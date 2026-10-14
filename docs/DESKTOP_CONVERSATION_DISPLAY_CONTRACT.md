@@ -710,7 +710,10 @@ Acceptance: `new_conversation_moves_draft_to_pending_before_creation_reply`,
   choices. A catalog refresh must not silently switch to another provider.
 - The model picker has a left vertical Codex/Claude icon rail and no title or
   close button. New conversations can switch agents; an existing conversation's
-  agent stays fixed. Account identity and weekly remaining quota appear above
+  agent stays fixed. Desktop shows the Codex/Claude names beside their icons,
+  explains the fixed agent in an existing conversation, and offers a new-chat
+  button retaining the selected directory. New drafts explain that either agent
+  can be selected. Account identity and weekly remaining quota appear above
   the model list in the right column. Reasoning and speed sit below it on one
   line, with icons and values instead of visible headings; accessible labels
   retain their meaning. iPhone dismisses the sheet by swiping down; desktop

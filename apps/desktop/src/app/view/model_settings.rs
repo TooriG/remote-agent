@@ -862,7 +862,7 @@ impl Desktop {
             || !self.snapshot.connected
             || self.snapshot.account.login.is_some();
         let mut agents = v_flex()
-            .w(px(52.))
+            .w(px(112.))
             .flex_shrink_0()
             .gap_2()
             .pr_2()
@@ -874,6 +874,7 @@ impl Desktop {
         ] {
             agents = agents.child(
                 Button::new(format!("model-agent-{label}"))
+                    .label(label)
                     .icon(
                         if value == ProviderKind::Claude {
                             Icon::default()
@@ -885,7 +886,7 @@ impl Desktop {
                         .size(px(24.)),
                     )
                     .ghost()
-                    .w(px(44.))
+                    .w(px(104.))
                     .h(px(44.))
                     .rounded(px(8.))
                     .selected(provider == Some(value))
@@ -893,7 +894,11 @@ impl Desktop {
                         button.bg(rgb(appearance::SELECTED))
                     })
                     .accessibility_label(label)
-                    .tooltip(label)
+                    .tooltip(if self.selected().is_some() {
+                        "この会話のエージェントは固定です。別のエージェントは新しい会話で選べます。"
+                    } else {
+                        label
+                    })
                     .debug_selector(move || format!("model-agent-{label}"))
                     .disabled(disabled || self.selected().is_some())
                     .on_click(cx.listener(move |s, _, window, cx| {
@@ -910,6 +915,52 @@ impl Desktop {
                         }
                         cx.notify();
                     })),
+            );
+        }
+        if let Some(session) = self.selected() {
+            let label = match session.provider {
+                ProviderKind::Codex => "Codex",
+                ProviderKind::Claude => "Claude",
+            };
+            body = body.child(
+                v_flex()
+                    .id("model-agent-locked-notice")
+                    .debug_selector(|| "model-agent-locked-notice".into())
+                    .gap_2()
+                    .p_2()
+                    .rounded(px(8.))
+                    .bg(rgb(appearance::RAISED))
+                    .child(
+                        div()
+                            .text_sm()
+                            .child(format!("この会話は{label}を使用しています")),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(appearance::MUTED))
+                            .child("別のエージェントは、新しい会話で選べます。"),
+                    )
+                    .child(
+                        Button::new("model-new-chat")
+                            .label("新しい会話でエージェントを選ぶ")
+                            .accessibility_label("新しい会話でエージェントを選ぶ")
+                            .debug_selector(|| "model-new-chat".into())
+                            .disabled(disabled)
+                            .on_click(cx.listener(|s, _, window, cx| {
+                                let cwd = s.snapshot.selected_directory();
+                                s.model_provider = None;
+                                s.new_chat(cwd, window, cx);
+                                cx.notify();
+                            })),
+                    ),
+            );
+        } else {
+            body = body.child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(appearance::MUTED))
+                    .child("CodexまたはClaudeを選んで会話を始められます。"),
             );
         }
         let account = self
@@ -1383,6 +1434,7 @@ mod tests {
                 <= window.debug_bounds("model-effort").unwrap().left()
         );
         assert!(window.debug_bounds("model-choice-gpt").is_some());
+        assert!(window.debug_bounds("model-agent-locked-notice").is_none());
         let model = window.debug_bounds("model-choice-gpt").unwrap();
         let effort = window.debug_bounds("model-picker-effort").unwrap();
         let speed = window.debug_bounds("model-picker-speed").unwrap();
@@ -1459,6 +1511,11 @@ mod tests {
         });
         window.run_until_parked();
         let claude = window.debug_bounds("model-agent-Claude").unwrap();
+        let notice = window.debug_bounds("model-agent-locked-notice").unwrap();
+        let new_chat = window.debug_bounds("model-new-chat").unwrap();
+        let summary = window.debug_bounds("model-account-summary").unwrap();
+        assert!(notice.bottom() <= summary.top());
+        assert!(new_chat.bottom() <= notice.bottom());
         window.simulate_click(claude.center(), Modifiers::default());
         window.update(|_, cx| assert!(view.read(cx).0.read(cx).model_provider.is_none()));
         assert!(window.debug_bounds("model-choice-gpt").is_some());
