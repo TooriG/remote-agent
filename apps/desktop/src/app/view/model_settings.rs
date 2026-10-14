@@ -1154,10 +1154,15 @@ impl Desktop {
         cx: &Context<Self>,
     ) -> AnyElement {
         let controls = self.snapshot.model_quick_controls(self.draft_key().clone());
-        let (Some(next), Some(tier)) = (controls.toggle_fast_to, controls.fast_service_tier) else {
+        let (Some(next), Some(_)) = (controls.toggle_fast_to, controls.fast_service_tier) else {
             return div().into_any_element();
         };
         let fast = controls.fast;
+        let selected_speed = controls.speed_choices.iter().find(|choice| choice.selected);
+        let speed_label = selected_speed.map_or("通常".to_owned(), |choice| choice.label.clone());
+        let speed_tooltip = selected_speed
+            .and_then(|choice| choice.description.clone())
+            .unwrap_or_else(|| speed_label.clone());
         let label = if fast {
             "Fast：オン"
         } else {
@@ -1167,7 +1172,7 @@ impl Desktop {
             .icon(fast_icon(fast))
             .ghost()
             .accessibility_label(label)
-            .tooltip(label)
+            .tooltip(speed_tooltip)
             .debug_selector(move || id.into())
             .h(px(44.))
             .text_color(if fast {
@@ -1184,16 +1189,19 @@ impl Desktop {
         if expanded {
             let entity = cx.entity().downgrade();
             button
-                .label(if fast { "高速" } else { "通常" })
+                .label(speed_label)
                 .child(Icon::new(IconName::ChevronDown).size(px(14.)))
                 .dropdown_menu_with_anchor(Anchor::BottomRight, move |mut menu, _, _| {
-                    for (value, label) in [("default".to_owned(), "通常"), (tier.clone(), "高速")]
-                    {
+                    for choice in &controls.speed_choices {
+                        let value = choice.id.clone();
+                        let label = choice.description.as_ref().map_or_else(
+                            || choice.label.clone(),
+                            |description| format!("{} · {}", choice.label, description),
+                        );
                         let entity = entity.clone();
-                        menu = menu.item(
-                            PopupMenuItem::new(label)
-                                .checked((value != "default") == fast)
-                                .on_click(move |_, _, cx| {
+                        menu =
+                            menu.item(PopupMenuItem::new(label).checked(choice.selected).on_click(
+                                move |_, _, cx| {
                                     let _ = entity.update(cx, |s, cx| {
                                         s.dispatch(Intent::SelectServiceTier {
                                             thread_id: s.draft_key().clone(),
@@ -1201,8 +1209,8 @@ impl Desktop {
                                         });
                                         cx.notify();
                                     });
-                                }),
-                        );
+                                },
+                            ));
                     }
                     menu
                 })

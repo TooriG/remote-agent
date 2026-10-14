@@ -154,6 +154,8 @@ jobs:
         run: nix develop .#native --command cargo test --locked -p host-fixture --test iroh_host passive_client_can_approve_after_five_minutes_without_reconnecting -- --ignored
   android:
     needs: changes
+    permissions:
+      contents: write # Attach the tested Android preview APK on release publication.
     if: needs.changes.outputs.android == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -199,6 +201,25 @@ jobs:
           name: android-acceptance
           path: target/qa/android-*
           retention-days: 7
+      - name: Package the tested Android preview APK
+        run: |
+          mkdir -p target/android-packages
+          cp apps/mobile/build/outputs/apk/debug/mobile-debug.apk target/android-packages/bex-android-preview.apk
+          cd target/android-packages
+          sha256sum bex-android-preview.apk > bex-android-preview.apk.sha256
+      - name: Retain the Android preview download
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: bex-android-preview
+          path: target/android-packages/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Attach Android preview APK to the published release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$RELEASE_TAG" target/android-packages/bex-android-preview.apk target/android-packages/bex-android-preview.apk.sha256 --repo "$GITHUB_REPOSITORY" --clobber
   mac:
     name: Mac
     needs: changes

@@ -718,6 +718,9 @@ Acceptance: `new_conversation_moves_draft_to_pending_before_creation_reply`,
   line, with icons and values instead of visible headings; accessible labels
   retain their meaning. iPhone dismisses the sheet by swiping down; desktop
   retains native popover dismissal.
+- Desktop speed menus list the provider's available service tiers and preserve
+  their reported descriptions, including speed multipliers and usage notes.
+  A selected accelerated tier remains selected independently of other tiers.
 - Model settings store a separate model, reasoning and speed preset for each
   provider, plus an independent model for new chats. Changing one selection must
   not overwrite the others. New chats use the selected model and that provider's

@@ -5,8 +5,8 @@
   const DL = window.BEX_DL = {
     mac:     { name: 'macOS',         file: { ja: 'Apple Silicon · macOS 26 · .zip 34MB', en: 'Apple Silicon · macOS 26 · .zip 34MB' }, url: 'https://github.com/ttizze/remote-agent/releases/download/prd-74/bex-74-macOS-arm64.zip', ready: true },
     ios:     { name: 'iPhone / iPad', file: { ja: 'iOS 26 · TestFlightで配布中', en: 'iOS 26 · via TestFlight' }, url: 'https://testflight.apple.com/join/UJbK9Ww7', ready: true, cta: { ja: 'TestFlightで入手', en: 'Get on TestFlight' } },
-    win:     { name: 'Windows',       file: { ja: 'Windows 11 · ソースからビルド可', en: 'Windows 11 · build from source' }, url: 'https://github.com/ttizze/remote-agent/blob/main/docs/WINDOWS.md', ready: false, source: true },
-    android: { name: 'Android',       file: { ja: 'Android 17 · ソースからビルド可', en: 'Android 17 · build from source' }, url: SRC, ready: false },
+    win:     { name: 'Windows',       file: { ja: 'Windows 11 · ソースからビルド可', en: 'Windows 11 · build from source' }, url: 'https://github.com/TooriG/remote-agent/blob/a0160da9d5b01c9ba0bdfce53a39e24bab7c18b8/docs/WINDOWS.md', ready: false, source: true },
+    android: { name: 'Android',       file: { ja: 'Android 17 · ソースからビルド可', en: 'Android 17 · build from source' }, url: SRC, ready: false, source: true, cta: { ja: 'Androidで使う', en: 'Use on Android' } },
     linux:   { name: 'Linux',         file: { ja: 'ヘッドレスHost・CLI', en: 'Headless Host and CLI' }, url: SRC + '#headless-linux-and-iphone-pairing', ready: true, source: true }
   };
   const ICON = {
@@ -93,7 +93,7 @@
   render();
   // Publish a direct download only after GitHub reports the release asset.
   // A Mac-only release, an API failure or an unpublished ZIP keeps source setup available.
-  async function loadWindowsRelease() {
+  async function loadReleaseDownloads() {
     try {
       const response = await fetch('https://api.github.com/repos/ttizze/remote-agent/releases/latest', {
         headers: { Accept: 'application/vnd.github+json' },
@@ -101,16 +101,24 @@
       });
       if (!response.ok) return;
       const release = await response.json();
-      const asset = release.assets?.find(x => x.name === 'bex-windows-x86_64-release.zip' && x.state === 'uploaded');
-      if (!asset) return;
-      const url = new URL(asset.browser_download_url);
-      if (url.origin !== 'https://github.com' || !url.pathname.startsWith('/ttizze/remote-agent/releases/download/')) return;
-      DL.win.url = url.href;
-      DL.win.ready = true;
-      DL.win.source = false;
-      DL.win.file = { ja: 'Windows 11 · x86-64 · ZIP', en: 'Windows 11 · x86-64 · ZIP' };
+      for (const [platform, filename] of [['win', 'bex-windows-x86_64-release.zip'], ['android', 'bex-android-preview.apk']]) {
+        const asset = release.assets?.find(x => x.name === filename && x.state === 'uploaded');
+        if (!asset) continue;
+        const url = new URL(asset.browser_download_url);
+        if (url.origin !== 'https://github.com' || !url.pathname.startsWith('/ttizze/remote-agent/releases/download/')) continue;
+        const target = DL[platform];
+        target.url = url.href;
+        target.ready = true;
+        target.source = false;
+        if (platform === 'android') {
+          target.file = { ja: 'Android 17 · APK（プレビュー）', en: 'Android 17 · preview APK' };
+          target.cta = { ja: 'Android用APKをダウンロード', en: 'Download Android APK' };
+        } else {
+          target.file = { ja: 'Windows 11 · x86-64 · ZIP', en: 'Windows 11 · x86-64 · ZIP' };
+        }
+      }
       render();
     } catch { /* Keep the working source-install link. */ }
   }
-  loadWindowsRelease();
+  loadReleaseDownloads();
 })();

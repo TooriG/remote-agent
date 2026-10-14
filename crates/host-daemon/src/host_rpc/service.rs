@@ -1307,15 +1307,40 @@ impl HostRpcService {
     }
 
     async fn project_snapshot(&self) -> Result<crate::projects::state::Snapshot, Failure> {
-        let native = match self.agent(ProviderKind::Codex) {
+        let mut native = match self.agent(ProviderKind::Codex) {
             Ok(agent) if agent.availability().is_ok() => agent.projects().await?,
             _ => Vec::new(),
         };
-        self.inner
+        let codex_project_ids = native.iter().map(|project| project.id.clone()).collect();
+        if let Ok(agent) = self.agent(ProviderKind::Claude)
+            && agent.availability().is_ok()
+        {
+            for mut project in agent.projects().await? {
+                project.roots.retain(|root| {
+                    !native.iter().any(|existing| {
+                        existing.roots.iter().any(|other| {
+                            other.path == root.path
+                                || dunce::canonicalize(&other.path)
+                                    .ok()
+                                    .zip(dunce::canonicalize(&root.path).ok())
+                                    .is_some_and(|(a, b)| a == b)
+                        })
+                    })
+                });
+                if !project.roots.is_empty() {
+                    native.push(project);
+                }
+            }
+        }
+        let mut snapshot = self
+            .inner
             .projects
             .load_with_projects(native)
             .await
-            .map_err(|error| Failure::new("project_state_unavailable", error))
+            .map_err(|error| Failure::new("project_state_unavailable", error))?;
+        // Only IDs from Codex can be sent to Codex's create_in_project API.
+        snapshot.native_project_ids = codex_project_ids;
+        Ok(snapshot)
     }
 
     async fn host_title_list(

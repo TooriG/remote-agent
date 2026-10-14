@@ -190,6 +190,55 @@ pub(super) fn files(home: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
+/// Project paths come from native metadata, never from Claude's lossy encoded
+/// transcript directory names. This function does not change provider storage.
+pub(super) fn projects(home: &Path, config: &Path) -> Result<Vec<agent_protocol::models::Project>> {
+    let mut roots = std::collections::BTreeSet::<PathBuf>::new();
+    match fs::read(config) {
+        Ok(bytes) => {
+            let value: Value = serde_json::from_slice(&bytes)
+                .context("Claude project configuration cannot be read")?;
+            if let Some(projects) = value["projects"].as_object() {
+                roots.extend(
+                    projects
+                        .keys()
+                        .map(PathBuf::from)
+                        .filter(|path| path.is_absolute()),
+                );
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    for file in files(home)? {
+        let Ok(summary) = summary(&file) else {
+            continue;
+        };
+        if let Some(cwd) = summary.thread.cwd {
+            let path = PathBuf::from(cwd);
+            if path.is_absolute() && !roots.iter().any(|root| path.starts_with(root)) {
+                roots.insert(path);
+            }
+        }
+    }
+    Ok(roots
+        .into_iter()
+        .map(|root| {
+            let root = dunce::canonicalize(&root).unwrap_or(root);
+            let path = root.to_string_lossy().into_owned();
+            agent_protocol::models::Project {
+                list_revision: 0,
+                id: format!("claude-project:{path}"),
+                name: root
+                    .file_name()
+                    .map_or_else(|| path.clone(), |name| name.to_string_lossy().into_owned()),
+                roots: vec![agent_protocol::models::ProjectRoot { path }],
+                favicon_png: None,
+            }
+        })
+        .collect())
+}
+
 pub(super) fn resolve(home: &Path, id: Uuid) -> Result<PathBuf> {
     let filename = format!("{id}.jsonl");
     let mut matches = files(home)?.into_iter().filter(|path| {
@@ -635,6 +684,40 @@ mod tests {
     use agent_protocol::items::*;
     use serde_json::json;
     const ID: &str = "12345678-1234-4234-8234-123456789abc";
+    #[test]
+    fn project_catalog_reads_config_and_transcript_paths_without_decoding_or_writing_storage() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("storage");
+        let transcript_dir = home.join("projects/lossy-name-with-hyphens");
+        fs::create_dir_all(&transcript_dir).unwrap();
+        let configured = root.path().join("project-with-hyphens");
+        let discovered = root.path().join("transcript-project");
+        fs::create_dir_all(&configured).unwrap();
+        fs::create_dir_all(&discovered).unwrap();
+        let config = home.join(".claude.json");
+        let bytes = serde_json::to_vec(
+            &json!({"projects":{(configured.to_str().unwrap()):{},"relative":{}}}),
+        )
+        .unwrap();
+        fs::write(&config, &bytes).unwrap();
+        let transcript = transcript_dir.join(format!("{ID}.jsonl"));
+        let history =
+            json!({"sessionId":ID,"type":"user","cwd":discovered,"message":{"content":"hello"}})
+                .to_string()
+                + "\n";
+        fs::write(&transcript, &history).unwrap();
+        let projects = projects(&home, &config).unwrap();
+        assert_eq!(projects.len(), 2);
+        assert!(projects.iter().any(|project| project.roots[0].path
+            == dunce::canonicalize(&configured).unwrap().to_str().unwrap()));
+        assert!(
+            projects
+                .iter()
+                .any(|project| project.name == "transcript-project")
+        );
+        assert_eq!(fs::read(&config).unwrap(), bytes);
+        assert_eq!(fs::read_to_string(&transcript).unwrap(), history);
+    }
     const NATIVE: &str = include_str!("../../tests/fixtures/claude-2.1.266.jsonl");
     fn fixture(bytes: &str) -> (tempfile::TempDir, PathBuf) {
         let root = tempfile::tempdir().unwrap();

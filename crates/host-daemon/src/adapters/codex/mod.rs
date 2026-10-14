@@ -936,16 +936,21 @@ impl Agent for Codex {
         .await
     }
     async fn models(&self, params: &op::ListModels) -> Result<op::ModelPage, Failure> {
-        let page: Page<Value> = self.request("model/list", params).await?;
+        let config: Result<Value, _> = self
+            .request("config/read", &serde_json::json!({"includeLayers":false}))
+            .await;
+        let configured = config
+            .as_ref()
+            .ok()
+            .and_then(|value| value["config"]["model"].as_str());
+        let page: Page<Value> = self.request("model/list", &serde_json::json!({"limit":params.limit,"cursor":params.cursor,"includeHidden":true})).await?;
         let mut data = page
             .data
             .into_iter()
+            .filter(|value| value["hidden"] != true || value["model"].as_str() == configured)
             .map(native::parse_model)
             .collect::<Result<Vec<_>, _>>()?;
         if params.cursor.is_none() {
-            let config: Result<Value, _> = self
-                .request("config/read", &serde_json::json!({"includeLayers":false}))
-                .await;
             if let Ok(config) = config {
                 native::include_configured_model(&mut data, &config["config"]);
             }

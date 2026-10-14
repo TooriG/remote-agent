@@ -5,18 +5,20 @@ const fs = require('node:fs');
 const source = fs.readFileSync(__dirname + '/public/download.js', 'utf8');
 const download = 'https://github.com/ttizze/remote-agent/releases/download/prd-75/bex-windows-x86_64-release.zip';
 
-async function renderWindows({ language = 'en', platform = 'Win32', assets = [], ok = true, fail = false } = {}) {
+async function renderWindows({ language = 'en', platform = 'Win32', userAgent, assets = [], ok = true, fail = false } = {}) {
   const element = () => ({ classList: { toggle() {} }, innerHTML: '', href: '' });
   const primary = [element(), element()];
   const grid = [element()];
   const menu = [element()];
+  const mobile = ['android', 'ios'].map(id => ({ ...element(), dataset: { dlMob: id } }));
+  let isMobile = false;
   const context = {
     window: {}, URL, AbortSignal,
-    navigator: { platform, userAgent: platform === 'Win32' ? 'Windows NT 10.0' : 'Macintosh' },
+    navigator: { platform, userAgent: userAgent || (platform === 'Win32' ? 'Windows NT 10.0' : 'Macintosh') },
     document: {
-      documentElement: { lang: language, classList: { toggle() {} } },
+      documentElement: { lang: language, classList: { toggle(name, value) { if (name === 'mob') isMobile = value; } } },
       querySelectorAll(selector) {
-        return ({ '[data-dl-primary]': primary, '[data-dl-grid]': grid, '[data-dl-menu]': menu })[selector] || [];
+        return ({ '[data-dl-primary]': primary, '[data-dl-grid]': grid, '[data-dl-menu]': menu, '[data-dl-mob]': mobile })[selector] || [];
       },
       addEventListener() {}
     },
@@ -28,8 +30,27 @@ async function renderWindows({ language = 'en', platform = 'Win32', assets = [],
   };
   vm.runInNewContext(source, context);
   await new Promise(resolve => setImmediate(resolve));
-  return { primary, grid: grid[0].innerHTML, menu: menu[0].innerHTML };
+  return { primary, grid: grid[0].innerHTML, menu: menu[0].innerHTML, mobile, isMobile };
 }
+
+for (const language of ['ja', 'en']) {
+  test(`Android phone ${language} prominently links to the published preview APK`, async () => {
+    const apk = 'https://github.com/ttizze/remote-agent/releases/download/prd-75/bex-android-preview.apk';
+    const result = await renderWindows({ language, platform: 'Linux arm64', userAgent: 'Android 17 Mobile', assets: [{ name: 'bex-android-preview.apk', state: 'uploaded', browser_download_url: apk }] });
+    assert.equal(result.isMobile, true);
+    assert.equal(result.primary[0].href, apk);
+    assert.equal(result.mobile[0].href, apk);
+    assert.match(result.mobile[0].innerHTML, /APK/);
+    assert.ok(result.grid.includes(`href="${apk}"`));
+  });
+}
+
+test('Android without a published APK retains usable setup instead of coming soon', async () => {
+  const result = await renderWindows({ platform: 'Linux arm64', userAgent: 'Android 17 Mobile' });
+  assert.equal(result.isMobile, true);
+  assert.match(result.mobile[0].innerHTML, /Use on Android/);
+  assert.ok(!result.mobile[0].innerHTML.includes('coming soon'));
+});
 
 for (const language of ['en', 'ja']) {
   test(`Windows ${language} hero, menu and card download the uploaded ZIP directly`, async () => {
