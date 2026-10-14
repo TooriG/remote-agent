@@ -349,3 +349,13 @@ html.mob .works { display: none; }
 .pk-row.add b { color: var(--teal); }
 .pk-foot { display: flex; justify-content: space-between; margin-top: 10px; padding: 12px 6px 2px; border-top: 1px solid var(--line); color: var(--fg-2); font-size: 12px; }
 @media (max-width: 960px) { .ag-in { grid-template-columns: minmax(0, 1fr); gap: 40px; } }
+
+/* Tabbed usage demos */
+.demo{text-align:center}.demo-lead{margin:20px auto 32px;max-width:680px;color:var(--fg-2)}
+.demo-tabs{display:flex;flex-wrap:wrap;justify-content:center;gap:6px;width:fit-content;max-width:100%;margin:0 auto 22px;padding:6px;border:1px solid var(--line-2);border-radius:14px;background:var(--bg-2)}
+.demo-tabs button{border:0;border-radius:9px;padding:12px 22px;background:transparent;color:var(--fg-2);font:inherit;font-size:14px;font-weight:600;cursor:pointer}
+.demo-tabs button[aria-selected="true"]{background:var(--teal-soft);color:#7be6d7}.demo-tabs button:hover{color:var(--fg)}
+.demo-tabs button:focus-visible,.demo-stage [role="tabpanel"]:focus-visible{outline:2px solid var(--teal);outline-offset:4px}
+.demo-stage{overflow:hidden;border:1px solid var(--line-2);border-radius:18px;background:#0a0b0c;box-shadow:0 24px 90px #0005}.demo-stage [hidden]{display:none}.demo-stage video{display:block;width:100%;height:auto;aspect-ratio:16/9}
+.demo-note{margin-top:20px;color:var(--fg-2);font-size:12px}
+@media(max-width:600px){.demo-tabs{gap:4px;padding:4px;width:100%}.demo-tabs button{flex:1;padding:10px 6px;font-size:11px;white-space:nowrap}.demo-stage{border-radius:10px}}

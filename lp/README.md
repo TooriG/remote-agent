@@ -26,3 +26,20 @@ Check download behavior with `node --test lp/download.test.cjs`.
 Preview from this directory with `npx wrangler dev` and deploy with
 `npx wrangler deploy`. Use the Cloudflare account that owns `bex-lp` and
 `getbex.dev`. This PR does not deploy the LP or create a product release.
+
+
+## Usage demos
+
+The LP includes three silent ten-second recreated BEX usage demos, with fictional
+project data. These are labeled recreations, not recordings of a real session.
+Tabs support arrow keys, Home/End and accessible selected states. Inactive and
+out-of-view clips pause. Reduced-motion preferences disable automatic playback;
+native video controls remain available. Only the selected clip is loaded.
+
+Reproducible HyperFrames source lives in `demo-source/` (Node 22 and FFmpeg).
+Run `npm run check` there, then
+`npm run render -- --output ../bex-demo.mp4 --fps 30 --quality standard`.
+Split the 30-second render at 0/10/20 seconds into `public/demos/agents.mp4`,
+`changes.mp4`, `mobile.mp4` using FFmpeg with libx264, yuv420p, CRF 23 and
+`-movflags +faststart`. Posters use full-render timestamps 3/17/27 seconds.
+The shipped clips are about 120–170 KB each, 1280×720, H.264, without audio.

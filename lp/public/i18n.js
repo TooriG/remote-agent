@@ -1,5 +1,11 @@
 (() => {
   const en = {
+    'demo.eyebrow': 'SEE BEX IN ACTION', 'demo.title': 'A quick look at how it works.',
+    'demo.sub': 'Choose an agent, review changes, and approve commands from your phone.',
+    'demo.tab0': 'Choose an agent', 'demo.tab1': 'Review changes', 'demo.tab2': 'Approve on mobile',
+    'demo.note': 'Recreated usage demos, 10 seconds each, without audio. All data is fictional. The demo interface is in Japanese.',
+    'demo.fallback': 'Open the video',
+
     'nav.screens': 'Screens', 'nav.agents': 'Two agents',
     'ag.eyebrow': 'Two agents, one app', 'ag.title': 'Codex and Claude Code,<br> in one app.',
     'ag.sub': 'No more juggling apps. Tap the model name in the composer to pick the agent and the account.',

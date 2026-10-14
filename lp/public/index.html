@@ -85,6 +85,12 @@
     </div>
   </section>
 
+  <section id="demo" class="sec demo"><div class="wrap">
+    <div class="eyebrow" data-i="demo.eyebrow">SEE BEX IN ACTION</div>
+    <h2 data-i="demo.title">使い方を、動画で。</h2>
+    <p class="demo-lead" data-i="demo.sub">エージェントを選んで、変更を確認。外出先からの承認まで、ひとつのアプリで。</p>
+    <div class="demo-tabs" role="tablist" aria-label="BEX demo">
+<button id="demo-tab-agents" role="tab" type="button" aria-controls="demo-panel-agents" aria-selected="true" tabindex="0" data-i="demo.tab0">エージェントを選ぶ</button><button id="demo-tab-changes" role="tab" type="button" aria-controls="demo-panel-changes" aria-selected="false" tabindex="-1" data-i="demo.tab1">変更を確認する</button><button id="demo-tab-mobile" role="tab" type="button" aria-controls="demo-panel-mobile" aria-selected="false" tabindex="-1" data-i="demo.tab2">スマホから承認</button></div><div class="demo-stage"><div id="demo-panel-agents" role="tabpanel" aria-labelledby="demo-tab-agents" tabindex="0"><video src="/demos/agents.mp4" poster="/demos/agents.jpg" width="1280" height="720" muted loop playsinline controls preload="metadata" aria-label="BEX usage demo"><a href="/demos/agents.mp4" data-i="demo.fallback">動画を開く</a></video></div><div id="demo-panel-changes" role="tabpanel" aria-labelledby="demo-tab-changes" tabindex="0" hidden><video data-src="/demos/changes.mp4" poster="/demos/changes.jpg" width="1280" height="720" muted loop playsinline controls preload="none" aria-label="BEX usage demo"><a href="/demos/changes.mp4" data-i="demo.fallback">動画を開く</a></video></div><div id="demo-panel-mobile" role="tabpanel" aria-labelledby="demo-tab-mobile" tabindex="0" hidden><video data-src="/demos/mobile.mp4" poster="/demos/mobile.jpg" width="1280" height="720" muted loop playsinline controls preload="none" aria-label="BEX usage demo"><a href="/demos/mobile.mp4" data-i="demo.fallback">動画を開く</a></video></div></div><p class="demo-note" data-i="demo.note">※ アプリの操作をもとにした再現デモです（各10秒・音声なし）。動画内のデータはサンプルです。</p></div></section>
   <section id="agents" class="sec agents">
     <div class="wrap ag-in">
       <div class="ag-text">
@@ -365,5 +371,6 @@
 
 <script src="/i18n.js"></script>
 <script src="/download.js"></script>
+<script src="/demo.js"></script>
 </body>
 </html>
