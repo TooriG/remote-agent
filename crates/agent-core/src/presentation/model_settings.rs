@@ -204,6 +204,26 @@ impl Snapshot {
             .collect()
     }
 
+    /// A recommended picker catalog is not an exhaustive allowlist of Codex IDs.
+    pub fn custom_model_choice(
+        &self,
+        provider: Option<ProviderKind>,
+        query: &str,
+    ) -> Option<ModelRef> {
+        let id = query.trim();
+        (provider == Some(ProviderKind::Codex)
+            && !id.is_empty()
+            && !id.chars().any(char::is_whitespace)
+            && !self
+                .models
+                .iter()
+                .any(|model| model.model.provider == ProviderKind::Codex && model.model.id == id))
+        .then(|| ModelRef {
+            provider: ProviderKind::Codex,
+            id: id.into(),
+        })
+    }
+
     pub fn model_for_provider(
         &self,
         thread_id: crate::state::DraftKey,

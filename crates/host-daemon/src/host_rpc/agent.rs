@@ -157,6 +157,15 @@ pub(crate) trait Agent: Identity {
         browser: Option<Value>,
     ) -> Result<ThreadResponse, Failure>;
     async fn state(&self, id: &str) -> Result<SubmissionState, Failure>;
+    async fn create_in_project(
+        &self,
+        cwd: &str,
+        model: Option<&str>,
+        browser: Option<Value>,
+        _project: Option<&str>,
+    ) -> Result<ThreadResponse, Failure> {
+        self.create(cwd, model, browser).await
+    }
     async fn submit(
         &self,
         input: &op::Submission,
@@ -166,6 +175,9 @@ pub(crate) trait Agent: Identity {
     ) -> Result<op::SubmissionReceipt, Failure>;
     async fn interrupt(&self, id: &str, turn: &TurnId) -> Result<Empty, Failure>;
     async fn models(&self, params: &op::ListModels) -> Result<op::ModelPage, Failure>;
+    async fn projects(&self) -> Result<Vec<agent_protocol::models::Project>, Failure> {
+        Ok(Vec::new())
+    }
     async fn catalog(&self, cwd: &str) -> ComposerCatalog;
     /// Explain uncertainty when native history cannot prove inactivity. Providers
     /// with authoritative listed status need no additional check.

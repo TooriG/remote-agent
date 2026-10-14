@@ -1307,9 +1307,13 @@ impl HostRpcService {
     }
 
     async fn project_snapshot(&self) -> Result<crate::projects::state::Snapshot, Failure> {
+        let native = match self.agent(ProviderKind::Codex) {
+            Ok(agent) if agent.availability().is_ok() => agent.projects().await?,
+            _ => Vec::new(),
+        };
         self.inner
             .projects
-            .load()
+            .load_with_projects(native)
             .await
             .map_err(|error| Failure::new("project_state_unavailable", error))
     }
@@ -1555,11 +1559,16 @@ impl HostRpcService {
                 Err(error) => return Err(Failure::new("worktree_creation_failed", error)),
             }
         }
+        let projects = self.project_snapshot().await?;
+        let project = projects
+            .project_for_workspace(params.cwd.as_deref().unwrap_or_default())
+            .filter(|id| projects.native_project_ids.contains(*id));
         self.start_thread(agent.as_ref(), |browser| {
-            agent.create(
+            agent.create_in_project(
                 params.cwd.as_deref().unwrap_or_default(),
                 params.model.as_ref().map(|m| m.id.as_str()),
                 browser,
+                project,
             )
         })
         .await
@@ -1731,7 +1740,19 @@ fn describe_thread(
     capabilities: agent_protocol::session::Capabilities,
     projects: &crate::projects::state::Snapshot,
 ) {
-    thread.project_id = projects.project_membership(thread.cwd.as_deref());
+    let inferred = projects.project_membership(thread.cwd.as_deref());
+    if matches!(
+        thread.project_id,
+        agent_protocol::models::ProjectMembership::Unknown {}
+    ) || (matches!(
+        thread.project_id,
+        agent_protocol::models::ProjectMembership::Unassigned {}
+    ) && inferred
+        .as_deref()
+        .is_some_and(|id| !projects.native_project_ids.contains(id)))
+    {
+        thread.project_id = inferred;
+    }
     thread.capabilities = Some(capabilities);
 }
 

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Fix Windows desktop startup stack overflow and restore the native draggable title bar. Removing an image attachment no longer opens its gallery.
+- Include the configured Codex model in the picker when absent from the recommended catalog, support explicit Codex model IDs, and preserve their selection across catalog refreshes.
+- Read Codex projects through the native project API, retain their names, roots and explicit conversation membership, and combine them with BEX-only projects without rewriting Codex desktop state.
+
 - Include a signed portable Node.js runtime in the Mac app, pinned by version and checksum. Claude Code users can use BEX without installing Node or npm; the SDK and provider scripts use the bundled runtime.
 
 - Restore project and standalone chat grouping on desktop, iPhone and Android, with five items initially and ten more per request. Resolve icons for all returned project headers, including empty projects, and preserve search behavior. Host and clients use the updated binary protocol together.

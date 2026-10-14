@@ -978,6 +978,9 @@ impl Desktop {
                     .large()
                     .aria_label("モデルを検索"),
             );
+        let custom_model = self
+            .snapshot
+            .custom_model_choice(provider, &self.model_search.read(cx).value());
         let models = self
             .snapshot
             .models_matching(provider, self.model_search.read(cx).value().to_string());
@@ -985,7 +988,7 @@ impl Desktop {
             .id("model-catalog")
             .max_h(px(264.))
             .overflow_y_scroll();
-        if models.is_empty() {
+        if models.is_empty() && custom_model.is_none() {
             list = list.child("利用可能なモデルがありません");
         }
         for model in models {
@@ -1031,6 +1034,23 @@ impl Desktop {
                                 )
                             }),
                     ),
+            );
+        }
+        if let Some(model) = custom_model {
+            let label = format!("モデルIDを指定: {}", model.id);
+            list = list.child(
+                Button::new("custom-model-choice")
+                    .debug_selector(|| "custom-model-choice".into())
+                    .label(label)
+                    .ghost()
+                    .w_full()
+                    .disabled(disabled)
+                    .on_click(cx.listener(move |s, _, _, _| {
+                        s.dispatch(Intent::SelectModel {
+                            thread_id: s.draft_key().clone(),
+                            model: model.clone(),
+                        });
+                    })),
             );
         }
         body = body

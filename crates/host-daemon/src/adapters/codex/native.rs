@@ -41,6 +41,32 @@ pub(super) fn parse_model(
     serde_json::from_value(value)
 }
 
+pub(super) fn include_configured_model(
+    models: &mut Vec<agent_protocol::models::Model>,
+    config: &Value,
+) {
+    let Some(id) = config["model"].as_str().filter(|id| !id.trim().is_empty()) else {
+        return;
+    };
+    if models.iter().any(|model| model.model.id == id) {
+        return;
+    }
+    // Configuration establishes the ID, not its supported effort/tier catalog.
+    models.push(agent_protocol::models::Model {
+        id: id.into(),
+        model: agent_protocol::models::ModelRef {
+            provider: ProviderKind::Codex,
+            id: id.into(),
+        },
+        display_name: id.into(),
+        default_reasoning_effort: String::new(),
+        supported_reasoning_efforts: Vec::new(),
+        service_tiers: None,
+        default_service_tier: None,
+        is_default: Some(false),
+    });
+}
+
 pub(crate) fn session_status(value: &Value) -> SessionStatus {
     match value["type"].as_str() {
         Some("active") => SessionStatus::Running,
@@ -483,6 +509,13 @@ pub(crate) fn parse_thread(mut value: Value) -> Result<Thread, serde_json::Error
         can_accept_direct_input: field(&value, "canAcceptDirectInput")?,
         name,
         cwd: field(&value, "cwd")?,
+        project_id: match value.get("projectId") {
+            Some(Value::String(id)) => {
+                agent_protocol::models::ProjectMembership::Assigned(id.clone())
+            }
+            Some(Value::Null) => agent_protocol::models::ProjectMembership::Unassigned {},
+            _ => agent_protocol::models::ProjectMembership::Unknown {},
+        },
         status: session_status(&value["status"]),
         turns: take_field::<Option<Vec<Value>>>(&mut value, "turns")?
             .map(|turns| {
@@ -594,6 +627,40 @@ mod tests {
             }))
             .is_err()
         );
+    }
+
+    #[test]
+    fn native_project_membership_preserves_explicit_assignment_and_projectless_chats() {
+        use agent_protocol::models::ProjectMembership;
+        for (membership, expected) in [
+            (
+                json!("project-a"),
+                ProjectMembership::Assigned("project-a".into()),
+            ),
+            (Value::Null, ProjectMembership::Unassigned {}),
+        ] {
+            let thread =
+                parse_thread(json!({"id":"thread", "projectId":membership, "cwd":"/shared/root"}))
+                    .unwrap();
+            assert_eq!(thread.project_id, expected);
+        }
+        assert_eq!(
+            parse_thread(json!({"id":"thread"})).unwrap().project_id,
+            ProjectMembership::Unknown {}
+        );
+    }
+
+    #[test]
+    fn configured_model_is_selectable_without_inventing_catalog_capabilities() {
+        let mut models = Vec::new();
+        include_configured_model(&mut models, &json!({"model":"gpt-6.1-sol"}));
+        include_configured_model(&mut models, &json!({"model":"gpt-6.1-sol"}));
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].model.id, "gpt-6.1-sol");
+        assert!(models[0].supported_reasoning_efforts.is_empty());
+        assert!(models[0].service_tiers.is_none());
+        include_configured_model(&mut models, &json!({"model":null}));
+        assert_eq!(models.len(), 1);
     }
 
     #[test]

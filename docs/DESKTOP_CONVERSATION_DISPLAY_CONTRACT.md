@@ -471,6 +471,24 @@ Acceptance: core `presentation::markdown`, `presentation::body`, and
 `response_metadata_updates_after_deferred_edits_are_loaded`; existing desktop
 selection and history assertions remain unchanged.
 
+## Desktop picker, projects and attachments
+
+Desktop attachment thumbnails open the image gallery. Their visible remove
+control has an occluding hitbox and consumes its click: removing an attachment
+preserves the draft text and never opens the gallery beneath the control.
+
+The Codex picker includes the configured model even when it is absent from the
+recommended catalog. Exact model IDs can also be entered in the picker search;
+explicit Codex choices survive catalog refreshes. Effort and service-tier options
+are shown only when the provider reports them.
+
+The Host reads Codex projects through `project/list`, retaining native project
+IDs, names, roots and explicit conversation assignments, including projectless
+conversations. BEX-only registered roots remain available. This reads native state
+without editing `.codex-global-state.json`.
+Starting a conversation in a native project passes its project ID to Codex, so
+the assignment survives reopening in either client.
+
 ## Requests and approvals
 
 Pending server requests are part of the live conversation state, even though

@@ -30,6 +30,61 @@ fn catalog() -> Vec<Model> {
     .unwrap()
 }
 
+#[test]
+fn explicit_codex_model_survives_selection_and_catalog_refresh() {
+    let snapshot = Snapshot {
+        models: Arc::new(catalog()),
+        ..Default::default()
+    };
+    let key = snapshot.navigation.draft_key.clone();
+    let model = ModelRef {
+        provider: ProviderKind::Codex,
+        id: "gpt-6.1-sol".into(),
+    };
+    assert_eq!(
+        snapshot.custom_model_choice(Some(ProviderKind::Codex), " gpt-6.1-sol "),
+        Some(model.clone())
+    );
+    assert!(
+        snapshot
+            .custom_model_choice(Some(ProviderKind::Claude), "gpt-6.1-sol")
+            .is_none()
+    );
+    assert!(
+        snapshot
+            .custom_model_choice(Some(ProviderKind::Codex), " ")
+            .is_none()
+    );
+    assert!(
+        snapshot
+            .custom_model_choice(Some(ProviderKind::Codex), "two words")
+            .is_none()
+    );
+    assert!(
+        snapshot
+            .custom_model_choice(Some(ProviderKind::Codex), "shared")
+            .is_none()
+    );
+    let selected = apply(
+        &snapshot,
+        Intent::SelectModel {
+            thread_id: key.clone(),
+            model: model.clone(),
+        },
+    );
+    assert_eq!(selected.drafts[&key].model, Some(model.clone()));
+    let mut selected = selected;
+    LoadModels {}.apply(
+        &mut selected,
+        ModelPage {
+            data: catalog(),
+            next_cursor: None,
+            provider_errors: None,
+        },
+    );
+    assert_eq!(selected.drafts[&key].model, Some(model));
+}
+
 fn apply(snapshot: &Snapshot, intent: Intent) -> Snapshot {
     reduce(snapshot, Event::Intent(intent)).0
 }
@@ -524,7 +579,7 @@ fn scoped_new_chat_model_inherits_provider_presets_without_changing_them() {
 }
 
 #[test]
-fn unavailable_provider_preset_falls_back_only_after_a_complete_catalog() {
+fn explicit_codex_preset_is_preserved_outside_the_recommended_catalog() {
     let selected = ModelRef {
         provider: ProviderKind::Codex,
         id: "retired".into(),
@@ -554,12 +609,12 @@ fn unavailable_provider_preset_falls_back_only_after_a_complete_catalog() {
             service_tier: Some("priority".into()),
         },
     );
-    let fallback = snapshot
+    let choice = snapshot
         .model_for_provider("new".into(), ProviderKind::Codex)
         .unwrap();
-    assert_eq!(fallback.id, "shared");
+    assert_eq!(choice, selected);
     let controls = snapshot.default_model_controls(ModelDefaultsScope::Global, ProviderKind::Codex);
-    assert_eq!(controls.effort, "medium");
+    assert!(controls.efforts.is_empty());
     assert!(!controls.fast);
     snapshot.model_errors =
         Arc::new(serde_json::from_value(json!({"codex":{"message":"unavailable"}})).unwrap());

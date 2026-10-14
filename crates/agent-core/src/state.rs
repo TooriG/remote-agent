@@ -1146,8 +1146,12 @@ pub(crate) fn supported_settings<'a>(
     Option<&'a str>,
     Option<&'a str>,
 ) {
-    // Absence in an incomplete catalog is not evidence that a saved choice was removed.
-    if catalog_incomplete
+    // Codex also accepts explicit IDs outside its recommended picker catalog.
+    // Absence in an incomplete catalog cannot invalidate a saved choice either.
+    if (catalog_incomplete
+        || selected_model.is_some_and(|model| {
+            model.provider == crate::session::ProviderKind::Codex && !model.id.is_empty()
+        }))
         && selected_model.is_some()
         && !models
             .iter()
