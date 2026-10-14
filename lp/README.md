@@ -14,7 +14,7 @@ The checksum is attached alongside it. Publishing a release from a tag predating
 this workflow change will not produce the new asset; use a tag containing it.
 
 Android phones show the Android download action prominently. Android buttons link
-directly to the fork's `android-preview-1/bex-android-preview.apk` release asset,
+directly to the fork's `android-preview-3/bex-android-preview.apk` release asset,
 including when the upstream release API is unavailable. The manual
 `android-download.yml` workflow builds the APK and runs Android unit tests before
 publishing the APK and SHA-256 checksum. Android 17 (API 37) or newer is required.
