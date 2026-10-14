@@ -720,6 +720,7 @@ fn publish_locked(current: &mut Arc<Snapshot>, next: Snapshot) -> bool {
         operation_sequence,
         model_defaults,
         scoped_model_defaults,
+        project_preferences,
         permission_settings,
         composer_catalog,
         host_name,
@@ -756,6 +757,7 @@ fn publish_locked(current: &mut Arc<Snapshot>, next: Snapshot) -> bool {
     if Arc::ptr_eq(&current.operations, operations)
         && current.operation_sequence == *operation_sequence
         && current.model_defaults == *model_defaults
+        && Arc::ptr_eq(&current.project_preferences, project_preferences)
         && Arc::ptr_eq(&current.scoped_model_defaults, scoped_model_defaults)
         && current.host_name == *host_name
         && current.task_activity == *task_activity

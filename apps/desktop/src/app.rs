@@ -39,6 +39,13 @@ use std::{
     sync::Arc,
 };
 
+struct ProjectEditor {
+    id: String,
+    scope: String,
+    name: Entity<InputState>,
+    section: Entity<InputState>,
+}
+
 enum OperationCompletion {
     Busy,
     Composer(u64),
@@ -202,6 +209,7 @@ pub(crate) struct Desktop {
     editor_path: Option<String>,
     editor_revision: u64,
     editor_pending: Option<u64>,
+    project_editor: Option<ProjectEditor>,
     search: Entity<InputState>,
     path: Entity<InputState>,
     model_panel: ModelPanel,
@@ -489,6 +497,7 @@ impl Desktop {
             editor_path: None,
             editor_revision: 0,
             editor_pending: None,
+            project_editor: None,
             search,
             path,
             model_panel: ModelPanel::Models,

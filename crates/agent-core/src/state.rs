@@ -208,6 +208,9 @@ pub struct TerminalView {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Object))]
 pub struct Snapshot {
+    /// Device-owned organization, scoped by Host storage identity and native project ID.
+    #[serde(default)]
+    pub project_preferences: Arc<BTreeMap<String, BTreeMap<String, ProjectPreferences>>>,
     #[serde(skip)]
     pub operations: Arc<BTreeMap<operations::OperationKey, operations::OperationState>>,
     #[serde(skip)]
@@ -351,6 +354,8 @@ impl Snapshot {
 
 mod notifications;
 use notifications::notification;
+pub mod projects;
+pub use projects::ProjectPreferences;
 pub mod operations;
 pub use operations::Intent;
 use operations::add_attachment;
@@ -546,6 +551,31 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 search_term: previous.list_query.search_term.clone(),
             });
         }
+        Intent::SetProjectPinned { project_id, pinned } => projects::update(&mut next, &project_id, |p| p.pinned = pinned),
+        Intent::EditProject { project_id, name, section } => {
+            let name = name.trim();
+            let section = section.trim();
+            if name.is_empty() || name.chars().count() > 100 || section.chars().count() > 60 {
+                next.error = Some("表示名は1〜100文字、セクションは60文字以内で入力してください".into());
+            } else {
+                projects::update(&mut next, &project_id, |p| {
+                    p.name = Some(name.into());
+                    p.section = (!section.is_empty()).then(|| section.into());
+                });
+            }
+        }
+        Intent::SetProjectSection { project_id, section } => {
+            let section = section.trim();
+            if section.chars().count() <= 60 {
+                projects::update(&mut next, &project_id, |p| p.section = (!section.is_empty()).then(|| section.into()));
+            }
+        }
+        Intent::SetProjectHidden { project_id, hidden } => projects::update(&mut next, &project_id, |p| p.hidden = hidden),
+        Intent::ArchiveProjectChats { project_id, before } => projects::archive(&mut next, &project_id, before),
+        Intent::RestoreProjectChats { project_id } => projects::update(&mut next, &project_id, |p| {
+            p.archived_before = None;
+            p.archived_ids.clear();
+        }),
         Intent::SetProjectExpanded { project_id, expanded } => {
             if !expanded {
                 Arc::make_mut(&mut next.expanded_projects).remove(&project_id);

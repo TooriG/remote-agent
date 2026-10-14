@@ -26,6 +26,8 @@ impl Snapshot {
         same_list
             && Arc::ptr_eq(&self.activity, &other.activity)
             && Arc::ptr_eq(&self.expanded_projects, &other.expanded_projects)
+            && Arc::ptr_eq(&self.project_preferences, &other.project_preferences)
+            && self.storage_scope == other.storage_scope
             && Arc::ptr_eq(&self.project_threads, &other.project_threads)
             && Arc::ptr_eq(&self.archived_scopes, &other.archived_scopes)
             && self.connected == other.connected

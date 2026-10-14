@@ -79,6 +79,30 @@ pub enum Intent {
     ExpandThreadList {
         project_id: Option<String>,
     },
+    SetProjectPinned {
+        project_id: String,
+        pinned: bool,
+    },
+    EditProject {
+        project_id: String,
+        name: String,
+        section: String,
+    },
+    SetProjectSection {
+        project_id: String,
+        section: String,
+    },
+    SetProjectHidden {
+        project_id: String,
+        hidden: bool,
+    },
+    ArchiveProjectChats {
+        project_id: String,
+        before: i64,
+    },
+    RestoreProjectChats {
+        project_id: String,
+    },
     SetProjectExpanded {
         project_id: String,
         expanded: bool,
