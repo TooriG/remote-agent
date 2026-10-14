@@ -35,20 +35,21 @@ async function renderWindows({ language = 'en', platform = 'Win32', userAgent, a
 
 for (const language of ['ja', 'en']) {
   test(`Android phone ${language} prominently links to the published preview APK`, async () => {
-    const apk = 'https://github.com/ttizze/remote-agent/releases/download/prd-75/bex-android-preview.apk';
+    const apk = 'https://github.com/TooriG/remote-agent/releases/download/android-preview-1/bex-android-preview.apk';
     const result = await renderWindows({ language, platform: 'Linux arm64', userAgent: 'Android 17 Mobile', assets: [{ name: 'bex-android-preview.apk', state: 'uploaded', browser_download_url: apk }] });
     assert.equal(result.isMobile, true);
     assert.equal(result.primary[0].href, apk);
     assert.equal(result.mobile[0].href, apk);
-    assert.match(result.mobile[0].innerHTML, /APK/);
+    assert.match(result.mobile[0].innerHTML, language === 'ja' ? /Androidで使う/ : /Use on Android/);
     assert.ok(result.grid.includes(`href="${apk}"`));
   });
 }
 
-test('Android without a published APK retains usable setup instead of coming soon', async () => {
-  const result = await renderWindows({ platform: 'Linux arm64', userAgent: 'Android 17 Mobile' });
+test('Android download remains direct when the upstream release API is offline', async () => {
+  const result = await renderWindows({ platform: 'Linux arm64', userAgent: 'Android 17 Mobile', fail: true });
   assert.equal(result.isMobile, true);
   assert.match(result.mobile[0].innerHTML, /Use on Android/);
+  assert.equal(result.mobile[0].href, 'https://github.com/TooriG/remote-agent/releases/download/android-preview-1/bex-android-preview.apk');
   assert.ok(!result.mobile[0].innerHTML.includes('coming soon'));
 });
 

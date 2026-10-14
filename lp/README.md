@@ -13,10 +13,12 @@ Native clients publishes the ZIP after Windows tests on a release publication.
 The checksum is attached alongside it. Publishing a release from a tag predating
 this workflow change will not produce the new asset; use a tag containing it.
 
-Android phones show the Android download action prominently. The same release
-lookup selects `bex-android-preview.apk` after Android acceptance succeeds and
-the workflow attaches it. This is the tested debug-signed preview APK, explicitly
-labeled as a preview, not a production-signed/store release. GitHub-hosted builds
+Android phones show the Android download action prominently. Android buttons link
+directly to the fork's `android-preview-1/bex-android-preview.apk` release asset,
+including when the upstream release API is unavailable. The manual
+`android-download.yml` workflow builds the APK and runs Android unit tests before
+publishing the APK and SHA-256 checksum. Android 17 (API 37) or newer is required.
+This is a debug-signed preview APK. GitHub-hosted builds
 generate a new debug signing key; switching between preview builds may require
 uninstalling the old app (which removes its local pairing keys and drafts).
 Production updates need a stable maintainer-owned signing key before this preview
@@ -25,7 +27,7 @@ distribution can become a normal update channel. No signing keys are checked in.
 Check download behavior with `node --test lp/download.test.cjs`.
 Preview from this directory with `npx wrangler dev` and deploy with
 `npx wrangler deploy`. Use the Cloudflare account that owns `bex-lp` and
-`getbex.dev`. This PR does not deploy the LP or create a product release.
+`getbex.dev`. Publish and verify the APK asset before deploying a changed Android URL.
 
 
 ## Usage demos
