@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bex — どこでも、これひとつで。</title>
+<meta name="description" content="bexは、あなたのコンピューターで動くCodexとClaude Codeを、Mac・iPhone・Android・CLIから操作するアプリです。">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://getbex.dev/">
+<meta property="og:title" content="bex — Your coding agents, anywhere.">
+<meta property="og:description" content="Run Codex and Claude Code on your own computer, and steer them from your Mac, iPhone, Android or the command line. どこでも、これひとつで。">
+<meta property="og:image" content="https://getbex.dev/og.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="bex — Your coding agents, anywhere.">
+<meta name="twitter:description" content="Run Codex and Claude Code on your own computer, and steer them from anywhere.">
+<meta name="twitter:image" content="https://getbex.dev/og.jpg">
+<meta name="theme-color" content="#0a0b0c">
+<link rel="icon" type="image/png" href="/favicon.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="nav">
+  <div class="wrap nav-in">
+    <a class="brand" href="#top"><img src="/assets/icon.png" alt="" width="28" height="28"><span>bex</span></a>
+    <nav class="links">
+      <a href="#agents" data-i="nav.agents">2つのエージェント</a>
+      <a href="#screens" data-i="nav.screens">画面</a>
+      <a href="#features" data-i="nav.features">機能</a>
+      <a href="#how" data-i="nav.how">しくみ</a>
+      <a href="#security" data-i="nav.security">セキュリティ</a>
+      <a href="#platforms" data-i="nav.platforms">対応環境</a>
+    </nav>
+    <div class="nav-r">
+      <div class="lang" role="group" aria-label="Language">
+        <button type="button" data-lang="ja">JA</button><button type="button" data-lang="en">EN</button>
+      </div>
+      <a class="btn btn-sm" href="#download" data-i="cta.download.short">ダウンロード</a>
+    </div>
+  </div>
+</header>
+
+<main id="top">
+  <section class="hero">
+    <div class="wrap hero-in">
+      <a class="pill" href="https://github.com/ttizze/remote-agent/releases/tag/prd-74"><span class="dot"></span><span data-i="hero.pill">Production build 74 を公開しました</span><span class="arrow">→</span></a>
+      <h1 data-i="hero.title">どこでも、<br class="sp">これひとつで。</h1>
+      <p class="lead" data-i="hero.lead">CodexもClaude Codeも、ひとつのアプリで。bexは、あなたのコンピューターで動く2つのエージェントを、Mac・iPhone・Android・CLIから操作できます。席を離れても、仕事は止まりません。</p>
+      <div class="dl-hero" data-dl-hero>
+        <div class="ctas dl-desk">
+          <a class="btn" data-dl-primary href="#download">ダウンロード</a>
+          <a class="btn btn-ghost" href="https://github.com/ttizze/remote-agent"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 19c-4 1.5-4-2-6-2.5m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1-.3-3.4 1.3a11.6 11.6 0 0 0-6 0C6.8 2.3 5.8 2.6 5.8 2.6a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4.4 9c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/></svg><span data-i="cta.github">GitHubで見る</span></a>
+        </div>
+        <div class="dl-more dl-desk">
+          <button type="button" class="dl-toggle" data-dl-toggle aria-expanded="false"><span></span><i>⌃</i></button>
+          <div class="dl-menu" data-dl-menu hidden></div>
+        </div>
+        <div class="dl-mob">
+          <a class="btn btn-big" data-dl-mob="android" href="#download"></a>
+          <a class="btn btn-big" data-dl-mob="ios" href="#download"></a>
+          <a class="also" href="#download"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M8 20h8M12 16v4"/></svg><span data-i="dl.also">macOS・Windows・Linuxにも対応</span></a>
+          <a class="also gh" href="https://github.com/ttizze/remote-agent"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 19c-4 1.5-4-2-6-2.5m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1-.3-3.4 1.3a11.6 11.6 0 0 0-6 0C6.8 2.3 5.8 2.6 5.8 2.6a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4.4 9c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/></svg><span data-i="cta.github">GitHubで見る</span></a>
+        </div>
+      </div>
+      <p class="works" data-i="hero.works">Codex と Claude Code に対応 · macOS · iOS · Android · Windows · Linux</p>
+    </div>
+    <div class="wrap">
+      <figure class="hero-shot">
+        <img src="/assets/hero.jpg" alt="" data-i-alt="hero.alt" width="1536" height="1024" onerror="this.parentNode.classList.add('ph')">
+        <div class="glow" aria-hidden="true"></div>
+      </figure>
+    </div>
+  </section>
+
+  <section class="strip">
+    <div class="wrap strip-in">
+      <div><b>1</b><span data-i="strip.1">台のHostに、すべての端末がつながる</span></div>
+      <div><b>2</b><span data-i="strip.2">つのエージェント、Codex と Claude Code</span></div>
+      <div><b>5</b><span data-i="strip.3">つの環境、Mac・iPhone・Android・Windows・Linux</span></div>
+    </div>
+  </section>
+
+  <section id="agents" class="sec agents">
+    <div class="wrap ag-in">
+      <div class="ag-text">
+        <p class="eyebrow" data-i="ag.eyebrow">Two agents, one app</p>
+        <h2 data-i="ag.title">CodexもClaude Codeも、<br>ひとつのアプリで。</h2>
+        <p class="sub" data-i="ag.sub">アプリを行き来する必要はありません。入力欄のモデル名を押せば、エージェントもアカウントも選べます。</p>
+        <ul class="ag-list">
+          <li><b data-i="ag1.t">いつものサブスクのまま</b><span data-i="ag1.d">ChatGPTとClaudeのアカウントをそのまま使えます。ログインは各エージェント自身が管理します。</span></li>
+          <li><b data-i="ag2.t">複数アカウントも切り替え</b><span data-i="ag2.d">アカウントごとの週の使用枠がひと目で分かります。履歴は切り替えても消えません。</span></li>
+          <li><b data-i="ag3.t">操作は同じ</b><span data-i="ag3.d">画像やファイルの添付、承認、質問への回答、中断、ワークツリーまで、どちらのエージェントでも同じ画面で扱えます。</span></li>
+        </ul>
+      </div>
+      <div class="picker" aria-hidden="true">
+        <div class="pk-head"><span data-i="ag.pick">モデルを選ぶ</span><span class="pk-search" data-i="ag.search">検索</span></div>
+        <p class="pk-sec">Codex</p>
+        <div class="pk-row on"><span class="pk-ic cx">Cx</span><div><b data-i="ag.acc1">仕事用 ChatGPT</b><small><span data-i="ag.week">今週の使用</span> 38%</small><i class="pk-bar"><i style="width:38%"></i></i></div><span class="pk-ck">✓</span></div>
+        <div class="pk-row"><span class="pk-ic cx">Cx</span><div><b data-i="ag.acc2">チームのAPIキー</b><small data-i="ag.api">API料金で利用</small></div></div>
+        <p class="pk-sec">Claude Code</p>
+        <div class="pk-row"><span class="pk-ic cl">Cl</span><div><b data-i="ag.acc3">個人の Claude</b><small><span data-i="ag.week">今週の使用</span> 72%</small><i class="pk-bar"><i style="width:72%" class="hi"></i></i></div></div>
+        <div class="pk-row add"><span class="pk-ic">＋</span><div><b data-i="ag.add">アカウントを追加</b></div></div>
+        <div class="pk-foot"><span class="fast">⚡ Fast</span><span data-i="ag.effort">推論の強度: 高</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="screens" class="sec screens">
+    <div class="wrap">
+      <p class="eyebrow" data-i="sc.eyebrow">Screens</p>
+      <h2 data-i="sc.title">Macでも、スマホでも、<br class="sp">同じ会話。</h2>
+      <p class="sub" data-i="sc.sub">デスクではMacアプリで差分とターミナルを見ながら。離れたらiPhoneやAndroidで、同じタスクをそのまま続けます。</p>
+
+      <div class="stage">
+        <div class="mac" aria-hidden="true">
+          <div class="mac-bar"><i></i><i></i><i></i><span>bex</span></div>
+          <div class="mac-body">
+            <aside class="mac-side">
+              <div class="ms-new"><b>＋</b><span data-i="m.new">新しい会話</span></div>
+              <p class="ms-h" data-i="m.projects">プロジェクト</p>
+              <div class="ms-proj">▾ web-shop</div>
+              <div class="ms-item on"><span class="spin"></span><span data-i="m.t1">決済画面のテストを直す</span></div>
+              <div class="ms-item"><span class="st wait"></span><span data-i="m.t2">在庫APIのページング</span></div>
+              <div class="ms-item"><span class="st done"></span><span data-i="m.t3">ヘッダーの文言を英語化</span><svg class="mg" viewBox="0 0 24 24"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></svg></div>
+              <div class="ms-proj">▾ mobile-app</div>
+              <div class="ms-item"><span class="st done"></span><span data-i="m.t4">ログインの再試行</span></div>
+              <p class="ms-h" data-i="m.chats">チャット</p>
+              <div class="ms-item"><span class="st"></span><span data-i="m.t5">リリースノートの下書き</span></div>
+            </aside>
+            <section class="mac-main">
+              <div class="mm-head"><b data-i="m.t1">決済画面のテストを直す</b><span class="run"><span class="spin"></span><span data-i="m.running">実行中 2:14 · テストを実行</span></span></div>
+              <div class="bub me" data-i="m.u1">決済画面のE2Eテストが落ちてるので直して。原因も教えて</div>
+              <div class="ai">
+                <p data-i="m.a1">原因はクーポン適用後の合計金額が、税計算の前に丸められていたことでした。計算順を直し、境界値のテストを追加します。</p>
+                <div class="cmd"><span>▸</span><code>npm test -- checkout</code><em data-i="m.pass">成功 · 24件</em></div>
+                <div class="chg"><span data-i="m.files">3件のファイル</span><b class="add">+42</b><b class="del">−8</b><u data-i="m.diff">変更を表示</u></div>
+              </div>
+              <div class="comp">
+                <span class="ph-t" data-i="m.ask">続きを入力…</span>
+                <div class="comp-r"><span class="fast">⚡ Fast</span><span class="mdl" data-i="m.mdl">Codex · 高</span><span class="mic"></span><span class="send">↑</span></div>
+              </div>
+            </section>
+            <section class="mac-diff">
+              <div class="md-h"><span>checkout/total.ts</span><em>+12 −4</em></div>
+              <pre><span class="ln">18</span>  const subtotal = sum(items)
+<span class="ln del">19</span><del>- const total = round(subtotal - coupon)</del>
+<span class="ln add">19</span><ins>+ const discounted = subtotal - coupon</ins>
+<span class="ln add">20</span><ins>+ const total = round(withTax(discounted))</ins>
+<span class="ln">21</span>  return { subtotal, total }</pre>
+              <div class="md-h term"><span data-i="m.term">ターミナル</span></div>
+              <pre class="tm">$ npm test -- checkout
+<span class="ok">✓</span> applies coupon before tax
+<span class="ok">✓</span> rounds once at the end
+<span class="ok">Tests: 24 passed</span></pre>
+            </section>
+          </div>
+        </div>
+
+        <div class="phones">
+          <figure class="phone" aria-hidden="true">
+            <div class="isl"></div>
+            <div class="scr">
+              <div class="p-top"><span class="p-pc">My Mac · <span data-i="p.conn">接続中</span></span><span class="p-plus">＋</span></div>
+              <h4 data-i="p.tasks">タスク</h4>
+              <p class="p-sec">web-shop</p>
+              <div class="p-row"><span class="spin"></span><div><b data-i="m.t1">決済画面のテストを直す</b><small data-i="p.r1">テストを実行中</small></div></div>
+              <div class="p-row"><span class="st wait"></span><div><b data-i="m.t2">在庫APIのページング</b><small data-i="p.r2">コマンドの承認待ち</small></div></div>
+              <div class="p-row"><span class="st done"></span><div><b data-i="m.t3">ヘッダーの文言を英語化</b><small data-i="p.r3">完了・未確認</small></div></div>
+              <p class="p-sec">mobile-app</p>
+              <div class="p-row"><span class="st done"></span><div><b data-i="m.t4">ログインの再試行</b><small data-i="p.r4">マージ済み</small></div></div>
+            </div>
+            <figcaption data-i="p.c1">タスク一覧</figcaption>
+          </figure>
+
+          <figure class="phone" aria-hidden="true">
+            <div class="isl"></div>
+            <div class="scr">
+              <div class="p-nav"><span>‹</span><b data-i="m.t2">在庫APIのページング</b></div>
+              <div class="bub me sm" data-i="p.u">在庫一覧を50件ずつ返すようにして</div>
+              <div class="ai sm"><p data-i="p.a">カーソル方式で実装しました。テストを流す前に、マイグレーションの実行を確認させてください。</p></div>
+              <div class="req">
+                <p class="rq-t" data-i="p.rq">コマンドの承認待ち</p>
+                <code>npm run db:migrate</code>
+                <div class="ch on" data-i="p.c_1">1. 許可する</div>
+                <div class="ch" data-i="p.c_2">2. このタスクでは常に許可</div>
+                <div class="ch" data-i="p.c_3">3. 拒否して指示する</div>
+              </div>
+            </div>
+            <figcaption data-i="p.c2">承認・質問に答える</figcaption>
+          </figure>
+
+          <figure class="phone lock" aria-hidden="true">
+            <div class="isl wide"><span class="spin"></span><span>2:14</span></div>
+            <div class="scr">
+              <p class="lk-d" data-i="p.date">10月14日 火曜日</p>
+              <p class="lk-t">21:41</p>
+              <div class="la">
+                <div class="la-h"><img src="/assets/icon.png" alt=""><b>bex</b><span>My Mac</span></div>
+                <b class="la-t" data-i="m.t1">決済画面のテストを直す</b>
+                <p data-i="p.la">テストを実行 · 2:14</p>
+                <div class="la-bar"><i></i></div>
+                <p class="la-s" data-i="p.la2">ほか1件が承認待ち</p>
+              </div>
+            </div>
+            <figcaption data-i="p.c3">ロック画面とDynamic Island</figcaption>
+          </figure>
+        </div>
+      </div>
+      <p class="mock-note" data-i="sc.note">※ 画面はアプリの表示をもとにした再現イメージです。</p>
+    </div>
+  </section>
+
+  <section id="features" class="sec">
+    <div class="wrap">
+      <p class="eyebrow" data-i="f.eyebrow">Features</p>
+      <h2 data-i="f.title">机の前にいなくても、<br class="sp">開発は進む。</h2>
+      <p class="sub" data-i="f.sub">作業はいつもあなたのコンピューターで。bexはそれを、手元のどの画面からでも続けられるようにします。</p>
+
+      <div class="feat-hero">
+        <div class="fh-text">
+          <h3 data-i="f1.t">続きは、ポケットから。</h3>
+          <p data-i="f1.d">Macで始めた会話を、iPhoneやAndroidでそのまま続けられます。タスクの状態はロック画面とDynamic Islandに表示され、タップすればその会話が開きます。</p>
+          <ul class="ticks">
+            <li data-i="f1.l1">全端末で同じ会話・同じ下書き</li>
+            <li data-i="f1.l2">iPhoneのLive Activitiesで進み具合を確認</li>
+            <li data-i="f1.l3">切断しても実行は続き、つなぎ直せば最新の状態から</li>
+          </ul>
+        </div>
+        <figure class="fh-img">
+          <img src="/assets/anywhere.jpg" alt="" data-i-alt="f1.alt" width="1536" height="1024" loading="lazy" onerror="this.parentNode.classList.add('ph')">
+        </figure>
+      </div>
+
+      <div class="grid">
+        <article class="card">
+          <div class="ic"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h7"/><circle cx="18" cy="16" r="3"/></svg></div>
+          <h3 data-i="f2.t">選んだ文章で、すぐ質問</h3>
+          <p data-i="f2.d">エージェントの回答を選んで下書きに引用したり、サイドチャットで聞き返したり。元の会話はそのまま残ります。</p>
+        </article>
+        <article class="card">
+          <div class="ic"><svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="9" r="2"/><path d="M6 8v8M18 11c0 4-6 3-10 6"/></svg></div>
+          <h3 data-i="f3.t">タスクごとに、自動でワークツリー</h3>
+          <p data-i="f3.d">新しいタスクは専用のGitワークツリーで動くので、作業どうしがぶつかりません。マージ済みのものは自動で片付けられます。</p>
+        </article>
+        <article class="card">
+          <div class="ic"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></div>
+          <h3 data-i="f4.t">話しかけて指示する</h3>
+          <p data-i="f4.d">音声入力で話した内容がそのまま下書きに入ります。録音に失敗しても、書きかけの文章は消えません。</p>
+        </article>
+        <article class="card">
+          <div class="ic"><svg viewBox="0 0 24 24"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/><path d="M9 12l2 2 4-4"/></svg></div>
+          <h3 data-i="f5.t">承認も質問も、外出先で</h3>
+          <p data-i="f5.d">コマンド実行の許可や、エージェントからの質問にスマホから答えられます。待たせている時間がなくなります。</p>
+        </article>
+        <article class="card">
+          <div class="ic"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M12 15h5"/></svg></div>
+          <h3 data-i="f6.t">ファイル、差分、ターミナル</h3>
+          <p data-i="f6.d">変更の要約から差分を開き、Host上のファイルを編集し、ネイティブのターミナルを操作できます。</p>
+        </article>
+        <article class="card">
+          <div class="ic"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18"/></svg></div>
+          <h3 data-i="f7.t">ログインしたままのブラウザ</h3>
+          <p data-i="f7.d">ChromeのCookieを取り込んで、bexのブラウザでも同じサイトにログインしたまま確認できます。</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section id="how" class="sec sec-alt">
+    <div class="wrap">
+      <p class="eyebrow" data-i="h.eyebrow">How it works</p>
+      <h2 data-i="h.title">3ステップで、つながる。</h2>
+      <ol class="steps">
+        <li>
+          <span class="num">01</span>
+          <h3 data-i="h1.t">Hostを起動する</h3>
+          <p data-i="h1.d">作業するコンピューターでbexを開くと、Host（常駐プログラム）が起動します。Codex・Claude Codeのプロセスはここで動きます。</p>
+          <code>host-daemon --name 'My Mac'</code>
+        </li>
+        <li>
+          <span class="num">02</span>
+          <h3 data-i="h2.t">QRコードでペアリング</h3>
+          <p data-i="h2.d">iPhoneやAndroidで「PCを追加」からQRコードを読み取るだけ。招待は7日間有効で、1回につき1台だけ登録できます。</p>
+          <code>host-daemon invite | qrencode -t ANSIUTF8</code>
+        </li>
+        <li>
+          <span class="num">03</span>
+          <h3 data-i="h3.t">どこからでも指示する</h3>
+          <p data-i="h3.d">LANでもインターネット越しでも、同じ認証済みの接続で会話できます。電車の中から、ソファから、続きをどうぞ。</p>
+          <code>agent-cli &lt;connection&gt; send &lt;thread&gt; "テストを直して"</code>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="security" class="sec">
+    <div class="wrap sec-split">
+      <div>
+        <p class="eyebrow" data-i="s.eyebrow">Security</p>
+        <h2 data-i="s.title">コードは、あなたの<br class="sp">コンピューターに。</h2>
+        <p class="sub" data-i="s.sub">bexはクラウドにコードを預けません。エージェントが動くのは、あなたが信頼するコンピューターだけです。</p>
+      </div>
+      <ul class="sec-list">
+        <li><h3 data-i="s1.t">エンドツーエンドで暗号化</h3><p data-i="s1.d">端末とHostはirohのQUICで直接つながります。中継を通る場合も、中継サーバーは会話を復号できません。</p></li>
+        <li><h3 data-i="s2.t">登録した端末だけ</h3><p data-i="s2.d">招待は1回1台。不要になった端末はいつでも取り消せます。識別鍵は所有者だけが読めるファイルに保存されます。</p></li>
+        <li><h3 data-i="s3.t">認証は各エージェントのまま</h3><p data-i="s3.d">ログイン情報はCodexとClaude Code自身が管理します。bexがトークンをコピーしたり、別のAPIを直接呼んだりはしません。</p></li>
+        <li><h3 data-i="s4.t">広告もトラッキングもなし</h3><p data-i="s4.d">bexには広告や広告トラッキングの機能はありません。</p></li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="platforms" class="sec sec-alt">
+    <div class="wrap">
+      <p class="eyebrow" data-i="p.eyebrow">Platforms</p>
+      <h2 data-i="p.title">使っている画面で、そのまま。</h2>
+      <div class="plats">
+        <div class="plat"><h3>macOS</h3><p>Tahoe 26</p><span data-i="p.mac">デスクトップアプリ・Host・CLI</span></div>
+        <div class="plat"><h3>iPhone / iPad</h3><p>iOS 26</p><span data-i="p.ios">ネイティブアプリ・Live Activities</span></div>
+        <div class="plat"><h3>Android</h3><p>Android 17</p><span data-i="p.android">ネイティブアプリ</span></div>
+        <div class="plat"><h3>Windows</h3><p>Windows 11</p><span data-i="p.win">デスクトップ・Host・CLI</span></div>
+        <div class="plat"><h3>Linux</h3><p>Ubuntu 24.04</p><span data-i="p.linux">ヘッドレスHost・CLI</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="download" class="sec sec-alt">
+    <div class="wrap">
+      <p class="eyebrow" data-i="dl.eyebrow">Download</p>
+      <h2 data-i="dl.title">すべての環境で、bexを。</h2>
+      <p class="sub" data-i="dl.sub">PCにはHostとデスクトップアプリを、スマホにはアプリを入れて、QRコードでつなぎます。</p>
+      <div class="dl-grid" data-dl-grid></div>
+      <p class="dl-note" data-i="dl.note">Windows版は配布ZIPが公開され次第、直接ダウンロードできます。公開前はビルド手順をご案内します。Android版はソースからビルドして使えます。</p>
+    </div>
+  </section>
+
+  <section class="sec final">
+    <div class="wrap final-in">
+      <img src="/assets/icon.png" alt="" width="72" height="72" class="final-icon">
+      <h2 data-i="c.title">エージェントを、連れて出かけよう。</h2>
+      <p class="sub" data-i="c.sub">Production build 74（2026年10月9日）が公開中です。</p>
+      <div class="ctas">
+        <a class="btn" data-dl-primary href="#download">ダウンロード</a>
+        <a class="btn btn-ghost" href="https://github.com/ttizze/remote-agent/blob/main/README.md" data-i="cta.docs">ドキュメントを読む</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-in">
+    <div class="brand"><img src="/assets/icon.png" alt="" width="22" height="22"><span>bex</span></div>
+    <nav>
+      <a href="https://github.com/ttizze/remote-agent">GitHub</a>
+      <a href="https://github.com/ttizze/remote-agent/releases" data-i="ft.releases">リリース</a>
+      <a href="https://github.com/ttizze/remote-agent/blob/main/docs/PRIVACY.md" data-i="ft.privacy">プライバシー</a>
+    </nav>
+    <p class="note" data-i="ft.note">CodexはOpenAI、Claude CodeはAnthropicの製品です。bexはどちらの会社とも提携していません。</p>
+  </div>
+</footer>
+
+<script src="/i18n.js"></script>
+<script src="/download.js"></script>
+</body>
+</html>

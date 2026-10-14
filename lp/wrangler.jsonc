@@ -1,0 +1,6 @@
+{
+  "name": "bex-lp",
+  "compatibility_date": "2026-10-15",
+  "assets": { "directory": "./public" },
+  "routes": [{ "pattern": "getbex.dev", "custom_domain": true }]
+}

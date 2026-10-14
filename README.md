@@ -106,6 +106,12 @@ Host preferences for worktrees (`bex-worktrees.json`) and the directory for chat
 
 To remove a saved PC on iPhone, open **タスク一覧 → PC一覧 → 接続を解除** and confirm. This deletes its authentication key on that iPhone and prevents reconnection after relaunch, while retaining Host conversation data. On Mac, **設定 → 端末と接続 → 接続を解除** revokes the device’s access and closes active connections. Pair again to reconnect. Removing a PC on iPhone does not remove the old device entry from the Mac.
 
+## Windows downloads
+
+Windows 11 users can run a prebuilt ZIP without installing Rust. See
+[Windows installation and build instructions](docs/WINDOWS.md) for prerequisites,
+release downloads, verified CI development artifacts, and source builds.
+
 ## Build the clients
 
 ```sh
