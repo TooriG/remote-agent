@@ -13,8 +13,8 @@ jobs:
     env:
       CARGO_BUILD_JOBS: 4
       CARGO_INCREMENTAL: 0
-      GRADLE_USER_HOME: ${{ runner.temp }}/gradle
-      ANDROID_USER_HOME: ${{ runner.temp }}/android
+      GRADLE_USER_HOME: /tmp/bex-gradle
+      ANDROID_USER_HOME: /tmp/bex-android
     steps:
       - uses: actions/checkout@v4
         with:
