@@ -16,7 +16,7 @@ this workflow change will not produce the new asset; use a tag containing it.
 Android phones show the Android download action prominently. Android buttons link
 directly to the fork's `android-preview-3/bex-android-preview.apk` release asset,
 including when the upstream release API is unavailable. The manual
-`android-download.yml` workflow builds the APK and runs Android unit tests before
+`android-download.yml` workflow builds the APK before
 publishing the APK and SHA-256 checksum. Android 17 (API 37) or newer is required.
 This is a debug-signed preview APK. GitHub-hosted builds
 generate a new debug signing key; switching between preview builds may require
