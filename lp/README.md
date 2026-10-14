@@ -31,7 +31,8 @@ Preview from this directory with `npx wrangler dev` and deploy with
 ## Usage demos
 
 The LP includes three silent ten-second recreated BEX usage demos, with fictional
-project data. These are labeled recreations, not recordings of a real session.
+project data and an English interface. The dark desktop shell follows the supplied
+BEX screenshot, including its sidebar, composer and workspace card. These are labeled recreations, not recordings of a real session.
 Tabs support arrow keys, Home/End and accessible selected states. Inactive and
 out-of-view clips pause. Reduced-motion preferences disable automatic playback;
 native video controls remain available. Only the selected clip is loaded.

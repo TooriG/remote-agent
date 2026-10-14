@@ -1,22 +1,22 @@
 ---
 format: 1280x720
 duration: 30s
-message: BEXの操作を3つの短いデモで伝える
+message: Show BEX usage in three concise English demos
 audience: developers
 mode: autonomous
 ---
-## Frame 1 — エージェントを選ぶ
+## Frame 1 — Choose an agent
 - duration: 10s
-- src: index.html#scene0
+- src: compositions/scene0.html
 - status: built
-0-2s 新規タスク。2-5s ピッカーからClaudeを選択。5-10s 選択結果を保持。
-## Frame 2 — 変更を確認する
+0–2s New chat and composer. 2–5s Open the model picker and choose Claude Code. 5–10s Hold the new conversation confirmation.
+## Frame 2 — Review changes
 - duration: 10s
-- src: index.html#scene1
+- src: compositions/scene1.html
 - status: built
-0-3s 依頼と回答。3-6s 赤/緑の差分。6-10s テスト成功。
-## Frame 3 — スマホから承認
+0–3s Checkout fix request and explanation. 3–6s Red/green code diff. 6–10s 24 passing tests.
+## Frame 3 — Approve on mobile
 - duration: 10s
-- src: index.html#scene2
+- src: compositions/scene2.html
 - status: built
-0-3s PCとスマホの同じタスク。3-5s 許可。5-10s 作業再開を確認。
+0–3s The same task on PC and phone. 3–5s Allow the migration. 5–10s Confirmation and work resumed.
