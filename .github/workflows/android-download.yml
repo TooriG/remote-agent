@@ -1,0 +1,58 @@
+name: Android APK download
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: android-download
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_BUILD_JOBS: 4
+      CARGO_INCREMENTAL: 0
+      GRADLE_USER_HOME: ${{ runner.temp }}/gradle
+      ANDROID_USER_HOME: ${{ runner.temp }}/android
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Free build space
+        run: |
+          for sdk in /usr/local/lib/android /usr/share/dotnet; do
+            if [[ -d "$sdk" ]]; then
+              sudo find "$sdk" -type f -size +10M -delete
+            fi
+          done
+      - uses: cachix/install-nix-action@v31
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cmd-format: nix develop . --command {0}
+          key: android-download-${{ hashFiles('flake.lock') }}
+          cache-on-failure: true
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Test and build installable Android preview
+        run: >-
+          nix develop . --command ./gradlew
+          :apps:mobile:testDebugUnitTest :apps:mobile:assembleDebug
+          --no-daemon --max-workers=4 --build-cache --console=plain
+      - name: Package APK and checksum
+        run: |
+          mkdir -p target/android-packages
+          cp apps/mobile/build/outputs/apk/debug/mobile-debug.apk target/android-packages/bex-android-preview.apk
+          cd target/android-packages
+          sha256sum bex-android-preview.apk > bex-android-preview.apk.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bex-android-preview
+          path: target/android-packages/*
+          if-no-files-found: error
+      - name: Publish APK download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="android-preview-${GITHUB_RUN_NUMBER}"
+          printf 'Android 17 (API 37) or newer. ARM64 and x86-64. Signed debug preview APK.\n\nSource commit: %s\n' "$GITHUB_SHA" > target/android-packages/release-notes.txt
+          gh release create "$tag" target/android-packages/bex-android-preview.apk target/android-packages/bex-android-preview.apk.sha256 --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "BEX Android preview ${GITHUB_RUN_NUMBER}" --notes-file target/android-packages/release-notes.txt
