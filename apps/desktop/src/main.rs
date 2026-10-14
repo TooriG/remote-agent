@@ -101,7 +101,7 @@ fn open_main_window(cx: &mut App) {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
                     title: Some("bex".into()),
-                    appears_transparent: cfg!(target_os = "macos"),
+                    appears_transparent: !cfg!(target_os = "windows"),
                     traffic_light_position: Some(point(
                         px(14.),
                         px((WINDOW_HEADER_HEIGHT - 14.) / 2.),
