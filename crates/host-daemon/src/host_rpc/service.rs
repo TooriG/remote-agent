@@ -1740,24 +1740,65 @@ fn describe_thread(
     capabilities: agent_protocol::session::Capabilities,
     projects: &crate::projects::state::Snapshot,
 ) {
-    let inferred = projects.project_membership(thread.cwd.as_deref());
-    if matches!(
+    // A null native ID also occurs for existing folder-based Codex conversations.
+    // Only a non-null native assignment can override workspace membership.
+    if !matches!(
         thread.project_id,
-        agent_protocol::models::ProjectMembership::Unknown {}
-    ) || (matches!(
-        thread.project_id,
-        agent_protocol::models::ProjectMembership::Unassigned {}
-    ) && inferred
-        .as_deref()
-        .is_some_and(|id| !projects.native_project_ids.contains(id)))
-    {
-        thread.project_id = inferred;
+        agent_protocol::models::ProjectMembership::Assigned(_)
+    ) {
+        thread.project_id = projects.project_membership(thread.cwd.as_deref());
     }
     thread.capabilities = Some(capabilities);
 }
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn native_projects_include_existing_threads_without_a_native_assignment() {
+        use super::*;
+        use agent_protocol::models::{Project, ProjectMembership, ProjectRoot};
+        let directory = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(directory.path()).unwrap();
+        let project = root.join("project");
+        std::fs::create_dir(&project).unwrap();
+        let projects = ProjectStore::new(root.join("bex-worktrees.json"))
+            .load_with_projects(vec![Project {
+                id: "native".into(),
+                name: "Native project".into(),
+                roots: vec![ProjectRoot {
+                    path: project.to_str().unwrap().into(),
+                }],
+                ..Default::default()
+            }])
+            .await
+            .unwrap();
+        for (cwd, membership, expected) in [
+            (
+                project.clone(),
+                ProjectMembership::Unassigned {},
+                Some("native"),
+            ),
+            (
+                project.clone(),
+                ProjectMembership::Unknown {},
+                Some("native"),
+            ),
+            (
+                project.clone(),
+                ProjectMembership::Assigned("explicit-other".into()),
+                Some("explicit-other"),
+            ),
+            (root.join("outside"), ProjectMembership::Unassigned {}, None),
+        ] {
+            let mut thread = Thread {
+                cwd: Some(cwd.to_str().unwrap().into()),
+                project_id: membership,
+                ..Default::default()
+            };
+            describe_thread(&mut thread, Default::default(), &projects);
+            assert_eq!(thread.project_id.as_deref(), expected);
+        }
+    }
     #[tokio::test]
     async fn live_activity_registration_falls_back_without_apns_and_rejects_malformed_tokens() {
         use super::*;

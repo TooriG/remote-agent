@@ -1554,7 +1554,7 @@ async fn title_lists_are_recent_scoped_small_and_expand_without_loading_bodies()
             let cwd = directory.path().join(&id);
             projects.push(json!({"id":id,"name":format!("Project {project:02}"),"roots":[{"path":cwd}]}));
             for index in 1..=18 {
-                threads.push(json!({"id":format!("p{project}-{index}"),"projectId":format!("project-{project}"),"cwd":cwd,"name":format!("Project {project:02} conversation {index:02}"),"updatedAt":project*100+index,"preview":"unused history".repeat(1000)}));
+                threads.push(json!({"id":format!("p{project}-{index}"),"projectId":null,"cwd":cwd,"name":format!("Project {project:02} conversation {index:02}"),"updatedAt":project*100+index,"preview":"unused history".repeat(1000)}));
             }
         }
         for index in 1..=18 {

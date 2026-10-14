@@ -483,8 +483,10 @@ explicit Codex choices survive catalog refreshes. Effort and service-tier option
 are shown only when the provider reports them.
 
 The Host reads Codex projects through `project/list`, retaining native project
-IDs, names, roots and explicit conversation assignments, including projectless
-conversations. BEX-only registered roots remain available. This reads native state
+IDs, names, roots and explicit conversation assignments. When a conversation has
+no native assignment, its working directory determines its project; unrelated
+directories and the Host's standalone chat directory stay unassigned.
+BEX-only registered roots remain available. This reads native state
 without editing `.codex-global-state.json`.
 Starting a conversation in a native project passes its project ID to Codex, so
 the assignment survives reopening in either client.
