@@ -1,5 +1,6 @@
 (() => {
   const en = {
+    'visual.note': 'UI illustrations show the features and setup flow.',
     'simple.local.body': 'Code stays with you. Connections are encrypted.',
     'simple.local.title': 'Your computer does the work.',
     'simple.mobile.body': 'The same conversations, instructions and approvals.',

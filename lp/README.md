@@ -107,3 +107,9 @@ and release announcements are omitted. Three short benefits, pairing steps and
 downloads provide the remaining hierarchy; detailed specifications live in Docs.
 The demo retains a short recreation label. Supporting text is at least 14px,
 with body copy at 16px or larger; the video contains its own recorded UI text.
+
+The three benefits and three pairing steps each have a distinct generated UI
+illustration in `public/assets/ui/`. These illustrate agent selection, mobile
+approval, local execution, opening the app, QR pairing and resuming a conversation.
+They use fictional data and are labeled as UI illustrations, not live screenshots.
+Images reserve a 3:2 layout box, load lazily and stack with the cards on phones.

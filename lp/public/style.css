@@ -366,3 +366,14 @@ html.mob .works { display: none; }
 .dl-card .tag { display: none; }
 @media(max-width:640px){.demo-tabs button{font-size:14px;white-space:normal;line-height:1.35;min-height:44px;padding:8px 4px}}
 @media(max-width:640px){.benefits{grid-template-columns:1fr;gap:28px}.sec{padding:56px 0}.demo.sec{padding:44px 0 56px}.demo-note{font-size:14px}.dl-card p{font-size:14px}.steps{grid-template-columns:1fr}.hero .lead{font-size:17px}.hero h1{font-size:36px}}
+
+/* Generated UI illustrations for the six feature/setup items. */
+.benefits { gap: 24px; }
+.benefit-visual, .step-visual { display: block; width: 100%; height: auto; aspect-ratio: 3 / 2; object-fit: contain; background: #080909; }
+.benefit-visual { margin-bottom: 24px; border: 1px solid var(--line); border-radius: 12px; }
+.steps li { padding: 0; overflow: hidden; }
+.steps li h3 { margin: 24px 24px 0; }
+.steps li p { margin: 12px 24px 28px; }
+.step-visual { border-bottom: 1px solid var(--line); }
+.visual-note { margin-top: 28px; color: var(--fg-2); font-size: 14px; }
+@media(max-width:640px){.benefits{gap:36px}.benefit-visual{margin-bottom:20px}.steps{gap:24px}}
