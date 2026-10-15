@@ -2553,7 +2553,7 @@ async fn fork_opens_the_returned_thread_and_keeps_later_deltas() {
         if navigate {
             new_chat(&store, &mut reader, &mut writer, "/new").await;
         }
-        writer.reply(&request, json!({"result":{"thread":{"id":{"provider":"codex","id":"forked"},"cwd":"/fixture","turns":[{"id":"copy","items":[{"id":"reply","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"copied","phase":"unknown"}}}}}],"status":"unknown"}]}}})).await.unwrap();
+        writer.reply(&request, json!({"result":{"model":{"provider":"codex","id":"fork-model"},"thread":{"id":{"provider":"codex","id":"forked"},"cwd":"/fixture","turns":[{"id":"copy","items":[{"id":"reply","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"copied","phase":"unknown"}}}}}],"status":"unknown"}]}}})).await.unwrap();
         if !navigate {
             loop {
                 let opening = read(&mut reader).await;
@@ -2617,7 +2617,9 @@ async fn fork_opens_the_returned_thread_and_keeps_later_deltas() {
         if navigate {
             assert!(!store.snapshot().drafts.contains_key(&fork_key));
         } else {
-            assert_eq!(store.snapshot().drafts[&fork_key], draft);
+            let mut expected = draft.as_ref().clone();
+            expected.model = Some(agent_protocol::models::ModelRef { provider: ProviderKind::Codex, id: "fork-model".into() });
+            assert_eq!(store.snapshot().drafts[&fork_key].as_ref(), &expected);
         }
         store.close().await.unwrap();
     }

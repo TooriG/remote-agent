@@ -890,12 +890,12 @@ impl Operation for ForkSession {
             .drafts
             .get(&DraftKey::from(self.thread_id.clone()))
             .cloned();
-        let mut effects = open_thread(snapshot, output.thread, output.model);
         if let Some(draft) = draft {
             Arc::make_mut(&mut snapshot.drafts)
                 .entry(id.clone().into())
                 .or_insert(draft);
         }
+        let mut effects = open_thread(snapshot, output.thread, output.model);
         effects.push(Effect::execute(ReadThread::new(id)));
         effects
     }
