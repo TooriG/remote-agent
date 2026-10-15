@@ -2537,7 +2537,7 @@ async fn fork_opens_the_returned_thread_and_keeps_later_deltas() {
     for navigate in [false, true] {
         let source = SessionRef { provider: ProviderKind::Codex, id: "thread".into() };
         let mut initial = snapshot();
-        let draft = Arc::new(Draft { text: "unsent message".into(), effort: Some("low".into()), ..Default::default() });
+        let draft = Arc::new(Draft { text: "unsent message".into(), ..Default::default() });
         Arc::make_mut(&mut initial.drafts).insert(source.clone().into(), draft.clone());
         let (store, mut reader, mut writer) = setup(initial).await;
         let fork = store.dispatch(Intent::ForkSession(op::ForkSession::new(
