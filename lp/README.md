@@ -81,3 +81,7 @@ connected app-server account. Choose an available catalog model when that happen
 BEX does not silently substitute another model. The live smoke test completed a
 reply on an explicit fork using GPT-6-Astra, while this account rejected
 gpt-6.1-sol through the BEX connection.
+
+The hero is followed immediately by the app screen showcase and usage demos.
+Decorative hero and anywhere illustrations are not displayed; the recreation
+labels remain so the showcase is not mistaken for a live session recording.
