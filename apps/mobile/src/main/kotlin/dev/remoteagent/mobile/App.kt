@@ -18,6 +18,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.ui.graphics.Color
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -436,8 +438,11 @@ internal fun RemoteAgentApp(
     BackHandler(model.screen != Screen.Hosts) {
         if (model.screen == Screen.Conversation) model.showThreads() else model.showHosts()
     }
-    MaterialTheme {
-        Scaffold(topBar = { TopAppBar(title = { Text("Remote Agent") }) }) { padding ->
+    MaterialTheme(colorScheme = darkColorScheme(
+        background = Color.Black, surface = Color(0xFF101010), surfaceVariant = Color(0xFF292929),
+        primary = Color(0xFFE8E8E8), onPrimary = Color.Black,
+        onBackground = Color(0xFFF0F0F0), onSurface = Color(0xFFF0F0F0))) {
+        Scaffold(topBar = { if (model.screen != Screen.Conversation) TopAppBar(title = { Text("BEX") }) }) { padding ->
             Column(Modifier.padding(padding)) {
                 ConnectionStatus(
                     model.notice ?: model.snapshot.error(),
@@ -536,8 +541,8 @@ private fun androidx.compose.foundation.layout.ColumnScope.ConversationPane(mode
             Modifier.weight(1f),
             scrollToTopRequest = scrollToTopRequest,
         ) { onSend ->
-            ThreadComposer(model.snapshot, model::perform, onSend) {
-                AttachmentButton(model.selectionKey, model::attach)
+            ThreadComposer(model.snapshot, model::perform, onSend) { transferState ->
+                AttachmentButton(model.selectionKey, model::attach, transferState)
             }
         }
     }

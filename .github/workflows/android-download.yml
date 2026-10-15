@@ -36,7 +36,7 @@ jobs:
       - name: Test and build installable Android preview
         run: |
           nix develop . --command ./gradlew \
-            :apps:mobile:testDebugUnitTest :apps:mobile:lintDebug :apps:mobile:assembleDebug \
+            :apps:mobile:testDebugUnitTest :apps:mobile:compileDebugAndroidTestKotlin :apps:mobile:lintDebug :apps:mobile:assembleDebug \
             --no-daemon --max-workers=4 --build-cache --console=plain || {
               cat apps/mobile/build/intermediates/lint_intermediate_text_report/debug/lintReportDebug/lint-results-debug.txt 2>/dev/null || true
               exit 1

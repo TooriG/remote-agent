@@ -3,6 +3,7 @@ package dev.remoteagent.mobile
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -43,6 +44,9 @@ import dev.remoteagent.core.DownloadFile
 import dev.remoteagent.core.DraftKey
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.Outcome
+import dev.remoteagent.core.MarkdownFileReference
+import dev.remoteagent.core.MarkdownFileKind
+import dev.remoteagent.core.markdownFileTarget
 import java.io.File
 import java.util.Base64
 import java.util.UUID
@@ -77,12 +81,16 @@ internal fun DraftAttachments(
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
 ) {
     if (attachments.isEmpty()) return
+    var preview by remember(draftKey) { mutableStateOf<MarkdownFileReference?>(null) }
     Row(
         Modifier.horizontalScroll(rememberScrollState()).padding(8.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         attachments.forEachIndexed { index, attachment ->
             Box {
+                val reference = markdownFileTarget(attachment.path, "")
+                    ?: MarkdownFileReference(attachment.path, attachment.name,
+                        if (attachment.isImage) MarkdownFileKind.IMAGE else MarkdownFileKind.FILE, null, null)
                 if (attachment.isImage) {
                     AttachmentThumbnail(
                         attachment.path,
@@ -90,10 +98,15 @@ internal fun DraftAttachments(
                         perform,
                         Modifier.size(120.dp)
                             .clip(RoundedCornerShape(12.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .clickable(onClickLabel = "プレビュー") { preview = reference },
                         contentScale = ContentScale.Crop,
                     )
-                } else Text(attachment.name, Modifier.padding(end = 48.dp, top = 12.dp))
+                } else Text("▤ ${attachment.name}\nタップしてプレビュー",
+                    Modifier.clip(RoundedCornerShape(12.dp))
+                        .clickable(onClickLabel = "${attachment.name}をプレビュー") { preview = reference }
+                        .background(MaterialTheme.colorScheme.surface)
+                        .padding(start = 12.dp, end = 48.dp, top = 12.dp, bottom = 12.dp))
                 IconButton(
                     onClick = { perform(Intent.RemoveAttachment(draftKey, index.toUInt())) {} },
                     modifier =
@@ -117,6 +130,7 @@ internal fun DraftAttachments(
             }
         }
     }
+    preview?.let { reference -> ConversationFilePreview(reference, perform) { preview = null } }
 }
 
 @Composable

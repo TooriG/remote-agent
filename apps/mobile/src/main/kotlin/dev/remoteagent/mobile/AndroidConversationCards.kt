@@ -25,6 +25,8 @@ import androidx.compose.ui.unit.dp
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.Outcome
 import dev.remoteagent.core.RenderedItem
+import dev.remoteagent.core.MarkdownFileReference
+import dev.remoteagent.core.MarkdownFileKind
 
 @Composable
 internal fun ThreadMessageCard(
@@ -138,13 +140,18 @@ private fun MessageImages(
     isUser: Boolean,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
 ) {
+    var preview by remember(sources) { mutableStateOf<MarkdownFileReference?>(null) }
+    fun openImage(source: String) {
+        preview = MarkdownFileReference(source, "画像プレビュー", MarkdownFileKind.IMAGE, null, null)
+    }
     if (isUser && sources.isNotEmpty()) {
         Row(
             Modifier.horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             sources.forEach { source ->
-                AttachmentThumbnail(source, "添付画像", perform, Modifier.size(80.dp))
+                AttachmentThumbnail(source, "添付画像", perform,
+                    Modifier.size(80.dp).clickable(onClickLabel = "画像をプレビュー") { openImage(source) })
             }
         }
     }
@@ -154,8 +161,10 @@ private fun MessageImages(
                 source,
                 "生成画像",
                 perform,
-                Modifier.widthIn(max = 320.dp).fillMaxWidth().height(320.dp),
+                Modifier.widthIn(max = 320.dp).fillMaxWidth().height(320.dp)
+                    .clickable(onClickLabel = "画像をプレビュー") { openImage(source) },
             )
         }
     }
+    preview?.let { reference -> ConversationFilePreview(reference, perform) { preview = null } }
 }

@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -71,9 +72,9 @@ internal fun ConversationFilePreview(
     DisposableEffect(target) { onDispose { target.delete() } }
     LaunchedEffect(reference.path, page) {
         try {
-            downloadPreview(target, reference.path, perform)
             loading = true
             error = null
+            downloadPreview(target, reference.path, perform)
             content =
                 withContext(Dispatchers.IO) {
                     readFilePreview(target, reference.kind, reference.path, page)
@@ -90,9 +91,10 @@ internal fun ConversationFilePreview(
         onDismissRequest = dismiss,
         title = { Text(reference.label) },
         text = {
-            Column {
+            Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState())) {
                 SelectionContainer {
-                    Text(reference.path, style = MaterialTheme.typography.labelSmall)
+                    Text(reference.path.takeUnless { it.startsWith("data:image/") } ?: "添付画像",
+                        style = MaterialTheme.typography.labelSmall)
                 }
                 if (loading) CircularProgressIndicator()
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
@@ -180,7 +182,7 @@ private fun PreviewText(
             Text(if (rendered) "ソースを表示" else "Markdownを表示")
         }
     if (rendered)
-        Column(Modifier.verticalScroll(rememberScrollState())) {
+        Column {
             ConversationBody(text, cwd, perform)
         }
     else
@@ -188,7 +190,6 @@ private fun PreviewText(
             Text(
                 text,
                 Modifier.horizontalScroll(rememberScrollState())
-                    .verticalScroll(rememberScrollState())
                     .padding(top = 12.dp),
                 fontFamily = FontFamily.Monospace,
             )
@@ -201,6 +202,12 @@ private suspend fun downloadPreview(
     perform: ((Intent, (Result<Outcome>) -> Unit) -> Unit)?,
 ) {
     if (!target.exists()) {
+        if (path.startsWith("data:image/")) {
+            withContext(Dispatchers.IO) {
+                target.writeBytes(java.util.Base64.getDecoder().decode(path.substringAfter(',')))
+            }
+            return
+        }
         checkNotNull(perform) { "Hostに接続してください" }
         suspendCancellableCoroutine<Unit> { continuation ->
             perform(Intent.DownloadFile(DownloadFile(path, target.path))) { result ->

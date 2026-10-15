@@ -12,6 +12,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
@@ -22,6 +25,11 @@ import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.Surface
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -39,6 +47,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.style.TextOverflow
 import dev.remoteagent.core.ActivityExpansion
 import dev.remoteagent.core.ActivityPresentation
 import dev.remoteagent.core.ConversationRow
@@ -246,14 +256,17 @@ internal fun ThreadComposer(
     snapshot: Snapshot,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
     onSend: () -> Unit,
-    attach: @Composable () -> Unit,
+    attach: @Composable ((Boolean) -> Unit) -> Unit,
 ) {
     val navigation = snapshot.navigation()
     val draft = snapshot.draft(navigation.draftKey)
     var sending by remember { mutableStateOf(false) }
+    var uploading by remember(navigation.draftKey) { mutableStateOf(false) }
     val inputUnavailable =
         navigation.threadId?.let(snapshot::conversation)?.inputUnavailableReason()
-    Column(Modifier.padding(12.dp)) {
+    Surface(Modifier.padding(horizontal = 12.dp, vertical = 8.dp).imePadding(),
+        shape = RoundedCornerShape(28.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+    Column(Modifier.padding(8.dp)) {
         inputUnavailable?.let { Text(it) }
         DraftAttachments(draft.attachments, navigation.draftKey, perform)
         val cursor = draft.text.toByteArray(Charsets.UTF_8).size.toUInt()
@@ -262,7 +275,7 @@ internal fun ThreadComposer(
                 perform(Intent.InsertInvocation(navigation.draftKey, it.text, invocation)) {}
             }
         }
-        OutlinedTextField(
+        TextField(
             draft.text,
             {
                 perform(
@@ -274,12 +287,17 @@ internal fun ThreadComposer(
                 ) {}
             },
             Modifier.fillMaxWidth(),
-            label = { Text("メッセージ") },
+            placeholder = { Text("AIに依頼する…") },
+            colors = TextFieldDefaults.colors(
+                focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
+                focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent),
             minLines = 2,
+            maxLines = 5,
         )
-        Row {
-            attach()
-            Button(
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            attach { uploading = it }
+            ModelPickerButton(snapshot, perform, Modifier.weight(1f))
+            FilledIconButton(
                 onClick = {
                     sending = true
                     onSend()
@@ -291,11 +309,15 @@ internal fun ThreadComposer(
                     snapshot.modelProviderForDraft(navigation.draftKey) != null &&
                         inputUnavailable == null &&
                         !sending &&
+                        !uploading &&
                         (draft.text.isNotBlank() || draft.attachments.isNotEmpty()),
             ) {
-                Text("送信")
+                if (sending) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                else Text("↑", fontSize = 24.sp,
+                    modifier = Modifier.semantics { contentDescription = "送信" })
             }
         }
+    }
     }
 }
 
@@ -303,38 +325,49 @@ internal fun ThreadComposer(
 internal fun AttachmentButton(
     selectionKey: Pair<String?, dev.remoteagent.core.DraftKey>,
     attach: (Pair<String?, dev.remoteagent.core.DraftKey>, Uri, () -> Unit) -> Unit,
+    transferState: (Boolean) -> Unit = {},
 ) {
     var transferring by remember { mutableStateOf(false) }
     var selection by remember { mutableStateOf(selectionKey) }
     val picker =
-        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-            if (uri != null) {
+        rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+            if (uris.isNotEmpty()) {
                 transferring = true
-                attach(selection, uri) { transferring = false }
+                transferState(true)
+                fun uploadNext(index: Int) {
+                    if (index == uris.size) {
+                        transferring = false
+                        transferState(false)
+                    } else attach(selection, uris[index]) { uploadNext(index + 1) }
+                }
+                uploadNext(0)
             }
         }
-    Button(
+    IconButton(
         onClick = {
             selection = selectionKey
             picker.launch(arrayOf("*/*"))
         },
         enabled = !transferring,
+        modifier = Modifier.semantics { contentDescription = if (transferring) "アップロード中" else "写真やファイルを添付" },
     ) {
-        Text(if (transferring) "添付中…" else "添付")
+        if (transferring) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+        else Text("+", fontSize = 32.sp)
     }
 }
 
 @Composable
 internal fun ConversationHeader(title: String?, showThreads: () -> Unit, scrollToTop: () -> Unit) {
-    Row {
-        Button(onClick = showThreads) { Text("タスク一覧") }
+    Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconButton(onClick = showThreads,
+            modifier = Modifier.semantics { contentDescription = "タスク一覧に戻る" }) { Text("‹", fontSize = 32.sp) }
         TextButton(
             onClick = scrollToTop,
             colors =
                 ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
-            modifier = Modifier.semantics { contentDescription = "会話の先頭へ" },
+            modifier = Modifier.weight(1f).semantics { contentDescription = "会話の先頭へ" },
         ) {
-            Text(title?.ifEmpty { "タスク" } ?: "チャット")
+            Text(title?.ifEmpty { "タスク" } ?: "新しいチャット", maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
