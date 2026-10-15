@@ -71,9 +71,20 @@ android {
         applicationId = "dev.remoteagent.mobile"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = System.getenv("BEX_ANDROID_VERSION_CODE")?.toIntOrNull() ?: 1
+        versionName = System.getenv("BEX_ANDROID_VERSION_CODE")?.let { "0.1.0-preview.$it" } ?: "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+    signingConfigs {
+        getByName("debug") {
+            System.getenv("BEX_ANDROID_PREVIEW_KEYSTORE")?.let { path ->
+                storeFile = file(path)
+                storeType = "pkcs12"
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

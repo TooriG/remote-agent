@@ -33,6 +33,15 @@ jobs:
           key: android-download-${{ hashFiles('flake.lock') }}
           cache-on-failure: true
       - uses: gradle/actions/setup-gradle@v4
+      - name: Restore stable preview signing key
+        env:
+          PREVIEW_KEYSTORE_BASE64: ${{ secrets.BEX_ANDROID_PREVIEW_KEYSTORE_BASE64 }}
+        run: |
+          test -n "$PREVIEW_KEYSTORE_BASE64" || { echo 'Configure BEX_ANDROID_PREVIEW_KEYSTORE_BASE64 before publishing previews.'; exit 1; }
+          umask 077
+          printf '%s' "$PREVIEW_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/bex-preview.p12"
+          echo "BEX_ANDROID_PREVIEW_KEYSTORE=$RUNNER_TEMP/bex-preview.p12" >> "$GITHUB_ENV"
+          echo "BEX_ANDROID_VERSION_CODE=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
       - name: Test and build installable Android preview
         run: |
           nix develop . --command ./gradlew \
