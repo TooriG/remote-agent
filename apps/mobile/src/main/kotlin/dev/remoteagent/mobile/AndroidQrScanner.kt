@@ -92,8 +92,12 @@ private fun bindCamera(
     val providerFuture = ProcessCameraProvider.getInstance(activity)
     providerFuture.addListener(
         {
-            if (ContextCompat.checkSelfPermission(activity, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED)
+            if (
+                ContextCompat.checkSelfPermission(activity, Manifest.permission.CAMERA) !=
+                    PackageManager.PERMISSION_GRANTED
+            ) {
                 return@addListener
+            }
             val provider = runCatching { providerFuture.get() }.getOrNull() ?: return@addListener
             val scannerOptions = BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
             val scanner = BarcodeScanning.getClient(scannerOptions)
