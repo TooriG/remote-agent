@@ -439,7 +439,10 @@ internal fun RemoteAgentApp(
         if (model.screen == Screen.Conversation) model.showThreads() else model.showHosts()
     }
     BexTheme {
-        Scaffold(topBar = { if (model.screen != Screen.Conversation) TopAppBar(title = { Text("bex", fontWeight = androidx.compose.ui.text.font.FontWeight.Bold) }) }) { padding ->
+        Scaffold(topBar = {
+            if (model.screen != Screen.Conversation)
+                TopAppBar(title = { Text("bex", fontWeight = androidx.compose.ui.text.font.FontWeight.Bold) })
+        }) { padding ->
             Column(Modifier.padding(padding)) {
                 ConnectionStatus(
                     model.notice ?: model.snapshot.error(),
