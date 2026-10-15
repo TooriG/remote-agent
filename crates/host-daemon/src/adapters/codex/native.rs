@@ -47,7 +47,11 @@ pub(super) fn parse_model(
 pub(super) fn include_configured_model(
     models: &mut Vec<agent_protocol::models::Model>,
     config: &Value,
+    account_type: Option<&str>,
 ) {
+    if account_type != Some("apiKey") {
+        return;
+    }
     let Some(id) = config["model"].as_str().filter(|id| !id.trim().is_empty()) else {
         return;
     };
@@ -62,36 +66,9 @@ pub(super) fn include_configured_model(
             id: id.into(),
         },
         display_name: id.into(),
-        // This explicit fallback covers the documented GPT-6.1 model when an
-        // older Codex catalog omits it. Native catalog entries always win.
-        // https://developers.openai.com/api/docs/models/gpt-6.1-sol (2026-10-15)
-        default_reasoning_effort: if id == "gpt-6.1-sol" {
-            "medium".into()
-        } else {
-            String::new()
-        },
-        supported_reasoning_efforts: if id == "gpt-6.1-sol" {
-            ["low", "medium", "high", "xhigh", "max"]
-                .into_iter()
-                .map(|effort| agent_protocol::models::ReasoningEffort {
-                    reasoning_effort: effort.into(),
-                })
-                .collect()
-        } else {
-            Vec::new()
-        },
-        // Fast is exposed by Codex as priority. API Ultrafast availability alone
-        // does not establish support in a ChatGPT-authenticated Codex session.
-        service_tiers: if id == "gpt-6.1-sol" {
-            Some(vec![agent_protocol::models::ServiceTier {
-                id: "priority".into(),
-                name: Some("Fast".into()),
-                description: None,
-                fast: true,
-            }])
-        } else {
-            None
-        },
+        default_reasoning_effort: String::new(),
+        supported_reasoning_efforts: Vec::new(),
+        service_tiers: None,
         default_service_tier: None,
         is_default: Some(false),
     });
@@ -681,29 +658,17 @@ mod tests {
     }
 
     #[test]
-    fn configured_gpt_6_1_uses_documented_capabilities_but_unknown_models_do_not() {
+    fn configured_models_do_not_establish_chatgpt_access_or_capabilities() {
         let mut models = Vec::new();
-        include_configured_model(&mut models, &json!({"model":"gpt-6.1-sol"}));
-        include_configured_model(&mut models, &json!({"model":"gpt-6.1-sol"}));
+        let config = json!({"model":"gpt-6.1-sol"});
+        include_configured_model(&mut models, &config, Some("chatgpt"));
+        include_configured_model(&mut models, &config, None);
+        assert!(models.is_empty());
+        include_configured_model(&mut models, &config, Some("apiKey"));
+        include_configured_model(&mut models, &config, Some("apiKey"));
         assert_eq!(models.len(), 1);
-        assert_eq!(models[0].model.id, "gpt-6.1-sol");
-        assert_eq!(
-            models[0]
-                .supported_reasoning_efforts
-                .iter()
-                .map(|effort| effort.reasoning_effort.as_str())
-                .collect::<Vec<_>>(),
-            ["low", "medium", "high", "xhigh", "max"]
-        );
-        assert_eq!(models[0].service_tiers.as_ref().unwrap()[0].id, "priority");
-        include_configured_model(&mut models, &json!({"model":null}));
-        assert_eq!(models.len(), 1);
-        include_configured_model(&mut models, &json!({"model":"custom-model"}));
-        assert!(models[1].supported_reasoning_efforts.is_empty());
-        assert!(models[1].service_tiers.is_none());
-        models[0].supported_reasoning_efforts.truncate(1);
-        include_configured_model(&mut models, &json!({"model":"gpt-6.1-sol"}));
-        assert_eq!(models[0].supported_reasoning_efforts.len(), 1);
+        assert!(models[0].supported_reasoning_efforts.is_empty());
+        assert!(models[0].service_tiers.is_none());
     }
 
     #[test]

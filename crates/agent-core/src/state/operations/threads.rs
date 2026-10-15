@@ -788,6 +788,7 @@ fn select_thread(snapshot: &mut Snapshot, id: crate::session::SessionRef, cwd: S
             Some(id.provider),
             &snapshot.models,
             !snapshot.model_errors.is_empty(),
+            snapshot.allows_custom_codex_models(),
         );
         if settings
             != (
@@ -983,6 +984,7 @@ impl Operation for LoadModels {
             &snapshot
                 .model_defaults_for_cwd(&snapshot.navigation.cwd)
                 .providers,
+            snapshot.allows_custom_codex_models(),
         );
         snapshot.models = Arc::new(models);
         snapshot.model_errors = Arc::new(errors);

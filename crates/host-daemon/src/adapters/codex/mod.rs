@@ -967,7 +967,14 @@ impl Agent for Codex {
             .collect::<Result<Vec<_>, _>>()?;
         if params.cursor.is_none() {
             if let Ok(config) = config {
-                native::include_configured_model(&mut data, &config["config"]);
+                let account: Result<Value, _> = self
+                    .request("account/read", &serde_json::json!({"refreshToken":false}))
+                    .await;
+                let account_type = account
+                    .as_ref()
+                    .ok()
+                    .and_then(|value| value["account"]["type"].as_str());
+                native::include_configured_model(&mut data, &config["config"], account_type);
             }
         }
         Ok(op::ModelPage {

@@ -477,10 +477,12 @@ Desktop attachment thumbnails open the image gallery. Their visible remove
 control has an occluding hitbox and consumes its click: removing an attachment
 preserves the draft text and never opens the gallery beneath the control.
 
-The Codex picker includes the configured model even when it is absent from the
-recommended catalog. Exact model IDs can also be entered in the picker search;
-explicit Codex choices survive catalog refreshes. Effort and service-tier options
-are shown only when the provider reports them.
+ChatGPT-authenticated Codex uses the native account's model catalog. A configured
+ID alone does not establish access: unsupported saved selections return to the
+native default on catalog/account refresh. Exact custom IDs and configured-model
+fallbacks remain available for API-key accounts. Incomplete catalog reads preserve
+saved choices. Effort and service-tier options come from the provider; the Host
+does not invent capabilities for a configured ID.
 
 The Host reads Codex projects through `project/list`, retaining native project
 IDs, names, roots and explicit conversation assignments. When a conversation has

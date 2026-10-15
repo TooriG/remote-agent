@@ -645,7 +645,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 if provider.is_some() && !previous.models.is_empty() {
                     let (model, effort, tier) = supported_settings(
                         draft.model.as_ref(), draft.effort.as_deref(), draft.service_tier.as_deref(),
-                        provider, &previous.models, !previous.model_errors.is_empty(),
+                        provider, &previous.models, !previous.model_errors.is_empty(), previous.allows_custom_codex_models(),
                     );
                     let settings = (model.cloned(), effort.map(str::to_owned), tier.map(str::to_owned));
                     (draft.model, draft.effort, draft.service_tier) = settings;
@@ -790,7 +790,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 _ => unreachable!(),
             };
             if !previous.models.is_empty() {
-                let (model, effort, tier) = supported_settings(draft.model.as_ref(), draft.effort.as_deref(), draft.service_tier.as_deref(), None, &previous.models, !previous.model_errors.is_empty());
+                let (model, effort, tier) = supported_settings(draft.model.as_ref(), draft.effort.as_deref(), draft.service_tier.as_deref(), None, &previous.models, !previous.model_errors.is_empty(), previous.allows_custom_codex_models());
                 let settings = (
                     model.cloned(),
                     effort.map(str::to_owned),
@@ -1102,6 +1102,24 @@ fn clear_session_status(thread: &mut Thread) {
     }
 }
 
+pub(crate) fn allows_custom_codex_models(
+    accounts: Option<&agent_protocol::operations::Accounts>,
+) -> bool {
+    let Some(accounts) = accounts else {
+        return true;
+    };
+    let provider = crate::session::ProviderKind::Codex;
+    let account = accounts.selected.get(&provider).and_then(|id| {
+        accounts
+            .accounts
+            .iter()
+            .find(|account| account.provider == provider && &account.id == id)
+    });
+    account
+        .and_then(|account| account.plan_type.as_deref())
+        .is_none_or(|plan| plan == "API key")
+}
+
 pub(crate) fn normalized_model_drafts(
     drafts: &Arc<BTreeMap<DraftKey, Arc<Draft>>>,
     models: &[crate::models::Model],
@@ -1109,6 +1127,7 @@ pub(crate) fn normalized_model_drafts(
     selected_accounts: Option<&std::collections::HashMap<crate::session::ProviderKind, String>>,
     active_draft: &DraftKey,
     provider_defaults: &HashMap<crate::session::ProviderKind, ProviderModelDefaults>,
+    allow_custom_codex: bool,
 ) -> Arc<BTreeMap<DraftKey, Arc<Draft>>> {
     let mut next = drafts.clone();
     for (key, previous) in drafts.iter() {
@@ -1147,6 +1166,7 @@ pub(crate) fn normalized_model_drafts(
             Some(provider),
             models,
             !errors.is_empty(),
+            allow_custom_codex,
         );
         if (model, effort, tier)
             != (
@@ -1171,6 +1191,7 @@ pub(crate) fn supported_settings<'a>(
     default_provider: Option<crate::session::ProviderKind>,
     models: &'a [Model],
     catalog_incomplete: bool,
+    allow_custom_codex: bool,
 ) -> (
     Option<&'a crate::models::ModelRef>,
     Option<&'a str>,
@@ -1180,7 +1201,9 @@ pub(crate) fn supported_settings<'a>(
     // Absence in an incomplete catalog cannot invalidate a saved choice either.
     if (catalog_incomplete
         || selected_model.is_some_and(|model| {
-            model.provider == crate::session::ProviderKind::Codex && !model.id.is_empty()
+            allow_custom_codex
+                && model.provider == crate::session::ProviderKind::Codex
+                && !model.id.is_empty()
         }))
         && selected_model.is_some()
         && !models

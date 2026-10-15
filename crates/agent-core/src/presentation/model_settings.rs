@@ -168,6 +168,7 @@ impl Snapshot {
             Some(provider),
             &self.models,
             !self.model_errors.is_empty(),
+            self.allows_custom_codex_models(),
         );
         quick_controls(
             self.models
@@ -213,6 +214,10 @@ impl Snapshot {
             .collect()
     }
 
+    pub(crate) fn allows_custom_codex_models(&self) -> bool {
+        crate::state::allows_custom_codex_models(self.account.accounts.as_deref())
+    }
+
     /// A recommended picker catalog is not an exhaustive allowlist of Codex IDs.
     pub fn custom_model_choice(
         &self,
@@ -220,7 +225,8 @@ impl Snapshot {
         query: &str,
     ) -> Option<ModelRef> {
         let id = query.trim();
-        (provider == Some(ProviderKind::Codex)
+        (self.allows_custom_codex_models()
+            && provider == Some(ProviderKind::Codex)
             && !id.is_empty()
             && !id.chars().any(char::is_whitespace)
             && !self
@@ -258,6 +264,7 @@ impl Snapshot {
             Some(provider),
             &self.models,
             !self.model_errors.is_empty(),
+            self.allows_custom_codex_models(),
         );
         model.cloned()
     }
