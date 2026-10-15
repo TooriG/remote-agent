@@ -34,10 +34,23 @@ jobs:
           cache-on-failure: true
       - uses: gradle/actions/setup-gradle@v4
       - name: Test and build installable Android preview
-        run: >-
-          nix develop . --command ./gradlew
-          :apps:mobile:testDebugUnitTest :apps:mobile:lintDebug :apps:mobile:assembleDebug
-          --no-daemon --max-workers=4 --build-cache --console=plain
+        run: |
+          nix develop . --command ./gradlew \
+            :apps:mobile:testDebugUnitTest :apps:mobile:lintDebug :apps:mobile:assembleDebug \
+            --no-daemon --max-workers=4 --build-cache --console=plain || {
+              cat apps/mobile/build/intermediates/lint_intermediate_text_report/debug/lintReportDebug/lint-results-debug.txt 2>/dev/null || true
+              exit 1
+            }
+      - name: Retain Android verification reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-verification-reports
+          path: |
+            apps/mobile/build/reports/
+            apps/mobile/build/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Package APK and checksum
         run: |
           mkdir -p target/android-packages
