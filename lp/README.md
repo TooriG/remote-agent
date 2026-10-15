@@ -23,11 +23,16 @@ including when the upstream release API is unavailable. The manual
 `android-download.yml` workflow builds the APK before
 publishing the APK and SHA-256 checksum. Android 8.0 (API 26) or newer and an
 ARM64 or x86-64 device are required.
-This is a debug-signed preview APK. GitHub-hosted builds
-generate a new debug signing key; switching between preview builds may require
-uninstalling the old app (which removes its local pairing keys and drafts).
-Production updates need a stable maintainer-owned signing key before this preview
-distribution can become a normal update channel. No signing keys are checked in.
+This is a debuggable preview APK, not a store release. The download workflow now
+requires a persistent PKCS#12 signing key in the repository's
+`BEX_ANDROID_PREVIEW_KEYSTORE_BASE64` secret; no signing keys are checked in.
+The preview key uses alias `androiddebugkey` and password `android`; its private
+key must remain secret despite that conventional debug password. The workflow
+increments the Android version code using its run number, so later previews from
+the same repository/key can update in place. Keep a private backup of this key.
+Older previews used disposable keys: replacing one removes its local pairing keys
+and drafts, so save unsent drafts first and pair again afterward. PC conversation
+history stays on the Host. A production/store release needs its own signing policy.
 
 Check download behavior with `node --test lp/download.test.cjs`.
 Preview from this directory with `npx wrangler dev` and deploy with
@@ -81,6 +86,20 @@ connected app-server account. Choose an available catalog model when that happen
 BEX does not silently substitute another model. The live smoke test completed a
 reply on an explicit fork using GPT-6-Astra, while this account rejected
 gpt-6.1-sol through the BEX connection.
+
+## Mobile composer
+
+The Android UI uses a dark conversation screen and a rounded bottom composer.
+Tap the model/effort label to search models and change the provider-advertised
+reasoning effort or speed tier. Existing conversations stay on their provider;
+new chats can choose either provider. Speed descriptions are shown when available.
+
+The plus button opens Android's multiple-document picker. Picked files upload to
+the paired Host through authenticated binary transfers; sending stays disabled
+until uploads finish. Attachment cards open image, PDF, text/code and Markdown
+previews. Conversation images and existing Markdown file links also open previews.
+Binary or oversized text files show an explicit unavailable-preview message.
+Draft attachments can be removed without deleting the original phone file.
 
 The hero is followed immediately by the app screen showcase and usage demos.
 Decorative hero and anywhere illustrations are not displayed; the recreation
