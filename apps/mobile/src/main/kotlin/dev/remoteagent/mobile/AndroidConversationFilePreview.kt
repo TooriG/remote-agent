@@ -9,8 +9,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -49,11 +49,7 @@ private const val PDF_PREVIEW_WIDTH = 1024f
 private const val PREVIEW_MAX_PIXELS = 2048
 private const val TEXT_PREVIEW_MAX_BYTES = 2 * 1024 * 1024
 
-private data class FilePreview(
-    val text: String? = null,
-    val image: ImageBitmap? = null,
-    val pages: Int = 0,
-)
+private data class FilePreview(val text: String? = null, val image: ImageBitmap? = null, val pages: Int = 0)
 
 /** File previews always read through the authenticated Host transfer. */
 @Composable
@@ -75,10 +71,7 @@ internal fun ConversationFilePreview(
             loading = true
             error = null
             downloadPreview(target, reference.path, perform)
-            content =
-                withContext(Dispatchers.IO) {
-                    readFilePreview(target, reference.kind, reference.path, page)
-                }
+            content = withContext(Dispatchers.IO) { readFilePreview(target, reference.kind, reference.path, page) }
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             throw cancelled
         } catch (expectedFailure: Exception) {
@@ -93,8 +86,10 @@ internal fun ConversationFilePreview(
         text = {
             Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState())) {
                 SelectionContainer {
-                    Text(reference.path.takeUnless { it.startsWith("data:image/") } ?: "添付画像",
-                        style = MaterialTheme.typography.labelSmall)
+                    Text(
+                        reference.path.takeUnless { it.startsWith("data:image/") } ?: "添付画像",
+                        style = MaterialTheme.typography.labelSmall,
+                    )
                 }
                 if (loading) CircularProgressIndicator()
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
@@ -104,7 +99,7 @@ internal fun ConversationFilePreview(
                     PreviewText(
                         content,
                         reference.kind == MarkdownFileKind.MARKDOWN,
-                        reference.path.substringBeforeLast('/'),
+                        reference.path.replace('\\', '/').substringBeforeLast('/'),
                         perform,
                     )
                 }
@@ -112,39 +107,27 @@ internal fun ConversationFilePreview(
         },
         confirmButton = { TextButton(onClick = dismiss) { Text("閉じる") } },
         dismissButton = {
-            TextButton(onClick = { clipboard.setText(AnnotatedString(reference.path)) }) {
-                Text("パスをコピー")
-            }
+            TextButton(onClick = { clipboard.setText(AnnotatedString(reference.path)) }) { Text("パスをコピー") }
         },
     )
 }
 
-private fun readFilePreview(
-    target: File,
-    kind: MarkdownFileKind,
-    path: String,
-    page: Int,
-): FilePreview {
+private fun readFilePreview(target: File, kind: MarkdownFileKind, path: String, page: Int): FilePreview {
     return when {
         path.endsWith(".pdf", ignoreCase = true) -> {
-            PdfRenderer(ParcelFileDescriptor.open(target, ParcelFileDescriptor.MODE_READ_ONLY))
-                .use { pdf ->
-                    pdf.openPage(page).use { pdfPage ->
-                        val scale =
-                            minOf(
-                                PDF_PREVIEW_WIDTH / pdfPage.width,
-                                PREVIEW_MAX_PIXELS.toFloat() / pdfPage.height,
-                            )
-                        val bitmap =
-                            Bitmap.createBitmap(
-                                (pdfPage.width * scale).toInt().coerceAtLeast(1),
-                                (pdfPage.height * scale).toInt().coerceAtLeast(1),
-                                Bitmap.Config.ARGB_8888,
-                            )
-                        pdfPage.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                        FilePreview(image = bitmap.asImageBitmap(), pages = pdf.pageCount)
-                    }
+            PdfRenderer(ParcelFileDescriptor.open(target, ParcelFileDescriptor.MODE_READ_ONLY)).use { pdf ->
+                pdf.openPage(page).use { pdfPage ->
+                    val scale = minOf(PDF_PREVIEW_WIDTH / pdfPage.width, PREVIEW_MAX_PIXELS.toFloat() / pdfPage.height)
+                    val bitmap =
+                        Bitmap.createBitmap(
+                            (pdfPage.width * scale).toInt().coerceAtLeast(1),
+                            (pdfPage.height * scale).toInt().coerceAtLeast(1),
+                            Bitmap.Config.ARGB_8888,
+                        )
+                    pdfPage.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                    FilePreview(image = bitmap.asImageBitmap(), pages = pdf.pageCount)
                 }
+            }
         }
         kind == MarkdownFileKind.IMAGE -> {
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -152,13 +135,10 @@ private fun readFilePreview(
             val options =
                 BitmapFactory.Options().apply {
                     inSampleSize = 1
-                    while (
-                        maxOf(bounds.outWidth, bounds.outHeight) / inSampleSize > PREVIEW_MAX_PIXELS
-                    ) inSampleSize *= 2
+                    while (maxOf(bounds.outWidth, bounds.outHeight) / inSampleSize > PREVIEW_MAX_PIXELS) inSampleSize *=
+                        2
                 }
-            FilePreview(
-                image = checkNotNull(BitmapFactory.decodeFile(target.path, options)).asImageBitmap()
-            )
+            FilePreview(image = checkNotNull(BitmapFactory.decodeFile(target.path, options)).asImageBitmap())
         }
         else -> {
             check(target.length() <= TEXT_PREVIEW_MAX_BYTES) { "プレビューできるサイズを超えています" }
@@ -177,20 +157,13 @@ private fun PreviewText(
     perform: ((Intent, (Result<Outcome>) -> Unit) -> Unit)?,
 ) {
     var rendered by remember(text) { mutableStateOf(markdown) }
-    if (markdown)
-        TextButton(onClick = { rendered = !rendered }) {
-            Text(if (rendered) "ソースを表示" else "Markdownを表示")
-        }
-    if (rendered)
-        Column {
-            ConversationBody(text, cwd, perform)
-        }
+    if (markdown) TextButton(onClick = { rendered = !rendered }) { Text(if (rendered) "ソースを表示" else "Markdownを表示") }
+    if (rendered) Column { ConversationBody(text, cwd, perform) }
     else
         SelectionContainer {
             Text(
                 text,
-                Modifier.horizontalScroll(rememberScrollState())
-                    .padding(top = 12.dp),
+                Modifier.horizontalScroll(rememberScrollState()).padding(top = 12.dp),
                 fontFamily = FontFamily.Monospace,
             )
         }
@@ -211,8 +184,7 @@ private suspend fun downloadPreview(
         checkNotNull(perform) { "Hostに接続してください" }
         suspendCancellableCoroutine<Unit> { continuation ->
             perform(Intent.DownloadFile(DownloadFile(path, target.path))) { result ->
-                if (continuation.isActive) continuation.resumeWith(result.map { Unit })
-                else target.delete()
+                if (continuation.isActive) continuation.resumeWith(result.map { Unit }) else target.delete()
             }
         }
     }

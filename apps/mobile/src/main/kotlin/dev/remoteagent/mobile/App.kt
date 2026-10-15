@@ -18,12 +18,11 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.ui.graphics.Color
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -31,6 +30,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import dev.remoteagent.core.AgentException
@@ -96,8 +96,10 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     var notice by mutableStateOf<String?>(null)
     val loadingHistory: Boolean
         get() = snapshot.navigation().threadId?.let { snapshot.operationRunning(OperationKey.History(it)) } ?: false
+
     val loadingThreads: Boolean
         get() = snapshot.operationRunning(OperationKey.SessionList)
+
     var list by mutableStateOf<ThreadList?>(null)
         private set
 
@@ -438,10 +440,18 @@ internal fun RemoteAgentApp(
     BackHandler(model.screen != Screen.Hosts) {
         if (model.screen == Screen.Conversation) model.showThreads() else model.showHosts()
     }
-    MaterialTheme(colorScheme = darkColorScheme(
-        background = Color.Black, surface = Color(0xFF101010), surfaceVariant = Color(0xFF292929),
-        primary = Color(0xFFE8E8E8), onPrimary = Color.Black,
-        onBackground = Color(0xFFF0F0F0), onSurface = Color(0xFFF0F0F0))) {
+    MaterialTheme(
+        colorScheme =
+            darkColorScheme(
+                background = Color.Black,
+                surface = Color(0xFF101010),
+                surfaceVariant = Color(0xFF292929),
+                primary = Color(0xFFE8E8E8),
+                onPrimary = Color.Black,
+                onBackground = Color(0xFFF0F0F0),
+                onSurface = Color(0xFFF0F0F0),
+            )
+    ) {
         Scaffold(topBar = { if (model.screen != Screen.Conversation) TopAppBar(title = { Text("BEX") }) }) { padding ->
             Column(Modifier.padding(padding)) {
                 ConnectionStatus(
@@ -455,20 +465,21 @@ internal fun RemoteAgentApp(
                         PairingScreen(model.busy, model::pair, model::showHosts, requestQrScan)
                     model.screen == Screen.Hosts ->
                         ProfilesScreen(model.profiles, model::selectProfile) { model.screen = Screen.Pairing }
-                    model.screen == Screen.Threads -> Box(Modifier.weight(1f)) {
-                        ThreadListScreen(
-                            model.list,
-                            model.snapshot.listQuery(),
-                            model.loadingThreads,
-                            { intent ->
-                                if (intent is Intent.NewChat || intent is Intent.ReadThread) {
-                                    model.screen = Screen.Conversation
-                                }
-                                model.perform(intent)
-                            },
-                            model::showHosts,
-                        )
-                    }
+                    model.screen == Screen.Threads ->
+                        Box(Modifier.weight(1f)) {
+                            ThreadListScreen(
+                                model.list,
+                                model.snapshot.listQuery(),
+                                model.loadingThreads,
+                                { intent ->
+                                    if (intent is Intent.NewChat || intent is Intent.ReadThread) {
+                                        model.screen = Screen.Conversation
+                                    }
+                                    model.perform(intent)
+                                },
+                                model::showHosts,
+                            )
+                        }
                     else -> ConversationPane(model)
                 }
             }

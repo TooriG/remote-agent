@@ -78,5 +78,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="android-preview-${GITHUB_RUN_NUMBER}"
-          printf 'Android 8.0 (API 26) or newer. ARM64 and x86-64. Signed debug preview APK.\n\nSource commit: %s\n' "$GITHUB_SHA" > target/android-packages/release-notes.txt
+          printf 'Android 8.0 (API 26) or newer. ARM64 and x86-64. Signed preview APK with a stable repository signing key.\n\nDark mobile composer, model/effort/speed choices, multiple-file upload and image/PDF/text previews.\n\nOlder previews used disposable signing keys and cannot be updated in place. Preserve unsent mobile drafts before replacing an older installation. PC conversation history remains on the Host. This and later previews from this repository reuse the same signing key.\n\nSource commit: %s\n' "$GITHUB_SHA" > target/android-packages/release-notes.txt
           gh release create "$tag" target/android-packages/bex-android-preview.apk target/android-packages/bex-android-preview.apk.sha256 --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "BEX Android preview ${GITHUB_RUN_NUMBER}" --notes-file target/android-packages/release-notes.txt

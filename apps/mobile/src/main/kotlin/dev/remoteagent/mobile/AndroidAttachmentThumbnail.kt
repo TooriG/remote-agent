@@ -7,10 +7,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -43,9 +43,9 @@ import dev.remoteagent.core.Attachment
 import dev.remoteagent.core.DownloadFile
 import dev.remoteagent.core.DraftKey
 import dev.remoteagent.core.Intent
-import dev.remoteagent.core.Outcome
-import dev.remoteagent.core.MarkdownFileReference
 import dev.remoteagent.core.MarkdownFileKind
+import dev.remoteagent.core.MarkdownFileReference
+import dev.remoteagent.core.Outcome
 import dev.remoteagent.core.markdownFileTarget
 import java.io.File
 import java.util.Base64
@@ -56,11 +56,7 @@ import kotlinx.coroutines.withContext
 private const val THUMBNAIL_MAX_PIXELS = 512
 
 @Composable
-internal fun ImageSkeleton(
-    modifier: Modifier,
-    label: String = "画像を読み込み中",
-    tag: String = "image.loading.skeleton",
-) {
+internal fun ImageSkeleton(modifier: Modifier, label: String = "画像を読み込み中", tag: String = "image.loading.skeleton") {
     Box(
         modifier
             .placeholder(
@@ -88,9 +84,15 @@ internal fun DraftAttachments(
     ) {
         attachments.forEachIndexed { index, attachment ->
             Box {
-                val reference = markdownFileTarget(attachment.path, "")
-                    ?: MarkdownFileReference(attachment.path, attachment.name,
-                        if (attachment.isImage) MarkdownFileKind.IMAGE else MarkdownFileKind.FILE, null, null)
+                val reference =
+                    markdownFileTarget(attachment.path, "")
+                        ?: MarkdownFileReference(
+                            attachment.path,
+                            attachment.name,
+                            if (attachment.isImage) MarkdownFileKind.IMAGE else MarkdownFileKind.FILE,
+                            null,
+                            null,
+                        )
                 if (attachment.isImage) {
                     AttachmentThumbnail(
                         attachment.path,
@@ -102,28 +104,27 @@ internal fun DraftAttachments(
                             .clickable(onClickLabel = "プレビュー") { preview = reference },
                         contentScale = ContentScale.Crop,
                     )
-                } else Text("▤ ${attachment.name}\nタップしてプレビュー",
-                    Modifier.clip(RoundedCornerShape(12.dp))
-                        .clickable(onClickLabel = "${attachment.name}をプレビュー") { preview = reference }
-                        .background(MaterialTheme.colorScheme.surface)
-                        .padding(start = 12.dp, end = 48.dp, top = 12.dp, bottom = 12.dp))
+                } else
+                    Text(
+                        "▤ ${attachment.name}\nタップしてプレビュー",
+                        Modifier.clip(RoundedCornerShape(12.dp))
+                            .clickable(onClickLabel = "${attachment.name}をプレビュー") { preview = reference }
+                            .background(MaterialTheme.colorScheme.surface)
+                            .padding(start = 12.dp, end = 48.dp, top = 12.dp, bottom = 12.dp),
+                    )
                 IconButton(
                     onClick = { perform(Intent.RemoveAttachment(draftKey, index.toUInt())) {} },
                     modifier =
-                            Modifier.size(48.dp)
-                                .align(Alignment.TopEnd)
-                                .offset(x = 4.dp, y = -4.dp)
-                                .semantics { contentDescription = "${attachment.name}を外す" },
+                        Modifier.size(48.dp).align(Alignment.TopEnd).offset(x = 4.dp, y = -4.dp).semantics {
+                            contentDescription = "${attachment.name}を外す"
+                        },
                 ) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopEnd) {
                         Icon(
                             painterResource(R.drawable.ic_close),
                             contentDescription = null,
                             tint = Color.Black,
-                            modifier =
-                                Modifier.size(18.dp)
-                                    .background(Color.White, CircleShape)
-                                    .padding(3.dp),
+                            modifier = Modifier.size(18.dp).background(Color.White, CircleShape).padding(3.dp),
                         )
                     }
                 }

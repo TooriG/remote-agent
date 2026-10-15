@@ -23,10 +23,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.remoteagent.core.Intent
+import dev.remoteagent.core.MarkdownFileKind
+import dev.remoteagent.core.MarkdownFileReference
 import dev.remoteagent.core.Outcome
 import dev.remoteagent.core.RenderedItem
-import dev.remoteagent.core.MarkdownFileReference
-import dev.remoteagent.core.MarkdownFileKind
 
 @Composable
 internal fun ThreadMessageCard(
@@ -60,8 +60,7 @@ internal fun ThreadMessageCard(
                 } else ConversationBody(body, cwd, perform)
             }
         if (changes.isNotEmpty()) ChangedFilesSummary(changes, loadChanges)
-        if (!isUser && content.kind == "agent")
-            MessageFooter(content.body.orEmpty(), timestampMs, fork)
+        if (!isUser && content.kind == "agent") MessageFooter(content.body.orEmpty(), timestampMs, fork)
         if (isUser) MessageTime(timestampMs)
         if (isUser && content.nativeId == null) {
             content.title?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
@@ -75,8 +74,7 @@ private fun MessageTime(timestampMs: ULong?) {
         ?.takeIf { it <= Long.MAX_VALUE.toULong() }
         ?.let {
             Text(
-                java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT)
-                    .format(java.util.Date(it.toLong())),
+                java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(it.toLong())),
                 style = MaterialTheme.typography.labelSmall,
             )
         }
@@ -145,13 +143,14 @@ private fun MessageImages(
         preview = MarkdownFileReference(source, "画像プレビュー", MarkdownFileKind.IMAGE, null, null)
     }
     if (isUser && sources.isNotEmpty()) {
-        Row(
-            Modifier.horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             sources.forEach { source ->
-                AttachmentThumbnail(source, "添付画像", perform,
-                    Modifier.size(80.dp).clickable(onClickLabel = "画像をプレビュー") { openImage(source) })
+                AttachmentThumbnail(
+                    source,
+                    "添付画像",
+                    perform,
+                    Modifier.size(80.dp).clickable(onClickLabel = "画像をプレビュー") { openImage(source) },
+                )
             }
         }
     }
@@ -161,8 +160,9 @@ private fun MessageImages(
                 source,
                 "生成画像",
                 perform,
-                Modifier.widthIn(max = 320.dp).fillMaxWidth().height(320.dp)
-                    .clickable(onClickLabel = "画像をプレビュー") { openImage(source) },
+                Modifier.widthIn(max = 320.dp).fillMaxWidth().height(320.dp).clickable(onClickLabel = "画像をプレビュー") {
+                    openImage(source)
+                },
             )
         }
     }

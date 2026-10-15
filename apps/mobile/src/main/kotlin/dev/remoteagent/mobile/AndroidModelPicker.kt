@@ -32,8 +32,11 @@ import dev.remoteagent.core.ProviderKind
 import dev.remoteagent.core.Snapshot
 
 @Composable
-internal fun ModelPickerButton(snapshot: Snapshot, perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
-    modifier: Modifier = Modifier) {
+internal fun ModelPickerButton(
+    snapshot: Snapshot,
+    perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val key = snapshot.navigation().draftKey
     val draft = snapshot.draft(key)
     val provider = snapshot.modelProviderForDraft(key)
@@ -42,68 +45,104 @@ internal fun ModelPickerButton(snapshot: Snapshot, perform: (Intent, (Result<Out
     val controls = snapshot.modelQuickControls(key)
     var open by remember(key) { mutableStateOf(false) }
     TextButton(onClick = { open = true }, modifier = modifier.testTag("model.settings")) {
-        Text(listOfNotNull(if (controls.fast) "⚡" else null, model?.displayName ?: selected?.id ?: "モデルを選択",
-            controls.effort.takeIf { it.isNotEmpty() }?.let(::effortLabel)).joinToString(" "),
-            maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(
+            listOfNotNull(
+                    if (controls.fast) "⚡" else null,
+                    model?.displayName ?: selected?.id ?: "モデルを選択",
+                    controls.effort.takeIf { it.isNotEmpty() }?.let(::effortLabel),
+                )
+                .joinToString(" "),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
     if (open) {
         var query by remember(key) { mutableStateOf("") }
         val fixedProvider = snapshot.navigation().threadId?.provider
         val choices = snapshot.modelsMatching(fixedProvider, query)
-        AlertDialog(onDismissRequest = { open = false }, title = { Text("モデルと実行設定") }, text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(query, { query = it }, label = { Text("モデルを検索") },
-                    singleLine = true, modifier = Modifier.fillMaxWidth())
-                if (fixedProvider != null) Text("この会話のAIは固定されています。別のAIは新規チャットで選べます。",
-                    style = MaterialTheme.typography.bodySmall)
-                LazyColumn(Modifier.heightIn(max = 220.dp)) {
-                    items(choices, key = { "${it.model.provider}:${it.model.id}" }) { choice ->
-                        TextButton(onClick = { perform(Intent.SelectModel(key, choice.model)) {} },
-                            modifier = Modifier.fillMaxWidth()) {
-                            Column(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-                                Text("${if (choice.model == selected) "✓ " else ""}${choice.displayName}")
-                                Text(if (choice.model.provider == ProviderKind.CODEX) "Codex" else "Claude",
-                                    style = MaterialTheme.typography.labelSmall)
+        AlertDialog(
+            onDismissRequest = { open = false },
+            title = { Text("モデルと実行設定") },
+            text = {
+                Column(
+                    Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedTextField(
+                        query,
+                        { query = it },
+                        label = { Text("モデルを検索") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (fixedProvider != null)
+                        Text("この会話のAIは固定されています。別のAIは新規チャットで選べます。", style = MaterialTheme.typography.bodySmall)
+                    LazyColumn(Modifier.heightIn(max = 220.dp)) {
+                        items(choices, key = { "${it.model.provider}:${it.model.id}" }) { choice ->
+                            TextButton(
+                                onClick = { perform(Intent.SelectModel(key, choice.model)) {} },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Column(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+                                    Text("${if (choice.model == selected) "✓ " else ""}${choice.displayName}")
+                                    Text(
+                                        if (choice.model.provider == ProviderKind.CODEX) "Codex" else "Claude",
+                                        style = MaterialTheme.typography.labelSmall,
+                                    )
+                                }
                             }
                         }
                     }
-                }
-                if (choices.isEmpty()) Text("モデルがありません。検索条件やPCとの接続を確認してください。")
-                if (controls.efforts.isNotEmpty()) {
-                    Text("推論量", style = MaterialTheme.typography.labelLarge)
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        controls.efforts.forEach { effort ->
-                            FilterChip(selected = controls.effort == effort,
-                                onClick = { perform(Intent.SelectEffort(key, effort)) {} },
-                                label = { Text(effortLabel(effort)) })
+                    if (choices.isEmpty()) Text("モデルがありません。検索条件やPCとの接続を確認してください。")
+                    if (controls.efforts.isNotEmpty()) {
+                        Text("推論量", style = MaterialTheme.typography.labelLarge)
+                        Row(
+                            Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            controls.efforts.forEach { effort ->
+                                FilterChip(
+                                    selected = controls.effort == effort,
+                                    onClick = { perform(Intent.SelectEffort(key, effort)) {} },
+                                    label = { Text(effortLabel(effort)) },
+                                )
+                            }
                         }
                     }
-                }
-                if (controls.speedChoices.isNotEmpty()) {
-                    Text("速度", style = MaterialTheme.typography.labelLarge)
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        controls.speedChoices.forEach { speed ->
-                            FilterChip(selected = speed.selected,
-                                onClick = { perform(Intent.SelectServiceTier(key, speed.id)) {} },
-                                label = { Text(speed.label) })
+                    if (controls.speedChoices.isNotEmpty()) {
+                        Text("速度", style = MaterialTheme.typography.labelLarge)
+                        Row(
+                            Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            controls.speedChoices.forEach { speed ->
+                                FilterChip(
+                                    selected = speed.selected,
+                                    onClick = { perform(Intent.SelectServiceTier(key, speed.id)) {} },
+                                    label = { Text(speed.label) },
+                                )
+                            }
                         }
-                    }
-                    controls.speedChoices.firstOrNull { it.selected }?.description?.let {
-                        Text(it, style = MaterialTheme.typography.bodySmall)
+                        controls.speedChoices
+                            .firstOrNull { it.selected }
+                            ?.description
+                            ?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                     }
                 }
-            }
-        }, confirmButton = { TextButton(onClick = { open = false }) { Text("完了") } })
+            },
+            confirmButton = { TextButton(onClick = { open = false }) { Text("完了") } },
+        )
     }
 }
 
-private fun effortLabel(value: String): String = when (value) {
-    "low" -> "低"
-    "medium" -> "中"
-    "high" -> "高"
-    "xhigh" -> "最高"
-    "max" -> "最大"
-    "minimal" -> "最小"
-    "none" -> "なし"
-    else -> value
-}
+private fun effortLabel(value: String): String =
+    when (value) {
+        "low" -> "低"
+        "medium" -> "中"
+        "high" -> "高"
+        "xhigh" -> "最高"
+        "max" -> "最大"
+        "minimal" -> "最小"
+        "none" -> "なし"
+        else -> value
+    }

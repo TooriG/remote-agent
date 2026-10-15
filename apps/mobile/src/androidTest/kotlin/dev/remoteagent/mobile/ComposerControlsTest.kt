@@ -19,17 +19,36 @@ import org.junit.Test
 class ComposerControlsTest {
     @get:Rule val compose = createComposeRule()
 
-    @Test fun existingConversationKeepsItsProviderAndDispatchesModelAndEffortChoices() {
+    @Test
+    fun existingConversationKeepsItsProviderAndDispatchesModelAndEffortChoices() {
         val identity = JSONObject("""{"provider":"codex","id":"fixture"}""")
         val key = JSONObject().put("Session", JSONObject().put("session", identity))
-        val state = JSONObject(Snapshot.empty().serialize().decodeToString())
-            .put("navigation", JSONObject().put("thread_id", identity).put("draft_key", key).put("cwd", "/fixture"))
-            .put("models", JSONArray("""[
+        val state =
+            JSONObject(Snapshot.empty().serialize().decodeToString())
+                .put("navigation", JSONObject().put("thread_id", identity).put("draft_key", key).put("cwd", "/fixture"))
+                .put(
+                    "models",
+                    JSONArray(
+                        """[
               {"id":"one","model":{"provider":"codex","id":"one"},"displayName":"Fixture One","defaultReasoningEffort":"low","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"high"}]},
               {"id":"two","model":{"provider":"codex","id":"two"},"displayName":"Fixture Two","defaultReasoningEffort":"low","supportedReasoningEfforts":[]},
               {"id":"claude","model":{"provider":"claude","id":"claude"},"displayName":"Other Provider","defaultReasoningEffort":"low","supportedReasoningEfforts":[]}
-            ]"""))
-            .put("drafts", JSONArray().put(JSONArray().put(key).put(JSONObject("""{"text":"draft","attachments":[],"model":{"provider":"codex","id":"one"},"effort":"low"}"""))))
+            ]"""
+                    ),
+                )
+                .put(
+                    "drafts",
+                    JSONArray()
+                        .put(
+                            JSONArray()
+                                .put(key)
+                                .put(
+                                    JSONObject(
+                                        """{"text":"draft","attachments":[],"model":{"provider":"codex","id":"one"},"effort":"low"}"""
+                                    )
+                                )
+                        ),
+                )
         Snapshot.restore(state.toString().encodeToByteArray()).use { snapshot ->
             val intents = mutableListOf<Intent>()
             compose.setContent { MaterialTheme { ModelPickerButton(snapshot, { intent, _ -> intents.add(intent) }) } }
@@ -44,16 +63,20 @@ class ComposerControlsTest {
         }
     }
 
-    @Test fun attachmentOpensAuthenticatedPreviewAndShowsTransferFailure() {
+    @Test
+    fun attachmentOpensAuthenticatedPreviewAndShowsTransferFailure() {
         Snapshot.empty().use { snapshot ->
             val intents = mutableListOf<Intent>()
             compose.setContent {
                 MaterialTheme {
-                    DraftAttachments(listOf(Attachment("/fixture/notes.txt", "notes.txt", false)),
-                        snapshot.navigation().draftKey, { intent, complete ->
+                    DraftAttachments(
+                        listOf(Attachment("/fixture/notes.txt", "notes.txt", false)),
+                        snapshot.navigation().draftKey,
+                        { intent, complete ->
                             intents.add(intent)
                             complete(Result.failure(IOException("preview transfer unavailable")))
-                        })
+                        },
+                    )
                 }
             }
             compose.onNodeWithText("タップしてプレビュー", substring = true).performClick()

@@ -11,27 +11,26 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.Surface
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -46,9 +45,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.text.style.TextOverflow
 import dev.remoteagent.core.ActivityExpansion
 import dev.remoteagent.core.ActivityPresentation
 import dev.remoteagent.core.ConversationRow
@@ -77,8 +76,7 @@ internal fun ThreadDetailScreen(
 ) {
     val threadId = snapshot.navigation().threadId
     val listState = rememberLazyListState()
-    var activityExpansion by
-        remember(threadId) { mutableStateOf(emptyMap<String, ActivityExpansion>()) }
+    var activityExpansion by remember(threadId) { mutableStateOf(emptyMap<String, ActivityExpansion>()) }
     var following by remember(threadId) { mutableStateOf(true) }
     LaunchedEffect(scrollToTopRequest) {
         if (scrollToTopRequest > 0) {
@@ -107,8 +105,7 @@ internal fun ThreadDetailScreen(
                         activityHeader = { activity ->
                             ActivityHeader(activity, activityExpansion[activity.id]) { choice ->
                                 activityExpansion = activityExpansion + (activity.id to choice)
-                                if (choice.expanded)
-                                    activity.loadItems?.let { perform(Intent.LoadTurnItems(it)) {} }
+                                if (choice.expanded) activity.loadItems?.let { perform(Intent.LoadTurnItems(it)) {} }
                             }
                         },
                     )
@@ -140,10 +137,7 @@ private fun BoxScope.LatestMessageButton(
                 }
             },
             colors =
-                IconButtonDefaults.filledIconButtonColors(
-                    containerColor = Color.DarkGray,
-                    contentColor = Color.White,
-                ),
+                IconButtonDefaults.filledIconButtonColors(containerColor = Color.DarkGray, contentColor = Color.White),
             modifier =
                 Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp).semantics {
                     contentDescription = "最新のメッセージへ"
@@ -181,8 +175,7 @@ private fun ConversationContent(
 ) {
     val timestampMs = row.timestampMs
     when (val content = row.content) {
-        is ConversationRowContent.User ->
-            ThreadMessageCard(content.item, true, cwd, perform, timestampMs)
+        is ConversationRowContent.User -> ThreadMessageCard(content.item, true, cwd, perform, timestampMs)
         is ConversationRowContent.Response ->
             ThreadMessageCard(
                 content.item,
@@ -196,24 +189,19 @@ private fun ConversationContent(
                     if (threadId != null && content.forkTurnId != null)
                         ({
                             perform(
-                                Intent.ForkSession(
-                                    dev.remoteagent.core.ForkSession(threadId, content.forkTurnId)
-                                )
+                                Intent.ForkSession(dev.remoteagent.core.ForkSession(threadId, content.forkTurnId))
                             ) {}
                         })
                     else null,
             )
         is ConversationRowContent.Activity ->
             ThreadActivityCard(content.item, cwd, perform) { itemId ->
-                if (threadId != null)
-                    perform(Intent.ReadItem(ReadItem(threadId, content.turnId, itemId))) {}
+                if (threadId != null) perform(Intent.ReadItem(ReadItem(threadId, content.turnId, itemId))) {}
             }
         is ConversationRowContent.ActivityHeader -> activityHeader(content.activity)
         is ConversationRowContent.PendingRequest ->
             RequestCard(content.request) { answer, complete ->
-                perform(Intent.Respond(Respond(content.request.id, answer))) {
-                    complete(it.exceptionOrNull()?.message)
-                }
+                perform(Intent.Respond(Respond(content.request.id, answer))) { complete(it.exceptionOrNull()?.message) }
             }
         is ConversationRowContent.Error -> {
             Text(content.error.title, style = MaterialTheme.typography.labelLarge)
@@ -222,10 +210,7 @@ private fun ConversationContent(
         }
         is ConversationRowContent.InProgress ->
             Button(
-                onClick = {
-                    if (threadId != null)
-                        perform(Intent.Interrupt(Interrupt(threadId, content.turnId))) {}
-                }
+                onClick = { if (threadId != null) perform(Intent.Interrupt(Interrupt(threadId, content.turnId))) {} }
             ) {
                 Text("停止")
             }
@@ -239,15 +224,8 @@ private fun ActivityHeader(
     toggle: (ActivityExpansion) -> Unit,
 ) {
     val expanded = activityIsExpanded(activity, choice)
-    TextButton(
-        onClick = {
-            if (activity.activityCanCollapse) toggle(ActivityExpansion(activity.status, !expanded))
-        }
-    ) {
-        Text(
-            activity.activitySummary +
-                if (activity.activityCanCollapse) if (expanded) " ⌄" else " ›" else ""
-        )
+    TextButton(onClick = { if (activity.activityCanCollapse) toggle(ActivityExpansion(activity.status, !expanded)) }) {
+        Text(activity.activitySummary + if (activity.activityCanCollapse) if (expanded) " ⌄" else " ›" else "")
     }
 }
 
@@ -262,62 +240,61 @@ internal fun ThreadComposer(
     val draft = snapshot.draft(navigation.draftKey)
     var sending by remember { mutableStateOf(false) }
     var uploading by remember(navigation.draftKey) { mutableStateOf(false) }
-    val inputUnavailable =
-        navigation.threadId?.let(snapshot::conversation)?.inputUnavailableReason()
-    Surface(Modifier.padding(horizontal = 12.dp, vertical = 8.dp).imePadding(),
-        shape = RoundedCornerShape(28.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
-    Column(Modifier.padding(8.dp)) {
-        inputUnavailable?.let { Text(it) }
-        DraftAttachments(draft.attachments, navigation.draftKey, perform)
-        val cursor = draft.text.toByteArray(Charsets.UTF_8).size.toUInt()
-        ComposerInvocationPicker(snapshot.composerSuggestions(draft.text, cursor)) { invocation ->
-            insertInvocation(draft.text, cursor, invocation.kind, invocation.name)?.let {
-                perform(Intent.InsertInvocation(navigation.draftKey, it.text, invocation)) {}
+    val inputUnavailable = navigation.threadId?.let(snapshot::conversation)?.inputUnavailableReason()
+    Surface(
+        Modifier.padding(horizontal = 12.dp, vertical = 8.dp).imePadding(),
+        shape = RoundedCornerShape(28.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+    ) {
+        Column(Modifier.padding(8.dp)) {
+            inputUnavailable?.let { Text(it) }
+            DraftAttachments(draft.attachments, navigation.draftKey, perform)
+            val cursor = draft.text.toByteArray(Charsets.UTF_8).size.toUInt()
+            ComposerInvocationPicker(snapshot.composerSuggestions(draft.text, cursor)) { invocation ->
+                insertInvocation(draft.text, cursor, invocation.kind, invocation.name)?.let {
+                    perform(Intent.InsertInvocation(navigation.draftKey, it.text, invocation)) {}
+                }
             }
-        }
-        TextField(
-            draft.text,
-            {
-                perform(
-                    Intent.EditComposer(
-                        navigation.draftKey,
-                        it,
-                        it.toByteArray(Charsets.UTF_8).size.toUInt(),
-                    )
-                ) {}
-            },
-            Modifier.fillMaxWidth(),
-            placeholder = { Text("AIに依頼する…") },
-            colors = TextFieldDefaults.colors(
-                focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
-                focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent),
-            minLines = 2,
-            maxLines = 5,
-        )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            attach { uploading = it }
-            ModelPickerButton(snapshot, perform, Modifier.weight(1f))
-            FilledIconButton(
-                onClick = {
-                    sending = true
-                    onSend()
-                    perform(Intent.Submit(navigation.threadId, UUID.randomUUID().toString())) {
-                        sending = false
-                    }
+            TextField(
+                draft.text,
+                {
+                    perform(
+                        Intent.EditComposer(navigation.draftKey, it, it.toByteArray(Charsets.UTF_8).size.toUInt())
+                    ) {}
                 },
-                enabled =
-                    snapshot.modelProviderForDraft(navigation.draftKey) != null &&
-                        inputUnavailable == null &&
-                        !sending &&
-                        !uploading &&
-                        (draft.text.isNotBlank() || draft.attachments.isNotEmpty()),
-            ) {
-                if (sending) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                else Text("↑", fontSize = 24.sp,
-                    modifier = Modifier.semantics { contentDescription = "送信" })
+                Modifier.fillMaxWidth(),
+                placeholder = { Text("AIに依頼する…") },
+                colors =
+                    TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                    ),
+                minLines = 2,
+                maxLines = 5,
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                attach { uploading = it }
+                ModelPickerButton(snapshot, perform, Modifier.weight(1f))
+                FilledIconButton(
+                    onClick = {
+                        sending = true
+                        onSend()
+                        perform(Intent.Submit(navigation.threadId, UUID.randomUUID().toString())) { sending = false }
+                    },
+                    enabled =
+                        snapshot.modelProviderForDraft(navigation.draftKey) != null &&
+                            inputUnavailable == null &&
+                            !sending &&
+                            !uploading &&
+                            (draft.text.isNotBlank() || draft.attachments.isNotEmpty()),
+                ) {
+                    if (sending) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                    else Text("↑", fontSize = 24.sp, modifier = Modifier.semantics { contentDescription = "送信" })
+                }
             }
         }
-    }
     }
 }
 
@@ -359,12 +336,12 @@ internal fun AttachmentButton(
 @Composable
 internal fun ConversationHeader(title: String?, showThreads: () -> Unit, scrollToTop: () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onClick = showThreads,
-            modifier = Modifier.semantics { contentDescription = "タスク一覧に戻る" }) { Text("‹", fontSize = 32.sp) }
+        IconButton(onClick = showThreads, modifier = Modifier.semantics { contentDescription = "タスク一覧に戻る" }) {
+            Text("‹", fontSize = 32.sp)
+        }
         TextButton(
             onClick = scrollToTop,
-            colors =
-                ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
+            colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
             modifier = Modifier.weight(1f).semantics { contentDescription = "会話の先頭へ" },
         ) {
             Text(title?.ifEmpty { "タスク" } ?: "新しいチャット", maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -387,19 +364,15 @@ private fun ObserveFollowing(
         }
     }
     LaunchedEffect(snapshot, following, older) {
-        val hasMore =
-            snapshot.navigation().threadId?.let(snapshot::conversation)?.hasMoreHistory() == true
+        val hasMore = snapshot.navigation().threadId?.let(snapshot::conversation)?.hasMoreHistory() == true
         snapshotFlow {
-                val viewportHeight =
-                    listState.layoutInfo.viewportEndOffset -
-                        listState.layoutInfo.viewportStartOffset
+                val viewportHeight = listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset
                 shouldLoadHistory(
                     hasMore,
                     older == null || snapshot.error() != null,
                     viewportHeight > 0 &&
                         listState.firstVisibleItemIndex == 0 &&
-                        listState.firstVisibleItemScrollOffset <
-                            viewportHeight * HISTORY_PREFETCH_FRACTION,
+                        listState.firstVisibleItemScrollOffset < viewportHeight * HISTORY_PREFETCH_FRACTION,
                     !listState.canScrollForward,
                     following,
                 )
