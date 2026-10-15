@@ -1,10 +1,16 @@
 (() => {
   const en = {
+    'simple.local.body': 'Code stays with you. Connections are encrypted.',
+    'simple.local.title': 'Your computer does the work.',
+    'simple.mobile.body': 'The same conversations, instructions and approvals.',
+    'simple.mobile.title': 'Pick up from your phone.',
+    'simple.agents.body': 'Your existing accounts. One app.',
+    'simple.agents.title': 'Codex and Claude Code.',
     'p.android.version': 'Android 8.0+',
     'demo.eyebrow': 'SEE BEX IN ACTION', 'demo.title': 'A quick look at how it works.',
     'demo.sub': 'Choose an agent, review changes, and approve commands from your phone.',
     'demo.tab0': 'Choose an agent', 'demo.tab1': 'Review changes', 'demo.tab2': 'Approve on mobile',
-    'demo.note': 'Recreated usage demos, 10 seconds each, without audio. All data is fictional. The demo interface is in English.',
+    'demo.note': 'Recreated demo · Sample data',
     'demo.fallback': 'Open the video',
 
     'nav.screens': 'Screens', 'nav.agents': 'Two agents',
@@ -15,9 +21,9 @@
     'ag3.t': 'One way of working', 'ag3.d': 'Attachments, approvals, answering questions, interrupting and worktrees all work the same with either agent.',
     'ag.pick': 'Choose a model', 'ag.search': 'Search', 'ag.acc1': 'Work ChatGPT', 'ag.week': 'This week', 'ag.acc2': 'Team API key', 'ag.api': 'Billed by API usage',
     'ag.acc3': 'Personal Claude', 'ag.add': 'Add account', 'ag.effort': 'Reasoning: High',
-    'dl.also': 'Also on macOS, Windows and Linux', 'dl.eyebrow': 'Download', 'dl.title': 'bex, on every screen.',
+    'dl.also': 'Also on macOS, Windows and Linux', 'dl.eyebrow': 'Download', 'dl.title': 'Download bex',
     'dl.sub': 'Install the Host and desktop app on your computer and the app on your phone, then pair them with a QR code.',
-    'dl.note': 'Download the Windows ZIP, extract it, and open bex-desktop.exe. No Rust or source build is required (Windows 11, 64-bit; preview build). Git, Node.js, and your chosen Codex / Claude Code agent are required separately. Download the Android APK directly too (Android 8.0 or newer, 64-bit; preview build).',
+    'dl.note': 'On Windows, extract the ZIP and run bex-desktop.exe. Git, Node.js and your chosen agent are required.',
     'sc.eyebrow': 'Screens', 'sc.title': 'Mac or phone,<br class="sp"> the same conversation.',
     'sc.sub': 'At your desk, use the Mac app with diffs and a terminal side by side. Away from it, carry on with the same task on iPhone or Android.',
     'sc.note': 'Screens are recreations based on the app\'s interface.',
@@ -33,14 +39,14 @@
     'p.date': 'Tuesday, October 14', 'p.la': 'Running tests · 2:14', 'p.la2': '1 more waiting for approval',
     'p.c1': 'Task list', 'p.c2': 'Answer approvals and questions', 'p.c3': 'Lock Screen and Dynamic Island',
     'nav.features': 'Features', 'nav.how': 'How it works', 'nav.security': 'Security', 'nav.platforms': 'Platforms',
-    'cta.download.short': 'Download', 'cta.download': 'Download prd-74', 'cta.github': 'View on GitHub', 'cta.docs': 'Read the docs',
+    'cta.download.short': 'Download', 'cta.download': 'Download prd-74', 'cta.github': 'View on GitHub', 'cta.docs': 'Docs',
     'hero.pill': 'Production build 74 is out',
     'hero.title': 'Your coding agents,<br class="sp"> anywhere.',
-    'hero.lead': 'Codex and Claude Code, in one app. bex runs both agents on your own computer and lets you steer them from your Mac, iPhone, Android or the command line. Step away from the desk; the work keeps going.',
+    'hero.lead': 'Codex and Claude Code in one app. Keep the same work moving, on your computer or your phone.',
     'hero.works': 'Works with Codex and Claude Code · macOS · iOS · Android · Windows · Linux',
     'hero.alt': 'A desk computer running a coding agent, connected to a phone in the user\'s hand',
     'strip.1': 'Host, every device connected to it', 'strip.2': 'agents: Codex and Claude Code', 'strip.3': 'platforms: Mac, iPhone, Android, Windows, Linux',
-    'f.eyebrow': 'Features', 'f.title': 'Ship from anywhere,<br class="sp"> not just your desk.',
+    'f.eyebrow': 'Features', 'f.title': 'Keep building. From anywhere.',
     'f.sub': 'The work always happens on your computer. bex lets you pick it up from whatever screen is in front of you.',
     'f1.t': 'Continue from your pocket.',
     'f1.d': 'Start a conversation on your Mac and carry on from iPhone or Android. Task status shows on the Lock Screen and in the Dynamic Island; tap it to jump straight back in.',
@@ -52,10 +58,10 @@
     'f5.t': 'Approve and answer on the go', 'f5.d': 'Grant command approvals and answer your agent\'s questions from your phone, so it is never left waiting.',
     'f6.t': 'Files, diffs and a terminal', 'f6.d': 'Open diffs from change summaries, edit files on the Host and drive a native terminal.',
     'f7.t': 'A browser that stays signed in', 'f7.d': 'Import Chrome cookies so bex\'s browser can check the same sites while you stay logged in.',
-    'h.eyebrow': 'How it works', 'h.title': 'Connected in three steps.',
-    'h1.t': 'Start the Host', 'h1.d': 'Open bex on the computer you work on and the Host starts. Your Codex and Claude Code processes run here.',
-    'h2.t': 'Pair with a QR code', 'h2.d': 'On iPhone or Android, choose Add PC and scan the code. Invitations last seven days and admit one device each.',
-    'h3.t': 'Steer from anywhere', 'h3.d': 'Over the LAN or across the internet, it is the same authenticated connection. From the train, from the sofa, keep going.',
+    'h.eyebrow': 'How it works', 'h.title': 'Connect. Then carry on.',
+    'h1.t': 'Open bex', 'h1.d': 'Open bex on the computer you work on.',
+    'h2.t': 'Pair with a QR code', 'h2.d': 'Choose Add PC on your phone and scan the QR code.',
+    'h3.t': 'Steer from anywhere', 'h3.d': 'Open the same conversation and pick up where you left off.',
     's.eyebrow': 'Security', 's.title': 'Your code stays<br class="sp"> on your computer.',
     's.sub': 'bex never parks your code in someone else\'s cloud. Agents run only on a computer you trust.',
     's1.t': 'Encrypted end to end', 's1.d': 'Devices connect to the Host over iroh QUIC. When traffic goes through a relay, the relay cannot decrypt your conversations.',
@@ -100,10 +106,4 @@
   const onScroll = () => nav.classList.toggle('scrolled', scrollY > 8);
   addEventListener('scroll', onScroll, { passive: true }); onScroll();
 
-  const io = 'IntersectionObserver' in window ? new IntersectionObserver(es => es.forEach(e => {
-    if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); }
-  }), { rootMargin: '0px 0px -8% 0px' }) : null;
-  document.querySelectorAll('.card, .steps li, .sec-list li, .plat, .feat-hero, .hero-shot').forEach(el => {
-    if (io) { el.classList.add('rv'); io.observe(el); }
-  });
 })();

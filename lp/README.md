@@ -101,6 +101,9 @@ previews. Conversation images and existing Markdown file links also open preview
 Binary or oversized text files show an explicit unavailable-preview message.
 Draft attachments can be removed without deleting the original phone file.
 
-The hero is followed immediately by the app screen showcase and usage demos.
-Decorative hero and anywhere illustrations are not displayed; the recreation
-labels remain so the showcase is not mistaken for a live session recording.
+The landing page uses a short hero followed immediately by the tabbed usage demo.
+Repeated mock screens, feature catalogues, platform lists, decorative illustrations
+and release announcements are omitted. Three short benefits, pairing steps and
+downloads provide the remaining hierarchy; detailed specifications live in Docs.
+The demo retains a short recreation label. Supporting text is at least 14px,
+with body copy at 16px or larger; the video contains its own recorded UI text.
