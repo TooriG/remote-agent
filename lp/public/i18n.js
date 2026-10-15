@@ -1,5 +1,9 @@
 (() => {
   const en = {
+    'strength.native.title': 'A responsive native app.',
+    'strength.native.body': 'The desktop app uses Rust and GPUI. Unchanged presentation data is reused to avoid unnecessary work.',
+    'strength.connection.title': 'Disconnect. Then carry on.',
+    'strength.connection.body': 'Work keeps running on your computer when your device disconnects. Reconnect to pick up from the latest state.',
     'visual.note': 'UI illustrations show the features and setup flow.',
     'simple.local.body': 'Code stays with you. Connections are encrypted.',
     'simple.local.title': 'Your computer does the work.',

@@ -113,3 +113,9 @@ illustration in `public/assets/ui/`. These illustrate agent selection, mobile
 approval, local execution, opening the app, QR pairing and resuming a conversation.
 They use fictional data and are labeled as UI illustrations, not live screenshots.
 Images reserve a 3:2 layout box, load lazily and stack with the cards on phones.
+
+Native responsiveness and disconnect recovery claims are grounded in README.ja.md
+(directory structure and Claude execution) and ADR 0005 (shared immutable rendering,
+reuse of unchanged presentation objects, reconnect reconciliation). They describe
+implementation choices and resumability, not comparative memory/speed benchmarks
+or guaranteed uninterrupted networking. No automatic retry of user input is claimed.

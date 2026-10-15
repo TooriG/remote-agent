@@ -376,4 +376,8 @@ html.mob .works { display: none; }
 .steps li p { margin: 12px 24px 28px; }
 .step-visual { border-bottom: 1px solid var(--line); }
 .visual-note { margin-top: 28px; color: var(--fg-2); font-size: 14px; }
+.product-strengths { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 48px; margin-top: 48px; padding-top: 36px; border-top: 1px solid var(--line); }
+.product-strengths h3 { font-size: 20px; font-weight: 600; }
+.product-strengths p { margin-top: 12px; max-width: 34em; color: var(--fg-2); font-size: 16px; }
+@media(max-width:640px){.product-strengths{grid-template-columns:1fr;gap:28px;margin-top:36px;padding-top:28px}}
 @media(max-width:640px){.benefits{gap:36px}.benefit-visual{margin-bottom:20px}.steps{gap:24px}}
