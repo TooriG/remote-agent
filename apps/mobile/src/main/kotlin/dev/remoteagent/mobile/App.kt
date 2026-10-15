@@ -22,7 +22,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -30,7 +29,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import dev.remoteagent.core.AgentException
@@ -67,11 +65,6 @@ import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerializationException
-
-private const val BEX_SURFACE = 0xFF101010
-private const val BEX_COMPOSER = 0xFF292929
-private const val BEX_ACCENT = 0xFFE8E8E8
-private const val BEX_TEXT = 0xFFF0F0F0
 
 internal enum class Screen {
     Hosts,
@@ -445,19 +438,8 @@ internal fun RemoteAgentApp(
     BackHandler(model.screen != Screen.Hosts) {
         if (model.screen == Screen.Conversation) model.showThreads() else model.showHosts()
     }
-    MaterialTheme(
-        colorScheme =
-            darkColorScheme(
-                background = Color.Black,
-                surface = Color(BEX_SURFACE),
-                surfaceVariant = Color(BEX_COMPOSER),
-                primary = Color(BEX_ACCENT),
-                onPrimary = Color.Black,
-                onBackground = Color(BEX_TEXT),
-                onSurface = Color(BEX_TEXT),
-            )
-    ) {
-        Scaffold(topBar = { if (model.screen != Screen.Conversation) TopAppBar(title = { Text("BEX") }) }) { padding ->
+    BexTheme {
+        Scaffold(topBar = { if (model.screen != Screen.Conversation) TopAppBar(title = { Text("bex", fontWeight = androidx.compose.ui.text.font.FontWeight.Bold) }) }) { padding ->
             Column(Modifier.padding(padding)) {
                 ConnectionStatus(
                     model.notice ?: model.snapshot.error(),
@@ -483,6 +465,8 @@ internal fun RemoteAgentApp(
                                     model.perform(intent)
                                 },
                                 model::showHosts,
+                                hostName = model.profiles.firstOrNull { it.id == model.profileId }?.name ?: "My PC",
+                                connected = model.snapshot.connected(),
                             )
                         }
                     else -> ConversationPane(model)

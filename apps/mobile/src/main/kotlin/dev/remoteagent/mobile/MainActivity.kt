@@ -16,10 +16,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -62,7 +60,7 @@ class MainActivity : ComponentActivity() {
                 val requestQrScan = rememberAndroidQrScanner(this)
                 RemoteAgentApp(activity = this, model = model, requestQrScan = requestQrScan)
             } else {
-                MaterialTheme(colorScheme = darkColorScheme()) {
+                BexTheme {
                     Surface(Modifier.fillMaxSize()) {
                         Column(Modifier.safeDrawingPadding().padding(24.dp)) {
                             Text("同じネットワークのPCへ接続するには、付近のデバイスへのアクセスを許可してください。")
