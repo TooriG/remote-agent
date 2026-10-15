@@ -4,6 +4,7 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const source = fs.readFileSync(__dirname + '/public/download.js', 'utf8');
 const download = 'https://github.com/ttizze/remote-agent/releases/download/prd-75/bex-windows-x86_64-release.zip';
+const preview = 'https://github.com/TooriG/remote-agent/releases/download/windows-preview-20261015-1/bex-windows-x86_64-dev.zip';
 
 async function renderWindows({ language = 'en', platform = 'Win32', userAgent, assets = [], ok = true, fail = false } = {}) {
   const element = () => ({ classList: { toggle() {} }, innerHTML: '', href: '' });
@@ -73,10 +74,21 @@ for (const [name, options] of Object.entries({
   'unfinished upload': { assets: [{ name: 'bex-windows-x86_64-release.zip', state: 'new', browser_download_url: download }] },
   'foreign download': { assets: [{ name: 'bex-windows-x86_64-release.zip', state: 'uploaded', browser_download_url: 'https://example.com/bex.zip' }] }
 })) {
-  test(`${name} retains Windows setup without a broken ZIP link`, async () => {
+  test(`${name} retains the pinned Windows ZIP download`, async () => {
     const result = await renderWindows(options);
-    assert.match(result.primary[0].href, /docs\/WINDOWS.md$/);
-    assert.match(result.primary[0].innerHTML, /Use on Windows/);
+    assert.equal(result.primary[0].href, preview);
+    assert.match(result.primary[0].innerHTML, /Download for Windows/);
+    assert.ok(result.grid.includes(`href="${preview}"`));
+    assert.match(result.grid, /preview ZIP/);
+    const windowsCard = result.grid.match(/<h3>Windows<\/h3>[\s\S]*?<\/a>/)[0];
+    assert.doesNotMatch(windowsCard, /Install from source|docs\/WINDOWS/);
     assert.ok(!result.primary[0].innerHTML.includes('coming soon'));
+  });
+}
+
+for (const language of ['ja', 'en']) {
+  test(`Windows ${language} menu also retains the preview without the release API`, async () => {
+    const result = await renderWindows({ language, platform:'MacIntel', fail:true });
+    assert.ok(result.menu.includes(`href="${preview}"`));
   });
 }

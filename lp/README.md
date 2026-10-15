@@ -3,11 +3,15 @@
 Source of the existing BEX landing page at https://getbex.dev/, imported from
 its currently deployed static assets so download changes can be reviewed here.
 
-Windows buttons use the public GitHub latest-release API. When it contains the
+Windows buttons link directly to the fork's published Windows x86-64 preview ZIP,
+including when the release API is unavailable. Extract the ZIP and run
+`bex-desktop.exe`; Rust and source compilation are unnecessary. This is an unsigned
+development preview, with Git, Node.js and the chosen agents installed separately.
+
+Windows buttons also check the public GitHub latest-release API. When it contains the
 uploaded `bex-windows-x86_64-release.zip` asset, the hero buttons, platform menu,
 and download card link directly to that asset without visiting a release page.
-Before publication or if the API is unavailable, the source installation link
-remains usable and Windows is not described as coming soon.
+If the upstream ZIP is not available, the pinned preview download stays usable.
 
 Native clients publishes the ZIP after Windows tests on a release publication.
 The checksum is attached alongside it. Publishing a release from a tag predating

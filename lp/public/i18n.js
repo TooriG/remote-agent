@@ -17,7 +17,7 @@
     'ag.acc3': 'Personal Claude', 'ag.add': 'Add account', 'ag.effort': 'Reasoning: High',
     'dl.also': 'Also on macOS, Windows and Linux', 'dl.eyebrow': 'Download', 'dl.title': 'bex, on every screen.',
     'dl.sub': 'Install the Host and desktop app on your computer and the app on your phone, then pair them with a QR code.',
-    'dl.note': 'Windows downloads link directly to the published ZIP when available; source build instructions remain available before publication. Download the Android APK directly (Android 8.0 or newer, 64-bit; preview build).',
+    'dl.note': 'Download the Windows ZIP, extract it, and open bex-desktop.exe. No Rust or source build is required (Windows 11, 64-bit; preview build). Git, Node.js, and your chosen Codex / Claude Code agent are required separately. Download the Android APK directly too (Android 8.0 or newer, 64-bit; preview build).',
     'sc.eyebrow': 'Screens', 'sc.title': 'Mac or phone,<br class="sp"> the same conversation.',
     'sc.sub': 'At your desk, use the Mac app with diffs and a terminal side by side. Away from it, carry on with the same task on iPhone or Android.',
     'sc.note': 'Screens are recreations based on the app\'s interface.',
