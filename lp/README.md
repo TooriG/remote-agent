@@ -14,10 +14,11 @@ The checksum is attached alongside it. Publishing a release from a tag predating
 this workflow change will not produce the new asset; use a tag containing it.
 
 Android phones show the Android download action prominently. Android buttons link
-directly to the fork's `android-preview-3/bex-android-preview.apk` release asset,
+directly to the fork's verified Android preview APK release asset,
 including when the upstream release API is unavailable. The manual
 `android-download.yml` workflow builds the APK before
-publishing the APK and SHA-256 checksum. Android 17 (API 37) or newer is required.
+publishing the APK and SHA-256 checksum. Android 8.0 (API 26) or newer and an
+ARM64 or x86-64 device are required.
 This is a debug-signed preview APK. GitHub-hosted builds
 generate a new debug signing key; switching between preview builds may require
 uninstalling the old app (which removes its local pairing keys and drafts).
@@ -53,5 +54,26 @@ The replacement has minimum API 26 (Android 8.0), while compile/target SDK remai
 37. It supports ARM64 and x86-64. Android 8–16 bypass the Android 17-only local
 network permission; Android 17+ keeps the permission check. The download workflow
 runs unit tests and Android lint, then checks the packaged minimum SDK and
-verifies the APK signature before publishing. Real-device installation still
-needs confirmation on the user's phone.
+verifies the APK signature before publishing. The reporting phone can now install
+and connect; its follow-up runtime failures were traced to an older running PC Host
+and an existing conversation owned by the Codex desktop app.
+
+## Android connection recovery
+
+Build and restart the PC Host and desktop client together when updating the APK.
+Replacing source or binaries alone does not update the already running Host.
+A mismatched Host can load projects successfully while model-list decoding fails.
+Keep pairing credentials when restarting; reinstalling Android is unnecessary for
+a PC-only Host update.
+
+Codex permits one app-server writer per conversation. BEX never steals an active
+writer or silently forks. If the PC Codex app owns a conversation, choose the
+message's **分岐** action to continue in a separate conversation; the unsent draft
+is copied while the original draft and conversation remain intact. New mobile
+builds present a readable recovery message instead of a raw RPC envelope.
+
+A model usable in the Codex desktop app may still be rejected by the separately
+connected app-server account. Choose an available catalog model when that happens;
+BEX does not silently substitute another model. The live smoke test completed a
+reply on an explicit fork using GPT-6-Astra, while this account rejected
+gpt-6.1-sol through the BEX connection.
