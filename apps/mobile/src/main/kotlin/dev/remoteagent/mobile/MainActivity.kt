@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
@@ -39,7 +40,8 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         localNetworkGranted =
-            checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK) == PackageManager.PERMISSION_GRANTED
+            !requiresLocalNetworkPermission(Build.VERSION.SDK_INT) ||
+                checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK) == PackageManager.PERMISSION_GRANTED
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -81,3 +83,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+
+/** Local-network runtime permission exists only from Android 17 onward. */
+internal fun requiresLocalNetworkPermission(sdk: Int): Boolean = sdk >= 37

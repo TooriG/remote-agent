@@ -8,7 +8,7 @@ The workspace pins netwatch 0.19.3 to a fork commit containing [UDP rebind recov
 
 ## Supported operating systems
 
-Except for Linux (Ubuntu 24.04 CI baseline), BEX supports only the latest generally available OS major, including its stable minor/patch releases. Betas, release candidates, older majors and future majors are outside the support contract. Minimum deployment versions prevent installation on older Apple/Android systems; they do not impose a runtime upper-version kill switch.
+Except for Linux (Ubuntu 24.04 CI baseline) and Android (Android 8.0/API 26 minimum), BEX supports only the latest generally available OS major, including its stable minor/patch releases. Betas, release candidates, older majors and future majors are outside the support contract. Minimum deployment versions prevent installation below the listed Apple/Android requirements; they do not impose a runtime upper-version kill switch.
 
 Verified on **2026-09-13**:
 
@@ -16,7 +16,7 @@ Verified on **2026-09-13**:
 | --- | --- | --- |
 | iPhone / iPad | iOS / iPadOS 26 | Xcode 26 stable, deployment target 26.0 in the app, UI tests, Rust and Swift bindings; iOS 26 Simulator |
 | macOS desktop, Host and CLI | macOS Tahoe 26 | Rust deployment target and app/helper bundle minimum 26.0; Swift helper target 26.0 |
-| Android | Android 17 (API 37) | Minimum, compile and target SDK 37; Nix build and test SDK platform 37 |
+| Android | Android 8.0+ (API 26+) | Minimum SDK 26; compile/target SDK 37; Nix build and test SDK platform 37 |
 | Windows desktop, Host and CLI | Windows 11; Windows Server 2025 | Existing `windows-2025` CI builds/tests on Server 2025, not a Windows 11 UI acceptance test |
 | Linux desktop, Host and CLI | Ubuntu 24.04 CI baseline | GitHub-hosted `ubuntu-24.04` runner and pinned `nix develop .#native` userspace |
 
@@ -122,7 +122,7 @@ scripts/dev-env.sh just build-desktop-macos && open target/release/bex.app
 scripts/dev-env.sh scripts/build-agent-ios.sh simulator
 open apps/mobile/iosApp/Bex.xcodeproj
 
-# Android 17 (API 37)
+# Android 8.0+ (build SDK 37)
 scripts/dev-env.sh ./gradlew :apps:mobile:assembleDebug
 ```
 

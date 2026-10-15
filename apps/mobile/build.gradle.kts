@@ -69,7 +69,7 @@ android {
     compileSdk = 37
     defaultConfig {
         applicationId = "dev.remoteagent.mobile"
-        minSdk = 37
+        minSdk = 26
         targetSdk = 37
         versionCode = 1
         versionName = "0.1.0"
@@ -88,6 +88,7 @@ android {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
     implementation(project(":terminal-native"))
     androidTestImplementation("androidx.compose.ui:ui-test-junit4:1.11.2")
     debugImplementation("androidx.compose.ui:ui-test-manifest:1.11.2")
