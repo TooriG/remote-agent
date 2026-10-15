@@ -1,5 +1,6 @@
 (() => {
   const en = {
+    'p.android.version': 'Android 8.0+',
     'demo.eyebrow': 'SEE BEX IN ACTION', 'demo.title': 'A quick look at how it works.',
     'demo.sub': 'Choose an agent, review changes, and approve commands from your phone.',
     'demo.tab0': 'Choose an agent', 'demo.tab1': 'Review changes', 'demo.tab2': 'Approve on mobile',
@@ -16,7 +17,7 @@
     'ag.acc3': 'Personal Claude', 'ag.add': 'Add account', 'ag.effort': 'Reasoning: High',
     'dl.also': 'Also on macOS, Windows and Linux', 'dl.eyebrow': 'Download', 'dl.title': 'bex, on every screen.',
     'dl.sub': 'Install the Host and desktop app on your computer and the app on your phone, then pair them with a QR code.',
-    'dl.note': 'Windows downloads link directly to the published ZIP when available; source build instructions remain available before publication. Download the Android APK directly (Android 17 or newer; preview build).',
+    'dl.note': 'Windows downloads link directly to the published ZIP when available; source build instructions remain available before publication. Download the Android APK directly (Android 8.0 or newer, 64-bit; preview build).',
     'sc.eyebrow': 'Screens', 'sc.title': 'Mac or phone,<br class="sp"> the same conversation.',
     'sc.sub': 'At your desk, use the Mac app with diffs and a terminal side by side. Away from it, carry on with the same task on iPhone or Android.',
     'sc.note': 'Screens are recreations based on the app\'s interface.',

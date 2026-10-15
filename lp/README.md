@@ -46,3 +46,12 @@ Split the 30-second render at 0/10/20 seconds into `public/demos/agents.mp4`,
 `changes.mp4`, `mobile.mp4` using FFmpeg with libx264, yuv420p, CRF 23 and
 `-movflags +faststart`. Posters use full-render timestamps 3/17/27 seconds.
 The shipped clips are about 120–170 KB each, 1280×720, H.264, without audio.
+
+
+The published APK was found to require API 37 after an installation failure was reported.
+The replacement has minimum API 26 (Android 8.0), while compile/target SDK remain
+37. It supports ARM64 and x86-64. Android 8–16 bypass the Android 17-only local
+network permission; Android 17+ keeps the permission check. The download workflow
+runs unit tests and Android lint, then checks the packaged minimum SDK and
+verifies the APK signature before publishing. Real-device installation still
+needs confirmation on the user's phone.
