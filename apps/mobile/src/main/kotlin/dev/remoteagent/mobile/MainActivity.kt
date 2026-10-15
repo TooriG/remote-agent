@@ -25,6 +25,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 
+private const val LOCAL_NETWORK_PERMISSION_API = 37
+
 class MainActivity : ComponentActivity() {
     private val model: AndroidAppModel by viewModels {
         viewModelFactory { initializer { AndroidAppModel(applicationContext) } }
@@ -85,4 +87,4 @@ class MainActivity : ComponentActivity() {
 }
 
 /** Local-network runtime permission exists only from Android 17 onward. */
-internal fun requiresLocalNetworkPermission(sdk: Int): Boolean = sdk >= 37
+internal fun requiresLocalNetworkPermission(sdk: Int): Boolean = sdk >= LOCAL_NETWORK_PERMISSION_API

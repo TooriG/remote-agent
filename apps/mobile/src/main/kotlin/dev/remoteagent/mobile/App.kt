@@ -68,6 +68,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerializationException
 
+private const val BEX_SURFACE = 0xFF101010
+private const val BEX_COMPOSER = 0xFF292929
+private const val BEX_ACCENT = 0xFFE8E8E8
+private const val BEX_TEXT = 0xFFF0F0F0
+
 internal enum class Screen {
     Hosts,
     Pairing,
@@ -444,12 +449,12 @@ internal fun RemoteAgentApp(
         colorScheme =
             darkColorScheme(
                 background = Color.Black,
-                surface = Color(0xFF101010),
-                surfaceVariant = Color(0xFF292929),
-                primary = Color(0xFFE8E8E8),
+                surface = Color(BEX_SURFACE),
+                surfaceVariant = Color(BEX_COMPOSER),
+                primary = Color(BEX_ACCENT),
                 onPrimary = Color.Black,
-                onBackground = Color(0xFFF0F0F0),
-                onSurface = Color(0xFFF0F0F0),
+                onBackground = Color(BEX_TEXT),
+                onSurface = Color(BEX_TEXT),
             )
     ) {
         Scaffold(topBar = { if (model.screen != Screen.Conversation) TopAppBar(title = { Text("BEX") }) }) { padding ->

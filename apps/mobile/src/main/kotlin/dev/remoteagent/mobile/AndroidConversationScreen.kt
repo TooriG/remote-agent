@@ -29,8 +29,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -255,25 +253,7 @@ internal fun ThreadComposer(
                     perform(Intent.InsertInvocation(navigation.draftKey, it.text, invocation)) {}
                 }
             }
-            TextField(
-                draft.text,
-                {
-                    perform(
-                        Intent.EditComposer(navigation.draftKey, it, it.toByteArray(Charsets.UTF_8).size.toUInt())
-                    ) {}
-                },
-                Modifier.fillMaxWidth(),
-                placeholder = { Text("AIに依頼する…") },
-                colors =
-                    TextFieldDefaults.colors(
-                        focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = Color.Transparent,
-                        focusedIndicatorColor = Color.Transparent,
-                        unfocusedIndicatorColor = Color.Transparent,
-                    ),
-                minLines = 2,
-                maxLines = 5,
-            )
+            ComposerTextInput(snapshot, perform)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 attach { uploading = it }
                 ModelPickerButton(snapshot, perform, Modifier.weight(1f))
