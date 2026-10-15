@@ -886,7 +886,16 @@ impl Operation for ForkSession {
     }
     fn apply(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
         let id = output.thread.id.clone().expect("validated thread ID");
+        let draft = snapshot
+            .drafts
+            .get(&DraftKey::from(self.thread_id.clone()))
+            .cloned();
         let mut effects = open_thread(snapshot, output.thread, output.model);
+        if let Some(draft) = draft {
+            Arc::make_mut(&mut snapshot.drafts)
+                .entry(id.clone().into())
+                .or_insert(draft);
+        }
         effects.push(Effect::execute(ReadThread::new(id)));
         effects
     }

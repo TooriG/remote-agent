@@ -316,7 +316,22 @@ fn native_failure(native: &serde_json::value::RawValue) -> Failure {
             .map(str::to_owned)
             .or_else(|| value["code"].as_i64().map(|code| code.to_string()));
     }
-    let mut failure = Failure::unknown("provider_failed", &execution.message);
+    // A different app-server owns this rollout. Never steal its writer or
+    // silently fork the user's conversation; the client can explicitly fork.
+    let writer_busy = execution.provider_code.as_deref() == Some("-32600")
+        && execution.message.starts_with("thread ")
+        && execution.message.ends_with(" already has an active writer");
+    let mut failure = Failure::unknown(
+        if writer_busy {
+            "thread_in_use"
+        } else {
+            "provider_failed"
+        },
+        &execution.message,
+    );
+    if writer_busy {
+        failure.message = agent_protocol::error::THREAD_IN_USE_MESSAGE.into();
+    }
     failure.execution = Some(Box::new(execution));
     failure
 }
@@ -1211,6 +1226,22 @@ mod tests {
             super::event_change(uuid::Uuid::nil(), &super::RpcMessage::parse(&root).unwrap())
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn writer_conflicts_have_a_distinct_recovery_code() {
+        let raw = serde_json::value::to_raw_value(&serde_json::json!({
+            "code": -32600,
+            "message": "thread example already has an active writer"
+        }))
+        .unwrap();
+        let failure = super::native_failure(&raw).before_submission();
+        assert_eq!(failure.code, "thread_in_use");
+        assert_eq!(failure.delivery, agent_protocol::error::Delivery::NotSent);
+        assert_eq!(
+            failure.execution.unwrap().provider_code.as_deref(),
+            Some("-32600")
         );
     }
 
