@@ -38,18 +38,17 @@ final class BexQrCaptureViewController: UIViewController, AVCaptureMetadataOutpu
     }
 
     private func requestCameraAndConfigure() {
-        switch AVCaptureDevice.authorizationStatus(for: .video) {
-        case .authorized:
-            configureAndStart()
+        let authorization = AVCaptureDevice.authorizationStatus(for: .video)
+        switch authorization {
+        case .authorized, .denied:
+            configureAndStart(authorized: authorization == .authorized)
         case .notDetermined:
-            AVCaptureDevice.requestAccess(for: .video) { [weak self] _ in
+            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
                 DispatchQueue.main.async {
                     guard let self, !self.hasCompleted else { return }
-                    self.requestCameraAndConfigure()
+                    self.configureAndStart(authorized: granted)
                 }
             }
-        case .denied:
-            showCameraError("カメラの使用が許可されていません。設定でBexのカメラを許可し、読み取り画面を開き直してください。", offersSettings: true)
         case .restricted:
             showCameraError("このiPhoneではカメラの使用が制限されています。")
         @unknown default:
@@ -57,7 +56,11 @@ final class BexQrCaptureViewController: UIViewController, AVCaptureMetadataOutpu
         }
     }
 
-    private func configureAndStart() {
+    private func configureAndStart(authorized: Bool) {
+        guard authorized else {
+            showCameraError("カメラの使用が許可されていません。設定でBexのカメラを許可し、読み取り画面を開き直してください。", offersSettings: true)
+            return
+        }
         guard let camera = AVCaptureDevice.default(for: .video) else {
             showCameraError("カメラを使用できません。接続画面に戻り、接続情報を入力してください。")
             return
