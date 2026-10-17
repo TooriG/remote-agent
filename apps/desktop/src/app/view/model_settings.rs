@@ -385,6 +385,39 @@ impl Desktop {
                 .child("エージェントを選択してください。")
                 .into_any_element();
         };
+        if manage && provider == ProviderKind::Codex {
+            let cli = self.snapshot.account.codex_cli.as_deref();
+            let updating = self.snapshot.operation_running(op::OperationKey::CodexCli);
+            let mut controls = v_flex().gap_2()
+                .child(div().font_semibold().child("Codex CLI"))
+                .child(cli.and_then(|status| status.version.clone()).unwrap_or_else(|| "バージョン未確認".into()))
+                .child(div().text_sm().text_color(rgb(appearance::MUTED))
+                    .child("選択中の環境のCLIを更新します。更新後は実行中の会話が終わってからHostを再起動してください。モデル一覧は再接続時に再取得します。"))
+                .child(h_flex().gap_2()
+                    .child(self.button("codex-cli-update", if updating { "確認・更新中…" } else { "最新版に更新" }, cx, |s, _, _| {
+                        s.dispatch(Intent::ManageCodexCli(op::ManageCodexCli { update: true }));
+                    }).disabled(disabled || updating).debug_selector(|| "codex-cli-update".into()))
+                    .child(self.button("codex-cli-refresh", "状態を確認", cx, |s, _, _| {
+                        s.dispatch(Intent::ManageCodexCli(op::ManageCodexCli { update: false }));
+                        s.refresh_accounts_and_models();
+                    }).disabled(disabled || updating)));
+            if let Some(cli) = cli {
+                if cli.restart_required {
+                    controls = controls.child(
+                        "更新が完了しました。新しいCLIを使用するにはHostを再起動してください。",
+                    );
+                }
+                if let Some(error) = &cli.error {
+                    controls = controls.child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(0xff8e86))
+                            .child(error.clone()),
+                    );
+                }
+            }
+            body = body.child(controls);
+        }
         if self.snapshot.account.login.is_some() {
             body = body.child(self.account_login_controls(None, cx));
         } else {

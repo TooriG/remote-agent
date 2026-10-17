@@ -1,6 +1,7 @@
 //! Codex native protocol boundary: execution operations, one shared process,
 //! ordered request completion, native cursors and deferred item reads.
 pub(crate) mod accounts;
+mod cli;
 mod composer;
 pub(crate) mod native;
 mod permissions;
@@ -71,6 +72,7 @@ fn unmaterialized_history(code: Option<&str>, message: &str, thread_id: &str) ->
 }
 
 pub struct Codex {
+    cli: cli::Updater,
     accounts: Arc<tokio::sync::Mutex<Option<crate::adapters::codex::accounts::Accounts>>>,
     list_access: tokio::sync::Semaphore,
     restoration_error: tokio::sync::watch::Sender<Option<String>>,
@@ -104,7 +106,8 @@ impl Codex {
             tracing::error!(target: "bex", operation = "host.codex", message = %error);
         }
         let available = process.is_ok();
-        let adapter = Self::new(process);
+        let mut adapter = Self::new(process);
+        adapter.cli = cli::Updater::new(config.clone());
         if available && let Err(error) = adapter.enable_accounts(account_directory, config).await {
             tracing::error!(target: "bex", operation = "host.codex.accounts", message = %error);
         }
@@ -123,6 +126,7 @@ impl Codex {
                     .unwrap_or_default()
             });
         Self {
+            cli: cli::Updater::new(Config::default()),
             accounts: Arc::default(),
             list_access: tokio::sync::Semaphore::new(4),
             restoration_error: tokio::sync::watch::channel(None).0,
@@ -627,6 +631,9 @@ impl Identity for Codex {
 
 #[async_trait::async_trait]
 impl Agent for Codex {
+    async fn codex_cli(&self, update: bool) -> Result<op::CodexCliStatus, Failure> {
+        Ok(self.cli.request(update).await)
+    }
     fn data_recipient(&self) -> &'static str {
         "OpenAI"
     }

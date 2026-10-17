@@ -121,6 +121,12 @@ pub(crate) trait Identity: Send + Sync {
 
 #[async_trait::async_trait]
 pub(crate) trait Agent: Identity {
+    async fn codex_cli(&self, _: bool) -> Result<op::CodexCliStatus, Failure> {
+        Err(Failure::new(
+            "unsupported",
+            "Codex CLI management is unavailable",
+        ))
+    }
     fn data_recipient(&self) -> &'static str;
     fn running_input(&self) -> super::submission::RunningInput;
     fn capabilities(&self) -> Capabilities;

@@ -39,6 +39,7 @@ macro_rules! rpc_operation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
 pub enum Intent {
+    ManageCodexCli(ManageCodexCli),
     ReadTaskActivity(ReadTaskActivity),
     RegisterLiveActivity(RegisterLiveActivity),
     UnregisterLiveActivity(UnregisterLiveActivity),
@@ -257,6 +258,7 @@ pub enum OperationKey {
         path: String,
     },
     WorkspaceReview,
+    CodexCli,
     Models,
     Accounts,
     AccountLogin {
@@ -410,6 +412,8 @@ mod permissions;
 pub use permissions::*;
 mod composer;
 pub use composer::*;
+mod codex_cli;
+pub use codex_cli::*;
 mod accounts;
 pub use accounts::*;
 mod terminal;

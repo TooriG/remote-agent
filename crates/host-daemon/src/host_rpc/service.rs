@@ -844,6 +844,11 @@ impl HostRpcService {
             | Call::SubmitAccountLogin(_)
             | Call::CancelAccountLogin(_) => self.account_request(request.clone()).await?,
 
+            Call::CodexCli(params) => self
+                .agent(ProviderKind::Codex)?
+                .codex_cli(params.update)
+                .await?
+                .into(),
             Call::ListModels(params) => {
                 let cursors: std::collections::BTreeMap<ProviderKind, Option<String>> = params
                     .cursor
