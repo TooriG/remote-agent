@@ -45,11 +45,17 @@ jobs:
       - name: Test and build installable Android preview
         run: |
           nix develop . --command ./gradlew \
-            :apps:mobile:testDebugUnitTest :apps:mobile:compileDebugAndroidTestKotlin :apps:mobile:lintDebug :apps:mobile:assembleDebug \
+            :apps:mobile:testDebugUnitTest :apps:mobile:assembleDebugAndroidTest :apps:mobile:lintDebug :apps:mobile:assembleDebug \
             --no-daemon --max-workers=4 --build-cache --console=plain || {
               cat apps/mobile/build/intermediates/lint_intermediate_text_report/debug/lintReportDebug/lint-results-debug.txt 2>/dev/null || true
               exit 1
             }
+      - name: Enable emulator hardware acceleration
+        run: sudo chmod a+rw /dev/kvm
+      - name: Build isolated Android Host fixtures
+        run: nix develop .#native --command cargo build --locked -p host-fixture -p codex-app-server -p bex-process --bins
+      - name: Verify image attachments against an isolated Host
+        run: nix develop .#android-test --command bash scripts/android-e2e.sh attachments
       - name: Retain Android verification reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -58,6 +64,7 @@ jobs:
           path: |
             apps/mobile/build/reports/
             apps/mobile/build/test-results/
+            target/qa/android-*
           if-no-files-found: ignore
           retention-days: 7
       - name: Package APK and checksum
