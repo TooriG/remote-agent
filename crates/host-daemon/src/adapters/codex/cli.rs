@@ -25,7 +25,9 @@ impl Updater {
         if !update {
             // A bounded version read holds the lock so an update arriving during
             // the initial check is not accidentally treated as a duplicate update.
-            if state.version.is_none() && state.error.is_none() {
+            // Refresh external CLI updates too, but preserve a failed update's
+            // error until the user retries it (clients poll through this call).
+            if state.error.is_none() {
                 match execute(&self.config, false).await {
                     Ok(version) => state.version = Some(version),
                     Err(error) => state.error = Some(error),
@@ -191,6 +193,20 @@ mod tests {
         assert!(!finished.restart_required);
         assert!(finished.version.is_none());
         assert!(updater.request(true).await.running);
+    }
+
+    #[tokio::test]
+    async fn status_rechecks_the_executable_even_with_a_cached_version() {
+        let root = tempfile::tempdir().unwrap();
+        let updater = Updater::new(Config {
+            program: root.path().join("missing-codex"),
+            ..Default::default()
+        });
+        updater.state.lock().await.version = Some("codex-cli cached".into());
+        let status = updater.request(false).await;
+        assert!(status.error.is_some(), "must probe the current executable");
+        assert!(!status.running);
+        assert!(!status.restart_required);
     }
 
     #[tokio::test]

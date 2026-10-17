@@ -25,6 +25,15 @@ To update, finish active tasks and stop the desktop and Host, then extract the
 new package into a new folder. Your account and conversation state lives outside
 this package. These ZIPs are for x86-64 Windows; native ARM64 builds are not included.
 
+## Update Codex CLI
+
+In BEX settings, select Codex and choose **最新版に更新** under **Codex CLI**.
+BEX runs the selected Host's `codex update`, verifies the installed version,
+and reports failures in the same panel. **状態を確認** also re-reads the installed
+version after an update performed outside BEX. Finish active conversations and
+restart BEX and its Host after updating so new sessions use the new executable.
+The CLI must support `codex update`; otherwise update it using its installer.
+
 ## Build from source
 
 Install the MSVC Rust toolchain and Visual Studio C++ Build Tools with the
