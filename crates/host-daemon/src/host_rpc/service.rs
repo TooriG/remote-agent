@@ -1317,10 +1317,11 @@ impl HostRpcService {
             _ => Vec::new(),
         };
         let codex_project_ids = native.iter().map(|project| project.id.clone()).collect();
-        if let Ok(agent) = self.agent(ProviderKind::Claude)
-            && agent.availability().is_ok()
-        {
+        // Claude catalogs are read-only native metadata; listing them does not
+        // require an executable CLI or an authenticated inference account.
+        if let Ok(agent) = self.agent(ProviderKind::Claude) {
             for mut project in agent.projects().await? {
+                let native_group = project.roots.is_empty();
                 project.roots.retain(|root| {
                     !native.iter().any(|existing| {
                         existing.roots.iter().any(|other| {
@@ -1332,7 +1333,7 @@ impl HostRpcService {
                         })
                     })
                 });
-                if !project.roots.is_empty() {
+                if native_group || !project.roots.is_empty() {
                     native.push(project);
                 }
             }
@@ -2367,6 +2368,83 @@ mod tests {
                 assert_eq!(response["error"]["code"], "provider_unavailable");
                 assert_eq!(response["error"]["delivery"], "notSent");
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn claude_native_projects_keep_shared_directory_threads_below_the_project() {
+        use super::*;
+        let root = tempfile::tempdir().unwrap();
+        let native = root.path().join("native");
+        let transcripts = native.join("projects/shared");
+        std::fs::create_dir_all(&transcripts).unwrap();
+        for project in ["chan_games", "chan_tanks"] {
+            let id = uuid::Uuid::new_v4();
+            let snapshot = serde_json::json!({"type":"attachment","attachment":{
+                "type":"prompt_snapshot","systemPrompt":[format!("## Where you are\n\nProject: \"{project}\" (id: `{project}`)\n")]
+            }});
+            let user = serde_json::json!({"type":"user","sessionId":id,"cwd":root.path(),"message":{"content":"hello"}});
+            std::fs::write(
+                transcripts.join(format!("{id}.jsonl")),
+                format!("{snapshot}\n{user}\n"),
+            )
+            .unwrap();
+        }
+        let claude = crate::adapters::Claude::load(
+            root.path().join("missing-cli"),
+            root.path().join("state"),
+            Some(native),
+        )
+        .await
+        .unwrap();
+        let service = HostRpcService::new(
+            [
+                Backend::unavailable(ProviderKind::Codex, "unavailable"),
+                claude.into(),
+            ],
+            ProjectStore::new(root.path().join("bex-worktrees.json")),
+        );
+        let session = service.open_session();
+        let response = service
+            .dispatch(
+                session.id(),
+                &Call::ListSessions(op::ListSessions {
+                    query: Default::default(),
+                }),
+            )
+            .await
+            .unwrap();
+        let Response::Success { result } = agent_protocol::protocol::decode::<
+            Response<agent_protocol::models::ThreadList>,
+        >(&response.initial)
+        .unwrap() else {
+            panic!("list failed")
+        };
+        assert_eq!(result.projects.len(), 2);
+        for project in &result.projects {
+            assert!(project.roots.is_empty());
+            let response = service
+                .dispatch(
+                    session.id(),
+                    &Call::ListProjectSessions(op::ListProjectSessions {
+                        project_id: project.id.clone(),
+                        limit: 5,
+                        search_term: String::new(),
+                    }),
+                )
+                .await
+                .unwrap();
+            let Response::Success { result: page } = agent_protocol::protocol::decode::<
+                Response<agent_protocol::models::ThreadList>,
+            >(&response.initial)
+            .unwrap() else {
+                panic!("project page failed")
+            };
+            assert_eq!(page.data.len(), 1);
+            assert_eq!(
+                page.data[0].project_id.as_deref(),
+                Some(project.id.as_str())
+            );
         }
     }
 

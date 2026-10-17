@@ -210,10 +210,15 @@ pub(super) fn projects(home: &Path, config: &Path) -> Result<Vec<agent_protocol:
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
     }
+    let mut native_projects = BTreeMap::new();
     for file in files(home)? {
-        let Ok(summary) = summary(&file) else {
+        let Ok((summary, project)) = summary_with_project(&file) else {
             continue;
         };
+        if let Some(project) = project {
+            native_projects.insert(project.id.clone(), project);
+            continue;
+        }
         if let Some(cwd) = summary.thread.cwd {
             let path = PathBuf::from(cwd);
             if path.is_absolute() && !roots.iter().any(|root| path.starts_with(root)) {
@@ -236,6 +241,7 @@ pub(super) fn projects(home: &Path, config: &Path) -> Result<Vec<agent_protocol:
                 favicon_png: None,
             }
         })
+        .chain(native_projects.into_values())
         .collect())
 }
 
@@ -258,11 +264,25 @@ pub(super) fn resolve(home: &Path, id: Uuid) -> Result<PathBuf> {
 
 /// Extract metadata without loading complete tool output or message bodies.
 pub(super) fn summary(path: &Path) -> Result<crate::host_rpc::agent::SessionSummary> {
+    summary_with_project(path).map(|(summary, _)| summary)
+}
+
+fn summary_with_project(
+    path: &Path,
+) -> Result<(
+    crate::host_rpc::agent::SessionSummary,
+    Option<agent_protocol::models::Project>,
+)> {
     use std::io::{Read, Seek, SeekFrom};
     let mut file = fs::File::open(path)?;
     let metadata = file.metadata()?;
     let mut head = Vec::new();
-    (&mut file).take(128 * 1024).read_to_end(&mut head)?;
+    // Native project prompt snapshots can follow large tool catalogs. Finish
+    // the last row so a snapshot crossing the head boundary remains readable.
+    (&mut file).take(1024 * 1024).read_to_end(&mut head)?;
+    if !head.ends_with(b"\n") {
+        BufReader::new((&mut file).take(MAX_LINE_BYTES as u64)).read_until(b'\n', &mut head)?;
+    }
     let mut tail = Vec::new();
     let offset = metadata.len().saturating_sub(128 * 1024);
     file.seek(SeekFrom::Start(offset))?;
@@ -285,6 +305,7 @@ pub(super) fn summary(path: &Path) -> Result<crate::host_rpc::agent::SessionSumm
         ..Default::default()
     };
     let mut branch = None;
+    let mut project = None;
     for line in head.split(|byte| *byte == b'\n').chain(
         tail.split(|byte| *byte == b'\n')
             .skip(usize::from(offset > 0)),
@@ -298,6 +319,11 @@ pub(super) fn summary(path: &Path) -> Result<crate::host_rpc::agent::SessionSumm
             return Err(anyhow!(
                 "Claude transcript session identity does not match its filename"
             ));
+        }
+        if let Some(native_project) = native_project(&value) {
+            thread.project_id =
+                agent_protocol::models::ProjectMembership::Assigned(native_project.id.clone());
+            project = Some(native_project);
         }
         if let Some(saved_branch) = value["gitBranch"].as_str() {
             branch = Some(saved_branch.to_owned());
@@ -319,7 +345,56 @@ pub(super) fn summary(path: &Path) -> Result<crate::host_rpc::agent::SessionSumm
             thread.preview = input_text(&value["message"]["content"]);
         }
     }
-    Ok(crate::host_rpc::agent::SessionSummary { thread, branch })
+    Ok((
+        crate::host_rpc::agent::SessionSummary { thread, branch },
+        project,
+    ))
+}
+
+/// Read only provider-authored prompt metadata, never user text or tool output.
+fn native_project(value: &Value) -> Option<agent_protocol::models::Project> {
+    if value["type"] != "attachment" || value["attachment"]["type"] != "prompt_snapshot" {
+        return None;
+    }
+    for block in value["attachment"]["systemPrompt"].as_array()? {
+        let Some(text) = block.as_str() else { continue };
+        let Some(section) = text
+            .split_once("## Where you are\n\nProject: ")
+            .map(|(_, rest)| rest)
+        else {
+            continue;
+        };
+        let Some((name, id)) = section.lines().next()?.rsplit_once(" (id: `") else {
+            continue;
+        };
+        let Some(id) = id.strip_suffix("`)") else {
+            continue;
+        };
+        if !id.starts_with("chan_")
+            || id.len() <= 5
+            || !id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
+        {
+            continue;
+        }
+        let Some(name) = name
+            .strip_prefix('"')
+            .and_then(|name| name.strip_suffix('"'))
+        else {
+            continue;
+        };
+        if name.trim().is_empty() {
+            continue;
+        }
+        return Some(agent_protocol::models::Project {
+            id: format!("claude-project:{id}"),
+            name: name.into(),
+            // Several Claude projects can share a launch directory. Membership
+            // comes from the native project ID, never from that shared cwd.
+            roots: Vec::new(),
+            ..Default::default()
+        });
+    }
+    None
 }
 
 fn input_text(content: &Value) -> Option<String> {
@@ -718,6 +793,74 @@ mod tests {
         assert_eq!(fs::read(&config).unwrap(), bytes);
         assert_eq!(fs::read_to_string(&transcript).unwrap(), history);
     }
+    fn project_snapshot(name: &str, id: &str) -> Value {
+        json!({"type":"attachment","attachment":{"type":"prompt_snapshot","systemPrompt":[
+            format!("## Where you are\n\nProject: \"{name}\" (id: `{id}`)\nVisibility: private.")
+        ]}})
+    }
+
+    #[test]
+    fn native_project_membership_groups_threads_even_when_they_share_a_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("storage");
+        let directory = home.join("projects/shared");
+        fs::create_dir_all(&directory).unwrap();
+        let cwd = root.path().join("shared-workspace");
+        let mut expected = BTreeMap::new();
+        for (id, name, project) in [
+            (Uuid::new_v4(), "Games", "chan_games"),
+            (Uuid::new_v4(), "Games", "chan_games"),
+            (Uuid::new_v4(), "Tanks", "chan_tanks"),
+        ] {
+            let file = directory.join(format!("{id}.jsonl"));
+            // The old 128 KiB head window cut off real prompt snapshots.
+            let padding = json!({"type":"attachment","attachment":{"type":"catalog","text":"x".repeat(180_000)}});
+            fs::write(
+                &file,
+                format!(
+                    "{padding}\n{}\n{}\n",
+                    project_snapshot(name, project),
+                    json!({"type":"user","sessionId":id,"cwd":cwd,"message":{"content":"hello"}})
+                ),
+            )
+            .unwrap();
+            let thread = summary(&file).unwrap().thread;
+            assert_eq!(
+                thread.project_id,
+                agent_protocol::models::ProjectMembership::Assigned(format!(
+                    "claude-project:{project}"
+                ))
+            );
+            expected.insert(format!("claude-project:{project}"), name.to_owned());
+        }
+        let catalog = projects(&home, &home.join("missing-config")).unwrap();
+        assert_eq!(catalog.len(), 2);
+        assert!(catalog.iter().all(|project| project.roots.is_empty()));
+        assert_eq!(
+            catalog
+                .into_iter()
+                .map(|p| (p.id, p.name))
+                .collect::<BTreeMap<_, _>>(),
+            expected
+        );
+    }
+
+    #[test]
+    fn native_project_metadata_does_not_accept_user_text_or_invalid_ids() {
+        let valid = project_snapshot("Games", "chan_games");
+        assert_eq!(native_project(&valid).unwrap().name, "Games");
+        let mut user = valid.clone();
+        user["type"] = json!("user");
+        assert!(native_project(&user).is_none());
+        let mut tool = valid;
+        tool["attachment"]["type"] = json!("tool_result");
+        assert!(native_project(&tool).is_none());
+        for id in ["", "chan_", "session_abc", "chan_abc/path"] {
+            assert!(native_project(&project_snapshot("Games", id)).is_none());
+        }
+        assert!(native_project(&project_snapshot(" ", "chan_games")).is_none());
+    }
+
     const NATIVE: &str = include_str!("../../tests/fixtures/claude-2.1.266.jsonl");
     fn fixture(bytes: &str) -> (tempfile::TempDir, PathBuf) {
         let root = tempfile::tempdir().unwrap();
