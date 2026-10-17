@@ -110,6 +110,8 @@ fn open_main_window(cx: &mut App) {
                 ..Default::default()
             },
             |window, cx| {
+                #[cfg(target_os = "windows")]
+                appearance::style_native_titlebar(window);
                 let desktop = cx.new(|cx| app::Desktop::new(app::Mode::Main, window, cx));
                 cx.new(|cx| Root::new(desktop, window, cx))
             },
