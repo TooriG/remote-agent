@@ -152,11 +152,16 @@ mod tests {
             .unwrap_err();
         assert!(error.contains("update-denied"), "{error}");
         #[cfg(windows)]
-        let slow = "ping -n 30 127.0.0.1 >nul";
+        let slow = {
+            let system = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap());
+            let mut command = bex_process::command(&system.join("System32/ping.exe")).unwrap();
+            command.args(["-n", "30", "127.0.0.1"]);
+            command
+        };
         #[cfg(unix)]
-        let slow = "sleep 30";
+        let slow = shell("sleep 30");
         assert_eq!(
-            collect(shell(slow), Duration::from_millis(100))
+            collect(slow, Duration::from_millis(100))
                 .await
                 .unwrap_err(),
             "CLI command timed out"
