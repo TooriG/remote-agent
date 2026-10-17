@@ -27,6 +27,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.remoteagent.core.Intent
+import dev.remoteagent.core.LoadModels
 import dev.remoteagent.core.ModelRef
 import dev.remoteagent.core.Outcome
 import dev.remoteagent.core.ProviderKind
@@ -45,7 +46,13 @@ internal fun ModelPickerButton(
     val model = snapshot.models().firstOrNull { it.model == selected }
     val controls = snapshot.modelQuickControls(key)
     var open by remember(key) { mutableStateOf(false) }
-    TextButton(onClick = { open = true }, modifier = modifier.testTag("model.settings")) {
+    TextButton(
+        onClick = {
+            open = true
+            perform(Intent.LoadModels(LoadModels())) {}
+        },
+        modifier = modifier.testTag("model.settings"),
+    ) {
         Text(
             listOfNotNull(
                     if (controls.fast) "⚡" else null,

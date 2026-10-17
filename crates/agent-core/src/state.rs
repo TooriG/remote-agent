@@ -992,9 +992,9 @@ fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
                     (*next.list_query).clone(),
                 )));
             }
-            if next.models.is_empty() {
-                effects.push(Effect::execute(op::LoadModels {}));
-            }
+            // The Host catalog can change while a mobile client is backgrounded.
+            // Keep cached choices visible until the fresh catalog arrives.
+            effects.push(Effect::execute(op::LoadModels {}));
             if next.account.accounts.is_none() {
                 effects.push(Effect::execute(op::ListAccounts {}));
             }

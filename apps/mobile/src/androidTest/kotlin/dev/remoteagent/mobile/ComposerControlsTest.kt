@@ -31,7 +31,7 @@ class ComposerControlsTest {
                     JSONArray(
                         """[
               {"id":"one","model":{"provider":"codex","id":"one"},"displayName":"Fixture One","defaultReasoningEffort":"low","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"high"}]},
-              {"id":"two","model":{"provider":"codex","id":"two"},"displayName":"Fixture Two","defaultReasoningEffort":"low","supportedReasoningEfforts":[]},
+              {"id":"gpt-6.1-sol","model":{"provider":"codex","id":"gpt-6.1-sol"},"displayName":"GPT-6.1","defaultReasoningEffort":"low","supportedReasoningEfforts":[]},
               {"id":"claude","model":{"provider":"claude","id":"claude"},"displayName":"Other Provider","defaultReasoningEffort":"low","supportedReasoningEfforts":[]}
             ]"""
                     ),
@@ -54,10 +54,11 @@ class ComposerControlsTest {
             compose.setContent { MaterialTheme { ModelPickerButton(snapshot, { intent, _ -> intents.add(intent) }) } }
             compose.onNodeWithTag("model.settings").performClick()
             compose.onNodeWithText("Other Provider").assertDoesNotExist()
-            compose.onNodeWithText("Fixture Two").performClick()
+            compose.onNodeWithText("GPT-6.1").performClick()
             compose.onNodeWithText("高").performClick()
             compose.runOnIdle {
-                assertTrue(intents.any { it is Intent.SelectModel })
+                assertTrue(intents.any { it is Intent.LoadModels })
+                assertTrue(intents.any { it is Intent.SelectModel && it.model.id == "gpt-6.1-sol" })
                 assertTrue(intents.any { it is Intent.SelectEffort })
             }
         }
