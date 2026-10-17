@@ -4,6 +4,7 @@ import XCTest
 /// XCTest selectors remain on BexLaunchUITests for the fixture runner.
 extension BexLaunchUITests {
     func testSimulatorRemovesHostAndRequiresPairingAfterRelaunch() throws {
+        XCUIApplication().resetAuthorizationStatus(for: .camera)
         let app = try connectedSimulatorApp()
         app.buttons["tasks.hosts"].tap()
         let profile = prefixedButton(app, prefix: "profiles.")
@@ -23,6 +24,7 @@ extension BexLaunchUITests {
         XCTAssertTrue(app.staticTexts["pairing.welcome"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["pairing.scan"].exists)
         XCTAssertEqual(app.buttons["pairing.scan"].label, "QRコードを読み取る")
+        assertScannerCameraDenialAndCancellation(app)
         XCTAssertFalse(app.descendants(matching: .any)["tasks.list"].exists)
         app.terminate(); app.launch()
         XCTAssertTrue(app.staticTexts["pairing.welcome"].waitForExistence(timeout: 10))
@@ -83,6 +85,21 @@ extension BexLaunchUITests {
         composer.tap()
         XCTAssertTrue(settings.isHittable)
         captureScreen(app, named: "Restored task and selected model")
+    }
+
+    func testSimulatorOpensQrScannerWhileAddingHost() throws {
+        XCUIApplication().resetAuthorizationStatus(for: .camera)
+        let app = try connectedSimulatorApp()
+        app.buttons["tasks.hosts"].tap()
+        let addHost = app.buttons["profiles.add"]
+        XCTAssertTrue(addHost.waitForExistence(timeout: 10)); addHost.tap()
+        assertScannerCameraDenialAndCancellation(app)
+        app.buttons["pairing.scan"].tap()
+        XCTAssertTrue(app.staticTexts["scanner.error"].waitForExistence(timeout: 10))
+        app.buttons["scanner.cancel"].tap()
+        let cancel = app.buttons["pairing.cancel"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 10)); cancel.tap()
+        XCTAssertTrue(addHost.waitForExistence(timeout: 10))
     }
 
     func testSimulatorUsesNativeHostNavigationAndPairingDismissal() throws {
@@ -335,6 +352,26 @@ extension BexLaunchUITests {
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "Task reopened after repeated back and cancelled edge swipes"
         screenshot.lifetime = .keepAlways; add(screenshot)
+    }
+
+    private func assertScannerCameraDenialAndCancellation(_ app: XCUIApplication) {
+        app.buttons["pairing.scan"].tap()
+        let scannerCancel = app.buttons["scanner.cancel"]
+        XCTAssertTrue(scannerCancel.waitForExistence(timeout: 10))
+        let alert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
+        if alert.waitForExistence(timeout: 5) {
+            let deny = alert.buttons.matching(NSPredicate(
+                format: "label IN %@", ["Don't Allow", "Don’t Allow", "許可しない"]
+            )).firstMatch
+            XCTAssertTrue(deny.exists); deny.tap()
+        }
+        let error = app.staticTexts["scanner.error"]
+        XCTAssertTrue(error.waitForExistence(timeout: 10))
+        XCTAssertTrue(error.label.contains("カメラ"))
+        XCTAssertTrue(app.buttons["scanner.settings"].exists)
+        scannerCancel.tap()
+        XCTAssertTrue(app.buttons["pairing.scan"].waitForExistence(timeout: 10))
+        XCTAssertFalse(scannerCancel.exists)
     }
 
     private func backToTaskList(_ app: XCUIApplication, swipe: Bool) {

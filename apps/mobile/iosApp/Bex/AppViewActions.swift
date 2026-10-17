@@ -194,12 +194,6 @@ extension BexAppViewModel {
         guard let threadId = snapshot.navigation().threadId else { return }
         perform(.interrupt(Interrupt(threadId: threadId, turnId: turnId)))
     }
-
-    func scanned(_ contents: String?) {
-        isScanning = false; if let contents {
-            preparePairing(contents)
-        }
-    }
 }
 
 extension BexAppViewModel {

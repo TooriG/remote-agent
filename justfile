@@ -95,6 +95,7 @@ conversation-ui:
         testSimulatorRetriesSideChatPreparationWithoutLosingOriginalDraft \
         testSimulatorSelectsAssistantTextInPlaceAndAddsOnlySelectionToDraft \
         testSimulatorUsesNativeHostNavigationAndPairingDismissal \
+        testSimulatorOpensQrScannerWhileAddingHost \
         testSimulatorRemovesHostAndRequiresPairingAfterRelaunch \
         testSimulatorRendersEveryActivityFamilyAndHidesStateOnlyItems \
         testSimulatorUsesNativeProjectDisclosureAndDirectoryNavigation \

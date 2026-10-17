@@ -10,7 +10,6 @@ final class BexAppViewModel: ObservableObject {
     @Published var screen: AppScreen = .profiles
     @Published var sideChatRequest: SideChatRequest?
     @Published var composerFocusRequest: UUID?
-    @Published var isScanning = false
     @Published var transferError: String?
     @Published var transferring = false
     @Published var isConnecting = false
