@@ -20,7 +20,7 @@ pub(crate) fn style_native_titlebar(window: &gpui_kit::Window) {
     use windows::Win32::{
         Foundation::HWND,
         Graphics::Dwm::{
-            DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE,
+            DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE,
             DwmSetWindowAttribute,
         },
     };
@@ -39,6 +39,7 @@ pub(crate) fn style_native_titlebar(window: &gpui_kit::Window) {
     for (attribute, value) in [
         (DWMWA_USE_IMMERSIVE_DARK_MODE, 1u32),
         (DWMWA_CAPTION_COLOR, colorref(BACKGROUND)),
+        (DWMWA_BORDER_COLOR, colorref(BORDER)),
         (DWMWA_TEXT_COLOR, colorref(FOREGROUND)),
     ] {
         // SAFETY: the live window owns HWND; each attribute takes a four-byte
