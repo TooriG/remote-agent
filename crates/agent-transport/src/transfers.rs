@@ -94,15 +94,51 @@ where
         ));
     }
     let response: crate::models::UploadedFile = crate::protocol::decode(&response)?;
-    if response.sha256 != sha256
-        || response.size != size
-        || !Path::new(&response.path).is_absolute()
-    {
+    validate_upload_acknowledgement(&response, size, sha256)?;
+    Ok(response)
+}
+
+fn validate_upload_acknowledgement(
+    response: &crate::models::UploadedFile,
+    size: u64,
+    sha256: [u8; 32],
+) -> Result<(), TransferError> {
+    if response.sha256 != sha256 || response.size != size {
         return Err(TransferError::Protocol(
             "upload acknowledgement changed content metadata".into(),
         ));
     }
-    Ok(response)
+    if !is_absolute_host_path(&response.path) {
+        return Err(TransferError::Protocol(
+            "upload acknowledgement has a relative Host path".into(),
+        ));
+    }
+    Ok(())
+}
+
+// This path belongs to the Host, which may run a different OS from the client.
+// In particular, Android's Path::is_absolute rejects Windows drive/UNC paths.
+fn is_absolute_host_path(path: &str) -> bool {
+    if path.is_empty() || path.contains('\0') {
+        return false;
+    }
+    if path.starts_with('/') {
+        return true;
+    }
+    let bytes = path.as_bytes();
+    if bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\')
+    {
+        return true;
+    }
+    if let Some(unc) = path.strip_prefix(r"\\") {
+        let mut components = unc.split(['\\', '/']);
+        return components.next().is_some_and(|server| !server.is_empty())
+            && components.next().is_some_and(|share| !share.is_empty());
+    }
+    false
 }
 
 /// Writes only a fully received, digest-checked download. A failed transfer
@@ -210,4 +246,56 @@ pub async fn resolve_item(
         response.item = item;
     }
     Ok(response)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn upload_acknowledgement_accepts_host_paths_across_client_platforms() {
+        for path in [
+            "/home/user/project/image.png",
+            "/Users/user/project/image.png",
+            r"C:\Users\user\project\image.png",
+            "D:/project/image.png",
+            r"\\server\share\project\image.png",
+            r"\\?\C:\Users\user\project\image.png",
+            r"\\?\UNC\server\share\image.png",
+        ] {
+            let response = crate::models::UploadedFile {
+                path: path.into(),
+                size: 42,
+                sha256: [7; 32],
+            };
+            validate_upload_acknowledgement(&response, 42, [7; 32])
+                .unwrap_or_else(|error| panic!("{path}: {error}"));
+            // The opaque Host path must survive unchanged for later submission.
+            assert_eq!(response.path, path);
+            assert!(validate_upload_acknowledgement(&response, 43, [7; 32]).is_err());
+            assert!(validate_upload_acknowledgement(&response, 42, [8; 32]).is_err());
+        }
+    }
+
+    #[test]
+    fn upload_acknowledgement_rejects_relative_or_invalid_host_paths() {
+        for path in [
+            "",
+            "image.png",
+            "../image.png",
+            r"C:image.png",
+            r"\image.png",
+            r"\\server",
+            r"\\server\",
+            "/image\0.png",
+        ] {
+            let response = crate::models::UploadedFile {
+                path: path.into(),
+                size: 42,
+                sha256: [7; 32],
+            };
+            let error = validate_upload_acknowledgement(&response, 42, [7; 32]).expect_err(path);
+            assert!(error.to_string().contains("relative Host path"), "{error}");
+        }
+    }
 }

@@ -53,7 +53,9 @@ jobs:
       - name: Enable emulator hardware acceleration
         run: sudo chmod a+rw /dev/kvm
       - name: Build isolated Android Host fixtures
-        run: nix develop .#native --command cargo build --locked -p host-fixture -p codex-app-server -p bex-process --bins
+        run: |
+          nix develop .#native --command cargo test --locked -p agent-transport --lib
+          nix develop .#native --command cargo build --locked -p host-fixture -p codex-app-server -p bex-process --bins
       - name: Verify image attachments against an isolated Host
         run: nix develop .#android-test --command bash scripts/android-e2e.sh attachments
       - name: Retain Android verification reports
