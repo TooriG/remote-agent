@@ -150,6 +150,8 @@ impl Claude {
     ) -> anyhow::Result<Self> {
         crate::platform::create_state_directory(&directory)?;
         let native_home = native_home.map(Ok).unwrap_or_else(history::home)?;
+        let path = std::env::var_os("PATH");
+        let program = process::executable(&program, path.as_deref()).unwrap_or(program);
         let accounts = accounts::Accounts::load(
             program.clone(),
             directory.join("accounts"),
