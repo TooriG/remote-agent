@@ -123,8 +123,14 @@ approval, local execution, opening the app, QR pairing and resuming a conversati
 They use fictional data and are labeled as UI illustrations, not live screenshots.
 Images reserve a 3:2 layout box, load lazily and stack with the cards on phones.
 
-Native responsiveness and disconnect recovery claims are grounded in README.ja.md
-(directory structure and Claude execution) and ADR 0005 (shared immutable rendering,
-reuse of unchanged presentation objects, reconnect reconciliation). They describe
-implementation choices and resumability, not comparative memory/speed benchmarks
-or guaranteed uninterrupted networking. No automatic retry of user input is claimed.
+The hero and three technical benefits highlight Rust + GPUI rendering, QUIC / iroh
+streams and Host-side execution with reconnect synchronization. Sources are
+README.ja.md (native clients and Host execution), ADR 0005 (reused presentation
+objects, independent request/subscription/blob streams, reconnect reconciliation),
+and `crates/agent-transport` (iroh endpoint and stream implementation).
+QUIC stream independence is described in RFC 9000 sections 2 and 2.2:
+https://www.rfc-editor.org/rfc/rfc9000.html#section-2.2
+These are implementation and resilience claims, not measured memory/speed ratios
+or reliability comparisons with Codex or Claude mobile apps. No reproducible
+comparison supports a tenfold claim yet. Do not infer a ratio from using Rust,
+promise uninterrupted networking or claim automatic replay of user input.

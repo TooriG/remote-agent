@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>bex — どこでも、これひとつで。</title>
-<meta name="description" content="bexは、あなたのコンピューターで動くCodexとClaude Codeを、Mac・iPhone・Android・CLIから操作するアプリです。">
+<meta name="description" content="Rust＋GPUIの軽快なネイティブUIと、QUICによる暗号化リモート接続。bexなら、PCで動くCodexとClaude Codeの続きをスマホから。">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://getbex.dev/">
 <meta property="og:title" content="bex — Your coding agents, anywhere.">
@@ -46,6 +46,7 @@
     <div class="wrap hero-in">
       <h1 data-i="hero.title">どこでも、<br class="sp">これひとつで。</h1>
       <p class="lead" data-i="hero.lead">CodexとClaude Codeを、ひとつのアプリで。<br>PCでもスマホでも、同じ開発の続きを。</p>
+      <p class="hero-tech" data-i="hero.tech">Rustの軽快さ。QUICでつながる、モバイル開発。</p>
       <div class="dl-hero" data-dl-hero>
         <div class="ctas dl-desk">
           <a class="btn" data-dl-primary href="#download">ダウンロード</a>
@@ -81,8 +82,10 @@
     </div>
     <p class="visual-note" data-i="visual.note">画像は機能・操作を伝えるためのUIイメージです。</p>
     <div class="product-strengths">
-      <article><h3 data-i="strength.native.title">軽快な、ネイティブアプリ。</h3><p data-i="strength.native.body">デスクトップにはRustとGPUIを採用。変わっていない表示を再利用し、余分な処理を抑えます。</p></article>
-      <article><h3 data-i="strength.connection.title">切れても、続きを。</h3><p data-i="strength.connection.body">端末の接続が切れても、PC上の実行は継続。再接続すると、最新の状態から再開できます。</p></article>
+      <h2 data-i="strength.title">軽さも、つながりも。技術から。</h2>
+      <article><span class="strength-tech">Rust + GPUI</span><h3 data-i="strength.native.title">軽快さを、ネイティブで。</h3><p data-i="strength.native.body">デスクトップUIはRust＋GPUIで描画。変わっていない表示データを再利用し、余分な処理を削減。会話も差分も、軽快に操作できる設計です。</p></article>
+      <article><span class="strength-tech">QUIC / iroh</span><h3 data-i="strength.connection.title">モバイル接続を、もっと強く。</h3><p data-i="strength.connection.body">PCとスマホを、QUICベースのirohで暗号化接続。会話・操作要求・添付ファイルを独立したストリームで運び、ひとつの通信待ちが他を巻き込みにくい設計です。</p></article>
+      <article><span class="strength-tech">Host + Reconnect</span><h3 data-i="strength.recovery.title">電波が切れても、作業は続く。</h3><p data-i="strength.recovery.body">エージェントは手元のPCで実行。スマホの接続が切れても処理は継続し、再接続時に最新の会話・進行状況へ同期。移動中も、同じ作業に戻れます。</p></article>
     </div>
   </div></section>
 

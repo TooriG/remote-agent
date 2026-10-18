@@ -1,9 +1,13 @@
 (() => {
   const en = {
-    'strength.native.title': 'A responsive native app.',
-    'strength.native.body': 'The desktop app uses Rust and GPUI. Unchanged presentation data is reused to avoid unnecessary work.',
-    'strength.connection.title': 'Disconnect. Then carry on.',
-    'strength.connection.body': 'Work keeps running on your computer when your device disconnects. Reconnect to pick up from the latest state.',
+    'hero.tech': 'Native speed with Rust. Mobile access over QUIC.',
+    'strength.title': 'Built for responsiveness. Built to stay connected.',
+    'strength.native.title': 'Native by design. Light on busywork.',
+    'strength.native.body': 'Rust and GPUI render the desktop UI. Unchanged presentation data is reused to cut unnecessary work, keeping conversations and diffs responsive by design.',
+    'strength.connection.title': 'A stronger foundation for mobile.',
+    'strength.connection.body': 'Your phone and computer connect over encrypted, QUIC-based iroh. Conversations, requests and attachments use independent streams, so one waiting transfer need not hold up the others.',
+    'strength.recovery.title': 'Lose the signal. Keep the work.',
+    'strength.recovery.body': 'Agents run on your own computer and keep working when your phone disconnects. Reconnect to sync the latest conversation and progress, then carry on with the same task.',
     'visual.note': 'UI illustrations show the features and setup flow.',
     'simple.local.body': 'Code stays with you. Connections are encrypted.',
     'simple.local.title': 'Your computer does the work.',
