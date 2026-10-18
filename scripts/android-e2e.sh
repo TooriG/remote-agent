@@ -90,7 +90,12 @@ adb -P "$server_port" -s "$serial" shell am instrument -w -e cwd "$fixture/host/
     -e class dev.remoteagent.mobile.ConversationRecoveryTest \
     dev.remoteagent.mobile.test/androidx.test.runner.AndroidJUnitRunner | tee "$log.attachments.log"
 grep -qx 'OK (1 test)' "$log.attachments.log"
-echo "Android image attachment round-trip passed"
+adb -P "$server_port" -s "$serial" shell am instrument -w \
+    -e class dev.remoteagent.mobile.VoiceInputTest \
+    dev.remoteagent.mobile.test/androidx.test.runner.AndroidJUnitRunner | tee "$log.voice.log"
+grep -qx 'OK (3 tests)' "$log.voice.log"
+
+echo "Android image attachment and voice input checks passed"
 exit 0
 fi
 if [[ $mode == all ]]; then

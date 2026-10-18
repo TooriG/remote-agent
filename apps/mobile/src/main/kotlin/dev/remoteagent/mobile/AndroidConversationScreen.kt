@@ -257,6 +257,7 @@ internal fun ThreadComposer(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 attach { uploading = it }
                 ModelPickerButton(snapshot, perform, Modifier.weight(1f))
+                VoiceInputButton(snapshot, perform, enabled = inputUnavailable == null && !sending)
                 FilledIconButton(
                     onClick = {
                         sending = true

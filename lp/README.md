@@ -81,6 +81,12 @@ gpt-6.1-sol through the BEX connection.
 
 ## Mobile composer
 
+The microphone button opens the phone's speech recognition activity in the device
+language and appends the result to the original draft through the shared core.
+Review or edit the text before sending. Cancellation preserves the draft; a phone
+without a speech recognition app shows setup guidance. The speech activity owns
+microphone access, so BEX does not require a separate recording permission.
+
 The Android UI uses a dark conversation screen and a rounded bottom composer.
 Tap the model/effort label to search models and change the provider-advertised
 reasoning effort or speed tier. Existing conversations stay on their provider;
