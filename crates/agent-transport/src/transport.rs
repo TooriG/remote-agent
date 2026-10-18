@@ -491,7 +491,8 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(10), async {
             let host = Endpoint::bind(Identity::generate(), Relays::Loopback).await.unwrap();
             let client = Endpoint::bind(Identity::generate(), Relays::Loopback).await.unwrap();
-            let (connected, accepted) = tokio::join!(client.connect(&host.ticket()), host.accept());
+            let ticket = host.ticket();
+            let (connected, accepted) = tokio::join!(client.connect(&ticket), host.accept());
             let connected = connected.unwrap();
             assert!(accepted.unwrap().is_ok());
             connected.close();
