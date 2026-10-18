@@ -163,5 +163,7 @@ private fun effortLabel(value: String): String =
         "max" -> "最大"
         "minimal" -> "最小"
         "none" -> "なし"
+        "off" -> "オフ"
+        "" -> "既定"
         else -> value
     }

@@ -492,7 +492,7 @@ impl DeepSeek {
             )
             .await?;
         }
-        if let Some(effort) = effort.filter(|e| !e.is_empty()) {
+        if let Some(effort) = effort {
             rpc.call(
                 "session/set_config_option",
                 json!({"sessionId":id,"configId":"reasoning_effort","value":effort}),
@@ -1252,8 +1252,23 @@ impl Agent for DeepSeek {
                     Some(Duration::from_secs(90)),
                 )
                 .await?;
-            let models = catalog(&created);
+            let mut models = catalog(&created);
             if let Some(id) = created["sessionId"].as_str() {
+                // ACP exposes reasoning only for the selected model. Discover each
+                // route on this disposable session, never on a user's conversation.
+                for model in &mut models {
+                    if model.is_default == Some(true) {
+                        continue;
+                    }
+                    match rpc.call(
+                        "session/set_config_option",
+                        json!({"sessionId":id,"configId":"model","value":model.model.id}),
+                        Some(Duration::from_secs(30)),
+                    ).await {
+                        Ok(config) => apply_model_reasoning(model, &config),
+                        Err(error) => tracing::debug!(model = %model.model.id, %error, "Harness model settings unavailable"),
+                    }
+                }
                 rpc.call(
                     "session/close",
                     json!({"sessionId":id}),
@@ -1440,6 +1455,16 @@ fn catalog(created: &Value) -> Vec<Model> {
             })
         })
         .collect()
+}
+
+// Never copy one model's reasoning capabilities onto another route.
+fn apply_model_reasoning(model: &mut Model, config: &Value) {
+    if let Some(selected) = catalog(config).into_iter().find(|choice| {
+        choice.model == model.model && choice.is_default == Some(true)
+    }) {
+        model.default_reasoning_effort = selected.default_reasoning_effort;
+        model.supported_reasoning_efforts = selected.supported_reasoning_efforts;
+    }
 }
 
 #[cfg(test)]
@@ -1643,11 +1668,34 @@ mod tests {
                 .iter()
                 .any(|model| model.model.id.contains("openrouter"))
         );
+        let router = models.data.iter().find(|model| model.model.id.contains("openrouter") && model.model.id.contains("deepseek-v4.1-flash")).expect("OpenRouter DeepSeek route");
+        assert!(!router.supported_reasoning_efforts.is_empty(), "exact-model reasoning missing");
+        eprintln!("routes={} deepseek_efforts={:?}", models.data.len(), router.supported_reasoning_efforts);
         let patch: Value =
             serde_json::from_slice(&std::fs::read(dir.path().join("acp.patch.json")).unwrap())
                 .unwrap();
         assert!(!patch.to_string().contains("test-catalog-only"));
         adapter.shutdown().await;
+    }
+
+    #[test]
+    fn reasoning_discovery_is_specific_to_the_selected_route() {
+        let initial = json!({"configOptions":[
+            {"id":"model","currentValue":"official","options":[{"value":"official"},{"value":"router"},{"value":"plain"}]},
+            {"id":"reasoning_effort","currentValue":"high","options":[{"value":"off"},{"value":"high"},{"value":"max"}]}
+        ]});
+        let mut models = catalog(&initial);
+        let router = json!({"configOptions":[
+            {"id":"model","currentValue":"router","options":[{"value":"router"}]},
+            {"id":"reasoning_effort","currentValue":"","options":[{"value":""},{"value":"low"},{"value":"high"}]}
+        ]});
+        apply_model_reasoning(&mut models[1], &router);
+        assert_eq!(models[1].supported_reasoning_efforts.iter().map(|e| e.reasoning_effort.as_str()).collect::<Vec<_>>(), vec!["", "low", "high"]);
+        assert_eq!(models[1].default_reasoning_effort, "");
+        assert_eq!(models[1].is_default, Some(false));
+        apply_model_reasoning(&mut models[2], &router);
+        assert!(models[2].supported_reasoning_efforts.is_empty());
+        assert_eq!(models[0].supported_reasoning_efforts.len(), 3);
     }
 
     #[test]
