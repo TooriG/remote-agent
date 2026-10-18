@@ -79,10 +79,6 @@ private fun ModelPickerDialog(
     var query by remember(key) { mutableStateOf("") }
     val fixedProvider = snapshot.navigation().threadId?.provider
     val choices = snapshot.modelsMatching(fixedProvider, query)
-    val controls = snapshot.modelQuickControls(key)
-    val tier = controls.speedChoices.firstOrNull { it.selected }?.id
-    var defaultsNotice by remember(selected, controls.effort, tier) { mutableStateOf<String?>(null) }
-    var savingDefaults by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = { dismiss() },
         title = { Text("モデルと実行設定") },
@@ -119,28 +115,41 @@ private fun ModelPickerDialog(
                 }
                 if (choices.isEmpty()) Text("モデルがありません。検索条件やPCとの接続を確認してください。")
                 ModelQuickSettings(snapshot, perform)
-                TextButton(
-                    enabled = selected != null && !savingDefaults,
-                    modifier = Modifier.fillMaxWidth().testTag("model.save-defaults"),
-                    onClick = {
-                        savingDefaults = true
-                        saveNewChatDefaults(snapshot, perform) { result ->
-                            savingDefaults = false
-                            defaultsNotice =
-                                result.fold(
-                                    onSuccess = { "新規チャットの既定に保存しました" },
-                                    onFailure = { it.message ?: "既定の保存に失敗しました" },
-                                )
-                        }
-                    },
-                ) {
-                    Text("この設定を新規チャットの既定にする")
-                }
-                Text(defaultsNotice ?: "この端末で、次の新規チャットからモデル・推論量・速度を引き継ぎます。", style = MaterialTheme.typography.bodySmall)
+                SaveNewChatDefaultsButton(snapshot, selected, perform)
             }
         },
         confirmButton = { TextButton(onClick = { dismiss() }) { Text("完了") } },
     )
+}
+
+@Composable
+private fun SaveNewChatDefaultsButton(
+    snapshot: Snapshot,
+    selected: ModelRef?,
+    perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
+) {
+    val key = snapshot.navigation().draftKey
+    val controls = snapshot.modelQuickControls(key)
+    val tier = controls.speedChoices.firstOrNull { it.selected }?.id
+    var defaultsNotice by remember(selected, controls.effort, tier) { mutableStateOf<String?>(null) }
+    var savingDefaults by remember { mutableStateOf(false) }
+    Column {
+        TextButton(
+            enabled = selected != null && !savingDefaults,
+            modifier = Modifier.fillMaxWidth().testTag("model.save-defaults"),
+            onClick = {
+                savingDefaults = true
+                saveNewChatDefaults(snapshot, perform) { result ->
+                    savingDefaults = false
+                    defaultsNotice =
+                        result.fold(onSuccess = { "新規チャットの既定に保存しました" }, onFailure = { it.message ?: "既定の保存に失敗しました" })
+                }
+            },
+        ) {
+            Text("この設定を新規チャットの既定にする")
+        }
+        Text(defaultsNotice ?: "この端末で、次の新規チャットからモデル・推論量・速度を引き継ぎます。", style = MaterialTheme.typography.bodySmall)
+    }
 }
 
 /** Reuse Core's persisted presets rather than keeping a second set of Android preferences. */
