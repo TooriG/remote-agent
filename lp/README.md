@@ -134,47 +134,7 @@ objects, independent request/subscription/blob streams, reconnect reconciliation
 and `crates/agent-transport` (iroh endpoint and stream implementation).
 QUIC stream independence is described in RFC 9000 sections 2 and 2.2:
 https://www.rfc-editor.org/rfc/rfc9000.html#section-2.2
-These implementation and resilience claims do not establish reliability advantages
-over Codex or Claude mobile apps. Do not infer a performance ratio from using Rust,
+These are implementation and resilience claims, not measured memory/speed ratios
+or reliability comparisons with Codex or Claude mobile apps. No reproducible
+comparison supports a tenfold claim yet. Do not infer a ratio from using Rust,
 promise uninterrupted networking or claim automatic replay of user input.
-
-## Windows baseline measurements
-
-`public/benchmarks-windows.html` explains the October 18, 2026 Windows baseline.
-`public/benchmarks/windows-20261018.json` retains every sample from five BEX/Claude launches
-and five Codex reference launches plus three excluded warm-ups, including process-level memory and binary
-hashes. The LP's Japanese and English numbers use the same validated medians.
-
-This uses the downloadable BEX Windows preview 6 dev-profile build, Codex package
-26.1013.4894.0 and Claude package 2.42304.0.0. App profiles and provider state
-directories are isolated, with no project or generation. BEX and Claude are signed
-out; Codex automatically restores Windows login despite its isolated profile.
-Codex is labeled a signed-in reference, not used for multiplier or superiority
-claims. The Claude percentage compares signed-out initial states. BEX includes its Host;
-all apps include their discovered descendants. The primary memory metric is USS
-(private resident RAM), excluding shared pages and GPU memory. RSS and private
-commit are also published to make the choice of metric inspectable.
-
-Window timing is process launch to the first visible OS window, not content
-readiness or time to first answer. Five launches follow one excluded warm-up,
-using warm OS caches and rotating app order. Memory uses 11 samples at 20–30
-seconds, a median for each launch, then a median across valid launches (five each).
-The original Codex fifth result is retained. Additional failed diagnostic attempts
-and a BEX resume missing its preexisting Host are excluded explicitly; BEX final
-valid run restarts its test Host. The
-single-PC test retains unrelated background apps and tasks. Do not generalize
-these numbers to authenticated coding workloads, mobile clients, all hardware,
-or a causal Rust-versus-Electron claim.
-
-Reproduce with Windows, Python 3.10+ and psutil 7.2.2. Provide a JSON array of
-`name`, `version`, `executable` objects named BEX, Codex and Claude, then run:
-
-```text
-python scripts/benchmark-desktop.py --config config.json --output results --runs 5
-python scripts/summarize-desktop-benchmark.py results lp/public/benchmarks/windows-20261018.json
-```
-
-Only harness-launched processes are terminated. Never publish profile directories
-or credentials. The summarizer requires complete runs, validates sampling times,
-process totals and BEX Host inclusion, and refuses incomplete datasets. Update the
-LP and report medians/ranges together when replacing a dataset.

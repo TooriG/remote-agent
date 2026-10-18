@@ -47,7 +47,6 @@
       <h1 data-i="hero.title">どこでも、<br class="sp">これひとつで。</h1>
       <p class="lead" data-i="hero.lead">CodexとClaude Codeを、ひとつのアプリで。<br>PCでもスマホでも、同じ開発の続きを。</p>
       <p class="hero-tech" data-i="hero.tech">Rustの軽快さ。QUICでつながる、モバイル開発。</p>
-      <a class="hero-benchmark" href="#benchmark" data-i="hero.benchmark">初期状態：専有RAM 33.1 MiB・ウィンドウ表示 0.44 秒※</a>
       <div class="dl-hero" data-dl-hero>
         <div class="ctas dl-desk">
           <a class="btn" data-dl-primary href="#download">ダウンロード</a>
@@ -87,23 +86,6 @@
       <article><span class="strength-tech">Rust + GPUI</span><h3 data-i="strength.native.title">軽快さを、ネイティブで。</h3><p data-i="strength.native.body">デスクトップUIはRust＋GPUIで描画。変わっていない表示データを再利用し、余分な処理を削減。会話も差分も、軽快に操作できる設計です。</p></article>
       <article><span class="strength-tech">QUIC / iroh</span><h3 data-i="strength.connection.title">モバイル接続を、もっと強く。</h3><p data-i="strength.connection.body">PCとスマホを、QUICベースのirohで暗号化接続。会話・操作要求・添付ファイルを独立したストリームで運び、ひとつの通信待ちが他を巻き込みにくい設計です。</p></article>
       <article><span class="strength-tech">Host + Reconnect</span><h3 data-i="strength.recovery.title">電波が切れても、作業は続く。</h3><p data-i="strength.recovery.body">エージェントは手元のPCで実行。スマホの接続が切れても処理は継続し、再接続時に最新の会話・進行状況へ同期。移動中も、同じ作業に戻れます。</p></article>
-    </div>
-  </div></section>
-
-  <section id="benchmark" class="sec"><div class="wrap">
-    <div class="benchmark-summary">
-      <span class="strength-tech">MEASURED ON WINDOWS</span>
-      <h2 data-i="bench.title">軽さを、数字で。</h2>
-      <p data-i="bench.lead">未ログインの初期状態で、専有RAMはClaude比約93%少なく。BEXはHostも含めて計測しています。</p>
-      <div class="benchmark-scroll"><table class="benchmark-table">
-        <caption data-i="bench.caption">Windows 11・2026年10月18日・各5回の中央値（Codexは認証条件が異なる参考値）</caption>
-        <thead><tr><th scope="col" data-i="bench.app">アプリ</th><th scope="col" data-i="bench.memory">専有RAM（USS）</th><th scope="col" data-i="bench.window">ウィンドウ表示</th></tr></thead>
-        <tbody><tr><th scope="row">BEX<small>Windows preview 6</small><small data-i="bench.host">未ログイン・Host込み</small></th><td><strong>33.1 MiB</strong></td><td><strong>0.44s</strong></td></tr>
-<tr><th scope="row">Codex<small>26.1013.4894.0</small><small data-i="bench.codexauth">ログイン済み・参考値</small></th><td><strong>918.5 MiB</strong></td><td><strong>2.84s</strong></td></tr>
-<tr><th scope="row">Claude<small>2.42304.0.0</small><small data-i="bench.signedout">未ログイン</small></th><td><strong>521.9 MiB</strong></td><td><strong>0.44s</strong></td></tr></tbody>
-      </table></div>
-      <p data-i="bench.note">※BEX・Claudeは未ログイン。CodexはWindows認証を自動復元したログイン済みの参考値で、同条件の比較対象ではありません。すべてプロジェクト未操作。専有RAMは共有・GPUメモリを除外。表示時間は最初の可視ウィンドウまでで、操作可能までの時間ではありません。普段使いのアプリを動かしたままの単一PC測定です。</p>
-      <p><a href="/benchmarks-windows.html" data-i="bench.details">バージョン・測定条件・全データを見る</a></p>
     </div>
   </div></section>
 
