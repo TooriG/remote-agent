@@ -72,51 +72,29 @@ internal fun ThreadListScreen(
     hostName: String = "My PC",
     connected: Boolean = false,
 ) {
-    var search by rememberSaveable { mutableStateOf(query.searchTerm) }
-    var searching by rememberSaveable { mutableStateOf(query.searchTerm.isNotEmpty()) }
+    var search by rememberSaveable { mutableStateOf(query.searchTerm.takeIf { it.isNotEmpty() }) }
     val focusManager = LocalFocusManager.current
     fun closeSearch() {
-        search = ""
-        searching = false
+        search = null
         focusManager.clearFocus()
     }
-    BackHandler(enabled = searching) { closeSearch() }
+    BackHandler(enabled = search != null) { closeSearch() }
     var selectedTab by rememberSaveable { mutableStateOf(0) }
     val currentQuery by rememberUpdatedState(query)
     val dispatch by rememberUpdatedState(perform)
     LaunchedEffect(search) {
         kotlinx.coroutines.delay(SEARCH_DEBOUNCE_MILLIS)
-        if (currentQuery.searchTerm != search)
-            dispatch(Intent.ListSessions(ListSessions(query = currentQuery.copy(searchTerm = search))))
+        val term = search.orEmpty()
+        if (currentQuery.searchTerm != term)
+            dispatch(Intent.ListSessions(ListSessions(query = currentQuery.copy(searchTerm = term))))
     }
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
-        Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (searching) {
-                val focusRequester = remember { FocusRequester() }
-                LaunchedEffect(Unit) { focusRequester.requestFocus() }
-                OutlinedTextField(
-                    value = search,
-                    onValueChange = { search = it },
-                    modifier = Modifier.weight(1f).focusRequester(focusRequester),
-                    placeholder = { Text("チャットを検索", fontSize = 14.sp) },
-                    singleLine = true,
-                    shape = RoundedCornerShape(28.dp),
-                )
-                IconButton(onClick = { closeSearch() }) {
-                    Icon(painterResource(R.drawable.ic_close), "検索を閉じる")
-                }
-            } else {
-                Text("ワークスペース", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                IconButton(onClick = { searching = true }) {
-                    Icon(painterResource(R.drawable.ic_search), "検索")
-                }
-                IconButton(
-                    onClick = { perform(Intent.ListSessions(ListSessions(query = query))) },
-                    enabled = !loadingThreads,
-                ) { Icon(painterResource(R.drawable.ic_refresh), "更新") }
-            }
-        }
+        ThreadListHeader(
+            search = search,
+            loadingThreads = loadingThreads,
+            changeSearch = { if (it == null) closeSearch() else search = it },
+            refresh = { perform(Intent.ListSessions(ListSessions(query = query))) },
+        )
         HostSelector(hostName, connected, showHosts)
         TabRow(selectedTabIndex = selectedTab, containerColor = MaterialTheme.colorScheme.background) {
             listOf("最近のチャット", "プロジェクト").forEachIndexed { index, label ->
@@ -128,24 +106,7 @@ internal fun ThreadListScreen(
             if (selectedTab == 0) {
                 recentChats(list, loadingThreads, perform)
             } else {
-                projectThreads(list, perform)
-                if (list?.hasMoreProjects == true)
-                    item {
-                        TextButton(
-                            onClick = { perform(Intent.ExpandProjects) },
-                            enabled = !loadingThreads && !list.loadingProjects,
-                        ) {
-                            LoadingLabel("もっとプロジェクトを表示", list.loadingProjects)
-                        }
-                    }
-                if (list != null && list.projects.isEmpty())
-                    item {
-                        Text(
-                            "プロジェクトがありません。",
-                            Modifier.padding(vertical = 24.dp),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                projectThreads(list, loadingThreads, perform)
             }
         }
         Button(
@@ -156,6 +117,42 @@ internal fun ThreadListScreen(
         ) {
             Icon(painterResource(R.drawable.ic_add), null, Modifier.size(20.dp))
             Text("新しいチャット", Modifier.padding(start = 8.dp), fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+@Composable
+private fun ThreadListHeader(
+    search: String?,
+    loadingThreads: Boolean,
+    changeSearch: (String?) -> Unit,
+    refresh: () -> Unit,
+) {
+    Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (search != null) {
+            val focusRequester = remember { FocusRequester() }
+            LaunchedEffect(Unit) { focusRequester.requestFocus() }
+            OutlinedTextField(
+                value = search,
+                onValueChange = changeSearch,
+                modifier = Modifier.weight(1f).focusRequester(focusRequester),
+                placeholder = { Text("チャットを検索", fontSize = 14.sp) },
+                singleLine = true,
+                shape = RoundedCornerShape(28.dp),
+            )
+            IconButton(onClick = { changeSearch(null) }) {
+                Icon(painterResource(R.drawable.ic_close), "検索を閉じる")
+            }
+        } else {
+            Text("ワークスペース", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            IconButton(onClick = { changeSearch("") }) {
+                Icon(painterResource(R.drawable.ic_search), "検索")
+            }
+            IconButton(
+                onClick = refresh,
+                enabled = !loadingThreads,
+            ) { Icon(painterResource(R.drawable.ic_refresh), "更新") }
         }
     }
 }
@@ -196,8 +193,12 @@ private fun HostSelector(
             Icon(painterResource(R.drawable.ic_computer), null, Modifier.size(18.dp))
             Text(hostName, Modifier.weight(1f, fill = false).padding(horizontal = 8.dp),
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(if (connected) "接続中" else "未接続", fontSize = 12.sp,
-                color = if (connected) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                if (connected) "接続中" else "未接続",
+                fontSize = 12.sp,
+                color =
+                    if (connected) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Icon(painterResource(R.drawable.ic_chevron), null, Modifier.padding(start = 6.dp).size(14.dp))
         }
     }
@@ -259,7 +260,7 @@ private const val UNMERGED_COLOR_ARGB = 0xFFFB923C
 private val SessionRef.listKey: String
     get() = "session:$provider:$id"
 
-private fun LazyListScope.projectThreads(list: ThreadList?, perform: (Intent) -> Unit) {
+private fun LazyListScope.projectThreads(list: ThreadList?, loadingThreads: Boolean, perform: (Intent) -> Unit) {
     val projects = list?.projects.orEmpty()
     projects.forEach { project ->
         item(key = "project:${project.id}") {
@@ -284,6 +285,23 @@ private fun LazyListScope.projectThreads(list: ThreadList?, perform: (Intent) ->
                 }
         }
     }
+    if (list?.hasMoreProjects == true)
+        item {
+            TextButton(
+                onClick = { perform(Intent.ExpandProjects) },
+                enabled = !loadingThreads && !list.loadingProjects,
+            ) {
+                LoadingLabel("もっとプロジェクトを表示", list.loadingProjects)
+            }
+        }
+    if (list != null && list.projects.isEmpty())
+        item {
+            Text(
+                "プロジェクトがありません。",
+                Modifier.padding(vertical = 24.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
 }
 
 @Composable

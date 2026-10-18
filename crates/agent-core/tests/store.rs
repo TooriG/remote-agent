@@ -424,9 +424,8 @@ async fn setup(snapshot: Snapshot) -> (Arc<Store>, host_fixture::Reader, host_fi
     let cwd = selected.map_or(snapshot.navigation.cwd.as_str(), |thread| {
         thread.cwd.as_deref().unwrap_or_default()
     });
-    for _ in 0..1
+    for _ in 0..2
         + usize::from(snapshot.threads.is_none())
-        + usize::from(snapshot.models.is_empty())
         + usize::from(snapshot.account.accounts.is_none())
         + usize::from(selected.is_some())
         + usize::from(!cwd.is_empty())

@@ -290,6 +290,16 @@ fn model_settings_corpus() {
         let draft: Draft = serde_json::from_value(case["draft"].clone()).unwrap();
         let models = serde_json::from_value(case["models"].clone()).unwrap();
         let mut previous = Snapshot {
+            account: Arc::new(agent_core::state::AccountState {
+                accounts: Some(Arc::new(
+                    serde_json::from_value(json!({
+                        "accounts":[{"id":"chatgpt","provider":"codex","planType":"pro"}],
+                        "selected":{"codex":"chatgpt"}
+                    }))
+                    .unwrap(),
+                )),
+                ..Default::default()
+            }),
             drafts: Arc::new(BTreeMap::from([(
                 SessionRef {
                     provider: ProviderKind::Codex,
