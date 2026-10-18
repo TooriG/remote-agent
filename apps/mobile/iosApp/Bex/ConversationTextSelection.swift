@@ -59,12 +59,8 @@ struct AssistantSelectableText: UIViewRepresentable {
             uiView.setContent(ConversationAttributedText.attributedText(blocks, dark: colorScheme == .dark,
                                                                         attachmentWidth: width))
         }
-        // Measure the text independently of the view's current frame and intrinsic size.
-        let bounds = uiView.attributedText.boundingRect(
-            with: CGSize(width: width, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil
-        )
-        return CGSize(width: width, height: ceil(bounds.height))
+        let size = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
+        return CGSize(width: width, height: size.height)
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
@@ -296,8 +292,6 @@ final class ConversationTextView: UITextView {
     var attachmentWidth: CGFloat = 300
 
     func setContent(_ content: NSAttributedString) {
-        // Sizing probes must not invalidate layout when the text is unchanged.
-        guard attributedText?.isEqual(to: content) != true else { return }
         let range = selectedRange
         let old = text as NSString
         let next = content.string as NSString

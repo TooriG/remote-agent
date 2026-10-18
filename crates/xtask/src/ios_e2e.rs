@@ -416,35 +416,6 @@ async fn monitor_diagnostics(
             prefix.with_extension(format!("hang-{pid}-processes.txt")),
             &processes.stdout,
         )?;
-        let scroll = File::create(prefix.with_extension(format!("hang-{pid}-scroll.log")))?;
-        if let Err(error) = supervision::run(
-            &args![
-                "xcrun",
-                "simctl",
-                "spawn",
-                simulator,
-                "log",
-                "stream",
-                "--style",
-                "compact",
-                "--timeout",
-                "5",
-                "--level",
-                "debug",
-                "--process",
-                pid.to_string(),
-                "--predicate",
-                "category == 'ConversationScroll'"
-            ],
-            cwd,
-            Io::Log(&scroll),
-            cancel,
-            timeout,
-        )
-        .await
-        {
-            eprintln!("Simulator {simulator}: scroll diagnostics failed: {error}");
-        }
         let mut output =
             File::create(prefix.with_extension(format!("hang-{pid}-sample-output.txt")))?;
         // Hosted macOS permits passwordless diagnostics of this worker's Debug app.
