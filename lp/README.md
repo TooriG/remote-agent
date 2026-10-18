@@ -81,6 +81,13 @@ gpt-6.1-sol through the BEX connection.
 
 ## Mobile composer
 
+Android messages labeled 「送信結果不明（自動再送しません）」 offer
+「表示を削除」 to remove the retained local message, or 「下書きに戻す」 to
+recover its text and attachments for editing. Both use the shared core recovery
+actions and work offline. Removing the message is persisted, so reopening the
+new chat or restarting the app does not bring it back. Neither action resends
+the instruction or cancels a task that the Host may already have accepted.
+
 While a conversation has an active turn, the right edge of the Android composer
 shows a white circular stop button with a black square. It remains available
 with an empty draft or while editing a follow-up, and interrupts that turn through
