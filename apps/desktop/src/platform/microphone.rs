@@ -191,11 +191,24 @@ where
                 }));
             },
             move |error| {
-                let _ = failures.send(error.to_string());
+                report_stream_error(error, &failures);
             },
             Some(std::time::Duration::from_secs(5)),
         )
         .map_err(|error| error.to_string())
+}
+
+fn report_stream_error(error: cpal::Error, failures: &mpsc::Sender<String>) {
+    // WASAPI can report a discontinuity shortly after capture starts. These
+    // notifications leave the stream usable; stopping here discards the recording.
+    match error.kind() {
+        cpal::ErrorKind::Xrun
+        | cpal::ErrorKind::DeviceChanged
+        | cpal::ErrorKind::RealtimeDenied => {}
+        _ => {
+            let _ = failures.send(error.to_string());
+        }
+    }
 }
 
 fn pcm(samples: Vec<f32>, rate: u32) -> Result<Vec<u8>, String> {
@@ -235,6 +248,33 @@ fn pcm(samples: Vec<f32>, rate: u32) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stream_notifications_do_not_abort_recording_but_fatal_errors_do() {
+        let (failures, failed) = mpsc::channel();
+        for _ in 0..3 {
+            for kind in [
+                cpal::ErrorKind::Xrun,
+                cpal::ErrorKind::DeviceChanged,
+                cpal::ErrorKind::RealtimeDenied,
+            ] {
+                report_stream_error(cpal::Error::from(kind), &failures);
+                assert_eq!(failed.try_recv(), Err(mpsc::TryRecvError::Empty));
+            }
+        }
+        for kind in [
+            cpal::ErrorKind::DeviceNotAvailable,
+            cpal::ErrorKind::StreamInvalidated,
+            cpal::ErrorKind::PermissionDenied,
+            cpal::ErrorKind::BackendError,
+            cpal::ErrorKind::Other,
+        ] {
+            let error = cpal::Error::from(kind);
+            let expected = error.to_string();
+            report_stream_error(error, &failures);
+            assert_eq!(failed.try_recv(), Ok(expected));
+        }
+    }
 
     proptest::proptest! {
         #[test]
