@@ -28,19 +28,19 @@ try {
         $buildDirectory = (Resolve-Path -LiteralPath $BinaryDirectory).Path
     }
     if (-not $InnoCompiler) {
-        foreach ($candidate in @("${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+        foreach ($candidate in @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
             if (Test-Path -LiteralPath $candidate) { $InnoCompiler = $candidate; break }
         }
     }
     if (-not $InnoCompiler) {
-        $toolRoot = Join-Path $metadata.target_directory "tool-cache/inno-7.1.0"
+        $toolRoot = Join-Path $metadata.target_directory "tool-cache/inno-6.6.1"
         $InnoCompiler = Join-Path $toolRoot "compiler/ISCC.exe"
         if (-not (Test-Path -LiteralPath $InnoCompiler)) {
             New-Item -ItemType Directory -Force -Path $toolRoot | Out-Null
-            $toolInstaller = Join-Path $toolRoot "innosetup-7.1.0-x64.exe"
-            Invoke-WebRequest -Uri "https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innosetup-7.1.0-x64.exe" -OutFile $toolInstaller
+            $toolInstaller = Join-Path $toolRoot "innosetup-6.6.1.exe"
+            Invoke-WebRequest -Uri "https://github.com/jrsoftware/issrc/releases/download/is-6_6_1/innosetup-6.6.1.exe" -OutFile $toolInstaller
             $toolHash = (Get-FileHash -LiteralPath $toolInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
-            if ($toolHash -ne "0362a383ed217d4c4239b5933866dd96d3eb2102737da92f80f6057a4b40df2f") { throw "Inno Setup checksum mismatch." }
+            if ($toolHash -ne "d243ce440c02705530699554fb9612b9b2bd7a2a90629cdb7f41e66f5faeb91f") { throw "Inno Setup checksum mismatch." }
             $compilerDirectory = Join-Path $toolRoot "compiler"
             $install = Start-Process -FilePath $toolInstaller -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CURRENTUSER", ('/DIR="' + $compilerDirectory + '"')) -WindowStyle Hidden -Wait -PassThru
             if ($install.ExitCode -ne 0) { throw "Inno Setup installation failed: $($install.ExitCode)" }
