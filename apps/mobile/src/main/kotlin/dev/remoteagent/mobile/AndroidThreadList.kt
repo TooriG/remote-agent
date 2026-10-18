@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -84,6 +85,8 @@ internal fun ThreadListScreen(
     var selectedTab by rememberSaveable { mutableStateOf(0) }
     val currentQuery by rememberUpdatedState(query)
     val dispatch by rememberUpdatedState(perform)
+    val listState = rememberLazyListState()
+    val reorder = rememberProjectReorder(listState, list?.projects.orEmpty(), perform)
     LaunchedEffect(search) {
         kotlinx.coroutines.delay(SEARCH_DEBOUNCE_MILLIS)
         if (currentQuery.searchTerm != search)
@@ -123,12 +126,13 @@ internal fun ThreadListScreen(
                 Tab(selected = selectedTab == index, onClick = { selectedTab = index }, text = { Text(label) })
             }
         }
-        LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(vertical = 16.dp)) {
+        LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState,
+            contentPadding = PaddingValues(vertical = 16.dp)) {
             list?.notice?.let { notice -> item { Text(notice, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
             if (selectedTab == 0) {
                 recentChats(list, loadingThreads, perform)
             } else {
-                projectThreads(list, perform)
+                projectThreads(list, perform, reorder)
                 if (list?.hasMoreProjects == true)
                     item {
                         TextButton(
@@ -262,11 +266,13 @@ private const val UNMERGED_COLOR_ARGB = 0xFFFB923C
 private val SessionRef.listKey: String
     get() = "session:$provider:$id"
 
-private fun LazyListScope.projectThreads(list: ThreadList?, perform: (Intent) -> Unit) {
+private fun LazyListScope.projectThreads(list: ThreadList?, perform: (Intent) -> Unit, reorder: ProjectReorder) {
     val projects = list?.projects.orEmpty()
     projects.forEach { project ->
         item(key = "project:${project.id}") {
-            ProjectRow(project, perform)
+            ProjectDropMarker(reorder, project.id, after = false)
+            ProjectRow(project, perform, reorder)
+            ProjectDropMarker(reorder, project.id, after = true)
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
         }
         if (project.expanded) {
@@ -290,12 +296,13 @@ private fun LazyListScope.projectThreads(list: ThreadList?, perform: (Intent) ->
 }
 
 @Composable
-private fun ProjectRow(project: ProjectSummary, perform: (Intent) -> Unit) {
+private fun ProjectRow(project: ProjectSummary, perform: (Intent) -> Unit, reorder: ProjectReorder) {
     Row(
         Modifier.fillMaxWidth().padding(vertical = 10.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        ProjectDragHandle(project, reorder)
         Row(
             Modifier.weight(1f).heightIn(min = 48.dp).clickable {
                 perform(Intent.SetProjectExpanded(project.id, !project.expanded))

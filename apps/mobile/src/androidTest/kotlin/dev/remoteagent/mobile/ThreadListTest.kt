@@ -19,6 +19,8 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.geometry.Offset
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.ProviderKind
 import dev.remoteagent.core.SessionRef
@@ -32,6 +34,37 @@ import org.junit.Test
 
 class ThreadListTest {
     @get:Rule val compose = createComposeRule()
+
+    @Test
+    fun projectHandlesDragBothDirectionsAndCancelWithoutOpeningChats() {
+        val persisted = JSONObject(Snapshot.empty().serialize().decodeToString()).put(
+            "threads", JSONObject("""{"data":[],"projects":[
+                {"id":"a","name":"Alpha","roots":[]},
+                {"id":"b","name":"Beta","roots":[]}],
+                "hasMore":false,"hasMoreProjects":false,"limit":5,"projectPages":{}}"""),
+        )
+        Snapshot.restore(persisted.toString().encodeToByteArray()).use { snapshot ->
+            val intents = mutableListOf<Intent>()
+            compose.setContent {
+                BexTheme { ThreadListScreen(snapshot.threadList(), snapshot.listQuery(), false, { intents.add(it) }, {}) }
+            }
+            compose.onNodeWithText("プロジェクト").performClick()
+            val alpha = compose.onNodeWithContentDescription("Alphaの順番を変更。上下にドラッグ")
+            val beta = compose.onNodeWithContentDescription("Betaの順番を変更。上下にドラッグ")
+            val distance = beta.fetchSemanticsNode().boundsInRoot.center.y -
+                alpha.fetchSemanticsNode().boundsInRoot.center.y
+            alpha.performTouchInput { swipe(center, center + Offset(0f, distance + 10f), 500) }
+            compose.runOnIdle { assertEquals(Intent.ReorderProject("a", "b", true), intents.single()) }
+            beta.performTouchInput { swipe(center, center - Offset(0f, distance + 10f), 500) }
+            compose.runOnIdle { assertEquals(Intent.ReorderProject("b", "a", false), intents.last()) }
+            alpha.performTouchInput {
+                down(center)
+                moveTo(center + Offset(0f, distance), 500)
+                cancel()
+            }
+            compose.runOnIdle { assertEquals(2, intents.size) }
+        }
+    }
 
     @Test
     fun workspaceTabsAndNewChatKeepExistingIntentNavigation() {
