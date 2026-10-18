@@ -1,5 +1,15 @@
 (() => {
   const en = {
+    'hero.benchmark': 'Initial state: 33.1 MiB private RAM · 0.44s first window*',
+    'bench.title': 'Lightness, measured.',
+    'bench.lead': 'In the signed-out initial state, private RAM was about 93% lower than Claude. BEX includes its Host.',
+    'bench.caption': 'Windows 11 · October 18, 2026 · Five launches each · Codex authentication differs (reference only)',
+    'bench.app': 'App', 'bench.memory': 'Private RAM (USS)', 'bench.window': 'First visible window',
+    'bench.host': 'Signed out · Including Host',
+    'bench.signedout': 'Signed out',
+    'bench.codexauth': 'Signed in · Reference only',
+    'bench.note': '*BEX and Claude are signed out. Codex auto-restored Windows credentials and is a signed-in reference, not an auth-matched comparison. No project interaction. Private RAM excludes shared and GPU memory. Timing ends at the first visible OS window, not usable-content readiness. Single PC with everyday apps still running.',
+    'bench.details': 'Versions, methodology and every sample',
     'hero.tech': 'Native speed with Rust. Mobile access over QUIC.',
     'strength.title': 'Built for responsiveness. Built to stay connected.',
     'strength.native.title': 'Native by design. Light on busywork.',
