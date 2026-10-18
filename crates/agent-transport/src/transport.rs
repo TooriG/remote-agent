@@ -489,8 +489,12 @@ mod tests {
     #[tokio::test]
     async fn current_peers_connect_but_pre_reasoning_protocol_is_rejected() {
         tokio::time::timeout(Duration::from_secs(10), async {
-            let host = Endpoint::bind(Identity::generate(), Relays::Loopback).await.unwrap();
-            let client = Endpoint::bind(Identity::generate(), Relays::Loopback).await.unwrap();
+            let host = Endpoint::bind(Identity::generate(), Relays::Loopback)
+                .await
+                .unwrap();
+            let client = Endpoint::bind(Identity::generate(), Relays::Loopback)
+                .await
+                .unwrap();
             let ticket = host.ticket();
             let (connected, accepted) = tokio::join!(client.connect(&ticket), host.accept());
             let connected = connected.unwrap();
@@ -503,7 +507,9 @@ mod tests {
                 .alpns(vec![b"remote-agent/streams/10".to_vec()])
                 .relay_mode(RelayMode::Disabled)
                 .clear_address_lookup()
-                .bind().await.unwrap();
+                .bind()
+                .await
+                .unwrap();
             let (connected, accepted) = tokio::join!(
                 legacy.connect(host.0.addr(), b"remote-agent/streams/10"),
                 host.accept()
@@ -513,6 +519,8 @@ mod tests {
             legacy.close().await;
             client.close().await;
             host.close().await;
-        }).await.expect("protocol negotiation must terminate");
+        })
+        .await
+        .expect("protocol negotiation must terminate");
     }
 }

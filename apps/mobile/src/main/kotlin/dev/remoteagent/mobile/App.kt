@@ -291,7 +291,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
                         }
                     try {
                         val connected = withTimeoutOrNull(45_000) {
-                            store.reconnect(Connection(profile.ticket, identity, null, true))
+                            store.resume(Connection(profile.ticket, identity, null, true))
                             true
                         }
                         if (connected == null) throw IOException("接続がタイムアウトしました。PCのBEXと通信環境を確認してください。")
