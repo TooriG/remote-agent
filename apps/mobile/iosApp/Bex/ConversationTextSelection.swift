@@ -292,6 +292,8 @@ final class ConversationTextView: UITextView {
     var attachmentWidth: CGFloat = 300
 
     func setContent(_ content: NSAttributedString) {
+        // Sizing probes must not invalidate layout when the text is unchanged.
+        guard attributedText?.isEqual(to: content) != true else { return }
         let range = selectedRange
         let old = text as NSString
         let next = content.string as NSString

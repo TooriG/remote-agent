@@ -153,6 +153,11 @@ struct ThreadScreen: View {
                             followLatest(to: lastRowId, using: proxy)
                         }
                     })
+                    .onScrollPhaseChange { _, phase in
+                        if phase == .interacting {
+                            isFollowingLatest = false
+                        }
+                    }
                     .onScrollGeometryChange(for: ConversationScrollMetrics.self) { geometry in
                         ConversationScrollMetrics(
                             content: geometry.contentSize,
