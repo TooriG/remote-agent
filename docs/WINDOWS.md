@@ -1,7 +1,7 @@
 # Windows / Windowsで使う
 
-BEX runs on Windows 11. The ZIP includes the desktop app, Host, CLI, provider
-supervisor, and Claude SDK bridge. You do not need Rust to use a downloaded ZIP.
+BEX runs on Windows 11. The EXE installer includes the desktop app, Host, CLI,
+provider supervisor, and Claude SDK bridge. You do not need Rust to install it.
 The package is currently unsigned.
 
 ## Install and run
