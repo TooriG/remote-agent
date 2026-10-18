@@ -30,6 +30,19 @@ alone does not complete publication.
    deployment in the PR or release notes. If publishing or deployment is blocked,
    record the blocker and handoff owner; do not report the release as complete.
 
+### Coordinating wire-protocol updates
+
+When changing the transport ALPN or shared wire format, publish and verify the
+matching client downloads and update the website before replacing a running
+Host. A queued or running APK build is not a published client. Keep the working
+Host installed until those downloads are available, then install the matching
+Host and clients together. Retain pairing keys, conversations and settings.
+
+`peer doesn't support any known protocol` (TLS error 120) means the peers could
+not agree on an application protocol. For BEX versions with different ALPNs,
+install the matching published client and Host; reconnecting the same mismatched
+versions cannot resolve this error. Do not remove pairing data to fix it.
+
 ## 日本語
 
 **macOSを含む全プラットフォームで、更新版を公開した開発者が、同じ公開作業内で
@@ -41,6 +54,11 @@ getbex.devの該当ダウンロードも最新版に更新してください。*
 から最新版を取得できることの確認まで行います。macOSも対象です。iOSのようにURLが
 変わらない場合も、そのリンク先で新ビルドを取得できることを確認してください。
 APIによる最新版検索があっても、固定の代替リンクを古いままにしないでください。
+
+通信形式を変更する場合は、対応クライアントの公開・検証とサイトの更新を先に完了し、
+その後で実行中Hostとクライアントを同じ版へ更新してください。APKのビルド中は
+公開完了として扱いません。TLS error 120（`peer doesn't support any known protocol`）が
+版の不一致で発生した場合は、接続情報を削除せず、対応版へ上書き更新してください。
 
 PRまたはリリースノートに、リビジョン・公開先・検証結果・サイトの反映結果を残します。
 権限などで公開できない場合は、未完了の内容と引き継ぎ担当を明記してください。
