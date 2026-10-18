@@ -41,6 +41,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -73,6 +74,8 @@ internal fun ThreadDetailScreen(
     composer: @Composable (() -> Unit) -> Unit,
 ) {
     val threadId = snapshot.navigation().threadId
+    var forking by remember(threadId) { mutableStateOf(false) }
+    var forkFailed by remember(threadId) { mutableStateOf(false) }
     val listState = rememberLazyListState()
     var activityExpansion by remember(threadId) { mutableStateOf(emptyMap<String, ActivityExpansion>()) }
     var following by remember(threadId) { mutableStateOf(true) }
@@ -100,6 +103,17 @@ internal fun ThreadDetailScreen(
                         threadId,
                         snapshot.navigation().cwd,
                         perform,
+                        forking = forking,
+                        startFork = { intent ->
+                            if (!forking) {
+                                forking = true
+                                forkFailed = false
+                                perform(intent) { result ->
+                                    forking = false
+                                    forkFailed = result.isFailure
+                                }
+                            }
+                        },
                         activityHeader = { activity ->
                             ActivityHeader(activity, activityExpansion[activity.id]) { choice ->
                                 activityExpansion = activityExpansion + (activity.id to choice)
@@ -115,6 +129,17 @@ internal fun ThreadDetailScreen(
                 conversationRows(projection?.requestRows.orEmpty(), activityExpansion, renderRow)
             }
             LatestMessageButton(listState) { following = true }
+        }
+        if (forking || forkFailed) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+                .semantics { liveRegion = androidx.compose.ui.semantics.LiveRegionMode.Polite },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (forking) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                Text(if (forking) "???????" else "???????????????????????",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (forkFailed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
         composer { following = true }
     }
@@ -169,6 +194,8 @@ private fun ConversationContent(
     threadId: dev.remoteagent.core.SessionRef?,
     cwd: String,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
+    forking: Boolean,
+    startFork: (Intent) -> Unit,
     activityHeader: @Composable (ActivityPresentation) -> Unit,
 ) {
     val timestampMs = row.timestampMs
@@ -186,11 +213,10 @@ private fun ConversationContent(
                 fork =
                     if (threadId != null && content.forkTurnId != null)
                         ({
-                            perform(
-                                Intent.ForkSession(dev.remoteagent.core.ForkSession(threadId, content.forkTurnId))
-                            ) {}
+                            startFork(Intent.ForkSession(dev.remoteagent.core.ForkSession(threadId, content.forkTurnId)))
                         })
                     else null,
+                forking = forking,
             )
         is ConversationRowContent.Activity ->
             ThreadActivityCard(content.item, cwd, perform) { itemId ->

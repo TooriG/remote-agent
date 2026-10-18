@@ -11,6 +11,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.ui.res.painterResource
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -38,6 +43,7 @@ internal fun ThreadMessageCard(
     changes: List<dev.remoteagent.core.WorkspaceDiffFile> = emptyList(),
     loadChanges: () -> Unit = {},
     fork: (() -> Unit)? = null,
+    forking: Boolean = false,
 ) {
     val content = remember(item) { item.presentation() }
     val imageFrame = Modifier.widthIn(max = 320.dp).fillMaxWidth().height(320.dp)
@@ -60,8 +66,8 @@ internal fun ThreadMessageCard(
                 } else ConversationBody(body, cwd, perform)
             }
         if (changes.isNotEmpty()) ChangedFilesSummary(changes, loadChanges)
-        if (!isUser && content.kind == "agent") MessageFooter(content.body.orEmpty(), timestampMs, fork)
-        if (isUser) MessageTime(timestampMs)
+        if (!isUser && content.kind == "agent") MessageFooter(content.body.orEmpty(), timestampMs, fork, forking)
+        if (isUser) MessageFooter(content.body.orEmpty(), timestampMs, null)
         if (isUser && content.nativeId == null) {
             content.title?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         }
@@ -81,15 +87,29 @@ private fun MessageTime(timestampMs: ULong?) {
 }
 
 @Composable
-private fun MessageFooter(text: String, timestampMs: ULong?, fork: (() -> Unit)?) {
+internal fun MessageFooter(text: String, timestampMs: ULong?, fork: (() -> Unit)?, forking: Boolean = false) {
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        androidx.compose.material3.TextButton(
-            onClick = { clipboard.setText(androidx.compose.ui.text.AnnotatedString(text)) }
-        ) {
-            Text("コピー")
+    var copied by remember(text) { mutableStateOf(false) }
+    LaunchedEffect(copied) {
+        if (copied) {
+            kotlinx.coroutines.delay(1_500)
+            copied = false
         }
-        fork?.let { androidx.compose.material3.TextButton(onClick = it) { Text("分岐") } }
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        IconButton(onClick = {
+            clipboard.setText(androidx.compose.ui.text.AnnotatedString(text))
+            copied = true
+        }, enabled = text.isNotEmpty()) {
+            Icon(painterResource(if (copied) R.drawable.ic_check else R.drawable.ic_copy),
+                if (copied) "???????" else "???", Modifier.size(20.dp))
+        }
+        fork?.let {
+            IconButton(onClick = it, enabled = !forking) {
+                if (forking) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                else Icon(painterResource(R.drawable.ic_fork), "??", Modifier.size(20.dp))
+            }
+        }
         MessageTime(timestampMs)
     }
 }
