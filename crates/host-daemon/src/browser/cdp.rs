@@ -186,9 +186,14 @@ impl Chrome {
                 }
                 Ok(value["result"].clone())
             }
-            Ok(Ok(_)) => Err(format!(
-                "ブラウザ操作を完了できません（{method}）。画面を確認して再試行してください。"
-            )),
+            Ok(Ok(value)) => {
+                tracing::debug!(target: "bex", operation = "browser.cdp",
+                    error_code = value["error"]["code"].as_i64(),
+                    message = %format_args!("{method} rejected"));
+                Err(format!(
+                    "ブラウザ操作を完了できません（{method}）。画面を確認して再試行してください。"
+                ))
+            }
             _ => {
                 tracing::warn!(target: "bex", operation = "browser.cdp",
                     message = %format_args!("{method} interrupted after {} ms", started.elapsed().as_millis()));
@@ -242,7 +247,7 @@ impl Chrome {
     pub async fn screenshot(&mut self, session: &str) -> Result<Vec<u8>, String> {
         self.call(Some(session), "Page.bringToFront", json!({}))
             .await?;
-        let mut retries = 0;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         let frame = loop {
             let result = self
                 .call(
@@ -251,12 +256,11 @@ impl Chrome {
                     json!({"format":"jpeg","quality":65,"captureBeyondViewport":false}),
                 )
                 .await;
-            if result.is_ok() || self.broken || retries == 2 {
+            if result.is_ok() || self.broken || tokio::time::Instant::now() >= deadline {
                 break result?;
             }
             // Navigation can briefly leave no active page to capture. Retry
             // only the frame capture, never the user's navigation or input.
-            retries += 1;
             tokio::time::sleep(Duration::from_millis(100)).await;
         };
         let data = frame["data"]
@@ -356,5 +360,150 @@ impl Chrome {
             );
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn fixture(
+        failures: usize,
+        disconnect: bool,
+    ) -> (Chrome, tokio::task::JoinHandle<Vec<String>>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = async_tungstenite::tokio::accept_async(stream)
+                .await
+                .unwrap();
+            let mut methods = Vec::new();
+            let mut captures = 0;
+            while let Some(message) = socket.next().await {
+                let Message::Text(text) = message.unwrap() else {
+                    break;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                let method = request["method"].as_str().unwrap();
+                methods.push(method.to_owned());
+                let mut response = json!({"id":request["id"],"result":{}});
+                if method == "Page.captureScreenshot" {
+                    captures += 1;
+                    if disconnect {
+                        break;
+                    }
+                    response = if captures <= failures {
+                        json!({"id":request["id"],"error":{"code":-32000,"message":"Not attached to an active page"}})
+                    } else {
+                        json!({"id":request["id"],"result":{"data":"/9j/2Q=="}})
+                    };
+                }
+                socket
+                    .send(Message::Text(response.to_string().into()))
+                    .await
+                    .unwrap();
+                if method == "Browser.close" {
+                    break;
+                }
+            }
+            methods
+        });
+        let (socket, _) = async_tungstenite::tokio::connect_async(format!("ws://{address}"))
+            .await
+            .unwrap();
+        let child = tokio::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--list")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        (
+            Chrome {
+                child,
+                socket,
+                next_id: 0,
+                sessions: HashMap::new(),
+                dialogs: HashMap::new(),
+                broken: false,
+            },
+            server,
+        )
+    }
+
+    #[tokio::test]
+    async fn screenshot_waits_for_a_frame_without_replaying_navigation() {
+        let (mut chrome, server) = fixture(3, false).await;
+        chrome
+            .action(
+                "page",
+                &BrowserAction::Navigate {
+                    url: "https://example.invalid/".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let image = tokio::time::timeout(Duration::from_secs(15), chrome.screenshot("page"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(image, [0xff, 0xd8, 0xff, 0xd9]);
+        chrome.shutdown().await;
+        let methods = server.await.unwrap();
+        assert_eq!(
+            methods
+                .iter()
+                .filter(|method| *method == "Page.navigate")
+                .count(),
+            1
+        );
+        assert_eq!(
+            methods
+                .iter()
+                .filter(|method| *method == "Page.captureScreenshot")
+                .count(),
+            4
+        );
+    }
+
+    #[tokio::test]
+    async fn screenshot_retries_end_without_discarding_a_healthy_transport() {
+        let (mut chrome, server) = fixture(usize::MAX, false).await;
+        let result = tokio::time::timeout(Duration::from_secs(15), chrome.screenshot("page"))
+            .await
+            .expect("frame retries must be bounded");
+        assert!(result.is_err());
+        assert!(!chrome.broken);
+        chrome
+            .call(None, "Browser.getVersion", json!({}))
+            .await
+            .unwrap();
+        chrome.shutdown().await;
+        assert!(
+            server
+                .await
+                .unwrap()
+                .iter()
+                .any(|method| method == "Browser.getVersion")
+        );
+    }
+
+    #[tokio::test]
+    async fn screenshot_does_not_retry_a_disconnected_transport() {
+        let (mut chrome, server) = fixture(0, true).await;
+        assert!(chrome.screenshot("page").await.is_err());
+        assert!(chrome.broken);
+        chrome.shutdown().await;
+        assert_eq!(
+            server
+                .await
+                .unwrap()
+                .iter()
+                .filter(|method| *method == "Page.captureScreenshot")
+                .count(),
+            1
+        );
     }
 }

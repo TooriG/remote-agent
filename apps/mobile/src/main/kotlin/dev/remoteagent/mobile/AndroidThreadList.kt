@@ -41,6 +41,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -61,6 +62,8 @@ import dev.remoteagent.core.SessionRef
 import dev.remoteagent.core.ThreadList
 import dev.remoteagent.core.ThreadSummary
 import dev.remoteagent.core.WorktreeStatus
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.drop
 
 @Composable
 internal fun ThreadListScreen(
@@ -77,16 +80,22 @@ internal fun ThreadListScreen(
     fun closeSearch() {
         search = null
         focusManager.clearFocus()
+        perform(Intent.ListSessions(ListSessions(query = query.copy(searchTerm = ""))))
     }
     BackHandler(enabled = search != null) { closeSearch() }
     var selectedTab by rememberSaveable { mutableStateOf(0) }
     val currentQuery by rememberUpdatedState(query)
     val dispatch by rememberUpdatedState(perform)
-    LaunchedEffect(search) {
-        kotlinx.coroutines.delay(SEARCH_DEBOUNCE_MILLIS)
-        val term = search.orEmpty()
-        if (currentQuery.searchTerm != term)
-            dispatch(Intent.ListSessions(ListSessions(query = currentQuery.copy(searchTerm = term))))
+    LaunchedEffect(Unit) {
+        // Core loads the initial query; every later edit supersedes pending input.
+        snapshotFlow { search }
+            .drop(1)
+            .collectLatest { term ->
+                if (term != null) {
+                    kotlinx.coroutines.delay(SEARCH_DEBOUNCE_MILLIS)
+                    dispatch(Intent.ListSessions(ListSessions(query = currentQuery.copy(searchTerm = term))))
+                }
+            }
     }
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
         ThreadListHeader(

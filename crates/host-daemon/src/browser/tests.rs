@@ -42,6 +42,10 @@ fn request(thread: &SessionRef, frame: &BrowserFrame, action: BrowserAction) -> 
 #[ignore = "requires Chrome/Chromium and bex-provider-supervisor"]
 async fn shared_browser_live() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_test_writer()
+        .try_init();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
