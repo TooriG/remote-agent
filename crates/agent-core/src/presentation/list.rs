@@ -131,7 +131,7 @@ impl Snapshot {
             &project_ids,
         )
         .into_iter()
-        .filter(|thread| thread.project_id.is_none())
+        .filter(|thread| thread.project_id.is_none() && self.chat_placement(&thread.id).is_none())
         .collect();
         let mut projects = list
             .projects
@@ -143,6 +143,7 @@ impl Snapshot {
             (
                 prefs.is_none_or(|p| !p.pinned),
                 prefs.and_then(|p| p.section.clone()).unwrap_or_default(),
+                prefs.and_then(|p| p.order).unwrap_or(usize::MAX),
             )
         });
         Some(ThreadList {
@@ -211,6 +212,10 @@ impl Snapshot {
                             &page
                                 .data
                                 .iter()
+                                .filter(|t| {
+                                    t.id.as_ref()
+                                        .is_none_or(|id| self.chat_placement(id).is_none())
+                                })
                                 .filter(|t| self.project_chat_visible(&project.id, t))
                                 .cloned()
                                 .collect::<Vec<_>>(),
@@ -225,6 +230,41 @@ impl Snapshot {
                                 errors.keys().cloned().collect::<Vec<_>>().join("、")
                             ));
                         }
+                    }
+                    if summary.expanded {
+                        let placed = self
+                            .project_preference(&project.id)
+                            .into_iter()
+                            .flat_map(|p| &p.placed_chats)
+                            .map(|chat| {
+                                let mut thread = self
+                                    .thread_metadata(&chat.id)
+                                    .cloned()
+                                    .unwrap_or_else(|| crate::models::Thread {
+                                        id: Some(chat.id.clone()),
+                                        name: Some(chat.title.clone()),
+                                        ..Default::default()
+                                    });
+                                thread.project_id =
+                                    crate::models::ProjectMembership::Assigned(project.id.clone());
+                                thread
+                            })
+                            .filter(|thread| self.project_chat_visible(&project.id, thread))
+                            .filter(|thread| {
+                                task_title(thread.name.as_deref(), thread.preview.as_deref())
+                                    .to_lowercase()
+                                    .contains(&self.list_query.search_term.to_lowercase())
+                            })
+                            .collect::<Vec<_>>();
+                        summary.threads.splice(
+                            0..0,
+                            thread_summaries(
+                                &placed,
+                                &self.activity.active,
+                                &self.activity.unread,
+                                &project_ids,
+                            ),
+                        );
                     }
                     summary
                 })

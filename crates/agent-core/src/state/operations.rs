@@ -84,6 +84,15 @@ pub enum Intent {
         project_id: String,
         pinned: bool,
     },
+    ReorderProject {
+        project_id: String,
+        target_id: String,
+        after: bool,
+    },
+    MoveChatToProject {
+        thread_id: crate::session::SessionRef,
+        project_id: String,
+    },
     EditProject {
         project_id: String,
         name: String,

@@ -554,6 +554,17 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             });
         }
         Intent::SetProjectPinned { project_id, pinned } => projects::update(&mut next, &project_id, |p| p.pinned = pinned),
+        Intent::ReorderProject { project_id, target_id, after } => projects::reorder(&mut next, &project_id, &target_id, after),
+        Intent::MoveChatToProject { thread_id, project_id } => {
+            projects::move_chat(&mut next, &thread_id, &project_id);
+            if next.connected && next.expanded_projects.contains_key(&project_id)
+                && !next.project_threads.contains_key(&project_id)
+                && next.chat_placement(&thread_id) == Some(project_id.as_str()) {
+                return prepare(previous, next, op::ListProjectSessions {
+                    project_id, limit: 5, search_term: previous.list_query.search_term.clone(),
+                });
+            }
+        },
         Intent::EditProject { project_id, name, section } => {
             let name = name.trim();
             let section = section.trim();

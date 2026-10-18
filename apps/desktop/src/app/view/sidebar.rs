@@ -1,6 +1,35 @@
 use super::*;
 
 #[derive(Clone)]
+enum SidebarDragKind {
+    Project(String),
+    Chat(agent_protocol::session::SessionRef),
+}
+
+#[derive(Clone)]
+pub(super) struct SidebarDrag {
+    scope: String,
+    label: String,
+    kind: SidebarDragKind,
+}
+
+impl Render for SidebarDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_3()
+            .py_2()
+            .max_w(px(240.))
+            .rounded_md()
+            .bg(rgb(appearance::SIDEBAR))
+            .border_1()
+            .border_color(rgb(0x60a5fa))
+            .text_sm()
+            .text_ellipsis()
+            .child(self.label.clone())
+    }
+}
+
+#[derive(Clone)]
 pub(super) struct SidebarSection {
     pub(super) label: &'static str,
     pub(super) menu: Vec<SidebarRow>,
@@ -11,6 +40,10 @@ pub(super) struct SidebarSection {
 #[derive(Clone)]
 pub(super) enum SidebarRow {
     Item(Box<SidebarMenuItem>),
+    Chat {
+        item: Box<SidebarMenuItem>,
+        drag: SidebarDrag,
+    },
     Heading(String),
     Project {
         id: String,
@@ -46,6 +79,26 @@ impl SidebarRow {
                 .collapsed(collapsed)
                 .render(id, window, cx)
                 .into_any_element(),
+            Self::Chat { item, drag } => {
+                let selector = format!(
+                    "drag-chat-{}",
+                    match &drag.kind {
+                        SidebarDragKind::Chat(id) => id.id.as_str(),
+                        _ => "",
+                    }
+                );
+                div()
+                    .debug_selector(move || selector.clone())
+                    .id(format!("drag-{id}"))
+                    .w_full()
+                    .cursor_grab()
+                    .on_drag(drag, |drag, _, _, cx| {
+                        cx.stop_propagation();
+                        cx.new(|_| drag.clone())
+                    })
+                    .child(item.collapsed(collapsed).render(id, window, cx))
+                    .into_any_element()
+            }
             Self::Project {
                 id: project_id,
                 name,
@@ -85,15 +138,67 @@ impl SidebarRow {
                 let menu_id = project_id.clone();
                 let menu_owner = desktop.clone();
                 let selector = format!("project-{project_id}");
+                let scope = desktop
+                    .upgrade()
+                    .map(|s| s.read(cx).snapshot.storage_scope.clone())
+                    .unwrap_or_default();
+                let drag = SidebarDrag {
+                    scope: scope.clone(),
+                    label: name.clone(),
+                    kind: SidebarDragKind::Project(project_id.clone()),
+                };
+                let drop_owner = desktop.clone();
+                let drop_id = project_id.clone();
+                let drop_target = project_id.clone();
+                let bounds = window
+                    .use_keyed_state(format!("project-drop-{scope}-{project_id}"), cx, |_, _| {
+                        std::rc::Rc::new(std::cell::Cell::new(None::<Bounds<Pixels>>))
+                    })
+                    .read(cx)
+                    .clone();
+                let move_bounds = bounds.clone();
+                let style_bounds = bounds.clone();
                 h_flex()
                     .id(id)
                     .w_full()
                     .gap_1()
+                    .on_drag_move::<SidebarDrag>(move |event, _, _| {
+                        move_bounds.set(Some(event.bounds));
+                    })
+                    .can_drop(move |value, _, _| value.downcast_ref::<SidebarDrag>().is_some_and(|drag| {
+                        drag.scope == scope && !matches!(&drag.kind, SidebarDragKind::Project(id) if id == &drop_id)
+                    }))
+                    .drag_over::<SidebarDrag>(move |style, drag, window, _| {
+                        if matches!(drag.kind, SidebarDragKind::Chat(_)) {
+                            style.bg(rgb(0x60a5fa).opacity(0.2))
+                        } else if style_bounds.get().is_some_and(|bounds| window.mouse_position().y > bounds.center().y) {
+                            style.border_b_2().border_color(rgb(0x60a5fa))
+                        } else {
+                            style.border_t_2().border_color(rgb(0x60a5fa))
+                        }
+                    })
+                    .on_drop(move |drag: &SidebarDrag, window, cx| {
+                        cx.stop_propagation();
+                        let after = bounds.get().is_some_and(|bounds| window.mouse_position().y > bounds.center().y);
+                        let _ = drop_owner.update(cx, |desktop, cx| {
+                            if desktop.snapshot.storage_scope != drag.scope { return; }
+                            let intent = match &drag.kind {
+                                SidebarDragKind::Project(id) => Intent::ReorderProject { project_id: id.clone(), target_id: drop_target.clone(), after },
+                                SidebarDragKind::Chat(id) => Intent::MoveChatToProject { thread_id: id.clone(), project_id: drop_target.clone() },
+                            };
+                            desktop.dispatch(intent);
+                            cx.notify();
+                        });
+                    })
                     .child(
-                        Button::new("heading")
+                        div().id("project-drag-source").flex_1().min_w_0().cursor_grab()
+                            .on_drag(drag, |drag, _, _, cx| {
+                                cx.stop_propagation();
+                                cx.new(|_| drag.clone())
+                            }).child(Button::new("heading")
                             .debug_selector(move || selector.clone())
                             .ghost()
-                            .flex_1()
+                            .w_full()
                             .min_w_0()
                             .h(px(44.))
                             .px_2()
@@ -129,7 +234,7 @@ impl SidebarRow {
                                     });
                                     cx.notify();
                                 });
-                            }),
+                            })),
                     )
                     .when(!collapsed, |row| {
                         row.child(super::project_management::project_menu_button(
@@ -289,12 +394,11 @@ impl Desktop {
                 desktop: cx.entity().downgrade(),
             });
             if expanded {
-                for button in project
-                    .threads
-                    .iter()
-                    .map(|thread| self.thread_button(thread, cx).icon(Icon::empty().size_4()))
-                {
-                    projects.push(button.into());
+                for thread in &project.threads {
+                    projects.push(self.draggable_chat(
+                        thread,
+                        self.thread_button(thread, cx).icon(Icon::empty().size_4()),
+                    ));
                 }
                 if project.loading && !project.has_more {
                     projects.push(SidebarMenuItem::new("読み込み中…").into());
@@ -367,7 +471,7 @@ impl Desktop {
             .map(|page| {
                 page.threads
                     .iter()
-                    .map(|thread| self.thread_button(thread, cx).into())
+                    .map(|thread| self.draggable_chat(thread, self.thread_button(thread, cx)))
                     .collect()
             })
             .unwrap_or_default();
@@ -466,6 +570,21 @@ impl Desktop {
                     )),
             )
     }
+    fn draggable_chat(
+        &self,
+        thread: &agent_core::presentation::list::ThreadSummary,
+        item: SidebarMenuItem,
+    ) -> SidebarRow {
+        SidebarRow::Chat {
+            item: Box::new(item),
+            drag: SidebarDrag {
+                scope: self.snapshot.storage_scope.clone(),
+                label: thread.title.clone(),
+                kind: SidebarDragKind::Chat(thread.id.clone()),
+            },
+        }
+    }
+
     fn thread_button(
         &self,
         thread: &agent_core::presentation::list::ThreadSummary,
@@ -550,6 +669,145 @@ mod tests {
                     }))
             })
         }
+    }
+
+    struct ProjectNavigation(Entity<Desktop>);
+    impl Render for ProjectNavigation {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            self.0
+                .update(cx, |desktop, cx| desktop.conversation_sidebar(cx))
+        }
+    }
+
+    #[gpui::test]
+    fn sidebar_drag_reorders_projects_and_moves_a_chat(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let app_runtime = Runtime {
+            handle: runtime.handle().clone(),
+            connections: Arc::default(),
+            closing: tokio_util::task::TaskTracker::new(),
+            logging_error: None,
+        };
+        let snapshot = Snapshot {
+            storage_scope: "drag-host".into(),
+            threads: Some(Arc::new(serde_json::from_value(serde_json::json!({
+                "data":[{"id":{"provider":"codex","id":"moving"},"name":"Move this chat","projectId":null}],
+                "projects":[{"id":"a","name":"Alpha","roots":[]},{"id":"b","name":"Beta","roots":[]}],
+                "hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5
+            })).unwrap())), ..Default::default()
+        };
+        let session = runtime.block_on(async {
+            let (updates, receive) = async_channel::unbounded();
+            tokio::spawn(StoreSession::publish(
+                Ok(Arc::new(Store::offline(snapshot))),
+                app_runtime.clone(),
+                updates,
+                Some,
+                |_| None,
+            ));
+            receive.recv().await.unwrap().unwrap().unwrap()
+        });
+        let store = session.store.clone();
+        cx.update(|cx| {
+            crate::appearance::init(cx);
+            cx.set_global(app_runtime);
+        });
+        let (view, window) = cx.add_window_view(|window, cx| {
+            let desktop = cx.new(|cx| {
+                Desktop::new(
+                    Mode::SideChat {
+                        remote: Some(RemoteHost {
+                            id: "fixture".into(),
+                            name: "fixture".into(),
+                            ticket: "invalid-fixture-ticket".into(),
+                        }),
+                        cwd: String::new(),
+                    },
+                    window,
+                    cx,
+                )
+            });
+            desktop.update(cx, |desktop, _| {
+                desktop.snapshot = store.snapshot();
+                desktop.session = Some(session);
+            });
+            ProjectNavigation(desktop)
+        });
+        window.simulate_resize(size(px(320.), px(700.)));
+        window.run_until_parked();
+        let from = window.debug_bounds("project-a").unwrap().center();
+        let target = window.debug_bounds("project-b").unwrap();
+        let to = gpui::point(target.center().x, target.bottom() - px(5.));
+        window.simulate_mouse_down(from, gpui::MouseButton::Left, Modifiers::default());
+        window.simulate_mouse_move(
+            from + gpui::point(px(12.), px(0.)),
+            gpui::MouseButton::Left,
+            Modifiers::default(),
+        );
+        window.run_until_parked();
+        window.simulate_mouse_move(to, gpui::MouseButton::Left, Modifiers::default());
+        window.run_until_parked();
+        window.simulate_mouse_up(to, gpui::MouseButton::Left, Modifiers::default());
+        assert_eq!(store.snapshot().thread_list().unwrap().projects[0].id, "b");
+        view.update(window, |view, cx| {
+            view.0
+                .update(cx, |desktop, _| desktop.snapshot = store.snapshot());
+            cx.notify();
+        });
+        window.run_until_parked();
+        let from = window.debug_bounds("drag-chat-moving").unwrap().center();
+        let to = window.debug_bounds("project-b").unwrap().center();
+        window.simulate_mouse_down(from, gpui::MouseButton::Left, Modifiers::default());
+        window.simulate_mouse_move(
+            from + gpui::point(px(12.), px(0.)),
+            gpui::MouseButton::Left,
+            Modifiers::default(),
+        );
+        window.run_until_parked();
+        window.simulate_mouse_move(to, gpui::MouseButton::Left, Modifiers::default());
+        window.run_until_parked();
+        window.simulate_mouse_up(to, gpui::MouseButton::Left, Modifiers::default());
+        let page = store.snapshot().thread_list().unwrap();
+        assert!(page.threads.is_empty());
+        assert_eq!(page.projects[0].threads[0].id.id, "moving");
+        // Move the project back above Alpha, then move its chat to Alpha.
+        for (source, target, chat) in [
+            ("project-b", "project-a", false),
+            ("drag-chat-moving", "project-a", true),
+        ] {
+            view.update(window, |view, cx| {
+                view.0
+                    .update(cx, |desktop, _| desktop.snapshot = store.snapshot());
+                cx.notify();
+            });
+            window.run_until_parked();
+            let from = window.debug_bounds(source).unwrap().center();
+            let target = window.debug_bounds(target).unwrap();
+            let to = gpui::point(target.center().x, target.top() + px(5.));
+            window.simulate_mouse_down(from, gpui::MouseButton::Left, Modifiers::default());
+            window.simulate_mouse_move(
+                from + gpui::point(px(12.), px(0.)),
+                gpui::MouseButton::Left,
+                Modifiers::default(),
+            );
+            window.run_until_parked();
+            window.simulate_mouse_move(to, gpui::MouseButton::Left, Modifiers::default());
+            window.run_until_parked();
+            window.simulate_mouse_up(to, gpui::MouseButton::Left, Modifiers::default());
+            let page = store.snapshot().thread_list().unwrap();
+            assert_eq!(page.projects[0].id, "b");
+            if chat {
+                assert!(page.projects[0].threads.is_empty());
+                assert_eq!(page.projects[1].threads[0].id.id, "moving");
+            }
+        }
+        assert!(
+            store.snapshot().navigation.thread_id.is_none(),
+            "dragging must not open the chat"
+        );
     }
 
     #[gpui::test]
