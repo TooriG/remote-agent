@@ -10,6 +10,7 @@ use std::sync::Arc;
 pub enum ProviderKind {
     Codex,
     Claude,
+    #[serde(rename = "deepseek")]
     DeepSeek,
 }
 

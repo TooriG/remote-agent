@@ -326,7 +326,7 @@ impl Desktop {
         let model_search = cx.new(|cx| InputState::new(window, cx).placeholder("モデルを検索"));
         let account_code = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("認証コードを貼り付け")
+                .placeholder("認証コード・APIキーを貼り付け")
                 .masked(true)
         });
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("会話を検索"));

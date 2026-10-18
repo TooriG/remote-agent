@@ -120,7 +120,7 @@ struct AccountLoginSection: View {
 
     var body: some View {
         Section("\(providerName) にサインイン") {
-            Text("1. ブラウザでサインイン")
+            Text(login.provider == .deepSeek ? "1. DeepSeekでAPIキーを取得" : "1. ブラウザでサインイン")
                 .font(.headline)
             if !login.requiresCodeSubmission {
                 Text("ログインページで次のコードを入力してください。")
@@ -132,14 +132,14 @@ struct AccountLoginSection: View {
                 }
             }
             if let url = URL(string: login.verificationUrl), url.scheme == "https" {
-                Link("ログインページを開く", destination: url)
+                Link(login.provider == .deepSeek ? "APIキーの管理画面を開く" : "ログインページを開く", destination: url)
             }
             if login.requiresCodeSubmission {
-                Text("2. 認証コードを貼り付け")
+                Text(login.provider == .deepSeek ? "2. APIキーを入力" : "2. 認証コードを貼り付け")
                     .font(.headline)
-                Text("ブラウザに表示されたコードを入力してください。")
+                Text(login.provider == .deepSeek ? "DeepSeekで発行したAPIキーを入力してください。" : "ブラウザに表示されたコードを入力してください。")
                     .font(.subheadline).foregroundStyle(.secondary)
-                SecureField("認証コード", text: $loginCode)
+                SecureField(login.provider == .deepSeek ? "APIキー" : "認証コード", text: $loginCode)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                     .accessibilityIdentifier("model.login.input")
                 Button("サインインを完了", action: submit)
