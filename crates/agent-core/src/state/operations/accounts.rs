@@ -46,6 +46,7 @@ impl Operation for ListAccounts {
                 &snapshot
                     .model_defaults_for_cwd(&snapshot.navigation.cwd)
                     .providers,
+                crate::state::allows_custom_codex_models(Some(&output)),
             );
         }
         Arc::make_mut(&mut snapshot.account).accounts = Some(Arc::new(output));
@@ -179,7 +180,8 @@ impl Operation for SelectAccountForDraft {
                         draft.service_tier.as_deref(),
                         Some(provider),
                         &snapshot.models,
-                        false,
+                        &snapshot.model_errors,
+                        snapshot.allows_custom_codex_models(),
                     );
                     let settings = (
                         model.cloned(),

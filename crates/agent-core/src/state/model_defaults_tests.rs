@@ -30,6 +30,178 @@ fn catalog() -> Vec<Model> {
     .unwrap()
 }
 
+#[test]
+fn explicit_codex_model_survives_selection_and_catalog_refresh() {
+    let snapshot = Snapshot {
+        models: Arc::new(catalog()),
+        ..Default::default()
+    };
+    let key = snapshot.navigation.draft_key.clone();
+    let model = ModelRef {
+        provider: ProviderKind::Codex,
+        id: "gpt-6.1-sol".into(),
+    };
+    assert_eq!(
+        snapshot.custom_model_choice(Some(ProviderKind::Codex), " gpt-6.1-sol "),
+        Some(model.clone())
+    );
+    assert!(
+        snapshot
+            .custom_model_choice(Some(ProviderKind::Claude), "gpt-6.1-sol")
+            .is_none()
+    );
+    assert!(
+        snapshot
+            .custom_model_choice(Some(ProviderKind::Codex), " ")
+            .is_none()
+    );
+    assert!(
+        snapshot
+            .custom_model_choice(Some(ProviderKind::Codex), "two words")
+            .is_none()
+    );
+    assert!(
+        snapshot
+            .custom_model_choice(Some(ProviderKind::Codex), "shared")
+            .is_none()
+    );
+    let selected = apply(
+        &snapshot,
+        Intent::SelectModel {
+            thread_id: key.clone(),
+            model: model.clone(),
+        },
+    );
+    assert_eq!(selected.drafts[&key].model, Some(model.clone()));
+    let mut selected = selected;
+    LoadModels {}.apply(
+        &mut selected,
+        ModelPage {
+            data: catalog(),
+            next_cursor: None,
+            provider_errors: None,
+        },
+    );
+    assert_eq!(selected.drafts[&key].model, Some(model));
+}
+
+#[test]
+fn chatgpt_catalog_repairs_unavailable_saved_model_but_api_keeps_explicit_ids() {
+    for plan in ["pro", "plus", "API key"] {
+        let mut snapshot = Snapshot {
+            models: Arc::new(catalog()),
+            ..Default::default()
+        };
+        let accounts = serde_json::from_value(json!({
+            "accounts":[{"id":"desktop","provider":"codex","planType":plan}],
+            "selected":{"codex":"desktop"}
+        }))
+        .unwrap();
+        Arc::make_mut(&mut snapshot.account).accounts = Some(Arc::new(accounts));
+        let key = snapshot.navigation.draft_key.clone();
+        let unsupported = ModelRef {
+            provider: ProviderKind::Codex,
+            id: "gpt-6.1-sol".into(),
+        };
+        assert_eq!(
+            snapshot
+                .custom_model_choice(Some(ProviderKind::Codex), "gpt-6.1-sol")
+                .is_some(),
+            plan == "API key"
+        );
+        snapshot = apply(
+            &snapshot,
+            Intent::SelectModel {
+                thread_id: key.clone(),
+                model: unsupported.clone(),
+            },
+        );
+        LoadModels {}.apply(
+            &mut snapshot,
+            ModelPage {
+                data: catalog(),
+                next_cursor: None,
+                provider_errors: None,
+            },
+        );
+        assert_eq!(
+            snapshot.drafts[&key].model.as_ref().unwrap().id,
+            if plan == "API key" {
+                "gpt-6.1-sol"
+            } else {
+                "shared"
+            }
+        );
+        if plan != "API key" {
+            assert_eq!(snapshot.drafts[&key].effort.as_deref(), Some("medium"));
+        }
+        // A later native catalog can grant access: never blacklist the ID itself.
+        let mut available = catalog();
+        let mut added = available[0].clone();
+        added.model = unsupported.clone();
+        available.push(added);
+        snapshot.models = Arc::new(available.clone());
+        snapshot = apply(
+            &snapshot,
+            Intent::SelectModel {
+                thread_id: key.clone(),
+                model: unsupported.clone(),
+            },
+        );
+        LoadModels {}.apply(
+            &mut snapshot,
+            ModelPage {
+                data: available,
+                next_cursor: None,
+                provider_errors: None,
+            },
+        );
+        assert_eq!(snapshot.drafts[&key].model, Some(unsupported));
+    }
+}
+
+#[rstest::rstest]
+#[case::other_provider_failed("claude", "shared")]
+#[case::selected_provider_failed("codex", "retired")]
+fn catalog_failures_only_preserve_the_affected_providers_saved_model(
+    #[case] failed: &str,
+    #[case] expected: &str,
+) {
+    let mut snapshot = scoped_fixture();
+    let mut accounts = snapshot.account.accounts.as_deref().unwrap().clone();
+    accounts.accounts[0].plan_type = Some("pro".into());
+    Arc::make_mut(&mut snapshot.account).accounts = Some(Arc::new(accounts));
+    let key = snapshot.navigation.draft_key.clone();
+    Arc::make_mut(&mut snapshot.drafts).insert(
+        key.clone(),
+        Arc::new(agent_core::state::Draft {
+            model: Some(ModelRef {
+                provider: ProviderKind::Codex,
+                id: "retired".into(),
+            }),
+            ..Default::default()
+        }),
+    );
+    LoadModels {}.apply(
+        &mut snapshot,
+        ModelPage {
+            data: catalog(),
+            next_cursor: None,
+            provider_errors: Some(
+                serde_json::from_value(json!({(failed): {"message":"unavailable"}})).unwrap(),
+            ),
+        },
+    );
+    assert_eq!(snapshot.drafts[&key].model.as_ref().unwrap().id, expected);
+    assert_eq!(
+        snapshot
+            .model_for_provider(key.clone(), ProviderKind::Codex)
+            .unwrap()
+            .id,
+        expected
+    );
+}
+
 fn apply(snapshot: &Snapshot, intent: Intent) -> Snapshot {
     reduce(snapshot, Event::Intent(intent)).0
 }
@@ -524,7 +696,7 @@ fn scoped_new_chat_model_inherits_provider_presets_without_changing_them() {
 }
 
 #[test]
-fn unavailable_provider_preset_falls_back_only_after_a_complete_catalog() {
+fn explicit_codex_preset_is_preserved_outside_the_recommended_catalog() {
     let selected = ModelRef {
         provider: ProviderKind::Codex,
         id: "retired".into(),
@@ -554,12 +726,12 @@ fn unavailable_provider_preset_falls_back_only_after_a_complete_catalog() {
             service_tier: Some("priority".into()),
         },
     );
-    let fallback = snapshot
+    let choice = snapshot
         .model_for_provider("new".into(), ProviderKind::Codex)
         .unwrap();
-    assert_eq!(fallback.id, "shared");
+    assert_eq!(choice, selected);
     let controls = snapshot.default_model_controls(ModelDefaultsScope::Global, ProviderKind::Codex);
-    assert_eq!(controls.effort, "medium");
+    assert!(controls.efforts.is_empty());
     assert!(!controls.fast);
     snapshot.model_errors =
         Arc::new(serde_json::from_value(json!({"codex":{"message":"unavailable"}})).unwrap());
