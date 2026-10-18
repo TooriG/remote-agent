@@ -347,6 +347,10 @@ impl Desktop {
                 return;
             }
         };
+        self.open_file(path, cx);
+    }
+
+    pub(super) fn open_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         if path
             .extension()
             .and_then(|extension| extension.to_str())
@@ -667,6 +671,113 @@ impl Desktop {
 mod file_panel_tests {
     use super::*;
     use core::prelude::v1::test;
+
+    #[gpui::test]
+    fn file_panel_opens_large_images_in_gallery_and_preserves_text_draft(cx: &mut TestAppContext) {
+        use agent_protocol::models::{FileEntry, FileList};
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("large.PNG");
+        let image = image::RgbaImage::from_fn(1024, 1024, |x, y| {
+            let n = (y * 1024 + x)
+                .wrapping_mul(747796405)
+                .wrapping_add(2891336453);
+            let n = ((n >> ((n >> 28) + 4)) ^ n).wrapping_mul(277803737);
+            image::Rgba([(n >> 16) as u8, (n >> 8) as u8, n as u8, 255])
+        });
+        image.save(&path).unwrap();
+        let size = std::fs::metadata(&path).unwrap().len();
+        assert!(
+            size > 1024 * 1024,
+            "regression fixture must exceed the editor limit"
+        );
+        let cwd = directory.path().to_string_lossy().into_owned();
+        let source = path.to_string_lossy().into_owned();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        cx.update(|cx| {
+            crate::appearance::init(cx);
+            cx.set_global(crate::Runtime {
+                handle: runtime.handle().clone(),
+                connections: Arc::new(crate::platform::Connections::default()),
+                closing: tokio_util::task::TaskTracker::new(),
+                logging_error: None,
+            });
+        });
+        let mut desktop = None;
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| {
+                Desktop::new(
+                    Mode::SideChat {
+                        remote: None,
+                        cwd: cwd.clone(),
+                    },
+                    window,
+                    cx,
+                )
+            });
+            desktop = Some(view.clone());
+            Root::new(view, window, cx)
+        });
+        let desktop = desktop.unwrap();
+        window.update(|window, cx| {
+            desktop.update(cx, |view, cx| {
+                let snapshot = Arc::make_mut(&mut view.snapshot);
+                Arc::make_mut(&mut snapshot.navigation).cwd = cwd.clone();
+                Arc::make_mut(&mut snapshot.workspace).directory = Some(Arc::new(FileList {
+                    path: cwd.clone(),
+                    entries: vec![FileEntry {
+                        name: "large.PNG".into(),
+                        path: source.clone(),
+                        directory: false,
+                        size,
+                    }],
+                    truncated: false,
+                }));
+                view.composer.update(cx, |input, cx| {
+                    input.set_value("Keep this draft", window, cx)
+                });
+                view.panel = Panel::Files;
+                view.panel_open = true;
+                cx.notify();
+            });
+        });
+        window.run_until_parked();
+        let entry = window
+            .debug_bounds("workspace-file-0")
+            .expect("image file entry");
+        window.simulate_click(entry.center(), Modifiers::default());
+        window.run_until_parked();
+        window.update(|_, cx| {
+            desktop.update(cx, |view, cx| {
+                let gallery = view
+                    .image_gallery
+                    .as_ref()
+                    .expect("file click must open the image gallery");
+                assert_eq!(gallery.current_image().0.as_str(), source);
+                assert_eq!(view.composer.read(cx).value().as_ref(), "Keep this draft");
+                assert!(
+                    view.snapshot.workspace.file.is_none(),
+                    "images must bypass the text editor"
+                );
+                view.image_gallery = None;
+                view.open_conversation_link(&source, cx);
+                assert!(
+                    view.image_gallery.is_some(),
+                    "Markdown links use the same image viewer"
+                );
+                view.image_gallery = None;
+                view.open_file(directory.path().join("readme.txt"), cx);
+                assert!(
+                    view.image_gallery.is_none(),
+                    "text files must retain the editor route"
+                );
+                assert!(view.panel_open && view.panel == Panel::Files);
+            });
+        });
+    }
 
     #[gpui::test]
     fn side_chat_links_and_changes_are_visible_and_return_to_the_same_draft(

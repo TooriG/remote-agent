@@ -161,11 +161,11 @@ impl Desktop {
                             format!("file-{i}"),
                             entry.name.clone(),
                             cx,
-                            move |s, _, _| {
+                            move |s, _, cx| {
                                 if directory {
                                     s.browse(path.clone());
                                 } else {
-                                    s.edit(path.clone(), false);
+                                    s.open_file(PathBuf::from(&path), cx);
                                 }
                             },
                         )
@@ -174,7 +174,8 @@ impl Desktop {
                         } else {
                             IconName::FileText
                         })
-                        .flex_1(),
+                        .flex_1()
+                        .debug_selector(move || format!("workspace-file-{i}").into()),
                     )
                     .when(!directory, |row| {
                         row.child(
