@@ -59,8 +59,12 @@ struct AssistantSelectableText: UIViewRepresentable {
             uiView.setContent(ConversationAttributedText.attributedText(blocks, dark: colorScheme == .dark,
                                                                         attachmentWidth: width))
         }
-        let size = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
-        return CGSize(width: width, height: size.height)
+        // Measure the text independently of the view's current frame and intrinsic size.
+        let bounds = uiView.attributedText.boundingRect(
+            with: CGSize(width: width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil
+        )
+        return CGSize(width: width, height: ceil(bounds.height))
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
