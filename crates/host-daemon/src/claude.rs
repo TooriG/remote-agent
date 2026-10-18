@@ -98,6 +98,7 @@ pub struct Claude {
     program: PathBuf,
     directory: PathBuf,
     native_home: PathBuf,
+    native_inherited: bool,
     accounts: AsyncMutex<accounts::Accounts>,
     records: AsyncMutex<HashMap<String, Arc<AsyncMutex<Record>>>>,
     processes: Arc<Semaphore>,
@@ -149,6 +150,7 @@ impl Claude {
         native_home: Option<PathBuf>,
     ) -> anyhow::Result<Self> {
         crate::platform::create_state_directory(&directory)?;
+        let native_inherited = native_home.is_none();
         let native_home = native_home.map(Ok).unwrap_or_else(history::home)?;
         let path = std::env::var_os("PATH");
         let program = process::executable(&program, path.as_deref()).unwrap_or(program);
@@ -156,6 +158,7 @@ impl Claude {
             program.clone(),
             directory.join("accounts"),
             native_home.clone(),
+            native_inherited,
         )
         .await?;
         let (events, event_receiver) = mpsc::channel(256);
@@ -164,6 +167,7 @@ impl Claude {
             program,
             directory,
             native_home,
+            native_inherited,
             records: AsyncMutex::new(HashMap::new()),
             processes: Arc::new(Semaphore::new(8)),
             events,
@@ -183,8 +187,7 @@ impl Claude {
         let cwd = tempfile::tempdir_in(&self.directory).map_err(|error| error.to_string())?;
         let (process, initialized) = Process::start(
             &self.program,
-            &self.native_home,
-            &auth_home,
+            process::homes(&self.native_home, self.native_inherited, &auth_home),
             cwd.path(),
             None,
             None,
@@ -697,8 +700,7 @@ impl Claude {
                 .map_err(|_| "Claude process capacity reached (8); wait for an active or retained session to finish")?;
             let (mut process, initialized) = Process::start(
                 &self.program,
-                &self.native_home,
-                &auth_home,
+                process::homes(&self.native_home, self.native_inherited, &auth_home),
                 Path::new(&cwd),
                 Some((&session, state.resumable)),
                 Some((&model, effort)),
@@ -1853,8 +1855,7 @@ impl Agent for Claude {
                 .map_err(|error| error.to_string())?;
             let (process, initialized) = Process::start(
                 &self.program,
-                &self.native_home,
-                &auth_home,
+                process::homes(&self.native_home, self.native_inherited, &auth_home),
                 directory,
                 None,
                 None,

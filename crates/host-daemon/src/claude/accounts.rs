@@ -41,6 +41,7 @@ pub(crate) struct Accounts {
     program: PathBuf,
     directory: PathBuf,
     native_home: PathBuf,
+    native_inherited: bool,
     registry: Registry,
     revision: u64,
     native_checked_at: Option<Instant>,
@@ -71,6 +72,7 @@ impl Accounts {
         program: PathBuf,
         directory: PathBuf,
         native_home: PathBuf,
+        native_inherited: bool,
     ) -> anyhow::Result<Self> {
         crate::platform::create_state_directory(&directory)?;
         let registry = match tokio::fs::read(directory.join("accounts.json")).await {
@@ -82,6 +84,7 @@ impl Accounts {
             program,
             directory,
             native_home,
+            native_inherited,
             registry,
             revision: 0,
             native_checked_at: None,
@@ -121,6 +124,10 @@ impl Accounts {
         Ok(self.directory.join(uuid.to_string()))
     }
 
+    fn homes<'a>(&'a self, home: &'a Path) -> Option<(&'a Path, &'a Path)> {
+        super::process::homes(&self.native_home, self.native_inherited, home)
+    }
+
     async fn save(&self) -> Result<(), String> {
         let path = self.directory.join("accounts.json");
         let value = self.registry.clone();
@@ -131,7 +138,12 @@ impl Accounts {
     }
 
     async fn info(&self, home: &Path, id: String) -> Result<Option<Account>, String> {
-        let mut process = Cli::start(&self.program, home, &["auth", "status", "--json"], None)?;
+        let mut process = Cli::start(
+            &self.program,
+            self.homes(home).map(|(_, home)| home),
+            &["auth", "status", "--json"],
+            None,
+        )?;
         let (_, output) = process.finish().await?;
         let value: Value =
             serde_json::from_slice(&output).map_err(|_| "Claude の認証状態を読み取れません。")?;
@@ -198,7 +210,9 @@ impl Accounts {
     > {
         let home = self.account_home(id)?;
         let program = self.program.clone();
-        let config_home = self.native_home.clone();
+        let homes = self
+            .homes(&home)
+            .map(|(config, credentials)| (config.to_owned(), credentials.to_owned()));
         let directory = self.directory.clone();
         let cache = self.usage.entry(id.to_owned()).or_default().clone();
         Ok(async move {
@@ -206,8 +220,9 @@ impl Accounts {
                 .read(async {
                     let (mut process, _) = super::process::Process::start(
                         &program,
-                        &config_home,
-                        &home,
+                        homes
+                            .as_ref()
+                            .map(|(config, credentials)| (config.as_path(), credentials.as_path())),
                         &directory,
                         None,
                         None,
@@ -276,7 +291,12 @@ impl Accounts {
                     }
                 }
                 self.revision += 1;
-                let mut process = Cli::start(&self.program, &home, &["auth", "logout"], None)?;
+                let mut process = Cli::start(
+                    &self.program,
+                    self.homes(&home).map(|(_, home)| home),
+                    &["auth", "logout"],
+                    None,
+                )?;
                 if !process.finish().await?.0 {
                     return Err("Claude のログアウトに失敗しました。".into());
                 }
@@ -293,7 +313,7 @@ impl Accounts {
                 let (sender, url) = oneshot::channel();
                 let process = Cli::start(
                     &self.program,
-                    &home,
+                    Some(&home),
                     &["auth", "login", "--claudeai"],
                     Some(sender),
                 )?;
@@ -427,14 +447,15 @@ impl Accounts {
             login.process.input.take();
             let _ = login.process.child.wait().await;
             // A completion can race cancellation; let the CLI remove its credentials.
-            let mut process = Cli::start(&self.program, &login.home, &["auth", "logout"], None)?;
+            let mut process =
+                Cli::start(&self.program, Some(&login.home), &["auth", "logout"], None)?;
             if !process.finish().await?.0 {
                 // A failed logout is harmless only when the CLI explicitly confirms
                 // there are no credentials. Keep the login available for retry on
                 // every other failure, including an unreadable status response.
                 let mut status = Cli::start(
                     &self.program,
-                    &login.home,
+                    Some(&login.home),
                     &["auth", "status", "--json"],
                     None,
                 )?;
@@ -457,16 +478,15 @@ impl Accounts {
 impl Cli {
     fn start(
         program: &Path,
-        home: &Path,
+        home: Option<&Path>,
         args: &[&str],
         url: Option<oneshot::Sender<String>>,
     ) -> Result<Self, String> {
         let mut command =
             bex_process::command(program).map_err(|_| "Claude の認証処理を起動できません。")?;
+        super::process::set_homes(&mut command, home.map(|home| (home, home)));
         command
             .args(args)
-            .env("CLAUDE_CONFIG_DIR", home)
-            .env("CLAUDE_SECURESTORAGE_CONFIG_DIR", home)
             .env_remove("ANTHROPIC_API_KEY")
             .env_remove("ANTHROPIC_AUTH_TOKEN")
             .env_remove("CLAUDE_CODE_OAUTH_TOKEN")
@@ -558,6 +578,7 @@ mod tests {
             directory.path().join("missing-claude"),
             directory.path().join("accounts"),
             directory.path().join("native"),
+            false,
         )
         .await
         .unwrap();
