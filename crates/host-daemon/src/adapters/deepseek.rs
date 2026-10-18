@@ -451,6 +451,16 @@ impl DeepSeek {
         let id = params["sessionId"]
             .as_str()
             .ok_or_else(|| failure("Missing permission session"))?;
+        let turn = self
+            .0
+            .records
+            .lock()
+            .await
+            .get(id)
+            .and_then(|record| record.thread.active_turn_id());
+        let Some(turn_id) = turn else {
+            return rpc.write(json!({"jsonrpc":"2.0","id":value["id"],"result":{"outcome":{"outcome":"cancelled"}}})).await;
+        };
         let choices = params["options"]
             .as_array()
             .into_iter()
@@ -465,7 +475,10 @@ impl DeepSeek {
             .collect();
         let request = Request {
             id: format!("deepseek:{}:{}", rpc.instance, value["id"]).into(),
-            target: RequestTarget::Session,
+            target: RequestTarget::Turn {
+                turn_id,
+                item_id: params["toolCall"]["toolCallId"].as_str().map(Into::into),
+            },
             delivery: RequestDelivery::Awaiting,
             body: RequestBody::Permission {
                 description: params["toolCall"]["title"]
