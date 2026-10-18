@@ -345,14 +345,41 @@ impl Desktop {
                                 }),
                         )
                 })
-                .on_link_click(move |url, _, _, cx| {
-                    let _ = view.update(cx, |s, cx| s.open_conversation_link(url, cx));
+                .on_link_click(move |url, event, window, cx| {
+                    if let gpui_kit::ClickEvent::Mouse(click) = event {
+                        if click.up.button == MouseButton::Right {
+                            let _ = view.update(cx, |view, cx| {
+                                view.selection.update(cx, |selection, cx| {
+                                    selection.show_context_menu(
+                                        Some(url.to_string()), click.up.position, window, cx,
+                                    );
+                                });
+                            });
+                            return;
+                        }
+                    }
+                    let _ = view.update(cx, |s, cx| {
+                        s.click_conversation_link(url, event.modifiers().control, window, cx)
+                    });
                 }),
         );
         for source in images.iter() {
             body = body.child(self.image(source, false, 320., true, cx));
         }
         body.into_any_element()
+    }
+    pub(super) fn click_conversation_link(
+        &mut self,
+        source: &str,
+        control: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if control && (source.starts_with("https://") || source.starts_with("http://")) {
+            self.open_browser_url(source, window, cx);
+        } else {
+            self.open_conversation_link(source, cx);
+        }
     }
     pub(super) fn open_conversation_link(&mut self, source: &str, cx: &mut Context<Self>) {
         if source.starts_with("https://") || source.starts_with("http://") {
@@ -877,6 +904,35 @@ mod file_panel_tests {
                 });
                 view.open_conversation_link("readme.txt:1", cx);
                 assert!(view.panel_open && view.panel == Panel::Files);
+                #[cfg(target_os = "windows")]
+                {
+                    // Hold initialization pending to exercise clicks arriving before WebView2 is ready.
+                    view.browser_initialization = Some(cx.spawn(async |_, _| {
+                        std::future::pending::<()>().await;
+                    }));
+                    view.click_conversation_link("https://example.com/first", true, window, cx);
+                    assert!(view.panel_open && view.panel == Panel::Browser);
+                    assert_eq!(
+                        view.pending_browser_url.as_deref(),
+                        Some("https://example.com/first")
+                    );
+                    view.click_conversation_link(
+                        "http://localhost:3000/next?q=1#detail",
+                        true,
+                        window,
+                        cx,
+                    );
+                    assert_eq!(
+                        view.pending_browser_url.as_deref(),
+                        Some("http://localhost:3000/next?q=1#detail")
+                    );
+                    view.click_conversation_link("readme.txt:1", true, window, cx);
+                    assert!(view.panel == Panel::Files);
+                    assert_eq!(
+                        view.composer.read(cx).value().as_ref(),
+                        "Keep this side draft"
+                    );
+                }
                 cx.notify();
             })
         });

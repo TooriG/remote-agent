@@ -212,6 +212,11 @@ impl Browser {
             }
         });
     }
+    pub(crate) fn open_url(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.address
+            .update(cx, |input, cx| input.set_value(url.to_owned(), window, cx));
+        self.navigate(cx);
+    }
     fn navigate(&mut self, cx: &mut Context<Self>) {
         match browser_url(self.address.read(cx).value().as_ref()) {
             Ok(url) => {

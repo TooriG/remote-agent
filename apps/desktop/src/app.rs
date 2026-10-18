@@ -239,6 +239,7 @@ pub(crate) struct Desktop {
     side_chat: Option<Entity<Desktop>>,
     terminal: Option<Entity<crate::terminal::Terminal>>,
     browser: Option<Entity<crate::browser::Browser>>,
+    pending_browser_url: Option<String>,
     #[cfg(target_os = "windows")]
     browser_initialization: Option<Task<()>>,
     dictation: Option<Dictation>,
@@ -529,6 +530,7 @@ impl Desktop {
             side_chat: None,
             terminal: None,
             browser: None,
+            pending_browser_url: None,
             #[cfg(target_os = "windows")]
             browser_initialization: None,
             dictation: None,
@@ -1475,11 +1477,14 @@ impl Desktop {
             #[cfg(target_os = "windows")]
             Panel::Browser if self.browser.is_none() && self.browser_initialization.is_none() => {
                 let owner = cx.entity().downgrade();
-                crate::browser::Browser::start(window, cx, move |result, _, cx| {
+                crate::browser::Browser::start(window, cx, move |result, window, cx| {
                     let _ = owner.update(cx, |s, cx| {
                         s.browser_initialization = None;
                         match result {
-                            Ok(view) => s.browser = Some(view),
+                            Ok(view) => {
+                                s.browser = Some(view);
+                                s.navigate_pending_browser_url(window, cx);
+                            }
                             Err(error) => s.set_error(error),
                         }
                         cx.notify();
@@ -1505,7 +1510,19 @@ impl Desktop {
         self.panel = panel;
         self.panel_open = true;
         self.tab = Tab::Chat;
+        self.navigate_pending_browser_url(window, cx);
         cx.notify();
+    }
+    fn open_browser_url(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.pending_browser_url = Some(url.to_owned());
+        self.open_panel(Panel::Browser, window, cx);
+    }
+    fn navigate_pending_browser_url(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(browser) = self.browser.clone()
+            && let Some(url) = self.pending_browser_url.take()
+        {
+            browser.update(cx, |browser, cx| browser.open_url(&url, window, cx));
+        }
     }
     fn pick_folder(&mut self) {
         self.busy += 1;
