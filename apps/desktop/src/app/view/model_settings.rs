@@ -364,7 +364,7 @@ impl Desktop {
             services = services.child(
                 self.button(
                     format!("model-provider-{label}"),
-                    label,
+                    if value == ProviderKind::DeepSeek { "DSH" } else { label },
                     cx,
                     move |s, _, _| {
                         s.model_provider = Some(value);
@@ -475,7 +475,7 @@ impl Desktop {
                                 div()
                                     .text_xs()
                                     .text_color(rgb(appearance::MUTED))
-                                    .child(plan.to_uppercase()),
+                                    .child(if provider == ProviderKind::DeepSeek { plan.clone() } else { plan.to_uppercase() }),
                             )
                         })
                         .child(if manage {
@@ -739,9 +739,9 @@ impl Desktop {
                 let id = login.login_id.clone();
                 form = form
                     .child(div().text_xs().text_color(rgb(appearance::MUTED)).child(
-                        "OpenRouterはDeepSeekエージェントで使えます。Codex・Claudeの会話からは新しい会話を開いて選択します。"
+                        "OpenRouterはDSHで使えます。Codex・Claudeの会話からは新しい会話を開いて選択します。"
                     ))
-                    .child(self.button("dsh-openrouter-models", "OpenRouterのモデルを選ぶ", cx, move |s, window, cx| {
+                    .child(self.button("dsh-openrouter-models", "OpenRouterのモデル一覧を開く", cx, move |s, window, cx| {
                         s.account_operation(Intent::CancelAccountLogin(op::CancelAccountLogin { provider, id: id.clone() }));
                         s.show_openrouter_models(window, cx);
                     }).small().disabled(disabled).debug_selector(|| "dsh-openrouter-models".into()));
@@ -813,7 +813,7 @@ impl Desktop {
                 div()
                     .text_xs()
                     .text_color(rgb(appearance::MUTED))
-                    .child("ログインが完了すると、自動で接続されます。"),
+                    .child(if provider == ProviderKind::DeepSeek { "キーの保存後、モデル一覧で使うモデルを選択してください。一覧を開くだけでは選択中のモデルは変わりません。" } else { "ログインが完了すると、自動で接続されます。" }),
             )
             .when(!self.account_polling && !self.account_busy, |form| {
                 form.child(
@@ -909,6 +909,39 @@ impl Desktop {
         cx.notify();
     }
 
+    fn dsh_model_controls(&self, disabled: bool, cx: &Context<Self>) -> AnyElement {
+        let mut controls = Vec::new();
+        if let Some(selected) = self.draft().model.as_ref().and_then(|model| agent_protocol::dsh::KeyProvider::for_model_id(&model.id)) {
+            controls.push(div().text_sm().font_semibold()
+                .id("dsh-selected-route")
+                .debug_selector(|| "dsh-selected-route".into())
+                .child(format!("選択中の送信先: {}", selected.model_label())).into_any_element());
+        }
+        if let Some(model) = self.snapshot.models_matching(Some(ProviderKind::DeepSeek), r#"["openrouter","deepseek/deepseek-v4.1-flash"]"#.into()).into_iter().next() {
+            let value = model.model;
+            let selected = self.draft().model.as_ref() == Some(&value);
+            controls.push(Button::new("model-select-openrouter-flash")
+                .label(if selected { "OpenRouter · Flash 4.1 選択中" } else { "OpenRouter経由のFlash 4.1を選択" })
+                .accessibility_label("OpenRouterでDeepSeek V4.1 Flashを選択")
+                .debug_selector(|| "model-select-openrouter-flash".into())
+                .small().selected(selected).disabled(disabled)
+                .on_click(cx.listener(move |s, _, window, cx| {
+                    s.dispatch(Intent::SelectModel { thread_id: s.draft_key().clone(), model: value.clone() });
+                    s.accept_snapshot(window, cx);
+                    s.model_search.update(cx, |input, cx| input.set_value("openrouter", window, cx));
+                    cx.notify();
+                })).into_any_element());
+        }
+        controls.push(Button::new("model-openrouter")
+            .label("OpenRouterのモデル一覧を表示")
+            .accessibility_label("OpenRouterのモデル一覧を表示")
+            .debug_selector(|| "model-openrouter".into())
+            .small().ghost().disabled(disabled)
+            .on_click(cx.listener(|s, _, window, cx| s.show_openrouter_models(window, cx)))
+            .into_any_element());
+        v_flex().gap_2().children(controls).into_any_element()
+    }
+
     fn model_panel_content(&self, cx: &Context<Self>) -> AnyElement {
         let mut body = v_flex().flex_1().min_w_0().gap_2();
         if self.model_panel != ModelPanel::Models {
@@ -971,7 +1004,7 @@ impl Desktop {
         ] {
             agents = agents.child(
                 Button::new(format!("model-agent-{label}"))
-                    .label(label)
+                    .label(if value == ProviderKind::DeepSeek { "DSH" } else { label })
                     .icon(
                         if value == ProviderKind::Claude {
                             Icon::default()
@@ -1018,7 +1051,7 @@ impl Desktop {
             let label = match session.provider {
                 ProviderKind::Codex => "Codex",
                 ProviderKind::Claude => "Claude",
-                ProviderKind::DeepSeek => "DeepSeek",
+                ProviderKind::DeepSeek => "DSH",
             };
             body = body.child(
                 v_flex()
@@ -1058,7 +1091,7 @@ impl Desktop {
                 div()
                     .text_xs()
                     .text_color(rgb(appearance::MUTED))
-                    .child("Codex・Claude・DeepSeek（OpenRouter対応）を選んで会話を始められます。"),
+                    .child("Codex・Claude・DSH（DeepSeek / OpenRouterなど）を選んで会話を始められます。"),
             );
         }
         let account = self
@@ -1131,14 +1164,7 @@ impl Desktop {
             .snapshot
             .custom_model_choice(provider, &self.model_search.read(cx).value());
         if provider == Some(ProviderKind::DeepSeek) {
-            body = body.child(
-                Button::new("model-openrouter")
-                    .label("OpenRouterのモデル")
-                    .accessibility_label("OpenRouterのモデル")
-                    .debug_selector(|| "model-openrouter".into())
-                    .small().ghost().disabled(disabled)
-                    .on_click(cx.listener(|s, _, window, cx| s.show_openrouter_models(window, cx))),
-            );
+            body = body.child(self.dsh_model_controls(disabled, cx));
         }
         let models = self
             .snapshot
@@ -1692,7 +1718,7 @@ mod tests {
             view.read(cx).0.clone().update(cx, |view, _| {
                 Arc::make_mut(&mut view.snapshot).models = Arc::new(serde_json::from_value(serde_json::json!([
                     {"id":"official","model":{"provider":"deepseek","id":"[\"deepseek-official\",\"deepseek-flash\"]"},"displayName":"DeepSeek","defaultReasoningEffort":"","supportedReasoningEfforts":[]},
-                    {"id":"router","model":{"provider":"deepseek","id":"[\"openrouter\",\"test/model\"]"},"displayName":"Router model","defaultReasoningEffort":"","supportedReasoningEfforts":[]}
+                    {"id":"router","model":{"provider":"deepseek","id":"[\"openrouter\",\"deepseek/deepseek-v4.1-flash\"]"},"displayName":"OpenRouter · DeepSeek V4.1 Flash","defaultReasoningEffort":"","supportedReasoningEfforts":[]}
                 ])).unwrap());
             });
         });
@@ -1705,6 +1731,56 @@ mod tests {
             let desktop = view.read(cx).0.read(cx);
             assert!(desktop.model_panel == ModelPanel::Models);
             assert_eq!(desktop.model_search.read(cx).value(), "openrouter");
+        });
+    }
+
+    #[gpui::test]
+    fn openrouter_selection_changes_the_real_store_and_keeps_unfinished_input(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let app_runtime = crate::Runtime {
+            handle: runtime.handle().clone(), connections: Arc::new(crate::platform::Connections::default()),
+            closing: tokio_util::task::TaskTracker::new(), logging_error: None,
+        };
+        let mut snapshot = agent_core::state::Snapshot::default();
+        snapshot.models = Arc::new(serde_json::from_value(serde_json::json!([
+            {"id":"official","model":{"provider":"deepseek","id":"[\"deepseek-official\",\"deepseek-flash\"]"},"displayName":"DeepSeek公式 · Flash","defaultReasoningEffort":"","supportedReasoningEfforts":[]},
+            {"id":"router","model":{"provider":"deepseek","id":"[\"openrouter\",\"deepseek/deepseek-v4.1-flash\"]"},"displayName":"OpenRouter · DeepSeek V4.1 Flash","defaultReasoningEffort":"","supportedReasoningEfforts":[]}
+        ])).unwrap());
+        let key = snapshot.navigation.draft_key.clone();
+        let official = snapshot.models[0].model.clone();
+        Arc::make_mut(&mut snapshot.drafts).insert(key, Arc::new(Draft {
+            text: "keep my unfinished input".into(), model: Some(official), ..Default::default()
+        }));
+        let store = runtime.block_on(async { Arc::new(agent_core::store::Store::offline(snapshot)) });
+        let session = runtime.block_on(async {
+            let (updates, receive) = async_channel::unbounded();
+            tokio::spawn(crate::store_session::StoreSession::publish(Ok(store.clone()), app_runtime.clone(), updates, Some, |_| None));
+            receive.recv().await.unwrap().unwrap().unwrap()
+        });
+        cx.update(|cx| { crate::appearance::init(cx); cx.set_global(app_runtime); });
+        let (view, window) = cx.add_window_view(|window, cx| {
+            let desktop = cx.new(|cx| Desktop::new(Mode::SideChat {
+                remote: Some(RemoteHost { id: "fixture".into(), name: "fixture".into(), ticket: "invalid-fixture-ticket".into() }), cwd: "/fixture".into(),
+            }, window, cx));
+            desktop.update(cx, |view, _| {
+                view.snapshot = store.snapshot();
+                Arc::make_mut(&mut view.snapshot).connected = true;
+                view.session = Some(session);
+                view.model_provider = Some(agent_protocol::session::ProviderKind::DeepSeek);
+            });
+            cx.observe(&desktop, |_, _, cx| cx.notify()).detach();
+            PickerView(desktop)
+        });
+        window.run_until_parked();
+        assert!(window.debug_bounds("dsh-selected-route").is_some());
+        let select = window.debug_bounds("model-select-openrouter-flash").unwrap();
+        window.simulate_click(select.center(), Modifiers::default());
+        window.run_until_parked();
+        window.update(|_, cx| {
+            let desktop = view.read(cx).0.read(cx);
+            assert_eq!(desktop.draft().model.as_ref().unwrap().id, r#"["openrouter","deepseek/deepseek-v4.1-flash"]"#);
+            assert_eq!(desktop.draft().text, "keep my unfinished input");
+            assert_eq!(store.snapshot().drafts[desktop.draft_key()].model, desktop.draft().model);
         });
     }
 

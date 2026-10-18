@@ -832,7 +832,17 @@ pub(super) fn open_thread(
                 cwd,
             },
         );
-        if let Some(model) = model {
+        // ACP reports the last model used by the native session. Keep a locally
+        // selected DSH gateway route when reopening an older official session.
+        let selected_gateway = snapshot.drafts.get(&DraftKey::from(id.clone()))
+            .and_then(|draft| draft.model.as_ref())
+            .filter(|selected| selected.provider == crate::session::ProviderKind::DeepSeek)
+            .and_then(|selected| agent_protocol::dsh::KeyProvider::for_model_id(&selected.id))
+            .is_some_and(|provider| provider != agent_protocol::dsh::KeyProvider::DeepSeek);
+        let old_official = model.as_ref().filter(|model| model.provider == crate::session::ProviderKind::DeepSeek)
+            .and_then(|model| agent_protocol::dsh::KeyProvider::for_model_id(&model.id))
+            == Some(agent_protocol::dsh::KeyProvider::DeepSeek);
+        if let Some(model) = model.filter(|_| !(selected_gateway && old_official)) {
             let (updated, _) = reduce(
                 snapshot,
                 Event::Intent(Intent::SelectModel {
@@ -1947,6 +1957,32 @@ mod tests {
         let conversations = snapshot.conversations.clone();
         ListAgents { thread_id: parent }.apply(&mut snapshot, observations);
         assert!(Arc::ptr_eq(&snapshot.conversations, &conversations));
+    }
+
+    #[rstest::rstest]
+    #[case::openrouter("openrouter")]
+    #[case::groq("groq")]
+    fn reopening_old_official_session_preserves_selected_gateway_for_next_submission(#[case] route: &str) {
+        let official = crate::models::ModelRef { provider: ProviderKind::DeepSeek, id: r#"["deepseek-official","deepseek-flash"]"#.into() };
+        let selected = crate::models::ModelRef { provider: ProviderKind::DeepSeek, id: serde_json::to_string(&[route, "test/model"]).unwrap() };
+        let session = SessionRef::new(ProviderKind::DeepSeek, "selected-gateway".into()).unwrap();
+        let key: DraftKey = session.clone().into();
+        let mut snapshot = Snapshot::default();
+        snapshot.connected = true;
+        snapshot.models = Arc::new(serde_json::from_value(serde_json::json!([
+            {"id":"official","model":official,"displayName":"Official","isDefault":true,"defaultReasoningEffort":"","supportedReasoningEfforts":[]},
+            {"id":"gateway","model":selected,"displayName":"Gateway","defaultReasoningEffort":"","supportedReasoningEfforts":[]}
+        ])).unwrap());
+        Arc::make_mut(&mut snapshot.drafts).insert(key.clone(), Arc::new(Draft {
+            text: "Keep my unfinished request".into(), model: Some(selected.clone()), ..Default::default()
+        }));
+        ReadThread::open(session.clone()).prepare(&mut snapshot).unwrap();
+        open_thread(&mut snapshot, Thread { id: Some(session.clone()), ..Default::default() }, Some(official));
+        assert_eq!(snapshot.drafts[&key].model, Some(selected.clone()));
+        assert_eq!(snapshot.drafts[&key].text, "Keep my unfinished request");
+        let (submitted, effects) = reduce_intent(&snapshot, Intent::Submit { thread_id: Some(session), client_user_message_id: "gateway-input".into() });
+        assert_eq!(effects.len(), 1);
+        assert_eq!(submitted.pending_submissions["gateway-input"].draft.model, Some(selected));
     }
 
     #[rstest::rstest]

@@ -349,6 +349,9 @@ impl DeepSeek {
         }) {
             return Err(failure("有効なAPIキーを入力してください。"));
         }
+        if update.provider != KeyProvider::OpenRouter && key.as_ref().is_some_and(|key| key.starts_with("sk-or-")) {
+            return Err(Failure::new("dsh_key_provider_mismatch", "OpenRouterのキーです。接続先にOpenRouterを選んで保存してください。"));
+        }
         self.reset_rpc().await?;
         if update.provider == KeyProvider::DeepSeek {
             let path = self.0.directory.join("api-key.json");
@@ -481,6 +484,7 @@ impl DeepSeek {
         effort: Option<&str>,
     ) -> Result<(), Failure> {
         if let Some(model) = model {
+            self.validate_model_key(model).await?;
             rpc.call(
                 "session/set_config_option",
                 json!({"sessionId":id,"configId":"model","value":model}),
@@ -495,6 +499,15 @@ impl DeepSeek {
                 Some(Duration::from_secs(30)),
             )
             .await?;
+        }
+        Ok(())
+    }
+    async fn validate_model_key(&self, model: &str) -> Result<(), Failure> {
+        if KeyProvider::for_model_id(model) == Some(KeyProvider::DeepSeek) {
+            let key = self.api_key().await?.or_else(|| std::env::var("DEEPSEEK_API_KEY").ok().map(zeroize::Zeroizing::new));
+            if key.as_ref().is_some_and(|key| key.starts_with("sk-or-")) {
+                return Err(Failure::new("dsh_key_provider_mismatch", "選択中の送信先はDeepSeek公式ですが、保存されているのはOpenRouterのキーです。モデル選択で「OpenRouter · DeepSeek: DeepSeek V4.1 Flash」など、OpenRouterのモデルを選択してください。"));
+            }
         }
         Ok(())
     }
@@ -797,13 +810,20 @@ fn translate_update(update: &Value, turn: &Turn) -> Option<Item> {
 impl Identity for DeepSeek {
     async fn list(&self) -> Result<op::Accounts, Failure> {
         let configured = self.configured().await?;
+        let keys = self.managed_keys().await?;
+        let saved: Vec<_> = KeyProvider::ALL.into_iter().filter_map(|provider| {
+            let key = keys["refs"][provider.reference()].as_str()?;
+            Some(if provider != KeyProvider::OpenRouter && key.starts_with("sk-or-") {
+                format!("{}（OpenRouter用キー・設定先を確認）", provider.label())
+            } else { provider.label().to_owned() })
+        }).collect();
         Ok(op::Accounts {
             accounts: if configured {
                 vec![op::Account {
                     id: ACCOUNT.into(),
                     provider: PROVIDER,
-                    email: Some("DeepSeek Harness API".into()),
-                    plan_type: Some("API".into()),
+                    email: Some("DSH APIキー".into()),
+                    plan_type: Some(if saved.is_empty() { "APIキー: Hostの外部設定を使用".into() } else { format!("APIキー保存済み: {}", saved.join(" / ")) }),
                     usage: None,
                 }]
             } else {
@@ -1023,6 +1043,7 @@ impl Agent for DeepSeek {
         model: Option<&str>,
         _: Option<Value>,
     ) -> Result<ThreadResponse, Failure> {
+        if let Some(model) = model { self.validate_model_key(model).await?; }
         let rpc = self.rpc().await?;
         let created = rpc
             .call(
@@ -1099,7 +1120,7 @@ impl Agent for DeepSeek {
         self.select(
             &rpc,
             &id,
-            input.model.as_ref().map(|m| m.id.as_str()),
+            input.model.as_ref().or(record.model.as_ref()).map(|m| m.id.as_str()),
             input.effort.as_deref(),
         )
         .await?;
@@ -1391,7 +1412,7 @@ fn catalog(created: &Value) -> Vec<Model> {
                     provider: PROVIDER,
                     id: id.into(),
                 },
-                display_name: name.into(),
+                display_name: KeyProvider::for_model_id(id).map_or_else(|| name.to_owned(), |provider| format!("{} · {name}", provider.model_label())),
                 default_reasoning_effort: if current {
                     reasoning
                         .and_then(|o| o["currentValue"].as_str())
@@ -1573,6 +1594,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dsh_reports_saved_routes_and_blocks_openrouter_keys_on_the_official_endpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        let adapter = DeepSeek::load("dsh".into(), dir.path().into()).await.unwrap();
+        save_test_key(&adapter, KeyProvider::DeepSeek, Some("native-secret")).await;
+        let rejected = adapter.update_key(KeyUpdate { provider: KeyProvider::DeepSeek, key: Some("sk-or-test-only".into()) }).await.unwrap_err();
+        assert_eq!(rejected.code, "dsh_key_provider_mismatch");
+        assert_eq!(adapter.api_key().await.unwrap().as_deref().map(String::as_str), Some("native-secret"));
+        save_test_key(&adapter, KeyProvider::OpenRouter, Some("sk-or-test-only")).await;
+        // An already saved misplaced key must be diagnosed before an inference request.
+        crate::platform::save_private_json(&dir.path().join("api-key.json"), &"sk-or-test-only").unwrap();
+        let error = adapter.validate_model_key(DEFAULT_MODEL).await.unwrap_err();
+        assert_eq!(error.code, "dsh_key_provider_mismatch");
+        assert!(error.message.contains("OpenRouter"));
+        assert!(!error.message.contains("sk-or-test-only"));
+        adapter.validate_model_key(r#"["openrouter","deepseek/deepseek-v4.1-flash"]"#).await.unwrap();
+        let accounts = Identity::list(&adapter).await.unwrap();
+        let account = &accounts.accounts[0];
+        assert_eq!(account.email.as_deref(), Some("DSH APIキー"));
+        let summary = account.plan_type.as_deref().unwrap();
+        assert!(summary.contains("APIキー保存済み"));
+        assert!(summary.contains("OpenRouter"));
+        assert!(summary.contains("DeepSeek（OpenRouter用キー・設定先を確認）"));
+        assert!(!serde_json::to_string(&accounts).unwrap().contains("sk-or-test-only"));
+        save_test_key(&adapter, KeyProvider::OpenRouter, None).await;
+        let accounts = Identity::list(&adapter).await.unwrap();
+        assert!(!accounts.accounts[0].plan_type.as_deref().unwrap().ends_with(" / OpenRouter"));
+    }
+
+    #[tokio::test]
     #[ignore = "requires installed DeepSeek Harness; no inference or paid request"]
     async fn installed_harness_exposes_configured_openrouter_models() {
         let dir = tempfile::tempdir().unwrap();
@@ -1605,7 +1655,7 @@ mod tests {
         let value = json!({"configOptions":[{"id":"model","currentValue":DEFAULT_MODEL,"options":[{"name":"DeepSeek","options":[{"value":DEFAULT_MODEL,"name":"deepseek-flash"},{"value":"other-route","name":"Other"}]}]},{"id":"reasoning_effort","currentValue":"high","options":[{"value":"off"},{"value":"high"},{"value":"max"}]}]});
         let models = catalog(&value);
         assert_eq!(models[0].model.id, DEFAULT_MODEL);
-        assert_eq!(models[0].display_name, "DeepSeek V4.1 Flash 1017");
+        assert_eq!(models[0].display_name, "DeepSeek公式 · DeepSeek V4.1 Flash 1017");
         assert_eq!(models[0].default_reasoning_effort, "high");
         assert_eq!(models[0].supported_reasoning_efforts.len(), 3);
         assert!(models[1].supported_reasoning_efforts.is_empty());

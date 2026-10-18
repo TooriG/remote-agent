@@ -15,6 +15,17 @@ pub enum KeyProvider {
 }
 
 impl KeyProvider {
+    /// DSH advertises opaque JSON [provider, model] values over ACP.
+    pub fn for_model_id(id: &str) -> Option<Self> {
+        let [route, model]: [String; 2] = serde_json::from_str(id).ok()?;
+        if model.is_empty() { return None; }
+        Self::ALL.into_iter().find(|provider| provider.route() == route)
+    }
+
+    pub fn model_label(self) -> &'static str {
+        if self == Self::DeepSeek { "DeepSeek公式" } else { self.label() }
+    }
+
     pub const ALL: [Self; 8] = [
         Self::DeepSeek,
         Self::OpenRouter,
@@ -86,4 +97,20 @@ pub struct KeyUpdate {
     pub provider: KeyProvider,
     /// None removes only the selected provider's BEX-managed key.
     pub key: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_routes_preserve_provider_boundaries() {
+        for provider in KeyProvider::ALL {
+            let id = serde_json::to_string(&[provider.route(), "test/model"]).unwrap();
+            assert!(KeyProvider::for_model_id(&id) == Some(provider));
+        }
+        for id in ["deepseek-flash", "[]", r#"["openrouter",""]"#, r#"["unknown","model"]"#] {
+            assert!(KeyProvider::for_model_id(id).is_none());
+        }
+    }
 }
