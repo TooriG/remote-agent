@@ -1,6 +1,9 @@
 package dev.remoteagent.mobile
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
@@ -9,9 +12,9 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
-import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.ProviderKind
 import dev.remoteagent.core.SessionRef
@@ -58,9 +61,19 @@ class ThreadListTest {
     fun searchOpensOnDemandAndCloseClearsFilter() {
         Snapshot.empty().use { snapshot ->
             val intents = mutableListOf<Intent>()
+            var query by mutableStateOf(snapshot.listQuery())
             compose.setContent {
                 BexTheme {
-                    ThreadListScreen(snapshot.threadList(), snapshot.listQuery(), false, { intents.add(it) }, {})
+                    ThreadListScreen(
+                        snapshot.threadList(),
+                        query,
+                        false,
+                        { intent ->
+                            intents.add(intent)
+                            if (intent is Intent.ListSessions) query = intent.v1.query
+                        },
+                        {},
+                    )
                 }
             }
             compose.onNodeWithText("チャットを検索").assertDoesNotExist()
