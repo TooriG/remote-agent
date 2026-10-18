@@ -7,6 +7,15 @@ use tokio::process::Command;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    // BROWSER accepts an executable, without arguments, on Windows as well as
+    // Unix. Reuse this companion as a successful no-op browser so no host-local
+    // callback tab can escape a provider's explicitly client-owned login flow.
+    if suppressed_browser_request(
+        std::env::var_os("BEX_SUPPRESS_BROWSER").as_deref() == Some(std::ffi::OsStr::new("1")),
+        &std::env::args_os().skip(1).collect::<Vec<_>>(),
+    ) {
+        return;
+    }
     let code = if std::env::args().nth(1).as_deref() == Some("--bex-pty") {
         pty::run().await
     } else {
@@ -16,6 +25,40 @@ async fn main() {
     // Tokio's stdin reader may still be blocked after a native process exits.
     // All owned children have already been killed/reaped before reaching here.
     std::process::exit(code);
+}
+
+fn suppressed_browser_request(enabled: bool, args: &[std::ffi::OsString]) -> bool {
+    enabled
+        && args.len() == 1
+        && args[0]
+            .to_str()
+            .is_some_and(|url| url.starts_with("https://") || url.starts_with("http://"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn suppresses_only_explicit_browser_invocations_and_keeps_provider_commands() {
+        let url = ["https://claude.com/oauth/authorize?state=test".into()];
+        assert!(suppressed_browser_request(true, &url));
+        assert!(!suppressed_browser_request(false, &url));
+        assert!(!suppressed_browser_request(true, &[]));
+        assert!(!suppressed_browser_request(true, &["claude.exe".into()]));
+        assert!(!suppressed_browser_request(
+            true,
+            &["claude.exe".into(), "auth".into(), "login".into()]
+        ));
+        assert!(!suppressed_browser_request(
+            true,
+            &[url[0].clone(), "extra".into()]
+        ));
+        assert!(!suppressed_browser_request(
+            true,
+            &["file:///tmp/test".into()]
+        ));
+    }
 }
 
 async fn run() -> std::io::Result<i32> {

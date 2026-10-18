@@ -10,6 +10,22 @@ pub fn command(program: &Path) -> io::Result<Command> {
 }
 
 fn supervisor_command() -> io::Result<Command> {
+    let mut command = Command::new(supervisor_path()?);
+    // Closing its input lets the supervisor terminate and reap the provider group.
+    command.kill_on_drop(false);
+    Ok(command)
+}
+
+/// Keep browser interaction on the requesting client. Providers may otherwise
+/// open a second, host-local OAuth URL, even when they also print a manual URL.
+pub fn suppress_browser(command: &mut Command) -> io::Result<()> {
+    command
+        .env("BROWSER", supervisor_path()?)
+        .env("BEX_SUPPRESS_BROWSER", "1");
+    Ok(())
+}
+
+fn supervisor_path() -> io::Result<std::path::PathBuf> {
     let executable = std::env::current_exe()?;
     let supervisor = companion_path(
         &executable,
@@ -21,10 +37,7 @@ fn supervisor_command() -> io::Result<Command> {
             "bex-provider-supervisor must be built and installed beside the Host; process execution is unavailable",
         ));
     }
-    let mut command = Command::new(supervisor);
-    // Closing its input lets the supervisor terminate and reap the provider group.
-    command.kill_on_drop(false);
-    Ok(command)
+    Ok(supervisor)
 }
 
 pub fn companion_path(executable: &Path, name: &str) -> io::Result<std::path::PathBuf> {

@@ -460,8 +460,8 @@ impl Cli {
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
         // The browser is opened by the requesting client, including an iPhone.
-        #[cfg(unix)]
-        command.env("BROWSER", "/usr/bin/true");
+        bex_process::suppress_browser(&mut command)
+            .map_err(|_| "Claude の認証処理を起動できません。")?;
         let mut child = command
             .spawn()
             .map_err(|_| "Claude の認証処理を起動できません。")?;
