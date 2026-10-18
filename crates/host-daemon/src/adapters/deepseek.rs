@@ -62,6 +62,7 @@ struct Rpc {
     pending: Mutex<Pending>,
     next: AtomicU64,
     loaded: Mutex<HashSet<String>>,
+    model_settings: Mutex<HashMap<String, Model>>,
     instance: uuid::Uuid,
     stop: CancellationToken,
     stopped: CancellationToken,
@@ -239,6 +240,7 @@ impl DeepSeek {
             pending: Mutex::new(HashMap::new()),
             next: AtomicU64::new(1),
             loaded: Mutex::new(HashSet::new()),
+            model_settings: Mutex::new(HashMap::new()),
             instance: uuid::Uuid::new_v4(),
             stop: self.0.stop.child_token(),
             stopped: CancellationToken::new(),
@@ -1254,19 +1256,28 @@ impl Agent for DeepSeek {
                 .await?;
             let mut models = catalog(&created);
             if let Some(id) = created["sessionId"].as_str() {
-                // ACP exposes reasoning only for the selected model. Discover each
-                // route on this disposable session, never on a user's conversation.
-                for model in &mut models {
-                    if model.is_default == Some(true) {
-                        continue;
-                    }
-                    match rpc.call(
+                // Only resolve the selected route: catalogs can contain hundreds of
+                // models and exact-model discovery may require provider metadata.
+                if let Some(selected) = params.selected_model.as_ref().filter(|model| model.provider == PROVIDER)
+                    && let Some(model) = models.iter_mut().find(|model| model.model == *selected)
+                {
+                    let config = rpc.call(
                         "session/set_config_option",
-                        json!({"sessionId":id,"configId":"model","value":model.model.id}),
+                        json!({"sessionId":id,"configId":"model","value":selected.id}),
                         Some(Duration::from_secs(30)),
-                    ).await {
-                        Ok(config) => apply_model_reasoning(model, &config),
-                        Err(error) => tracing::debug!(model = %model.model.id, %error, "Harness model settings unavailable"),
+                    ).await;
+                    match config {
+                        Ok(config) => {
+                            apply_model_reasoning(model, &config);
+                            rpc.model_settings.lock().await.insert(model.model.id.clone(), model.clone());
+                        }
+                        Err(error) => tracing::debug!(model = %selected.id, %error, "Harness model settings unavailable"),
+                    }
+                }
+                for model in &mut models {
+                    if let Some(known) = rpc.model_settings.lock().await.get(&model.model.id) {
+                        model.default_reasoning_effort = known.default_reasoning_effort.clone();
+                        model.supported_reasoning_efforts = known.supported_reasoning_efforts.clone();
                     }
                 }
                 rpc.call(
@@ -1489,6 +1500,7 @@ mod tests {
         });
         let models = adapter
             .models(&op::ListModels {
+                selected_model: None,
                 limit: 100,
                 cursor: None,
             })
@@ -1657,6 +1669,7 @@ mod tests {
         save_test_key(&adapter, KeyProvider::OpenRouter, Some("test-catalog-only")).await;
         let models = adapter
             .models(&op::ListModels {
+                selected_model: None,
                 limit: 100,
                 cursor: None,
             })
@@ -1668,7 +1681,9 @@ mod tests {
                 .iter()
                 .any(|model| model.model.id.contains("openrouter"))
         );
-        let router = models.data.iter().find(|model| model.model.id.contains("openrouter") && model.model.id.contains("deepseek-v4.1-flash")).expect("OpenRouter DeepSeek route");
+        let selected = models.data.iter().find(|model| model.model.id.contains("openrouter") && model.model.id.contains("deepseek-v4.1-flash")).expect("OpenRouter DeepSeek route").model.clone();
+        let models = adapter.models(&op::ListModels { selected_model: Some(selected), limit: 100, cursor: None }).await.unwrap();
+        let router = models.data.iter().find(|model| model.model.id.contains("openrouter") && model.model.id.contains("deepseek-v4.1-flash")).unwrap();
         assert!(!router.supported_reasoning_efforts.is_empty(), "exact-model reasoning missing");
         eprintln!("routes={} deepseek_efforts={:?}", models.data.len(), router.supported_reasoning_efforts);
         let patch: Value =

@@ -771,6 +771,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 .get(thread_id)
                 .map(|draft| draft.as_ref().clone())
                 .unwrap_or_default();
+            let refresh_model = matches!(&intent, Intent::SelectModel { model, .. } if model.provider == ProviderKind::DeepSeek);
             let thread_id = match intent {
                 Intent::SelectModel { thread_id, model } => {
                     if draft.model.as_ref() != Some(&model) {
@@ -817,6 +818,9 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 .is_none_or(|previous| **previous != draft)
             {
                 Arc::make_mut(&mut next.drafts).insert(thread_id, Arc::new(draft));
+            }
+            if refresh_model {
+                return (next, vec![Effect::execute(op::LoadModels {})]);
             }
         }
     });

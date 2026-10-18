@@ -968,17 +968,21 @@ impl Operation for LoadModels {
     fn key(&self) -> Option<OperationKey> {
         Some(OperationKey::Models)
     }
-    no_input!();
+    type Input = Option<crate::models::ModelRef>;
+    fn capture(&self, snapshot: &Snapshot) -> Result<Self::Input, PeerError> {
+        let key = snapshot.navigation.draft_key.clone();
+        Ok(snapshot.draft(key).model.clone())
+    }
     type Output = agent_protocol::operations::ModelPage;
 
     const STALE_POLICY: StalePolicy = StalePolicy::Retry;
 
     async fn run(
         &self,
-        _: Self::Input,
+        selected_model: Self::Input,
         context: &mut Execution<'_>,
     ) -> Result<Self::Output, PeerError> {
-        context.client.models().await
+        context.client.models_for(selected_model).await
     }
     fn apply(self, snapshot: &mut Snapshot, catalog: Self::Output) -> Vec<Effect> {
         let models = catalog.data;
@@ -1038,6 +1042,26 @@ mod tests {
     #[allow(dead_code)]
     mod host_fixture {
         include!("../../../tests/support/host.rs");
+    }
+
+    #[test]
+    fn model_reload_captures_the_selected_route_and_preserves_its_effort() {
+        let model = crate::models::ModelRef { provider: ProviderKind::DeepSeek, id: "router-deepseek".into() };
+        let initial = Snapshot::default();
+        let key = initial.navigation.draft_key.clone();
+        let (mut snapshot, effects) = reduce_intent(&initial, Intent::SelectModel { thread_id: key.clone(), model: model.clone() });
+        assert!(!effects.is_empty(), "selecting a Harness model must discover its exact settings");
+        assert_eq!(LoadModels {}.capture(&snapshot).unwrap(), Some(model.clone()));
+        let (next, _) = reduce_intent(&snapshot, Intent::SelectEffort { thread_id: key.clone(), effort: "high".into() });
+        snapshot = next;
+        let catalog = serde_json::from_value(serde_json::json!({"data":[{
+            "id":"deepseek:router-deepseek","model":model,"displayName":"DeepSeek",
+            "defaultReasoningEffort":"","supportedReasoningEfforts":[{"reasoningEffort":""},{"reasoningEffort":"off"},{"reasoningEffort":"high"}]
+        }],"nextCursor":null})).unwrap();
+        LoadModels {}.apply(&mut snapshot, catalog);
+        assert_eq!(snapshot.model_quick_controls(key.clone()).effort, "high");
+        let (snapshot, _) = reduce_intent(&snapshot, Intent::SelectEffort { thread_id: key.clone(), effort: "".into() });
+        assert_eq!(snapshot.draft(key).effort.as_deref(), Some(""));
     }
 
     #[test]
