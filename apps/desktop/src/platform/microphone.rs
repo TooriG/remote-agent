@@ -385,7 +385,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Requires a microphone and OS permission; run in a signed Mac bundle"]
+    #[ignore = "Requires a microphone and OS permission; macOS also requires a signed bundle"]
     fn native_recording_starts_stops_and_restarts() {
         #[cfg(target_os = "macos")]
         prepare_microphone();
@@ -418,10 +418,13 @@ mod tests {
                 "recording attempt {attempt}: started in {:?}",
                 started.elapsed()
             );
-            let level = next(&incoming).unwrap();
-            assert!(
-                matches!(level, RecordingEvent::Level(value) if value.is_finite() && (0.0..=1.0).contains(&value))
-            );
+            let recording_started = std::time::Instant::now();
+            while recording_started.elapsed() < std::time::Duration::from_secs(2) {
+                let level = next(&incoming).unwrap();
+                assert!(
+                    matches!(level, RecordingEvent::Level(value) if value.is_finite() && (0.0..=1.0).contains(&value))
+                );
+            }
             recording.finish().unwrap();
             loop {
                 match next(&incoming).unwrap() {
