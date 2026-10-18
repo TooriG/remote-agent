@@ -100,7 +100,12 @@ adb -P "$server_port" -s "$serial" shell am instrument -w \
     dev.remoteagent.mobile.test/androidx.test.runner.AndroidJUnitRunner | tee "$log.links.log"
 grep -qx 'OK (4 tests)' "$log.links.log"
 
-echo "Android image attachment, voice input and link checks passed"
+adb -P "$server_port" -s "$serial" shell am instrument -w \
+    -e class dev.remoteagent.mobile.ThreadListTest \
+    dev.remoteagent.mobile.test/androidx.test.runner.AndroidJUnitRunner | tee "$log.thread-list.log"
+grep -qx 'OK (3 tests)' "$log.thread-list.log"
+
+echo "Android image attachment, voice input, link and header checks passed"
 exit 0
 fi
 if [[ $mode == all ]]; then

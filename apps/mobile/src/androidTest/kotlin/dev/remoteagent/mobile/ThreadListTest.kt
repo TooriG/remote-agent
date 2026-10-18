@@ -1,5 +1,9 @@
 package dev.remoteagent.mobile
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,6 +40,7 @@ class ThreadListTest {
             var openedHosts = false
             compose.setContent {
                 BexTheme {
+                    Box(Modifier.width(320.dp)) {
                     ThreadListScreen(
                         snapshot.threadList(),
                         snapshot.listQuery(),
@@ -45,9 +50,18 @@ class ThreadListTest {
                         hostName = "Development PC",
                         connected = true,
                     )
+                    }
                 }
             }
-            compose.onNodeWithText("接続中").assertIsDisplayed()
+            compose.onNodeWithText("ワークスペース").assertDoesNotExist()
+            compose.onNodeWithContentDescription("接続中").assertIsDisplayed()
+            val header = listOf(
+                compose.onNodeWithText("bex"),
+                compose.onNodeWithText("Development PC"),
+                compose.onNodeWithContentDescription("検索"),
+                compose.onNodeWithContentDescription("更新"),
+            ).map { it.assertIsDisplayed().fetchSemanticsNode().boundsInRoot }
+            header.forEach { assertEquals(header.first().center.y, it.center.y, 1f) }
             compose.onNodeWithText("Development PC").performClick()
             assertTrue(openedHosts)
             compose.onNodeWithText("プロジェクト").performClick()
