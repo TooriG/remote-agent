@@ -58,7 +58,7 @@ fn runtime_from(
     // sealed Resources directory, rather than alongside its Mach-O executables.
     let (default_node, bridge) = if directory.ends_with("Contents/MacOS") {
         (
-            directory.join(format!("node{}", std::env::consts::EXE_SUFFIX)),
+            bex_process::bundled_node_path(host).expect("Mac bundle has a runtime path"),
             directory
                 .parent()
                 .expect("Contents exists")
@@ -119,7 +119,10 @@ mod tests {
         std::fs::create_dir_all(&executables).unwrap();
         std::fs::create_dir_all(&resources).unwrap();
         let host = executables.join("host-daemon");
-        let bundled = executables.join(format!("node{}", std::env::consts::EXE_SUFFIX));
+        let bundled = root
+            .path()
+            .join("Bex Dev.app/Contents/Helpers/Bex Node.app/Contents/MacOS/node");
+        std::fs::create_dir_all(bundled.parent().unwrap()).unwrap();
         let bridge = resources.join("bex-claude-sdk.mjs");
         std::fs::write(&bundled, b"bundled runtime").unwrap();
         std::fs::write(&bridge, b"SDK bridge").unwrap();

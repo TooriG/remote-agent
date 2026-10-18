@@ -39,6 +39,18 @@ pub fn companion_path(executable: &Path, name: &str) -> io::Result<std::path::Pa
     Ok(directory.join(name))
 }
 
+/// The Mac runtime has its own background-only identity instead of inheriting
+/// the desktop app's foreground identity when npm or an MCP tool uses it.
+pub fn bundled_node_path(executable: &Path) -> Option<std::path::PathBuf> {
+    let directory = executable.parent()?;
+    directory.ends_with("Contents/MacOS").then(|| {
+        directory
+            .parent()
+            .expect("Contents exists")
+            .join("Helpers/Bex Node.app/Contents/MacOS/node")
+    })
+}
+
 /// On Windows the Host owns a Job Object for the supervisor and all PTY
 /// descendants. Unix cleanup is performed by the supervisor on lifetime EOF.
 pub fn terminal_command() -> io::Result<process_wrap::tokio::CommandWrap> {
