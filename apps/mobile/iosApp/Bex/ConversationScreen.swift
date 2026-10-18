@@ -170,6 +170,9 @@ struct ThreadScreen: View {
                                 geometry.contentSize.height - geometry.visibleRect.maxY <= 80
                         )
                     } action: { old, new in
+                        #if DEBUG
+                            traceScroll(from: old.content.height, to: new, following: isFollowingLatest)
+                        #endif
                         let top = HistoryTopVisibility(threadId: thread.id, firstRowId: thread.rows.first?.id,
                                                        visible: new.oldestVisible)
                         if historyTopVisibility != top {

@@ -1,4 +1,5 @@
 import AgentCore
+import OSLog
 import SwiftUI
 import UIKit
 
@@ -147,6 +148,20 @@ struct ConversationScrollMetrics: Equatable {
     let oldestVisible: Bool
     let latestVisible: Bool
 }
+
+#if DEBUG
+    func traceScroll(from oldHeight: CGFloat, to new: ConversationScrollMetrics, following: Bool) {
+        Logger(subsystem: "dev.remoteagent.mobile.ios", category: "ConversationScroll").notice("""
+        oldHeight=\(oldHeight, privacy: .public)
+        newHeight=\(new.content.height, privacy: .public)
+        viewport=\(new.container.height, privacy: .public)
+        width=\(new.container.width, privacy: .public)
+        following=\(following, privacy: .public)
+        oldest=\(new.oldestVisible, privacy: .public)
+        latest=\(new.latestVisible, privacy: .public)
+        """)
+    }
+#endif
 
 func conversationRows(_ rows: [ThreadConversationRow],
                       expansion: [String: ActivityExpansion]) -> [ThreadConversationRow] {
