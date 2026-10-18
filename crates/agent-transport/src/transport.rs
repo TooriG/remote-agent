@@ -28,7 +28,9 @@ use uuid::Uuid;
 
 // Bump when shared Postcard types change incompatibly; enum indices and field
 // positions are part of the wire format, even when decoding still succeeds.
-const ALPN: &[u8] = b"remote-agent/streams/10";
+// Version 11 includes ListModels.selected_model. Version 10 clients encode the
+// page limit where the Host now expects an Option, closing every new session.
+const ALPN: &[u8] = b"remote-agent/streams/11";
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
     #[error("iroh transport failed: {0}")]
@@ -477,5 +479,39 @@ impl AsyncWrite for Stream {
             }));
         }
         stream.shutdown.as_mut().unwrap().as_mut().poll(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn current_peers_connect_but_pre_reasoning_protocol_is_rejected() {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let host = Endpoint::bind(Identity::generate(), Relays::Loopback).await.unwrap();
+            let client = Endpoint::bind(Identity::generate(), Relays::Loopback).await.unwrap();
+            let (connected, accepted) = tokio::join!(client.connect(&host.ticket()), host.accept());
+            let connected = connected.unwrap();
+            assert!(accepted.unwrap().is_ok());
+            connected.close();
+
+            // A v10 ListModels request lacks selected_model. Reject at TLS
+            // negotiation, before any request can be decoded as another type.
+            let legacy = iroh::Endpoint::builder(presets::N0)
+                .alpns(vec![b"remote-agent/streams/10".to_vec()])
+                .relay_mode(RelayMode::Disabled)
+                .clear_address_lookup()
+                .bind().await.unwrap();
+            let (connected, accepted) = tokio::join!(
+                legacy.connect(host.0.addr(), b"remote-agent/streams/10"),
+                host.accept()
+            );
+            assert!(connected.is_err());
+            assert!(accepted.unwrap().is_err());
+            legacy.close().await;
+            client.close().await;
+            host.close().await;
+        }).await.expect("protocol negotiation must terminate");
     }
 }

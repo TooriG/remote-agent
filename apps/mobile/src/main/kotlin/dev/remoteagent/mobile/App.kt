@@ -66,6 +66,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.SerializationException
 
 internal enum class Screen {
@@ -106,6 +107,8 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     private var owner: AgentStore? = null
     private var initialization: Job? = null
     private var connection: Job? = null
+    private var retry: Job? = null
+    private var foreground = true
     private var attachmentTransfers = 0
     private var observation: Job? = null
     private var persistence: Job? = null
@@ -174,6 +177,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         initialization?.cancel()
         observation?.cancel()
         connection?.cancel()
+        retry?.cancel()
         val old = owner
         owner = null
         while (pending.isNotEmpty()) pending.removeFirst().second(Result.failure(CancellationException()))
@@ -217,6 +221,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     }
 
     fun pair(contents: String) {
+        retry?.cancel()
         connection?.cancel()
         busy = true
         notice = null
@@ -274,7 +279,9 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         val store = owner
         val profile = profiles.firstOrNull { it.id == profileId }
         if (store == null || profile == null || busy) return
+        retry?.cancel()
         busy = true
+        notice = null
         connection =
             scope.launch {
                 try {
@@ -283,7 +290,11 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
                             AndroidCredentialStore(context, profile.id).loadOrCreate(::generateIdentity)
                         }
                     try {
-                        store.reconnect(Connection(profile.ticket, identity, null, true))
+                        val connected = withTimeoutOrNull(45_000) {
+                            store.reconnect(Connection(profile.ticket, identity, null, true))
+                            true
+                        }
+                        if (connected == null) throw IOException("接続がタイムアウトしました。PCのBEXと通信環境を確認してください。")
                     } finally {
                         identity.fill(0)
                     }
@@ -300,13 +311,35 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
                     connectionFailed(profile.id, error)
                 } catch (error: IllegalArgumentException) {
                     connectionFailed(profile.id, error)
+                } finally {
+                    if (owner === store && profileId == profile.id) busy = false
                 }
             }
     }
 
     fun foreground() {
+        foreground = true
         // Returning from a picker must not replace the transport underneath its upload.
         if (attachmentTransfers == 0) connect()
+    }
+
+    fun background() {
+        foreground = false
+        retry?.cancel()
+        persist()
+    }
+
+    internal fun retryConnection() {
+        retry?.cancel()
+        if (!foreground) return
+        val store = owner
+        val id = profileId
+        retry = scope.launch {
+            // A successful handshake may fail on its first RPC (for example,
+            // after a mismatched update). Never reconnect at network RTT speed.
+            delay(2_000)
+            if (owner === store && profileId == id && !snapshot.connected()) connect()
+        }
     }
 
     private fun observe(store: AgentStore, id: String) {
@@ -319,7 +352,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
                     if (profileId != id) return@launch
                     val latest = store.snapshot()
                     publish(latest)
-                    if (previous.connected() && !latest.connected() && !busy) connect()
+                    if (previous.connected() && !latest.connected()) retryConnection()
                     previous = latest
                 }
             }
@@ -407,6 +440,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     }
 
     override fun onCleared() {
+        retry?.cancel()
         observation?.cancel()
         connection?.cancel()
         initialization?.cancel()
@@ -431,6 +465,7 @@ private fun AndroidAppModel.connectionFailed(id: String, error: Exception) {
     if (profileId == id) {
         busy = false
         notice = error.message
+        retryConnection()
     }
 }
 
@@ -459,7 +494,7 @@ internal fun RemoteAgentApp(
     requestQrScan: (onContents: (String) -> Unit) -> Unit,
 ) {
     DisposableEffect(model, activity) {
-        val observer = AndroidConnectionLifecycle(model::foreground, model::persist)
+        val observer = AndroidConnectionLifecycle(model::foreground, model::background)
         activity.lifecycle.addObserver(observer)
         onDispose { activity.lifecycle.removeObserver(observer) }
     }
