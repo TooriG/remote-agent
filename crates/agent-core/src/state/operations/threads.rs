@@ -881,6 +881,12 @@ pub(super) fn refresh_thread(snapshot: &mut Snapshot, incoming: Thread) {
 pub use agent_protocol::operations::ForkSession;
 
 impl Operation for ForkSession {
+    fn key(&self) -> Option<OperationKey> {
+        Some(OperationKey::Fork {
+            session: self.thread_id.clone(),
+            turn: self.last_turn_id.clone(),
+        })
+    }
     rpc_operation!();
     fn invalidates(&self) -> bool {
         true

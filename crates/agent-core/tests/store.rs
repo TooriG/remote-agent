@@ -2535,9 +2535,15 @@ async fn expanded_history_replaces_the_window_preserving_native_item_ids() {
 #[tokio::test]
 async fn fork_opens_the_returned_thread_and_keeps_later_deltas() {
     for navigate in [false, true] {
-        let source = SessionRef { provider: ProviderKind::Codex, id: "thread".into() };
+        let source = SessionRef {
+            provider: ProviderKind::Codex,
+            id: "thread".into(),
+        };
         let mut initial = snapshot();
-        let draft = Arc::new(Draft { text: "unsent message".into(), ..Default::default() });
+        let draft = Arc::new(Draft {
+            text: "unsent message".into(),
+            ..Default::default()
+        });
         Arc::make_mut(&mut initial.drafts).insert(source.clone().into(), draft.clone());
         let (store, mut reader, mut writer) = setup(initial).await;
         let fork = store.dispatch(Intent::ForkSession(op::ForkSession::new(
@@ -2550,6 +2556,11 @@ async fn fork_opens_the_returned_thread_and_keeps_later_deltas() {
         let request = read(&mut reader).await;
         assert_eq!(request["method"], "host/session/fork");
         assert_eq!(request["params"]["lastTurnId"], "turn");
+        let progress = op::OperationKey::Fork {
+            session: source.clone(),
+            turn: "turn".into(),
+        };
+        assert!(store.snapshot().operation_running(progress.clone()));
         if navigate {
             new_chat(&store, &mut reader, &mut writer, "/new").await;
         }
@@ -2611,18 +2622,53 @@ async fn fork_opens_the_returned_thread_and_keeps_later_deltas() {
             store.snapshot().navigation.cwd,
             if navigate { "/new" } else { "/fixture" }
         );
+        assert!(!store.snapshot().operation_running(progress));
         assert_eq!(loaded_text(&store.snapshot()), Some("old"));
         assert_eq!(store.snapshot().drafts[&DraftKey::from(source)], draft);
-        let fork_key = DraftKey::from(SessionRef { provider: ProviderKind::Codex, id: "forked".into() });
+        let fork_key = DraftKey::from(SessionRef {
+            provider: ProviderKind::Codex,
+            id: "forked".into(),
+        });
         if navigate {
             assert!(!store.snapshot().drafts.contains_key(&fork_key));
         } else {
             let mut expected = draft.as_ref().clone();
-            expected.model = Some(agent_protocol::models::ModelRef { provider: ProviderKind::Codex, id: "fork-model".into() });
+            expected.model = Some(agent_protocol::models::ModelRef {
+                provider: ProviderKind::Codex,
+                id: "fork-model".into(),
+            });
             assert_eq!(store.snapshot().drafts[&fork_key].as_ref(), &expected);
         }
         store.close().await.unwrap();
     }
+}
+
+#[tokio::test]
+async fn fork_failure_clears_progress_and_allows_retry() {
+    let (store, mut reader, writer) = setup(snapshot()).await;
+    let source = SessionRef {
+        provider: ProviderKind::Codex,
+        id: "thread".into(),
+    };
+    let progress = op::OperationKey::Fork {
+        session: source.clone(),
+        turn: "turn".into(),
+    };
+    for _ in 0..2 {
+        let fork = store.dispatch(Intent::ForkSession(op::ForkSession::new(
+            source.clone(),
+            "turn".into(),
+        )));
+        assert!(store.snapshot().operation_running(progress.clone()));
+        let request = read(&mut reader).await;
+        assert_eq!(request["method"], "host/session/fork");
+        writer.reply(&request, json!({"error":{"code":"unavailable","message":"fork failed","delivery":"notSent"}})).await.unwrap();
+        assert!(fork.await.is_err());
+        assert!(!store.snapshot().operation_running(progress.clone()));
+        assert!(store.snapshot().operation_error(progress.clone()).is_some());
+        assert_eq!(store.snapshot().navigation.thread_id, Some(source.clone()));
+    }
+    store.close().await.unwrap();
 }
 
 #[tokio::test]

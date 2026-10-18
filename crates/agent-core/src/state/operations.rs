@@ -258,6 +258,10 @@ pub enum OperationKey {
     History {
         session: crate::session::SessionRef,
     },
+    Fork {
+        session: crate::session::SessionRef,
+        turn: agent_protocol::ids::TurnId,
+    },
     Item {
         item: ReadItem,
     },

@@ -675,32 +675,70 @@ impl Desktop {
                                 .when_some(
                                     session.cloned().zip(fork_turn_id.clone()),
                                     |actions, (thread_id, turn_id)| {
-                                        actions.child(
-                                            Button::new(format!("fork-{}", item.data.id))
-                                                .small()
-                                                .ghost()
-                                                .tooltip("ここから会話を分岐")
-                                                .accessibility_label("ここから会話を分岐")
-                                                .on_click(cx.listener(move |view, _, _, cx| {
-                                                    if !view.snapshot.connected || view.busy > 0 {
-                                                        return;
-                                                    }
-                                                    view.busy += 1;
-                                                    view.perform(
-                                                        Intent::ForkSession(op::ForkSession::new(
-                                                            thread_id.clone(),
-                                                            turn_id.clone(),
-                                                        )),
-                                                        OperationCompletion::Busy,
-                                                    );
-                                                    cx.notify();
-                                                }))
-                                                .icon(Icon::default().path("bex/branch.svg"))
-                                                .debug_selector(|| "response-fork".into())
-                                                .disabled(
-                                                    !self.snapshot.connected || self.busy > 0,
-                                                ),
-                                        )
+                                        let forking = self.snapshot.operation_running(
+                                            op::OperationKey::Fork {
+                                                session: thread_id.clone(),
+                                                turn: turn_id.clone(),
+                                            },
+                                        );
+                                        actions
+                                            .child(
+                                                Button::new(format!("fork-{}", item.data.id))
+                                                    .small()
+                                                    .ghost()
+                                                    .loading(forking)
+                                                    .tooltip(if forking {
+                                                        "分岐を作成中…"
+                                                    } else {
+                                                        "ここから会話を分岐"
+                                                    })
+                                                    .accessibility_label(if forking {
+                                                        "分岐を作成中…"
+                                                    } else {
+                                                        "ここから会話を分岐"
+                                                    })
+                                                    .on_click(cx.listener(
+                                                        move |view, _, window, cx| {
+                                                            if !view.snapshot.connected
+                                                                || view.busy > 0
+                                                            {
+                                                                return;
+                                                            }
+                                                            view.busy += 1;
+                                                            view.perform(
+                                                                Intent::ForkSession(
+                                                                    op::ForkSession::new(
+                                                                        thread_id.clone(),
+                                                                        turn_id.clone(),
+                                                                    ),
+                                                                ),
+                                                                OperationCompletion::Busy,
+                                                            );
+                                                            view.accept_snapshot(window, cx);
+                                                            view.list.remeasure();
+                                                            cx.notify();
+                                                        },
+                                                    ))
+                                                    .icon(Icon::default().path("bex/branch.svg"))
+                                                    .debug_selector(|| "response-fork".into())
+                                                    .disabled(
+                                                        !self.snapshot.connected
+                                                            || self.busy > 0
+                                                            || forking,
+                                                    ),
+                                            )
+                                            .when(forking, |actions| {
+                                                actions.child(
+                                                    h_flex()
+                                                        .gap_2()
+                                                        .text_xs()
+                                                        .text_color(rgb(appearance::MUTED))
+                                                        .child("分岐を作成中…")
+                                                        .debug_selector(|| {
+                                                            "response-fork-progress".into()
+                                                        }),
+                                                )
+                                            })
                                     },
                                 ),
                         );
@@ -1270,6 +1308,7 @@ mod tests {
 #[cfg(test)]
 mod rendering_tests {
     use super::{Desktop, Mode, Snapshot};
+    use agent_core::state::operations as op;
     use crate::app::ImageState;
     use agent_core::presentation::conversation::{RenderedConversation, project_conversation};
     use gpui_kit as gpui;
@@ -1337,6 +1376,50 @@ mod rendering_tests {
                 }),
                 conversation: project_conversation(&snapshot, Arc::new(source), &None),
             }
+        }
+    }
+
+    #[gpui::test]
+    fn fork_progress_is_visible_only_at_the_pending_source(cx: &mut TestAppContext) {
+        let _runtime = init(cx);
+        for (session, turn, phase, visible) in [
+            ("fixture", "turn", op::OperationPhase::Running, true),
+            ("other", "turn", op::OperationPhase::Running, false),
+            ("fixture", "other", op::OperationPhase::Running, false),
+            (
+                "fixture",
+                "turn",
+                op::OperationPhase::Failed {
+                    message: "failed".into(),
+                },
+                false,
+            ),
+        ] {
+            let source = serde_json::from_value(serde_json::json!({"id":{"provider":"codex","id":"fixture"},"capabilities":{"additionalInput":true,"fork":true,"rename":true,"modelChange":true},"turns":[{"id":"turn","status":"completed","items":[{"id":"answer","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"Answer","phase":"final"}}}}}]}]})).unwrap();
+            let (_, window) = cx.add_window_view(|window, cx| {
+                let view = ConversationView::new(Snapshot::default(), source, window, cx);
+                view.desktop.update(cx, |desktop, _| {
+                    Arc::make_mut(&mut Arc::make_mut(&mut desktop.snapshot).operations).insert(
+                        op::OperationKey::Fork {
+                            session: agent_protocol::session::SessionRef {
+                                provider: agent_protocol::session::ProviderKind::Codex,
+                                id: session.into(),
+                            },
+                            turn: turn.into(),
+                        },
+                        op::OperationState {
+                            generation: 1,
+                            phase,
+                        },
+                    );
+                });
+                view
+            });
+            window.run_until_parked();
+            assert_eq!(
+                window.debug_bounds("response-fork-progress").is_some(),
+                visible
+            );
         }
     }
 
