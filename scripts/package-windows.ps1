@@ -48,7 +48,8 @@ try {
     }
     $revision = & git rev-parse HEAD
     if ($LASTEXITCODE -ne 0) { throw "Cannot determine the source revision." }
-    $sourceStatus = & git status --porcelain --untracked-files=normal
+    $sourceStatus = & git -c core.longpaths=true status --porcelain --untracked-files=normal
+    if ($LASTEXITCODE -ne 0) { throw "Cannot verify the source checkout." }
     if ($sourceStatus) { $revision = "$revision-dirty" }
     if (-not $SkipBuild) {
         $previousRevision = $env:BEX_BUILD_REVISION
