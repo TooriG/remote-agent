@@ -86,6 +86,10 @@ search and refresh actions in one header row, including at 320dp width.
 There is no workspace heading or separate Host row. Search opens in place;
 closing it clears the filter and restores the header controls. Host names
 truncate to one line, and the connection dot retains a spoken status label.
+The selector uses a small connection dot, PC icon and machine name without a
+filled button background or chevron. Hosts default to the machine hostname
+(Windows computer name); an explicit `--name` overrides it. Paired Android
+clients refresh the saved name when reconnecting, without pairing again.
 
 The microphone button opens the phone's speech recognition activity in the device
 language and appends the result to the original draft through the shared core.
