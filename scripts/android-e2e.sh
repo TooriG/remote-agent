@@ -53,6 +53,11 @@ done
 [[ $boot_completed == 1 ]] || { echo "Android emulator did not complete boot" >&2; exit 1; }
 [[ $(adb -P "$server_port" -s "$serial" shell getprop ro.build.version.sdk | tr -d '\r') == 37 ]]
 [[ $(adb -P "$server_port" -s "$serial" shell getprop ro.build.version.codename | tr -d '\r') == REL ]]
+# Permission-dialog nodes can appear before their entrance animation settles.
+# Configure only this disposable emulator before UI automation starts.
+for scale in window_animation_scale transition_animation_scale animator_duration_scale; do
+    adb -P "$server_port" -s "$serial" shell settings put global "$scale" 0
+done
 adb -P "$server_port" -s "$serial" shell input keyevent 82
 adb -P "$server_port" -s "$serial" install apps/mobile/build/outputs/apk/debug/mobile-debug.apk
 adb -P "$server_port" -s "$serial" install apps/mobile/build/outputs/apk/androidTest/debug/mobile-debug-androidTest.apk

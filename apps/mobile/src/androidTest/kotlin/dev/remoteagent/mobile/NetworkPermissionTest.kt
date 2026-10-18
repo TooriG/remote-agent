@@ -37,7 +37,7 @@ class NetworkPermissionTest {
             assertTrue(device.takeScreenshot(File(context.getExternalFilesDir(null), "network-permission.png")))
             assertTrue(permissionVisible)
             device.findObject(By.text("許可して接続")).click()
-            val deny = By.res("com.android.permissioncontroller", "permission_deny_button")
+            val deny = By.res("com.android.permissioncontroller", "permission_deny_button").enabled(true)
             val denyVisible = device.wait(Until.hasObject(deny), 10_000)
             if (!denyVisible) device.dumpWindowHierarchy(System.out)
             assertTrue("Local-network permission denial dialog did not appear", denyVisible)
@@ -61,10 +61,14 @@ class NetworkPermissionTest {
         ActivityScenario.launch(MainActivity::class.java).use { activity ->
             assertTrue(device.wait(Until.hasObject(By.text("許可して接続")), 10_000))
             device.findObject(By.text("許可して接続")).click()
-            val allow = By.res("com.android.permissioncontroller", "permission_allow_button")
+            val allow = By.res("com.android.permissioncontroller", "permission_allow_button").enabled(true)
             assertTrue(device.wait(Until.hasObject(allow), 10_000))
             device.waitForIdle()
             device.findObject(allow).click()
+            assertTrue(
+                "Permission dialog must close after allowing access",
+                device.wait(Until.gone(By.pkg("com.android.permissioncontroller")), 10_000),
+            )
             assertTrue(device.wait(Until.hasObject(By.text("PCとペアリング")), 10_000))
             assertEquals(
                 PackageManager.PERMISSION_GRANTED,
