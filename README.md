@@ -114,6 +114,10 @@ release downloads, verified CI development artifacts, and source builds.
 
 ## Build the clients
 
+Developers publishing updates for any platform, including macOS, must also update
+and deploy that platform's download on https://getbex.dev and verify its public
+buttons deliver the latest published build. Follow the [release checklist](docs/RELEASING.md).
+
 ```sh
 # Mac release (requires a signing certificate; BEX_CODE_SIGN_IDENTITY selects it)
 scripts/dev-env.sh just build-desktop-macos && open target/release/bex.app

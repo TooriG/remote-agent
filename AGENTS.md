@@ -1,6 +1,6 @@
 # Project rules
 
-- When fixing Android APK or Windows builds, publish the verified replacement and update/deploy the corresponding download on https://getbex.dev in the same task. Verify the public site's buttons download the replacement before marking the task complete. Distribute Android as APK and Windows as an EXE installer containing its companion files; do not use ZIP as the normal Windows download. Send changes through the existing related PR to ttizze/remote-agent from TooriG/remote-agent; exclude unrelated local changes.
+- For every published platform update, including macOS, Windows, Android and iOS, the developer publishing that update must also update the corresponding download on https://getbex.dev. Follow [the release checklist](docs/RELEASING.md): publish and verify the artifact or distribution channel, update the site's download metadata, run its download tests, deploy the site and verify the public buttons deliver the latest published version. This applies to every developer, regardless of who maintains the website or which platform they work on. Distribute Android as APK and Windows as an EXE installer containing its companion files; do not use ZIP as the normal Windows download. Send changes through the existing related PR to ttizze/remote-agent from TooriG/remote-agent; exclude unrelated local changes.
 
 - Keep unit tests close to the implementation they verify.
 
