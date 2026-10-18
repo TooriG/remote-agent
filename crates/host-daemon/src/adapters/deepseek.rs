@@ -78,7 +78,6 @@ impl From<DeepSeek> for super::Backend {
             provider: PROVIDER,
             agent: Ok(Arc::new(agent)),
             dictation: None,
-            suggestions: None,
         }
     }
 }
