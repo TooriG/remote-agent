@@ -70,6 +70,8 @@ internal fun ThreadMessageCard(
         if (isUser) MessageFooter(content.body.orEmpty(), timestampMs, null)
         if (isUser && content.nativeId == null) {
             content.title?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+            val submissionId = remember(item) { item.unknownSubmissionId() }
+            submissionId?.let { UnknownSubmissionActions(it, perform) }
         }
     }
 }
