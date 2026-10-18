@@ -44,7 +44,7 @@ pub enum Error {
         #[source]
         source: io::Error,
     },
-    #[error("Codex executable was not found on PATH: {0}")]
+    #[error("Codex executable was not found: {0}. {hint}", hint = platform::NOT_FOUND_HINT)]
     ExecutableNotFound(PathBuf),
     #[error("failed to start Codex App Server: {0}")]
     Spawn(#[source] io::Error),
