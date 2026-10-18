@@ -101,7 +101,11 @@ private fun ModelPickerDialog(
                             Column(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
                                 Text("${if (choice.model == selected) "✓ " else ""}${choice.displayName}")
                                 Text(
-                                    if (choice.model.provider == ProviderKind.CODEX) "Codex" else "Claude",
+                                    when (choice.model.provider) {
+                                        ProviderKind.CODEX -> "Codex"
+                                        ProviderKind.CLAUDE -> "Claude"
+                                        ProviderKind.DEEP_SEEK -> "DeepSeek"
+                                    },
                                     style = MaterialTheme.typography.labelSmall,
                                 )
                             }

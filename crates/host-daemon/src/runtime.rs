@@ -79,8 +79,20 @@ pub(crate) async fn run(config: StartupConfig) -> Result<()> {
             )
         }
     };
+    let deepseek = match host_daemon::adapters::deepseek::DeepSeek::load(
+        config.deepseek,
+        account_directory.join("deepseek"),
+    )
+    .await
+    {
+        Ok(adapter) => adapter.into(),
+        Err(error) => host_daemon::adapters::Backend::unavailable(
+            agent_protocol::session::ProviderKind::DeepSeek,
+            error,
+        ),
+    };
     let service = HostRpcService::new(
-        [codex.into(), claude],
+        [codex.into(), claude, deepseek],
         ProjectStore::new(directory.join("bex-worktrees.json")),
     );
     service

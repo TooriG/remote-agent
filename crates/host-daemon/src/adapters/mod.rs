@@ -1,5 +1,6 @@
 //! Provider implementations enter the Host through an opaque backend.
 pub mod codex;
+pub mod deepseek;
 pub(crate) mod requests;
 pub use crate::claude::Claude;
 

@@ -15,6 +15,9 @@ pub(crate) struct StartupConfig {
     /// Claude Code executable. Uses the Host user's Claude subscription login.
     #[arg(long, default_value = "claude")]
     pub(crate) claude: PathBuf,
+    /// DeepSeek Harness executable, or the dsh JavaScript entry point.
+    #[arg(long, default_value = "dsh")]
+    pub(crate) deepseek: PathBuf,
     /// Native Claude Code configuration and transcript storage root.
     #[arg(long)]
     pub(crate) claude_home: Option<PathBuf>,

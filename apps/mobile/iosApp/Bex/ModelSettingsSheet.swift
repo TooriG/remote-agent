@@ -92,7 +92,7 @@ struct ModelSettingsScreen: View {
                     }
                     Divider()
                     if defaults, let provider {
-                        Text(provider == .codex ? "Codex のデフォルト" : "Claude のデフォルト")
+                        Text(provider.bexName + " のデフォルト")
                             .font(.headline).padding(.horizontal, 12).padding(.vertical, 8)
                     }
                     modelSection
@@ -300,9 +300,9 @@ private struct ModelAgentRail: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            ForEach([ProviderKind.codex, .claude], id: \.self) { value in
+            ForEach([ProviderKind.codex, .claude, .deepSeek], id: \.self) { value in
                 Button { select(value) } label: {
-                    Image(value == .codex ? "openai" : "claude")
+                    Image(value.bexIcon)
                         .resizable().scaledToFit().frame(width: 24, height: 24)
                         .foregroundStyle(value == .claude ? Color(red: 0.85, green: 0.47, blue: 0.34) : .primary)
                         .frame(width: 44, height: 44).contentShape(Rectangle())
@@ -315,8 +315,8 @@ private struct ModelAgentRail: View {
                         }
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(value == .codex ? "Codex" : "Claude Code")
-                .accessibilityIdentifier("model.provider." + (value == .codex ? "codex" : "claude"))
+                .accessibilityLabel(value.bexName)
+                .accessibilityIdentifier("model.provider." + value.bexKey)
                 .accessibilityValue(provider == value ? "選択中" : "")
                 .accessibilityAddTraits(provider == value ? .isSelected : [])
                 .disabled(disabled)

@@ -94,11 +94,11 @@ struct AccountIdentityView: View {
     var body: some View {
         HStack(spacing: 4) {
             if let account {
-                Image(account.provider == .codex ? "openai" : "anthropic")
+                Image(account.provider.bexIcon)
                     .resizable()
                     .scaledToFit()
                     .frame(width: 12, height: 12)
-                    .accessibilityLabel(account.provider == .codex ? "OpenAI" : "Anthropic")
+                    .accessibilityLabel(account.provider.bexName)
                 Text(account.email ?? account.id)
                     .lineLimit(1)
                     .accessibilityIdentifier("account.identity." + account.id)

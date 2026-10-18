@@ -346,6 +346,7 @@ pub fn item_presentation(
                 match provider {
                     Some(crate::session::ProviderKind::Codex) => "Codex",
                     Some(crate::session::ProviderKind::Claude) => "Claude",
+                    Some(crate::session::ProviderKind::DeepSeek) => "DeepSeek",
                     None => "Assistant",
                 }
                 .into(),

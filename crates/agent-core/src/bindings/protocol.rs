@@ -159,6 +159,7 @@ struct WorktreeThread {
 enum ProviderKind {
     Codex,
     Claude,
+    DeepSeek,
 }
 #[uniffi::remote(Record)]
 struct SessionRef {

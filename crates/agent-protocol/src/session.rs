@@ -10,6 +10,7 @@ use std::sync::Arc;
 pub enum ProviderKind {
     Codex,
     Claude,
+    DeepSeek,
 }
 
 impl ProviderKind {
@@ -17,6 +18,7 @@ impl ProviderKind {
         match self {
             Self::Codex => "codex",
             Self::Claude => "claude",
+            Self::DeepSeek => "deepseek",
         }
     }
 }

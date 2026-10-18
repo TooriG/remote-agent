@@ -48,3 +48,13 @@ getbex.dev からWindows用EXEインストーラーを取得して実行しま�
 更新前に実行中のタスクを終え、BEXとHostを終了してから新しいEXEを実行してください。会話・アカウントのデータはインストール先の外に保存されます。対象はWindows 11・x86-64です。
 
 Claude sign-in opens from the requesting BEX client. The Host suppresses the CLI's automatic browser launch on Windows and Unix, so the user receives only the manual authorization URL. After approving, copy the code from the web page into BEX and choose Connect.
+
+## DeepSeek Harness
+
+Install Node.js 22.19 or newer and `npm install -g @deepseek-ai/dsh@0.2.1-rc.2` on the Host PC. In BEX, open model settings, choose **DeepSeek**, add an account, and enter an API key from <https://platform.deepseek.com/api_keys>. The masked key is stored in the Host's private state directory, separately from conversations, and passed only to Harness. An existing `DEEPSEEK_API_KEY` or Harness credential is also supported.
+
+Choose **DeepSeek V4.1 Flash 1017** to use the official `deepseek-flash` route (currently V4.1-Flash-1017). Other models configured in Harness appear from its live catalog. BEX uses the official ACP interface for prompts, reasoning, tool results, permissions, cancellation and resuming the same native session after a Host restart. Additional messages wait until the current task finishes; fork is unavailable. Permission defaults belong to Harness; permission requests are answered in BEX.
+
+For a separate installation, pass `host-daemon --deepseek C:\path\to\dsh\lib\bin.js`. `BEX_DEEPSEEK_NODE` selects its Node runtime. The standard Windows installation also detects a BEX-managed Harness under `%LOCALAPPDATA%\BEX\deepseek-harness`.
+
+Host・Windows版・Android版は同じ対応版へ更新してください。DeepSeek用APIキーをPCのBEXで設定すると、そのHostへ接続するAndroid端末からも利用できます。

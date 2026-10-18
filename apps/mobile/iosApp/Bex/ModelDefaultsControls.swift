@@ -14,7 +14,7 @@ struct NewChatDefaultModelMenu: View {
                 .accessibilityIdentifier("model.defaults.new-chat.automatic")
             ForEach(choices, id: \.model) { choice in
                 Button { select(choice.model) } label: {
-                    let name = (choice.model.provider == .codex ? "Codex" : "Claude") + " · " + choice.displayName
+                    let name = choice.model.provider.bexName + " · " + choice.displayName
                     if selected == choice.model {
                         Label(name, systemImage: "checkmark")
                     } else {

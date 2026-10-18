@@ -17,7 +17,7 @@ struct AgentSettingsScreen: View {
     @State private var signOutId: String?
     private var providerName: String {
         guard let provider = login?.provider ?? provider else { return "エージェント" }
-        return provider == .codex ? "Codex" : "Claude Code"
+        return provider.bexName
     }
 
     private var accounts: [Account] {
@@ -58,6 +58,7 @@ struct AgentSettingsScreen: View {
                     Picker("エージェント", selection: $provider) {
                         Text("Codex").tag(Optional(ProviderKind.codex))
                         Text("Claude Code").tag(Optional(ProviderKind.claude))
+                        Text("DeepSeek Harness").tag(Optional(ProviderKind.deepSeek))
                     }
                     .pickerStyle(.segmented)
                     .accessibilityIdentifier("account.provider")
@@ -303,6 +304,31 @@ extension AgentSettingsScreen {
             if case let .failure(error) = result {
                 loginError = model.snapshot.error() ?? error.localizedDescription
             }
+        }
+    }
+}
+
+
+extension ProviderKind {
+    var bexName: String {
+        switch self {
+        case .codex: "Codex"
+        case .claude: "Claude Code"
+        case .deepSeek: "DeepSeek Harness"
+        }
+    }
+    var bexKey: String {
+        switch self {
+        case .codex: "codex"
+        case .claude: "claude"
+        case .deepSeek: "deepseek"
+        }
+    }
+    var bexIcon: String {
+        switch self {
+        case .codex: "openai"
+        case .claude: "claude"
+        case .deepSeek: "deepseek"
         }
     }
 }

@@ -64,6 +64,7 @@ impl Snapshot {
         let agents: Vec<_> = [
             (ProviderKind::Codex, "Codex"),
             (ProviderKind::Claude, "Claude Code"),
+            (ProviderKind::DeepSeek, "DeepSeek Harness"),
         ]
         .into_iter()
         .map(|(provider, name)| {
@@ -122,9 +123,9 @@ mod tests {
             authenticated in proptest::bool::ANY,
             catalog in proptest::bool::ANY,
             failed in proptest::bool::ANY,
-            provider in proptest::sample::select(vec![ProviderKind::Codex, ProviderKind::Claude]),
+            provider in proptest::sample::select(vec![ProviderKind::Codex, ProviderKind::Claude, ProviderKind::DeepSeek]),
         ) {
-            let key = if provider == ProviderKind::Codex { "codex" } else { "claude" };
+            let key = provider.key();
             let models: Vec<Model> = if catalog {
                 serde_json::from_value(serde_json::json!([{
                     "id":"same-native-id", "model":{"provider":key,"id":"same-native-id"},

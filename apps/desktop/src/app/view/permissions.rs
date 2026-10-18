@@ -57,6 +57,7 @@ impl Desktop {
                 .child(match provider {
                     Some(ProviderKind::Codex) => "Codex の承認方法",
                     Some(ProviderKind::Claude) => "Claude の承認方法",
+                    Some(ProviderKind::DeepSeek) => "DeepSeek Harness の承認方法",
                     None => "エージェント未選択",
                 }),
         );

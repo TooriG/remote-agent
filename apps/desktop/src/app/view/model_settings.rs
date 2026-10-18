@@ -6,6 +6,7 @@ fn provider_icon(provider: ProviderKind) -> Icon {
     Icon::default().path(match provider {
         ProviderKind::Codex => "bex/openai.svg",
         ProviderKind::Claude => "bex/anthropic.svg",
+        ProviderKind::DeepSeek => "bex/deepseek.svg",
     })
 }
 
@@ -54,6 +55,7 @@ impl Desktop {
         let id = match provider {
             Some(ProviderKind::Codex) => "default-model-Codex",
             Some(ProviderKind::Claude) => "default-model-Claude",
+            Some(ProviderKind::DeepSeek) => "default-model-DeepSeek",
             None => "new-chat-default-model",
         };
         let choices: Vec<_> = std::iter::once(("自動".to_owned(), None))
@@ -65,6 +67,7 @@ impl Desktop {
                         let name = match model.model.provider {
                             ProviderKind::Codex => "Codex",
                             ProviderKind::Claude => "Claude",
+                            ProviderKind::DeepSeek => "DeepSeek",
                         };
                         (
                             format!("{name} · {}", model.display_name),
@@ -220,6 +223,7 @@ impl Desktop {
                     .child(match provider {
                         ProviderKind::Codex => "Codex",
                         ProviderKind::Claude => "Claude",
+                        ProviderKind::DeepSeek => "DeepSeek",
                     })
                     .child(
                         div()
@@ -240,7 +244,7 @@ impl Desktop {
                     .child(div().text_sm().text_color(rgb(appearance::MUTED)).child("新規チャットを開始するときのモデルです。自動は利用可能なエージェントのデフォルトを使います。")))
                 .child(self.default_model_picker(None, cx)))
             .child(div().text_lg().font_semibold().child("プロバイダごとのデフォルト"))
-            .children([ProviderKind::Codex, ProviderKind::Claude].into_iter().map(|provider| self.provider_model_settings(provider, cx)))
+            .children([ProviderKind::Codex, ProviderKind::Claude, ProviderKind::DeepSeek].into_iter().map(|provider| self.provider_model_settings(provider, cx)))
             .child(
                 div()
                     .text_xs()
@@ -355,6 +359,7 @@ impl Desktop {
         for (value, label) in [
             (ProviderKind::Codex, "Codex"),
             (ProviderKind::Claude, "Claude"),
+            (ProviderKind::DeepSeek, "DeepSeek"),
         ] {
             services = services.child(
                 self.button(
@@ -688,7 +693,9 @@ impl Desktop {
         let mut form = v_flex()
             .gap_3()
             .text_sm()
-            .child(if login.requires_code_submission {
+            .child(if provider == ProviderKind::DeepSeek {
+                "DeepSeekの管理画面で発行したAPIキーを入力してください。"
+            } else if login.requires_code_submission {
                 "ブラウザでログインし、認証コードを貼り付けてください。"
             } else {
                 "ブラウザでログインし、次のコードを入力してください。"
@@ -696,7 +703,11 @@ impl Desktop {
             .child(
                 self.button(
                     "account-open-login",
-                    "ブラウザでログイン",
+                    if provider == ProviderKind::DeepSeek {
+                        "APIキーを取得"
+                    } else {
+                        "ブラウザでログイン"
+                    },
                     cx,
                     move |_, _, cx| {
                         cx.open_url(&url);
@@ -904,6 +915,7 @@ impl Desktop {
         for (value, label) in [
             (ProviderKind::Codex, "Codex"),
             (ProviderKind::Claude, "Claude"),
+            (ProviderKind::DeepSeek, "DeepSeek"),
         ] {
             agents = agents.child(
                 Button::new(format!("model-agent-{label}"))
@@ -954,6 +966,7 @@ impl Desktop {
             let label = match session.provider {
                 ProviderKind::Codex => "Codex",
                 ProviderKind::Claude => "Claude",
+                ProviderKind::DeepSeek => "DeepSeek",
             };
             body = body.child(
                 v_flex()
