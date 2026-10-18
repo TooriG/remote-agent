@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const source = fs.readFileSync(__dirname + '/public/download.js', 'utf8');
 const download = 'https://github.com/ttizze/remote-agent/releases/download/prd-75/bex-windows-x86_64-setup.exe';
-const preview = 'https://github.com/TooriG/remote-agent/releases/download/windows-preview-20261018-dsh-routing/bex-windows-x86_64-setup.exe';
+const preview = 'https://github.com/TooriG/remote-agent/releases/download/windows-preview-20261019-reasoning/bex-windows-x86_64-setup.exe';
 
 async function renderWindows({ language = 'en', platform = 'Win32', userAgent, assets = [], ok = true, fail = false } = {}) {
   const element = () => ({ classList: { toggle() {} }, innerHTML: '', href: '' });
@@ -36,7 +36,7 @@ async function renderWindows({ language = 'en', platform = 'Win32', userAgent, a
 
 for (const language of ['ja', 'en']) {
   test(`Android phone ${language} prominently links to the published preview APK`, async () => {
-    const apk = 'https://github.com/TooriG/remote-agent/releases/download/android-preview-41/bex-android-preview.apk';
+    const apk = 'https://github.com/TooriG/remote-agent/releases/download/android-preview-45/bex-android-preview.apk';
     const result = await renderWindows({ language, platform: 'Linux arm64', userAgent: 'Android 17 Mobile', assets: [{ name: 'bex-android-preview.apk', state: 'uploaded', browser_download_url: apk }] });
     assert.equal(result.isMobile, true);
     assert.equal(result.primary[0].href, apk);
@@ -50,7 +50,7 @@ test('Android download remains direct when the upstream release API is offline',
   const result = await renderWindows({ platform: 'Linux arm64', userAgent: 'Android 17 Mobile', fail: true });
   assert.equal(result.isMobile, true);
   assert.match(result.mobile[0].innerHTML, /Use on Android/);
-  assert.equal(result.mobile[0].href, 'https://github.com/TooriG/remote-agent/releases/download/android-preview-41/bex-android-preview.apk');
+  assert.equal(result.mobile[0].href, 'https://github.com/TooriG/remote-agent/releases/download/android-preview-45/bex-android-preview.apk');
   assert.ok(!result.mobile[0].innerHTML.includes('coming soon'));
 });
 
