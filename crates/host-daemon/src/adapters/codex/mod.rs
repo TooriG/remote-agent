@@ -3,6 +3,7 @@
 pub(crate) mod accounts;
 mod cli;
 mod composer;
+mod fork;
 pub(crate) mod native;
 mod permissions;
 mod usage;
@@ -1040,14 +1041,15 @@ impl Agent for Codex {
         last_turn_id: &str,
         browser_config: Option<Value>,
     ) -> Result<ThreadResponse, Failure> {
-        self.thread_response(
-            "thread/fork",
-            &with_browser_config(
-                serde_json::json!({"threadId":id,"lastTurnId":last_turn_id,"excludeTurns":false}),
-                browser_config,
-            ),
-        )
-        .await
+        let params = with_browser_config(
+            serde_json::json!({"threadId":id,"lastTurnId":last_turn_id,"excludeTurns":false}),
+            browser_config,
+        );
+        let value = fork::request(params, |method, params| async move {
+            self.request(method, &params).await
+        })
+        .await?;
+        native::parse_thread_response(value).map_err(Into::into)
     }
     async fn rename(&self, id: &str, name: &str) -> Result<agent_protocol::models::Empty, Failure> {
         self.request(
