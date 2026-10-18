@@ -28,7 +28,7 @@ class ComposerStopTest {
         val key = JSONObject().put("Session", JSONObject().put("session", identity))
         val state = JSONObject(Snapshot.empty().serialize().decodeToString())
             .put("navigation", JSONObject().put("thread_id", identity).put("draft_key", key).put("cwd", "/fixture"))
-            .put("drafts", JSONArray().put(JSONArray().put(key).put(JSONObject().put("text", draft))))
+            .put("drafts", JSONArray().put(JSONArray().put(key).put(JSONObject().put("text", draft).put("attachments", JSONArray()))))
             .put("conversations", JSONArray().put(JSONArray().put(identity).put(
                 JSONObject().put("id", identity).put("turns", JSONArray().put(
                     JSONObject().put("id", "active").put("status", status).put("items", JSONArray())
