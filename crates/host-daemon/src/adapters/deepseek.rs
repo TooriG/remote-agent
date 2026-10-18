@@ -892,7 +892,9 @@ impl Identity for DeepSeek {
         }
     }
     async fn usage(&self, _: &str) -> Result<op::AccountUsage, Failure> {
-        Err(unsupported())
+        // ACP has no quota API. An empty result means unavailable usage, not a
+        // failed credential setup, and keeps account settings usable.
+        Ok(op::AccountUsage { windows: vec![], fetched_at: now() as i64, error: None })
     }
 }
 
@@ -1509,6 +1511,9 @@ mod tests {
         let adapter = DeepSeek::load("dsh".into(), dir.path().into())
             .await
             .unwrap();
+        let usage = adapter.usage(ACCOUNT).await.unwrap();
+        assert!(usage.windows.is_empty());
+        assert!(usage.error.is_none());
         let keys = adapter.managed_keys().await.unwrap();
         assert_eq!(keys["refs"]["OPENROUTER_API_KEY"], "rotated-secret");
         assert_eq!(keys["refs"]["OPENAI_API_KEY"], "openai-secret");
