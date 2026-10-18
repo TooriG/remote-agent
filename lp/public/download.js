@@ -5,8 +5,8 @@
   const DL = window.BEX_DL = {
     mac:     { name: 'macOS',         file: { ja: 'Apple Silicon · macOS 26 · .zip 34MB', en: 'Apple Silicon · macOS 26 · .zip 34MB' }, url: 'https://github.com/ttizze/remote-agent/releases/download/prd-74/bex-74-macOS-arm64.zip', ready: true },
     ios:     { name: 'iPhone / iPad', file: { ja: 'iOS 26 · TestFlightで配布中', en: 'iOS 26 · via TestFlight' }, url: 'https://testflight.apple.com/join/UJbK9Ww7', ready: true, cta: { ja: 'TestFlightで入手', en: 'Get on TestFlight' } },
-    win:     { name: 'Windows',       file: { ja: 'Windows 11 · x86-64 · ZIP（プレビュー）', en: 'Windows 11 · x86-64 · preview ZIP' }, url: 'https://github.com/TooriG/remote-agent/releases/download/windows-preview-20261015-1/bex-windows-x86_64-dev.zip', ready: true },
-    android: { name: 'Android',       file: { ja: 'Android 8.0以降 · 64-bit · APK（プレビュー）', en: 'Android 8.0+ · 64-bit · preview APK' }, url: 'https://github.com/TooriG/remote-agent/releases/download/android-preview-16/bex-android-preview.apk', ready: true, cta: { ja: 'Androidで使う', en: 'Use on Android' } },
+    win:     { name: 'Windows',       file: { ja: 'Windows 11 · x86-64 · EXE（プレビュー）', en: 'Windows 11 · x86-64 · preview EXE' }, url: 'https://github.com/TooriG/remote-agent/releases/download/windows-preview-20261018-1/bex-windows-x86_64-setup.exe', ready: true },
+    android: { name: 'Android',       file: { ja: 'Android 8.0以降 · 64-bit · APK（プレビュー）', en: 'Android 8.0+ · 64-bit · preview APK' }, url: 'https://github.com/TooriG/remote-agent/releases/download/android-preview-23/bex-android-preview.apk', ready: true, cta: { ja: 'Androidで使う', en: 'Use on Android' } },
     linux:   { name: 'Linux',         file: { ja: 'ヘッドレスHost・CLI', en: 'Headless Host and CLI' }, url: SRC + '#headless-linux-and-iphone-pairing', ready: true, source: true }
   };
   const ICON = {
@@ -92,7 +92,7 @@
   new MutationObserver(render).observe(document.documentElement, { attributes: true, attributeFilter: ['lang'] });
   render();
   // Publish a direct download only after GitHub reports the release asset.
-  // A Mac-only release, an API failure or an unpublished ZIP keeps source setup available.
+  // A Mac-only release, an API failure or an unpublished installer keeps the pinned download available.
   async function loadReleaseDownloads() {
     try {
       const response = await fetch('https://api.github.com/repos/ttizze/remote-agent/releases/latest', {
@@ -101,7 +101,7 @@
       });
       if (!response.ok) return;
       const release = await response.json();
-      for (const [platform, filename] of [['win', 'bex-windows-x86_64-release.zip']]) {
+      for (const [platform, filename] of [['win', 'bex-windows-x86_64-setup.exe']]) {
         const asset = release.assets?.find(x => x.name === filename && x.state === 'uploaded');
         if (!asset) continue;
         const url = new URL(asset.browser_download_url);
@@ -110,7 +110,7 @@
         target.url = url.href;
         target.ready = true;
         target.source = false;
-        target.file = { ja: 'Windows 11 · x86-64 · ZIP', en: 'Windows 11 · x86-64 · ZIP' };
+        target.file = { ja: 'Windows 11 · x86-64 · EXE', en: 'Windows 11 · x86-64 · EXE' };
       }
       render();
     } catch { /* Keep the pinned, published preview download. */ }

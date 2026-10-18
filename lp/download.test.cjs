@@ -3,8 +3,8 @@ const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const fs = require('node:fs');
 const source = fs.readFileSync(__dirname + '/public/download.js', 'utf8');
-const download = 'https://github.com/ttizze/remote-agent/releases/download/prd-75/bex-windows-x86_64-release.zip';
-const preview = 'https://github.com/TooriG/remote-agent/releases/download/windows-preview-20261015-1/bex-windows-x86_64-dev.zip';
+const download = 'https://github.com/ttizze/remote-agent/releases/download/prd-75/bex-windows-x86_64-setup.exe';
+const preview = 'https://github.com/TooriG/remote-agent/releases/download/windows-preview-20261018-1/bex-windows-x86_64-setup.exe';
 
 async function renderWindows({ language = 'en', platform = 'Win32', userAgent, assets = [], ok = true, fail = false } = {}) {
   const element = () => ({ classList: { toggle() {} }, innerHTML: '', href: '' });
@@ -36,7 +36,7 @@ async function renderWindows({ language = 'en', platform = 'Win32', userAgent, a
 
 for (const language of ['ja', 'en']) {
   test(`Android phone ${language} prominently links to the published preview APK`, async () => {
-    const apk = 'https://github.com/TooriG/remote-agent/releases/download/android-preview-16/bex-android-preview.apk';
+    const apk = 'https://github.com/TooriG/remote-agent/releases/download/android-preview-23/bex-android-preview.apk';
     const result = await renderWindows({ language, platform: 'Linux arm64', userAgent: 'Android 17 Mobile', assets: [{ name: 'bex-android-preview.apk', state: 'uploaded', browser_download_url: apk }] });
     assert.equal(result.isMobile, true);
     assert.equal(result.primary[0].href, apk);
@@ -50,19 +50,19 @@ test('Android download remains direct when the upstream release API is offline',
   const result = await renderWindows({ platform: 'Linux arm64', userAgent: 'Android 17 Mobile', fail: true });
   assert.equal(result.isMobile, true);
   assert.match(result.mobile[0].innerHTML, /Use on Android/);
-  assert.equal(result.mobile[0].href, 'https://github.com/TooriG/remote-agent/releases/download/android-preview-16/bex-android-preview.apk');
+  assert.equal(result.mobile[0].href, 'https://github.com/TooriG/remote-agent/releases/download/android-preview-23/bex-android-preview.apk');
   assert.ok(!result.mobile[0].innerHTML.includes('coming soon'));
 });
 
 for (const language of ['en', 'ja']) {
-  test(`Windows ${language} hero, menu and card download the uploaded ZIP directly`, async () => {
-    const result = await renderWindows({ language, assets: [{ name: 'bex-windows-x86_64-release.zip', state: 'uploaded', browser_download_url: download }] });
+  test(`Windows ${language} hero, menu and card download the uploaded EXE directly`, async () => {
+    const result = await renderWindows({ language, assets: [{ name: 'bex-windows-x86_64-setup.exe', state: 'uploaded', browser_download_url: download }] });
     for (const button of result.primary) {
       assert.equal(button.href, download);
       assert.match(button.innerHTML, language === 'ja' ? /Windows版をダウンロード/ : /Download for Windows/);
     }
     assert.ok(result.grid.includes(`href="${download}"`));
-    const mac = await renderWindows({ language, platform: 'MacIntel', assets: [{ name: 'bex-windows-x86_64-release.zip', state: 'uploaded', browser_download_url: download }] });
+    const mac = await renderWindows({ language, platform: 'MacIntel', assets: [{ name: 'bex-windows-x86_64-setup.exe', state: 'uploaded', browser_download_url: download }] });
     assert.ok(mac.menu.includes(`href="${download}"`));
     assert.ok(!result.primary[0].innerHTML.includes('coming soon'));
   });
@@ -71,15 +71,16 @@ for (const [name, options] of Object.entries({
   'Mac-only release': {},
   'failed API': { ok: false },
   offline: { fail: true },
-  'unfinished upload': { assets: [{ name: 'bex-windows-x86_64-release.zip', state: 'new', browser_download_url: download }] },
-  'foreign download': { assets: [{ name: 'bex-windows-x86_64-release.zip', state: 'uploaded', browser_download_url: 'https://example.com/bex.zip' }] }
+  'old ZIP-only release': { assets: [{ name: 'bex-windows-x86_64-release.zip', state: 'uploaded', browser_download_url: 'https://github.com/ttizze/remote-agent/releases/download/prd-75/bex-windows-x86_64-release.zip' }] },
+  'unfinished upload': { assets: [{ name: 'bex-windows-x86_64-setup.exe', state: 'new', browser_download_url: download }] },
+  'foreign download': { assets: [{ name: 'bex-windows-x86_64-setup.exe', state: 'uploaded', browser_download_url: 'https://example.com/bex.zip' }] }
 })) {
-  test(`${name} retains the pinned Windows ZIP download`, async () => {
+  test(`${name} retains the pinned Windows EXE download`, async () => {
     const result = await renderWindows(options);
     assert.equal(result.primary[0].href, preview);
     assert.match(result.primary[0].innerHTML, /Download for Windows/);
     assert.ok(result.grid.includes(`href="${preview}"`));
-    assert.match(result.grid, /preview ZIP/);
+    assert.match(result.grid, /preview EXE/);
     const windowsCard = result.grid.match(/<h3>Windows<\/h3>[\s\S]*?<\/a>/)[0];
     assert.doesNotMatch(windowsCard, /Install from source|docs\/WINDOWS/);
     assert.ok(!result.primary[0].innerHTML.includes('coming soon'));

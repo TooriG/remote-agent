@@ -1,5 +1,7 @@
 # Project rules
 
+- When fixing Android APK or Windows builds, publish the verified replacement and update/deploy the corresponding download on https://getbex.dev in the same task. Verify the public site's buttons download the replacement before marking the task complete. Distribute Android as APK and Windows as an EXE installer containing its companion files; do not use ZIP as the normal Windows download. Send changes through the existing related PR to ttizze/remote-agent from TooriG/remote-agent; exclude unrelated local changes.
+
 - Keep unit tests close to the implementation they verify.
 
 - The product is unreleased. Keep only the current format and behavior; do not add backward-compatibility paths, old-format migrations or retired implementations.

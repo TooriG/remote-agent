@@ -2,7 +2,9 @@
 param(
     [ValidateSet("dev", "release")]
     [string]$Profile = "release",
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [string]$BinaryDirectory,
+    [string]$InnoCompiler
 )
 
 $ErrorActionPreference = "Stop"
@@ -21,6 +23,29 @@ try {
     $metadata = $metadataJson | ConvertFrom-Json
     $directory = if ($Profile -eq "dev") { "debug" } else { "release" }
     $buildDirectory = Join-Path $metadata.target_directory $directory
+    if ($BinaryDirectory) {
+        if (-not $SkipBuild) { throw "BinaryDirectory requires SkipBuild." }
+        $buildDirectory = (Resolve-Path -LiteralPath $BinaryDirectory).Path
+    }
+    if (-not $InnoCompiler) {
+        foreach ($candidate in @("${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            if (Test-Path -LiteralPath $candidate) { $InnoCompiler = $candidate; break }
+        }
+    }
+    if (-not $InnoCompiler) {
+        $toolRoot = Join-Path $metadata.target_directory "tool-cache/inno-7.1.0"
+        $InnoCompiler = Join-Path $toolRoot "compiler/ISCC.exe"
+        if (-not (Test-Path -LiteralPath $InnoCompiler)) {
+            New-Item -ItemType Directory -Force -Path $toolRoot | Out-Null
+            $toolInstaller = Join-Path $toolRoot "innosetup-7.1.0-x64.exe"
+            Invoke-WebRequest -Uri "https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innosetup-7.1.0-x64.exe" -OutFile $toolInstaller
+            $toolHash = (Get-FileHash -LiteralPath $toolInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($toolHash -ne "0362a383ed217d4c4239b5933866dd96d3eb2102737da92f80f6057a4b40df2f") { throw "Inno Setup checksum mismatch." }
+            $compilerDirectory = Join-Path $toolRoot "compiler"
+            $install = Start-Process -FilePath $toolInstaller -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CURRENTUSER", ('/DIR="' + $compilerDirectory + '"')) -WindowStyle Hidden -Wait -PassThru
+            if ($install.ExitCode -ne 0) { throw "Inno Setup installation failed: $($install.ExitCode)" }
+        }
+    }
     $revision = & git rev-parse HEAD
     if ($LASTEXITCODE -ne 0) { throw "Cannot determine the source revision." }
     $sourceStatus = & git status --porcelain --untracked-files=normal
@@ -54,6 +79,12 @@ try {
         $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
         "$hash  $(Split-Path $archive -Leaf)" | Set-Content -LiteralPath "$archive.sha256" -Encoding ASCII
         Write-Output $archive
+        & $InnoCompiler "/DBundleDirectory=$bundle" "/DPackageDirectory=$packageRoot" "/DBuildRevision=$($revision.Substring(0, 8))" scripts/windows-installer.iss
+        if ($LASTEXITCODE -ne 0) { throw "Windows EXE installer compilation failed." }
+        $installer = Join-Path $packageRoot "bex-windows-x86_64-setup.exe"
+        $installerHash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+        "$installerHash  $(Split-Path $installer -Leaf)" | Set-Content -LiteralPath "$installer.sha256" -Encoding ASCII
+        Write-Output $installer
     } finally {
         # Verify the absolute target is the unique child created above.
         $resolvedStaging = [IO.Path]::GetFullPath($staging)

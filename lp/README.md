@@ -3,19 +3,11 @@
 Source of the existing BEX landing page at https://getbex.dev/, imported from
 its currently deployed static assets so download changes can be reviewed here.
 
-Windows buttons link directly to the fork's published Windows x86-64 preview ZIP,
-including when the release API is unavailable. Extract the ZIP and run
-`bex-desktop.exe`; Rust and source compilation are unnecessary. This is an unsigned
-development preview, with Git, Node.js and the chosen agents installed separately.
+Windows buttons download the published `bex-windows-x86_64-setup.exe` installer directly, including when the GitHub release API is unavailable. Run the EXE to install BEX and all companion Host/CLI/Claude SDK files into the current user's Programs folder and create a Start menu shortcut. No ZIP extraction or Rust compilation is needed. Git, Node.js, the chosen agents and WebView2 are separate runtime prerequisites.
 
-Windows buttons also check the public GitHub latest-release API. When it contains the
-uploaded `bex-windows-x86_64-release.zip` asset, the hero buttons, platform menu,
-and download card link directly to that asset without visiting a release page.
-If the upstream ZIP is not available, the pinned preview download stays usable.
+The latest-release API may replace the pinned Windows preview only with an uploaded `bex-windows-x86_64-setup.exe` from the upstream repository. Old ZIP-only releases never override the EXE download. Native clients builds the installer with Inno Setup after Windows tests, retains it as an artifact, and uploads the EXE/checksum on release publication. The ZIP remains an optional diagnostic artifact, not a site download.
 
-Native clients publishes the ZIP after Windows tests on a release publication.
-The checksum is attached alongside it. Publishing a release from a tag predating
-this workflow change will not produce the new asset; use a tag containing it.
+Whenever Android or Windows is fixed, publish and verify the replacement first, update the pinned URL in `public/download.js`, run `node --test lp/download.test.cjs`, deploy this Worker with `wrangler deploy`, and verify the live https://getbex.dev/download.js and its download buttons point to the verified replacement. Do not finish at a local build, PR or GitHub release alone. Keep workers.dev and preview URLs enabled.
 
 Android phones show the Android download action prominently. Android buttons link
 directly to the fork's verified Android preview APK release asset,

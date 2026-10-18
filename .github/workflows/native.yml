@@ -396,5 +396,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          gh release upload "$env:RELEASE_TAG" target/windows-packages/bex-windows-x86_64-release.zip target/windows-packages/bex-windows-x86_64-release.zip.sha256 --repo "$env:GITHUB_REPOSITORY" --clobber
+          gh release upload "$env:RELEASE_TAG" target/windows-packages/bex-windows-x86_64-setup.exe target/windows-packages/bex-windows-x86_64-setup.exe.sha256 target/windows-packages/bex-windows-x86_64-release.zip target/windows-packages/bex-windows-x86_64-release.zip.sha256 --repo "$env:GITHUB_REPOSITORY" --clobber
           if ($LASTEXITCODE -ne 0) { throw "Windows release upload failed." }
