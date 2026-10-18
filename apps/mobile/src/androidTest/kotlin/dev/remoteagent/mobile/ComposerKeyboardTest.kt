@@ -11,7 +11,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.performClick
 import androidx.core.view.WindowInsetsCompat
 import dev.remoteagent.core.Snapshot
@@ -45,7 +45,7 @@ class ComposerKeyboardTest {
             val view = compose.activity.window.decorView
             val density = compose.activity.resources.displayMetrics.density
             val originalBottom = compose.onNodeWithTag("conversation.composer").fetchSemanticsNode().boundsInRoot.bottom
-            compose.onNodeWithText("AI??????").performClick()
+            compose.onNode(hasSetTextAction()).performClick()
             compose.waitUntil(10_000) {
                 view.rootWindowInsets?.let {
                     WindowInsetsCompat.toWindowInsetsCompat(it, view).isVisible(WindowInsetsCompat.Type.ime())
