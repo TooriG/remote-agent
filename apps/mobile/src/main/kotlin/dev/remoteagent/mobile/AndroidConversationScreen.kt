@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -39,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
@@ -240,7 +240,7 @@ internal fun ThreadComposer(
     var uploading by remember(navigation.draftKey) { mutableStateOf(false) }
     val inputUnavailable = navigation.threadId?.let(snapshot::conversation)?.inputUnavailableReason()
     Surface(
-        Modifier.padding(horizontal = 12.dp, vertical = 8.dp).imePadding(),
+        Modifier.padding(horizontal = 12.dp, vertical = 8.dp).testTag("conversation.composer"),
         shape = RoundedCornerShape(28.dp),
         color = MaterialTheme.colorScheme.surfaceVariant,
     ) {

@@ -105,7 +105,13 @@ adb -P "$server_port" -s "$serial" shell am instrument -w \
     dev.remoteagent.mobile.test/androidx.test.runner.AndroidJUnitRunner | tee "$log.thread-list.log"
 grep -qx 'OK (3 tests)' "$log.thread-list.log"
 
-echo "Android image attachment, voice input, link and header checks passed"
+adb -P "$server_port" -s "$serial" shell settings put secure show_ime_with_hard_keyboard 1
+adb -P "$server_port" -s "$serial" shell am instrument -w \
+    -e class dev.remoteagent.mobile.ComposerKeyboardTest \
+    dev.remoteagent.mobile.test/androidx.test.runner.AndroidJUnitRunner | tee "$log.keyboard.log"
+grep -qx 'OK (1 test)' "$log.keyboard.log"
+
+echo "Android image attachment, voice input, link and header and keyboard checks passed"
 exit 0
 fi
 if [[ $mode == all ]]; then

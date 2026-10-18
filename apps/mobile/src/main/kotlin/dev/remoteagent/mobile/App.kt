@@ -6,6 +6,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -471,7 +474,7 @@ internal fun RemoteAgentApp(
                     TopAppBar(title = { Text("bex", fontWeight = androidx.compose.ui.text.font.FontWeight.Bold) })
             }
         ) { padding ->
-            Column(Modifier.padding(padding)) {
+            Column(Modifier.fillMaxSize().appContentInsets(padding)) {
                 ConnectionStatus(
                     model.notice ?: model.snapshot.error(),
                     model.busy,
@@ -578,3 +581,8 @@ private fun androidx.compose.foundation.layout.ColumnScope.ConversationPane(mode
         }
     }
 }
+
+// Consume Scaffold/system-bar padding before applying the remaining keyboard inset.
+// Keep IME handling at the screen boundary so it cannot create a gap below the composer.
+internal fun Modifier.appContentInsets(padding: PaddingValues): Modifier =
+    padding(padding).consumeWindowInsets(padding).imePadding()
