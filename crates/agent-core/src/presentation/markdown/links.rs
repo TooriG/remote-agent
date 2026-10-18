@@ -2,6 +2,87 @@ use super::{MarkdownBlock, MarkdownRun, definitions, parse};
 use markdown::mdast::Node;
 use percent_encoding::percent_decode_str;
 
+/// Files that must be saved rather than decoded by the text editor.
+pub fn file_requires_download(path: &str) -> bool {
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    let extension = name
+        .rsplit_once('.')
+        .map(|(_, extension)| extension.to_ascii_lowercase());
+    matches!(
+        extension.as_deref(),
+        Some(
+            "exe"
+                | "msi"
+                | "msix"
+                | "msixbundle"
+                | "appx"
+                | "dll"
+                | "apk"
+                | "aab"
+                | "zip"
+                | "7z"
+                | "rar"
+                | "tar"
+                | "gz"
+                | "bz2"
+                | "xz"
+                | "zst"
+                | "dmg"
+                | "pkg"
+                | "deb"
+                | "rpm"
+                | "iso"
+                | "wasm"
+                | "bin"
+                | "pdf"
+                | "doc"
+                | "docx"
+                | "xls"
+                | "xlsx"
+                | "ppt"
+                | "pptx"
+                | "mp4"
+                | "mov"
+                | "webm"
+                | "mkv"
+                | "mp3"
+                | "wav"
+                | "ogg"
+                | "flac"
+                | "ttf"
+                | "otf"
+                | "woff"
+                | "woff2"
+        )
+    )
+}
+
+#[cfg(test)]
+mod download_tests {
+    #[test]
+    fn artifacts_bypass_the_text_editor_but_source_and_images_do_not() {
+        for path in [
+            "C:\\build\\ImoutoTank-Multiplayer.EXE",
+            "/tmp/app.apk",
+            "bundle.tar.gz",
+            "report.pdf",
+            "video.mp4",
+        ] {
+            assert!(super::file_requires_download(path), "{path}");
+        }
+        for path in [
+            "main.rs",
+            "readme.txt",
+            "README",
+            "large.PNG",
+            "installer.exe.md",
+            "/exe/main.ts",
+        ] {
+            assert!(!super::file_requires_download(path), "{path}");
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
 pub enum MarkdownFileKind {

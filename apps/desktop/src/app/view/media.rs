@@ -351,6 +351,11 @@ impl Desktop {
     }
 
     pub(super) fn open_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if agent_core::presentation::markdown::file_requires_download(&path.to_string_lossy()) {
+            self.download(path.to_string_lossy().into_owned());
+            cx.notify();
+            return;
+        }
         if path
             .extension()
             .and_then(|extension| extension.to_str())
@@ -769,6 +774,17 @@ mod file_panel_tests {
                     "Markdown links use the same image viewer"
                 );
                 view.image_gallery = None;
+                view.panel_open = false;
+                view.open_conversation_link(
+                    &directory
+                        .path()
+                        .join("ImoutoTank-Multiplayer.EXE")
+                        .to_string_lossy(),
+                    cx,
+                );
+                assert!(!view.panel_open, "installers must bypass the editor panel");
+                assert!(view.image_gallery.is_none());
+                assert_eq!(view.composer.read(cx).value().as_ref(), "Keep this draft");
                 view.open_file(directory.path().join("readme.txt"), cx);
                 assert!(
                     view.image_gallery.is_none(),
