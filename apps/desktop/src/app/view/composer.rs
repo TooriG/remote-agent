@@ -341,6 +341,7 @@ impl Desktop {
         }
         let running = self.thread().and_then(|thread| thread.active_turn_id());
         let empty = self.composer.read(cx).value().trim().is_empty() && attachments.is_empty();
+        let inactive = empty && running.is_none();
         let phase = self.dictation.as_ref().map(|d| d.phase);
         let send = if let Some(id) = running.filter(|_| empty) {
             Self::icon_button(
@@ -476,8 +477,22 @@ impl Desktop {
                         .child(
                             send.large().rounded_full().w(px(40.)).h(px(40.)).custom(
                                 ButtonCustomVariant::new(cx)
-                                    .color(rgb(appearance::FOREGROUND).into())
-                                    .foreground(rgb(appearance::SIDEBAR).into())
+                                    .color(
+                                        rgb(if inactive {
+                                            appearance::BORDER
+                                        } else {
+                                            0xffffff
+                                        })
+                                        .into(),
+                                    )
+                                    .foreground(
+                                        rgb(if inactive {
+                                            appearance::MUTED
+                                        } else {
+                                            appearance::SIDEBAR
+                                        })
+                                        .into(),
+                                    )
                                     .hover(rgb(0xd4d4d4).into())
                                     .active(rgb(appearance::MUTED).into()),
                             ),

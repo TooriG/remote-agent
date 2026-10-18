@@ -1854,11 +1854,7 @@ fn composer_should_submit(
     window: &mut Window,
     cx: &mut Context<TextareaState>,
 ) -> bool {
-    !action.shift
-        && !action.secondary
-        && input.selected_range().is_empty()
-        && input.cursor() == input.text().len()
-        && input.marked_text_range(window, cx).is_none()
+    !action.shift && !action.secondary && input.marked_text_range(window, cx).is_none()
 }
 
 #[cfg(test)]
@@ -1867,7 +1863,7 @@ mod composer_tests {
     use gpui_kit as gpui;
     use gpui_kit::{EntityInputHandler, TestAppContext};
     #[gpui::test]
-    fn enter_submits_only_committed_text_at_the_end(cx: &mut TestAppContext) {
+    fn enter_submits_committed_text_regardless_of_cursor_or_selection(cx: &mut TestAppContext) {
         cx.update(crate::appearance::init);
         let input = cx.add_window(TextareaState::new);
         input
@@ -1881,9 +1877,9 @@ mod composer_tests {
                 input.set_selected_range(end..end, cx);
                 assert!(composer_should_submit(input, &enter, window, cx));
                 input.set_selected_range(3..3, cx);
-                assert!(!composer_should_submit(input, &enter, window, cx));
+                assert!(composer_should_submit(input, &enter, window, cx));
                 input.set_selected_range(0..end, cx);
-                assert!(!composer_should_submit(input, &enter, window, cx));
+                assert!(composer_should_submit(input, &enter, window, cx));
                 input.set_selected_range(end..end, cx);
                 assert!(!composer_should_submit(
                     input,
