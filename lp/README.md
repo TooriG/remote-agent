@@ -81,6 +81,12 @@ gpt-6.1-sol through the BEX connection.
 
 ## Mobile composer
 
+While a conversation has an active turn, the right edge of the Android composer
+shows a white circular stop button with a black square. It remains available
+with an empty draft or while editing a follow-up, and interrupts that turn through
+the shared core without clearing the draft. Pending requests disable repeat taps;
+failed requests show a retry notice. When the turn ends, the send control returns.
+
 The Android chat list keeps the BEX wordmark, Host selector, connection dot,
 search and refresh actions in one header row, including at 320dp width.
 There is no workspace heading or separate Host row. Search opens in place;
