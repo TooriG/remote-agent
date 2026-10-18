@@ -565,10 +565,12 @@ impl Desktop {
                         let toggle = key.clone();
                         let item_id = item.data.id.clone();
                         let details = change_details.clone();
-                        let mut summary = v_flex().gap_1().child("変更ファイル");
+                        let mut summary = v_flex().w_full().min_w_0().gap_2().child("変更ファイル");
                         for file in changes {
                             summary = summary.child(
                                 h_flex()
+                                    .w_full()
+                                    .min_w_0()
                                     .gap_2()
                                     .child(
                                         div()
@@ -577,14 +579,25 @@ impl Desktop {
                                             .text_ellipsis()
                                             .child(file.path.clone()),
                                     )
-                                    .child(review_counts(file.additions, file.deletions)),
+                                    .child(
+                                        div()
+                                            .flex_shrink_0()
+                                            .child(review_counts(file.additions, file.deletions)),
+                                    ),
                             );
                         }
                         body = body.child(
-                            Button::new(key.clone())
+                            gpui_kit::base::Button::new(key.clone())
                                 .child(summary)
                                 .w_full()
-                                .ghost()
+                                .min_w_0()
+                                .flex_shrink_0()
+                                .p_3()
+                                .rounded_md()
+                                .text_sm()
+                                .bg(rgb(appearance::RAISED))
+                                .cursor_pointer()
+                                .hover(|style| style.bg(rgb(appearance::HOVER)))
                                 .accessibility_label("変更ファイルの差分を開く")
                                 .on_click(cx.listener(move |view, _, _, cx| {
                                     toggle_set(&mut view.expanded_items, &toggle);
