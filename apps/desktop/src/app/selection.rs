@@ -278,8 +278,8 @@ mod tests {
     use super::{ConversationSelection, SelectionAction, append_to_composer, search_url};
     use gpui_kit as gpui;
     use gpui_kit::{
-        AppContext, Context, Entity, InputEvent as _, IntoElement, Modifiers, MouseButton,
-        MouseMoveEvent, MouseUpEvent, ParentElement, Render, Styled, TestAppContext,
+        AppContext, Context, Entity, InputEvent as _, InteractiveElement, IntoElement, Modifiers,
+        MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement, Render, Styled, TestAppContext,
         VisualTestContext, Window,
         component::{
             Root,
