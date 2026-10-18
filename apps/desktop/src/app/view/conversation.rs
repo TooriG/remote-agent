@@ -1037,7 +1037,9 @@ impl Desktop {
                         format!("elicitation-url-{key}"),
                         "リンクを開く",
                         cx,
-                        move |_, _, cx| cx.open_url(&url),
+                        move |view, window, cx| {
+                            view.click_conversation_link(&url, window.modifiers().control, window, cx)
+                        },
                     ));
                 } else {
                     body = body.child(Textarea::new(&inputs.response));
