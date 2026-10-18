@@ -110,6 +110,11 @@ adb -P "$server_port" -s "$serial" shell am instrument -w \
     dev.remoteagent.mobile.test/androidx.test.runner.AndroidJUnitRunner | tee "$log.message-actions.log"
 grep -qx 'OK (2 tests)' "$log.message-actions.log"
 
+adb -P "$server_port" -s "$serial" shell am instrument -w \
+    -e class dev.remoteagent.mobile.ModelDefaultsTest \
+    dev.remoteagent.mobile.test/androidx.test.runner.AndroidJUnitRunner | tee "$log.model-defaults.log"
+grep -qx 'OK (2 tests)' "$log.model-defaults.log"
+
 adb -P "$server_port" -s "$serial" shell settings put secure show_ime_with_hard_keyboard 1
 adb -P "$server_port" -s "$serial" shell am instrument -w \
     -e class dev.remoteagent.mobile.ComposerKeyboardTest \
