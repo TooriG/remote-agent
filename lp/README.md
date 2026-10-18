@@ -81,6 +81,12 @@ gpt-6.1-sol through the BEX connection.
 
 ## Mobile composer
 
+The Android chat list keeps the BEX wordmark, Host selector, connection dot,
+search and refresh actions in one header row, including at 320dp width.
+There is no workspace heading or separate Host row. Search opens in place;
+closing it clears the filter and restores the header controls. Host names
+truncate to one line, and the connection dot retains a spoken status label.
+
 The microphone button opens the phone's speech recognition activity in the device
 language and appends the result to the original draft through the shared core.
 Review or edit the text before sending. Cancellation preserves the draft; a phone
