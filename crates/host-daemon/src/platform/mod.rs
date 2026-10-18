@@ -64,7 +64,6 @@ pub fn save_private_json(path: &Path, value: &impl serde::Serialize) -> Result<(
 }
 
 fn save_private_json_inner(path: &Path, value: &impl serde::Serialize) -> Result<()> {
-    #[cfg(windows)]
     let mut retries = 0;
     loop {
         let result = atomicwrites::AtomicFile::new(path, atomicwrites::AllowOverwrite)
@@ -79,8 +78,8 @@ fn save_private_json_inner(path: &Path, value: &impl serde::Serialize) -> Result
         // replacing this same destination (including another BEX window).
         // Retry only OS failures, never serialization errors. Each attempt
         // still atomically replaces the complete, flushed JSON document.
-        #[cfg(windows)]
-        if let Err(atomicwrites::Error::Internal(error)) = &result
+        if cfg!(windows)
+            && let Err(atomicwrites::Error::Internal(error)) = &result
             && matches!(error.raw_os_error(), Some(5 | 32 | 33))
             && retries < 10
         {
