@@ -1,7 +1,7 @@
 //! Credential references understood by the DSH provider routes.
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum KeyProvider {
     #[default]
     DeepSeek,

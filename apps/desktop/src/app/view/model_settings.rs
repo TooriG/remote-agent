@@ -485,6 +485,12 @@ impl Desktop {
                                 self.snapshot
                                     .account_weekly_usage(account.provider, account.id.clone()),
                             )
+                        })
+                        .when(manage && provider == ProviderKind::DeepSeek, |row| {
+                            row.child(dsh_route_status_view(
+                                account.plan_type.as_deref(),
+                                self.dsh_key_provider,
+                            ))
                         });
                     if manage && self.account_sign_out.as_deref() == Some(account.id.as_str()) {
                         row =
@@ -857,6 +863,105 @@ impl Desktop {
             None => form.child(cancel).into_any_element(),
         }
     }
+}
+
+/// Entries look like `DeepSeek`, `OpenRouter`, or
+/// `DeepSeek (OpenRouter用キー・設定先を確認)`; the first entry carries the
+/// `APIキー保存済み: ` prefix. Only a whole entry may match a route name.
+fn dsh_route_entries(plan_type: Option<&str>) -> Vec<&str> {
+    let Some(plan) = plan_type else {
+        return Vec::new();
+    };
+    let Some((_, saved)) = plan.split_once("APIキー保存済み: ") else {
+        return Vec::new();
+    };
+    saved.split(" / ").collect()
+}
+
+fn dsh_route_saved(plan_type: Option<&str>, provider: agent_protocol::dsh::KeyProvider) -> bool {
+    dsh_route_entries(plan_type)
+        .into_iter()
+        .any(|entry| entry == provider.label() || entry.starts_with(&format!("{} (", provider.label())))
+}
+
+fn dsh_route_status(plan_type: Option<&str>) -> Vec<agent_protocol::dsh::KeyProvider> {
+    agent_protocol::dsh::KeyProvider::ALL
+        .into_iter()
+        .filter(|provider| dsh_route_saved(plan_type, *provider))
+        .collect()
+}
+
+/// A saved route whose key belongs to a different provider fails on send, so it
+/// is reported as needing attention instead of as a usable route.
+fn dsh_route_needs_attention(
+    plan_type: Option<&str>,
+    provider: agent_protocol::dsh::KeyProvider,
+) -> bool {
+    dsh_route_entries(plan_type).into_iter().any(|entry| {
+        entry.starts_with(provider.label()) && entry.contains("設定先を確認")
+    })
+}
+fn dsh_route_status_view(
+    plan_type: Option<&str>,
+    current: agent_protocol::dsh::KeyProvider,
+) -> AnyElement {
+    let saved = dsh_route_status(plan_type);
+    let external = plan_type.is_some_and(|plan| plan.contains("Hostの外部設定を使用"));
+    let mut body = v_flex()
+        .w_full()
+        .gap_1()
+        .child(div().text_sm().font_semibold().child("接続先のAPIキー"));
+    if !saved.is_empty() {
+        body = body.child(div().text_xs().text_color(rgb(appearance::MUTED)).child(
+            "キーは保存済みのため表示しません。保存先は接続中のHostです。",
+        ));
+    }
+    for provider in agent_protocol::dsh::KeyProvider::ALL {
+        let is_saved = saved.contains(&provider);
+        let attention = dsh_route_needs_attention(plan_type, provider);
+        let detail = if attention {
+            "OpenRouter用のキーです。この接続先に保存し直してください。"
+        } else if is_saved {
+            "保存済み（キーは非表示）"
+        } else if external && provider == agent_protocol::dsh::KeyProvider::DeepSeek {
+            "Hostの外部設定（環境変数または ~/.dsh）を使用"
+        } else {
+            "未設定"
+        };
+        let (mark, tint) = if attention {
+            ("!", 0xe9b56f)
+        } else if is_saved || (external && provider == agent_protocol::dsh::KeyProvider::DeepSeek) {
+            ("✓", 0x8acfac)
+        } else {
+            ("−", appearance::MUTED)
+        };
+        body = body.child(
+            h_flex()
+                .w_full()
+                .gap_2()
+                .items_center()
+                .when(provider == current, |row| {
+                    row.px_2().py_1().rounded(px(6.)).bg(rgb(appearance::SELECTED))
+                })
+                .child(
+                    div()
+                        .w(px(14.))
+                        .flex_shrink_0()
+                        .text_color(rgb(tint))
+                        .child(mark),
+                )
+                .child(div().w(px(96.)).flex_shrink_0().child(provider.label()))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_xs()
+                        .text_color(rgb(appearance::MUTED))
+                        .child(detail),
+                ),
+        );
+    }
+    body.into_any_element()
 }
 
 fn account_usage_view(usage: Option<&agent_protocol::operations::AccountUsage>) -> AnyElement {
@@ -1499,6 +1604,61 @@ fn usage_bar(remaining_percent: u32, tint: Rgba) -> Div {
                     tint
                 }),
         )
+}
+
+#[cfg(test)]
+mod route_status_tests {
+    use super::{dsh_route_needs_attention, dsh_route_saved, dsh_route_status};
+    use agent_protocol::dsh::KeyProvider;
+
+    #[test]
+    fn saved_route_summary_lists_only_configured_providers() {
+        let plan = "APIキー保存済み: DeepSeek / OpenRouter";
+        assert_eq!(
+            dsh_route_status(Some(plan)),
+            vec![KeyProvider::DeepSeek, KeyProvider::OpenRouter]
+        );
+        assert!(!dsh_route_needs_attention(Some(plan), KeyProvider::OpenRouter));
+    }
+
+    #[test]
+    fn misplaced_openrouter_key_is_flagged_on_the_route_that_holds_it() {
+        let plan =
+            "APIキー保存済み: DeepSeek (OpenRouter用キー・設定先を確認) / OpenRouter";
+        assert!(dsh_route_needs_attention(Some(plan), KeyProvider::DeepSeek));
+        assert!(!dsh_route_needs_attention(Some(plan), KeyProvider::OpenRouter));
+        assert_eq!(
+            dsh_route_status(Some(plan)),
+            vec![KeyProvider::DeepSeek, KeyProvider::OpenRouter]
+        );
+    }
+
+    /// `xAI` and `OpenAI` both contain "AI", and the annotation itself contains
+    /// a separator-like sequence; only whole entries may match a route.
+    #[test]
+    fn route_names_do_not_match_as_substrings_of_other_entries() {
+        let plan = "APIキー保存済み: OpenAI / xAI";
+        assert_eq!(
+            dsh_route_status(Some(plan)),
+            vec![KeyProvider::OpenAI, KeyProvider::Xai]
+        );
+        let only_openai = "APIキー保存済み: OpenAI";
+        assert_eq!(dsh_route_status(Some(only_openai)), vec![KeyProvider::OpenAI]);
+        assert!(!dsh_route_saved(Some("APIキー保存済み: OpenAI"), KeyProvider::Xai));
+        assert!(!dsh_route_saved(None, KeyProvider::DeepSeek));
+    }
+
+    #[test]
+    fn unknown_or_external_plans_report_no_saved_route() {
+        for plan in [
+            None,
+            Some("APIキー: Hostの外部設定を使用"),
+            Some("無関係なプラン"),
+        ] {
+            assert!(dsh_route_status(plan).is_empty());
+            assert!(!dsh_route_needs_attention(plan, KeyProvider::DeepSeek));
+        }
+    }
 }
 
 #[cfg(test)]

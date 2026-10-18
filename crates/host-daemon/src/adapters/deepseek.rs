@@ -78,6 +78,7 @@ impl From<DeepSeek> for super::Backend {
             provider: PROVIDER,
             agent: Ok(Arc::new(agent)),
             dictation: None,
+            suggestions: None,
         }
     }
 }
@@ -384,6 +385,25 @@ impl DeepSeek {
             Err(e) => return Err(failure(e)),
         }
         Ok(())
+    }
+
+    /// Report only whether each route has a credential and where it came from.
+    /// Key values never cross this boundary, and an unusable saved key is
+    /// reported so the user can fix it before an inference request fails.
+    async fn route_summary(&self) -> Result<String, Failure> {
+        let keys = self.managed_keys().await?;
+        Ok(KeyProvider::ALL
+            .into_iter()
+            .filter_map(|provider| {
+                let key = keys["refs"][provider.reference()].as_str()?;
+                Some(if provider != KeyProvider::OpenRouter && key.starts_with("sk-or-") {
+                    format!("{} (OpenRouter用キー・設定先を確認)", provider.label())
+                } else {
+                    provider.label().to_owned()
+                })
+            })
+            .collect::<Vec<_>>()
+            .join(" / "))
     }
 
     async fn configured(&self) -> Result<bool, Failure> {
@@ -812,20 +832,14 @@ fn translate_update(update: &Value, turn: &Turn) -> Option<Item> {
 impl Identity for DeepSeek {
     async fn list(&self) -> Result<op::Accounts, Failure> {
         let configured = self.configured().await?;
-        let keys = self.managed_keys().await?;
-        let saved: Vec<_> = KeyProvider::ALL.into_iter().filter_map(|provider| {
-            let key = keys["refs"][provider.reference()].as_str()?;
-            Some(if provider != KeyProvider::OpenRouter && key.starts_with("sk-or-") {
-                format!("{}（OpenRouter用キー・設定先を確認）", provider.label())
-            } else { provider.label().to_owned() })
-        }).collect();
+        let saved = self.route_summary().await?;
         Ok(op::Accounts {
             accounts: if configured {
                 vec![op::Account {
                     id: ACCOUNT.into(),
                     provider: PROVIDER,
                     email: Some("DSH APIキー".into()),
-                    plan_type: Some(if saved.is_empty() { "APIキー: Hostの外部設定を使用".into() } else { format!("APIキー保存済み: {}", saved.join(" / ")) }),
+                    plan_type: Some(if saved.is_empty() { "APIキー: Hostの外部設定を使用".into() } else { format!("APIキー保存済み: {saved}") }),
                     usage: None,
                 }]
             } else {
@@ -1601,6 +1615,31 @@ mod tests {
         );
     }
 
+    /// The client parses this summary, so an entry must never contain the
+    /// `" / "` separator and must stay parseable after the prefix is stripped.
+    #[tokio::test]
+    async fn dsh_route_summary_is_parseable_and_never_leaks_key_material() {
+        let dir = tempfile::tempdir().unwrap();
+        let adapter = DeepSeek::load("dsh".into(), dir.path().into())
+            .await
+            .unwrap();
+        assert_eq!(adapter.route_summary().await.unwrap(), "");
+        save_test_key(&adapter, KeyProvider::DeepSeek, Some("native-secret")).await;
+        save_test_key(&adapter, KeyProvider::OpenRouter, Some("router-secret")).await;
+        assert_eq!(
+            adapter.route_summary().await.unwrap(),
+            "DeepSeek / OpenRouter"
+        );
+        // A misplaced key is annotated without introducing a second separator.
+        crate::platform::save_private_json(&dir.path().join("api-key.json"), &"sk-or-misplaced")
+            .unwrap();
+        let summary = adapter.route_summary().await.unwrap();
+        assert_eq!(summary.split(" / ").count(), 2);
+        assert!(summary.starts_with("DeepSeek (OpenRouter用キー・設定先を確認)"));
+        assert!(!summary.contains("secret"));
+        assert!(!summary.contains("sk-or-misplaced"));
+    }
+
     #[tokio::test]
     async fn dsh_keys_reject_invalid_values_without_overwriting_existing_credentials() {
         let dir = tempfile::tempdir().unwrap();
@@ -1652,7 +1691,7 @@ mod tests {
         let summary = account.plan_type.as_deref().unwrap();
         assert!(summary.contains("APIキー保存済み"));
         assert!(summary.contains("OpenRouter"));
-        assert!(summary.contains("DeepSeek（OpenRouter用キー・設定先を確認）"));
+        assert!(summary.contains("DeepSeek (OpenRouter用キー・設定先を確認)"));
         assert!(!serde_json::to_string(&accounts).unwrap().contains("sk-or-test-only"));
         save_test_key(&adapter, KeyProvider::OpenRouter, None).await;
         let accounts = Identity::list(&adapter).await.unwrap();
