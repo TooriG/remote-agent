@@ -1,6 +1,7 @@
 use gpui_kit::{
-    App, Context, Entity, EventEmitter, InteractiveElement, IntoElement, MouseButton,
-    ParentElement, Pixels, Point, Render, SharedString, Styled, Window, anchored,
+    App, Context, DismissEvent, Entity, EventEmitter, Focusable, InteractiveElement, IntoElement,
+    MouseButton, ParentElement, Pixels, Point, Render, SharedString, Styled, Subscription, Window,
+    anchored,
     base::TextSelection,
     canvas,
     component::{
@@ -8,7 +9,7 @@ use gpui_kit::{
         button::{Button, ButtonVariants},
         h_flex,
         input::TextareaState,
-        menu::{ContextMenuExt, PopupMenuItem},
+        menu::{PopupMenu, PopupMenuItem},
     },
     deferred, div, point,
     prelude::FluentBuilder,
@@ -25,6 +26,8 @@ pub(super) struct ConversationSelection {
     selected: Option<(Point<Pixels>, String)>,
     pending: Option<Point<Pixels>>,
     allow_side_chat: bool,
+    context_menu: Option<(Point<Pixels>, Entity<PopupMenu>)>,
+    menu_subscription: Option<Subscription>,
 }
 
 impl EventEmitter<SelectionAction> for ConversationSelection {}
@@ -35,14 +38,60 @@ impl ConversationSelection {
             selected: None,
             pending: None,
             allow_side_chat,
+            context_menu: None,
+            menu_subscription: None,
         }
     }
 
     pub(super) fn clear(&mut self, cx: &mut Context<Self>) {
         self.pending = None;
-        if self.selected.take().is_some() {
+        let had_menu = self.context_menu.take().is_some();
+        self.menu_subscription = None;
+        if self.selected.take().is_some() || had_menu {
             cx.notify();
         }
+    }
+
+    pub(super) fn show_context_menu(
+        &mut self,
+        link: Option<String>,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.clear(cx);
+        let text = TextSelection::selected_text(window, cx);
+        let previous_focus = window.focused(cx);
+        let menu = PopupMenu::build(window, cx, move |menu, _, _| {
+            let menu = menu.when_some(previous_focus, |menu, focus| menu.action_context(focus));
+            let menu = menu.when_some(link, |menu, link| {
+                menu.item(
+                    PopupMenuItem::new("リンクをコピー").on_click(move |_, _, cx| {
+                        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(link.clone()));
+                    }),
+                )
+            });
+            let query = text.clone();
+            menu.item(
+                PopupMenuItem::new("コピー")
+                    .disabled(text.is_empty())
+                    .on_click(move |_, _, cx| {
+                        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text.clone()));
+                    }),
+            )
+            .item(
+                PopupMenuItem::new("Googleで検索")
+                    .disabled(query.is_empty())
+                    .on_click(move |_, _, cx| cx.open_url(search_url(&query).as_str())),
+            )
+        });
+        self.menu_subscription = Some(cx.subscribe(&menu, |view, _, _: &DismissEvent, cx| {
+            view.context_menu = None;
+            cx.notify();
+        }));
+        menu.focus_handle(cx).focus(window, cx);
+        self.context_menu = Some((position, menu));
+        cx.notify();
     }
 
     pub(super) fn wrap(entity: &Entity<Self>, content: impl IntoElement) -> impl IntoElement {
@@ -70,24 +119,12 @@ impl ConversationSelection {
                         close_owner.update(cx, |view, cx| view.clear(cx));
                     })
                     .child(content)
-                    .context_menu(move |menu, window, cx| {
-                        context_owner.update(cx, |view, cx| view.clear(cx));
-                        let text = TextSelection::selected_text(window, cx);
-                        let query = text.clone();
-                        menu.item(
-                            PopupMenuItem::new("コピー")
-                                .disabled(text.is_empty())
-                                .on_click(move |_, _, cx| {
-                                    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
-                                        text.clone(),
-                                    ));
-                                }),
-                        )
-                        .item(
-                            PopupMenuItem::new("Googleで検索")
-                                .disabled(query.is_empty())
-                                .on_click(move |_, _, cx| cx.open_url(search_url(&query).as_str())),
-                        )
+                    // Rich-text link handlers run first on mouse-up and consume the
+                    // event. Plain text falls through to this selection menu.
+                    .on_mouse_up(MouseButton::Right, move |event, window, cx| {
+                        context_owner.update(cx, |view, cx| {
+                            view.show_context_menu(None, event.position, window, cx);
+                        });
                     }),
             )
             .child(entity.clone())
@@ -113,8 +150,20 @@ impl Render for ConversationSelection {
             )
             .size(px(0.))
         });
+        let context_menu = self.context_menu.as_ref().map(|(position, menu)| {
+            deferred(
+                anchored()
+                    .position(*position)
+                    .snap_to_window_with_margin(px(8.))
+                    .child(menu.clone()),
+            )
+            .with_priority(gpui_kit::base::POPUP_PRIORITY)
+        });
         let Some((position, text)) = &self.selected else {
-            return div().children(capture).into_any_element();
+            return div()
+                .children(capture)
+                .children(context_menu)
+                .into_any_element();
         };
         let add = text.clone();
         let details = text.clone();
@@ -165,6 +214,7 @@ impl Render for ConversationSelection {
             });
         div()
             .children(capture)
+            .children(context_menu)
             .child(
                 deferred(
                     anchored()
@@ -242,18 +292,66 @@ mod tests {
     struct Chat(Entity<ConversationSelection>, gpui::ListState);
     impl Render for Chat {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let selection = self.0.clone();
             div()
                 .size_full()
                 .flex()
                 .flex_col()
                 .child(ConversationSelection::wrap(
                     &self.0,
-                    gpui::list(self.1.clone(), |_, _, _| {
+                    gpui::list(self.1.clone(), move |_, _, _| {
+                        let labelled_selection = selection.clone();
+                        let plain_selection = selection.clone();
                         div()
                             .pt(px(80.))
                             .child(
                                 TextView::markdown("message", "Alpha Bravo\n\nCharlie Delta")
                                     .selectable(true),
+                            )
+                            .child(
+                                div().debug_selector(|| "labelled-link".into()).child(
+                                    TextView::markdown(
+                                        "link",
+                                        "[Download clip](https://example.com/clip.webm?q=1#video)",
+                                    )
+                                    .selectable(true)
+                                    .on_link_click(
+                                        move |url, event, window, cx| {
+                                            if let gpui::ClickEvent::Mouse(click) = event {
+                                                if click.up.button == MouseButton::Right {
+                                                    labelled_selection.update(cx, |view, cx| {
+                                                        view.show_context_menu(
+                                                            Some(url.to_string()),
+                                                            click.up.position,
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    });
+                                                }
+                                            }
+                                        },
+                                    ),
+                                ),
+                            )
+                            .child(
+                                div().debug_selector(|| "plain-link".into()).child(
+                                    TextView::markdown("plain", "https://example.com/plain")
+                                        .selectable(true)
+                                        .on_link_click(move |url, event, window, cx| {
+                                            if let gpui::ClickEvent::Mouse(click) = event {
+                                                if click.up.button == MouseButton::Right {
+                                                    plain_selection.update(cx, |view, cx| {
+                                                        view.show_context_menu(
+                                                            Some(url.to_string()),
+                                                            click.up.position,
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    });
+                                                }
+                                            }
+                                        }),
+                                ),
                             )
                             .into_any_element()
                     })
@@ -334,6 +432,29 @@ mod tests {
                 "Alpha Bravo\n"
             )
         });
+    }
+
+    #[gpui::test]
+    fn right_click_link_copies_destination_without_selection_or_navigation(
+        cx: &mut TestAppContext,
+    ) {
+        let (_, cx) = setup(cx);
+        for (id, expected) in [
+            ("labelled-link", "https://example.com/clip.webm?q=1#video"),
+            ("plain-link", "https://example.com/plain"),
+        ] {
+            let bounds = cx.debug_bounds(id).unwrap();
+            let at = point(bounds.left() + px(30.), bounds.center().y);
+            cx.simulate_mouse_move(at, None, Modifiers::default());
+            cx.simulate_mouse_down(at, MouseButton::Right, Modifiers::default());
+            cx.simulate_mouse_up(at, MouseButton::Right, Modifiers::default());
+            cx.run_until_parked();
+            cx.simulate_keystrokes("down enter");
+            cx.update(|_, cx| {
+                assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), expected)
+            });
+            assert!(cx.opened_url().is_none());
+        }
     }
 
     #[gpui::test]
