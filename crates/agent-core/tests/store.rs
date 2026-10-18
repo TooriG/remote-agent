@@ -2646,6 +2646,7 @@ async fn fork_opens_the_returned_thread_and_keeps_later_deltas() {
 #[tokio::test]
 async fn fork_failure_clears_progress_and_allows_retry() {
     let (store, mut reader, writer) = setup(snapshot()).await;
+    let selected_before = store.snapshot().navigation.thread_id.clone();
     let source = SessionRef {
         provider: ProviderKind::Codex,
         id: "thread".into(),
@@ -2666,7 +2667,7 @@ async fn fork_failure_clears_progress_and_allows_retry() {
         assert!(fork.await.is_err());
         assert!(!store.snapshot().operation_running(progress.clone()));
         assert!(store.snapshot().operation_error(progress.clone()).is_some());
-        assert_eq!(store.snapshot().navigation.thread_id, Some(source.clone()));
+        assert_eq!(store.snapshot().navigation.thread_id, selected_before);
     }
     store.close().await.unwrap();
 }
