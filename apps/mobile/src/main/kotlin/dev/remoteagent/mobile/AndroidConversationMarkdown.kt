@@ -84,9 +84,7 @@ internal fun ConversationBlocks(
     perform: ((Intent, (Result<Outcome>) -> Unit) -> Unit)?,
 ) {
     var file by remember { mutableStateOf<dev.remoteagent.core.MarkdownFileReference?>(null) }
-    val openFile: (String) -> Unit = { source ->
-        file = dev.remoteagent.core.markdownFileTarget(source, cwd)
-    }
+    val openFile: (String) -> Unit = { source -> file = dev.remoteagent.core.markdownFileTarget(source, cwd) }
     SelectionContainer {
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
             blocks.forEachIndexed { index, block ->
@@ -106,22 +104,31 @@ internal fun ConversationBlocks(
                                 val quoteColor = MaterialTheme.colorScheme.outline
                                 Box(
                                     Modifier.padding(
-                                            start = (block.style.listDepth.toInt() - 1)
-                                                .coerceAtLeast(0).times(LIST_INDENT_DP).dp
+                                            start =
+                                                (block.style.listDepth.toInt() - 1)
+                                                    .coerceAtLeast(0)
+                                                    .times(LIST_INDENT_DP)
+                                                    .dp
                                         )
-                                        .then(if (block.style.quoted) {
-                                            Modifier.drawBehind {
-                                                drawLine(quoteColor, Offset(1.dp.toPx(), 0f),
-                                                    Offset(1.dp.toPx(), size.height), 2.dp.toPx())
-                                            }.padding(start = 12.dp)
-                                        } else Modifier)
+                                        .then(
+                                            if (block.style.quoted) {
+                                                Modifier.drawBehind {
+                                                        drawLine(
+                                                            quoteColor,
+                                                            Offset(1.dp.toPx(), 0f),
+                                                            Offset(1.dp.toPx(), size.height),
+                                                            2.dp.toPx(),
+                                                        )
+                                                    }
+                                                    .padding(start = 12.dp)
+                                            } else Modifier
+                                        )
                                 ) {
                                     MarkdownText(block.runs, style, block.style.marker, openFile)
                                 }
                             }
                         }
-                    is MarkdownBlock.Visualization ->
-                        ConversationVisualization(block.path, cwd, perform)
+                    is MarkdownBlock.Visualization -> ConversationVisualization(block.path, cwd, perform)
                     is MarkdownBlock.Table -> MarkdownTable(block, index, openFile)
                 }
             }
@@ -152,10 +159,7 @@ private fun MarkdownCode(block: MarkdownBlock.Paragraph, index: Int) {
             )
             .background(MaterialTheme.colorScheme.surfaceContainer)
     ) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
                 block.style.filename ?: (block.style.language ?: "CODE").uppercase(),
                 Modifier.weight(1f),
@@ -207,17 +211,13 @@ private fun MarkdownTable(table: MarkdownBlock.Table, index: Int, openFile: (Str
         ) {
             table.rows.forEachIndexed { row, cells ->
                 Row(
-                    Modifier.background(
-                        if (row == 0) MaterialTheme.colorScheme.surfaceVariant
-                        else Color.Transparent
-                    )
+                    Modifier.background(if (row == 0) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent)
                 ) {
                     cells.forEachIndexed { column, cell ->
                         Box(
-                            Modifier.width(width)
-                                .padding(10.dp)
-                                .testTag("markdown.cell.$index.$row.$column")
-                                .semantics(mergeDescendants = true) {}
+                            Modifier.width(width).padding(10.dp).testTag("markdown.cell.$index.$row.$column").semantics(
+                                mergeDescendants = true
+                            ) {}
                         ) {
                             MarkdownText(
                                 cell.runs,
@@ -259,9 +259,7 @@ private fun TableCopyMenu(table: MarkdownBlock.Table) {
                     clipboard.setText(
                         androidx.compose.ui.text.AnnotatedString(
                             dev.remoteagent.core.markdownTableCsv(
-                                table.rows.map { row ->
-                                    row.map { cell -> cell.runs.joinToString("") { it.text } }
-                                }
+                                table.rows.map { row -> row.map { cell -> cell.runs.joinToString("") { it.text } } }
                             )
                         )
                     )
@@ -280,11 +278,9 @@ private fun MarkdownText(
     openFile: (String) -> Unit,
     alignment: TextAlign = TextAlign.Left,
 ) {
-    val chips =
-        runs
-            .mapIndexedNotNull { index, run -> run.file?.let { index.toString() to it } }
-            .toMap()
+    val chips = runs.mapIndexedNotNull { index, run -> run.file?.let { index.toString() to it } }.toMap()
     val linkColor = MaterialTheme.colorScheme.primary
+    val openExternalLink = rememberExternalLinkOpener()
     val styledRuns = runs.map { markdownText(listOf(it)) }
     val text = buildAnnotatedString {
         if (marker != null) append("$marker ")
@@ -295,10 +291,10 @@ private fun MarkdownText(
                     appendInlineContent(index.toString(), "[${run.file!!.label}](<$link>)")
                 }
             } else if (link != null) {
-                withStyle(
-                    SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)
-                ) {
-                    withLink(LinkAnnotation.Url(link)) { append(styledRuns[index]) }
+                withStyle(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)) {
+                    withLink(LinkAnnotation.Clickable("url:$index") { openExternalLink(link) }) {
+                        append(styledRuns[index])
+                    }
                 }
             } else append(styledRuns[index])
         }
@@ -314,10 +310,8 @@ private fun MarkdownText(
                 androidx.compose.foundation.text.InlineTextContent(
                     androidx.compose.ui.text.Placeholder(
                         minOf(
-                                file.label
-                                    .codePointCount(0, file.label.length)
-                                    .coerceAtMost(CHIP_MAX_CHARACTERS) * CHIP_CHARACTER_WIDTH_EM +
-                                    CHIP_PADDING_EM,
+                                file.label.codePointCount(0, file.label.length).coerceAtMost(CHIP_MAX_CHARACTERS) *
+                                    CHIP_CHARACTER_WIDTH_EM + CHIP_PADDING_EM,
                                 maxChipEm,
                             )
                             .em,
@@ -342,15 +336,13 @@ private fun markdownText(runs: List<MarkdownRun>): androidx.compose.ui.text.Anno
             withStyle(
                 SpanStyle(
                     color =
-                        (if (dark) run.darkColor else run.lightColor)?.let {
-                            Color(OPAQUE_ALPHA_MASK or it.toLong())
-                        } ?: Color.Unspecified,
+                        (if (dark) run.darkColor else run.lightColor)?.let { Color(OPAQUE_ALPHA_MASK or it.toLong()) }
+                            ?: Color.Unspecified,
                     fontWeight = if (run.strong) FontWeight.Bold else null,
                     fontStyle = if (run.emphasis) FontStyle.Italic else null,
                     fontFamily = if (run.code) FontFamily.Monospace else null,
                     background = if (run.code) inlineBackground else Color.Unspecified,
-                    textDecoration =
-                        if (run.strikethrough) TextDecoration.LineThrough else TextDecoration.None,
+                    textDecoration = if (run.strikethrough) TextDecoration.LineThrough else TextDecoration.None,
                 )
             ) {
                 append(run.text)
