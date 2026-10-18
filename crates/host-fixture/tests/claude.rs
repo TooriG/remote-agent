@@ -1520,6 +1520,7 @@ async fn claude_accounts_login_switch_resume_cancel_and_logout_without_codex() {
         std::fs::remove_file(native.join("usage-paused")).unwrap();
         until(&store, |snapshot| snapshot.account.accounts.as_ref().is_some_and(|accounts| accounts.accounts[0].usage.is_some())).await;
         let usage = store.snapshot().account.accounts.as_ref().unwrap().accounts[0].usage.clone().unwrap();
+        assert!(usage.error.is_none(), "{usage:?}");
         assert_eq!(usage.windows.len(), 3);
         assert_eq!(usage.windows[0].remaining_percent, 28);
         assert_eq!(usage.windows[1].remaining_percent, 61);
