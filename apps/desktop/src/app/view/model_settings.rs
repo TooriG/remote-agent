@@ -735,6 +735,17 @@ impl Desktop {
             form = form.child(div().text_xs().text_color(rgb(appearance::MUTED)).child(
                 format!("{} · {}", self.dsh_key_provider.label(), if saved { "保存済み（キーは非表示）" } else { "BEXには未設定" })
             ));
+            if saved && self.dsh_key_provider == agent_protocol::dsh::KeyProvider::OpenRouter {
+                let id = login.login_id.clone();
+                form = form
+                    .child(div().text_xs().text_color(rgb(appearance::MUTED)).child(
+                        "OpenRouterはDeepSeekエージェントで使えます。Codex・Claudeの会話からは新しい会話を開いて選択します。"
+                    ))
+                    .child(self.button("dsh-openrouter-models", "OpenRouterのモデルを選ぶ", cx, move |s, window, cx| {
+                        s.account_operation(Intent::CancelAccountLogin(op::CancelAccountLogin { provider, id: id.clone() }));
+                        s.show_openrouter_models(window, cx);
+                    }).small().disabled(disabled).debug_selector(|| "dsh-openrouter-models".into()));
+            }
             if saved {
                 let id = login.login_id.clone();
                 form = form.child(self.button("dsh-key-remove", "この接続先のキーを削除", cx, move |s, _, _| {
@@ -887,6 +898,17 @@ fn account_usage_view(usage: Option<&agent_protocol::operations::AccountUsage>) 
 }
 
 impl Desktop {
+    fn show_openrouter_models(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.selected().is_some_and(|session| session.provider != ProviderKind::DeepSeek) {
+            self.new_chat(self.snapshot.selected_directory(), window, cx);
+        }
+        self.model_provider = Some(ProviderKind::DeepSeek);
+        self.model_panel = ModelPanel::Models;
+        self.model_search.update(cx, |input, cx| input.set_value("openrouter", window, cx));
+        self.refresh_accounts_and_models();
+        cx.notify();
+    }
+
     fn model_panel_content(&self, cx: &Context<Self>) -> AnyElement {
         let mut body = v_flex().flex_1().min_w_0().gap_2();
         if self.model_panel != ModelPanel::Models {
@@ -1036,7 +1058,7 @@ impl Desktop {
                 div()
                     .text_xs()
                     .text_color(rgb(appearance::MUTED))
-                    .child("CodexまたはClaudeを選んで会話を始められます。"),
+                    .child("Codex・Claude・DeepSeek（OpenRouter対応）を選んで会話を始められます。"),
             );
         }
         let account = self
@@ -1108,6 +1130,16 @@ impl Desktop {
         let custom_model = self
             .snapshot
             .custom_model_choice(provider, &self.model_search.read(cx).value());
+        if provider == Some(ProviderKind::DeepSeek) {
+            body = body.child(
+                Button::new("model-openrouter")
+                    .label("OpenRouterのモデル")
+                    .accessibility_label("OpenRouterのモデル")
+                    .debug_selector(|| "model-openrouter".into())
+                    .small().ghost().disabled(disabled)
+                    .on_click(cx.listener(|s, _, window, cx| s.show_openrouter_models(window, cx))),
+            );
+        }
         let models = self
             .snapshot
             .models_matching(provider, self.model_search.read(cx).value().to_string());
@@ -1655,6 +1687,25 @@ mod tests {
         });
         assert!(window.debug_bounds("dsh-key-remove").is_some());
         assert!(window.debug_bounds("account-submit-code").is_some());
+        assert!(window.debug_bounds("dsh-openrouter-models").is_some());
+        window.update(|_, cx| {
+            view.read(cx).0.clone().update(cx, |view, _| {
+                Arc::make_mut(&mut view.snapshot).models = Arc::new(serde_json::from_value(serde_json::json!([
+                    {"id":"official","model":{"provider":"deepseek","id":"[\"deepseek-official\",\"deepseek-flash\"]"},"displayName":"DeepSeek","defaultReasoningEffort":"","supportedReasoningEfforts":[]},
+                    {"id":"router","model":{"provider":"deepseek","id":"[\"openrouter\",\"test/model\"]"},"displayName":"Router model","defaultReasoningEffort":"","supportedReasoningEfforts":[]}
+                ])).unwrap());
+            });
+        });
+        let models = window.debug_bounds("dsh-openrouter-models").unwrap();
+        window.simulate_click(models.center(), Modifiers::default());
+        window.run_until_parked();
+        assert!(window.debug_bounds("model-choice-router").is_some());
+        assert!(window.debug_bounds("model-choice-official").is_none());
+        window.update(|_, cx| {
+            let desktop = view.read(cx).0.read(cx);
+            assert!(desktop.model_panel == ModelPanel::Models);
+            assert_eq!(desktop.model_search.read(cx).value(), "openrouter");
+        });
     }
 
     struct DefaultsView(Entity<Desktop>);
