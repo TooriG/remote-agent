@@ -37,6 +37,8 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
+use agent_protocol::dsh::{KeyProvider, KeyUpdate};
+
 const PROVIDER: ProviderKind = ProviderKind::DeepSeek;
 const ACCOUNT: &str = "deepseek:native";
 const DEFAULT_MODEL: &str = "[\"deepseek-official\",\"deepseek-flash\"]";
@@ -180,7 +182,29 @@ impl DeepSeek {
         }
         let mut command = self.command()?;
         let patch = self.0.directory.join("acp.patch.json");
-        crate::platform::save_private_json(&patch,&json!([{"id":"acp","config":{"provider":"deepseek-official","model":"deepseek-flash"}}])).map_err(failure)?;
+        let keys = self.managed_keys().await?;
+        let mut providers = serde_json::Map::new();
+        for provider in KeyProvider::ALL {
+            if provider != KeyProvider::DeepSeek && keys["refs"][provider.reference()].is_string() {
+                providers.insert(
+                    provider.route().into(),
+                    json!({"apiKeyEnv":provider.reference()}),
+                );
+            }
+        }
+        let mut overlays = vec![
+            json!({"id":"acp","config":{"provider":"deepseek-official","model":"deepseek-flash"}}),
+            json!({"id":"llm-pi-ai","config":{"providers":providers}}),
+        ];
+        if keys["refs"]
+            .as_object()
+            .is_some_and(|refs| !refs.is_empty())
+        {
+            let credentials = self.0.directory.join("dsh-runtime-credentials.json");
+            crate::platform::save_private_json(&credentials, &keys).map_err(failure)?;
+            overlays.push(json!({"id":"credentials","config":{"path":credentials}}));
+        }
+        crate::platform::save_private_json(&patch, &overlays).map_err(failure)?;
         command
             .args(["--profile", "acp", "--patch"])
             .arg(patch)
@@ -298,8 +322,69 @@ impl DeepSeek {
             Err(e) => Err(failure(e)),
         }
     }
+    async fn managed_keys(&self) -> Result<Value, Failure> {
+        let mut value = match tokio::fs::read(self.0.directory.join("dsh-keys.json")).await {
+            Ok(bytes) => serde_json::from_slice::<Value>(&bytes)
+                .map_err(|_| failure("DSH APIキー設定を読み込めません。"))?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({"version":1,"refs":{}}),
+            Err(e) => return Err(failure(e)),
+        };
+        if value["version"] != 1 || !value["refs"].is_object() {
+            return Err(failure("DSH APIキー設定の形式が不正です。"));
+        }
+        if let Some(key) = self.api_key().await? {
+            value["refs"][KeyProvider::DeepSeek.reference()] = json!(&*key);
+        }
+        Ok(value)
+    }
+
+    async fn update_key(&self, update: KeyUpdate) -> Result<(), Failure> {
+        let key = update
+            .key
+            .map(|key| zeroize::Zeroizing::new(key.trim().to_owned()));
+        if key.as_ref().is_some_and(|key| {
+            key.is_empty()
+                || key.len() > 4096
+                || key.chars().any(|c| c.is_whitespace() || c.is_control())
+        }) {
+            return Err(failure("有効なAPIキーを入力してください。"));
+        }
+        self.reset_rpc().await?;
+        if update.provider == KeyProvider::DeepSeek {
+            let path = self.0.directory.join("api-key.json");
+            if let Some(key) = key {
+                crate::platform::save_private_json(&path, &*key).map_err(failure)?;
+            } else {
+                match tokio::fs::remove_file(path).await {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(failure(e)),
+                }
+            }
+        } else {
+            let mut keys = self.managed_keys().await?;
+            let refs = keys["refs"].as_object_mut().unwrap();
+            refs.remove(KeyProvider::DeepSeek.reference());
+            if let Some(key) = key {
+                refs.insert(update.provider.reference().into(), json!(&*key));
+            } else {
+                refs.remove(update.provider.reference());
+            }
+            crate::platform::save_private_json(&self.0.directory.join("dsh-keys.json"), &keys)
+                .map_err(failure)?;
+        }
+        match tokio::fs::remove_file(self.0.directory.join("dsh-runtime-credentials.json")).await {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(failure(e)),
+        }
+        Ok(())
+    }
+
     async fn configured(&self) -> Result<bool, Failure> {
-        if self.api_key().await?.is_some()
+        if self.managed_keys().await?["refs"]
+            .as_object()
+            .is_some_and(|refs| !refs.is_empty())
             || std::env::var("DEEPSEEK_API_KEY").is_ok_and(|v| !v.trim().is_empty())
         {
             return Ok(true);
@@ -717,7 +802,7 @@ impl Identity for DeepSeek {
                 vec![op::Account {
                     id: ACCOUNT.into(),
                     provider: PROVIDER,
-                    email: Some("DeepSeek API".into()),
+                    email: Some("DeepSeek Harness API".into()),
                     plan_type: Some("API".into()),
                     usage: None,
                 }]
@@ -743,35 +828,45 @@ impl Identity for DeepSeek {
                 .into())
             }
             AccountCommand::StartLogin => {
+                let keys = self.managed_keys().await?;
                 let id = uuid::Uuid::new_v4().to_string();
                 *self.0.login.lock().await = Some(id.clone());
                 Ok(op::AccountLogin {
                     provider: PROVIDER,
                     login_id: id,
                     requires_code_submission: true,
-                    user_code: String::new(),
+                    user_code: serde_json::to_string(
+                        &KeyProvider::ALL
+                            .into_iter()
+                            .filter(|provider| keys["refs"][provider.reference()].is_string())
+                            .collect::<Vec<_>>(),
+                    )
+                    .map_err(failure)?,
                     verification_url: "https://platform.deepseek.com/api_keys".into(),
                 }
                 .into())
             }
             AccountCommand::SubmitLogin { id, code } => {
-                if self.0.login.lock().await.as_ref() != Some(&id) {
+                let mut login = self.0.login.lock().await;
+                if login.as_ref() != Some(&id) {
                     return Err(failure("API key setup has expired"));
                 }
                 let code = zeroize::Zeroizing::new(code);
-                let key = zeroize::Zeroizing::new(code.trim().to_owned());
-                if key.is_empty() || key.len() > 4096 || key.chars().any(char::is_whitespace) {
-                    return Err(failure("有効なDeepSeek APIキーを入力してください。"));
-                }
-                self.reset_rpc().await?;
-                crate::platform::save_private_json(&self.0.directory.join("api-key.json"), &*key)
-                    .map_err(failure)?;
-                *self.0.login.lock().await = None;
+                let update = if code.trim_start().starts_with('{') {
+                    serde_json::from_str::<KeyUpdate>(&code)
+                        .map_err(|_| failure("DSH APIキー設定の形式が不正です。"))?
+                } else {
+                    KeyUpdate {
+                        provider: KeyProvider::DeepSeek,
+                        key: Some(code.to_string()),
+                    }
+                };
+                self.update_key(update).await?;
+                *login = None;
                 Ok(AccountReply::Complete)
             }
             AccountCommand::ReadLogin { id } => Ok(op::AccountLoginStatus {
-                completed: self.0.login.lock().await.as_ref() != Some(&id)
-                    && self.configured().await?,
+                completed: self.0.login.lock().await.as_ref() != Some(&id),
                 account_id: self.configured().await?.then(|| ACCOUNT.into()),
             }
             .into()),
@@ -784,15 +879,13 @@ impl Identity for DeepSeek {
             }
             AccountCommand::Logout { id } if id == ACCOUNT => {
                 self.reset_rpc().await?;
-                match tokio::fs::remove_file(self.0.directory.join("api-key.json")).await {
-                    Ok(()) => {}
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                        return Err(failure(
-                            "Harnessや環境変数に設定したAPIキーは、設定元で削除してください。",
-                        ));
-                    }
-                    Err(e) => return Err(failure(e)),
-                };
+                for provider in KeyProvider::ALL {
+                    self.update_key(KeyUpdate {
+                        provider,
+                        key: None,
+                    })
+                    .await?;
+                }
                 Ok(AccountReply::Complete)
             }
             _ => Err(failure("Unknown DeepSeek account")),
@@ -1374,6 +1467,131 @@ mod tests {
         )
         .await
         .unwrap();
+        adapter.shutdown().await;
+    }
+
+    async fn save_test_key(adapter: &DeepSeek, provider: KeyProvider, key: Option<&str>) {
+        let AccountReply::Login(login) = adapter.account(AccountCommand::StartLogin).await.unwrap()
+        else {
+            panic!("login expected")
+        };
+        adapter
+            .account(AccountCommand::SubmitLogin {
+                id: login.login_id.clone(),
+                code: serde_json::to_string(&KeyUpdate {
+                    provider,
+                    key: key.map(str::to_owned),
+                })
+                .unwrap(),
+            })
+            .await
+            .unwrap();
+        let AccountReply::Status(status) = adapter
+            .account(AccountCommand::ReadLogin { id: login.login_id })
+            .await
+            .unwrap()
+        else {
+            panic!("status expected")
+        };
+        assert!(status.completed);
+    }
+
+    #[tokio::test]
+    async fn dsh_keys_rotate_independently_persist_and_never_appear_in_account_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let adapter = DeepSeek::load("dsh".into(), dir.path().into())
+            .await
+            .unwrap();
+        save_test_key(&adapter, KeyProvider::DeepSeek, Some("native-secret")).await;
+        save_test_key(&adapter, KeyProvider::OpenRouter, Some("router-secret")).await;
+        save_test_key(&adapter, KeyProvider::OpenAI, Some("openai-secret")).await;
+        save_test_key(&adapter, KeyProvider::OpenRouter, Some("rotated-secret")).await;
+        let adapter = DeepSeek::load("dsh".into(), dir.path().into())
+            .await
+            .unwrap();
+        let keys = adapter.managed_keys().await.unwrap();
+        assert_eq!(keys["refs"]["OPENROUTER_API_KEY"], "rotated-secret");
+        assert_eq!(keys["refs"]["OPENAI_API_KEY"], "openai-secret");
+        assert_eq!(keys["refs"]["DEEPSEEK_API_KEY"], "native-secret");
+        let AccountReply::Login(login) = adapter.account(AccountCommand::StartLogin).await.unwrap()
+        else {
+            panic!("login expected")
+        };
+        assert!(login.user_code.contains("OpenRouter"));
+        assert!(!login.user_code.contains("secret"));
+        assert!(
+            !serde_json::to_string(&Identity::list(&adapter).await.unwrap())
+                .unwrap()
+                .contains("secret")
+        );
+        save_test_key(&adapter, KeyProvider::OpenRouter, None).await;
+        let keys = adapter.managed_keys().await.unwrap();
+        assert!(keys["refs"].get("OPENROUTER_API_KEY").is_none());
+        assert_eq!(keys["refs"]["OPENAI_API_KEY"], "openai-secret");
+        save_test_key(&adapter, KeyProvider::OpenAI, None).await;
+        save_test_key(&adapter, KeyProvider::DeepSeek, None).await;
+        assert!(
+            adapter.managed_keys().await.unwrap()["refs"]
+                .as_object()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn dsh_keys_reject_invalid_values_without_overwriting_existing_credentials() {
+        let dir = tempfile::tempdir().unwrap();
+        let adapter = DeepSeek::load("dsh".into(), dir.path().into())
+            .await
+            .unwrap();
+        save_test_key(&adapter, KeyProvider::OpenRouter, Some("keep-secret")).await;
+        for key in [
+            "".to_owned(),
+            "has space".to_owned(),
+            "bad\0key".to_owned(),
+            "x".repeat(4097),
+        ] {
+            assert!(
+                adapter
+                    .update_key(KeyUpdate {
+                        provider: KeyProvider::OpenRouter,
+                        key: Some(key)
+                    })
+                    .await
+                    .is_err()
+            );
+            assert_eq!(
+                adapter.managed_keys().await.unwrap()["refs"]["OPENROUTER_API_KEY"],
+                "keep-secret"
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires installed DeepSeek Harness; no inference or paid request"]
+    async fn installed_harness_exposes_configured_openrouter_models() {
+        let dir = tempfile::tempdir().unwrap();
+        let adapter = DeepSeek::load("dsh".into(), dir.path().into())
+            .await
+            .unwrap();
+        save_test_key(&adapter, KeyProvider::OpenRouter, Some("test-catalog-only")).await;
+        let models = adapter
+            .models(&op::ListModels {
+                limit: 100,
+                cursor: None,
+            })
+            .await
+            .unwrap();
+        assert!(
+            models
+                .data
+                .iter()
+                .any(|model| model.model.id.contains("openrouter"))
+        );
+        let patch: Value =
+            serde_json::from_slice(&std::fs::read(dir.path().join("acp.patch.json")).unwrap())
+                .unwrap();
+        assert!(!patch.to_string().contains("test-catalog-only"));
         adapter.shutdown().await;
     }
 

@@ -2,6 +2,7 @@
 pub mod browser;
 pub mod composer;
 pub mod diagnostics;
+pub mod dsh;
 pub mod error;
 pub mod execution;
 pub mod ids;

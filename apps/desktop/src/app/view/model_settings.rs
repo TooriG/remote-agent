@@ -555,7 +555,7 @@ impl Desktop {
                         .child(
                             self.button(
                                 "account-start-login",
-                                "アカウントを追加",
+                                if provider == ProviderKind::DeepSeek { "APIキーを管理" } else { "アカウントを追加" },
                                 cx,
                                 move |s, _, _| {
                                     s.account_operation(Intent::StartAccountLogin(
@@ -671,7 +671,11 @@ impl Desktop {
             return div().into_any_element();
         };
         let disabled = !self.snapshot.connected || self.account_busy || self.busy > 0;
-        let url = login.verification_url.clone();
+        let url = if login.provider == ProviderKind::DeepSeek {
+            self.dsh_key_provider.key_url().to_owned()
+        } else {
+            login.verification_url.clone()
+        };
         let cancel_id = login.login_id.clone();
         let provider = login.provider;
         let cancel = self
@@ -694,7 +698,7 @@ impl Desktop {
             .gap_3()
             .text_sm()
             .child(if provider == ProviderKind::DeepSeek {
-                "DeepSeekの管理画面で発行したAPIキーを入力してください。"
+                "DSHで使う接続先を選び、APIキーを保存してください。保存先は接続中のHostです。"
             } else if login.requires_code_submission {
                 "ブラウザでログインし、認証コードを貼り付けてください。"
             } else {
@@ -716,6 +720,29 @@ impl Desktop {
                 .debug_selector(|| "account-open-login".into())
                 .small(),
             );
+        if provider == ProviderKind::DeepSeek {
+            let configured = serde_json::from_str::<Vec<agent_protocol::dsh::KeyProvider>>(&login.user_code).unwrap_or_default();
+            form = form.child(h_flex().flex_wrap().gap_2().children(
+                agent_protocol::dsh::KeyProvider::ALL.into_iter().map(|key_provider| {
+                    self.button(format!("dsh-key-{}", key_provider.reference()), key_provider.label(), cx, move |s, window, cx| {
+                        s.dsh_key_provider = key_provider;
+                        s.account_code.update(cx, |input, cx| input.set_value("", window, cx));
+                    }).small().selected(self.dsh_key_provider == key_provider).disabled(disabled)
+                    .debug_selector(move || format!("dsh-key-{}", key_provider.reference()))
+                })
+            ));
+            let saved = configured.contains(&self.dsh_key_provider);
+            form = form.child(div().text_xs().text_color(rgb(appearance::MUTED)).child(
+                format!("{} · {}", self.dsh_key_provider.label(), if saved { "保存済み（キーは非表示）" } else { "BEXには未設定" })
+            ));
+            if saved {
+                let id = login.login_id.clone();
+                form = form.child(self.button("dsh-key-remove", "この接続先のキーを削除", cx, move |s, _, _| {
+                    let code = serde_json::to_string(&agent_protocol::dsh::KeyUpdate { provider: s.dsh_key_provider, key: None }).unwrap();
+                    s.account_operation(Intent::SubmitAccountLogin(op::SubmitAccountLogin { provider, id: id.clone(), code }));
+                }).small().ghost().disabled(disabled).debug_selector(|| "dsh-key-remove".into()));
+            }
+        }
         if login.requires_code_submission {
             let submit_id = login.login_id.clone();
             form = form.child(
@@ -725,14 +752,17 @@ impl Desktop {
                         div()
                             .flex_1()
                             .min_w_0()
-                            .child(Input::new(&self.account_code)),
+                            .child(Input::new(&self.account_code).aria_label(if provider == ProviderKind::DeepSeek { "APIキー" } else { "認証コード" })),
                     )
                     .child(
-                        self.button("account-submit-code", "接続", cx, move |s, window, cx| {
+                        self.button("account-submit-code", if provider == ProviderKind::DeepSeek { "保存" } else { "接続" }, cx, move |s, window, cx| {
                             let code = s.account_code.read(cx).value().to_string();
                             if code.trim().is_empty() {
                                 return;
                             }
+                            let code = if provider == ProviderKind::DeepSeek {
+                                serde_json::to_string(&agent_protocol::dsh::KeyUpdate { provider: s.dsh_key_provider, key: Some(code) }).unwrap()
+                            } else { code };
                             s.account_operation(Intent::SubmitAccountLogin(
                                 op::SubmitAccountLogin {
                                     provider,
@@ -1585,6 +1615,48 @@ mod tests {
         window.simulate_click(claude.center(), Modifiers::default());
         window.update(|_, cx| assert!(view.read(cx).0.read(cx).model_provider.is_none()));
     }
+    #[gpui::test]
+    fn dsh_key_form_switches_provider_without_carrying_the_previous_secret(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        cx.update(|cx| {
+            crate::appearance::init(cx);
+            cx.set_global(crate::Runtime {
+                handle: runtime.handle().clone(), connections: Arc::new(crate::platform::Connections::default()),
+                closing: tokio_util::task::TaskTracker::new(), logging_error: None,
+            });
+        });
+        let (view, window) = cx.add_window_view(|window, cx| {
+            let desktop = cx.new(|cx| Desktop::new(Mode::SideChat {
+                remote: Some(RemoteHost { id: "fixture".into(), name: "fixture".into(), ticket: "invalid-fixture-ticket".into() }), cwd: "/fixture".into(),
+            }, window, cx));
+            desktop.update(cx, |view, cx| {
+                view.model_provider = Some(agent_protocol::session::ProviderKind::DeepSeek);
+                view.model_panel = ModelPanel::Manage;
+                let snapshot = Arc::make_mut(&mut view.snapshot);
+                snapshot.connected = true;
+                Arc::make_mut(&mut snapshot.account).login = Some(Arc::new(agent_protocol::operations::AccountLogin {
+                    provider: agent_protocol::session::ProviderKind::DeepSeek, login_id: "test".into(),
+                    requires_code_submission: true, user_code: "[\"OpenRouter\"]".into(), verification_url: "https://platform.deepseek.com/api_keys".into(),
+                }));
+                view.account_code.update(cx, |input, cx| input.set_value("previous-secret", window, cx));
+            });
+            cx.observe(&desktop, |_, _, cx| cx.notify()).detach();
+            PickerView(desktop)
+        });
+        window.run_until_parked();
+        assert!(window.debug_bounds("dsh-key-remove").is_none());
+        let router = window.debug_bounds("dsh-key-OPENROUTER_API_KEY").unwrap();
+        window.simulate_click(router.center(), Modifiers::default());
+        window.run_until_parked();
+        window.update(|_, cx| {
+            let desktop = view.read(cx).0.read(cx);
+            assert!(desktop.dsh_key_provider == agent_protocol::dsh::KeyProvider::OpenRouter);
+            assert!(desktop.account_code.read(cx).value().is_empty());
+        });
+        assert!(window.debug_bounds("dsh-key-remove").is_some());
+        assert!(window.debug_bounds("account-submit-code").is_some());
+    }
+
     struct DefaultsView(Entity<Desktop>);
     impl Render for DefaultsView {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
