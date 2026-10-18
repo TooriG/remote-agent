@@ -106,8 +106,9 @@ internal fun ThreadListScreen(
                     Icon(painterResource(R.drawable.ic_close), "検索を閉じる")
                 }
             } else {
-                Text("ワークスペース", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("bex", Modifier.padding(end = 8.dp), style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold, maxLines = 1)
+                HostSelector(hostName, connected, showHosts, Modifier.weight(1f))
                 IconButton(onClick = { searching = true }) {
                     Icon(painterResource(R.drawable.ic_search), "検索")
                 }
@@ -117,7 +118,6 @@ internal fun ThreadListScreen(
                 ) { Icon(painterResource(R.drawable.ic_refresh), "更新") }
             }
         }
-        HostSelector(hostName, connected, showHosts)
         TabRow(selectedTabIndex = selectedTab, containerColor = MaterialTheme.colorScheme.background) {
             listOf("最近のチャット", "プロジェクト").forEachIndexed { index, label ->
                 Tab(selected = selectedTab == index, onClick = { selectedTab = index }, text = { Text(label) })
@@ -185,22 +185,22 @@ private fun HostSelector(
     hostName: String,
     connected: Boolean,
     showHosts: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.End) {
         androidx.compose.material3.FilledTonalButton(
             onClick = showHosts,
-            modifier = Modifier.heightIn(min = 48.dp),
+            modifier = modifier.heightIn(min = 48.dp),
             shape = RoundedCornerShape(24.dp),
             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
         ) {
             Icon(painterResource(R.drawable.ic_computer), null, Modifier.size(18.dp))
-            Text(hostName, Modifier.weight(1f, fill = false).padding(horizontal = 8.dp),
+            Text(hostName, Modifier.weight(1f).padding(horizontal = 6.dp),
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(if (connected) "接続中" else "未接続", fontSize = 12.sp,
-                color = if (connected) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant)
+            Icon(painterResource(R.drawable.ic_circle),
+                if (connected) "接続中" else "未接続", Modifier.size(8.dp),
+                tint = if (connected) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant)
             Icon(painterResource(R.drawable.ic_chevron), null, Modifier.padding(start = 6.dp).size(14.dp))
         }
-    }
 }
 
 @Composable

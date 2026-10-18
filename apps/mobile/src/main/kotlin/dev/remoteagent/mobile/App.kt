@@ -467,7 +467,7 @@ internal fun RemoteAgentApp(
     BexTheme {
         Scaffold(
             topBar = {
-                if (model.screen != Screen.Conversation)
+                if (model.screen != Screen.Conversation && model.screen != Screen.Threads)
                     TopAppBar(title = { Text("bex", fontWeight = androidx.compose.ui.text.font.FontWeight.Bold) })
             }
         ) { padding ->
