@@ -115,9 +115,13 @@ struct ThreadScreen: View {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 12) {
                             ForEach(rows) { row in
-                                conversationRow(row)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .id(row.id)
+                                // A fixed child count keeps the lazy stack from
+                                // resolving every conditional row during scrolling.
+                                VStack(alignment: .leading, spacing: 0) {
+                                    conversationRow(row)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .id(row.id)
                             }
                         }
                         .padding(.horizontal, 16)
