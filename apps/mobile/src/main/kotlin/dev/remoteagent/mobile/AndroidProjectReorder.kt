@@ -10,6 +10,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -20,6 +21,8 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.LocalPinnableContainer
+import androidx.compose.ui.layout.PinnableContainer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
@@ -50,6 +53,7 @@ internal class ProjectReorder(val list: LazyListState) {
     var pointerY by mutableStateOf(0f)
     var projects: List<ProjectSummary> = emptyList()
     var perform: (Intent) -> Unit = {}
+    var pinned: PinnableContainer.PinnedHandle? = null
 
     fun updateTarget() {
         target = projectDropAt(pointerY, list.layoutInfo.visibleItemsInfo.mapNotNull { item ->
@@ -69,6 +73,8 @@ internal class ProjectReorder(val list: LazyListState) {
         }
         source = null
         target = null
+        pinned?.release()
+        pinned = null
     }
 }
 
@@ -81,6 +87,7 @@ internal fun rememberProjectReorder(
     val state = remember(list) { ProjectReorder(list) }
     state.projects = projects
     state.perform = perform
+    DisposableEffect(state) { onDispose { state.finish(commit = false) } }
     val edge = with(LocalDensity.current) { 56.dp.toPx() }
     LaunchedEffect(state.source) {
         var previous = withFrameNanos { it }
@@ -114,6 +121,7 @@ internal fun ProjectDropMarker(state: ProjectReorder, id: String, after: Boolean
 @Composable
 internal fun ProjectDragHandle(project: ProjectSummary, state: ProjectReorder) {
     val currentProject by rememberUpdatedState(project)
+    val pinnable by rememberUpdatedState(LocalPinnableContainer.current)
     Box(
         Modifier.size(40.dp, 48.dp).semantics {
             contentDescription = "${project.name}の順番を変更。上下にドラッグ"
@@ -136,6 +144,8 @@ internal fun ProjectDragHandle(project: ProjectSummary, state: ProjectReorder) {
                     val row = state.list.layoutInfo.visibleItemsInfo
                         .firstOrNull { it.key == "project:${currentProject.id}" }
                     if (row != null) {
+                        // Keep receiving this gesture when auto-scroll moves its source offscreen.
+                        state.pinned = pinnable?.pin()
                         state.source = currentProject.id
                         state.pointerY = row.offset + row.size / 2f + position.y - size.height / 2f
                         state.updateTarget()
