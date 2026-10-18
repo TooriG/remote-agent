@@ -82,7 +82,7 @@ impl Desktop {
         let state = &self.images[&key];
         if let Some(path) = &state.path {
             let background = cx.theme().secondary;
-            let id = SharedString::from(key);
+            let id = SharedString::from(key.clone());
             let image = img(path.clone())
                 .id(id.clone())
                 .w_full()
@@ -107,7 +107,7 @@ impl Desktop {
                 .image_gallery
                 .as_ref()
                 .is_some_and(|gallery| gallery.saving);
-            div()
+            let image_menu = div()
                 .id(id)
                 .w_full()
                 .h(px(height))
@@ -136,7 +136,14 @@ impl Desktop {
                                 });
                             }),
                     )
-                })
+                });
+            div()
+                .id(SharedString::from(format!("image-menu-boundary-{key}")))
+                .w_full()
+                .h(px(height))
+                .flex_shrink_0()
+                .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+                .child(image_menu)
                 .into_any_element()
         } else if let Some(error) = &state.error {
             div()
