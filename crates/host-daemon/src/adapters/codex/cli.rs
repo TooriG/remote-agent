@@ -155,15 +155,16 @@ mod tests {
         let slow = {
             let system = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap());
             let mut command = bex_process::command(&system.join("System32/ping.exe")).unwrap();
+            // GUI-launched Hosts may not inherit a PATH containing System32.
+            // The timeout fixture must still start rather than fail immediately.
+            command.env("PATH", "");
             command.args(["-n", "30", "127.0.0.1"]);
             command
         };
         #[cfg(unix)]
         let slow = shell("sleep 30");
         assert_eq!(
-            collect(slow, Duration::from_millis(100))
-                .await
-                .unwrap_err(),
+            collect(slow, Duration::from_millis(100)).await.unwrap_err(),
             "CLI command timed out"
         );
     }
