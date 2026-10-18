@@ -33,6 +33,10 @@ import dev.remoteagent.core.Intent
 import dev.remoteagent.core.ProjectSummary
 import kotlin.math.abs
 
+private const val NANOS_PER_SECOND = 1_000_000_000f
+private const val MAX_FRAME_SECONDS = 0.05f
+private const val SCROLL_SPEED = 8f
+
 internal data class ProjectDrop(val id: String, val after: Boolean)
 
 // Only project headers are destinations; expanded chats and paging rows are skipped.
@@ -67,9 +71,9 @@ internal class ProjectReorder(val list: LazyListState) {
     fun finish(commit: Boolean) {
         val id = source
         val drop = target
-        if (commit && id != null && drop != null && id != drop.id &&
-            projects.any { it.id == id } && projects.any { it.id == drop.id }) {
-            perform(Intent.ReorderProject(id, drop.id, drop.after))
+        if (commit && id != null && drop != null) {
+            val present = projects.any { it.id == id } && projects.any { it.id == drop.id }
+            if (id != drop.id && present) perform(Intent.ReorderProject(id, drop.id, drop.after))
         }
         source = null
         target = null
@@ -99,8 +103,8 @@ internal fun rememberProjectReorder(
                 state.pointerY > info.viewportEndOffset - edge -> edge
                 else -> 0f
             }
-            val seconds = ((now - previous) / 1_000_000_000f).coerceAtMost(0.05f)
-            if (abs(velocity) > 0f) list.scrollBy(velocity * seconds * 8f)
+            val seconds = ((now - previous) / NANOS_PER_SECOND).coerceAtMost(MAX_FRAME_SECONDS)
+            if (abs(velocity) > 0f) list.scrollBy(velocity * seconds * SCROLL_SPEED)
             state.updateTarget()
             previous = now
         }
