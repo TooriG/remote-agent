@@ -6,12 +6,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.consumeWindowInsets
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -61,6 +61,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.joinAll
@@ -184,32 +185,31 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         profileId = id
         repository.selected = id
         busy = false
-        initialization =
-            scope.launch {
-                old?.shutdown()
-                try {
-                    val bytes = withContext(Dispatchers.IO) { repository.load(id) }
-                    val store = AgentStore.offline(bytes, repository.diagnosticsDirectory(id))
-                    if (profileId != id || !isActive) {
-                        store.shutdown()
-                        return@launch
-                    }
-                    owner = store
-                    initialization = null
-                    publish(store.snapshot())
-                    perform(Intent.ShowThreadList)
-                    while (pending.isNotEmpty()) {
-                        val (intent, complete) = pending.removeFirst()
-                        perform(intent, complete)
-                    }
-                    observe(store, id)
-                    connect()
-                } catch (error: IOException) {
-                    failInitialization(id, error)
-                } catch (error: AgentException) {
-                    failInitialization(id, error)
+        initialization = scope.launch {
+            old?.shutdown()
+            try {
+                val bytes = withContext(Dispatchers.IO) { repository.load(id) }
+                val store = AgentStore.offline(bytes, repository.diagnosticsDirectory(id))
+                if (profileId != id || !isActive) {
+                    store.shutdown()
+                    return@launch
                 }
+                owner = store
+                initialization = null
+                publish(store.snapshot())
+                perform(Intent.ShowThreadList)
+                while (pending.isNotEmpty()) {
+                    val (intent, complete) = pending.removeFirst()
+                    perform(intent, complete)
+                }
+                observe(store, id)
+                connect()
+            } catch (error: IOException) {
+                failInitialization(id, error)
+            } catch (error: AgentException) {
+                failInitialization(id, error)
             }
+        }
     }
 
     private fun failInitialization(id: String, error: Exception) {
@@ -225,54 +225,51 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         connection?.cancel()
         busy = true
         notice = null
-        connection =
-            scope.launch {
-                try {
-                    val invitation =
-                        parseInvitation(contents, System.currentTimeMillis().milliseconds.inWholeSeconds.toULong())
-                    val id = ticketIdentity(invitation.endpoint)
-                    val identity =
-                        withContext(Dispatchers.IO) {
-                            AndroidCredentialStore(context, id).loadOrCreate(::generateIdentity)
-                        }
-                    val store =
-                        try {
-                            AgentStore.connect(
-                                Connection(invitation.endpoint, identity, invitation.invitation, true),
-                                byteArrayOf(),
-                                repository.diagnosticsDirectory(id),
-                            )
-                        } finally {
-                            identity.fill(0)
-                        }
-                    persist()
-                    initialization?.cancel()
-                    observation?.cancel()
-                    owner?.shutdown()
-                    profiles = profiles.filterNot { it.id == id } + HostProfile(id, id, invitation.endpoint)
-                    repository.saveProfiles(profiles)
-                    repository.selected = id
-                    profileId = id
-                    owner = store
-                    publish(store.snapshot())
-                    observe(store, id)
-                    perform(Intent.LoadHostName(LoadHostName()))
-                    screen = Screen.Threads
-                    busy = false
-                } catch (error: AgentException) {
-                    busy = false
-                    notice = error.message
-                } catch (error: IOException) {
-                    busy = false
-                    notice = error.message
-                } catch (error: GeneralSecurityException) {
-                    busy = false
-                    notice = error.message
-                } catch (error: IllegalArgumentException) {
-                    busy = false
-                    notice = error.message
-                }
+        connection = scope.launch {
+            try {
+                val invitation =
+                    parseInvitation(contents, System.currentTimeMillis().milliseconds.inWholeSeconds.toULong())
+                val id = ticketIdentity(invitation.endpoint)
+                val identity =
+                    withContext(Dispatchers.IO) { AndroidCredentialStore(context, id).loadOrCreate(::generateIdentity) }
+                val store =
+                    try {
+                        AgentStore.connect(
+                            Connection(invitation.endpoint, identity, invitation.invitation, true),
+                            byteArrayOf(),
+                            repository.diagnosticsDirectory(id),
+                        )
+                    } finally {
+                        identity.fill(0)
+                    }
+                persist()
+                initialization?.cancel()
+                observation?.cancel()
+                owner?.shutdown()
+                profiles = profiles.filterNot { it.id == id } + HostProfile(id, id, invitation.endpoint)
+                repository.saveProfiles(profiles)
+                repository.selected = id
+                profileId = id
+                owner = store
+                publish(store.snapshot())
+                observe(store, id)
+                perform(Intent.LoadHostName(LoadHostName()))
+                screen = Screen.Threads
+                busy = false
+            } catch (error: AgentException) {
+                busy = false
+                notice = error.message
+            } catch (error: IOException) {
+                busy = false
+                notice = error.message
+            } catch (error: GeneralSecurityException) {
+                busy = false
+                notice = error.message
+            } catch (error: IllegalArgumentException) {
+                busy = false
+                notice = error.message
             }
+        }
     }
 
     fun connect() {
@@ -282,39 +279,40 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         retry?.cancel()
         busy = true
         notice = null
-        connection =
-            scope.launch {
+        connection = scope.launch {
+            try {
+                val identity =
+                    withContext(Dispatchers.IO) {
+                        AndroidCredentialStore(context, profile.id).loadOrCreate(::generateIdentity)
+                    }
                 try {
-                    val identity =
-                        withContext(Dispatchers.IO) {
-                            AndroidCredentialStore(context, profile.id).loadOrCreate(::generateIdentity)
-                        }
-                    try {
-                        val connected = withTimeoutOrNull(45_000) {
+                    val connected =
+                        withTimeoutOrNull(45_000) {
                             store.resume(Connection(profile.ticket, identity, null, true))
                             true
                         }
-                        if (connected == null) throw IOException("接続がタイムアウトしました。PCのBEXと通信環境を確認してください。")
-                    } finally {
-                        identity.fill(0)
-                    }
-                    if (profileId != profile.id) return@launch
-                    publish(store.snapshot())
-                    perform(Intent.LoadHostName(LoadHostName()))
-                    notice = null
-                    busy = false
-                } catch (error: AgentException) {
-                    connectionFailed(profile.id, error)
-                } catch (error: IOException) {
-                    connectionFailed(profile.id, error)
-                } catch (error: GeneralSecurityException) {
-                    connectionFailed(profile.id, error)
-                } catch (error: IllegalArgumentException) {
-                    connectionFailed(profile.id, error)
+                    if (connected == null) throw IOException("接続がタイムアウトしました。PCのBEXと通信環境を確認してください。")
                 } finally {
-                    if (owner === store && profileId == profile.id) busy = false
+                    identity.fill(0)
                 }
+                if (profileId != profile.id) return@launch
+                publish(store.snapshot())
+                perform(Intent.LoadHostName(LoadHostName()))
+                notice = null
+                busy = false
+            } catch (error: AgentException) {
+                connectionFailed(profile.id, error)
+            } catch (error: IOException) {
+                connectionFailed(profile.id, error)
+            } catch (error: GeneralSecurityException) {
+                connectionFailed(profile.id, error)
+            } catch (error: IllegalArgumentException) {
+                connectionFailed(profile.id, error)
+            } finally {
+                if (owner === store && profileId == profile.id && connection === currentCoroutineContext()[Job])
+                    busy = false
             }
+        }
     }
 
     fun foreground() {
@@ -344,18 +342,17 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
 
     private fun observe(store: AgentStore, id: String) {
         val initial = snapshot
-        observation =
-            scope.launch {
-                var previous = initial
-                while (isActive) {
-                    store.nextSnapshot(previous)
-                    if (profileId != id) return@launch
-                    val latest = store.snapshot()
-                    publish(latest)
-                    if (previous.connected() && !latest.connected()) retryConnection()
-                    previous = latest
-                }
+        observation = scope.launch {
+            var previous = initial
+            while (isActive) {
+                store.nextSnapshot(previous)
+                if (profileId != id) return@launch
+                val latest = store.snapshot()
+                publish(latest)
+                if (previous.connected() && !latest.connected()) retryConnection()
+                previous = latest
             }
+        }
     }
 
     private fun publish(next: Snapshot) {
@@ -368,11 +365,10 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         conversation = projectConversationRows(next, next.conversationSource(), conversation)
         snapshot = next
         persistence?.cancel()
-        persistence =
-            scope.launch {
-                delay(250.milliseconds)
-                persist()
-            }
+        persistence = scope.launch {
+            delay(250.milliseconds)
+            persist()
+        }
     }
 
     fun attach(selection: Pair<String?, dev.remoteagent.core.DraftKey>, uri: Uri, complete: () -> Unit) {
