@@ -30,6 +30,7 @@ internal fun Snapshot.threadJson(session: SessionRef): JSONObject {
         when (session.provider) {
             ProviderKind.CODEX -> "codex"
             ProviderKind.CLAUDE -> "claude"
+            ProviderKind.DEEP_SEEK -> "deepseek"
         }
     return (0 until entries.length()).firstNotNullOf { index ->
         val entry = entries.getJSONArray(index)
