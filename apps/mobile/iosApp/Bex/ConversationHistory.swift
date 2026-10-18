@@ -149,7 +149,7 @@ struct ConversationScrollMetrics: Equatable {
     let latestVisible: Bool
 }
 
-#if DEBUG
+#if targetEnvironment(simulator)
     func traceScroll(from oldHeight: CGFloat, to new: ConversationScrollMetrics, following: Bool) {
         Logger(subsystem: "dev.remoteagent.mobile.ios", category: "ConversationScroll").notice("""
         oldHeight=\(oldHeight, privacy: .public)
