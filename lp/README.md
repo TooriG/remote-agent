@@ -99,6 +99,11 @@ previews. Conversation images and existing Markdown file links also open preview
 Binary or oversized text files show an explicit unavailable-preview message.
 Draft attachments can be removed without deleting the original phone file.
 
+Conversation website and PR links open Android's browser or matching app. Links
+inside tables behave the same way. If no app can handle a link, BEX displays its
+URL with a copy action. Workspace file links keep the authenticated BEX preview.
+
+
 The landing page uses a short hero followed immediately by the tabbed usage demo.
 Repeated mock screens, feature catalogues, platform lists, decorative illustrations
 and release announcements are omitted. Three short benefits, pairing steps and
