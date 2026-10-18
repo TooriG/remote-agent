@@ -1,8 +1,8 @@
 package dev.remoteagent.mobile
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -32,10 +32,16 @@ internal fun UnknownSubmissionActions(
     }
     Column {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(enabled = !busy, onClick = { dispatch(Intent.RestoreUnknownSubmission(submissionId)) }) {
+            TextButton(
+                enabled = !busy,
+                onClick = { dispatch(Intent.RestoreUnknownSubmission(submissionId)) },
+            ) {
                 Text("下書きに戻す")
             }
-            TextButton(enabled = !busy, onClick = { dispatch(Intent.DiscardUnknownSubmission(submissionId)) }) {
+            TextButton(
+                enabled = !busy,
+                onClick = { dispatch(Intent.DiscardUnknownSubmission(submissionId)) },
+            ) {
                 Text("表示を削除")
             }
         }

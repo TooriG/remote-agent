@@ -24,12 +24,21 @@ class UnknownSubmissionTest {
 
     private fun fixture(unknown: Boolean = true): Snapshot {
         val key = JSONObject("""{"Local":{"key":"new:/fixture"}}""")
-        val draft = JSONObject("""{"text":"過去の指示","attachments":[{"path":"/sent.txt","name":"sent.txt","isImage":false}],"model":null,"effort":null}""")
-        val pending = JSONObject().put("sequence", 0).put("draft_key", key).put("draft", draft)
-            .put("accepted", false).put("delivery_unknown", unknown)
-        val state = JSONObject(Snapshot.empty().serialize().decodeToString())
-            .put("navigation", JSONObject().put("draft_key", key).put("cwd", "/fixture"))
-            .put("pending_submissions", JSONObject().put("old-input", pending))
+        val draft =
+            JSONObject(
+                """{"text":"過去の指示","attachments":[{"path":"/sent.txt","name":"sent.txt","isImage":false}],"model":null,"effort":null}"""
+            )
+        val pending =
+            JSONObject()
+                .put("sequence", 0)
+                .put("draft_key", key)
+                .put("draft", draft)
+                .put("accepted", false)
+                .put("delivery_unknown", unknown)
+        val state =
+            JSONObject(Snapshot.empty().serialize().decodeToString())
+                .put("navigation", JSONObject().put("draft_key", key).put("cwd", "/fixture"))
+                .put("pending_submissions", JSONObject().put("old-input", pending))
         return Snapshot.restore(state.toString().encodeToByteArray())
     }
 
@@ -43,26 +52,37 @@ class UnknownSubmissionTest {
             compose.setContent {
                 val snapshot = current.value
                 MaterialTheme {
-                    ThreadDetailScreen(snapshot, projectConversationRows(snapshot, snapshot.conversationSource(), null),
+                    ThreadDetailScreen(
+                        snapshot,
+                        projectConversationRows(snapshot, snapshot.conversationSource(), null),
                         { intent, done ->
                             intents += intent
                             runBlocking { store.dispatch(intent).wait() }
                             current.value = store.snapshot()
                             done(Result.success(Outcome.Applied))
-                        }, null) {}
+                        },
+                        null,
+                    ) {}
                 }
             }
-            compose.onNodeWithText("過去の指示").assertIsDisplayed()
+            compose.onNodeWithText("過去の指示", substring = true).assertIsDisplayed()
             compose.onNodeWithText("表示を削除").performClick()
-            compose.onNodeWithText("過去の指示").assertDoesNotExist()
+            compose.onNodeWithText("過去の指示", substring = true).assertDoesNotExist()
             assertTrue(intents.single() is Intent.DiscardUnknownSubmission)
             val restarted = AgentStore.offline(store.snapshot().serializeLocalState(), null)
             try {
                 restarted.dispatch(Intent.NewChat("/fixture")).wait()
                 assertNull(restarted.snapshot().conversationSource())
-                assertEquals("", restarted.snapshot().draft(restarted.snapshot().navigation().draftKey).text)
-            } finally { restarted.shutdown() }
-        } finally { store.shutdown() }
+                assertEquals(
+                    "",
+                    restarted.snapshot().draft(restarted.snapshot().navigation().draftKey).text,
+                )
+            } finally {
+                restarted.shutdown()
+            }
+        } finally {
+            store.shutdown()
+        }
     }
 
     @Test
@@ -70,15 +90,25 @@ class UnknownSubmissionTest {
         val store = AgentStore.offline(fixture().use { it.serializeLocalState() }, null)
         try {
             val snapshot = store.snapshot()
-            val item = requireNotNull(projectConversationRows(snapshot, snapshot.conversationSource(), null)).queued.single()
+            val item =
+                requireNotNull(
+                        projectConversationRows(snapshot, snapshot.conversationSource(), null)
+                    )
+                    .queued
+                    .single()
             val intents = mutableListOf<Intent>()
             compose.setContent {
                 MaterialTheme {
-                    ThreadMessageCard(item, true, "/fixture", { intent, done ->
-                        intents += intent
-                        runBlocking { store.dispatch(intent).wait() }
-                        done(Result.success(Outcome.Applied))
-                    })
+                    ThreadMessageCard(
+                        item,
+                        true,
+                        "/fixture",
+                        { intent, done ->
+                            intents += intent
+                            runBlocking { store.dispatch(intent).wait() }
+                            done(Result.success(Outcome.Applied))
+                        },
+                    )
                 }
             }
             compose.onNodeWithText("下書きに戻す").performClick()
@@ -88,7 +118,9 @@ class UnknownSubmissionTest {
             val draft = next.draft(next.navigation().draftKey)
             assertEquals("過去の指示", draft.text)
             assertEquals("/sent.txt", draft.attachments.single().path)
-        } finally { store.shutdown() }
+        } finally {
+            store.shutdown()
+        }
     }
 
     @Test
@@ -96,7 +128,12 @@ class UnknownSubmissionTest {
         var calls = 0
         var completion: ((Result<Outcome>) -> Unit)? = null
         compose.setContent {
-            MaterialTheme { UnknownSubmissionActions("old-input") { _, done -> calls++; completion = done } }
+            MaterialTheme {
+                UnknownSubmissionActions("old-input") { _, done ->
+                    calls++
+                    completion = done
+                }
+            }
         }
         compose.onNodeWithText("表示を削除").performClick()
         compose.onNodeWithText("表示を削除").assertIsNotEnabled()
@@ -110,8 +147,15 @@ class UnknownSubmissionTest {
     @Test
     fun sendingInputHasNoDiscardOrRestoreActions() {
         fixture(false).use { snapshot ->
-            val item = requireNotNull(projectConversationRows(snapshot, snapshot.conversationSource(), null)).queued.single()
-            compose.setContent { MaterialTheme { ThreadMessageCard(item, true, "/fixture", { _, _ -> }) } }
+            val item =
+                requireNotNull(
+                        projectConversationRows(snapshot, snapshot.conversationSource(), null)
+                    )
+                    .queued
+                    .single()
+            compose.setContent {
+                MaterialTheme { ThreadMessageCard(item, true, "/fixture", { _, _ -> }) }
+            }
             compose.onNodeWithText("送信中…").assertIsDisplayed()
             compose.onNodeWithText("表示を削除").assertDoesNotExist()
             compose.onNodeWithText("下書きに戻す").assertDoesNotExist()
