@@ -187,20 +187,23 @@ private fun HostSelector(
     showHosts: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-        androidx.compose.material3.FilledTonalButton(
-            onClick = showHosts,
-            modifier = modifier.heightIn(min = 48.dp),
-            shape = RoundedCornerShape(24.dp),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-        ) {
-            Icon(painterResource(R.drawable.ic_computer), null, Modifier.size(18.dp))
-            Text(hostName, Modifier.weight(1f).padding(horizontal = 6.dp),
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Icon(painterResource(R.drawable.ic_circle),
-                if (connected) "接続中" else "未接続", Modifier.size(8.dp),
-                tint = if (connected) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant)
-            Icon(painterResource(R.drawable.ic_chevron), null, Modifier.padding(start = 6.dp).size(14.dp))
-        }
+    Row(
+        modifier.heightIn(min = 48.dp).clickable(
+            role = androidx.compose.ui.semantics.Role.Button,
+            onClickLabel = "接続先を切り替える", onClick = showHosts,
+        ),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(painterResource(R.drawable.ic_circle),
+            if (connected) "接続中" else "未接続", Modifier.size(6.dp),
+            tint = if (connected) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant)
+        Icon(painterResource(R.drawable.ic_computer), null, Modifier.size(16.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(hostName, Modifier.weight(1f, fill = false),
+            style = MaterialTheme.typography.labelLarge,
+            maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
 }
 
 @Composable

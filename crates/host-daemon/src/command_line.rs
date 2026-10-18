@@ -29,7 +29,8 @@ pub(crate) struct StartupConfig {
     /// Start a separate test/development Host, outside the user's shared instance.
     #[arg(long, requires = "state_dir")]
     pub(crate) isolated: bool,
-    #[arg(long, default_value = "BEX Host")]
+    /// Name shown to paired clients. Defaults to this machine's hostname.
+    #[arg(long, default_value_t = machine_name())]
     pub(crate) name: String,
     /// Lifetime of newly issued one-use pairing invitations (1–90 days).
     #[arg(long, default_value_t = 7, value_parser = clap::value_parser!(u64).range(1..=90))]
@@ -40,6 +41,20 @@ pub(crate) struct StartupConfig {
     /// Override the public iroh relay list.
     #[arg(long)]
     pub(crate) relay_url: Vec<String>,
+}
+
+fn machine_name() -> String {
+    #[cfg(windows)]
+    let name = std::env::var("COMPUTERNAME").ok();
+    #[cfg(not(windows))]
+    let name = std::process::Command::new("/bin/hostname")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok());
+    name.map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "PC".into())
 }
 
 #[derive(clap::Subcommand)]
@@ -62,6 +77,15 @@ pub(crate) enum Mode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn machine_name_is_the_default_and_explicit_names_are_preserved() {
+        let config = StartupConfig::try_parse_from([] as [&str; 0]).unwrap();
+        assert!(!config.name.trim().is_empty());
+        assert_ne!(config.name, "BEX Host");
+        let config = StartupConfig::try_parse_from(["--name", "Build workstation"]).unwrap();
+        assert_eq!(config.name, "Build workstation");
+    }
 
     #[test]
     fn invitation_lifetime_defaults_to_a_week_and_is_bounded() {
