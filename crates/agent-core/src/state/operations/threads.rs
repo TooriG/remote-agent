@@ -971,7 +971,7 @@ impl Operation for LoadModels {
     type Input = Option<crate::models::ModelRef>;
     fn capture(&self, snapshot: &Snapshot) -> Result<Self::Input, PeerError> {
         let key = snapshot.navigation.draft_key.clone();
-        Ok(snapshot.draft(key).model.clone())
+        Ok(snapshot.drafts.get(&key).and_then(|draft| draft.model.clone()))
     }
     type Output = agent_protocol::operations::ModelPage;
 
@@ -1061,7 +1061,7 @@ mod tests {
         LoadModels {}.apply(&mut snapshot, catalog);
         assert_eq!(snapshot.model_quick_controls(key.clone()).effort, "high");
         let (snapshot, _) = reduce_intent(&snapshot, Intent::SelectEffort { thread_id: key.clone(), effort: "".into() });
-        assert_eq!(snapshot.draft(key).effort.as_deref(), Some(""));
+        assert_eq!(snapshot.drafts.get(&key).unwrap().effort.as_deref(), Some(""));
     }
 
     #[test]

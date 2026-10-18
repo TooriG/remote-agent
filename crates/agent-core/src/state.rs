@@ -771,7 +771,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 .get(thread_id)
                 .map(|draft| draft.as_ref().clone())
                 .unwrap_or_default();
-            let refresh_model = matches!(&intent, Intent::SelectModel { model, .. } if model.provider == ProviderKind::DeepSeek);
+            let refresh_model = matches!(&intent, Intent::SelectModel { model, .. } if model.provider == crate::session::ProviderKind::DeepSeek);
             let thread_id = match intent {
                 Intent::SelectModel { thread_id, model } => {
                     if draft.model.as_ref() != Some(&model) {
