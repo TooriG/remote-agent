@@ -1,4 +1,5 @@
 use super::*;
+use gpui_kit::component::menu::ContextMenuExt;
 
 impl Desktop {
     pub(super) fn image(
@@ -99,25 +100,44 @@ impl Desktop {
                         .child("画像を表示できません")
                         .into_any_element()
                 });
-            if clickable {
-                let source = state.source.clone();
-                div()
-                    .id(id)
-                    .w_full()
-                    .h(px(height))
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        view.open_image_gallery(source.clone(), encoded, cx)
-                    }))
-                    .child(image)
-                    .into_any_element()
-            } else {
-                image.into_any_element()
-            }
+            let source = state.source.clone();
+            let menu_source = source.clone();
+            let owner = cx.entity().downgrade();
+            let saving = self
+                .image_gallery
+                .as_ref()
+                .is_some_and(|gallery| gallery.saving);
+            div()
+                .id(id)
+                .w_full()
+                .h(px(height))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .when(clickable, |element| {
+                    element
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            view.open_image_gallery(source.clone(), encoded, cx)
+                        }))
+                })
+                .child(image)
+                .context_menu(move |menu, _, _| {
+                    let owner = owner.clone();
+                    let source = menu_source.clone();
+                    menu.item(
+                        PopupMenuItem::new("画像を名前を付けて保存…")
+                            .icon(Icon::default().path("bex/download.svg"))
+                            .disabled(saving)
+                            .on_click(move |_, _, cx| {
+                                let _ = owner.update(cx, |view, cx| {
+                                    view.save_image(&source, encoded, cx);
+                                });
+                            }),
+                    )
+                })
+                .into_any_element()
         } else if let Some(error) = &state.error {
             div()
                 .text_sm()
@@ -572,20 +592,33 @@ impl Desktop {
             .image_gallery
             .as_ref()
             .filter(|gallery| !gallery.saving)
-            .map(|gallery| gallery.current_image())
+            .map(|gallery| gallery.current_image().clone())
         else {
             return;
         };
-        let key = self.image_key(source, *encoded);
+        self.save_image(&source, encoded, cx);
+    }
+
+    fn save_image(&mut self, source: &str, encoded: bool, cx: &mut Context<Self>) {
+        let key = self.image_key(source, encoded);
         let Some(ImageSource::Resource(resource)) =
             self.images.get(&key).and_then(|image| image.path.clone())
         else {
             return;
         };
-        let gallery = self.image_gallery.as_mut().expect("gallery checked above");
-        gallery.saving = true;
-        gallery.error.clear();
-        let id = gallery.id;
+        let id = if let Some(gallery) = self.image_gallery.as_mut().filter(|gallery| {
+            let current = gallery.current_image();
+            current.0.as_str() == source && current.1 == encoded
+        }) {
+            if gallery.saving {
+                return;
+            }
+            gallery.saving = true;
+            gallery.error.clear();
+            Some(gallery.id)
+        } else {
+            None
+        };
         let http = cx.http_client();
         cx.spawn(async move |view, cx| {
             enum Original {
@@ -654,7 +687,7 @@ impl Desktop {
             }
             .await;
             let _ = view.update(cx, |s, cx| {
-                if let Some(gallery) = s.image_gallery.as_mut().filter(|gallery| gallery.id == id) {
+                if let Some(gallery) = s.image_gallery.as_mut().filter(|gallery| Some(gallery.id) == id) {
                     gallery.saving = false;
                     match result {
                         Ok(saved) => gallery.saved = saved,
@@ -663,8 +696,11 @@ impl Desktop {
                             gallery.error = error;
                         }
                     }
-                    cx.notify();
+                } else if let Err(error) = result {
+                    tracing::error!(target: "bex", operation = "image.save", message = %error);
+                    s.set_error(error);
                 }
+                cx.notify();
             });
         })
         .detach();
