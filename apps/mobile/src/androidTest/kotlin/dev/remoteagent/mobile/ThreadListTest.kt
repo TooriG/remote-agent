@@ -8,6 +8,9 @@ import androidx.compose.ui.test.hasProgressBarRangeInfo
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.assertDoesNotExist
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import dev.remoteagent.core.Intent
@@ -49,6 +52,30 @@ class ThreadListTest {
             compose.onNodeWithText("最近のチャット").performClick()
             compose.onNodeWithText("新しいチャット").performClick()
             assertTrue(intents.last() is Intent.NewChat)
+        }
+    }
+
+    @Test
+    fun searchOpensOnDemandAndCloseClearsFilter() {
+        Snapshot.empty().use { snapshot ->
+            val intents = mutableListOf<Intent>()
+            compose.setContent {
+                BexTheme {
+                    ThreadListScreen(snapshot.threadList(), snapshot.listQuery(), false, { intents.add(it) }, {})
+                }
+            }
+            compose.onNodeWithText("チャットを検索").assertDoesNotExist()
+            compose.onNodeWithContentDescription("検索").performClick()
+            compose.onNodeWithText("チャットを検索").performTextInput("BEX")
+            compose.waitUntil(5_000) {
+                intents.filterIsInstance<Intent.ListSessions>().lastOrNull()?.v1?.query?.searchTerm == "BEX"
+            }
+            compose.onNodeWithContentDescription("検索を閉じる").performClick()
+            compose.onNodeWithText("チャットを検索").assertDoesNotExist()
+            compose.waitUntil(5_000) {
+                intents.filterIsInstance<Intent.ListSessions>().lastOrNull()?.v1?.query?.searchTerm == ""
+            }
+            compose.onNodeWithContentDescription("検索").assertIsDisplayed()
         }
     }
 

@@ -191,11 +191,24 @@ where
                 }));
             },
             move |error| {
-                let _ = failures.send(error.to_string());
+                report_stream_error(error, &failures);
             },
             Some(std::time::Duration::from_secs(5)),
         )
         .map_err(|error| error.to_string())
+}
+
+fn report_stream_error(error: cpal::Error, failures: &mpsc::Sender<String>) {
+    // WASAPI can report a discontinuity shortly after capture starts. These
+    // notifications leave the stream usable; stopping here discards the recording.
+    match error.kind() {
+        cpal::ErrorKind::Xrun
+        | cpal::ErrorKind::DeviceChanged
+        | cpal::ErrorKind::RealtimeDenied => {}
+        _ => {
+            let _ = failures.send(error.to_string());
+        }
+    }
 }
 
 fn pcm(samples: Vec<f32>, rate: u32) -> Result<Vec<u8>, String> {
@@ -235,6 +248,33 @@ fn pcm(samples: Vec<f32>, rate: u32) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stream_notifications_do_not_abort_recording_but_fatal_errors_do() {
+        let (failures, failed) = mpsc::channel();
+        for _ in 0..3 {
+            for kind in [
+                cpal::ErrorKind::Xrun,
+                cpal::ErrorKind::DeviceChanged,
+                cpal::ErrorKind::RealtimeDenied,
+            ] {
+                report_stream_error(cpal::Error::from(kind), &failures);
+                assert_eq!(failed.try_recv(), Err(mpsc::TryRecvError::Empty));
+            }
+        }
+        for kind in [
+            cpal::ErrorKind::DeviceNotAvailable,
+            cpal::ErrorKind::StreamInvalidated,
+            cpal::ErrorKind::PermissionDenied,
+            cpal::ErrorKind::BackendError,
+            cpal::ErrorKind::Other,
+        ] {
+            let error = cpal::Error::from(kind);
+            let expected = error.to_string();
+            report_stream_error(error, &failures);
+            assert_eq!(failed.try_recv(), Ok(expected));
+        }
+    }
 
     proptest::proptest! {
         #[test]
@@ -345,7 +385,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Requires a microphone and OS permission; run in a signed Mac bundle"]
+    #[ignore = "Requires a microphone and OS permission; macOS also requires a signed bundle"]
     fn native_recording_starts_stops_and_restarts() {
         #[cfg(target_os = "macos")]
         prepare_microphone();
@@ -378,10 +418,13 @@ mod tests {
                 "recording attempt {attempt}: started in {:?}",
                 started.elapsed()
             );
-            let level = next(&incoming).unwrap();
-            assert!(
-                matches!(level, RecordingEvent::Level(value) if value.is_finite() && (0.0..=1.0).contains(&value))
-            );
+            let recording_started = std::time::Instant::now();
+            while recording_started.elapsed() < std::time::Duration::from_secs(2) {
+                let level = next(&incoming).unwrap();
+                assert!(
+                    matches!(level, RecordingEvent::Level(value) if value.is_finite() && (0.0..=1.0).contains(&value))
+                );
+            }
             recording.finish().unwrap();
             loop {
                 match next(&incoming).unwrap() {

@@ -1,7 +1,10 @@
 package dev.remoteagent.mobile
 
 import android.graphics.BitmapFactory
-import androidx.compose.foundation.BorderStroke
+import androidx.activity.compose.BackHandler
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -70,6 +73,14 @@ internal fun ThreadListScreen(
     connected: Boolean = false,
 ) {
     var search by rememberSaveable { mutableStateOf(query.searchTerm) }
+    var searching by rememberSaveable { mutableStateOf(query.searchTerm.isNotEmpty()) }
+    val focusManager = LocalFocusManager.current
+    fun closeSearch() {
+        search = ""
+        searching = false
+        focusManager.clearFocus()
+    }
+    BackHandler(enabled = searching) { closeSearch() }
     var selectedTab by rememberSaveable { mutableStateOf(0) }
     val currentQuery by rememberUpdatedState(query)
     val dispatch by rememberUpdatedState(perform)
@@ -79,10 +90,34 @@ internal fun ThreadListScreen(
             dispatch(Intent.ListSessions(ListSessions(query = currentQuery.copy(searchTerm = search))))
     }
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
-        HostSelector(hostName, connected, loadingThreads, showHosts) {
-            perform(Intent.ListSessions(ListSessions(query = query)))
+        Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (searching) {
+                val focusRequester = remember { FocusRequester() }
+                LaunchedEffect(Unit) { focusRequester.requestFocus() }
+                OutlinedTextField(
+                    value = search,
+                    onValueChange = { search = it },
+                    modifier = Modifier.weight(1f).focusRequester(focusRequester),
+                    placeholder = { Text("チャットを検索", fontSize = 14.sp) },
+                    singleLine = true,
+                    shape = RoundedCornerShape(28.dp),
+                )
+                IconButton(onClick = { closeSearch() }) {
+                    Icon(painterResource(R.drawable.ic_close), "検索を閉じる")
+                }
+            } else {
+                Text("ワークスペース", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                IconButton(onClick = { searching = true }) {
+                    Icon(painterResource(R.drawable.ic_search), "検索")
+                }
+                IconButton(
+                    onClick = { perform(Intent.ListSessions(ListSessions(query = query))) },
+                    enabled = !loadingThreads,
+                ) { Icon(painterResource(R.drawable.ic_refresh), "更新") }
+            }
         }
-        ThreadSearchHeader(search, { search = it })
+        HostSelector(hostName, connected, showHosts)
         TabRow(selectedTabIndex = selectedTab, containerColor = MaterialTheme.colorScheme.background) {
             listOf("最近のチャット", "プロジェクト").forEachIndexed { index, label ->
                 Tab(selected = selectedTab == index, onClick = { selectedTab = index }, text = { Text(label) })
@@ -149,50 +184,23 @@ private fun LazyListScope.recentChats(list: ThreadList?, loadingThreads: Boolean
 private fun HostSelector(
     hostName: String,
     connected: Boolean,
-    loading: Boolean,
     showHosts: () -> Unit,
-    refresh: () -> Unit,
 ) {
-    Row(Modifier.fillMaxWidth().padding(bottom = 20.dp), verticalAlignment = Alignment.CenterVertically) {
-        androidx.compose.material3.OutlinedButton(
+    Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.End) {
+        androidx.compose.material3.FilledTonalButton(
             onClick = showHosts,
-            modifier = Modifier.weight(1f),
-            shape = RoundedCornerShape(10.dp),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
+            modifier = Modifier.heightIn(min = 48.dp),
+            shape = RoundedCornerShape(24.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
         ) {
-            Icon(painterResource(R.drawable.ic_computer), null, Modifier.size(20.dp))
-            Text(
-                hostName,
-                Modifier.weight(1f).padding(horizontal = 12.dp),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                if (connected) "接続中" else "未接続",
-                color =
-                    if (connected) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 12.sp,
-            )
-            Icon(painterResource(R.drawable.ic_chevron), null, Modifier.padding(start = 8.dp).size(16.dp))
+            Icon(painterResource(R.drawable.ic_computer), null, Modifier.size(18.dp))
+            Text(hostName, Modifier.weight(1f, fill = false).padding(horizontal = 8.dp),
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(if (connected) "接続中" else "未接続", fontSize = 12.sp,
+                color = if (connected) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant)
+            Icon(painterResource(R.drawable.ic_chevron), null, Modifier.padding(start = 6.dp).size(14.dp))
         }
-        IconButton(onClick = refresh, enabled = !loading) { Icon(painterResource(R.drawable.ic_refresh), "更新") }
     }
-}
-
-@Composable
-private fun ThreadSearchHeader(search: String, setSearch: (String) -> Unit) {
-    Text("ワークスペース", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-    OutlinedTextField(
-        search,
-        setSearch,
-        Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 12.dp),
-        placeholder = { Text("プロジェクト・チャットを検索", fontSize = 14.sp) },
-        leadingIcon = { Icon(painterResource(R.drawable.ic_search), null) },
-        singleLine = true,
-        shape = RoundedCornerShape(10.dp),
-    )
 }
 
 @Composable
