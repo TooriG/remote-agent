@@ -135,6 +135,11 @@ pub(crate) trait Agent: Identity {
     /// create a conversation locally and defer starting an executable.
     fn validate_create(&self) -> Result<(), Failure>;
     fn storage_directory(&self) -> &Path;
+    /// External native histories distinguish client draft namespaces. Provider
+    /// checkpoints owned by this Host already share its identity namespace.
+    fn history_scope_directory(&self) -> Option<&Path> {
+        Some(self.storage_directory())
+    }
     async fn list(
         &self,
         search: &str,

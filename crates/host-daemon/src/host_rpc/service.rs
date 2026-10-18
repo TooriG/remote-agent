@@ -918,11 +918,11 @@ impl HostRpcService {
             .into(),
             Call::SessionScope(_) => {
                 let started = std::time::Instant::now();
-                let scope = provider_storage_scope(
-                    self.agents()
-                        .into_iter()
-                        .map(|(p, a)| (p, canonical_storage_path(a.storage_directory()))),
-                )?;
+                let scope =
+                    provider_storage_scope(self.agents().into_iter().filter_map(|(p, a)| {
+                        a.history_scope_directory()
+                            .map(|path| (p, canonical_storage_path(path)))
+                    }))?;
                 tracing::info!(target: "bex", operation = "host.connection.scope",
                     message = %format_args!("elapsed_ms={}", started.elapsed().as_millis()));
                 scope.into()
@@ -2763,6 +2763,55 @@ mod tests {
         assert_eq!(
             super::provider_storage_scope(areas).unwrap(),
             "8170d6192a00957e1b3b4a3da16963137015f8d36f1efaa8b8b347090f78476b",
+        );
+    }
+
+    #[tokio::test]
+    async fn enabling_host_owned_harness_keeps_the_existing_draft_namespace() {
+        let root = tempfile::tempdir().unwrap();
+        let claude = crate::claude::Claude::load(
+            "claude".into(),
+            root.path().join("accounts"),
+            Some(root.path().join("native")),
+        )
+        .await
+        .unwrap();
+        let service = super::HostRpcService::new(
+            [claude.into()],
+            crate::ProjectStore::new(root.path().join("projects.json")),
+        );
+        let request =
+            agent_protocol::protocol::Call::SessionScope(agent_protocol::models::Empty {});
+        let session = service.open_session();
+        let before = service
+            .dispatch(session.id(), &request)
+            .await
+            .unwrap()
+            .initial;
+        let claude = crate::claude::Claude::load(
+            "claude".into(),
+            root.path().join("accounts"),
+            Some(root.path().join("native")),
+        )
+        .await
+        .unwrap();
+        let harness =
+            crate::adapters::deepseek::DeepSeek::load("dsh".into(), root.path().join("harness"))
+                .await
+                .unwrap();
+        let service = super::HostRpcService::new(
+            [claude.into(), harness.into()],
+            crate::ProjectStore::new(root.path().join("projects.json")),
+        );
+        let session = service.open_session();
+        let after = service
+            .dispatch(session.id(), &request)
+            .await
+            .unwrap()
+            .initial;
+        assert_eq!(
+            before, after,
+            "Adding Harness must not archive existing drafts or navigation"
         );
     }
 
