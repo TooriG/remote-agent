@@ -70,7 +70,7 @@ class ModelDefaultsTest {
                 }
                 compose.onNodeWithTag("model.settings").performClick()
                 compose.onNodeWithTag("model.save-defaults").performScrollTo().performClick()
-                compose.onNodeWithText("新規チャットの既定に保存しました").assertIsDisplayed()
+                compose.onNodeWithText("新規チャットの既定に保存しました").performScrollTo().assertIsDisplayed()
                 val restored = AgentStore.offline(store.snapshot().serializeLocalState(), null)
                 try {
                     restored.dispatch(Intent.NewChat("/another-project")).wait()
@@ -107,7 +107,7 @@ class ModelDefaultsTest {
             }
             compose.onNodeWithTag("model.settings").performClick()
             compose.onNodeWithTag("model.save-defaults").performScrollTo().performClick()
-            compose.onNodeWithText("保存できません").assertIsDisplayed()
+            compose.onNodeWithText("保存できません").performScrollTo().assertIsDisplayed()
             compose.onNodeWithText("新規チャットの既定に保存しました").assertDoesNotExist()
             compose.runOnIdle { assertTrue(intents.none { it is Intent.SelectNewChatModel }) }
         }
