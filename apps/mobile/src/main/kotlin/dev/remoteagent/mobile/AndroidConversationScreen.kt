@@ -265,6 +265,7 @@ internal fun ThreadComposer(
     var sending by remember { mutableStateOf(false) }
     var uploading by remember(navigation.draftKey) { mutableStateOf(false) }
     val inputUnavailable = navigation.threadId?.let(snapshot::conversation)?.inputUnavailableReason()
+    val activeTurn = navigation.threadId?.let(snapshot::conversation)?.activeTurnId()
     Surface(
         Modifier.padding(horizontal = 12.dp, vertical = 8.dp).testTag("conversation.composer"),
         shape = RoundedCornerShape(28.dp),
@@ -284,7 +285,9 @@ internal fun ThreadComposer(
                 attach { uploading = it }
                 ModelPickerButton(snapshot, perform, Modifier.weight(1f))
                 VoiceInputButton(snapshot, perform, enabled = inputUnavailable == null && !sending)
-                FilledIconButton(
+                if (navigation.threadId != null && activeTurn != null) {
+                    ComposerStopButton(Interrupt(navigation.threadId!!, activeTurn), perform)
+                } else FilledIconButton(
                     onClick = {
                         sending = true
                         onSend()
