@@ -143,6 +143,7 @@ impl Desktop {
                 .h(px(height))
                 .flex_shrink_0()
                 .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+                .on_mouse_up(MouseButton::Right, |_, _, cx| cx.stop_propagation())
                 .child(image_menu)
                 .into_any_element()
         } else if let Some(error) = &state.error {
