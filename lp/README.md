@@ -101,6 +101,9 @@ The Android UI uses a dark conversation screen and a rounded bottom composer.
 Tap the model/effort label to search models and change the provider-advertised
 reasoning effort or speed tier. Existing conversations stay on their provider;
 new chats can choose either provider. Speed descriptions are shown when available.
+Use 「この設定を新規チャットの既定にする」 in that dialog to save the selected model,
+reasoning effort and speed for future new chats on the Android device. These
+presets survive app restarts; existing drafts keep their own settings.
 
 The plus button opens Android's multiple-document picker. Picked files upload to
 the paired Host through authenticated binary transfers; sending stays disabled
