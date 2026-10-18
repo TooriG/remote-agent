@@ -102,12 +102,12 @@ internal fun MessageFooter(text: String, timestampMs: ULong?, fork: (() -> Unit)
             copied = true
         }, enabled = text.isNotEmpty()) {
             Icon(painterResource(if (copied) R.drawable.ic_check else R.drawable.ic_copy),
-                if (copied) "???????" else "???", Modifier.size(20.dp))
+                if (copied) "コピーしました" else "コピー", Modifier.size(20.dp))
         }
         fork?.let {
             IconButton(onClick = it, enabled = !forking) {
                 if (forking) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                else Icon(painterResource(R.drawable.ic_fork), "??", Modifier.size(20.dp))
+                else Icon(painterResource(R.drawable.ic_fork), "分岐", Modifier.size(20.dp))
             }
         }
         MessageTime(timestampMs)

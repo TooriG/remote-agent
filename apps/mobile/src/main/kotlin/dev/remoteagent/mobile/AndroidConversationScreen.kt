@@ -136,7 +136,7 @@ internal fun ThreadDetailScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (forking) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                Text(if (forking) "???????" else "???????????????????????",
+                Text(if (forking) "分岐を作成中…" else "分岐できませんでした。もう一度お試しください。",
                     style = MaterialTheme.typography.bodySmall,
                     color = if (forkFailed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
             }

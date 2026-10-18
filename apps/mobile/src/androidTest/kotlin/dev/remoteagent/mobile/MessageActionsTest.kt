@@ -55,19 +55,19 @@ class MessageActionsTest {
                     }, null) {}
                 }
             }
-            compose.onNodeWithContentDescription("??").performClick()
-            compose.onNodeWithText("???????").assertIsDisplayed()
+            compose.onNodeWithContentDescription("分岐").performClick()
+            compose.onNodeWithText("分岐を作成中…").assertIsDisplayed()
             assertEquals(1, calls)
             // The action is disabled until the actual operation completes.
-            compose.onAllNodesWithContentDescription("??").assertCountEquals(0)
+            compose.onAllNodesWithContentDescription("分岐").assertCountEquals(0)
             compose.runOnIdle { completion!!(Result.failure(IllegalStateException("offline"))) }
-            compose.onNodeWithText("???????????????????????").assertIsDisplayed()
-            compose.onNodeWithContentDescription("??").performClick()
+            compose.onNodeWithText("分岐できませんでした。もう一度お試しください。").assertIsDisplayed()
+            compose.onNodeWithContentDescription("分岐").performClick()
             assertEquals(2, calls)
-            compose.onNodeWithText("???????").assertIsDisplayed()
+            compose.onNodeWithText("分岐を作成中…").assertIsDisplayed()
             compose.runOnIdle { completion!!(Result.success(Outcome.Applied)) }
-            compose.onNodeWithText("???????").assertDoesNotExist()
-            compose.onNodeWithContentDescription("??").assertIsDisplayed()
+            compose.onNodeWithText("分岐を作成中…").assertDoesNotExist()
+            compose.onNodeWithContentDescription("分岐").assertIsDisplayed()
         }
     }
 
@@ -80,11 +80,11 @@ class MessageActionsTest {
                 clipboard = LocalClipboardManager.current
                 MaterialTheme { ThreadDetailScreen(snapshot, projection, { _, _ -> }, null) {} }
             }
-            compose.onAllNodesWithContentDescription("???").assertCountEquals(2)
-            compose.onAllNodesWithContentDescription("???")[0].performClick()
-            compose.onNodeWithContentDescription("???????").assertIsDisplayed()
+            compose.onAllNodesWithContentDescription("コピー").assertCountEquals(2)
+            compose.onAllNodesWithContentDescription("コピー")[0].performClick()
+            compose.onNodeWithContentDescription("コピーしました").assertIsDisplayed()
             compose.runOnIdle { assertEquals("My original message", clipboard.getText()?.text) }
-            compose.onAllNodesWithContentDescription("???")[0].performClick()
+            compose.onAllNodesWithContentDescription("コピー")[0].performClick()
             compose.runOnIdle { assertEquals("Assistant reply", clipboard.getText()?.text) }
         }
     }
