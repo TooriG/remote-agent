@@ -358,6 +358,7 @@ private fun ProjectRow(
     floating: Boolean = false,
 ) {
     val openLink = rememberExternalLinkOpener()
+    val coordinatorUrl = project.coordinatorUrl
     Row(
         modifier.fillMaxWidth().padding(vertical = 10.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -396,8 +397,8 @@ private fun ProjectRow(
                 }
             }
         }
-        if (project.coordinatorUrl != null) {
-            IconButton(onClick = { openLink(project.coordinatorUrl) }) {
+        if (coordinatorUrl != null) {
+            IconButton(onClick = { openLink(coordinatorUrl) }) {
                 Icon(painterResource(R.drawable.ic_chat), "${project.name}のメイン会話をClaudeで開く")
             }
         } else {
