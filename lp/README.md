@@ -88,6 +88,13 @@ actions and work offline. Removing the message is persisted, so reopening the
 new chat or restarting the app does not bring it back. Neither action resends
 the instruction or cancels a task that the Host may already have accepted.
 
+Retained queued messages are collapsed into 「送信結果不明・N件」 so they do
+not fill the conversation. 「内容を確認」 reveals the original messages and
+their individual recovery actions. 「表示をすべて削除」 removes the displayed
+batch through the same persisted core discard action, preserving the current
+draft and any inputs arriving after the batch starts. A storage failure stops
+the batch and allows retrying the remaining messages.
+
 While a conversation has an active turn, the right edge of the Android composer
 shows a white circular stop button with a black square. It remains available
 with an empty draft or while editing a follow-up, and interrupts that turn through
