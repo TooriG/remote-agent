@@ -111,6 +111,8 @@ filled button background or chevron. Hosts default to the machine hostname
 (Windows computer name); an explicit `--name` overrides it. Paired Android
 clients refresh the saved name when reconnecting, without pairing again.
 
+Recent chats includes standalone conversations and individual conversations inside projects, ordered by the latest update. Each project conversation shows its project name below the title, including while the project is collapsed. More loads older conversations across both groups; tapping a row opens its original provider and session.
+
 The microphone button opens the phone's speech recognition activity in the device
 language and appends the result to the original draft through the shared core.
 Review or edit the text before sending. Cancellation preserves the draft; a phone
