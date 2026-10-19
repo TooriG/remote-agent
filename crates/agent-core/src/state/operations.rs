@@ -76,6 +76,8 @@ pub enum Intent {
         thread_id: Option<crate::session::SessionRef>,
     },
     AddProject(AddProject),
+    ShowRecentChats,
+    ExpandRecentChats,
     ExpandProjects,
     ExpandThreadList {
         project_id: Option<String>,

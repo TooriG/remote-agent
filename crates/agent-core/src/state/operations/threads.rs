@@ -294,7 +294,17 @@ impl Operation for ListSessions {
     }
     fn capture(&self, snapshot: &Snapshot) -> Result<Self::Input, PeerError> {
         let mut query = self.query.clone();
-        if query.project_limits.is_none() && !snapshot.project_threads.is_empty() {
+        if snapshot.recent_chats && query.part.is_none() {
+            query.project_limits = snapshot.threads.as_ref().map(|list| {
+                list.projects
+                    .iter()
+                    .map(|p| {
+                        let limit = snapshot.expanded_projects.get(&p.id).copied().unwrap_or(0);
+                        (p.id.clone(), limit.max(query.limit))
+                    })
+                    .collect()
+            });
+        } else if query.project_limits.is_none() && !snapshot.project_threads.is_empty() {
             query.project_limits = Some(
                 snapshot
                     .expanded_projects
@@ -440,15 +450,36 @@ impl Operation for ListSessions {
         let (data, more) = page_rows(threads.data, threads.limit);
         threads.data = data;
         threads.has_more |= more;
+        let recent_reads: Vec<_> = if snapshot.recent_chats && snapshot.connected {
+            threads
+                .projects
+                .iter()
+                .filter(|project| {
+                    pages
+                        .get(&project.id)
+                        .is_none_or(|page| page.limit < snapshot.list_query.limit && page.has_more)
+                })
+                .map(|project| {
+                    Effect::execute(ListProjectSessions {
+                        project_id: project.id.clone(),
+                        limit: snapshot.list_query.limit,
+                        search_term: snapshot.list_query.search_term.clone(),
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         snapshot.threads = Some(Arc::new(threads));
         decoration
             .into_iter()
+            .chain(recent_reads)
             .chain(
                 snapshot
                     .expanded_projects
                     .iter()
                     .filter(|(id, _)| {
-                        snapshot.connected && !snapshot.project_threads.contains_key(*id)
+                        snapshot.connected && !snapshot.recent_chats && !snapshot.project_threads.contains_key(*id)
                     })
                     .map(|(id, limit)| {
                         Effect::execute(ListProjectSessions {
@@ -1042,6 +1073,41 @@ mod tests {
     #[allow(dead_code)]
     mod host_fixture {
         include!("../../../tests/support/host.rs");
+    }
+
+    #[test]
+    fn recent_paging_requests_closed_project_pages_without_expanding_them() {
+        let mut snapshot = Snapshot {
+            connected: true,
+            recent_chats: true,
+            ..Default::default()
+        };
+        ListSessions::new(Default::default()).apply(
+            &mut snapshot,
+            serde_json::from_value(serde_json::json!({
+                "data":[],"projects":[{"id":"p","name":"P","roots":[]}],
+                "hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5
+            }))
+            .unwrap(),
+        );
+        let (_, effects) = reduce_intent(&snapshot, Intent::ExpandRecentChats);
+        assert_eq!(effects.len(), 1);
+        let mut operation = ListSessions::new(crate::models::ListQuery {
+            limit: 15,
+            project_limit: 15,
+            ..Default::default()
+        });
+        operation.prepare(&mut snapshot).unwrap();
+        let query = operation.capture(&snapshot).unwrap();
+        assert_eq!(query.project_limits.unwrap()["p"], 15);
+        assert_eq!(query.part, None);
+        assert!(snapshot.expanded_projects.is_empty());
+        let effects = operation.apply(&mut snapshot, serde_json::from_value(serde_json::json!({
+            "data":[],"projects":[{"id":"p","name":"P","roots":[]},{"id":"q","name":"Q","roots":[]}],
+            "hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":15
+        })).unwrap());
+        assert_eq!(effects.len(), 2);
+        assert!(snapshot.expanded_projects.is_empty());
     }
 
     #[test]

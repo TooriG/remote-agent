@@ -210,6 +210,9 @@ pub struct TerminalView {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Object))]
 pub struct Snapshot {
+    /// Mobile recent feed loads project pages independently of expansion.
+    #[serde(skip)]
+    pub recent_chats: bool,
     /// Device-owned organization, scoped by Host storage identity and native project ID.
     #[serde(default)]
     pub project_preferences: Arc<BTreeMap<String, BTreeMap<String, ProjectPreferences>>>,
@@ -627,6 +630,22 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             query.limit = query.limit.saturating_add(10);
             query.part = Some(crate::models::ListPart::Chats);
             return prepare(previous, next, op::ListSessions::new(query));
+        }
+        Intent::ShowRecentChats | Intent::ExpandRecentChats => {
+            let expanding = matches!(intent, Intent::ExpandRecentChats);
+            if !expanding && previous.recent_chats {
+                return (next, Vec::new());
+            }
+            next.recent_chats = true;
+            let mut query = (*previous.list_query).clone();
+            if expanding {
+                query.limit = query.limit.saturating_add(10);
+            }
+            query.project_limit = query.project_limit.max(query.limit);
+            query.part = None;
+            if next.connected {
+                return prepare(previous, next, op::ListSessions::new(query));
+            }
         }
         Intent::ExpandProjects => {
             let mut query = (*previous.list_query).clone();

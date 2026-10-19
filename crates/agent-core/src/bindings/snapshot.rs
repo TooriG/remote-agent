@@ -23,7 +23,8 @@ impl Snapshot {
             (None, None) => true,
             _ => false,
         };
-        same_list
+        self.recent_chats == other.recent_chats
+            && same_list
             && Arc::ptr_eq(&self.activity, &other.activity)
             && Arc::ptr_eq(&self.expanded_projects, &other.expanded_projects)
             && Arc::ptr_eq(&self.project_preferences, &other.project_preferences)

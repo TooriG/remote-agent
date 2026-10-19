@@ -79,7 +79,6 @@ internal fun ThreadListScreen(
     hostName: String = "My PC",
     connected: Boolean = false,
 ) {
-    LaunchedEffect(Unit) { perform(Intent.ShowRecentChats) }
     var search by rememberSaveable { mutableStateOf(query.searchTerm) }
     var searching by rememberSaveable { mutableStateOf(query.searchTerm.isNotEmpty()) }
     val focusManager = LocalFocusManager.current

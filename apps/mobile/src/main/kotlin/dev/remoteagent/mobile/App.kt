@@ -341,6 +341,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     }
 
     private fun observe(store: AgentStore, id: String) {
+        perform(Intent.ShowRecentChats)
         val initial = snapshot
         observation = scope.launch {
             var previous = initial
@@ -361,7 +362,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
             profiles = profiles.map { if (it.id == profileId) it.copy(name = name) else it }
             repository.saveProfiles(profiles)
         }
-        if (!next.listUnchanged(snapshot)) list = next.threadList()
+        if (!next.listUnchanged(snapshot)) list = next.recentThreadList()
         conversation = projectConversationRows(next, next.conversationSource(), conversation)
         snapshot = next
         persistence?.cancel()

@@ -110,6 +110,63 @@ impl Snapshot {
         }
     }
 
+    /// Recent top-level chats across standalone and project pages, regardless of expansion.
+    pub fn recent_thread_list(&self) -> Option<ThreadList> {
+        let mut list = self.thread_list()?;
+        let source = self.threads.as_ref()?;
+        let project_ids: HashSet<_> = source.projects.iter().map(|p| p.id.as_str()).collect();
+        let mut rows: BTreeMap<_, crate::models::Thread> = BTreeMap::new();
+        for thread in source
+            .data
+            .iter()
+            .chain(self.project_threads.values().flat_map(|p| &p.data))
+        {
+            let Some(id) = &thread.id else { continue };
+            let mut thread = thread.clone();
+            if let Some(project) = self.chat_placement(id) {
+                thread.project_id = crate::models::ProjectMembership::Assigned(project.to_owned());
+            }
+            if let Some(project) = thread.project_id.as_ref() {
+                if self.project_preference(project).is_some_and(|p| p.hidden)
+                    || !self.project_chat_visible(project, &thread)
+                {
+                    continue;
+                }
+            }
+            if rows
+                .get(id)
+                .is_none_or(|old| old.list_revision <= thread.list_revision)
+            {
+                rows.insert(id.clone(), thread);
+            }
+        }
+        let mut rows: Vec<_> = rows.into_values().collect();
+        rows.sort_by(|a, b| {
+            b.updated_at
+                .unwrap_or(0.0)
+                .total_cmp(&a.updated_at.unwrap_or(0.0))
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        list.threads = thread_summaries(
+            &rows,
+            &self.activity.active,
+            &self.activity.unread,
+            &project_ids,
+        );
+        let limit = self.list_query.limit as usize;
+        list.has_more |= list.threads.len() > limit
+            || source.has_more_projects
+            || self.project_threads.values().any(|page| page.has_more);
+        list.threads.truncate(limit);
+        for project in &source.projects {
+            let key = crate::state::operations::OperationKey::ProjectList {
+                project_id: project.id.clone(),
+            };
+            list.loading_chats |= self.operation_running(key);
+        }
+        Some(list)
+    }
+
     pub fn thread_list(&self) -> Option<ThreadList> {
         let list = self.threads.as_ref()?;
         let project_ids: HashSet<_> = list
@@ -356,6 +413,45 @@ mod tests {
             )),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn recent_chats_merge_closed_projects_in_update_order_and_page_globally() {
+        let mut snapshot = snapshot_list(json!([
+            {"id":{"provider":"codex","id":"standalone"},"updatedAt":10},
+            {"id":{"provider":"codex","id":"duplicate"},"updatedAt":5}
+        ]));
+        let page = serde_json::from_value(json!({
+            "data":[
+                {"id":{"provider":"codex","id":"project-chat"},"projectId":"project","updatedAt":30},
+                {"id":{"provider":"codex","id":"duplicate"},"projectId":"project","updatedAt":20,"listRevision":2},
+                {"id":{"provider":"claude","id":"duplicate"},"projectId":"project","updatedAt":15},
+                {"id":{"provider":"codex","id":"agent"},"parentId":{"provider":"codex","id":"project-chat"},"projectId":"project","updatedAt":40}
+            ],"projects":[],"limit":5,"hasMore":false,"hasMoreProjects":false,"projectPages":{}
+        })).unwrap();
+        Arc::make_mut(&mut snapshot.project_threads).insert("project".into(), Arc::new(page));
+        Arc::make_mut(&mut snapshot.list_query).limit = 2;
+        let list = snapshot.recent_thread_list().unwrap();
+        assert!(!list.projects[0].expanded);
+        assert_eq!(
+            list.threads
+                .iter()
+                .map(|t| t.id.id.as_str())
+                .collect::<Vec<_>>(),
+            ["project-chat", "duplicate"]
+        );
+        assert!(
+            list.threads
+                .iter()
+                .all(|t| t.project_id.as_deref() == Some("project"))
+        );
+        assert!(list.has_more);
+        Arc::make_mut(&mut snapshot.list_query).limit = 10;
+        let list = snapshot.recent_thread_list().unwrap();
+        assert_eq!(list.threads.len(), 4);
+        assert!(!list.has_more);
+        assert_eq!(list.threads.last().unwrap().id.id, "standalone");
+        assert_eq!(snapshot.thread_list().unwrap().threads.len(), 2);
     }
 
     #[test]

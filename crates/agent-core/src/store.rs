@@ -716,6 +716,7 @@ fn apply_locked(current: &mut Arc<Snapshot>, event: Event) -> (Vec<Scheduled>, b
 fn publish_locked(current: &mut Arc<Snapshot>, next: Snapshot) -> bool {
     // No `..`: adding a Snapshot field must update the publication contract.
     let Snapshot {
+        recent_chats,
         operations,
         operation_sequence,
         model_defaults,
@@ -754,7 +755,8 @@ fn publish_locked(current: &mut Arc<Snapshot>, next: Snapshot) -> bool {
         (None, None) => true,
         _ => false,
     };
-    if Arc::ptr_eq(&current.operations, operations)
+    if current.recent_chats == *recent_chats
+        && Arc::ptr_eq(&current.operations, operations)
         && current.operation_sequence == *operation_sequence
         && current.model_defaults == *model_defaults
         && Arc::ptr_eq(&current.project_preferences, project_preferences)
