@@ -133,52 +133,71 @@ internal fun ThreadListScreen(
                 Tab(selected = selectedTab == index, onClick = { selectedTab = index }, text = { Text(label) })
             }
         }
-        Box(Modifier.weight(1f).fillMaxWidth().clipToBounds()) {
-            LazyColumn(Modifier.fillMaxSize(), state = listState,
-                contentPadding = PaddingValues(vertical = 16.dp)) {
-                list?.notice?.let { notice -> item { Text(notice, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
-                if (selectedTab == 0) {
-                    recentChats(list, loadingThreads, perform)
-                } else {
-                    projectThreads(list, perform, reorder)
-                    if (list?.hasMoreProjects == true)
-                        item {
-                            TextButton(
-                                onClick = { perform(Intent.ExpandProjects) },
-                                enabled = !loadingThreads && !list.loadingProjects,
-                            ) {
-                                LoadingLabel("もっとプロジェクトを表示", list.loadingProjects)
-                            }
-                        }
-                    if (list != null && list.projects.isEmpty())
-                        item {
-                            Text(
-                                "プロジェクトがありません。",
-                                Modifier.padding(vertical = 24.dp),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                }
+        ThreadListContent(list, loadingThreads, selectedTab, reorder, perform, Modifier.weight(1f).fillMaxWidth())
+        NewChatButton(perform)
+    }
+}
+
+@Composable
+private fun NewChatButton(perform: (Intent) -> Unit) {
+    Button(
+        onClick = { perform(Intent.NewChat("")) },
+        modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+        shape = RoundedCornerShape(10.dp),
+        contentPadding = PaddingValues(16.dp),
+    ) {
+        Icon(painterResource(R.drawable.ic_add), null, Modifier.size(20.dp))
+        Text("新しいチャット", Modifier.padding(start = 8.dp), fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+private fun ThreadListContent(
+    list: ThreadList?,
+    loadingThreads: Boolean,
+    selectedTab: Int,
+    reorder: ProjectReorder,
+    perform: (Intent) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(modifier.clipToBounds()) {
+        LazyColumn(Modifier.fillMaxSize(), state = reorder.list,
+            contentPadding = PaddingValues(vertical = 16.dp)) {
+            list?.notice?.let { notice ->
+                item { Text(notice, color = MaterialTheme.colorScheme.onSurfaceVariant) }
             }
-            reorder.projects.firstOrNull { it.id == reorder.source }?.let { project ->
-                // Draw above the list while the original handle stays put to keep gesture coordinates stable.
-                ProjectRow(project, {}, reorder, floating = true,
-                    modifier = Modifier.graphicsLayer { translationY = reorder.draggedTop }
-                        .padding(top = 2.dp)
-                        .shadow(12.dp, RoundedCornerShape(12.dp))
-                        .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(12.dp))
-                        .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
-                        .clearAndSetSemantics { testTag = "dragged-project" })
+            if (selectedTab == 0) {
+                recentChats(list, loadingThreads, perform)
+            } else {
+                projectThreads(list, perform, reorder)
+                if (list?.hasMoreProjects == true)
+                    item {
+                        TextButton(
+                            onClick = { perform(Intent.ExpandProjects) },
+                            enabled = !loadingThreads && !list.loadingProjects,
+                        ) {
+                            LoadingLabel("もっとプロジェクトを表示", list.loadingProjects)
+                        }
+                    }
+                if (list != null && list.projects.isEmpty())
+                    item {
+                        Text(
+                            "プロジェクトがありません。",
+                            Modifier.padding(vertical = 24.dp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
             }
         }
-        Button(
-            onClick = { perform(Intent.NewChat("")) },
-            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
-            shape = RoundedCornerShape(10.dp),
-            contentPadding = PaddingValues(16.dp),
-        ) {
-            Icon(painterResource(R.drawable.ic_add), null, Modifier.size(20.dp))
-            Text("新しいチャット", Modifier.padding(start = 8.dp), fontWeight = FontWeight.SemiBold)
+        reorder.projects.firstOrNull { it.id == reorder.source }?.let { project ->
+            // Draw above the list while the original handle stays put to keep gesture coordinates stable.
+            ProjectRow(project, {}, reorder, floating = true,
+                modifier = Modifier.graphicsLayer { translationY = reorder.draggedTop }
+                    .padding(top = 2.dp)
+                    .shadow(12.dp, RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(12.dp))
+                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                    .clearAndSetSemantics { testTag = "dragged-project" })
         }
     }
 }
@@ -280,6 +299,7 @@ private fun SummaryRow(thread: ThreadSummary, openConversation: (Intent) -> Unit
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 }
 
+private const val DRAG_PLACEHOLDER_ALPHA = 0.2f
 private const val SEARCH_DEBOUNCE_MILLIS = 200L
 private const val UNMERGED_COLOR_ARGB = 0xFFFB923C
 
@@ -292,7 +312,7 @@ private fun LazyListScope.projectThreads(list: ThreadList?, perform: (Intent) ->
         item(key = "project:${project.id}") {
             ProjectDropMarker(reorder, project.id, after = false)
             ProjectRow(project, perform, reorder,
-                modifier = Modifier.alpha(if (reorder.source == project.id) 0.2f else 1f))
+                modifier = Modifier.alpha(if (reorder.source == project.id) DRAG_PLACEHOLDER_ALPHA else 1f))
             ProjectDropMarker(reorder, project.id, after = true)
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
         }

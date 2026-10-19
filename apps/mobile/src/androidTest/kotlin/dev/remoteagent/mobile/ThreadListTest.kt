@@ -55,13 +55,16 @@ class ThreadListTest {
             val beta = compose.onNodeWithContentDescription("Betaの順番を変更。上下にドラッグ")
             val distance = beta.fetchSemanticsNode().boundsInRoot.center.y -
                 alpha.fetchSemanticsNode().boundsInRoot.center.y
+            compose.mainClock.autoAdvance = false
             alpha.performTouchInput {
                 down(center)
                 moveTo(center + Offset(0f, distance * 0.6f), 100)
             }
+            compose.mainClock.advanceTimeBy(32)
             val carried = compose.onNodeWithTag("dragged-project", useUnmergedTree = true)
             val firstTop = carried.assertIsDisplayed().fetchSemanticsNode().boundsInRoot.top
             alpha.performTouchInput { moveTo(center + Offset(0f, distance * 0.6f + 20f), 50) }
+            compose.mainClock.advanceTimeBy(32)
             val nextTop = carried.fetchSemanticsNode().boundsInRoot.top
             assertEquals(20f, nextTop - firstTop, 1f)
             compose.runOnIdle { assertTrue(intents.isEmpty()) }
@@ -69,6 +72,7 @@ class ThreadListTest {
                 moveTo(center + Offset(0f, distance + 10f), 100)
                 up()
             }
+            compose.mainClock.autoAdvance = true
             carried.assertDoesNotExist()
             compose.runOnIdle { assertEquals(Intent.ReorderProject("a", "b", true), intents.single()) }
             beta.performTouchInput { swipe(center, center - Offset(0f, distance + 10f), 500) }
