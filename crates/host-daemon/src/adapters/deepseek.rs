@@ -189,7 +189,7 @@ impl DeepSeek {
             if provider != KeyProvider::DeepSeek && keys["refs"][provider.reference()].is_string() {
                 providers.insert(
                     provider.route().into(),
-                    json!({"apiKeyEnv":provider.reference()}),
+                    provider_profile(provider),
                 );
             }
         }
@@ -1421,6 +1421,40 @@ async fn prompt(input: &[op::Input]) -> Result<Vec<Value>, Failure> {
     }
     Ok(prompt)
 }
+// NanoGPT is an OpenAI-compatible custom route, not an installed pi-ai catalog.
+// Model IDs/capabilities: https://nano-gpt.com/api/v1/models?detailed=true
+fn provider_profile(provider: KeyProvider) -> Value {
+    let mut profile = json!({"apiKeyEnv":provider.reference()});
+    if provider == KeyProvider::NanoGpt {
+        profile["displayName"] = json!("NanoGPT");
+        profile["api"] = json!("openai-completions");
+        profile["baseURL"] = json!("https://nano-gpt.com/api/v1");
+        profile["compat"] = json!({
+            "supportsReasoningEffort":true,
+            "requiresReasoningContentOnAssistantMessages":true
+        });
+        profile["models"] = json!([
+            {
+                "id":"deepseek/deepseek-v4.1-flash",
+                "name":"DeepSeek V4.1 Flash",
+                "contextWindow":1000000,
+                "maxTokens":32768,
+                "input":["text","image"],
+                "reasoningEfforts":{"off":"none","low":"low","high":"high","max":"max"}
+            },
+            {
+                "id":"deepseek/deepseek-v4.1-flash:thinking",
+                "name":"DeepSeek V4.1 Flash (Thinking)",
+                "contextWindow":1000000,
+                "maxTokens":32768,
+                "input":["text","image"],
+                "reasoningEfforts":{"low":"low","high":"high","max":"max"}
+            }
+        ]);
+    }
+    profile
+}
+
 fn catalog(created: &Value) -> Vec<Model> {
     let options = created["configOptions"].as_array();
     let model = options.into_iter().flatten().find(|o| o["id"] == "model");
@@ -1728,6 +1762,35 @@ mod tests {
             serde_json::from_slice(&std::fs::read(dir.path().join("acp.patch.json")).unwrap())
                 .unwrap();
         assert!(!patch.to_string().contains("test-catalog-only"));
+        adapter.shutdown().await;
+    }
+
+    #[test]
+    fn nanogpt_uses_its_own_endpoint_credential_and_reasoning_wire_values() {
+        let profile = provider_profile(KeyProvider::NanoGpt);
+        assert_eq!(profile["apiKeyEnv"], "NANOGPT_API_KEY");
+        assert_eq!(profile["baseURL"], "https://nano-gpt.com/api/v1");
+        assert_eq!(profile["api"], "openai-completions");
+        let models = profile["models"].as_array().unwrap();
+        assert_eq!(models[0]["id"], "deepseek/deepseek-v4.1-flash");
+        assert_eq!(models[0]["reasoningEfforts"]["off"], "none");
+        assert!(models[1]["reasoningEfforts"].get("off").is_none());
+        assert_eq!(provider_profile(KeyProvider::OpenRouter), json!({"apiKeyEnv":"OPENROUTER_API_KEY"}));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires installed Harness; catalog only, no inference"]
+    async fn installed_harness_exposes_nanogpt_deepseek_and_native_efforts() {
+        let dir = tempfile::tempdir().unwrap();
+        let adapter = DeepSeek::load("dsh".into(), dir.path().into()).await.unwrap();
+        save_test_key(&adapter, KeyProvider::NanoGpt, Some("test-catalog-only")).await;
+        let selected = ModelRef { provider: PROVIDER, id: r#"["nanogpt","deepseek/deepseek-v4.1-flash"]"#.into() };
+        let page = adapter.models(&op::ListModels { selected_model: Some(selected.clone()), limit: 100, cursor: None }).await.unwrap();
+        let model = page.data.iter().find(|m| m.model == selected).expect("NanoGPT route missing");
+        assert_eq!(model.display_name, "NanoGPT · DeepSeek V4.1 Flash");
+        assert!(model.supported_reasoning_efforts.iter().any(|effort| effort.reasoning_effort == "high"));
+        assert!(model.supported_reasoning_efforts.iter().any(|effort| effort.reasoning_effort == "off"));
+        eprintln!("nanogpt model={:?}", model);
         adapter.shutdown().await;
     }
 

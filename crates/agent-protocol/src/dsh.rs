@@ -6,6 +6,7 @@ pub enum KeyProvider {
     #[default]
     DeepSeek,
     OpenRouter,
+    NanoGpt,
     OpenAI,
     Anthropic,
     Gemini,
@@ -26,9 +27,10 @@ impl KeyProvider {
         if self == Self::DeepSeek { "DeepSeek公式" } else { self.label() }
     }
 
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::DeepSeek,
         Self::OpenRouter,
+        Self::NanoGpt,
         Self::OpenAI,
         Self::Anthropic,
         Self::Gemini,
@@ -41,6 +43,7 @@ impl KeyProvider {
         match self {
             Self::DeepSeek => "DeepSeek",
             Self::OpenRouter => "OpenRouter",
+            Self::NanoGpt => "NanoGPT",
             Self::OpenAI => "OpenAI",
             Self::Anthropic => "Anthropic",
             Self::Gemini => "Gemini",
@@ -54,6 +57,7 @@ impl KeyProvider {
         match self {
             Self::DeepSeek => "DEEPSEEK_API_KEY",
             Self::OpenRouter => "OPENROUTER_API_KEY",
+            Self::NanoGpt => "NANOGPT_API_KEY",
             Self::OpenAI => "OPENAI_API_KEY",
             Self::Anthropic => "ANTHROPIC_API_KEY",
             Self::Gemini => "GEMINI_API_KEY",
@@ -67,6 +71,7 @@ impl KeyProvider {
         match self {
             Self::DeepSeek => "deepseek-official",
             Self::OpenRouter => "openrouter",
+            Self::NanoGpt => "nanogpt",
             Self::OpenAI => "openai",
             Self::Anthropic => "anthropic",
             Self::Gemini => "google",
@@ -80,6 +85,7 @@ impl KeyProvider {
         match self {
             Self::DeepSeek => "https://platform.deepseek.com/api_keys",
             Self::OpenRouter => "https://openrouter.ai/settings/keys",
+            Self::NanoGpt => "https://nano-gpt.com/api",
             Self::OpenAI => "https://platform.openai.com/api-keys",
             Self::Anthropic => "https://console.anthropic.com/settings/keys",
             Self::Gemini => "https://aistudio.google.com/apikey",
