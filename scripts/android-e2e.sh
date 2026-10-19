@@ -103,7 +103,7 @@ grep -qx 'OK (4 tests)' "$log.links.log"
 adb -P "$server_port" -s "$serial" shell am instrument -w \
     -e class dev.remoteagent.mobile.ThreadListTest \
     dev.remoteagent.mobile.test/androidx.test.runner.AndroidJUnitRunner | tee "$log.thread-list.log"
-grep -qx 'OK (4 tests)' "$log.thread-list.log"
+grep -qx 'OK (5 tests)' "$log.thread-list.log"
 
 adb -P "$server_port" -s "$serial" shell am instrument -w \
     -e class dev.remoteagent.mobile.MessageActionsTest \

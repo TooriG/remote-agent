@@ -38,6 +38,32 @@ class ThreadListTest {
     @get:Rule val compose = createComposeRule()
 
     @Test
+    fun recentChatsShowProjectNamesAndOpenTheOriginalConversation() {
+        val persisted = JSONObject(Snapshot.empty().serialize().decodeToString()).put(
+            "threads", JSONObject("""{"data":[
+                {"id":{"provider":"codex","id":"project-chat"},"name":"Project conversation","projectId":"bex","updatedAt":20},
+                {"id":{"provider":"claude","id":"standalone"},"name":"Standalone conversation","updatedAt":10}],
+                "projects":[{"id":"bex","name":"BEX project","roots":[]}],
+                "hasMore":true,"hasMoreProjects":false,"limit":5,"projectPages":{}}"""),
+        )
+        Snapshot.restore(persisted.toString().encodeToByteArray()).use { snapshot ->
+            val intents = mutableListOf<Intent>()
+            compose.setContent {
+                BexTheme {
+                    ThreadListScreen(snapshot.recentThreadList(), snapshot.listQuery(), false, { intents.add(it) }, {})
+                }
+            }
+            compose.onNodeWithText("Project conversation").assertIsDisplayed()
+            compose.onNodeWithText("BEX project").assertIsDisplayed()
+            compose.onNodeWithText("Standalone conversation").assertIsDisplayed()
+            compose.onNodeWithText("Project conversation").performClick()
+            assertEquals(SessionRef(ProviderKind.CODEX, "project-chat"), (intents.single() as Intent.ReadThread).v1.threadId)
+            compose.onNodeWithText("もっと見る").performClick()
+            assertEquals(Intent.ExpandRecentChats, intents.last())
+        }
+    }
+
+    @Test
     fun projectHandlesDragBothDirectionsAndCancelWithoutOpeningChats() {
         val persisted = JSONObject(Snapshot.empty().serialize().decodeToString()).put(
             "threads", JSONObject("""{"data":[],"projects":[
