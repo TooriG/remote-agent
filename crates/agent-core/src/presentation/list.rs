@@ -9,6 +9,8 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 pub struct ProjectSummary {
     pub id: String,
     pub name: String,
+    /// The native coordinator lives on Claude, separately from local worker sessions.
+    pub coordinator_url: Option<String>,
     pub roots: Vec<ProjectRoot>,
     pub icon_png: Option<Vec<u8>>,
     pub monogram: String,
@@ -55,6 +57,7 @@ fn project_summary(project: &Project) -> ProjectSummary {
     ProjectSummary {
         id: project.id.clone(),
         name: project.name.clone(),
+        coordinator_url: coordinator_url(&project.id),
         roots: project.roots.clone(),
         icon_png: project
             .favicon_png
@@ -71,6 +74,12 @@ fn project_summary(project: &Project) -> ProjectSummary {
         threads: Vec::new(),
         has_more: false,
     }
+}
+
+fn coordinator_url(project_id: &str) -> Option<String> {
+    let id = project_id.strip_prefix("claude-project:chan_")?;
+    (!id.is_empty() && id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_'))
+        .then(|| format!("https://claude.ai/code/project/chan_{id}"))
 }
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ThreadSummary {
@@ -373,6 +382,22 @@ mod tests {
     use agent_protocol::models;
     use serde_json::json;
     use std::sync::Arc;
+
+    #[test]
+    fn only_native_claude_projects_link_to_their_coordinator() {
+        let summary = project_summary(&Project {
+            id: "claude-project:chan_01Q7KpeXNrNrvTTahXT6YE2S".into(),
+            ..Default::default()
+        });
+        assert_eq!(summary.coordinator_url.as_deref(), Some(
+            "https://claude.ai/code/project/chan_01Q7KpeXNrNrvTTahXT6YE2S"
+        ));
+        for id in ["local", "claude-project:C:\\work", "claude-project:chan_",
+            "claude-project:chan_bad/../../new", "claude-project:chan_bad?thread=other",
+            "claude-project:chan_日本語"] {
+            assert!(coordinator_url(id).is_none(), "unexpected coordinator for {id}");
+        }
+    }
 
     #[rstest::rstest]
     #[case("remote-agent", "RA")]

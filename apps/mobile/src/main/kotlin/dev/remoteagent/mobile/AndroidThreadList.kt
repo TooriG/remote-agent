@@ -316,6 +316,20 @@ private fun LazyListScope.projectThreads(list: ThreadList?, perform: (Intent) ->
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
         }
         if (project.expanded) {
+            project.coordinatorUrl?.let { url ->
+                item(key = "coordinator:${project.id}") {
+                    val openLink = rememberExternalLinkOpener()
+                    TextButton(onClick = { openLink(url) }, modifier = Modifier.fillMaxWidth()) {
+                        Text("メイン会話をClaudeで開く")
+                    }
+                    Text(
+                        "タスクの依頼・振り分けはメイン会話へ。以下はこのPCの作業スレッドです。",
+                        Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             if (project.loading && !project.hasMore)
                 item(key = "loading:${project.id}") { CircularProgressIndicator(Modifier.size(18.dp)) }
             project.error?.let { message ->
@@ -343,6 +357,7 @@ private fun ProjectRow(
     modifier: Modifier = Modifier,
     floating: Boolean = false,
 ) {
+    val openLink = rememberExternalLinkOpener()
     Row(
         modifier.fillMaxWidth().padding(vertical = 10.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -381,8 +396,14 @@ private fun ProjectRow(
                 }
             }
         }
-        IconButton(onClick = { perform(Intent.NewChat(project.roots.firstOrNull()?.path.orEmpty())) }) {
-            Icon(painterResource(R.drawable.ic_add), "${project.name}で新しいチャット")
+        if (project.coordinatorUrl != null) {
+            IconButton(onClick = { openLink(project.coordinatorUrl) }) {
+                Icon(painterResource(R.drawable.ic_chat), "${project.name}のメイン会話をClaudeで開く")
+            }
+        } else {
+            IconButton(onClick = { perform(Intent.NewChat(project.roots.firstOrNull()?.path.orEmpty())) }) {
+                Icon(painterResource(R.drawable.ic_add), "${project.name}で新しいチャット")
+            }
         }
     }
 }
