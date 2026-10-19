@@ -6,6 +6,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -44,7 +45,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.testTag
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.res.painterResource
@@ -73,6 +79,7 @@ internal fun ThreadListScreen(
     hostName: String = "My PC",
     connected: Boolean = false,
 ) {
+    LaunchedEffect(Unit) { perform(Intent.ShowRecentChats) }
     var search by rememberSaveable { mutableStateOf(query.searchTerm) }
     var searching by rememberSaveable { mutableStateOf(query.searchTerm.isNotEmpty()) }
     val focusManager = LocalFocusManager.current
@@ -126,30 +133,42 @@ internal fun ThreadListScreen(
                 Tab(selected = selectedTab == index, onClick = { selectedTab = index }, text = { Text(label) })
             }
         }
-        LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState,
-            contentPadding = PaddingValues(vertical = 16.dp)) {
-            list?.notice?.let { notice -> item { Text(notice, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
-            if (selectedTab == 0) {
-                recentChats(list, loadingThreads, perform)
-            } else {
-                projectThreads(list, perform, reorder)
-                if (list?.hasMoreProjects == true)
-                    item {
-                        TextButton(
-                            onClick = { perform(Intent.ExpandProjects) },
-                            enabled = !loadingThreads && !list.loadingProjects,
-                        ) {
-                            LoadingLabel("もっとプロジェクトを表示", list.loadingProjects)
+        Box(Modifier.weight(1f).fillMaxWidth().clipToBounds()) {
+            LazyColumn(Modifier.fillMaxSize(), state = listState,
+                contentPadding = PaddingValues(vertical = 16.dp)) {
+                list?.notice?.let { notice -> item { Text(notice, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
+                if (selectedTab == 0) {
+                    recentChats(list, loadingThreads, perform)
+                } else {
+                    projectThreads(list, perform, reorder)
+                    if (list?.hasMoreProjects == true)
+                        item {
+                            TextButton(
+                                onClick = { perform(Intent.ExpandProjects) },
+                                enabled = !loadingThreads && !list.loadingProjects,
+                            ) {
+                                LoadingLabel("もっとプロジェクトを表示", list.loadingProjects)
+                            }
                         }
-                    }
-                if (list != null && list.projects.isEmpty())
-                    item {
-                        Text(
-                            "プロジェクトがありません。",
-                            Modifier.padding(vertical = 24.dp),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                    if (list != null && list.projects.isEmpty())
+                        item {
+                            Text(
+                                "プロジェクトがありません。",
+                                Modifier.padding(vertical = 24.dp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                }
+            }
+            reorder.projects.firstOrNull { it.id == reorder.source }?.let { project ->
+                // Draw above the list while the original handle stays put to keep gesture coordinates stable.
+                ProjectRow(project, {}, reorder, floating = true,
+                    modifier = Modifier.graphicsLayer { translationY = reorder.draggedTop }
+                        .padding(top = 2.dp)
+                        .shadow(12.dp, RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(12.dp))
+                        .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                        .clearAndSetSemantics { testTag = "dragged-project" })
             }
         }
         Button(
@@ -172,7 +191,7 @@ private fun LazyListScope.recentChats(list: ThreadList?, loadingThreads: Boolean
     if (list?.hasMore == true)
         item {
             TextButton(
-                onClick = { perform(Intent.ExpandThreadList(null)) },
+                onClick = { perform(Intent.ExpandRecentChats) },
                 enabled = !loadingThreads && !list.loadingChats,
             ) {
                 LoadingLabel("もっと見る", list.loadingChats)
@@ -236,7 +255,8 @@ private fun SummaryRow(thread: ThreadSummary, openConversation: (Intent) -> Unit
         Column(Modifier.weight(1f)) {
             Text(thread.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
             projectName?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
         if (thread.active) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
@@ -271,7 +291,8 @@ private fun LazyListScope.projectThreads(list: ThreadList?, perform: (Intent) ->
     projects.forEach { project ->
         item(key = "project:${project.id}") {
             ProjectDropMarker(reorder, project.id, after = false)
-            ProjectRow(project, perform, reorder)
+            ProjectRow(project, perform, reorder,
+                modifier = Modifier.alpha(if (reorder.source == project.id) 0.2f else 1f))
             ProjectDropMarker(reorder, project.id, after = true)
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
         }
@@ -296,13 +317,25 @@ private fun LazyListScope.projectThreads(list: ThreadList?, perform: (Intent) ->
 }
 
 @Composable
-private fun ProjectRow(project: ProjectSummary, perform: (Intent) -> Unit, reorder: ProjectReorder) {
+private fun ProjectRow(
+    project: ProjectSummary,
+    perform: (Intent) -> Unit,
+    reorder: ProjectReorder,
+    modifier: Modifier = Modifier,
+    floating: Boolean = false,
+) {
     Row(
-        Modifier.fillMaxWidth().padding(vertical = 10.dp),
+        modifier.fillMaxWidth().padding(vertical = 10.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        ProjectDragHandle(project, reorder)
+        if (floating) {
+            Box(Modifier.size(40.dp, 48.dp), contentAlignment = Alignment.Center) {
+                Text("≡", color = MaterialTheme.colorScheme.primary)
+            }
+        } else {
+            ProjectDragHandle(project, reorder)
+        }
         Row(
             Modifier.weight(1f).heightIn(min = 48.dp).clickable {
                 perform(Intent.SetProjectExpanded(project.id, !project.expanded))

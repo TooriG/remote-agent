@@ -55,6 +55,8 @@ internal class ProjectReorder(val list: LazyListState) {
     var source by mutableStateOf<String?>(null)
     var target by mutableStateOf<ProjectDrop?>(null)
     var pointerY by mutableStateOf(0f)
+    var grabOffsetY by mutableStateOf(0f)
+    val draggedTop: Float get() = pointerY - grabOffsetY
     var projects: List<ProjectSummary> = emptyList()
     var perform: (Intent) -> Unit = {}
     var pinned: PinnableContainer.PinnedHandle? = null
@@ -152,6 +154,7 @@ internal fun ProjectDragHandle(project: ProjectSummary, state: ProjectReorder) {
                         state.pinned = pinnable?.pin()
                         state.source = currentProject.id
                         state.pointerY = row.offset + row.size / 2f + position.y - size.height / 2f
+                        state.grabOffsetY = state.pointerY - row.offset
                         state.updateTarget()
                     }
                 },

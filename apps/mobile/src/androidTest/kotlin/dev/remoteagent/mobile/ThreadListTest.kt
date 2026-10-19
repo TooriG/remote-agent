@@ -17,6 +17,7 @@ import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
@@ -54,7 +55,21 @@ class ThreadListTest {
             val beta = compose.onNodeWithContentDescription("Betaの順番を変更。上下にドラッグ")
             val distance = beta.fetchSemanticsNode().boundsInRoot.center.y -
                 alpha.fetchSemanticsNode().boundsInRoot.center.y
-            alpha.performTouchInput { swipe(center, center + Offset(0f, distance + 10f), 500) }
+            alpha.performTouchInput {
+                down(center)
+                moveTo(center + Offset(0f, distance * 0.6f), 100)
+            }
+            val carried = compose.onNodeWithTag("dragged-project", useUnmergedTree = true)
+            val firstTop = carried.assertIsDisplayed().fetchSemanticsNode().boundsInRoot.top
+            alpha.performTouchInput { moveTo(center + Offset(0f, distance * 0.6f + 20f), 50) }
+            val nextTop = carried.fetchSemanticsNode().boundsInRoot.top
+            assertEquals(20f, nextTop - firstTop, 1f)
+            compose.runOnIdle { assertTrue(intents.isEmpty()) }
+            alpha.performTouchInput {
+                moveTo(center + Offset(0f, distance + 10f), 100)
+                up()
+            }
+            carried.assertDoesNotExist()
             compose.runOnIdle { assertEquals(Intent.ReorderProject("a", "b", true), intents.single()) }
             beta.performTouchInput { swipe(center, center - Offset(0f, distance + 10f), 500) }
             compose.runOnIdle { assertEquals(Intent.ReorderProject("b", "a", false), intents.last()) }
@@ -63,6 +78,7 @@ class ThreadListTest {
                 moveTo(center + Offset(0f, distance), 500)
                 cancel()
             }
+            carried.assertDoesNotExist()
             compose.runOnIdle { assertEquals(2, intents.size) }
         }
     }
