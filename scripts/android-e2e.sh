@@ -113,7 +113,7 @@ grep -qx 'OK (2 tests)' "$log.message-actions.log"
 adb -P "$server_port" -s "$serial" shell am instrument -w \
     -e class dev.remoteagent.mobile.UnknownSubmissionTest \
     dev.remoteagent.mobile.test/androidx.test.runner.AndroidJUnitRunner | tee "$log.unknown-submission.log"
-grep -qx 'OK (4 tests)' "$log.unknown-submission.log"
+grep -qx 'OK (7 tests)' "$log.unknown-submission.log"
 
 adb -P "$server_port" -s "$serial" shell am instrument -w \
     -e class dev.remoteagent.mobile.ModelDefaultsTest \

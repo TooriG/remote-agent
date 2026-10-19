@@ -74,6 +74,9 @@ internal fun ThreadDetailScreen(
     composer: @Composable (() -> Unit) -> Unit,
 ) {
     val threadId = snapshot.navigation().threadId
+    var recoveryExpanded by remember(threadId, snapshot.navigation().draftKey) { mutableStateOf(false) }
+    val unknown = remember(projection) { projection?.queued.orEmpty().filter { it.unknownSubmissionId() != null } }
+    val unknownIds = remember(unknown) { unknown.mapNotNull { it.unknownSubmissionId() } }
     var forking by remember(threadId) { mutableStateOf(false) }
     var forkFailed by remember(threadId) { mutableStateOf(false) }
     val listState = rememberLazyListState()
@@ -123,7 +126,13 @@ internal fun ThreadDetailScreen(
                     )
                 }
                 conversationRows(projection?.rows.orEmpty(), activityExpansion, renderRow)
-                items(projection?.queued.orEmpty(), key = { "queued:${it.id()}" }) {
+                if (unknownIds.isNotEmpty()) {
+                    item(key = "unknown-submission-summary") {
+                        UnknownSubmissionSummary(unknownIds, recoveryExpanded, { recoveryExpanded = it }, perform)
+                    }
+                }
+                items(projection?.queued.orEmpty().filter { recoveryExpanded || it.unknownSubmissionId() == null },
+                    key = { "queued:${it.id()}" }) {
                     ThreadMessageCard(it, true, snapshot.navigation().cwd, perform)
                 }
                 conversationRows(projection?.requestRows.orEmpty(), activityExpansion, renderRow)
