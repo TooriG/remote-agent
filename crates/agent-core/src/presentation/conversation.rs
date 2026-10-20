@@ -160,6 +160,7 @@ pub struct TurnErrorPresentation {
     pub message: String,
     pub details: Option<String>,
     pub is_reconnecting: bool,
+    pub is_usage_limit: bool,
 }
 
 pub enum ItemSource {
@@ -786,6 +787,7 @@ fn turn_error(error: &models::ExecutionError) -> TurnErrorPresentation {
         message: error.message.clone(),
         details: error.details.clone(),
         is_reconnecting: retrying,
+        is_usage_limit: !retrying && matches!(error.category, UsageLimit),
     }
 }
 
@@ -1625,6 +1627,20 @@ mod tests {
         assert_eq!(error.title, "サーバーが混み合っています。再接続しています");
         assert!(error.is_reconnecting);
         assert_eq!(error.message, "retry");
+    }
+
+    #[test]
+    fn usage_limit_actions_require_provider_evidence_and_a_finished_retry() {
+        for category in [models::ErrorCategory::UsageLimit, models::ErrorCategory::RateLimited, models::ErrorCategory::Other] {
+            let error = turn_error(&models::ExecutionError { category: category.clone(), message: "usage limit".into(), ..Default::default() });
+            assert_eq!(error.is_usage_limit, category == models::ErrorCategory::UsageLimit);
+        }
+        let error = turn_error(&models::ExecutionError {
+            category: models::ErrorCategory::UsageLimit,
+            retry: Some(models::RetryEvidence { retrying: true, overloaded: false }),
+            ..Default::default()
+        });
+        assert!(!error.is_usage_limit);
     }
 }
 

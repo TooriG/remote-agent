@@ -60,3 +60,18 @@ Choose **DeepSeek V4.1 Flash 1017** to use the official `deepseek-flash` route (
 For a separate installation, pass `host-daemon --deepseek C:\path\to\dsh\lib\bin.js`. `BEX_DEEPSEEK_NODE` selects its Node runtime. The standard Windows installation also detects a BEX-managed Harness under `%LOCALAPPDATA%\BEX\deepseek-harness`.
 
 Host・Windows版・Android版は同じ対応版へ更新してください。DeepSeek用APIキーをPCのBEXで設定すると、そのHostへ接続するAndroid端末からも利用できます。
+# Chromeからブラウザデータを取り込む
+
+BEXのブラウザにある「Chromeから取り込む」から、次の操作ができます。
+
+- パスワード: 「Chromeでパスワードを書き出す」でChromeを開き、Googleパスワードマネージャーの設定からCSVをダウンロードします。「パスワードCSVを取り込む」でそのファイルを選択してください。取り込み後は、書き出したCSVを削除してください。
+- ブックマーク: メニューに表示されるChromeのプロファイルを選ぶと取り込めます。「ブックマーク」から開けます。
+- ログイン: サイトを開き、「ログインを入力」からアカウントを選ぶと、表示中のログインフォームに入力します。送信は自分で行います。同じオリジン（スキーム・ホスト・ポート）の保存情報だけを使います。HTTPSに対応し、HTTPはローカル開発用のループバックのみ対応します。別オリジンのフレームやパスワード変更フォームには入力しません。
+- 削除: 「取り込んだデータをすべて削除」でBEX内の取り込みデータを消せます。Chromeの元データは変更しません。
+
+取り込んだパスワードとブックマークは、このWindowsユーザーのDPAPIで暗号化してローカルの`browser-import.dpapi`に保存します。Host・AIプロバイダーへの送信や端末間同期は行いません。再取り込みでは同じサイト・ユーザー名のパスワードを更新します。Windows版Chromeのアプリに紐づく暗号化を回避せず、パスワードはChromeの正式なCSV書き出しを利用します。Cookie・ログイン中セッション・パスキーの移行は対象外です。
+
+## 使用量とリセット
+
+利用上限のエラーに表示される「使用量・リセット時刻」から、設定のエージェント画面を開けます。使用量とローカル時刻のリセット予定を確認し、「使用量を再取得」で表示を更新できます。Codexには「追加クレジット・上限を管理」も表示され、BEXのブラウザでChatGPTの管理画面を開きます。ログイン中のアカウントを確認して操作してください。利用枠そのものをBEXから強制リセットする機能ではありません。提供元から取得した使用量には最大60秒のキャッシュがあります。
+

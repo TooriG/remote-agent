@@ -486,6 +486,14 @@ impl Desktop {
                                     .account_weekly_usage(account.provider, account.id.clone()),
                             )
                         })
+                        .when(manage && provider == ProviderKind::Codex, |row| {
+                            row.child(
+                                self.button(format!("account-usage-manage-{index}"), "追加クレジット・上限を管理", cx, |s, window, cx| {
+                                    s.open_browser_url("https://chatgpt.com/settings/usage", window, cx);
+                                }).small().ghost()
+                            ).child(div().text_xs().text_color(rgb(appearance::MUTED))
+                                .child("利用枠は表示時刻に自動リセットされます。上限の変更・追加クレジットは管理画面で行えます。"))
+                        })
                         .when(manage && provider == ProviderKind::DeepSeek, |row| {
                             row.child(dsh_route_status_view(
                                 account.plan_type.as_deref(),
@@ -573,7 +581,7 @@ impl Desktop {
                             .disabled(disabled),
                         )
                         .child(
-                            self.button("accounts-refresh", "更新", cx, |s, _, _| {
+                            self.button("accounts-refresh", "使用量を再取得", cx, |s, _, _| {
                                 s.refresh_accounts_and_models();
                             })
                             .tooltip("モデルと使用量を更新")

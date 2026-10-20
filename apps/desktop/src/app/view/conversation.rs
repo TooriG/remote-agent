@@ -550,7 +550,26 @@ impl Desktop {
                     body = body.child(self.request_card(request, cx));
                 }
                 ConversationRowContent::Error { error } => {
-                    body = body.child(div().text_color(rgb(0xff8e86)).child(error.message.clone()));
+                    let provider = session.map(|s| s.provider);
+                    body = body.child(
+                        v_flex().gap_2()
+                            .child(div().text_color(rgb(0xff8e86)).child(error.message.clone()))
+                            .when(error.is_usage_limit, |card| {
+                                card.child(
+                                    h_flex().gap_2().flex_wrap()
+                                        .child(self.button(format!("usage-settings-{}", turn.id), "使用量・リセット時刻", cx, move |s, _, _| {
+                                            s.open_settings();
+                                            s.model_provider = provider;
+                                            s.model_panel = ModelPanel::Manage;
+                                        }).small())
+                                        .when(provider == Some(agent_protocol::session::ProviderKind::Codex), |actions| {
+                                            actions.child(self.button(format!("usage-manage-{}", turn.id), "追加クレジット・上限を管理", cx, |s, window, cx| {
+                                                s.open_browser_url("https://chatgpt.com/settings/usage", window, cx);
+                                            }).small())
+                                        })
+                                )
+                            })
+                    );
                 }
                 ConversationRowContent::Response {
                     item,

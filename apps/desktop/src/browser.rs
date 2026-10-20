@@ -1,5 +1,5 @@
 use agent_protocol::browser::browser_url;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use gpui_kit::component::{
     Disableable,
     menu::{DropdownMenu, PopupMenuItem},
@@ -16,6 +16,9 @@ use gpui_kit::{
     *,
 };
 use gpui_wry::WebView;
+
+#[cfg(target_os = "windows")]
+mod windows_import;
 
 enum Event {
     Location(String),
@@ -51,15 +54,15 @@ pub(crate) struct Browser {
     webview: Entity<WebView>,
     address: Entity<InputState>,
     error: String,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     importing: bool,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     import_notice: String,
     #[cfg(target_os = "macos")]
     chrome: ChromeProfileSource,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     visible: bool,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     profile_menu_open: bool,
     _subscription: Subscription,
 }
@@ -181,26 +184,26 @@ impl Browser {
                 webview,
                 address,
                 error: String::new(),
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
                 importing: false,
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
                 import_notice: String::new(),
                 #[cfg(target_os = "macos")]
                 chrome,
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
                 visible: true,
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
                 profile_menu_open: false,
                 _subscription: subscription,
             }
         })
     }
     pub(crate) fn set_visible(&mut self, visible: bool, cx: &mut App) {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             self.visible = visible;
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         let visible = visible && !self.profile_menu_open;
         self.webview.update(cx, |view, _| {
             if view.visible() != visible {
@@ -405,18 +408,20 @@ impl Render for Browser {
                     ),
             )
             .map(|body| {
+                #[cfg(target_os = "windows")]
+                let body = body.child(self.windows_import_toolbar(cx));
                 #[cfg(target_os = "macos")]
-                let body = body
-                    .child(h_flex().px_2().pb_2().child(self.chrome_import_button(cx)))
-                    .when(!self.import_notice.is_empty(), |body| {
-                        body.child(
-                            div()
-                                .px_3()
-                                .pb_2()
-                                .text_sm()
-                                .child(self.import_notice.clone()),
-                        )
-                    });
+                let body = body.child(h_flex().px_2().pb_2().child(self.chrome_import_button(cx)));
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                let body = body.when(!self.import_notice.is_empty(), |body| {
+                    body.child(
+                        div()
+                            .px_3()
+                            .pb_2()
+                            .text_sm()
+                            .child(self.import_notice.clone()),
+                    )
+                });
                 body
             })
             .when(!self.error.is_empty(), |body| {
