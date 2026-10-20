@@ -424,7 +424,14 @@ pub fn reduce(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
         event => reduce_event(previous, event),
     };
     effects.extend(op::prefetch_composer_catalog(&mut next));
-    effects.extend(op::prefetch_model_settings(&mut next));
+    effects.extend(op::prefetch_model_settings(
+        next.connected,
+        next.drafts
+            .get(&next.navigation.draft_key)
+            .and_then(|draft| draft.model.as_ref()),
+        &next.models,
+        next.operations.keys(),
+    ));
     (next, effects)
 }
 macro_rules! prepare_operations {

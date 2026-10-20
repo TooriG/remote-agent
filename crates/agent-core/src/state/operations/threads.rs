@@ -1012,25 +1012,26 @@ impl Operation for LoadModels {
     }
 }
 
-pub(crate) fn prefetch_model_settings(snapshot: &mut Snapshot) -> Option<Effect> {
-    if !snapshot.connected {
+pub(crate) fn prefetch_model_settings<'a>(
+    connected: bool,
+    selected: Option<&crate::models::ModelRef>,
+    models: &[Model],
+    mut pending: impl Iterator<Item = &'a OperationKey>,
+) -> Option<Effect> {
+    if !connected {
         return None;
     }
-    let selected = snapshot
-        .drafts
-        .get(&snapshot.navigation.draft_key)?
-        .model
-        .as_ref()?;
-    let model = snapshot.models.iter().find(|model| {
+    let selected = selected?;
+    let model = models.iter().find(|model| {
         &model.model == selected && model.settings.is_none() && model.settings_discovery
     })?;
-    let operation = ReadModelSettings {
-        model: model.model.clone(),
-    };
-    if snapshot.operations.contains_key(&operation.key().unwrap()) {
+    if pending.any(|key| matches!(key, OperationKey::ModelSettings { model } if model == selected))
+    {
         return None;
     }
-    Some(Effect::execute(operation))
+    Some(Effect::execute(ReadModelSettings {
+        model: model.model.clone(),
+    }))
 }
 
 pub use agent_protocol::operations::ReadModelSettings;
@@ -1217,7 +1218,18 @@ mod tests {
         .unwrap();
         snapshot.connected = true;
         LoadModels {}.apply(&mut snapshot, page);
-        assert!(prefetch_model_settings(&mut snapshot).is_some());
+        assert!(
+            prefetch_model_settings(
+                snapshot.connected,
+                snapshot
+                    .drafts
+                    .get(&key)
+                    .and_then(|draft| draft.model.as_ref()),
+                &snapshot.models,
+                snapshot.operations.keys(),
+            )
+            .is_some()
+        );
         assert_eq!(snapshot.drafts[&key].effort.as_deref(), Some("high"));
         assert_eq!(snapshot.drafts[&other_key].effort.as_deref(), Some("max"));
         let (mut switched, _) = reduce_intent(
