@@ -10,6 +10,14 @@ Set-StrictMode -Version Latest
 if (-not $CacheRoot) { $CacheRoot = $env:BEX_FXC_CACHE_ROOT }
 if (-not $CacheRoot) { $CacheRoot = Join-Path $PSScriptRoot "../../target/tool-cache/windows-fxc" }
 
+function Get-PinnedFileHash([string]$Path) {
+    # Cargo's PowerShell child may not discover the Get-FileHash script module.
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $stream = [IO.File]::OpenRead($Path)
+    try { [BitConverter]::ToString($sha.ComputeHash($stream)).Replace("-", "").ToLowerInvariant() }
+    finally { $stream.Dispose(); $sha.Dispose() }
+}
+
 $pin = Get-Content -LiteralPath (Join-Path $PSScriptRoot "manifest.json") -Raw | ConvertFrom-Json
 $directory = [IO.Path]::GetFullPath((Join-Path $CacheRoot $pin.version))
 if (-not (Test-Path -LiteralPath $directory)) {
@@ -20,7 +28,7 @@ if (-not (Test-Path -LiteralPath $directory)) {
         $package = $pin.package.ToLowerInvariant()
         $archive = Join-Path $pending "sdk.nupkg"
         Invoke-WebRequest -UseBasicParsing -Uri "https://api.nuget.org/v3-flatcontainer/$package/$($pin.version)/$package.$($pin.version).nupkg" -OutFile $archive
-        if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $pin.sha256) {
+        if ((Get-PinnedFileHash $archive) -ne $pin.sha256) {
             throw "Pinned Windows SDK package checksum mismatch."
         }
         Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -48,7 +56,7 @@ foreach ($file in $pin.files) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Pinned shader compiler file is missing: $path"
     }
-    if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $file.sha256) {
+    if ((Get-PinnedFileHash $path) -ne $file.sha256) {
         throw "Pinned shader compiler checksum mismatch: $path"
     }
 }

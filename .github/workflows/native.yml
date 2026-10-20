@@ -359,7 +359,7 @@ jobs:
     timeout-minutes: 60
     env:
       # rust-cache prunes non-Cargo files inside target, leaving empty tool caches.
-      BEX_FXC_CACHE_ROOT: ${{ github.workspace }}/../bex-windows-fxc
+      BEX_FXC_CACHE_ROOT: ${{ github.workspace }}/output/tool-cache/windows-fxc
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
