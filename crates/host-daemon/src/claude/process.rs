@@ -121,7 +121,8 @@ mod tests {
         let host = executables.join("host-daemon");
         let bundled = root
             .path()
-            .join("Bex Dev.app/Contents/Helpers/Bex Node.app/Contents/MacOS/node");
+            .join("Bex Dev.app/Contents/Helpers/Bex Node.app/Contents/MacOS")
+            .join(format!("node{}", std::env::consts::EXE_SUFFIX));
         std::fs::create_dir_all(bundled.parent().unwrap()).unwrap();
         let bridge = resources.join("bex-claude-sdk.mjs");
         std::fs::write(&bundled, b"bundled runtime").unwrap();
