@@ -393,8 +393,8 @@ fn authenticated_snapshot() -> Snapshot {
         models: Arc::new(
             serde_json::from_value(json!([{
                 "id":"fixture","model":{"provider":"codex","id":"fixture"},"displayName":"Fixture",
-                "isDefault":true,"defaultReasoningEffort":"","supportedReasoningEfforts":[]
-            }]))
+                "isDefault":true, "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]
+            }}]))
             .unwrap(),
         ),
         account: Arc::new(agent_core::state::AccountState {
@@ -609,11 +609,11 @@ async fn draft_field_edits_preserve_interleaved_attachments_and_settings() {
     for attachment_first in [false, true] {
         let previous = Snapshot {
             models: Arc::new(serde_json::from_value(json!([{
-                "id":"model", "model":{"provider": "codex", "id": "model"}, "displayName":"Model",
+                "id":"model", "model":{"provider": "codex", "id": "model"}, "displayName":"Model", "settings": {
                 "defaultReasoningEffort":"medium", "defaultServiceTier":"priority",
                 "supportedReasoningEfforts":[{"reasoningEffort":"medium"},{"reasoningEffort":"max"}],
                 "serviceTiers":[{"id":"priority","fast":true}]
-            }])).unwrap()),
+            }}])).unwrap()),
             drafts: Arc::new(BTreeMap::from([(SessionRef {provider: ProviderKind::Codex, id: "thread".into()}.into(), Arc::new(Draft {
                 text: "old".into(), model: Some(agent_protocol::models::ModelRef { provider: agent_protocol::session::ProviderKind::Codex, id: "model".into() }), effort: Some("medium".into()),
                 service_tier: Some("priority".into()), ..Default::default()
@@ -3471,8 +3471,8 @@ async fn opening_a_draft_during_initial_catalog_reads_retries_and_selects_a_mode
         let result = match request["method"].as_str().unwrap() {
             "host/model/list" => json!({"data":[{
                 "id":"fresh","model":{"provider": "codex", "id": "fresh"},"displayName":"Fresh model",
-                "isDefault":true,"defaultReasoningEffort":"medium","supportedReasoningEfforts":[]
-            }]}),
+                "isDefault":true, "settings": {"defaultReasoningEffort":"medium","supportedReasoningEfforts":[]
+            }}]}),
             "host/account/list" => {
                 json!(authenticated_snapshot().account.accounts.as_ref().unwrap())
             }
@@ -3538,7 +3538,7 @@ async fn connection_loads_workspace_and_lists_in_one_epoch() {
         ),
         (
             "host/model/list",
-            json!({"data":[{"id":"fresh","model":{"provider": "codex", "id": "fresh"},"displayName":"Fresh","defaultReasoningEffort":"medium","supportedReasoningEfforts":[]}],"nextCursor":null}),
+            json!({"data":[{"id":"fresh","model":{"provider": "codex", "id": "fresh"},"displayName":"Fresh", "settings": {"defaultReasoningEffort":"medium","supportedReasoningEfforts":[]}}],"nextCursor":null}),
         ),
         (
             "host/session/list",
@@ -3889,7 +3889,7 @@ async fn completed_login_selects_its_account_before_refreshing_without_client_lo
                         json!({"accounts":[{"provider":provider,"id":id}],"selected":{(provider):id},"error":null})
                     }
                     "host/model/list" => {
-                        json!({"data":[{"id":model_id,"model":{"provider":provider,"id":model_id},"displayName":model_id,"defaultReasoningEffort":"medium","supportedReasoningEfforts":[]}]})
+                        json!({"data":[{"id":model_id,"model":{"provider":provider,"id":model_id},"displayName":model_id, "settings": {"defaultReasoningEffort":"medium","supportedReasoningEfforts":[]}}]})
                     }
                     method => panic!("unexpected login effect: {method}"),
                 };
@@ -4364,7 +4364,7 @@ async fn model_catalog_pages_keep_provider_identity_and_distinct_alias_entries()
         )
         .await
         .unwrap();
-    let model = |provider: &str, id: &str, title: &str| json!({"id":id,"model":{"provider":provider,"id":"same-native-model"},"displayName":title,"defaultReasoningEffort":"","supportedReasoningEfforts":[],"isDefault":false});
+    let model = |provider: &str, id: &str, title: &str| json!({"id":id,"model":{"provider":provider,"id":"same-native-model"},"displayName":title,"isDefault":false, "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}});
     writer.reply(&pending["host/model/list"],json!({"result":{"data":[model("codex","shared-entry","Original Codex"),model("claude","shared-entry","Claude")],"nextCursor":"next"}})).await.unwrap();
     let next = read(&mut reader).await;
     assert_eq!(next["method"], "host/model/list");

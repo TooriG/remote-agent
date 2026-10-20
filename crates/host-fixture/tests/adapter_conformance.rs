@@ -1116,7 +1116,6 @@ async fn adapter_initialization_failure_preserves_the_other_provider_and_host() 
     let models = local
         .peer
         .call(&op::ListModels {
-            selected_model: None,
             cursor: None,
             limit: 100,
         })

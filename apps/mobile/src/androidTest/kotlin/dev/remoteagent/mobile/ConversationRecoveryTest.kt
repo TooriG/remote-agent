@@ -153,10 +153,10 @@ class ConversationRecoveryTest {
             requireNotNull(resolver.openOutputStream(uri)).use { it.write(image) }
             // Exercise both orders: foreground reconnect before the picker result, and
             // another foreground callback while the selected image is being imported.
-            model.foreground()
+            model.lifecycle(true)
             val finished = CompletableDeferred<Unit>()
             model.attach(model.selectionKey, uri) { finished.complete(Unit) }
-            model.foreground()
+            model.lifecycle(true)
             finished.await()
             assertNull(model.notice)
             val attachment = model.snapshot.draft(model.draftKey).attachments.single()

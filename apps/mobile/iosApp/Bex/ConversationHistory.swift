@@ -36,7 +36,17 @@ extension ThreadScreen {
                 selection: selectionActions,
                 timestampMs: row.timestampMs,
                 fork: turnId
-                    .map { id in { complete in model.forkAndOpen(through: id, completion: complete) } }
+                    .map { id in { model.forkAndOpen(through: id) { _ in } } },
+                forking: turnId
+                    .flatMap { turn in model.selectedThreadId.map { model.snapshot.operationRunning(key: .fork(
+                        session: $0,
+                        turn: turn
+                    )) } } ?? false,
+                forkError: turnId
+                    .flatMap { turn in model.selectedThreadId.flatMap { model.snapshot.operationError(key: .fork(
+                        session: $0,
+                        turn: turn
+                    )) } }
             )
         case let (.activityHeader(activity), _): activityHeader(activity)
         case (let .activity(_, turnId), let item?): activityItem(item, turnId: turnId)

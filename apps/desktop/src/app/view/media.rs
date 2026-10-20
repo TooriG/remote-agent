@@ -359,7 +359,10 @@ impl Desktop {
                             let _ = view.update(cx, |view, cx| {
                                 view.selection.update(cx, |selection, cx| {
                                     selection.show_context_menu(
-                                        Some(url.to_string()), click.up.position, window, cx,
+                                        Some(url.to_string()),
+                                        click.up.position,
+                                        window,
+                                        cx,
                                     );
                                 });
                             });

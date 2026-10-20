@@ -40,14 +40,10 @@ internal fun ThreadListHeader(
                 singleLine = true,
                 shape = RoundedCornerShape(28.dp),
             )
-            IconButton(onClick = { changeSearch(null) }) {
-                Icon(painterResource(R.drawable.ic_close), "検索を閉じる")
-            }
+            IconButton(onClick = { changeSearch(null) }) { Icon(painterResource(R.drawable.ic_close), "検索を閉じる") }
         } else {
             title()
-            IconButton(onClick = { changeSearch("") }) {
-                Icon(painterResource(R.drawable.ic_search), "検索")
-            }
+            IconButton(onClick = { changeSearch("") }) { Icon(painterResource(R.drawable.ic_search), "検索") }
             IconButton(onClick = refresh, enabled = !loadingThreads) {
                 Icon(painterResource(R.drawable.ic_refresh), "更新")
             }

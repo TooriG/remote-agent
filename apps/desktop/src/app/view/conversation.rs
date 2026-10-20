@@ -1014,7 +1014,12 @@ impl Desktop {
                         "リンクを開く",
                         cx,
                         move |view, window, cx| {
-                            view.click_conversation_link(&url, window.modifiers().control, window, cx)
+                            view.click_conversation_link(
+                                &url,
+                                window.modifiers().control,
+                                window,
+                                cx,
+                            )
                         },
                     ));
                 } else {
@@ -1246,9 +1251,9 @@ mod tests {
 #[cfg(test)]
 mod rendering_tests {
     use super::{Desktop, Mode, Snapshot};
-    use agent_core::state::operations as op;
     use crate::app::ImageState;
     use agent_core::presentation::conversation::{RenderedConversation, project_conversation};
+    use agent_core::state::operations as op;
     use gpui_kit as gpui;
     use gpui_kit::{
         AppContext, Context, Entity, IntoElement, Render, RenderImage, TestAppContext, Window, px,

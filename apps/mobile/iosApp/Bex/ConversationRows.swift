@@ -53,11 +53,11 @@ struct ThreadMessageRow: View {
     let media: ConversationMediaAccess
     let selection: ConversationSelectionActions
     var timestampMs: UInt64?
-    var fork: ((@escaping (String?) -> Void) -> Void)?
+    var fork: (() -> Void)?
+    var forking = false
+    var forkError: String?
     var restoreUnknown: ((String) -> Void)?
     var discardUnknown: ((String) -> Void)?
-    @State private var forking = false
-    @State private var forkError: String?
     @State private var copied = false
     @State private var selectingText = false
 
@@ -150,10 +150,7 @@ struct ThreadMessageRow: View {
                         Text(Date(timeIntervalSince1970: Double(timestampMs) / 1000), style: .time).font(.caption)
                     }
                     if let fork {
-                        Button {
-                            forking = true; forkError = nil
-                            fork { error in forking = false; forkError = error }
-                        } label: {
+                        Button(action: fork) {
                             Image(systemName: "arrow.triangle.branch")
                         }
                         .disabled(forking)

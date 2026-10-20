@@ -2,10 +2,9 @@ package dev.remoteagent.mobile
 
 import android.graphics.BitmapFactory
 import androidx.activity.compose.BackHandler
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.border
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -43,16 +42,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.semantics.testTag
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -110,8 +110,13 @@ internal fun ThreadListScreen(
             changeSearch = { if (it == null) closeSearch() else search = it },
             refresh = { perform(Intent.ListSessions(ListSessions(query = query))) },
         ) {
-            Text("bex", Modifier.padding(end = 8.dp), style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold, maxLines = 1)
+            Text(
+                "bex",
+                Modifier.padding(end = 8.dp),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+            )
             HostSelector(hostName, connected, showHosts, Modifier.weight(1f))
         }
         TabRow(selectedTabIndex = selectedTab, containerColor = MaterialTheme.colorScheme.background) {
@@ -147,27 +152,36 @@ private fun ThreadListContent(
     modifier: Modifier = Modifier,
 ) {
     Box(modifier.clipToBounds()) {
-        LazyColumn(Modifier.fillMaxSize(), state = reorder.list,
-            contentPadding = PaddingValues(vertical = 16.dp)) {
-            list?.notice?.let { notice ->
-                item { Text(notice, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            }
+        LazyColumn(Modifier.fillMaxSize(), state = reorder.list, contentPadding = PaddingValues(vertical = 16.dp)) {
+            list?.notice?.let { notice -> item { Text(notice, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
             if (selectedTab == 0) {
                 recentChats(list, loadingThreads, perform)
             } else {
                 projectThreads(list, loadingThreads, perform, reorder)
             }
         }
-        reorder.projects.firstOrNull { it.id == reorder.source }?.let { project ->
-            // Draw above the list while the original handle stays put to keep gesture coordinates stable.
-            ProjectRow(project, {}, reorder, floating = true,
-                modifier = Modifier.graphicsLayer { translationY = reorder.draggedTop }
-                    .padding(top = 2.dp)
-                    .shadow(12.dp, RoundedCornerShape(12.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(12.dp))
-                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
-                    .clearAndSetSemantics { testTag = "dragged-project" })
-        }
+        reorder.projects
+            .firstOrNull { it.id == reorder.source }
+            ?.let { project ->
+                // Draw above the list while the original handle stays put to keep gesture coordinates stable.
+                ProjectRow(
+                    project,
+                    {},
+                    reorder,
+                    floating = true,
+                    modifier =
+                        Modifier.graphicsLayer { translationY = reorder.draggedTop }
+                            .padding(top = 2.dp)
+                            .shadow(12.dp, RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(12.dp))
+                            .border(
+                                1.dp,
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+                                RoundedCornerShape(12.dp),
+                            )
+                            .clearAndSetSemantics { testTag = "dragged-project" },
+                )
+            }
     }
 }
 
@@ -192,28 +206,37 @@ private fun LazyListScope.recentChats(list: ThreadList?, loadingThreads: Boolean
 }
 
 @Composable
-private fun HostSelector(
-    hostName: String,
-    connected: Boolean,
-    showHosts: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
+private fun HostSelector(hostName: String, connected: Boolean, showHosts: () -> Unit, modifier: Modifier = Modifier) {
     Row(
-        modifier.heightIn(min = 48.dp).clickable(
-            role = androidx.compose.ui.semantics.Role.Button,
-            onClickLabel = "接続先を切り替える", onClick = showHosts,
-        ),
+        modifier
+            .heightIn(min = 48.dp)
+            .clickable(
+                role = androidx.compose.ui.semantics.Role.Button,
+                onClickLabel = "接続先を切り替える",
+                onClick = showHosts,
+            ),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Icon(painterResource(R.drawable.ic_circle),
-            if (connected) "接続中" else "未接続", Modifier.size(6.dp),
-            tint = if (connected) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant)
-        Icon(painterResource(R.drawable.ic_computer), null, Modifier.size(16.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(hostName, Modifier.weight(1f, fill = false),
+        Icon(
+            painterResource(R.drawable.ic_circle),
+            if (connected) "接続中" else "未接続",
+            Modifier.size(6.dp),
+            tint = if (connected) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Icon(
+            painterResource(R.drawable.ic_computer),
+            null,
+            Modifier.size(16.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            hostName,
+            Modifier.weight(1f, fill = false),
             style = MaterialTheme.typography.labelLarge,
-            maxLines = 1, overflow = TextOverflow.Ellipsis)
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -243,8 +266,13 @@ private fun SummaryRow(thread: ThreadSummary, openConversation: (Intent) -> Unit
         Column(Modifier.weight(1f)) {
             Text(thread.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
             projectName?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
         if (thread.active) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
@@ -284,18 +312,18 @@ private fun LazyListScope.projectThreads(
     list?.projects.orEmpty().forEach { project ->
         item(key = "project:${project.id}") {
             ProjectDropMarker(reorder, project.id, after = false)
-            ProjectRow(project, perform, reorder,
-                modifier = Modifier.alpha(if (reorder.source == project.id) DRAG_PLACEHOLDER_ALPHA else 1f))
+            ProjectRow(
+                project,
+                perform,
+                reorder,
+                modifier = Modifier.alpha(if (reorder.source == project.id) DRAG_PLACEHOLDER_ALPHA else 1f),
+            )
             ProjectDropMarker(reorder, project.id, after = true)
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
         }
         if (project.expanded) {
-            project.coordinatorUrl?.let { url ->
+            project.coordinatorUrl?.let {
                 item(key = "coordinator:${project.id}") {
-                    val openLink = rememberExternalLinkOpener()
-                    TextButton(onClick = { openLink(url) }, modifier = Modifier.fillMaxWidth()) {
-                        Text("メイン会話をClaudeで開く")
-                    }
                     Text(
                         "タスクの依頼・振り分けはメイン会話へ。以下はこのPCの作業スレッドです。",
                         Modifier.padding(horizontal = 12.dp, vertical = 4.dp),

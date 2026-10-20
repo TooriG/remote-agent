@@ -11,10 +11,9 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
 [features]
 bindings = ["dep:uniffi", "dep:zeroize"]
 diagrams = ["dep:mermaid-rs-renderer"]
-browser-import = ["dep:csv", "dep:zeroize"]
+browser-import = []
 
 [dependencies]
-csv = { version = "1.3", optional = true }
 agent-protocol = { path = "../agent-protocol" }
 agent-transport = { path = "../agent-transport" }
 uniffi = { version = "=0.32.0", features = ["tokio"], optional = true }

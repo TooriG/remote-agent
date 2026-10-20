@@ -19,13 +19,13 @@ use std::sync::Arc;
 fn catalog() -> Vec<Model> {
     serde_json::from_value(json!([
         {"id":"gpt","model":{"provider":"codex","id":"shared"},"displayName":"GPT",
-         "isDefault":true,"defaultReasoningEffort":"medium",
+         "isDefault":true, "settings": {"defaultReasoningEffort":"medium",
          "supportedReasoningEfforts":[{"reasoningEffort":"medium"},{"reasoningEffort":"high"}],
-         "serviceTiers":[{"id":"priority","fast":true}]},
+         "serviceTiers":[{"id":"priority","fast":true}]}},
         {"id":"claude","model":{"provider":"claude","id":"shared"},"displayName":"Claude",
-         "isDefault":true,"defaultReasoningEffort":"medium",
+         "isDefault":true, "settings": {"defaultReasoningEffort":"medium",
          "supportedReasoningEfforts":[{"reasoningEffort":"medium"},{"reasoningEffort":"high"}],
-         "serviceTiers":[{"id":"fast","fast":true}]}
+         "serviceTiers":[{"id":"fast","fast":true}]}}
     ]))
     .unwrap()
 }
@@ -968,4 +968,77 @@ fn initial_provider_choice_uses_preset_options_for_an_unassigned_local_draft() {
         snapshot.drafts[&key].service_tier.as_deref(),
         Some("priority")
     );
+}
+
+#[test]
+fn saving_a_draft_preset_commits_all_settings_and_preserves_other_providers() {
+    let mut snapshot = Snapshot::default();
+    let preserved = ProviderModelDefaults {
+        effort: Some("medium".into()),
+        ..Default::default()
+    };
+    snapshot
+        .model_defaults
+        .providers
+        .insert(ProviderKind::Codex, preserved.clone());
+    let key = snapshot.navigation.draft_key.clone();
+    let model = crate::models::ModelRef {
+        provider: crate::session::ProviderKind::DeepSeek,
+        id: "route".into(),
+    };
+    Arc::make_mut(&mut snapshot.drafts).insert(
+        key.clone(),
+        Arc::new(agent_core::state::Draft {
+            model: Some(model.clone()),
+            effort: Some("high".into()),
+            service_tier: Some("priority".into()),
+            ..Default::default()
+        }),
+    );
+    let (next, _) = reduce(
+        &snapshot,
+        Event::Intent(Intent::SaveDraftModelDefaults {
+            scope: ModelDefaultsScope::Global,
+            draft_key: key.clone(),
+        }),
+    );
+    let defaults = next.model_defaults(ModelDefaultsScope::Global);
+    assert_eq!(defaults.new_chat_model, Some(model.clone()));
+    assert_eq!(defaults.providers[&ProviderKind::Codex], preserved);
+    let settings = &defaults.providers[&model.provider];
+    assert_eq!(settings.model, Some(model));
+    assert_eq!(settings.effort.as_deref(), Some("high"));
+    assert_eq!(settings.service_tier.as_deref(), Some("priority"));
+    assert_eq!(snapshot.drafts[&key], next.drafts[&key]);
+}
+
+#[test]
+fn saving_a_draft_preset_captures_the_visible_model_defaults() {
+    let mut snapshot = Snapshot {
+        models: Arc::new(catalog()),
+        ..Default::default()
+    };
+    let key = snapshot.navigation.draft_key.clone();
+    let model = snapshot.models[0].model.clone();
+    Arc::make_mut(&mut snapshot.drafts).insert(
+        key.clone(),
+        Arc::new(agent_core::state::Draft {
+            model: Some(model.clone()),
+            ..Default::default()
+        }),
+    );
+    let visible = snapshot.model_quick_controls(key.clone());
+    let next = apply(
+        &snapshot,
+        Intent::SaveDraftModelDefaults {
+            scope: ModelDefaultsScope::Global,
+            draft_key: key.clone(),
+        },
+    );
+    let defaults = next.provider_model_defaults(ModelDefaultsScope::Global, model.provider);
+    assert_eq!(defaults.model, Some(model));
+    assert_eq!(defaults.effort.as_deref(), Some("medium"));
+    assert_eq!(defaults.effort, Some(visible.effort));
+    assert_eq!(defaults.service_tier.as_deref(), Some("default"));
+    assert_eq!(snapshot.drafts[&key], next.drafts[&key]);
 }

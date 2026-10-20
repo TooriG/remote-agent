@@ -39,6 +39,7 @@ impl Operation for ListAccounts {
         if !snapshot.models.is_empty() {
             snapshot.drafts = normalized_model_drafts(
                 &snapshot.drafts,
+                snapshot.conversations.keys(),
                 &snapshot.models,
                 &snapshot.model_errors,
                 Some(&output.selected),
@@ -282,16 +283,24 @@ impl Operation for CancelAccountLogin {
 pub use agent_protocol::operations::LogoutAccount;
 
 impl Operation for LogoutAccount {
+    fn invalidates(&self) -> bool {
+        true
+    }
     fn key(&self) -> Option<OperationKey> {
         Some(OperationKey::Accounts)
     }
     rpc_operation!();
     fn apply(self, snapshot: &mut Snapshot, _output: Self::Output) -> Vec<Effect> {
         Arc::make_mut(&mut snapshot.account).accounts = None;
-        vec![
+        let mut effects = vec![
             Effect::execute(ListAccounts {}),
             Effect::execute(LoadModels {}),
-        ]
+        ];
+        if self.provider == crate::session::ProviderKind::DeepSeek {
+            Arc::make_mut(&mut snapshot.account).dsh_credentials = None;
+            effects.push(Effect::execute(ReadDshCredentials {}));
+        }
+        effects
     }
 }
 
@@ -336,8 +345,8 @@ mod account_model_tests {
         }))
         .unwrap();
         let models: rpc::ModelPage = serde_json::from_value(json!({"data":[
-            {"id":"gpt","model":{"provider":"codex","id":"gpt"},"displayName":"GPT","isDefault":true,"defaultReasoningEffort":"high","supportedReasoningEfforts":[{"reasoningEffort":"high"}]},
-            {"id":"sonnet","model":{"provider":"claude","id":"sonnet"},"displayName":"Sonnet","isDefault":true,"defaultReasoningEffort":"","supportedReasoningEfforts":[]}
+            {"id":"gpt","model":{"provider":"codex","id":"gpt"},"displayName":"GPT","isDefault":true, "settings": {"defaultReasoningEffort":"high","supportedReasoningEfforts":[{"reasoningEffort":"high"}]}},
+            {"id":"sonnet","model":{"provider":"claude","id":"sonnet"},"displayName":"Sonnet","isDefault":true, "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}}
         ]})).unwrap();
         if models_first {
             LoadModels {}.apply(
@@ -443,8 +452,8 @@ mod account_model_tests {
             "accounts":[{"id":"a","provider":"codex"},{"id":"b","provider":"codex"},{"id":"claude:c","provider":"claude"}],
             "selected":{"codex":"a","claude":"claude:c"}
         })).unwrap()));
-        let codex: Model = serde_json::from_value(json!({"id":"gpt","model":{"provider": "codex", "id": "gpt"},"displayName":"GPT","defaultReasoningEffort":"medium","supportedReasoningEfforts":[{"reasoningEffort":"medium"},{"reasoningEffort":"high"}],"serviceTiers":[{"id":"fast","fast":true}]})).unwrap();
-        let claude: Model = serde_json::from_value(json!({"id":"claude:sonnet","model":{"provider": "claude", "id": "sonnet"},"displayName":"Sonnet","defaultReasoningEffort":"high","supportedReasoningEfforts":[{"reasoningEffort":"high"}]})).unwrap();
+        let codex: Model = serde_json::from_value(json!({"id":"gpt","model":{"provider": "codex", "id": "gpt"},"displayName":"GPT", "settings": {"defaultReasoningEffort":"medium","supportedReasoningEfforts":[{"reasoningEffort":"medium"},{"reasoningEffort":"high"}],"serviceTiers":[{"id":"fast","fast":true}]}})).unwrap();
+        let claude: Model = serde_json::from_value(json!({"id":"claude:sonnet","model":{"provider": "claude", "id": "sonnet"},"displayName":"Sonnet", "settings": {"defaultReasoningEffort":"high","supportedReasoningEfforts":[{"reasoningEffort":"high"}]}})).unwrap();
         snapshot.models = Arc::new(vec![codex.clone(), claude.clone()]);
         Arc::make_mut(&mut snapshot.drafts).insert(
             "draft".into(),
@@ -552,8 +561,13 @@ mod account_model_tests {
             })
         );
         let mut restricted = codex;
-        restricted.supported_reasoning_efforts.truncate(1);
-        restricted.service_tiers = None;
+        restricted
+            .settings
+            .as_mut()
+            .unwrap()
+            .supported_reasoning_efforts
+            .truncate(1);
+        restricted.settings.as_mut().unwrap().service_tiers = None;
         select(
             &mut snapshot,
             "b",
@@ -587,5 +601,35 @@ mod account_model_tests {
                 .as_deref(),
             Some("default")
         );
+    }
+}
+
+pub use agent_protocol::dsh::{
+    KeyUpdate as UpdateDshCredential, ReadCredentials as ReadDshCredentials,
+};
+impl Operation for ReadDshCredentials {
+    fn key(&self) -> Option<OperationKey> {
+        Some(OperationKey::DshCredentials)
+    }
+    rpc_operation!();
+    fn apply(self, snapshot: &mut Snapshot, credentials: Self::Output) -> Vec<Effect> {
+        Arc::make_mut(&mut snapshot.account).dsh_credentials = Some(Arc::new(credentials));
+        Vec::new()
+    }
+}
+impl Operation for UpdateDshCredential {
+    fn invalidates(&self) -> bool {
+        true
+    }
+    fn key(&self) -> Option<OperationKey> {
+        Some(OperationKey::DshCredentials)
+    }
+    rpc_operation!();
+    fn apply(self, snapshot: &mut Snapshot, credentials: Self::Output) -> Vec<Effect> {
+        Arc::make_mut(&mut snapshot.account).dsh_credentials = Some(Arc::new(credentials));
+        vec![
+            Effect::execute(ListAccounts {}),
+            Effect::execute(LoadModels {}),
+        ]
     }
 }

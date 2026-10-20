@@ -13,6 +13,9 @@ use std::sync::Arc;
 
 #[uniffi::export]
 impl Snapshot {
+    pub fn connection_generation(&self) -> u64 {
+        self.connection_generation
+    }
     pub fn conversation_source(&self) -> Option<Arc<Thread>> {
         self.conversation_thread()
             .map(|value| Arc::new(Thread(value)))

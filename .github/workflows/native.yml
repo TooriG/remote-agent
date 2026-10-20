@@ -357,6 +357,9 @@ jobs:
     # Latest stable Windows Server major; Windows 11 UI acceptance is separate.
     runs-on: windows-2025
     timeout-minutes: 60
+    env:
+      # rust-cache prunes non-Cargo files inside target, leaving empty tool caches.
+      BEX_FXC_CACHE_ROOT: ${{ github.workspace }}/../bex-windows-fxc
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -371,6 +374,7 @@ jobs:
           tool: cargo-nextest@${{ needs.toolchain.outputs.nextest-version }}
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
+          cache-directories: ${{ env.BEX_FXC_CACHE_ROOT }}
           save-if: ${{ github.event_name != 'pull_request' }}
           cache-on-failure: true
       - name: Verify pinned shader compiler and reproducible bytecode

@@ -145,11 +145,12 @@ pub struct RenameSession {
 
 #[derive(Debug, Serialize, Clone, Deserialize)]
 pub struct ListModels {
-    /// Discover exact capabilities for this selected route without scanning every model.
-    #[serde(default)]
-    pub selected_model: Option<crate::models::ModelRef>,
     pub limit: usize,
     pub cursor: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadModelSettings {
+    pub model: crate::models::ModelRef,
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

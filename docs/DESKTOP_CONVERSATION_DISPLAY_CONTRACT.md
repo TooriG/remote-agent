@@ -710,6 +710,20 @@ Acceptance: `new_conversation_moves_draft_to_pending_before_creation_reply`,
   quick controls. Both clients use core capability and weekly-usage projections.
   Selecting an account fetches its current catalog and retains supported draft
   choices. A catalog refresh must not silently switch to another provider.
+- Catalog discovery and exact-model settings are separate Host operations.
+  Missing settings retain saved draft choices; only resolved settings can
+  establish that an option is unsupported. Host advertises whether an adapter
+  can resolve settings, and core requests them for the selected model. Replies
+  update that model's identity even if navigation changes while loading.
+  Native session metadata seeds an unselected draft; reopening a conversation
+  retains an existing draft's selected model across all providers.
+- API-key routes use typed credential read/update operations. Route status
+  contains configuration source and attention state, never a secret or a status
+  encoded in an account plan label. Desktop, iPhone and Android render core's
+  credential controls; login codes remain part of actual login flows.
+- Saving the current draft as a new-chat preset updates its model, reasoning,
+  speed and new-chat selection in one core transition. Fork, send and interrupt
+  progress come from core operation state keyed by their source operation.
 - The model picker has a left vertical Codex/Claude icon rail and no title or
   close button. New conversations can switch agents; an existing conversation's
   agent stays fixed. Desktop shows the Codex/Claude names beside their icons,
@@ -801,3 +815,25 @@ Acceptance: core `composer::tests`,
 `invocation_completion_preserves_suffix_and_does_not_accept_ime`,
 `completion_candidates_keep_names_and_descriptions_on_one_line`, and iOS
 `testSimulatorSelectsPluginAndSkillFromComposer`.
+
+## Native connection and browser ownership
+
+- Native Store owns one transport retry worker per environment. Application
+  lifecycle only activates or pauses recovery; views do not schedule retry loops.
+  Authentication rejection waits for a lifecycle/network wakeup. Transport
+  recovery retains cached state and submission delivery evidence. A new
+  connection generation lets platform services refresh Live Activity tokens
+  without tying that work to a particular screen's connection callback.
+- Windows browsing uses an application-owned persistent WebView2 profile and
+  its native password-saving and autofill prompts. BEX does not import password
+  CSVs, maintain a password vault, or inject login credentials into pages.
+  Bookmark migration is separate and merges under a storage lock. Chrome login
+  import is explicitly unavailable on Windows; macOS retains its consent-based
+  Cookie import. Both use the same Chrome profile metadata parser.
+
+Ownership was compared with T3 Code commit
+`1327e7bdfb454594eb8308961691d1b7419156f3`, particularly
+`packages/client-runtime/src/connection`,
+`packages/provider-core/src/server/ModelCatalog.ts`, and
+`apps/desktop/src/preview/BrowserImport`. BEX keeps these responsibilities in
+its existing Rust core, Host adapters and native platform services.

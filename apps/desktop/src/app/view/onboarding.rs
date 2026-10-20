@@ -49,9 +49,7 @@ impl Desktop {
                 let id = format!("connection-agent-{}", agent.name);
                 row = row.child(
                     self.button(id.clone(), "ログイン", cx, move |view, _, _| {
-                        view.account_operation(Intent::StartAccountLogin(op::StartAccountLogin {
-                            provider,
-                        }));
+                        view.start_provider_setup(provider);
                     })
                     .debug_selector(move || id.clone())
                     .small()
@@ -294,8 +292,8 @@ mod tests {
                 let snapshot = Arc::make_mut(&mut view.snapshot);
                 snapshot.connected = true;
                 snapshot.models = Arc::new(serde_json::from_value(serde_json::json!([
-                    {"id":"gpt","model":{"provider":"codex","id":"gpt"},"displayName":"GPT","defaultReasoningEffort":"","supportedReasoningEfforts":[]},
-                    {"id":"sonnet","model":{"provider":"claude","id":"sonnet"},"displayName":"Sonnet","defaultReasoningEffort":"","supportedReasoningEfforts":[]}
+                    {"id":"gpt","model":{"provider":"codex","id":"gpt"},"displayName":"GPT", "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}},
+                    {"id":"sonnet","model":{"provider":"claude","id":"sonnet"},"displayName":"Sonnet", "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}}
                 ])).unwrap());
                 Arc::make_mut(&mut snapshot.account).accounts = Some(Arc::new(serde_json::from_value(serde_json::json!({"accounts":[],"selected":{}})).unwrap()));
             });

@@ -11,7 +11,8 @@ mod diagram;
 pub use diagram::{MarkdownDiagram, markdown_diagram};
 mod links;
 pub use links::{
-    MarkdownFileKind, MarkdownFileReference, file_requires_download, markdown_display_source, markdown_file_target,
+    MarkdownFileKind, MarkdownFileReference, file_requires_download, markdown_display_source,
+    markdown_file_target,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]

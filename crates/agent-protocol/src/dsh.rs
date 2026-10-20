@@ -16,15 +16,12 @@ pub enum KeyProvider {
 }
 
 impl KeyProvider {
-    /// DSH advertises opaque JSON [provider, model] values over ACP.
-    pub fn for_model_id(id: &str) -> Option<Self> {
-        let [route, model]: [String; 2] = serde_json::from_str(id).ok()?;
-        if model.is_empty() { return None; }
-        Self::ALL.into_iter().find(|provider| provider.route() == route)
-    }
-
     pub fn model_label(self) -> &'static str {
-        if self == Self::DeepSeek { "DeepSeek公式" } else { self.label() }
+        if self == Self::DeepSeek {
+            "DeepSeek公式"
+        } else {
+            self.label()
+        }
     }
 
     pub const ALL: [Self; 9] = [
@@ -96,8 +93,8 @@ impl KeyProvider {
     }
 }
 
-/// Carried by the existing private account-login submission. Never returned in metadata.
-#[derive(Serialize, Deserialize)]
+/// A private credential mutation. Keys are never returned in metadata or Debug.
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct KeyUpdate {
     pub provider: KeyProvider,
@@ -105,18 +102,47 @@ pub struct KeyUpdate {
     pub key: Option<String>,
 }
 
+impl std::fmt::Debug for KeyUpdate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KeyUpdate")
+            .field("provider", &self.provider)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CredentialSource {
+    Missing,
+    Managed,
+    External,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CredentialRoute {
+    pub provider: KeyProvider,
+    pub source: CredentialSource,
+    pub needs_attention: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadCredentials {}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Credentials {
+    pub routes: Vec<CredentialRoute>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn model_routes_preserve_provider_boundaries() {
-        for provider in KeyProvider::ALL {
-            let id = serde_json::to_string(&[provider.route(), "test/model"]).unwrap();
-            assert!(KeyProvider::for_model_id(&id) == Some(provider));
-        }
-        for id in ["deepseek-flash", "[]", r#"["openrouter",""]"#, r#"["unknown","model"]"#] {
-            assert!(KeyProvider::for_model_id(id).is_none());
-        }
+    fn debug_never_contains_credential_values() {
+        let update = KeyUpdate {
+            provider: KeyProvider::OpenRouter,
+            key: Some("fixture-secret".into()),
+        };
+        let debug = format!("{update:?}");
+        assert!(!debug.contains("fixture-secret"));
+        assert!(debug.contains("OpenRouter"));
     }
 }

@@ -139,6 +139,8 @@ pub struct AccountState {
     pub accounts: Option<Arc<agent_protocol::operations::Accounts>>,
     #[serde(skip)]
     pub login: Option<Arc<agent_protocol::operations::AccountLogin>>,
+    #[serde(skip)]
+    pub dsh_credentials: Option<Arc<agent_protocol::dsh::Credentials>>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PendingSubmission {
@@ -271,6 +273,8 @@ pub struct Snapshot {
     #[serde(skip)]
     pub connected: bool,
     #[serde(skip)]
+    pub connection_generation: u64,
+    #[serde(skip)]
     pub subscriptions: Arc<BTreeMap<crate::session::SessionRef, uuid::Uuid>>,
     #[serde(skip)]
     pub error: Option<String>,
@@ -305,6 +309,14 @@ impl Snapshot {
 
 #[cfg_attr(feature = "bindings", uniffi::export)]
 impl Snapshot {
+    pub fn operation_phase(
+        &self,
+        key: operations::OperationKey,
+    ) -> Option<operations::OperationPhase> {
+        self.operations
+            .get(&key)
+            .map(|operation| operation.phase.clone())
+    }
     pub fn operation_running(&self, key: operations::OperationKey) -> bool {
         self.operations
             .get(&key)
@@ -412,6 +424,7 @@ pub fn reduce(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
         event => reduce_event(previous, event),
     };
     effects.extend(op::prefetch_composer_catalog(&mut next));
+    effects.extend(op::prefetch_model_settings(&mut next));
     (next, effects)
 }
 macro_rules! prepare_operations {
@@ -428,7 +441,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
     prepare_operations!(intent, previous, next, [
         ReadTaskActivity, RegisterLiveActivity, UnregisterLiveActivity,
         ReadPermissionSettings, UpdatePermissionSettings,
-        ManageCodexCli, ListAccounts, SelectAccount, SelectAccountForDraft, LogoutAccount, StartAccountLogin,
+        ManageCodexCli, ReadDshCredentials, UpdateDshCredential, ListAccounts, SelectAccount, SelectAccountForDraft, LogoutAccount, StartAccountLogin,
         ReadAccountLogin, CancelAccountLogin, SubmitAccountLogin, ForkSession,
         StartTerminal, DetachTerminal, KillTerminal, CreateInvitation, RemoveRemoteHost,
         RevokeDevice, ListFiles, ReadFile,
@@ -438,7 +451,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
         ReadThread, OpenRequest, ReadItem, ResizeTerminal,
         Interrupt,
         WriteTerminal, DownloadFile, LoadSessionImages, LoadVisualization,
-        LoadHostName, LoadHostManagement, LoadModels,
+        LoadHostName, LoadHostManagement, LoadModels, ReadModelSettings,
         Respond, Transcribe, UploadAttachment, PairRemoteHost,
     ], {
         Intent::WatchAgents { thread_id } => {
@@ -719,6 +732,38 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             }
         }
 
+        Intent::SaveDraftModelDefaults { scope, draft_key } => {
+            if let Some(draft) = previous.drafts.get(&draft_key) {
+                let provider = previous.model_provider_for_draft(draft_key.clone());
+                let model = draft.model.clone().or_else(|| {
+                    provider.and_then(|provider| previous.model_for_provider(draft_key.clone(), provider))
+                });
+                if let Some(model) = model {
+                    let (effort, tier) = previous.models.iter()
+                        .find(|choice| choice.model == model)
+                        .and_then(|choice| choice.settings.as_ref())
+                        .map(|settings| {
+                            let (effort, tier) = supported_model_options(
+                                settings, draft.effort.as_deref(), draft.service_tier.as_deref(),
+                            );
+                            (effort, Some(tier))
+                        })
+                        .unwrap_or((draft.effort.as_deref(), draft.service_tier.as_deref()));
+                    let mut defaults = previous.model_defaults(scope.clone());
+                    defaults.new_chat_model = Some(model.clone());
+                    defaults.providers.insert(model.provider, ProviderModelDefaults {
+                        model: Some(model),
+                        effort: effort.map(str::to_owned),
+                        service_tier: tier.map(str::to_owned),
+                    });
+                    set_model_defaults(&mut next, scope, defaults);
+                } else {
+                    next.error = Some("モデルを選択してください".into());
+                }
+            } else {
+                next.error = Some("入力欄が見つかりません".into());
+            }
+        }
         Intent::SelectNewChatModel { scope, model } => {
             let mut defaults = previous.model_defaults(scope.clone());
             defaults.new_chat_model = model;
@@ -790,7 +835,6 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 .get(thread_id)
                 .map(|draft| draft.as_ref().clone())
                 .unwrap_or_default();
-            let refresh_model = matches!(&intent, Intent::SelectModel { model, .. } if model.provider == crate::session::ProviderKind::DeepSeek);
             let thread_id = match intent {
                 Intent::SelectModel { thread_id, model } => {
                     if draft.model.as_ref() != Some(&model) {
@@ -837,9 +881,6 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 .is_none_or(|previous| **previous != draft)
             {
                 Arc::make_mut(&mut next.drafts).insert(thread_id, Arc::new(draft));
-            }
-            if refresh_model {
-                return (next, vec![Effect::execute(op::LoadModels {})]);
             }
         }
     });
@@ -986,6 +1027,7 @@ fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
             }
         }
         Event::Connected => {
+            next.connection_generation = previous.connection_generation.saturating_add(1);
             for page in next
                 .threads
                 .iter_mut()
@@ -1156,8 +1198,9 @@ pub(crate) fn allows_custom_codex_models(
         .is_none_or(|plan| plan == "API key")
 }
 
-pub(crate) fn normalized_model_drafts(
+pub(crate) fn normalized_model_drafts<'a>(
     drafts: &Arc<BTreeMap<DraftKey, Arc<Draft>>>,
+    initialized_sessions: impl Iterator<Item = &'a crate::session::SessionRef> + Clone,
     models: &[crate::models::Model],
     errors: &serde_json::Map<String, serde_json::Value>,
     selected_accounts: Option<&std::collections::HashMap<crate::session::ProviderKind, String>>,
@@ -1167,6 +1210,13 @@ pub(crate) fn normalized_model_drafts(
 ) -> Arc<BTreeMap<DraftKey, Arc<Draft>>> {
     let mut next = drafts.clone();
     for (key, previous) in drafts.iter() {
+        // Let the first native read seed a conversation before catalog defaults.
+        if previous.model.is_none()
+            && let DraftKey::Session { session } = key
+            && !initialized_sessions.clone().any(|id| id == session)
+        {
+            continue;
+        }
         let selected_provider =
             crate::presentation::model_settings::draft_provider(key, previous.model.as_ref());
         if selected_provider.is_none() && key != active_draft {
@@ -1265,46 +1315,54 @@ pub(crate) fn supported_settings<'a>(
         })
         .or_else(|| available.next());
     let Some(model) = model else {
-        return if models.is_empty() {
-            (selected_model, None, None)
-        } else {
-            // The other provider's catalog cannot validate this draft's options.
-            (selected_model, selected_effort, selected_tier)
-        };
+        // Missing catalog data cannot validate this draft's options.
+        return (selected_model, selected_effort, selected_tier);
+    };
+    let Some(settings) = &model.settings else {
+        return (Some(&model.model), selected_effort, selected_tier);
     };
     let changed = selected_model.is_some() && selected_model != Some(&model.model);
-    let effort = model
+    let (effort, tier) = supported_model_options(
+        settings,
+        selected_effort.filter(|_| !changed),
+        selected_tier.filter(|_| !changed),
+    );
+    (Some(&model.model), effort, Some(tier))
+}
+
+pub(crate) fn supported_model_options<'a>(
+    settings: &'a crate::models::ModelSettings,
+    selected_effort: Option<&'a str>,
+    selected_tier: Option<&'a str>,
+) -> (Option<&'a str>, &'a str) {
+    let effort = settings
         .supported_reasoning_efforts
         .iter()
-        .find(|effort| !changed && Some(effort.reasoning_effort.as_str()) == selected_effort)
+        .find(|effort| Some(effort.reasoning_effort.as_str()) == selected_effort)
         .or_else(|| {
-            model
+            settings
                 .supported_reasoning_efforts
                 .iter()
-                .find(|effort| effort.reasoning_effort == model.default_reasoning_effort)
+                .find(|effort| effort.reasoning_effort == settings.default_reasoning_effort)
         })
-        .or_else(|| model.supported_reasoning_efforts.first());
+        .or_else(|| settings.supported_reasoning_efforts.first());
     let supported_tier = |id: &str| {
         id == "default"
-            || model
+            || settings
                 .service_tiers
                 .as_ref()
                 .is_some_and(|tiers| tiers.iter().any(|tier| tier.id == id))
     };
     let tier = selected_tier
-        .filter(|tier| !changed && supported_tier(tier))
+        .filter(|tier| supported_tier(tier))
         .or_else(|| {
-            model
+            settings
                 .default_service_tier
                 .as_deref()
                 .filter(|tier| supported_tier(tier))
         })
         .unwrap_or("default");
-    (
-        Some(&model.model),
-        effort.map(|effort| effort.reasoning_effort.as_str()),
-        Some(tier),
-    )
+    (effort.map(|effort| effort.reasoning_effort.as_str()), tier)
 }
 
 fn shared_mut<'a, K: Ord + Clone + std::borrow::Borrow<Q>, Q: Ord + ?Sized, T: Clone>(

@@ -849,6 +849,21 @@ impl HostRpcService {
                 .codex_cli(params.update)
                 .await?
                 .into(),
+            Call::ReadModelSettings(params) => self
+                .agent(params.model.provider)?
+                .model_settings(&params.model.id)
+                .await?
+                .into(),
+            Call::ReadDshCredentials(_) => self
+                .agent(ProviderKind::DeepSeek)?
+                .dsh_credentials()
+                .await?
+                .into(),
+            Call::UpdateDshCredential(update) => self
+                .agent(ProviderKind::DeepSeek)?
+                .update_dsh_credential(update.clone())
+                .await?
+                .into(),
             Call::ListModels(params) => {
                 let cursors: std::collections::BTreeMap<ProviderKind, Option<String>> = params
                     .cursor
