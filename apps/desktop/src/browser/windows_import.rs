@@ -366,7 +366,7 @@ impl Browser {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{BrowserData, fs, import_passwords, load, update};
     #[test]
     fn import_persists_encrypted_and_survives_reopen_and_failed_retry() {
         let dir = tempfile::tempdir().unwrap();
