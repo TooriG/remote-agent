@@ -201,7 +201,7 @@ fn open_chrome_password_export() -> Result<(), String> {
     Ok(())
 }
 
-impl Browser {
+impl BrowserPage {
     fn run_import(
         &mut self,
         work: impl FnOnce() -> Result<String, String> + Send + 'static,
