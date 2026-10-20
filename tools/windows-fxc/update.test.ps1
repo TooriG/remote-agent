@@ -17,6 +17,9 @@ foreach ($order in @($versions, @($versions[4..0]))) {
 foreach ($current in @("10.0.10.0", "10.0.12.0")) {
     if ((Select-StableSdkVersion $versions $current) -ne $current) { throw "Must not downgrade or update an equal pin." }
 }
+if ((Select-StableSdkVersion @("10.0.10.0", "11.0.0", "11.0.1-preview") "10.0.10.0") -ne "11.0.0") {
+    throw "NuGet-normalized three-component stable versions must be eligible."
+}
 Assert-Rejected { Select-StableSdkVersion @() "10.0.1.0" } "No stable"
 Assert-Rejected { Select-StableSdkVersion @("11.0.0.0-preview") "10.0.1.0" } "No stable"
 

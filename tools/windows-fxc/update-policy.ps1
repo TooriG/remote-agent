@@ -1,5 +1,6 @@
 function Select-StableSdkVersion([string[]]$Versions, [string]$CurrentVersion) {
-    $stable = @($Versions | Where-Object { $_ -cmatch '^\d+\.\d+\.\d+\.\d+$' } |
+    # NuGet omits a zero fourth component when normalizing versions.
+    $stable = @($Versions | Where-Object { $_ -cmatch '^\d+\.\d+\.\d+(\.\d+)?$' } |
         Sort-Object { [version]$_ } -Descending)
     if ($stable.Count -eq 0) { throw "No stable Windows SDK versions found." }
     if ([version]$stable[0] -gt [version]$CurrentVersion) { return $stable[0] }
