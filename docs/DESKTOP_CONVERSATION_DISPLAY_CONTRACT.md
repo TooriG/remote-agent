@@ -461,14 +461,14 @@ source and enlarged views through public GPUI block extensions. Incomplete,
 invalid, unsupported or oversized diagrams remain selectable code. Native mobile
 keeps Mermaid as code, matching T3's native renderer.
 
-Completed answers expose reported changed files and known addition/deletion
-counts. Opening the card requests only deferred file-change items; these are the
-provider's reported edits, rather than a newly read workspace diff. Work remains
-collapsed until explicitly opened. Expanded native work renders command/output,
+Reported file changes stay inside collapsed work, with no separate file list
+below completed answers. Opening work reveals file-change entries; opening an
+entry loads its deferred details and displays the provider's reported edits.
+Expanded native work renders command/output,
 exit status, JSON arguments/results, search links and diffs from core. Answer
 copy, completion time and supported fork actions remain outside collapsed work.
 Acceptance: core `presentation::markdown`, `presentation::body`, and
-`response_metadata_updates_after_deferred_edits_are_loaded`; existing desktop
+`completed_edits_stay_in_collapsed_activity_when_details_load`; existing desktop
 selection and history assertions remain unchanged.
 
 ## Desktop picker, projects and attachments

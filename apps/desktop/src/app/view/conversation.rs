@@ -552,76 +552,8 @@ impl Desktop {
                 ConversationRowContent::Error { error } => {
                     body = body.child(div().text_color(rgb(0xff8e86)).child(error.message.clone()));
                 }
-                ConversationRowContent::Response {
-                    item,
-                    fork_turn_id,
-                    changes,
-                    change_details,
-                } => {
+                ConversationRowContent::Response { item, fork_turn_id } => {
                     body = body.child(self.projected_item(item, turn, cx));
-                    if !changes.is_empty() {
-                        let key = format!("response-changes-{}", item.data.id);
-                        let expanded = self.expanded_items.contains(&key);
-                        let toggle = key.clone();
-                        let item_id = item.data.id.clone();
-                        let details = change_details.clone();
-                        let mut summary = v_flex().gap_1().child("変更ファイル");
-                        for file in changes {
-                            summary = summary.child(
-                                h_flex()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .text_ellipsis()
-                                            .child(file.path.clone()),
-                                    )
-                                    .child(review_counts(file.additions, file.deletions)),
-                            );
-                        }
-                        body = body.child(
-                            Button::new(key.clone())
-                                .child(summary)
-                                .w_full()
-                                .ghost()
-                                .accessibility_label("変更ファイルの差分を開く")
-                                .on_click(cx.listener(move |view, _, _, cx| {
-                                    toggle_set(&mut view.expanded_items, &toggle);
-                                    if view.expanded_items.contains(&toggle) {
-                                        for detail in &details {
-                                            view.dispatch(Intent::ReadItem(detail.clone()));
-                                        }
-                                    }
-                                    view.remeasure_item(&item_id);
-                                    view.pause_tail();
-                                    cx.notify();
-                                })),
-                        );
-                        if expanded {
-                            for (index, file) in changes.iter().enumerate() {
-                                body = body.child(div().text_sm().child(file.path.clone()));
-                                if file.rows.is_empty() {
-                                    body = body.child(
-                                        div().text_sm().child("差分はまだ取得されていません"),
-                                    );
-                                } else {
-                                    let patch = file
-                                        .rows
-                                        .iter()
-                                        .map(|row| row.text.as_str())
-                                        .collect::<Vec<_>>()
-                                        .join("\n");
-                                    body = body.child(Self::diff(
-                                        &mut self.diffs,
-                                        format!("{key}-{index}"),
-                                        &patch,
-                                        cx,
-                                    ));
-                                }
-                            }
-                        }
-                    }
                     if item.data.kind == "agent" {
                         let text = item.data.body.clone().expect("assistant message has text");
                         body = body.child(

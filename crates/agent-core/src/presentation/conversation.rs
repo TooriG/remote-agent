@@ -76,8 +76,6 @@ pub enum ConversationRowContent {
     Response {
         item: Arc<RenderedItem>,
         fork_turn_id: Option<agent_protocol::ids::TurnId>,
-        changes: Vec<super::diff::WorkspaceDiffFile>,
-        change_details: Vec<crate::state::operations::ReadItem>,
     },
     InProgress {
         turn_id: agent_protocol::ids::TurnId,
@@ -556,42 +554,9 @@ fn render_turn(
                     turn_id: source.id.clone(),
                 });
             } else {
-                let changes = if !in_progress && segment.last && responses.peek().is_none() {
-                    body::changed_files(native.iter().flat_map(|item| match item.body() {
-                        models::ItemBody::FileChange { changes, .. } => changes.as_slice(),
-                        _ => &[],
-                    }))
-                } else {
-                    Vec::new()
-                };
-                let change_details = if changes.is_empty() {
-                    Vec::new()
-                } else {
-                    session
-                        .into_iter()
-                        .flat_map(|thread_id| {
-                            native
-                                .iter()
-                                .filter(|item| {
-                                    item.is_deferred()
-                                        && matches!(
-                                            item.body(),
-                                            models::ItemBody::FileChange { .. }
-                                        )
-                                })
-                                .map(|item| crate::state::operations::ReadItem {
-                                    thread_id: thread_id.clone(),
-                                    turn_id: source.id.clone(),
-                                    item_id: item.id.clone(),
-                                })
-                        })
-                        .collect()
-                };
                 push(Response {
                     item,
                     fork_turn_id: can_fork.then(|| source.id.clone()),
-                    changes,
-                    change_details,
                 });
             }
         }
@@ -866,7 +831,7 @@ mod tests {
         }
     }
     #[test]
-    fn response_metadata_updates_after_deferred_edits_are_loaded() {
+    fn completed_edits_stay_in_collapsed_activity_when_details_load() {
         let mut snapshot = fixture();
         let session = agent_protocol::session::SessionRef {
             provider: agent_protocol::session::ProviderKind::Codex,
@@ -888,22 +853,6 @@ mod tests {
         let index = items.len() - 1;
         items.insert(index, Arc::new(deferred));
         let projection = project_snapshot(snapshot.clone(), None);
-        let rows = projection.turns[1].conversation_rows();
-        assert_eq!(rows[0].timestamp_ms, Some(1_000));
-        let response = rows.last().unwrap();
-        assert_eq!(response.timestamp_ms, Some(6_000));
-        let ConversationRowContent::Response {
-            changes,
-            change_details,
-            ..
-        } = &response.content
-        else {
-            panic!()
-        };
-        assert_eq!(changes[0].path, "src/a.rs");
-        assert_eq!(changes[0].additions, None);
-        assert_eq!(change_details.len(), 1);
-        assert_eq!(change_details[0].item_id.as_str(), "edit");
         let thread = Arc::make_mut(
             Arc::make_mut(&mut snapshot.conversations)
                 .get_mut(&session)
@@ -912,17 +861,42 @@ mod tests {
         let turn = Arc::make_mut(&mut thread.turns.as_mut().unwrap()[1]);
         turn.items.as_mut().unwrap()[index] = Arc::new(edit);
         let loaded = project_snapshot(snapshot, Some(&projection));
-        let rows = loaded.turns[1].conversation_rows();
-        let ConversationRowContent::Response {
-            changes,
-            change_details,
-            ..
-        } = &rows.last().unwrap().content
-        else {
-            panic!()
-        };
-        assert_eq!(changes[0].additions, Some(1));
-        assert!(change_details.is_empty());
+        for (rendered, deferred) in [(&projection, true), (&loaded, false)] {
+            let rows = rendered.turns[1].conversation_rows();
+            assert_eq!(rows[0].timestamp_ms, Some(1_000));
+            let response = rows.last().unwrap();
+            assert_eq!(response.timestamp_ms, Some(6_000));
+            assert!(matches!(
+                &response.content,
+                ConversationRowContent::Response { item, .. }
+                    if item.data.native_id.as_deref() == Some("stream")
+            ));
+            let activity = rows
+                .iter()
+                .find_map(|row| match &row.content {
+                    ConversationRowContent::ActivityHeader { activity } => Some(activity),
+                    _ => None,
+                })
+                .unwrap();
+            assert!(activity.activity_can_collapse);
+            assert!(!activity_is_expanded(activity, None));
+            let edit = rows
+                .iter()
+                .find_map(|row| match &row.content {
+                    ConversationRowContent::Activity { item, .. }
+                        if item.data.native_id.as_deref() == Some("edit") =>
+                    {
+                        Some(item)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(edit.data.deferred, deferred);
+            assert!(edit.data.collapsible);
+            if !deferred {
+                assert_eq!(edit.expanded_body(), "add: src/a.rs\n@@ -0,0 +1 @@\n+new");
+            }
+        }
     }
     fn project_snapshot(
         snapshot: Snapshot,
@@ -1104,7 +1078,7 @@ mod tests {
         let completed = project_snapshot(snapshot, Some(&rendered));
         let rows = completed.turns[1].conversation_rows();
         assert!(
-            matches!(&rows.last().unwrap().content, ConversationRowContent::Response { item, fork_turn_id: Some(id), .. } if id.as_str() == "live" && item.data.native_id.as_deref() == Some("stream"))
+            matches!(&rows.last().unwrap().content, ConversationRowContent::Response { item, fork_turn_id: Some(id) } if id.as_str() == "live" && item.data.native_id.as_deref() == Some("stream"))
         );
         assert!(rows.iter().any(|row| row.id == accepted_id));
         for row in rows {

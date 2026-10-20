@@ -35,8 +35,6 @@ internal fun ThreadMessageCard(
     cwd: String,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
     timestampMs: ULong? = null,
-    changes: List<dev.remoteagent.core.WorkspaceDiffFile> = emptyList(),
-    loadChanges: () -> Unit = {},
     fork: (() -> Unit)? = null,
 ) {
     val content = remember(item) { item.presentation() }
@@ -59,7 +57,6 @@ internal fun ThreadMessageCard(
                     }
                 } else ConversationBody(body, cwd, perform)
             }
-        if (changes.isNotEmpty()) ChangedFilesSummary(changes, loadChanges)
         if (!isUser && content.kind == "agent") MessageFooter(content.body.orEmpty(), timestampMs, fork)
         if (isUser) MessageTime(timestampMs)
         if (isUser && content.nativeId == null) {
