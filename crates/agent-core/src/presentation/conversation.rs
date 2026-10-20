@@ -1631,13 +1631,27 @@ mod tests {
 
     #[test]
     fn usage_limit_actions_require_provider_evidence_and_a_finished_retry() {
-        for category in [models::ErrorCategory::UsageLimit, models::ErrorCategory::RateLimited, models::ErrorCategory::Other] {
-            let error = turn_error(&models::ExecutionError { category: category.clone(), message: "usage limit".into(), ..Default::default() });
-            assert_eq!(error.is_usage_limit, category == models::ErrorCategory::UsageLimit);
+        for category in [
+            models::ErrorCategory::UsageLimit,
+            models::ErrorCategory::RateLimited,
+            models::ErrorCategory::Other,
+        ] {
+            let error = turn_error(&models::ExecutionError {
+                category: category.clone(),
+                message: "usage limit".into(),
+                ..Default::default()
+            });
+            assert_eq!(
+                error.is_usage_limit,
+                category == models::ErrorCategory::UsageLimit
+            );
         }
         let error = turn_error(&models::ExecutionError {
             category: models::ErrorCategory::UsageLimit,
-            retry: Some(models::RetryEvidence { retrying: true, overloaded: false }),
+            retry: Some(models::RetryEvidence {
+                retrying: true,
+                overloaded: false,
+            }),
             ..Default::default()
         });
         assert!(!error.is_usage_limit);
