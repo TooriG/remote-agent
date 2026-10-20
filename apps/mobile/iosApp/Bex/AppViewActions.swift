@@ -33,6 +33,7 @@ extension BexAppViewModel {
     }
 
     func recordScene(_ value: UInt64) {
+        store?.setConnectionActive(active: value == 1)
         store?.recordConnectionEvent(phase: .appScene, value: value)
     }
 
@@ -193,12 +194,6 @@ extension BexAppViewModel {
     func interrupt(_ turnId: String) {
         guard let threadId = snapshot.navigation().threadId else { return }
         perform(.interrupt(Interrupt(threadId: threadId, turnId: turnId)))
-    }
-
-    func scanned(_ contents: String?) {
-        isScanning = false; if let contents {
-            preparePairing(contents)
-        }
     }
 }
 

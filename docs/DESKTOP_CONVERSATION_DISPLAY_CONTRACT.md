@@ -121,6 +121,11 @@ hydration must not change this default.
   screen. Latest-message positioning must settle before paging a scrollable
   initial page. Preserve latest following and the reader's position when
   prepending older pages; never request duplicate pages while a read is pending.
+- iPhone observes the realized oldest/latest row boundaries with scroll visibility
+  callbacks. Native size-change anchoring owns latest following; estimated lazy
+  content sizes must not drive repeated scroll commands. Empty rendered pages
+  remain eligible for bounded paging. This follows [Apple's lazy-stack scrolling
+  guidance](https://developer.apple.com/videos/play/wwdc2026/321/).
 - Retain cached history only when its suffix matches the refreshed page's
   prefix in order, preserving repeated turn occurrences from the server page.
   A shared ID elsewhere
@@ -461,14 +466,14 @@ source and enlarged views through public GPUI block extensions. Incomplete,
 invalid, unsupported or oversized diagrams remain selectable code. Native mobile
 keeps Mermaid as code, matching T3's native renderer.
 
-Completed answers expose reported changed files and known addition/deletion
-counts. Opening the card requests only deferred file-change items; these are the
-provider's reported edits, rather than a newly read workspace diff. Work remains
-collapsed until explicitly opened. Expanded native work renders command/output,
+Reported file changes stay inside collapsed work, with no separate file list
+below completed answers. Opening work reveals file-change entries; opening an
+entry loads its deferred details and displays the provider's reported edits.
+Expanded native work renders command/output,
 exit status, JSON arguments/results, search links and diffs from core. Answer
 copy, completion time and supported fork actions remain outside collapsed work.
 Acceptance: core `presentation::markdown`, `presentation::body`, and
-`response_metadata_updates_after_deferred_edits_are_loaded`; existing desktop
+`completed_edits_stay_in_collapsed_activity_when_details_load`; existing desktop
 selection and history assertions remain unchanged.
 
 ## Desktop picker, projects and attachments
@@ -710,6 +715,20 @@ Acceptance: `new_conversation_moves_draft_to_pending_before_creation_reply`,
   quick controls. Both clients use core capability and weekly-usage projections.
   Selecting an account fetches its current catalog and retains supported draft
   choices. A catalog refresh must not silently switch to another provider.
+- Catalog discovery and exact-model settings are separate Host operations.
+  Missing settings retain saved draft choices; only resolved settings can
+  establish that an option is unsupported. Host advertises whether an adapter
+  can resolve settings, and core requests them for the selected model. Replies
+  update that model's identity even if navigation changes while loading.
+  Native session metadata seeds an unselected draft; reopening a conversation
+  retains an existing draft's selected model across all providers.
+- API-key routes use typed credential read/update operations. Route status
+  contains configuration source and attention state, never a secret or a status
+  encoded in an account plan label. Desktop, iPhone and Android render core's
+  credential controls; login codes remain part of actual login flows.
+- Saving the current draft as a new-chat preset updates its model, reasoning,
+  speed and new-chat selection in one core transition. Fork, send and interrupt
+  progress come from core operation state keyed by their source operation.
 - The model picker has a left vertical Codex/Claude icon rail and no title or
   close button. New conversations can switch agents; an existing conversation's
   agent stays fixed. Desktop shows the Codex/Claude names beside their icons,
@@ -801,3 +820,25 @@ Acceptance: core `composer::tests`,
 `invocation_completion_preserves_suffix_and_does_not_accept_ime`,
 `completion_candidates_keep_names_and_descriptions_on_one_line`, and iOS
 `testSimulatorSelectsPluginAndSkillFromComposer`.
+
+## Native connection and browser ownership
+
+- Native Store owns one transport retry worker per environment. Application
+  lifecycle only activates or pauses recovery; views do not schedule retry loops.
+  Authentication rejection waits for a lifecycle/network wakeup. Transport
+  recovery retains cached state and submission delivery evidence. A new
+  connection generation lets platform services refresh Live Activity tokens
+  without tying that work to a particular screen's connection callback.
+- Windows browsing uses an application-owned persistent WebView2 profile and
+  its native password-saving and autofill prompts. BEX does not import password
+  CSVs, maintain a password vault, or inject login credentials into pages.
+  Bookmark migration is separate and merges under a storage lock. Chrome login
+  import is explicitly unavailable on Windows; macOS retains its consent-based
+  Cookie import. Both use the same Chrome profile metadata parser.
+
+Ownership was compared with T3 Code commit
+`1327e7bdfb454594eb8308961691d1b7419156f3`, particularly
+`packages/client-runtime/src/connection`,
+`packages/provider-core/src/server/ModelCatalog.ts`, and
+`apps/desktop/src/preview/BrowserImport`. BEX keeps these responsibilities in
+its existing Rust core, Host adapters and native platform services.

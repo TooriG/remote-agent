@@ -27,40 +27,6 @@ async fn main() {
     std::process::exit(code);
 }
 
-fn suppressed_browser_request(enabled: bool, args: &[std::ffi::OsString]) -> bool {
-    enabled
-        && args.len() == 1
-        && args[0]
-            .to_str()
-            .is_some_and(|url| url.starts_with("https://") || url.starts_with("http://"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn suppresses_only_explicit_browser_invocations_and_keeps_provider_commands() {
-        let url = ["https://claude.com/oauth/authorize?state=test".into()];
-        assert!(suppressed_browser_request(true, &url));
-        assert!(!suppressed_browser_request(false, &url));
-        assert!(!suppressed_browser_request(true, &[]));
-        assert!(!suppressed_browser_request(true, &["claude.exe".into()]));
-        assert!(!suppressed_browser_request(
-            true,
-            &["claude.exe".into(), "auth".into(), "login".into()]
-        ));
-        assert!(!suppressed_browser_request(
-            true,
-            &[url[0].clone(), "extra".into()]
-        ));
-        assert!(!suppressed_browser_request(
-            true,
-            &["file:///tmp/test".into()]
-        ));
-    }
-}
-
 async fn run() -> std::io::Result<i32> {
     let mut args = std::env::args_os().skip(1);
     let program = args
@@ -104,4 +70,38 @@ async fn run() -> std::io::Result<i32> {
     // Also terminate remaining tool descendants after the main CLI exits.
     let _ = std::pin::Pin::from(child.kill()).await;
     result
+}
+
+fn suppressed_browser_request(enabled: bool, args: &[std::ffi::OsString]) -> bool {
+    enabled
+        && args.len() == 1
+        && args[0]
+            .to_str()
+            .is_some_and(|url| url.starts_with("https://") || url.starts_with("http://"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn suppresses_only_explicit_browser_invocations_and_keeps_provider_commands() {
+        let url = ["https://claude.com/oauth/authorize?state=test".into()];
+        assert!(suppressed_browser_request(true, &url));
+        assert!(!suppressed_browser_request(false, &url));
+        assert!(!suppressed_browser_request(true, &[]));
+        assert!(!suppressed_browser_request(true, &["claude.exe".into()]));
+        assert!(!suppressed_browser_request(
+            true,
+            &["claude.exe".into(), "auth".into(), "login".into()]
+        ));
+        assert!(!suppressed_browser_request(
+            true,
+            &[url[0].clone(), "extra".into()]
+        ));
+        assert!(!suppressed_browser_request(
+            true,
+            &["file:///tmp/test".into()]
+        ));
+    }
 }

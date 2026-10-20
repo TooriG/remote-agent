@@ -117,6 +117,21 @@ pub(crate) trait Identity: Send + Sync {
     async fn list(&self) -> Result<op::Accounts, Failure>;
     async fn account(&self, command: AccountCommand) -> Result<AccountReply, Failure>;
     async fn usage(&self, id: &str) -> Result<op::AccountUsage, Failure>;
+    async fn dsh_credentials(&self) -> Result<agent_protocol::dsh::Credentials, Failure> {
+        Err(Failure::new(
+            "unsupported",
+            "This provider does not manage DSH credentials",
+        ))
+    }
+    async fn update_dsh_credential(
+        &self,
+        _update: agent_protocol::dsh::KeyUpdate,
+    ) -> Result<agent_protocol::dsh::Credentials, Failure> {
+        Err(Failure::new(
+            "unsupported",
+            "This provider does not manage DSH credentials",
+        ))
+    }
 }
 
 #[async_trait::async_trait]
@@ -186,6 +201,15 @@ pub(crate) trait Agent: Identity {
     ) -> Result<op::SubmissionReceipt, Failure>;
     async fn interrupt(&self, id: &str, turn: &TurnId) -> Result<Empty, Failure>;
     async fn models(&self, params: &op::ListModels) -> Result<op::ModelPage, Failure>;
+    async fn model_settings(
+        &self,
+        _id: &str,
+    ) -> Result<agent_protocol::models::ModelSettings, Failure> {
+        Err(Failure::new(
+            "unsupported",
+            "Model settings cannot be discovered",
+        ))
+    }
     async fn projects(&self) -> Result<Vec<agent_protocol::models::Project>, Failure> {
         Ok(Vec::new())
     }

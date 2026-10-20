@@ -11,21 +11,21 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.ui.res.painterResource
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.MarkdownFileKind
@@ -40,8 +40,6 @@ internal fun ThreadMessageCard(
     cwd: String,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
     timestampMs: ULong? = null,
-    changes: List<dev.remoteagent.core.WorkspaceDiffFile> = emptyList(),
-    loadChanges: () -> Unit = {},
     fork: (() -> Unit)? = null,
     forking: Boolean = false,
 ) {
@@ -65,7 +63,6 @@ internal fun ThreadMessageCard(
                     }
                 } else ConversationBody(body, cwd, perform)
             }
-        if (changes.isNotEmpty()) ChangedFilesSummary(changes, loadChanges)
         if (!isUser && content.kind == "agent") MessageFooter(content.body.orEmpty(), timestampMs, fork, forking)
         if (isUser) MessageFooter(content.body.orEmpty(), timestampMs, null)
         if (isUser && content.nativeId == null) {
@@ -94,17 +91,23 @@ internal fun MessageFooter(text: String, timestampMs: ULong?, fork: (() -> Unit)
     var copied by remember(text) { mutableStateOf(false) }
     LaunchedEffect(copied) {
         if (copied) {
-            kotlinx.coroutines.delay(1_500)
+            kotlinx.coroutines.delay(COPY_NOTICE_DURATION_MS)
             copied = false
         }
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onClick = {
-            clipboard.setText(androidx.compose.ui.text.AnnotatedString(text))
-            copied = true
-        }, enabled = text.isNotEmpty()) {
-            Icon(painterResource(if (copied) R.drawable.ic_check else R.drawable.ic_copy),
-                if (copied) "コピーしました" else "コピー", Modifier.size(20.dp))
+        IconButton(
+            onClick = {
+                clipboard.setText(androidx.compose.ui.text.AnnotatedString(text))
+                copied = true
+            },
+            enabled = text.isNotEmpty(),
+        ) {
+            Icon(
+                painterResource(if (copied) R.drawable.ic_check else R.drawable.ic_copy),
+                if (copied) "コピーしました" else "コピー",
+                Modifier.size(20.dp),
+            )
         }
         fork?.let {
             IconButton(onClick = it, enabled = !forking) {
@@ -190,3 +193,5 @@ private fun MessageImages(
     }
     preview?.let { reference -> ConversationFilePreview(reference, perform) { preview = null } }
 }
+
+private const val COPY_NOTICE_DURATION_MS = 1_500L

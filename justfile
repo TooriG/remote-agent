@@ -14,6 +14,7 @@ unit-tests *targets:
     #!/usr/bin/env bash
     set -uo pipefail
     failed=0
+    pwsh -NoLogo -NoProfile -NonInteractive -File tools/windows-fxc/update.test.ps1 || failed=1
     npm --prefix crates/host-daemon/src/claude/sdk ci --ignore-scripts --no-audit --no-fund || failed=1
     npm --prefix crates/host-daemon/src/claude/sdk test || failed=1
     node scripts/install-claude-sdk.mjs "${CARGO_TARGET_DIR:-target}/debug" || failed=1
@@ -95,6 +96,7 @@ conversation-ui:
         testSimulatorRetriesSideChatPreparationWithoutLosingOriginalDraft \
         testSimulatorSelectsAssistantTextInPlaceAndAddsOnlySelectionToDraft \
         testSimulatorUsesNativeHostNavigationAndPairingDismissal \
+        testSimulatorOpensQrScannerWhileAddingHost \
         testSimulatorRemovesHostAndRequiresPairingAfterRelaunch \
         testSimulatorRendersEveryActivityFamilyAndHidesStateOnlyItems \
         testSimulatorUsesNativeProjectDisclosureAndDirectoryNavigation \

@@ -129,8 +129,8 @@ mod tests {
             let models: Vec<Model> = if catalog {
                 serde_json::from_value(serde_json::json!([{
                     "id":"same-native-id", "model":{"provider":key,"id":"same-native-id"},
-                    "displayName":"Agent", "defaultReasoningEffort":"", "supportedReasoningEfforts":[]
-                }])).unwrap()
+                    "displayName":"Agent", "settings": { "defaultReasoningEffort":"", "supportedReasoningEfforts":[]
+                }}])).unwrap()
             } else { Vec::new() };
             let accounts: Accounts = serde_json::from_value(serde_json::json!({
                 "accounts": if authenticated { vec![serde_json::json!({"id":"selected","provider":key})] } else { Vec::new() },
@@ -157,8 +157,8 @@ mod tests {
         let mut snapshot = Snapshot {
             connected: true,
             models: std::sync::Arc::new(serde_json::from_value(serde_json::json!([
-                {"id":"gpt", "model":{"provider":"codex","id":"gpt"}, "displayName":"GPT", "defaultReasoningEffort":"", "supportedReasoningEfforts":[]},
-                {"id":"sonnet", "model":{"provider":"claude","id":"sonnet"}, "displayName":"Sonnet", "defaultReasoningEffort":"", "supportedReasoningEfforts":[]}
+                {"id":"gpt", "model":{"provider":"codex","id":"gpt"}, "displayName":"GPT", "settings": { "defaultReasoningEffort":"", "supportedReasoningEfforts":[]}},
+                {"id":"sonnet", "model":{"provider":"claude","id":"sonnet"}, "displayName":"Sonnet", "settings": { "defaultReasoningEffort":"", "supportedReasoningEfforts":[]}}
             ])).unwrap()),
             ..Default::default()
         };
@@ -192,8 +192,8 @@ mod tests {
     fn incomplete_checks_and_authentication_remain_distinct() {
         let model: Model = serde_json::from_value(serde_json::json!({
             "id":"gpt", "model":{"provider":"codex","id":"gpt"},
-            "displayName":"GPT", "defaultReasoningEffort":"", "supportedReasoningEfforts":[]
-        }))
+            "displayName":"GPT", "settings": { "defaultReasoningEffort":"", "supportedReasoningEfforts":[]
+        }}))
         .unwrap();
         let accounts = Accounts {
             accounts: Vec::new(),

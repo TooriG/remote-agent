@@ -5,7 +5,8 @@ pub(super) fn prepare_host(command: &mut Command) {
     let mut paths = Vec::new();
     // Provider scripts with an env-node shebang also use the bundled runtime.
     if let Ok(executable) = std::env::current_exe()
-        && let Some(directory) = executable.parent()
+        && let Some(node) = host_daemon::bundled_node_path(&executable)
+        && let Some(directory) = node.parent()
     {
         paths.push(directory.to_path_buf());
     }

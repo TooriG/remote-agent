@@ -381,17 +381,32 @@ impl BrowserPage {
         ready: impl FnOnce(Result<Entity<Self>, String>, &mut Window, &mut App) + 'static,
     ) -> Result<Task<()>, String> {
         use wry::raw_window_handle::HasWindowHandle;
+        let directory = directories::ProjectDirs::from("app", "bex", "BEX")
+            .ok_or("ブラウザの保存先を取得できません")?
+            .data_local_dir()
+            .join("browser-profile");
         let raw_parent = window.window_handle().map_err(|e| e.to_string())?.as_raw();
         Ok(window.spawn(cx, async move |cx| {
             // The owning Desktop retains this task, cancelling it before its window is
             // destroyed. Never retain a GPUI App/Window borrow across WebView2 awaits:
             // the synchronous builder pumps messages and re-enters GPUI updates.
             let parent = unsafe { wry::raw_window_handle::WindowHandle::borrow_raw(raw_parent) };
-            let (builder, rx) = Self::prepare(wry::WebViewBuilder::new());
+            let mut context = wry::WebContext::new(Some(directory));
+            let (builder, rx) = Self::prepare(wry::WebViewBuilder::new_with_web_context(&mut context));
             let result = builder
                 .build_as_child_async(&parent)
                 .await
-                .map_err(|e| e.to_string());
+                .map_err(|e| e.to_string())
+                .and_then(|raw| {
+                    use windows::core::Interface;
+                    use wry::WebViewExtWindows;
+                    unsafe {
+                        let settings = raw.controller().CoreWebView2().and_then(|view| view.Settings()).and_then(|settings| settings.cast::<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings4>()).map_err(|error| error.to_string())?;
+                        settings.SetIsPasswordAutosaveEnabled(true).map_err(|error| error.to_string())?;
+                        settings.SetIsGeneralAutofillEnabled(true).map_err(|error| error.to_string())?;
+                    }
+                    Ok(raw)
+                });
             let _ = cx.update(move |window, cx| {
                 let result = result.map(|raw| Self::attach(raw, rx, window, cx));
                 ready(result, window, cx);
@@ -730,30 +745,15 @@ fn chrome_profiles(root: &std::path::Path) -> Result<Vec<(String, std::path::Pat
     let bytes = std::fs::read(root.join("Local State")).map_err(|_| {
         "Chromeのプロファイルが見つかりません。Chromeを一度起動してください".to_string()
     })?;
-    let state: serde_json::Value = serde_json::from_slice(&bytes)
-        .map_err(|_| "Chromeのプロファイル情報を読み取れません".to_string())?;
-    let profiles = state
-        .pointer("/profile/info_cache")
-        .and_then(|v| v.as_object())
-        .ok_or("Chromeのプロファイル情報がありません")?;
-    let mut result = Vec::new();
-    for (directory, info) in profiles {
-        // Local State must not redirect the importer outside Chrome's profile root.
-        let mut components = std::path::Path::new(directory).components();
-        if !matches!(components.next(), Some(std::path::Component::Normal(_)))
-            || components.next().is_some()
-        {
-            continue;
-        }
-        let profile = root.join(directory);
-        if chrome_cookie_path(&profile).is_some() {
-            let name = info
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or(directory);
-            result.push((format!("{name} ({directory})"), profile));
-        }
-    }
+    let result: Vec<_> = agent_core::browser_import::parse_chrome_profiles(&bytes)?
+        .into_iter()
+        .filter_map(|profile| {
+            let path = root.join(&profile.directory);
+            chrome_cookie_path(&path)
+                .is_some()
+                .then(|| (format!("{} ({})", profile.name, profile.directory), path))
+        })
+        .collect();
     if result.is_empty() {
         return Err("CookieのあるChromeプロファイルが見つかりません".into());
     }

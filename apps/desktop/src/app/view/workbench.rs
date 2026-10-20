@@ -175,7 +175,7 @@ impl Desktop {
                             IconName::FileText
                         })
                         .flex_1()
-                        .debug_selector(move || format!("workspace-file-{i}").into()),
+                        .debug_selector(move || format!("workspace-file-{i}")),
                     )
                     .when(!directory, |row| {
                         row.child(

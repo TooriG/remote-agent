@@ -139,6 +139,8 @@ pub struct AccountState {
     pub accounts: Option<Arc<agent_protocol::operations::Accounts>>,
     #[serde(skip)]
     pub login: Option<Arc<agent_protocol::operations::AccountLogin>>,
+    #[serde(skip)]
+    pub dsh_credentials: Option<Arc<agent_protocol::dsh::Credentials>>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PendingSubmission {
@@ -271,6 +273,8 @@ pub struct Snapshot {
     #[serde(skip)]
     pub connected: bool,
     #[serde(skip)]
+    pub connection_generation: u64,
+    #[serde(skip)]
     pub subscriptions: Arc<BTreeMap<crate::session::SessionRef, uuid::Uuid>>,
     #[serde(skip)]
     pub error: Option<String>,
@@ -305,6 +309,14 @@ impl Snapshot {
 
 #[cfg_attr(feature = "bindings", uniffi::export)]
 impl Snapshot {
+    pub fn operation_phase(
+        &self,
+        key: operations::OperationKey,
+    ) -> Option<operations::OperationPhase> {
+        self.operations
+            .get(&key)
+            .map(|operation| operation.phase.clone())
+    }
     pub fn operation_running(&self, key: operations::OperationKey) -> bool {
         self.operations
             .get(&key)
@@ -412,6 +424,14 @@ pub fn reduce(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
         event => reduce_event(previous, event),
     };
     effects.extend(op::prefetch_composer_catalog(&mut next));
+    effects.extend(op::prefetch_model_settings(
+        next.connected,
+        next.drafts
+            .get(&next.navigation.draft_key)
+            .and_then(|draft| draft.model.as_ref()),
+        &next.models,
+        next.operations.keys(),
+    ));
     (next, effects)
 }
 macro_rules! prepare_operations {
@@ -428,7 +448,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
     prepare_operations!(intent, previous, next, [
         ReadTaskActivity, RegisterLiveActivity, UnregisterLiveActivity,
         ReadPermissionSettings, UpdatePermissionSettings,
-        ManageCodexCli, ListAccounts, SelectAccount, SelectAccountForDraft, LogoutAccount, StartAccountLogin,
+        ManageCodexCli, ReadDshCredentials, UpdateDshCredential, ListAccounts, SelectAccount, SelectAccountForDraft, LogoutAccount, StartAccountLogin,
         ReadAccountLogin, CancelAccountLogin, SubmitAccountLogin, ForkSession,
         StartTerminal, DetachTerminal, KillTerminal, CreateInvitation, RemoveRemoteHost,
         RevokeDevice, ListFiles, ReadFile,
@@ -438,7 +458,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
         ReadThread, OpenRequest, ReadItem, ResizeTerminal,
         Interrupt,
         WriteTerminal, DownloadFile, LoadSessionImages, LoadVisualization,
-        LoadHostName, LoadHostManagement, LoadModels,
+        LoadHostName, LoadHostManagement, LoadModels, ReadModelSettings,
         Respond, Transcribe, UploadAttachment, PairRemoteHost,
     ], {
         Intent::WatchAgents { thread_id } => {
@@ -677,7 +697,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 if provider.is_some() && !previous.models.is_empty() {
                     let (model, effort, tier) = supported_settings(
                         draft.model.as_ref(), draft.effort.as_deref(), draft.service_tier.as_deref(),
-                        provider, &previous.models, !previous.model_errors.is_empty(), previous.allows_custom_codex_models(),
+                        provider, &previous.models, &previous.model_errors, previous.allows_custom_codex_models(),
                     );
                     let settings = (model.cloned(), effort.map(str::to_owned), tier.map(str::to_owned));
                     (draft.model, draft.effort, draft.service_tier) = settings;
@@ -719,6 +739,38 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             }
         }
 
+        Intent::SaveDraftModelDefaults { scope, draft_key } => {
+            if let Some(draft) = previous.drafts.get(&draft_key) {
+                let provider = previous.model_provider_for_draft(draft_key.clone());
+                let model = draft.model.clone().or_else(|| {
+                    provider.and_then(|provider| previous.model_for_provider(draft_key.clone(), provider))
+                });
+                if let Some(model) = model {
+                    let (effort, tier) = previous.models.iter()
+                        .find(|choice| choice.model == model)
+                        .and_then(|choice| choice.settings.as_ref())
+                        .map(|settings| {
+                            let (effort, tier) = supported_model_options(
+                                settings, draft.effort.as_deref(), draft.service_tier.as_deref(),
+                            );
+                            (effort, Some(tier))
+                        })
+                        .unwrap_or((draft.effort.as_deref(), draft.service_tier.as_deref()));
+                    let mut defaults = previous.model_defaults(scope.clone());
+                    defaults.new_chat_model = Some(model.clone());
+                    defaults.providers.insert(model.provider, ProviderModelDefaults {
+                        model: Some(model),
+                        effort: effort.map(str::to_owned),
+                        service_tier: tier.map(str::to_owned),
+                    });
+                    set_model_defaults(&mut next, scope, defaults);
+                } else {
+                    next.error = Some("モデルを選択してください".into());
+                }
+            } else {
+                next.error = Some("入力欄が見つかりません".into());
+            }
+        }
         Intent::SelectNewChatModel { scope, model } => {
             let mut defaults = previous.model_defaults(scope.clone());
             defaults.new_chat_model = model;
@@ -790,7 +842,6 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 .get(thread_id)
                 .map(|draft| draft.as_ref().clone())
                 .unwrap_or_default();
-            let refresh_model = matches!(&intent, Intent::SelectModel { model, .. } if model.provider == crate::session::ProviderKind::DeepSeek);
             let thread_id = match intent {
                 Intent::SelectModel { thread_id, model } => {
                     if draft.model.as_ref() != Some(&model) {
@@ -823,7 +874,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 _ => unreachable!(),
             };
             if !previous.models.is_empty() {
-                let (model, effort, tier) = supported_settings(draft.model.as_ref(), draft.effort.as_deref(), draft.service_tier.as_deref(), None, &previous.models, !previous.model_errors.is_empty(), previous.allows_custom_codex_models());
+                let (model, effort, tier) = supported_settings(draft.model.as_ref(), draft.effort.as_deref(), draft.service_tier.as_deref(), None, &previous.models, &previous.model_errors, previous.allows_custom_codex_models());
                 let settings = (
                     model.cloned(),
                     effort.map(str::to_owned),
@@ -837,9 +888,6 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 .is_none_or(|previous| **previous != draft)
             {
                 Arc::make_mut(&mut next.drafts).insert(thread_id, Arc::new(draft));
-            }
-            if refresh_model {
-                return (next, vec![Effect::execute(op::LoadModels {})]);
             }
         }
     });
@@ -986,6 +1034,7 @@ fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
             }
         }
         Event::Connected => {
+            next.connection_generation = previous.connection_generation.saturating_add(1);
             for page in next
                 .threads
                 .iter_mut()
@@ -1156,68 +1205,74 @@ pub(crate) fn allows_custom_codex_models(
         .is_none_or(|plan| plan == "API key")
 }
 
-pub(crate) fn normalized_model_drafts(
-    drafts: &Arc<BTreeMap<DraftKey, Arc<Draft>>>,
-    models: &[crate::models::Model],
-    errors: &serde_json::Map<String, serde_json::Value>,
-    selected_accounts: Option<&std::collections::HashMap<crate::session::ProviderKind, String>>,
-    active_draft: &DraftKey,
-    provider_defaults: &HashMap<crate::session::ProviderKind, ProviderModelDefaults>,
-    allow_custom_codex: bool,
-) -> Arc<BTreeMap<DraftKey, Arc<Draft>>> {
-    let mut next = drafts.clone();
-    for (key, previous) in drafts.iter() {
-        let selected_provider =
-            crate::presentation::model_settings::draft_provider(key, previous.model.as_ref());
-        if selected_provider.is_none() && key != active_draft {
-            continue;
+impl Snapshot {
+    pub(crate) fn normalize_model_drafts(&mut self) {
+        let provider_defaults = self.model_defaults_for_cwd(&self.navigation.cwd).providers;
+        let allow_custom_codex = self.allows_custom_codex_models();
+        let mut next = self.drafts.clone();
+        for (key, previous) in self.drafts.iter() {
+            // Let the first native read seed a conversation before catalog defaults.
+            if previous.model.is_none()
+                && let DraftKey::Session { session } = key
+                && !self.conversations.contains_key(session)
+            {
+                continue;
+            }
+            let selected_provider =
+                crate::presentation::model_settings::draft_provider(key, previous.model.as_ref());
+            if selected_provider.is_none() && key != &self.navigation.draft_key {
+                continue;
+            }
+            let provider = selected_provider.or_else(|| {
+                crate::presentation::model_settings::automatic_provider(
+                    &self.models,
+                    self.account
+                        .accounts
+                        .as_ref()
+                        .map(|accounts| &accounts.selected),
+                    &self.model_errors,
+                )
+            });
+            let Some(provider) = provider else {
+                continue;
+            };
+            let defaults = selected_provider
+                .is_none()
+                .then(|| provider_defaults.get(&provider))
+                .flatten();
+            let (model, effort, tier) = supported_settings(
+                previous
+                    .model
+                    .as_ref()
+                    .or_else(|| defaults.and_then(|defaults| defaults.model.as_ref())),
+                previous
+                    .effort
+                    .as_deref()
+                    .or_else(|| defaults.and_then(|defaults| defaults.effort.as_deref())),
+                previous
+                    .service_tier
+                    .as_deref()
+                    .or_else(|| defaults.and_then(|defaults| defaults.service_tier.as_deref())),
+                Some(provider),
+                &self.models,
+                &self.model_errors,
+                allow_custom_codex,
+            );
+            if (model, effort, tier)
+                != (
+                    previous.model.as_ref(),
+                    previous.effort.as_deref(),
+                    previous.service_tier.as_deref(),
+                )
+            {
+                let draft = shared_mut(&mut next, key).expect("draft came from this map");
+                draft.model = model.cloned();
+                draft.effort = effort.map(str::to_owned);
+                draft.service_tier = tier.map(str::to_owned);
+            }
         }
-        let provider = selected_provider.or_else(|| {
-            crate::presentation::model_settings::automatic_provider(
-                models,
-                selected_accounts,
-                errors,
-            )
-        });
-        let Some(provider) = provider else {
-            continue;
-        };
-        let defaults = selected_provider
-            .is_none()
-            .then(|| provider_defaults.get(&provider))
-            .flatten();
-        let (model, effort, tier) = supported_settings(
-            previous
-                .model
-                .as_ref()
-                .or_else(|| defaults.and_then(|defaults| defaults.model.as_ref())),
-            previous
-                .effort
-                .as_deref()
-                .or_else(|| defaults.and_then(|defaults| defaults.effort.as_deref())),
-            previous
-                .service_tier
-                .as_deref()
-                .or_else(|| defaults.and_then(|defaults| defaults.service_tier.as_deref())),
-            Some(provider),
-            models,
-            !errors.is_empty(),
-            allow_custom_codex,
-        );
-        if (model, effort, tier)
-            != (
-                previous.model.as_ref(),
-                previous.effort.as_deref(),
-                previous.service_tier.as_deref(),
-            )
-        {
-            let draft = shared_mut(&mut next, key).expect("draft came from this map");
-            draft.model = model.cloned();
-            draft.effort = effort.map(str::to_owned);
-            draft.service_tier = tier.map(str::to_owned);
-        }
+        self.drafts = next;
     }
-    next
 }
 
 pub(crate) fn supported_settings<'a>(
@@ -1226,16 +1281,20 @@ pub(crate) fn supported_settings<'a>(
     selected_tier: Option<&'a str>,
     default_provider: Option<crate::session::ProviderKind>,
     models: &'a [Model],
-    catalog_incomplete: bool,
+    catalog_errors: &serde_json::Map<String, serde_json::Value>,
     allow_custom_codex: bool,
 ) -> (
     Option<&'a crate::models::ModelRef>,
     Option<&'a str>,
     Option<&'a str>,
 ) {
+    let provider = selected_model
+        .filter(|model| !model.id.is_empty())
+        .map(|model| model.provider)
+        .or(default_provider);
     // Codex also accepts explicit IDs outside its recommended picker catalog.
     // Absence in an incomplete catalog cannot invalidate a saved choice either.
-    if (catalog_incomplete
+    if (provider.is_some_and(|provider| catalog_errors.contains_key(provider.key()))
         || selected_model.is_some_and(|model| {
             allow_custom_codex
                 && model.provider == crate::session::ProviderKind::Codex
@@ -1248,10 +1307,6 @@ pub(crate) fn supported_settings<'a>(
     {
         return (selected_model, selected_effort, selected_tier);
     }
-    let provider = selected_model
-        .filter(|model| !model.id.is_empty())
-        .map(|model| model.provider)
-        .or(default_provider);
     let mut available = models
         .iter()
         .filter(|model| provider.is_none_or(|provider| model.model.provider == provider));
@@ -1265,46 +1320,54 @@ pub(crate) fn supported_settings<'a>(
         })
         .or_else(|| available.next());
     let Some(model) = model else {
-        return if models.is_empty() {
-            (selected_model, None, None)
-        } else {
-            // The other provider's catalog cannot validate this draft's options.
-            (selected_model, selected_effort, selected_tier)
-        };
+        // Missing catalog data cannot validate this draft's options.
+        return (selected_model, selected_effort, selected_tier);
+    };
+    let Some(settings) = &model.settings else {
+        return (Some(&model.model), selected_effort, selected_tier);
     };
     let changed = selected_model.is_some() && selected_model != Some(&model.model);
-    let effort = model
+    let (effort, tier) = supported_model_options(
+        settings,
+        selected_effort.filter(|_| !changed),
+        selected_tier.filter(|_| !changed),
+    );
+    (Some(&model.model), effort, Some(tier))
+}
+
+pub(crate) fn supported_model_options<'a>(
+    settings: &'a crate::models::ModelSettings,
+    selected_effort: Option<&'a str>,
+    selected_tier: Option<&'a str>,
+) -> (Option<&'a str>, &'a str) {
+    let effort = settings
         .supported_reasoning_efforts
         .iter()
-        .find(|effort| !changed && Some(effort.reasoning_effort.as_str()) == selected_effort)
+        .find(|effort| Some(effort.reasoning_effort.as_str()) == selected_effort)
         .or_else(|| {
-            model
+            settings
                 .supported_reasoning_efforts
                 .iter()
-                .find(|effort| effort.reasoning_effort == model.default_reasoning_effort)
+                .find(|effort| effort.reasoning_effort == settings.default_reasoning_effort)
         })
-        .or_else(|| model.supported_reasoning_efforts.first());
+        .or_else(|| settings.supported_reasoning_efforts.first());
     let supported_tier = |id: &str| {
         id == "default"
-            || model
+            || settings
                 .service_tiers
                 .as_ref()
                 .is_some_and(|tiers| tiers.iter().any(|tier| tier.id == id))
     };
     let tier = selected_tier
-        .filter(|tier| !changed && supported_tier(tier))
+        .filter(|tier| supported_tier(tier))
         .or_else(|| {
-            model
+            settings
                 .default_service_tier
                 .as_deref()
                 .filter(|tier| supported_tier(tier))
         })
         .unwrap_or("default");
-    (
-        Some(&model.model),
-        effort.map(|effort| effort.reasoning_effort.as_str()),
-        Some(tier),
-    )
+    (effort.map(|effort| effort.reasoning_effort.as_str()), tier)
 }
 
 fn shared_mut<'a, K: Ord + Clone + std::borrow::Borrow<Q>, Q: Ord + ?Sized, T: Clone>(

@@ -317,17 +317,17 @@ mod tests {
                                     .selectable(true)
                                     .on_link_click(
                                         move |url, event, window, cx| {
-                                            if let gpui::ClickEvent::Mouse(click) = event {
-                                                if click.up.button == MouseButton::Right {
-                                                    labelled_selection.update(cx, |view, cx| {
-                                                        view.show_context_menu(
-                                                            Some(url.to_string()),
-                                                            click.up.position,
-                                                            window,
-                                                            cx,
-                                                        );
-                                                    });
-                                                }
+                                            if let gpui::ClickEvent::Mouse(click) = event
+                                                && click.up.button == MouseButton::Right
+                                            {
+                                                labelled_selection.update(cx, |view, cx| {
+                                                    view.show_context_menu(
+                                                        Some(url.to_string()),
+                                                        click.up.position,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                });
                                             }
                                         },
                                     ),
@@ -338,17 +338,17 @@ mod tests {
                                     TextView::markdown("plain", "https://example.com/plain")
                                         .selectable(true)
                                         .on_link_click(move |url, event, window, cx| {
-                                            if let gpui::ClickEvent::Mouse(click) = event {
-                                                if click.up.button == MouseButton::Right {
-                                                    plain_selection.update(cx, |view, cx| {
-                                                        view.show_context_menu(
-                                                            Some(url.to_string()),
-                                                            click.up.position,
-                                                            window,
-                                                            cx,
-                                                        );
-                                                    });
-                                                }
+                                            if let gpui::ClickEvent::Mouse(click) = event
+                                                && click.up.button == MouseButton::Right
+                                            {
+                                                plain_selection.update(cx, |view, cx| {
+                                                    view.show_context_menu(
+                                                        Some(url.to_string()),
+                                                        click.up.position,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                });
                                             }
                                         }),
                                 ),

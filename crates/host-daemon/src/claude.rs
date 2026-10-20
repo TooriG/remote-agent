@@ -237,10 +237,14 @@ impl Claude {
                     id: name.into(),
                     model,
                     display_name: display.into(),
-                    default_reasoning_effort: default,
-                    supported_reasoning_efforts: efforts,
-                    service_tiers: Some(Vec::new()),
-                    default_service_tier: None,
+                    credential_route: None,
+                    settings_discovery: false,
+                    settings: Some(agent_protocol::models::ModelSettings {
+                        default_reasoning_effort: default,
+                        supported_reasoning_efforts: efforts,
+                        service_tiers: Some(Vec::new()),
+                        default_service_tier: None,
+                    }),
                     is_default: Some(false),
                 })
             })

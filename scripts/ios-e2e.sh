@@ -45,6 +45,7 @@ if [[ $# == 0 ]]; then
         testSimulatorAddsClaudeAccountAndKeepsCodexSelected \
         testSimulatorRepeatedlyReopensTasksAndNewDraftsAfterBackNavigation \
         testSimulatorUsesNativeHostNavigationAndPairingDismissal \
+        testSimulatorOpensQrScannerWhileAddingHost \
         testSimulatorRemovesHostAndRequiresPairingAfterRelaunch \
         testSimulatorUsesNativeProjectDisclosureAndDirectoryNavigation \
         testSimulatorCanStartAConversationInAProject \

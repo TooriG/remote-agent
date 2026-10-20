@@ -9,6 +9,7 @@ struct AgentSettingsScreen: View {
     let close: () -> Void
     @State private var changingAccount = false
     @State private var loadingAccounts = false
+    @State private var credentialProvider = KeyProvider.deepSeek
     @State private var loginCode = ""
     @State private var loginError: String?
     @State private var loginRequestInFlight = false
@@ -71,7 +72,11 @@ struct AgentSettingsScreen: View {
                         .font(.caption).foregroundStyle(agent.availability == .ready ? .green : .secondary)
                     }
                 }
-                accountSection
+                if provider == .deepSeek {
+                    credentialSection
+                } else {
+                    accountSection
+                }
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -128,7 +133,7 @@ struct AgentSettingsScreen: View {
                 refresh()
             }
         }
-        .onChange(of: provider) { _ in loginError = nil }
+        .onChange(of: provider) { _ in loginError = nil; loginCode = ""; refresh() }
         .onChange(of: model.selectedProfileId) { _ in
             loginError = nil
             loginCode = ""
@@ -144,6 +149,40 @@ struct AgentSettingsScreen: View {
 }
 
 extension AgentSettingsScreen {
+    private var credentialSection: some View {
+        let controls = model.snapshot.credentialControls()
+        let selected = controls.first { $0.provider == credentialProvider }
+        let updating = model.snapshot.operationRunning(key: .dshCredentials)
+        return Section("接続先のAPIキー") {
+            Picker("接続先", selection: $credentialProvider) {
+                ForEach(controls, id: \.provider) { route in Text(route.label).tag(route.provider) }
+            }.onChange(of: credentialProvider) { _ in loginCode = "" }
+            if let selected {
+                Text(selected.status).font(.caption).foregroundStyle(.secondary)
+                if let url = URL(string: selected.keyUrl) {
+                    Link("APIキーを取得", destination: url)
+                }
+                SecureField("APIキー", text: $loginCode).textInputAutocapitalization(.never).autocorrectionDisabled()
+                Button("保存") {
+                    let key = loginCode; loginCode = ""
+                    model.perform(.updateDshCredential(KeyUpdate(provider: credentialProvider, key: key)))
+                }
+                .disabled(updating || loginCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model
+                    .isConnected)
+                if selected.canRemove {
+                    Button("この接続先のキーを削除", role: .destructive) {
+                        model.perform(.updateDshCredential(KeyUpdate(provider: credentialProvider, key: nil)))
+                    }.disabled(updating || !model.isConnected)
+                }
+            }
+            Button("設定状態を取得", action: refresh).disabled(updating || !model.isConnected)
+            if let error = model.snapshot
+                .operationError(key: .dshCredentials) {
+                Text(error).font(.caption).foregroundStyle(.red)
+            }
+        }
+    }
+
     private var accountSection: some View {
         Section {
             ForEach(accounts, id: \.id) { account in
@@ -215,6 +254,9 @@ extension AgentSettingsScreen {
     }
 
     private func refresh() {
+        if provider == .deepSeek {
+            model.perform(.readDshCredentials(ReadCredentials()))
+        }
         if let login {
             pollLogin(login.loginId, provider: login.provider); return
         }
@@ -308,7 +350,6 @@ extension AgentSettingsScreen {
     }
 }
 
-
 extension ProviderKind {
     var bexName: String {
         switch self {
@@ -317,6 +358,7 @@ extension ProviderKind {
         case .deepSeek: "DeepSeek Harness"
         }
     }
+
     var bexKey: String {
         switch self {
         case .codex: "codex"
@@ -324,6 +366,7 @@ extension ProviderKind {
         case .deepSeek: "deepseek"
         }
     }
+
     var bexIcon: String {
         switch self {
         case .codex: "openai"

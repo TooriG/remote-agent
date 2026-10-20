@@ -135,12 +135,11 @@ impl Snapshot {
             if let Some(project) = self.chat_placement(id) {
                 thread.project_id = crate::models::ProjectMembership::Assigned(project.to_owned());
             }
-            if let Some(project) = thread.project_id.as_ref() {
-                if self.project_preference(project).is_some_and(|p| p.hidden)
-                    || !self.project_chat_visible(project, &thread)
-                {
-                    continue;
-                }
+            if let Some(project) = thread.project_id.as_ref()
+                && (self.project_preference(project).is_some_and(|p| p.hidden)
+                    || !self.project_chat_visible(project, &thread))
+            {
+                continue;
             }
             if rows
                 .get(id)
@@ -163,9 +162,7 @@ impl Snapshot {
             &project_ids,
         );
         let limit = self.list_query.limit as usize;
-        list.has_more |= list.threads.len() > limit
-            || source.has_more_projects
-            || self.project_threads.values().any(|page| page.has_more);
+        list.has_more |= list.threads.len() > limit;
         list.threads.truncate(limit);
         for project in &source.projects {
             let key = crate::state::operations::OperationKey::ProjectList {
@@ -386,13 +383,22 @@ mod tests {
             id: "claude-project:chan_01Q7KpeXNrNrvTTahXT6YE2S".into(),
             ..Default::default()
         });
-        assert_eq!(summary.coordinator_url.as_deref(), Some(
-            "https://claude.ai/code/project/chan_01Q7KpeXNrNrvTTahXT6YE2S"
-        ));
-        for id in ["local", "claude-project:C:\\work", "claude-project:chan_",
-            "claude-project:chan_bad/../../new", "claude-project:chan_bad?thread=other",
-            "claude-project:chan_日本語"] {
-            assert!(coordinator_url(id).is_none(), "unexpected coordinator for {id}");
+        assert_eq!(
+            summary.coordinator_url.as_deref(),
+            Some("https://claude.ai/code/project/chan_01Q7KpeXNrNrvTTahXT6YE2S")
+        );
+        for id in [
+            "local",
+            "claude-project:C:\\work",
+            "claude-project:chan_",
+            "claude-project:chan_bad/../../new",
+            "claude-project:chan_bad?thread=other",
+            "claude-project:chan_日本語",
+        ] {
+            assert!(
+                coordinator_url(id).is_none(),
+                "unexpected coordinator for {id}"
+            );
         }
     }
 

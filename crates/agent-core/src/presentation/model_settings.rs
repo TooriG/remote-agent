@@ -167,7 +167,7 @@ impl Snapshot {
             defaults.service_tier.as_deref(),
             Some(provider),
             &self.models,
-            !self.model_errors.is_empty(),
+            &self.model_errors,
             self.allows_custom_codex_models(),
         );
         quick_controls(
@@ -263,7 +263,7 @@ impl Snapshot {
             None,
             Some(provider),
             &self.models,
-            !self.model_errors.is_empty(),
+            &self.model_errors,
             self.allows_custom_codex_models(),
         );
         model.cloned()
@@ -313,7 +313,7 @@ fn quick_controls(
     effort: Option<&str>,
     service_tier: Option<&str>,
 ) -> ModelQuickControls {
-    let Some(model) = model else {
+    let Some(model) = model.and_then(|model| model.settings.as_ref()) else {
         return ModelQuickControls::default();
     };
     let efforts: Vec<_> = model
@@ -321,18 +321,12 @@ fn quick_controls(
         .iter()
         .map(|choice| choice.reasoning_effort.clone())
         .collect();
-    let effort = effort
-        .filter(|value| !value.is_empty())
-        .unwrap_or(&model.default_reasoning_effort)
-        .to_owned();
+    let (effort, tier) = crate::state::supported_model_options(model, effort, service_tier);
+    let effort = effort.unwrap_or_default().to_owned();
     let effort_level = efforts
         .iter()
         .position(|value| *value == effort)
         .map_or(0, |index| index as u32 + 1);
-    let tier = service_tier
-        .filter(|value| !value.is_empty())
-        .or(model.default_service_tier.as_deref())
-        .unwrap_or("default");
     let fast_tier = model
         .service_tiers
         .as_deref()
@@ -391,11 +385,11 @@ mod tests {
     #[test]
     fn speed_choices_preserve_native_multipliers_and_select_each_tier() {
         let model: Model = serde_json::from_value(serde_json::json!({
-            "id":"model","model":{"provider":"codex","id":"model"},"displayName":"Model",
+            "id":"model","model":{"provider":"codex","id":"model"},"displayName":"Model", "settings": {
             "defaultReasoningEffort":"low","supportedReasoningEfforts":[{"reasoningEffort":"low"}],
             "serviceTiers":[{"id":"priority","name":"Fast","description":"2x speed, increased usage","fast":true},
                 {"id":"ultrafast","name":"Ultrafast","description":"Fastest processing","fast":true}]
-        })).unwrap();
+        }})).unwrap();
         for id in ["default", "priority", "ultrafast"] {
             let controls = quick_controls(Some(&model), Some("low"), Some(id));
             assert_eq!(
@@ -427,11 +421,11 @@ mod tests {
     fn automatic_provider_uses_catalog_defaults_and_speed_uses_metadata() {
         use serde_json::json;
         let mut models: Vec<Model> = serde_json::from_value(json!([
-            {"id":"first","model":{"provider":"codex","id":"first"},"displayName":"First",
-             "defaultReasoningEffort":"","supportedReasoningEfforts":[],"isDefault":false},
-            {"id":"preferred","model":{"provider":"claude","id":"preferred"},"displayName":"Preferred",
-             "defaultReasoningEffort":"","supportedReasoningEfforts":[],"isDefault":true,
-             "serviceTiers":[{"id":"express","fast":true},{"id":"priority","fast":false}]}
+            {"id":"first","model":{"provider":"codex","id":"first"},"displayName":"First","isDefault":false, "settings": {
+             "defaultReasoningEffort":"","supportedReasoningEfforts":[]}},
+            {"id":"preferred","model":{"provider":"claude","id":"preferred"},"displayName":"Preferred","isDefault":true, "settings": {
+             "defaultReasoningEffort":"","supportedReasoningEfforts":[],
+             "serviceTiers":[{"id":"express","fast":true},{"id":"priority","fast":false}]}}
         ])).unwrap();
         let errors = serde_json::Map::new();
         let selected = [
@@ -472,8 +466,8 @@ mod tests {
             use serde_json::json;
             let other = if provider == ProviderKind::Codex { ProviderKind::Claude } else { ProviderKind::Codex };
             let mut models: Vec<Model> = serde_json::from_value(json!([
-                {"id":"other", "model":{"provider":other,"id":"other"},"isDefault":true,"displayName":"Other","defaultReasoningEffort":"","supportedReasoningEfforts":[]},
-                {"id":"available", "model":{"provider":provider,"id":"available"},"isDefault":true,"displayName":"Available","defaultReasoningEffort":"","supportedReasoningEfforts":[]}
+                {"id":"other", "model":{"provider":other,"id":"other"},"isDefault":true,"displayName":"Other", "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}},
+                {"id":"available", "model":{"provider":provider,"id":"available"},"isDefault":true,"displayName":"Available", "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}}
             ])).unwrap();
             if reversed { models.reverse(); }
             let selected = [(provider, "account".into())].into();
@@ -504,7 +498,7 @@ mod tests {
         use serde_json::json;
         for catalog in [
             json!([]),
-            json!([{"id":"failed","model":{"provider":"claude","id":"failed"},"displayName":"Failed","defaultReasoningEffort":"","supportedReasoningEfforts":[]}]),
+            json!([{"id":"failed","model":{"provider":"claude","id":"failed"},"displayName":"Failed", "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}}]),
         ] {
             let snapshot = Snapshot {
                 models: Arc::new(serde_json::from_value(catalog).unwrap()),
@@ -550,10 +544,10 @@ mod tests {
             let id = format!("claude:{suffix}");
             let mut snapshot = Snapshot {
                 models: Arc::new(serde_json::from_value(serde_json::json!([
-                    {"id":id,"model":{"provider":"codex","id":id},"displayName":"Codex","isDefault":true,
-                     "defaultReasoningEffort":"high","supportedReasoningEfforts":[{"reasoningEffort":"high"}]},
-                    {"id":id,"model":{"provider":"claude","id":id},"displayName":"Claude","isDefault":true,
-                     "defaultReasoningEffort":"low","supportedReasoningEfforts":[{"reasoningEffort":"low"}]}
+                    {"id":id,"model":{"provider":"codex","id":id},"displayName":"Codex","isDefault":true, "settings": {
+                     "defaultReasoningEffort":"high","supportedReasoningEfforts":[{"reasoningEffort":"high"}]}},
+                    {"id":id,"model":{"provider":"claude","id":id},"displayName":"Claude","isDefault":true, "settings": {
+                     "defaultReasoningEffort":"low","supportedReasoningEfforts":[{"reasoningEffort":"low"}]}}
                 ])).unwrap()),
                 ..Default::default()
             };
@@ -599,10 +593,10 @@ mod tests {
     #[test]
     fn quick_controls_use_capabilities_and_saved_values_without_inventing_quotas() {
         let mut snapshot = Snapshot { models: Arc::new(serde_json::from_value(serde_json::json!([
-            {"id":"gpt","model":{"provider": "codex", "id": "gpt"},"displayName":"GPT","defaultReasoningEffort":"medium",
+            {"id":"gpt","model":{"provider": "codex", "id": "gpt"},"displayName":"GPT", "settings": {"defaultReasoningEffort":"medium",
              "supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"medium"},{"reasoningEffort":"high"}],
-             "serviceTiers":[{"id":"priority","fast":true}]},
-            {"id":"claude:haiku","model":{"provider": "claude", "id": "haiku"},"displayName":"Haiku","defaultReasoningEffort":"","supportedReasoningEfforts":[]}
+             "serviceTiers":[{"id":"priority","fast":true}]}},
+            {"id":"claude:haiku","model":{"provider": "claude", "id": "haiku"},"displayName":"Haiku", "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}}
         ])).unwrap()), ..Default::default() };
         Arc::make_mut(&mut snapshot.drafts).insert(
             "draft".into(),
@@ -672,6 +666,113 @@ mod tests {
             snapshot
                 .account_weekly_usage(ProviderKind::Codex, "a".into())
                 .is_empty()
+        );
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "bindings", derive(uniffi::Record))]
+pub struct CredentialControl {
+    pub provider: agent_protocol::dsh::KeyProvider,
+    pub label: String,
+    pub key_url: String,
+    pub status: String,
+    pub can_remove: bool,
+}
+#[cfg_attr(feature = "bindings", uniffi::export)]
+impl Snapshot {
+    pub fn credential_controls(&self) -> Vec<CredentialControl> {
+        use agent_protocol::dsh::{CredentialSource, KeyProvider};
+        KeyProvider::ALL
+            .into_iter()
+            .map(|provider| {
+                let route = self
+                    .account
+                    .dsh_credentials
+                    .as_ref()
+                    .and_then(|credentials| {
+                        credentials
+                            .routes
+                            .iter()
+                            .find(|route| route.provider == provider)
+                    });
+                let status = match route {
+                    Some(route) if route.needs_attention => "キーの接続先を確認してください",
+                    Some(route) => match route.source {
+                        CredentialSource::Managed => "保存済み（キーは非表示）",
+                        CredentialSource::External => "Hostの外部設定を使用",
+                        CredentialSource::Missing => "未設定",
+                    },
+                    None => "設定状態を取得してください",
+                };
+                CredentialControl {
+                    provider,
+                    label: provider.label().into(),
+                    key_url: provider.key_url().into(),
+                    status: status.into(),
+                    can_remove: route
+                        .is_some_and(|route| route.source == CredentialSource::Managed),
+                }
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod credential_control_tests {
+    use super::*;
+    use agent_protocol::dsh::{CredentialRoute, CredentialSource, Credentials, KeyProvider};
+    #[test]
+    fn credential_controls_only_offer_removal_for_managed_keys() {
+        let mut snapshot = Snapshot::default();
+        std::sync::Arc::make_mut(&mut snapshot.account).dsh_credentials =
+            Some(std::sync::Arc::new(Credentials {
+                routes: vec![
+                    CredentialRoute {
+                        provider: KeyProvider::DeepSeek,
+                        source: CredentialSource::External,
+                        needs_attention: false,
+                    },
+                    CredentialRoute {
+                        provider: KeyProvider::OpenRouter,
+                        source: CredentialSource::Managed,
+                        needs_attention: false,
+                    },
+                    CredentialRoute {
+                        provider: KeyProvider::OpenAI,
+                        source: CredentialSource::Managed,
+                        needs_attention: true,
+                    },
+                ],
+            }));
+        let controls = snapshot.credential_controls();
+        assert_eq!(controls.len(), 9);
+        assert!(
+            !controls
+                .iter()
+                .find(|route| route.provider == KeyProvider::DeepSeek)
+                .unwrap()
+                .can_remove
+        );
+        assert!(
+            controls
+                .iter()
+                .find(|route| route.provider == KeyProvider::OpenRouter)
+                .unwrap()
+                .can_remove
+        );
+        let misplaced = controls
+            .iter()
+            .find(|route| route.provider == KeyProvider::OpenAI)
+            .unwrap();
+        assert!(misplaced.can_remove);
+        assert!(misplaced.status.contains("確認"));
+        assert!(
+            !controls
+                .iter()
+                .find(|route| route.provider == KeyProvider::Gemini)
+                .unwrap()
+                .can_remove
         );
     }
 }

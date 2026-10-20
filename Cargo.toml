@@ -22,6 +22,12 @@ rust-version = "1.98"
 [profile.dev]
 debug = "line-tables-only"
 
+# GPUI's Windows debug renderer reads HLSL from its build-time Cargo source
+# directory. Embed compiled shaders so development packages also run on other PCs.
+# This applies to the crate's build script as well; other crates keep assertions.
+[profile.dev.package.gpui-pre-windows]
+debug-assertions = false
+
 [workspace.dependencies]
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std"] }
@@ -43,3 +49,4 @@ zeroize = "1.8.1"
 netwatch = { git = "https://github.com/ttizze/net-tools", rev = "1d54cca14f47ebfa20a75234e8a08351d9f5a8d4" }
 alacritty_terminal = { path = "vendor/alacritty_terminal" }
 vte = { path = "vendor/vte" }
+gpui-pre-windows = { path = "vendor/gpui_windows" }

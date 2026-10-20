@@ -26,14 +26,36 @@ class ComposerStopTest {
     private fun fixture(status: String, draft: String = ""): Snapshot {
         val identity = JSONObject("""{"provider":"codex","id":"thread"}""")
         val key = JSONObject().put("Session", JSONObject().put("session", identity))
-        val state = JSONObject(Snapshot.empty().serialize().decodeToString())
-            .put("navigation", JSONObject().put("thread_id", identity).put("draft_key", key).put("cwd", "/fixture"))
-            .put("drafts", JSONArray().put(JSONArray().put(key).put(JSONObject().put("text", draft).put("attachments", JSONArray()))))
-            .put("conversations", JSONArray().put(JSONArray().put(identity).put(
-                JSONObject().put("id", identity).put("turns", JSONArray().put(
-                    JSONObject().put("id", "active").put("status", status).put("items", JSONArray())
-                ))
-            )))
+        val state =
+            JSONObject(Snapshot.empty().serialize().decodeToString())
+                .put("navigation", JSONObject().put("thread_id", identity).put("draft_key", key).put("cwd", "/fixture"))
+                .put(
+                    "drafts",
+                    JSONArray()
+                        .put(JSONArray().put(key).put(JSONObject().put("text", draft).put("attachments", JSONArray()))),
+                )
+                .put(
+                    "conversations",
+                    JSONArray()
+                        .put(
+                            JSONArray()
+                                .put(identity)
+                                .put(
+                                    JSONObject()
+                                        .put("id", identity)
+                                        .put(
+                                            "turns",
+                                            JSONArray()
+                                                .put(
+                                                    JSONObject()
+                                                        .put("id", "active")
+                                                        .put("status", status)
+                                                        .put("items", JSONArray())
+                                                ),
+                                        )
+                                )
+                        ),
+                )
         return Snapshot.restore(state.toString().encodeToByteArray())
     }
 
@@ -44,7 +66,14 @@ class ComposerStopTest {
             var complete: ((Result<Outcome>) -> Unit)? = null
             compose.setContent {
                 MaterialTheme {
-                    ThreadComposer(snapshot, { intent, callback -> intents.add(intent); complete = callback }, {}) {}
+                    ThreadComposer(
+                        snapshot,
+                        { intent, callback ->
+                            intents.add(intent)
+                            complete = callback
+                        },
+                        {},
+                    ) {}
                 }
             }
             compose.onNodeWithTag("composer.stop").assertIsDisplayed().assertIsEnabled().performClick()

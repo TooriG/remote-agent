@@ -5,7 +5,6 @@ import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -27,32 +26,65 @@ class MessageActionsTest {
 
     private fun conversation(): Snapshot {
         val id = JSONObject("""{"provider":"codex","id":"actions"}""")
-        val thread = JSONObject().put("id", id)
-            .put("capabilities", JSONObject("""{"fork":true,"additionalInput":true,"rename":false,"modelChange":false}"""))
-            .put("turns", JSONArray().put(JSONObject().put("id", "turn").put("status", "completed")
-                .put("items", JSONArray().put(messageItem("user", "My original message", true))
-                    .put(messageItem("answer", "Assistant reply")))))
-        val state = JSONObject(Snapshot.empty().serialize().decodeToString())
-            .put("navigation", JSONObject().put("thread_id", id)
-                .put("draft_key", JSONObject().put("Session", JSONObject().put("session", id))).put("cwd", "/fixture"))
-            .put("conversations", JSONArray().put(JSONArray().put(id).put(thread)))
+        val thread =
+            JSONObject()
+                .put("id", id)
+                .put(
+                    "capabilities",
+                    JSONObject("""{"fork":true,"additionalInput":true,"rename":false,"modelChange":false}"""),
+                )
+                .put(
+                    "turns",
+                    JSONArray()
+                        .put(
+                            JSONObject()
+                                .put("id", "turn")
+                                .put("status", "completed")
+                                .put(
+                                    "items",
+                                    JSONArray()
+                                        .put(messageItem("user", "My original message", true))
+                                        .put(messageItem("answer", "Assistant reply")),
+                                )
+                        ),
+                )
+        val state =
+            JSONObject(Snapshot.empty().serialize().decodeToString())
+                .put(
+                    "navigation",
+                    JSONObject()
+                        .put("thread_id", id)
+                        .put("draft_key", JSONObject().put("Session", JSONObject().put("session", id)))
+                        .put("cwd", "/fixture"),
+                )
+                .put("conversations", JSONArray().put(JSONArray().put(id).put(thread)))
         return Snapshot.restore(state.toString().encodeToByteArray())
     }
 
     @Test
     fun forkShowsImmediateProgressPreventsRepeatAndAllowsRetryAfterFailure() {
         conversation().use { snapshot ->
-            val projection = projectConversationRows(snapshot, snapshot.conversation(SessionRef(ProviderKind.CODEX, "actions")), null)
+            val projection =
+                projectConversationRows(
+                    snapshot,
+                    snapshot.conversation(SessionRef(ProviderKind.CODEX, "actions")),
+                    null,
+                )
             var calls = 0
             var completion: ((Result<Outcome>) -> Unit)? = null
             compose.setContent {
                 MaterialTheme {
-                    ThreadDetailScreen(snapshot, projection, { intent, done ->
-                        if (intent is Intent.ForkSession) {
-                            calls++
-                            completion = done
-                        }
-                    }, null) {}
+                    ThreadDetailScreen(
+                        snapshot,
+                        projection,
+                        { intent, done ->
+                            if (intent is Intent.ForkSession) {
+                                calls++
+                                completion = done
+                            }
+                        },
+                        null,
+                    ) {}
                 }
             }
             compose.onNodeWithContentDescription("分岐").performClick()
@@ -74,7 +106,12 @@ class MessageActionsTest {
     @Test
     fun userAndAssistantMessagesCopyExactTextAndAcknowledgeTheTap() {
         conversation().use { snapshot ->
-            val projection = projectConversationRows(snapshot, snapshot.conversation(SessionRef(ProviderKind.CODEX, "actions")), null)
+            val projection =
+                projectConversationRows(
+                    snapshot,
+                    snapshot.conversation(SessionRef(ProviderKind.CODEX, "actions")),
+                    null,
+                )
             lateinit var clipboard: ClipboardManager
             compose.setContent {
                 clipboard = LocalClipboardManager.current

@@ -41,6 +41,18 @@ pub(super) fn parse_model(
     }
     let id = value["model"].take();
     value["model"] = serde_json::json!({"provider":ProviderKind::Codex,"id":id});
+    let settings = [
+        "defaultReasoningEffort",
+        "supportedReasoningEfforts",
+        "serviceTiers",
+        "defaultServiceTier",
+    ]
+    .into_iter()
+    .map(|key| (key.to_owned(), value[key].take()))
+    .collect::<serde_json::Map<_, _>>();
+    value["settings"] = Value::Object(settings);
+    value["settingsDiscovery"] = Value::Bool(false);
+    value["credentialRoute"] = Value::Null;
     serde_json::from_value(value)
 }
 
@@ -66,10 +78,9 @@ pub(super) fn include_configured_model(
             id: id.into(),
         },
         display_name: id.into(),
-        default_reasoning_effort: String::new(),
-        supported_reasoning_efforts: Vec::new(),
-        service_tiers: None,
-        default_service_tier: None,
+        credential_route: None,
+        settings: None,
+        settings_discovery: false,
         is_default: Some(false),
     });
 }
@@ -620,7 +631,7 @@ mod tests {
         .unwrap();
         assert_eq!(model.model.provider, ProviderKind::Codex);
         assert_eq!(model.model.id, "native-model");
-        let tiers = model.service_tiers.unwrap();
+        let tiers = model.settings.unwrap().service_tiers.unwrap();
         assert_eq!(
             tiers.iter().map(|tier| tier.fast).collect::<Vec<_>>(),
             [true, false, false]
@@ -667,8 +678,7 @@ mod tests {
         include_configured_model(&mut models, &config, Some("apiKey"));
         include_configured_model(&mut models, &config, Some("apiKey"));
         assert_eq!(models.len(), 1);
-        assert!(models[0].supported_reasoning_efforts.is_empty());
-        assert!(models[0].service_tiers.is_none());
+        assert!(models[0].settings.is_none());
     }
 
     #[test]

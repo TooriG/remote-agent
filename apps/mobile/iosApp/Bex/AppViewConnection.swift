@@ -21,16 +21,13 @@ extension BexAppViewModel {
                     phase: .identityRead,
                     value: UInt64((ProcessInfo.processInfo.systemUptime - identityStarted) * 1_000_000)
                 )
-                let reused = try await owner.resume(connection: Connection(ticket: profile.ticket,
-                                                                           identity: identity,
-                                                                           invitation: nil, useRelays: true))
+                _ = try await owner.resume(connection: Connection(ticket: profile.ticket,
+                                                                  identity: identity,
+                                                                  invitation: nil, useRelays: true))
                 guard let self, selectedProfileId == profile.id, !Task.isCancelled else { return }
                 let elapsed = (ProcessInfo.processInfo.systemUptime - started) * 1_000_000
                 owner.recordConnectionEvent(phase: .uiConnectReady, value: UInt64(elapsed))
                 publish(owner.snapshot())
-                if !reused {
-                    liveActivities.resendTokens(hostID: profile.id)
-                }
                 if snapshot.hostName() == nil {
                     perform(.loadHostName(LoadHostName()))
                 }
@@ -58,9 +55,9 @@ extension BexAppViewModel {
                     guard let self, selectedProfileId == host, !Task.isCancelled else { return }
                     let latest = owner.snapshot()
                     publish(latest)
-                    if previous.connected(), !latest.connected(), !isConnecting {
-                        // Network changes and foreground activation can retry a failed attempt.
-                        connect()
+                    if latest.connected(), previous.connectionGeneration() != latest.connectionGeneration() {
+                        liveActivities.resendTokens(hostID: host)
+                        notice = latest.error()
                     }
                     previous = latest
                 } catch { return }

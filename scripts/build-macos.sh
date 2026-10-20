@@ -63,14 +63,17 @@ trap 'exit 143' TERM
 bundle="$staging/bex.app"
 executables="$bundle/Contents/MacOS"
 resources="$bundle/Contents/Resources"
-mkdir -p "$executables" "$resources"
+node_bundle="$bundle/Contents/Helpers/Bex Node.app"
+node="$node_bundle/Contents/MacOS/node"
+mkdir -p "$executables" "$resources" "${node%/*}"
 cp apps/desktop/assets/icon.icns "$resources/bex.icns"
 cp crates/host-daemon/src/claude/sdk/SDK-LICENSE.md "$resources/Claude-Agent-SDK-LICENSE.md"
 cp "$output/bex-desktop" "$executables/bex"
 cp "$output/host-daemon" "$executables/host-daemon"
 cp crates/host-daemon/src/claude/sdk/bridge.bundle.mjs "$resources/bex-claude-sdk.mjs"
 cp "$output/bex-provider-supervisor" "$executables/bex-provider-supervisor"
-cp "${BEX_NODE_RUNTIME:?Use the pinned Nix development environment}/bin/node" "$executables/node"
+cp "${BEX_NODE_RUNTIME:?Use the pinned Nix development environment}/bin/node" "$node"
+cp apps/desktop/macos/Node.Info.plist "$node_bundle/Contents/Info.plist"
 cp "$BEX_NODE_RUNTIME/share/doc/node/LICENSE" "$resources/Node-LICENSE.txt"
 cp apps/desktop/macos/Info.plist "$bundle/Contents/Info.plist"
 # Use macOS's libiconv so the app also runs on Macs without Nix.
@@ -86,12 +89,12 @@ done
 sign "$executables/bex"
 sign --identifier app.bex.provider-supervisor "$executables/bex-provider-supervisor"
 sign --identifier app.bex.host "$executables/host-daemon"
-sign --identifier app.bex.node --options runtime --entitlements apps/desktop/macos/Node.entitlements "$executables/node"
-verify "$executables/node"
+sign --options runtime --entitlements apps/desktop/macos/Node.entitlements "$node_bundle"
+verify "$node_bundle"
 sign "$bundle"
 verify "$bundle"
 # Exercise the signed runtime without an installed Node or Nix on PATH.
-env -i PATH=/usr/bin:/bin "$executables/node" "$resources/bex-claude-sdk.mjs" </dev/null
+env -i PATH=/usr/bin:/bin "$node" "$resources/bex-claude-sdk.mjs" </dev/null
 if [[ -e $destination ]]; then mv "$destination" "$staging/previous.app"; fi
 mv "$bundle" "$destination"
 echo "$destination"

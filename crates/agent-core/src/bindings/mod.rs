@@ -1,6 +1,7 @@
 //! Native binding boundary. Core owns all conversation state and effects.
 mod json;
 mod protocol;
+mod recovery;
 mod snapshot;
 
 use crate::{
@@ -105,7 +106,10 @@ pub fn validate_invitation(invitation: Invitation, now: u64) -> Result<String, A
 
 #[derive(uniffi::Object)]
 pub struct AgentStore {
-    store: crate::store::Store,
+    store: Arc<crate::store::Store>,
+    recovery: Mutex<Option<recovery::Recovery>>,
+    connection_active: tokio::sync::watch::Sender<bool>,
+    connection_work: Arc<tokio::sync::Mutex<()>>,
     endpoint: tokio::sync::Mutex<Option<NativeEndpoint>>,
     trace: Arc<Trace>,
 }
@@ -120,18 +124,30 @@ impl AgentStore {
         connection: Connection,
         reuse: bool,
     ) -> Result<bool, AgentError> {
+        self.recovery.lock().unwrap().take();
+        let _attempt = self.connection_work.lock().await;
         let started = std::time::Instant::now();
         self.resume_connection(started, async {
             let (endpoint, ticket, invitation) = self.connection_endpoint(connection).await?;
             let endpoint_ms = started.elapsed().as_millis() as u64;
-            let mut performance = if reuse && invitation.is_none() {
+            let result = if reuse && invitation.is_none() {
                 self.store.resume(&endpoint, &ticket).await.map_err(error)
             } else {
                 self.store
                     .reconnect(&endpoint, &ticket, invitation)
                     .await
                     .map_err(error)
-            }?;
+            };
+            if invitation.is_none() || result.is_ok() {
+                *self.recovery.lock().unwrap() = Some(recovery::Recovery::start(
+                    self.store.clone(),
+                    endpoint,
+                    ticket,
+                    self.connection_work.clone(),
+                    self.connection_active.subscribe(),
+                ));
+            }
+            let mut performance = result?;
             performance.endpoint_ms = endpoint_ms;
             performance.total_ms = started.elapsed().as_millis() as u64;
             performance.client_revision = option_env!("BEX_BUILD_REVISION")
@@ -246,7 +262,10 @@ impl AgentStore {
             started.elapsed().as_micros() as u64,
         );
         Ok(Arc::new(Self {
-            store,
+            store: Arc::new(store),
+            recovery: Mutex::new(None),
+            connection_active: tokio::sync::watch::channel(true).0,
+            connection_work: Default::default(),
             endpoint: Default::default(),
             trace,
         }))
@@ -271,6 +290,9 @@ impl AgentStore {
     pub async fn resume(&self, connection: Connection) -> Result<bool, AgentError> {
         self.connect_recording(connection, true).await
     }
+    pub fn set_connection_active(&self, active: bool) {
+        self.connection_active.send_replace(active);
+    }
     /// Platform network monitors supply changes; transport recovery stays in Core.
     pub async fn network_changed(&self) {
         let endpoint = self
@@ -281,6 +303,9 @@ impl AgentStore {
             .map(|cached| cached.endpoint.clone());
         if let Some(endpoint) = endpoint {
             endpoint.network_change().await;
+        }
+        if let Some(recovery) = self.recovery.lock().unwrap().as_ref() {
+            recovery.wake();
         }
     }
     /// Platform lifecycle boundaries only; shared transport measurements stay in Core.
@@ -354,6 +379,7 @@ impl AgentStore {
     }
 
     pub async fn shutdown(&self) -> Result<(), AgentError> {
+        self.recovery.lock().unwrap().take();
         let result = self.store.close().await.map_err(error);
         if let Some(cached) = self.endpoint.lock().await.take() {
             cached.endpoint.close().await;
@@ -452,6 +478,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn automatic_recovery_pauses_in_background_and_reconnects_once_when_active() {
+        tokio::time::timeout(Duration::from_secs(15), async {
+            let identity = Identity::generate();
+            let trust = crate::transport::Trust {
+                allowed: [identity.node_id()].into(),
+                ..Default::default()
+            };
+            let host = Endpoint::bind(Identity::generate(), Relays::Disabled)
+                .await
+                .unwrap();
+            let (incoming, store) = tokio::join!(
+                scoped_incoming(&host, &trust),
+                AgentStore::connect(
+                    Connection {
+                        ticket: host.ticket().to_string(),
+                        identity: identity.to_bytes().to_vec(),
+                        invitation: None,
+                        use_relays: false
+                    },
+                    Vec::new(),
+                    None
+                )
+            );
+            let store = store.unwrap();
+            let (first, _reader, _writer) = incoming;
+            store.set_connection_active(false);
+            first.close();
+            let mut snapshots = store.store.subscribe();
+            while snapshots.borrow_and_update().connected {
+                snapshots.changed().await.unwrap();
+            }
+            assert!(
+                tokio::time::timeout(Duration::from_millis(2200), host.accept())
+                    .await
+                    .is_err(),
+                "background recovery must not open a connection"
+            );
+            store.set_connection_active(true);
+            let (second, _reader, _writer) = scoped_incoming(&host, &trust).await;
+            while !snapshots.borrow_and_update().connected {
+                snapshots.changed().await.unwrap();
+            }
+            assert!(
+                tokio::time::timeout(Duration::from_millis(200), host.accept())
+                    .await
+                    .is_err(),
+                "a ready connection must have no competing retry owner"
+            );
+            store.shutdown().await.unwrap();
+            second.close();
+            host.close().await;
+        })
+        .await
+        .expect("automatic recovery did not settle");
+    }
+
+    #[tokio::test]
     async fn shutdown_releases_a_native_snapshot_waiter() {
         let store = AgentStore::offline(Vec::new(), None).await.unwrap();
         let previous = store.snapshot();
@@ -495,7 +578,7 @@ mod tests {
             let restored = AgentStore::offline(serde_json::to_vec(&saved).unwrap(), None).await.unwrap();
             assert_eq!(*restored.snapshot().list_query, crate::models::ListQuery::default());
             restored.shutdown().await.unwrap();
-            let store = Arc::new(AgentStore { store: crate::store::Store::offline(cached), endpoint: Default::default(), trace: Trace::new() });
+            let store = Arc::new(AgentStore { store: Arc::new(crate::store::Store::offline(cached)), recovery: Mutex::new(None), connection_active: tokio::sync::watch::channel(true).0, connection_work: Default::default(), endpoint: Default::default(), trace: Trace::new() });
             let (connected, (session, reader, writer)) = tokio::join!(store.reconnect(connection()), scoped_incoming(&host, &trust));
             connected.unwrap();
             let first = session;
@@ -530,7 +613,7 @@ mod tests {
                 assert_eq!(open["params"]["session"]["id"], "thread");
                 // Finish the conversation before the lists; no reload invalidates another.
                 writer.reply(open, json!({"result":{"session":{"provider":"codex","id":"thread"},"subscriptionId":uuid::Uuid::new_v4(),"revision":0,"response":{"thread":{"id":{"provider":"codex","id":"thread"},"turns":[{"id":"turn","items":[{"id":"answer","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"after reconnect","phase":"unknown"}}}}}],"status":"unknown"}]}}}})).await.unwrap();
-                writer.reply(&requests["host/model/list"], json!({ "result":{"data":[{"id":"fresh-model","model":{"provider": "codex", "id": "fresh-model"},"displayName":"Fresh","defaultReasoningEffort":"medium","supportedReasoningEfforts":[]}],"nextCursor":null}})).await.unwrap();
+                writer.reply(&requests["host/model/list"], json!({ "result":{"data":[{"id":"fresh-model","model":{"provider": "codex", "id": "fresh-model"},"displayName":"Fresh", "settings": {"defaultReasoningEffort":"medium","supportedReasoningEfforts":[]}}],"nextCursor":null}})).await.unwrap();
                 writer.reply(list, json!({ "result":{"data":[{"id":{"provider":"codex","id":"thread"},"name":"reloaded"}],"projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,}})).await.unwrap();
                 assert!(!matches!(reader.read_request().await, Ok(Some(_))));
                 next.close();
@@ -744,7 +827,10 @@ mod tests {
         use crate::diagnostics::{ConnectionPerformance, ConnectionRoute};
         let (store, report) = crate::store::Store::mock_connection();
         let store = AgentStore {
-            store,
+            store: Arc::new(store),
+            recovery: Mutex::new(None),
+            connection_active: tokio::sync::watch::channel(true).0,
+            connection_work: Default::default(),
             endpoint: Default::default(),
             trace: Trace::new(),
         };

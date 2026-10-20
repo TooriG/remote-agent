@@ -80,9 +80,15 @@ final class BexLaunchUITests: XCTestCase {
     }
 
     func connectedSimulatorApp(expandProject: Bool = true) throws -> XCUIApplication {
-        let app = XCUIApplication()
+        var app = XCUIApplication()
         if app.state != .notRunning {
             app.terminate()
+            if !app.wait(for: .notRunning, timeout: 10) {
+                // A Simulator relaunch can replace the process XCTest just stopped.
+                // Refresh the application handle before establishing test isolation.
+                app = XCUIApplication()
+                app.terminate()
+            }
             XCTAssertTrue(app.wait(for: .notRunning, timeout: 10))
         }
         app.launch()

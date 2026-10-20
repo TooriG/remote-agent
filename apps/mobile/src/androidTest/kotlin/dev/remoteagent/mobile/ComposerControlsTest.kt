@@ -30,9 +30,9 @@ class ComposerControlsTest {
                     "models",
                     JSONArray(
                         """[
-              {"id":"one","model":{"provider":"codex","id":"one"},"displayName":"Fixture One","defaultReasoningEffort":"low","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"high"}]},
-              {"id":"gpt-6.1-sol","model":{"provider":"codex","id":"gpt-6.1-sol"},"displayName":"GPT-6.1","defaultReasoningEffort":"low","supportedReasoningEfforts":[]},
-              {"id":"claude","model":{"provider":"claude","id":"claude"},"displayName":"Other Provider","defaultReasoningEffort":"low","supportedReasoningEfforts":[]}
+              {"id":"one","model":{"provider":"codex","id":"one"},"displayName":"Fixture One", "settings": {"defaultReasoningEffort":"low","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"high"}]}},
+              {"id":"gpt-6.1-sol","model":{"provider":"codex","id":"gpt-6.1-sol"},"displayName":"GPT-6.1", "settings": {"defaultReasoningEffort":"low","supportedReasoningEfforts":[]}},
+              {"id":"claude","model":{"provider":"claude","id":"claude"},"displayName":"Other Provider", "settings": {"defaultReasoningEffort":"low","supportedReasoningEfforts":[]}}
             ]"""
                     ),
                 )

@@ -41,13 +41,14 @@ internal data class ProjectDrop(val id: String, val after: Boolean)
 
 // Only project headers are destinations; expanded chats and paging rows are skipped.
 internal fun projectDropAt(y: Float, headers: List<Pair<String, IntRange>>): ProjectDrop? {
-    val header = headers.minByOrNull { (_, bounds) ->
-        when {
-            y < bounds.first -> bounds.first - y
-            y > bounds.last -> y - bounds.last
-            else -> 0f
-        }
-    } ?: return null
+    val header =
+        headers.minByOrNull { (_, bounds) ->
+            when {
+                y < bounds.first -> bounds.first - y
+                y > bounds.last -> y - bounds.last
+                else -> 0f
+            }
+        } ?: return null
     return ProjectDrop(header.first, y > (header.second.first + header.second.last) / 2f)
 }
 
@@ -56,18 +57,24 @@ internal class ProjectReorder(val list: LazyListState) {
     var target by mutableStateOf<ProjectDrop?>(null)
     var pointerY by mutableStateOf(0f)
     var grabOffsetY by mutableStateOf(0f)
-    val draggedTop: Float get() = pointerY - grabOffsetY
+    val draggedTop: Float
+        get() = pointerY - grabOffsetY
+
     var projects: List<ProjectSummary> = emptyList()
     var perform: (Intent) -> Unit = {}
     var pinned: PinnableContainer.PinnedHandle? = null
 
     fun updateTarget() {
-        target = projectDropAt(pointerY, list.layoutInfo.visibleItemsInfo.mapNotNull { item ->
-            val key = item.key as? String ?: return@mapNotNull null
-            val id = key.removePrefix("project:")
-            if (projects.none { it.id == id }) return@mapNotNull null
-            id to (item.offset until item.offset + item.size)
-        })
+        target =
+            projectDropAt(
+                pointerY,
+                list.layoutInfo.visibleItemsInfo.mapNotNull { item ->
+                    val key = item.key as? String ?: return@mapNotNull null
+                    val id = key.removePrefix("project:")
+                    if (projects.none { it.id == id }) return@mapNotNull null
+                    id to (item.offset until item.offset + item.size)
+                },
+            )
     }
 
     fun finish(commit: Boolean) {
@@ -100,11 +107,12 @@ internal fun rememberProjectReorder(
         while (state.source != null) {
             val now = withFrameNanos { it }
             val info = list.layoutInfo
-            val velocity = when {
-                state.pointerY < info.viewportStartOffset + edge -> -edge
-                state.pointerY > info.viewportEndOffset - edge -> edge
-                else -> 0f
-            }
+            val velocity =
+                when {
+                    state.pointerY < info.viewportStartOffset + edge -> -edge
+                    state.pointerY > info.viewportEndOffset - edge -> edge
+                    else -> 0f
+                }
             val seconds = ((now - previous) / NANOS_PER_SECOND).coerceAtMost(MAX_FRAME_SECONDS)
             if (abs(velocity) > 0f) list.scrollBy(velocity * seconds * SCROLL_SPEED)
             state.updateTarget()
@@ -129,47 +137,58 @@ internal fun ProjectDragHandle(project: ProjectSummary, state: ProjectReorder) {
     val currentProject by rememberUpdatedState(project)
     val pinnable by rememberUpdatedState(LocalPinnableContainer.current)
     Box(
-        Modifier.size(40.dp, 48.dp).semantics {
-            contentDescription = "${project.name}の順番を変更。上下にドラッグ"
-            val index = state.projects.indexOfFirst { it.id == project.id }
-            customActions = listOfNotNull(
-                state.projects.getOrNull(index - 1)?.let { previous ->
-                    CustomAccessibilityAction("上へ移動") {
-                        state.perform(Intent.ReorderProject(project.id, previous.id, false)); true
-                    }
-                },
-                state.projects.getOrNull(index + 1)?.let { next ->
-                    CustomAccessibilityAction("下へ移動") {
-                        state.perform(Intent.ReorderProject(project.id, next.id, true)); true
-                    }
-                },
-            )
-        }.pointerInput(project.id, state) {
-            detectDragGestures(
-                onDragStart = { position ->
-                    val row = state.list.layoutInfo.visibleItemsInfo
-                        .firstOrNull { it.key == "project:${currentProject.id}" }
-                    if (row != null) {
-                        // Keep receiving this gesture when auto-scroll moves its source offscreen.
-                        state.pinned = pinnable?.pin()
-                        state.source = currentProject.id
-                        state.pointerY = row.offset + row.size / 2f + position.y - size.height / 2f
-                        state.grabOffsetY = state.pointerY - row.offset
+        Modifier.size(40.dp, 48.dp)
+            .semantics {
+                contentDescription = "${project.name}の順番を変更。上下にドラッグ"
+                val index = state.projects.indexOfFirst { it.id == project.id }
+                customActions =
+                    listOfNotNull(
+                        state.projects.getOrNull(index - 1)?.let { previous ->
+                            CustomAccessibilityAction("上へ移動") {
+                                state.perform(Intent.ReorderProject(project.id, previous.id, false))
+                                true
+                            }
+                        },
+                        state.projects.getOrNull(index + 1)?.let { next ->
+                            CustomAccessibilityAction("下へ移動") {
+                                state.perform(Intent.ReorderProject(project.id, next.id, true))
+                                true
+                            }
+                        },
+                    )
+            }
+            .pointerInput(project.id, state) {
+                detectDragGestures(
+                    onDragStart = { position ->
+                        val row =
+                            state.list.layoutInfo.visibleItemsInfo.firstOrNull {
+                                it.key == "project:${currentProject.id}"
+                            }
+                        if (row != null) {
+                            // Keep receiving this gesture when auto-scroll moves its source offscreen.
+                            state.pinned = pinnable?.pin()
+                            state.source = currentProject.id
+                            state.pointerY = row.offset + row.size / 2f + position.y - size.height / 2f
+                            state.grabOffsetY = state.pointerY - row.offset
+                            state.updateTarget()
+                        }
+                    },
+                    onDrag = { change, amount ->
+                        change.consume()
+                        state.pointerY += amount.y
                         state.updateTarget()
-                    }
-                },
-                onDrag = { change, amount ->
-                    change.consume()
-                    state.pointerY += amount.y
-                    state.updateTarget()
-                },
-                onDragEnd = { state.finish(commit = true) },
-                onDragCancel = { state.finish(commit = false) },
-            )
-        },
+                    },
+                    onDragEnd = { state.finish(commit = true) },
+                    onDragCancel = { state.finish(commit = false) },
+                )
+            },
         contentAlignment = Alignment.Center,
     ) {
-        Text("≡", color = if (state.source == project.id) MaterialTheme.colorScheme.primary
-            else MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            "≡",
+            color =
+                if (state.source == project.id) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }

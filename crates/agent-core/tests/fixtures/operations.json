@@ -1375,16 +1375,18 @@
                   "id": "model-a"
                 },
                 "displayName": "Model a",
-                "defaultReasoningEffort": "medium",
-                "supportedReasoningEfforts": [
-                  {
-                    "reasoningEffort": "medium"
-                  },
-                  {
-                    "reasoningEffort": "high"
-                  }
-                ],
-                "futureField": true
+                "futureField": true,
+                "settings": {
+                  "defaultReasoningEffort": "medium",
+                  "supportedReasoningEfforts": [
+                    {
+                      "reasoningEffort": "medium"
+                    },
+                    {
+                      "reasoningEffort": "high"
+                    }
+                  ]
+                }
               }
             ],
             "nextCursor": "page-2"
@@ -1407,16 +1409,18 @@
                   "id": "model-b"
                 },
                 "displayName": "Model b",
-                "defaultReasoningEffort": "medium",
-                "supportedReasoningEfforts": [
-                  {
-                    "reasoningEffort": "medium"
-                  },
-                  {
-                    "reasoningEffort": "high"
-                  }
-                ],
-                "futureField": true
+                "futureField": true,
+                "settings": {
+                  "defaultReasoningEffort": "medium",
+                  "supportedReasoningEfforts": [
+                    {
+                      "reasoningEffort": "medium"
+                    },
+                    {
+                      "reasoningEffort": "high"
+                    }
+                  ]
+                }
               },
               {
                 "id": "a",
@@ -1425,16 +1429,18 @@
                   "id": "model-a"
                 },
                 "displayName": "Updated A",
-                "defaultReasoningEffort": "medium",
-                "supportedReasoningEfforts": [
-                  {
-                    "reasoningEffort": "medium"
-                  },
-                  {
-                    "reasoningEffort": "high"
-                  }
-                ],
-                "futureField": true
+                "futureField": true,
+                "settings": {
+                  "defaultReasoningEffort": "medium",
+                  "supportedReasoningEfforts": [
+                    {
+                      "reasoningEffort": "medium"
+                    },
+                    {
+                      "reasoningEffort": "high"
+                    }
+                  ]
+                }
               }
             ]
           }
@@ -1449,16 +1455,18 @@
           "id": "model-a"
         },
         "displayName": "Updated A",
-        "defaultReasoningEffort": "medium",
-        "supportedReasoningEfforts": [
-          {
-            "reasoningEffort": "medium"
-          },
-          {
-            "reasoningEffort": "high"
-          }
-        ],
-        "futureField": true
+        "futureField": true,
+        "settings": {
+          "defaultReasoningEffort": "medium",
+          "supportedReasoningEfforts": [
+            {
+              "reasoningEffort": "medium"
+            },
+            {
+              "reasoningEffort": "high"
+            }
+          ]
+        }
       },
       {
         "id": "b",
@@ -1467,16 +1475,18 @@
           "id": "model-b"
         },
         "displayName": "Model b",
-        "defaultReasoningEffort": "medium",
-        "supportedReasoningEfforts": [
-          {
-            "reasoningEffort": "medium"
-          },
-          {
-            "reasoningEffort": "high"
-          }
-        ],
-        "futureField": true
+        "futureField": true,
+        "settings": {
+          "defaultReasoningEffort": "medium",
+          "supportedReasoningEfforts": [
+            {
+              "reasoningEffort": "medium"
+            },
+            {
+              "reasoningEffort": "high"
+            }
+          ]
+        }
       }
     ]
   },
@@ -1501,16 +1511,18 @@
                   "id": "model-a"
                 },
                 "displayName": "Model a",
-                "defaultReasoningEffort": "medium",
-                "supportedReasoningEfforts": [
-                  {
-                    "reasoningEffort": "medium"
-                  },
-                  {
-                    "reasoningEffort": "high"
-                  }
-                ],
-                "futureField": true
+                "futureField": true,
+                "settings": {
+                  "defaultReasoningEffort": "medium",
+                  "supportedReasoningEfforts": [
+                    {
+                      "reasoningEffort": "medium"
+                    },
+                    {
+                      "reasoningEffort": "high"
+                    }
+                  ]
+                }
               }
             ],
             "nextCursor": "loop"
@@ -1533,16 +1545,18 @@
                   "id": "model-a"
                 },
                 "displayName": "Model a",
-                "defaultReasoningEffort": "medium",
-                "supportedReasoningEfforts": [
-                  {
-                    "reasoningEffort": "medium"
-                  },
-                  {
-                    "reasoningEffort": "high"
-                  }
-                ],
-                "futureField": true
+                "futureField": true,
+                "settings": {
+                  "defaultReasoningEffort": "medium",
+                  "supportedReasoningEfforts": [
+                    {
+                      "reasoningEffort": "medium"
+                    },
+                    {
+                      "reasoningEffort": "high"
+                    }
+                  ]
+                }
               }
             ],
             "nextCursor": "loop"

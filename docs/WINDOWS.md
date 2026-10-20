@@ -35,6 +35,42 @@ toolchain job).
 ./scripts/package-windows.ps1 -Profile dev
 ```
 
+Both profiles embed the Windows renderer's compiled shaders. The workspace
+disables `debug_assertions` only for `gpui-pre-windows` in the development
+profile, including its build script, so it compiles HLSL at build time. Keep
+this override when building development previews:
+GPUI's debug renderer otherwise loads shaders from the builder's Cargo registry
+directory and fails on another PC with `Error creating DirectWriteTextSystem`
+and a missing-path error. Runtime users do not need the SDK or Cargo sources.
+
+Shader compilation uses the Microsoft Windows SDK C++ NuGet package pinned
+in `tools/windows-fxc/manifest.json`. Both ordinary Cargo builds and CI use the
+same verified x64 `fxc.exe` and `d3dcompiler_47.dll`; the package is downloaded
+from Microsoft's official NuGet feed into `target/tool-cache/windows-fxc`.
+The package and extracted files are checked with SHA-256. Missing or modified
+cached files stop the build; installed SDKs, PATH and `GPUI_FXC_PATH` cannot
+select a different shader compiler. Delete the affected version's cache to
+restore it from the pinned package. Initial setup needs network access.
+
+The vendored GPUI build script tracks the manifest, preparation script and all
+HLSL inputs, so changing a pin or shader recompiles its bytecode. Windows CI
+also checks rejection of missing/corrupted compiler files and identical shader
+bytecode from two different source directories. This pins shader compilation;
+it does not establish byte-for-byte reproducibility of the entire MSVC build.
+
+**Update Windows shader compiler** checks the official NuGet feed every Sunday
+at 04:00 Japan time (GitHub may delay scheduled runs). It selects the newest
+listed stable package without downgrading, hashes its archive and matching x64 compiler
+files, and opens or updates one PR on `automation/windows-fxc`. It explicitly
+dispatches **Native clients** validation for the proposed pin; review that run
+before merging the PR. Updates are not auto-merged, and ordinary builds never
+query the latest version. The repository must allow GitHub Actions to create
+pull requests; the updater does not approve them.
+
+To check for an update manually, run the workflow from GitHub Actions, or run
+`scripts/dev-env.sh pwsh -NoProfile -File tools/windows-fxc/update.ps1` locally.
+The local command changes only the manifest when a newer stable version exists.
+
 Install Inno Setup 6.3+ (or supply `-InnoCompiler path/to/ISCC.exe`).
 The script builds desktop, Host, supervisor, and CLI from the same checkout,
 then writes the EXE installer, optional ZIP, and SHA-256 checksums under `target/windows-packages/`
@@ -51,26 +87,23 @@ Claude sign-in opens from the requesting BEX client. The Host suppresses the CLI
 
 ## DeepSeek Harness
 
-Install Node.js 22.19 or newer and `npm install -g @deepseek-ai/dsh@0.2.1-rc.2` on the Host PC. In BEX, open **設定 → エージェント → DeepSeek → APIキーを管理** (also available from the model picker). Choose DeepSeek, OpenRouter, NanoGPT, OpenAI, Anthropic, Gemini, Groq, Mistral or xAI, then enter and save its API key. **APIキーを取得** opens the selected provider’s key page. Keys are masked, stored on the connected Host separately from conversations, and never returned to clients. Saved keys can be replaced or removed individually; another provider’s key is preserved. Wait for active DSH tasks to finish before changing credentials. BEX enables the corresponding DSH routes, and their models appear in the model picker after saving. All devices connected to that Host can use these routes. Existing environment or Harness credentials remain available when BEX has no managed keys; BEX-managed credentials take precedence for its Harness process.
+Install Node.js 22.19 or newer and `npm install -g @deepseek-ai/dsh@0.2.1-rc.2` on the Host PC. In BEX, open **設定 → エージェント → DeepSeek** and use **接続先のAPIキー** (also available from the model picker). Choose DeepSeek, OpenRouter, NanoGPT, OpenAI, Anthropic, Gemini, Groq, Mistral or xAI, then enter and save its API key. **APIキーを取得** opens the selected provider’s key page. Keys are masked, stored on the connected Host separately from conversations, and never returned to clients. Saved keys can be replaced or removed individually; another provider’s key is preserved. Wait for active DSH tasks to finish before changing credentials. BEX enables the corresponding DSH routes, and their models appear in the model picker after saving. All devices connected to that Host can use these routes. Route status identifies BEX-managed keys, external official credentials and missing configuration. BEX-managed keys take precedence for its Harness process.
 
-For NanoGPT, save its key under **NanoGPT** and choose **NanoGPT · DeepSeek V4.1 Flash** (or the Thinking variant). This route uses `https://nano-gpt.com/api/v1` and the canonical `deepseek/deepseek-v4.1-flash` model ID from NanoGPT's catalog. Reasoning choices come from Harness and use NanoGPT's wire values. Existing paired Android clients can select the route; preview 45 also refreshes its reasoning choices when selecting a model.
+For NanoGPT, save its key under **NanoGPT** and choose **NanoGPT · DeepSeek V4.1 Flash** (or the Thinking variant). This route uses `https://nano-gpt.com/api/v1` and the `deepseek/deepseek-v4.1-flash` model ID. Reasoning choices are resolved separately for the selected model through Harness; catalog reads do not change the selected model.
 
-Choose **DeepSeek V4.1 Flash 1017** to use the official `deepseek-flash` route (currently V4.1-Flash-1017). Other models configured in Harness appear from its live catalog. BEX uses the official ACP interface for prompts, reasoning, tool results, permissions, cancellation and resuming the same native session after a Host restart. Additional messages wait until the current task finishes; fork is unavailable. Permission defaults belong to Harness; permission requests are answered in BEX.
+Choose the **DeepSeek公式** route to use the official `deepseek-flash` model. Model names come from Harness's live catalog. BEX uses the official ACP interface for prompts, reasoning, tool results, permissions, cancellation and resuming the same native session after a Host restart. Additional messages wait until the current task finishes; fork is unavailable. Permission defaults belong to Harness; permission requests are answered in BEX.
 
 For a separate installation, pass `host-daemon --deepseek C:\path\to\dsh\lib\bin.js`. `BEX_DEEPSEEK_NODE` selects its Node runtime. The standard Windows installation also detects a BEX-managed Harness under `%LOCALAPPDATA%\BEX\deepseek-harness`.
 
 Host・Windows版・Android版は同じ対応版へ更新してください。DeepSeek用APIキーをPCのBEXで設定すると、そのHostへ接続するAndroid端末からも利用できます。
 
-## Chromeからブラウザデータを取り込む
+## ブラウザのログインとChromeのブックマーク
 
-BEXのブラウザにある「Chromeから取り込む」から、次の操作ができます。
+BEXのWindowsブラウザは専用のWebView2プロファイルにログイン状態を保存します。最初はBEX内でサイトにログインしてください。パスワードの保存と自動入力はWebView2の標準機能を使います。
 
-- パスワード: 「Chromeでパスワードを書き出す」でChromeを開き、Googleパスワードマネージャーの設定からCSVをダウンロードします。「パスワードCSVを取り込む」でそのファイルを選択してください。取り込み後は、書き出したCSVを削除してください。
-- ブックマーク: メニューに表示されるChromeのプロファイルを選ぶと取り込めます。「ブックマーク」から開けます。
-- ログイン: サイトを開き、「ログインを入力」からアカウントを選ぶと、表示中のログインフォームに入力します。送信は自分で行います。同じオリジン（スキーム・ホスト・ポート）の保存情報だけを使います。HTTPSに対応し、HTTPはローカル開発用のループバックのみ対応します。別オリジンのフレームやパスワード変更フォームには入力しません。
-- 削除: 「取り込んだデータをすべて削除」でBEX内の取り込みデータを消せます。Chromeの元データは変更しません。
+「Chromeのブックマークを取り込む」からプロファイルを選ぶと、そのブックマークを取り込めます。「ブックマーク」から開くことができ、同じURLを再取り込みすると名前を更新します。「取り込んだブックマークを削除」はBEXに保存したブックマークだけを削除します。Chromeの元データは変更しません。
 
-取り込んだパスワードとブックマークは、このWindowsユーザーのDPAPIで暗号化してローカルの`browser-import.dpapi`に保存します。Host・AIプロバイダーへの送信や端末間同期は行いません。再取り込みでは同じサイト・ユーザー名のパスワードを更新します。Windows版Chromeのアプリに紐づく暗号化を回避せず、パスワードはChromeの正式なCSV書き出しを利用します。Cookie・ログイン中セッション・パスキーの移行は対象外です。
+Chromeのログイン状態、パスワード、Cookie、パスキーの取り込みには対応していません。取り込んだブックマークはローカルの`browser-bookmarks.json`、ブラウザの状態は`browser-profile`に保存します。端末間でブラウザの状態を同期する機能はありません。
 
 ## 使用量とリセット
 

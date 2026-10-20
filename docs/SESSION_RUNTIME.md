@@ -107,8 +107,10 @@ interrupts, approvals and MCP elicitation. A supervised Node process exchanges
 typed Host operations and SDK events; Rust does not implement Claude control
 requests. Its npm-locked runtime ships beside a standalone Host or in a Mac
 app's sealed Resources. The Mac app ships a signed portable Node runtime in
-Contents/MacOS and selects it directly, without requiring Node on PATH. Its Host
-also puts that directory on PATH for provider scripts with an env-node shebang.
+Contents/Helpers/Bex Node.app, with its own background-only app identity so it
+does not appear as another foreground app in the Dock. The Host selects it
+directly, without requiring Node on PATH, and puts the helper's Contents/MacOS
+directory on PATH for provider scripts with an env-node shebang.
 A standalone Host requires Node 22 or newer; `BEX_NODE` can explicitly select
 another executable. Claude Code itself remains a user-installed dependency.
 Consecutive turns reuse one
