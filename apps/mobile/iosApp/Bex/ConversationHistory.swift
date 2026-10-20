@@ -144,7 +144,7 @@ struct HistoryTopVisibility: Equatable {
 struct ConversationScrollMetrics: Equatable {
     let content: CGSize
     let container: CGSize
-    let oldestVisible: Bool
+    let oldest: HistoryTopVisibility
     let latestVisible: Bool
 }
 

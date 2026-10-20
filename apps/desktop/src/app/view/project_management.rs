@@ -1,4 +1,4 @@
-﻿use super::*;
+use super::*;
 
 fn action(
     label: impl Into<SharedString>,
@@ -254,4 +254,3 @@ impl Desktop {
         }
     }
 }
-

@@ -20,8 +20,8 @@ pub(crate) fn style_native_titlebar(window: &gpui_kit::Window) {
     use windows::Win32::{
         Foundation::HWND,
         Graphics::Dwm::{
-            DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE,
-            DwmSetWindowAttribute,
+            DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR,
+            DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute,
         },
     };
     use wry::raw_window_handle::{HasWindowHandle, RawWindowHandle};

@@ -818,7 +818,7 @@ fn select_thread(snapshot: &mut Snapshot, id: crate::session::SessionRef, cwd: S
             previous.service_tier.as_deref(),
             Some(id.provider),
             &snapshot.models,
-            !snapshot.model_errors.is_empty(),
+            &snapshot.model_errors,
             snapshot.allows_custom_codex_models(),
         );
         if settings

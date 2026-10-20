@@ -156,30 +156,49 @@ async fn completed(
 async fn listed(
     store: &Store,
     id: &agent_protocol::session::SessionRef,
-    project_id: Option<&str>,
+    project_root: Option<&Path>,
 ) -> Arc<Snapshot> {
-    if let Some(project_id) = project_id {
-        until(store, |snapshot| {
-            snapshot
-                .threads
-                .as_ref()
-                .is_some_and(|list| list.projects.iter().any(|project| project.id == project_id))
-        })
-        .await;
-        store
-            .dispatch(Intent::SetProjectExpanded {
-                project_id: project_id.to_owned(),
-                expanded: true,
-            })
-            .await
-            .unwrap();
-    }
     store
         .dispatch(Intent::ListSessions(op::ListSessions::new(
             Default::default(),
         )))
         .await
         .unwrap();
+    if let Some(project_root) = project_root {
+        let snapshot = until(store, |snapshot| {
+            snapshot.threads.as_ref().is_some_and(|list| {
+                list.projects.iter().any(|project| {
+                    project
+                        .roots
+                        .iter()
+                        .any(|root| Path::new(&root.path) == project_root)
+                })
+            })
+        })
+        .await;
+        let project_id = snapshot
+            .threads
+            .as_ref()
+            .unwrap()
+            .projects
+            .iter()
+            .find(|project| {
+                project
+                    .roots
+                    .iter()
+                    .any(|root| Path::new(&root.path) == project_root)
+            })
+            .unwrap()
+            .id
+            .clone();
+        store
+            .dispatch(Intent::SetProjectExpanded {
+                project_id,
+                expanded: true,
+            })
+            .await
+            .unwrap();
+    }
     until(store, |snapshot| {
         snapshot.thread_list().is_some_and(|list| {
             list.threads
@@ -416,7 +435,7 @@ async fn claude_submission_preserves_inputs_settings_workspaces_and_history_acro
             assert_eq!(inputs[number]["content"].as_array().unwrap().len(), if attachment == "none" { 1 } else { 2 });
             if attachment == "image" { assert_eq!(inputs[number]["content"][1]["source"]["media_type"], "image/png"); }
             if attachment == "file" { assert!(inputs[number]["content"][1]["text"].as_str().unwrap().contains("note.txt")); }
-            listed(&store, &id, selected.then_some("project")).await;
+            listed(&store, &id, selected.then_some(workspace.as_path())).await;
             store.dispatch(Intent::ReadThread(op::ReadThread::open(id.clone()))).await.unwrap();
             assert_eq!(store.snapshot().conversations[&id].turns.as_ref().unwrap().len(), number + 1);
             let saved: Snapshot = serde_json::from_slice(&serde_json::to_vec(store.snapshot().as_ref()).unwrap()).unwrap();
@@ -901,7 +920,7 @@ async fn missing_codex_keeps_claude_inputs_workspaces_and_resumed_history_usable
             else { assert_eq!(Path::new(&current), if selected { workspace.clone() } else { root.join("bex-chats") }); }
             let turns = snapshot.conversations[&id].turns.as_ref().unwrap();
             assert!(turns[index].items.as_ref().unwrap().iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::AssistantText { .. }) && item_text(item).is_some_and(|text| text.starts_with(&format!("reply {}: independent {index}", index + 1)))));
-            let snapshot = listed(&store, &id, selected.then_some("project")).await;
+            let snapshot = listed(&store, &id, selected.then_some(workspace.as_path())).await;
             let list = snapshot.threads.as_ref().unwrap();
             assert!(list.provider_errors.as_ref().unwrap()["codex"]["message"].is_string());
             let management = fixture.local().await.unwrap();
@@ -1501,6 +1520,7 @@ async fn claude_accounts_login_switch_resume_cancel_and_logout_without_codex() {
         std::fs::remove_file(native.join("usage-paused")).unwrap();
         until(&store, |snapshot| snapshot.account.accounts.as_ref().is_some_and(|accounts| accounts.accounts[0].usage.is_some())).await;
         let usage = store.snapshot().account.accounts.as_ref().unwrap().accounts[0].usage.clone().unwrap();
+        assert!(usage.error.is_none(), "{usage:?}");
         assert_eq!(usage.windows.len(), 3);
         assert_eq!(usage.windows[0].remaining_percent, 28);
         assert_eq!(usage.windows[1].remaining_percent, 61);
@@ -1570,6 +1590,66 @@ async fn claude_accounts_login_switch_resume_cancel_and_logout_without_codex() {
             && home["skill"] == "shared skill" && home["settings"] == r#"{"model":"shared-model"}"#));
         drop(store); endpoint.close().await; fixture.close().await.unwrap();
     }).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn claude_cancel_recovers_from_logout_failure_only_when_logged_out() {
+    tokio::time::timeout(Duration::from_secs(60), async {
+        let root = tempfile::tempdir().unwrap();
+        let fixture = host(root.path(), Arc::new(Memory::default()), fixture_program()).await;
+        let (store, endpoint) = connect(&fixture, Snapshot::default()).await;
+        for status in [
+            json!({"loggedIn": false}),
+            json!({"loggedIn": true}),
+            json!({}),
+            json!(null),
+        ] {
+            store
+                .dispatch(Intent::StartAccountLogin(op::StartAccountLogin {
+                    provider: ProviderKind::Claude,
+                }))
+                .await
+                .unwrap();
+            let login = store.snapshot().account.login.clone().unwrap();
+            let profile = root
+                .path()
+                .join("claude/accounts")
+                .join(login.login_id.strip_prefix("claude:").unwrap());
+            std::fs::write(profile.join("fail-auth-logout"), "").unwrap();
+            std::fs::write(profile.join("fixture-auth.json"), status.to_string()).unwrap();
+            if status.is_null() {
+                std::fs::write(profile.join("invalid-auth-status"), "").unwrap();
+            }
+            let cancel = || {
+                Intent::CancelAccountLogin(op::CancelAccountLogin {
+                    provider: ProviderKind::Claude,
+                    id: login.login_id.clone(),
+                })
+            };
+            let result = store.dispatch(cancel()).await;
+            if status["loggedIn"] == false {
+                result.unwrap();
+            } else {
+                assert!(result.is_err(), "unconfirmed cleanup must fail");
+                assert!(
+                    profile.exists(),
+                    "retain the profile until credentials are removed"
+                );
+                std::fs::remove_file(profile.join("fail-auth-logout")).unwrap();
+                store.dispatch(cancel()).await.unwrap();
+            }
+            assert!(
+                !profile.exists(),
+                "successful cancellation removes the profile, including after retry"
+            );
+            store.dispatch(cancel()).await.unwrap();
+        }
+        drop(store);
+        endpoint.close().await;
+        fixture.close().await.unwrap();
+    })
+    .await
+    .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

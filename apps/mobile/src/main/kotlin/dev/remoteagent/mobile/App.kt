@@ -169,6 +169,13 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     }
 
     fun selectProfile(id: String) {
+        fun fail(error: Exception) {
+            if (profileId == id) {
+                initialization = null
+                notice = error.message
+                while (pending.isNotEmpty()) pending.removeFirst().second(Result.failure(error))
+            }
+        }
         screen = Screen.Threads
         if (profileId == id && owner != null) {
             connect()
@@ -185,39 +192,32 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         profileId = id
         repository.selected = id
         busy = false
-        initialization = scope.launch {
-            old?.shutdown()
-            try {
-                val bytes = withContext(Dispatchers.IO) { repository.load(id) }
-                val store = AgentStore.offline(bytes, repository.diagnosticsDirectory(id))
-                if (profileId != id || !isActive) {
-                    store.shutdown()
-                    return@launch
+        initialization =
+            scope.launch {
+                old?.shutdown()
+                try {
+                    val bytes = withContext(Dispatchers.IO) { repository.load(id) }
+                    val store = AgentStore.offline(bytes, repository.diagnosticsDirectory(id))
+                    if (profileId != id || !isActive) {
+                        store.shutdown()
+                        return@launch
+                    }
+                    owner = store
+                    initialization = null
+                    publish(store.snapshot())
+                    perform(Intent.ShowThreadList)
+                    while (pending.isNotEmpty()) {
+                        val (intent, complete) = pending.removeFirst()
+                        perform(intent, complete)
+                    }
+                    observe(store, id)
+                    connect()
+                } catch (error: IOException) {
+                    fail(error)
+                } catch (error: AgentException) {
+                    fail(error)
                 }
-                owner = store
-                initialization = null
-                publish(store.snapshot())
-                perform(Intent.ShowThreadList)
-                while (pending.isNotEmpty()) {
-                    val (intent, complete) = pending.removeFirst()
-                    perform(intent, complete)
-                }
-                observe(store, id)
-                connect()
-            } catch (error: IOException) {
-                failInitialization(id, error)
-            } catch (error: AgentException) {
-                failInitialization(id, error)
             }
-        }
-    }
-
-    private fun failInitialization(id: String, error: Exception) {
-        if (profileId == id) {
-            initialization = null
-            notice = error.message
-            while (pending.isNotEmpty()) pending.removeFirst().second(Result.failure(error))
-        }
     }
 
     fun pair(contents: String) {
@@ -381,12 +381,13 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         val directory = snapshot.navigation().cwd
         if (!snapshot.connected()) connect()
         attachmentTransfers++
+        var local: File? = null
         fun finish() {
+            local?.parentFile?.deleteRecursively()
             attachmentTransfers--
             complete()
         }
         scope.launch {
-            var local: File? = null
             var uploading = false
             try {
                 connection?.join()
@@ -398,10 +399,11 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
                 if (selection != selectionKey) return@launch
                 uploading = true
                 perform(Intent.UploadAttachment(UploadAttachment(key, attachment, directory))) { result ->
-                    if (selection == selectionKey && result.isFailure) {
-                        notice = result.exceptionOrNull()?.message ?: "添付のアップロードに失敗しました。もう一度お試しください。"
+                    result.onFailure { error ->
+                        if (selection == selectionKey) {
+                            notice = error.message.orEmpty().ifEmpty { "添付のアップロードに失敗しました。もう一度お試しください。" }
+                        }
                     }
-                    local?.parentFile?.deleteRecursively()
                     finish()
                 }
             } catch (error: SecurityException) {
@@ -409,10 +411,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
             } catch (error: IOException) {
                 if (selection == selectionKey) notice = error.message
             } finally {
-                if (!uploading) {
-                    local?.parentFile?.deleteRecursively()
-                    finish()
-                }
+                if (!uploading) finish()
             }
         }
     }

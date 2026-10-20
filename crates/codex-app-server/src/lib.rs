@@ -164,7 +164,8 @@ impl CodexAppServer {
     /// Stop this backend without consuming other Host services that share it.
     pub async fn shutdown(&self) -> Result<(), Error> {
         let mut child = self.child.lock().await;
-        self.peer.close().await?;
+        // Requests already report transport failure; shutdown must still reap the child.
+        let _ = self.peer.close().await;
         child.wait().await?;
         Ok(())
     }
@@ -204,4 +205,48 @@ fn ensure_public_line(line: &str) -> Result<(), Error> {
         ensure_public_method(method)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn shutdown_reaps_the_child_even_after_a_transport_write_failure() {
+        for broken in [false, true] {
+            let (reader, _reader_owner) = tokio::io::duplex(128);
+            let (writer, writer_owner) = tokio::io::duplex(128);
+            let _writer_owner = (!broken).then_some(writer_owner);
+            let peer = RpcPeer::open(
+                agent_transport::peer::JsonlReader::new(reader),
+                writer,
+                None,
+                4,
+            )
+            .unwrap();
+            if broken {
+                assert!(peer.send_raw(r#"{"method":"fixture"}"#).await.is_err());
+                assert!(peer.close().await.is_err());
+            }
+            let child = tokio::process::Command::new(std::env::current_exe().unwrap())
+                .arg("--list")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+            let server = CodexAppServer {
+                child: tokio::sync::Mutex::new(child),
+                peer,
+                initialize_response: InitializeResponse {
+                    user_agent: "fixture".into(),
+                    codex_home: PathBuf::new(),
+                },
+            };
+            server.shutdown().await.unwrap();
+            assert!(server.child.lock().await.id().is_none());
+            server.shutdown().await.unwrap();
+        }
+    }
 }

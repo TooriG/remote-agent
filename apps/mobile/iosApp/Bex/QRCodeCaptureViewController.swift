@@ -2,12 +2,13 @@ import AVFoundation
 import UIKit
 
 final class BexQrCaptureViewController: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
-    private let completion: (String?) -> Void
+    private let completion: (String) -> Void
     private let session = AVCaptureSession()
+    private let sessionQueue = DispatchQueue(label: "bex.qr-capture")
     private let previewLayer = AVCaptureVideoPreviewLayer()
     private var hasCompleted = false
 
-    init(completion: @escaping (String?) -> Void) {
+    init(completion: @escaping (String) -> Void) {
         self.completion = completion
         super.init(nibName: nil, bundle: nil)
     }
@@ -32,32 +33,36 @@ final class BexQrCaptureViewController: UIViewController, AVCaptureMetadataOutpu
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
-        session.stopRunning()
+        hasCompleted = true
+        sessionQueue.async { [session] in session.stopRunning() }
     }
 
     private func requestCameraAndConfigure() {
-        switch AVCaptureDevice.authorizationStatus(for: .video) {
-        case .authorized:
-            configureAndStart()
+        let authorization = AVCaptureDevice.authorizationStatus(for: .video)
+        switch authorization {
+        case .authorized, .denied:
+            configureAndStart(authorized: authorization == .authorized)
         case .notDetermined:
             AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
                 DispatchQueue.main.async {
-                    guard let self else { return }
-                    if granted {
-                        self.configureAndStart()
-                    } else {
-                        self.finish(nil)
-                    }
+                    guard let self, !self.hasCompleted else { return }
+                    self.configureAndStart(authorized: granted)
                 }
             }
-        default:
-            finish(nil)
+        case .restricted:
+            showCameraError("このiPhoneではカメラの使用が制限されています。")
+        @unknown default:
+            showCameraError("カメラのアクセス状態を確認できません。接続画面に戻り、接続情報を入力してください。")
         }
     }
 
-    private func configureAndStart() {
+    private func configureAndStart(authorized: Bool) {
+        guard authorized else {
+            showCameraError("カメラの使用が許可されていません。設定でBexのカメラを許可し、読み取り画面を開き直してください。", offersSettings: true)
+            return
+        }
         guard let camera = AVCaptureDevice.default(for: .video) else {
-            finish(nil)
+            showCameraError("カメラを使用できません。接続画面に戻り、接続情報を入力してください。")
             return
         }
         session.beginConfiguration()
@@ -66,7 +71,7 @@ final class BexQrCaptureViewController: UIViewController, AVCaptureMetadataOutpu
               session.canAddInput(input), session.canAddOutput(output)
         else {
             session.commitConfiguration()
-            finish(nil)
+            showCameraError("カメラを起動できません。接続画面に戻り、接続情報を入力してください。")
             return
         }
         session.addInput(input)
@@ -74,7 +79,41 @@ final class BexQrCaptureViewController: UIViewController, AVCaptureMetadataOutpu
         output.setMetadataObjectsDelegate(self, queue: .main)
         output.metadataObjectTypes = [.qr]
         session.commitConfiguration()
-        DispatchQueue.global(qos: .userInitiated).async { [weak session] in session?.startRunning() }
+        sessionQueue.async { [session] in session.startRunning() }
+    }
+
+    private func showCameraError(_ message: String, offersSettings: Bool = false) {
+        let label = UILabel()
+        label.text = message
+        label.textColor = .white
+        label.font = .preferredFont(forTextStyle: .body)
+        label.adjustsFontForContentSizeCategory = true
+        label.numberOfLines = 0
+        label.textAlignment = .center
+        label.accessibilityIdentifier = "scanner.error"
+        let stack = UIStackView(arrangedSubviews: [label])
+        stack.axis = .vertical
+        stack.spacing = 20
+        if offersSettings {
+            let settings = UIButton(type: .system)
+            settings.setTitle("設定を開く", for: .normal)
+            settings.accessibilityIdentifier = "scanner.settings"
+            settings.addTarget(self, action: #selector(openSettings), for: .touchUpInside)
+            stack.addArrangedSubview(settings)
+        }
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 24),
+            stack.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -24),
+            stack.centerYAnchor.constraint(equalTo: view.safeAreaLayoutGuide.centerYAnchor)
+        ])
+    }
+
+    @objc private func openSettings() {
+        if let url = URL(string: UIApplication.openSettingsURLString) {
+            UIApplication.shared.open(url)
+        }
     }
 
     func metadataOutput(
@@ -88,13 +127,7 @@ final class BexQrCaptureViewController: UIViewController, AVCaptureMetadataOutpu
             .first?.stringValue,
             !code.isEmpty
         else { return }
-        finish(code)
-    }
-
-    private func finish(_ result: String?) {
-        guard !hasCompleted else { return }
         hasCompleted = true
-        session.stopRunning()
-        dismiss(animated: true) { self.completion(result) }
+        completion(code)
     }
 }

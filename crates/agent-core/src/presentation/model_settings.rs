@@ -167,7 +167,7 @@ impl Snapshot {
             defaults.service_tier.as_deref(),
             Some(provider),
             &self.models,
-            !self.model_errors.is_empty(),
+            &self.model_errors,
             self.allows_custom_codex_models(),
         );
         quick_controls(
@@ -263,7 +263,7 @@ impl Snapshot {
             None,
             Some(provider),
             &self.models,
-            !self.model_errors.is_empty(),
+            &self.model_errors,
             self.allows_custom_codex_models(),
         );
         model.cloned()

@@ -91,6 +91,7 @@ jobs:
       - name: Check workflows and vendored runtimes
         run: |
           nix develop .#native --command actionlint
+          nix develop .#native --command pwsh -NoLogo -NoProfile -NonInteractive -File tools/windows-fxc/update.test.ps1
           nix develop .#native --command node --test lp/download.test.cjs
           nix develop .#native --command npm --prefix crates/host-daemon/src/visualize ci --ignore-scripts --no-audit
           nix develop .#native --command npm --prefix crates/host-daemon/src/visualize run vendor
@@ -163,6 +164,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+          fetch-depth: 0
+      - name: Configure Android release signing and version
+        if: github.event_name == 'release'
+        env:
+          BEX_ANDROID_PREVIEW_KEYSTORE_BASE64: ${{ secrets.BEX_ANDROID_PREVIEW_KEYSTORE_BASE64 }}
+        run: bash scripts/configure-android-preview.sh
       - *free-space
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
@@ -366,6 +373,8 @@ jobs:
         with:
           save-if: ${{ github.event_name != 'pull_request' }}
           cache-on-failure: true
+      - name: Verify pinned shader compiler and reproducible bytecode
+        run: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tools/windows-fxc/verify.ps1
       - name: Build desktop, Host and CLI
         run: cargo build --locked --features agent-core/bindings -p codex-app-server -p bex-process -p bex-desktop -p host-daemon -p agent-cli
       - name: Install the SDK runtime beside the Host

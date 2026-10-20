@@ -3460,8 +3460,11 @@ async fn oversized_session_opens_repeatedly_and_downloads_lossless_items_without
                 .items
                 .as_ref()
                 .unwrap();
-            if item_text(&items[0]).is_some_and(|text| text.len() == 17 * 1024 * 1024)
-                && matches!(items[1].body(), agent_protocol::items::ItemBody::ImageGeneration { data: Some(data), .. } if data.len() == 17 * 1024 * 1024)
+            // The summary's body can finish loading before the detail stream
+            // delivers the remaining item metadata.
+            if let [text, image, ..] = items.as_slice()
+                && item_text(text).is_some_and(|text| text.len() == 17 * 1024 * 1024)
+                && matches!(image.body(), agent_protocol::items::ItemBody::ImageGeneration { data: Some(data), .. } if data.len() == 17 * 1024 * 1024)
             {
                 break;
             }

@@ -160,6 +160,48 @@ fn chatgpt_catalog_repairs_unavailable_saved_model_but_api_keeps_explicit_ids() 
     }
 }
 
+#[rstest::rstest]
+#[case::other_provider_failed("claude", "shared")]
+#[case::selected_provider_failed("codex", "retired")]
+fn catalog_failures_only_preserve_the_affected_providers_saved_model(
+    #[case] failed: &str,
+    #[case] expected: &str,
+) {
+    let mut snapshot = scoped_fixture();
+    let mut accounts = snapshot.account.accounts.as_deref().unwrap().clone();
+    accounts.accounts[0].plan_type = Some("pro".into());
+    Arc::make_mut(&mut snapshot.account).accounts = Some(Arc::new(accounts));
+    let key = snapshot.navigation.draft_key.clone();
+    Arc::make_mut(&mut snapshot.drafts).insert(
+        key.clone(),
+        Arc::new(agent_core::state::Draft {
+            model: Some(ModelRef {
+                provider: ProviderKind::Codex,
+                id: "retired".into(),
+            }),
+            ..Default::default()
+        }),
+    );
+    LoadModels {}.apply(
+        &mut snapshot,
+        ModelPage {
+            data: catalog(),
+            next_cursor: None,
+            provider_errors: Some(
+                serde_json::from_value(json!({(failed): {"message":"unavailable"}})).unwrap(),
+            ),
+        },
+    );
+    assert_eq!(snapshot.drafts[&key].model.as_ref().unwrap().id, expected);
+    assert_eq!(
+        snapshot
+            .model_for_provider(key.clone(), ProviderKind::Codex)
+            .unwrap()
+            .id,
+        expected
+    );
+}
+
 fn apply(snapshot: &Snapshot, intent: Intent) -> Snapshot {
     reduce(snapshot, Event::Intent(intent)).0
 }

@@ -8,6 +8,7 @@ use std::{
 pub(crate) struct Snapshot {
     pub(crate) projects: Vec<Project>,
     pub(crate) native_project_ids: std::collections::HashSet<String>,
+    pub(crate) provider_errors: serde_json::Map<String, serde_json::Value>,
     pub(super) resolved_roots: HashMap<String, PathBuf>,
     pub(super) worktree_roots: HashMap<String, String>,
     pub(super) chat_directory: Option<PathBuf>,

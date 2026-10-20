@@ -3,3 +3,15 @@
 [[profile.default.overrides]]
 filter = 'test(=oversized_session_opens_repeatedly_and_downloads_lossless_items_without_reconnecting)'
 threads-required = "num-test-threads"
+
+# Each conformance case owns both provider processes and four Tokio workers.
+# Preserve its real RPC deadlines without competing with other Host startups.
+[[profile.default.overrides]]
+filter = 'binary(adapter_conformance)'
+threads-required = "num-test-threads"
+
+# This contract holds a usage request across credential verification. Reserve
+# its real eight-second fetch budget instead of competing with SDK startups.
+[[profile.default.overrides]]
+filter = 'test(=claude_accounts_login_switch_resume_cancel_and_logout_without_codex)'
+threads-required = "num-test-threads"

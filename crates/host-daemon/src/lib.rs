@@ -17,6 +17,7 @@ mod workspace_review;
 mod worktrees;
 use workspace_review::inspect_workspace;
 
+pub use bex_process::bundled_node_path;
 pub use host_runtime::HostRuntime;
 
 pub use host_identity::{CredentialStore, FileKeyStore, HostCredentials, load_local_identity};

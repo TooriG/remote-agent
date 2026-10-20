@@ -15,13 +15,16 @@ including when the upstream release API is unavailable. The manual
 `android-download.yml` workflow builds the APK before
 publishing the APK and SHA-256 checksum. Android 8.0 (API 26) or newer and an
 ARM64 or x86-64 device are required.
-This is a debuggable preview APK, not a store release. The download workflow now
-requires a persistent PKCS#12 signing key in the repository's
+This is a debuggable preview APK, not a store release. Both APK publication
+workflows require the existing PKCS#12 signing key in the repository's
 `BEX_ANDROID_PREVIEW_KEYSTORE_BASE64` secret; no signing keys are checked in.
 The preview key uses alias `androiddebugkey` and password `android`; its private
-key must remain secret despite that conventional debug password. The workflow
-increments the Android version code using its run number, so later previews from
-the same repository/key can update in place. Keep a private backup of this key.
+key must remain secret despite that conventional debug password. Both workflows
+use `scripts/configure-android-preview.sh`; missing keys stop publication.
+Version codes come from the full source history and increase along descendant
+main builds across both workflows. Keep the same key when moving previews between
+repositories so installed previews can update in place. Keep a private backup of
+this key. Ordinary CI APKs remain disposable test artifacts.
 Older previews used disposable keys: replacing one removes its local pairing keys
 and drafts, so save unsent drafts first and pair again afterward. PC conversation
 history stays on the Host. A production/store release needs its own signing policy.

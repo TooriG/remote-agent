@@ -2,8 +2,6 @@ package dev.remoteagent.mobile
 
 import android.graphics.BitmapFactory
 import androidx.activity.compose.BackHandler
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
@@ -30,7 +28,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -43,6 +40,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -68,6 +66,8 @@ import dev.remoteagent.core.SessionRef
 import dev.remoteagent.core.ThreadList
 import dev.remoteagent.core.ThreadSummary
 import dev.remoteagent.core.WorktreeStatus
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.drop
 
 @Composable
 internal fun ThreadListScreen(
@@ -79,53 +79,40 @@ internal fun ThreadListScreen(
     hostName: String = "My PC",
     connected: Boolean = false,
 ) {
-    var search by rememberSaveable { mutableStateOf(query.searchTerm) }
-    var searching by rememberSaveable { mutableStateOf(query.searchTerm.isNotEmpty()) }
+    var search by rememberSaveable { mutableStateOf(query.searchTerm.takeIf { it.isNotEmpty() }) }
     val focusManager = LocalFocusManager.current
     fun closeSearch() {
-        search = ""
-        searching = false
+        search = null
         focusManager.clearFocus()
+        perform(Intent.ListSessions(ListSessions(query = query.copy(searchTerm = ""))))
     }
-    BackHandler(enabled = searching) { closeSearch() }
+    BackHandler(enabled = search != null) { closeSearch() }
     var selectedTab by rememberSaveable { mutableStateOf(0) }
     val currentQuery by rememberUpdatedState(query)
     val dispatch by rememberUpdatedState(perform)
     val listState = rememberLazyListState()
     val reorder = rememberProjectReorder(listState, list?.projects.orEmpty(), perform)
-    LaunchedEffect(search) {
-        kotlinx.coroutines.delay(SEARCH_DEBOUNCE_MILLIS)
-        if (currentQuery.searchTerm != search)
-            dispatch(Intent.ListSessions(ListSessions(query = currentQuery.copy(searchTerm = search))))
+    LaunchedEffect(Unit) {
+        // Core loads the initial query; every later edit supersedes pending input.
+        snapshotFlow { search }
+            .drop(1)
+            .collectLatest { term ->
+                if (term != null) {
+                    kotlinx.coroutines.delay(SEARCH_DEBOUNCE_MILLIS)
+                    dispatch(Intent.ListSessions(ListSessions(query = currentQuery.copy(searchTerm = term))))
+                }
+            }
     }
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
-        Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (searching) {
-                val focusRequester = remember { FocusRequester() }
-                LaunchedEffect(Unit) { focusRequester.requestFocus() }
-                OutlinedTextField(
-                    value = search,
-                    onValueChange = { search = it },
-                    modifier = Modifier.weight(1f).focusRequester(focusRequester),
-                    placeholder = { Text("チャットを検索", fontSize = 14.sp) },
-                    singleLine = true,
-                    shape = RoundedCornerShape(28.dp),
-                )
-                IconButton(onClick = { closeSearch() }) {
-                    Icon(painterResource(R.drawable.ic_close), "検索を閉じる")
-                }
-            } else {
-                Text("bex", Modifier.padding(end = 8.dp), style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold, maxLines = 1)
-                HostSelector(hostName, connected, showHosts, Modifier.weight(1f))
-                IconButton(onClick = { searching = true }) {
-                    Icon(painterResource(R.drawable.ic_search), "検索")
-                }
-                IconButton(
-                    onClick = { perform(Intent.ListSessions(ListSessions(query = query))) },
-                    enabled = !loadingThreads,
-                ) { Icon(painterResource(R.drawable.ic_refresh), "更新") }
-            }
+        ThreadListHeader(
+            search = search,
+            loadingThreads = loadingThreads,
+            changeSearch = { if (it == null) closeSearch() else search = it },
+            refresh = { perform(Intent.ListSessions(ListSessions(query = query))) },
+        ) {
+            Text("bex", Modifier.padding(end = 8.dp), style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold, maxLines = 1)
+            HostSelector(hostName, connected, showHosts, Modifier.weight(1f))
         }
         TabRow(selectedTabIndex = selectedTab, containerColor = MaterialTheme.colorScheme.background) {
             listOf("最近のチャット", "プロジェクト").forEachIndexed { index, label ->
@@ -168,24 +155,7 @@ private fun ThreadListContent(
             if (selectedTab == 0) {
                 recentChats(list, loadingThreads, perform)
             } else {
-                projectThreads(list, perform, reorder)
-                if (list?.hasMoreProjects == true)
-                    item {
-                        TextButton(
-                            onClick = { perform(Intent.ExpandProjects) },
-                            enabled = !loadingThreads && !list.loadingProjects,
-                        ) {
-                            LoadingLabel("もっとプロジェクトを表示", list.loadingProjects)
-                        }
-                    }
-                if (list != null && list.projects.isEmpty())
-                    item {
-                        Text(
-                            "プロジェクトがありません。",
-                            Modifier.padding(vertical = 24.dp),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                projectThreads(list, loadingThreads, perform, reorder)
             }
         }
         reorder.projects.firstOrNull { it.id == reorder.source }?.let { project ->
@@ -305,9 +275,13 @@ private const val UNMERGED_COLOR_ARGB = 0xFFFB923C
 private val SessionRef.listKey: String
     get() = "session:$provider:$id"
 
-private fun LazyListScope.projectThreads(list: ThreadList?, perform: (Intent) -> Unit, reorder: ProjectReorder) {
-    val projects = list?.projects.orEmpty()
-    projects.forEach { project ->
+private fun LazyListScope.projectThreads(
+    list: ThreadList?,
+    loadingThreads: Boolean,
+    perform: (Intent) -> Unit,
+    reorder: ProjectReorder,
+) {
+    list?.projects.orEmpty().forEach { project ->
         item(key = "project:${project.id}") {
             ProjectDropMarker(reorder, project.id, after = false)
             ProjectRow(project, perform, reorder,
@@ -347,6 +321,23 @@ private fun LazyListScope.projectThreads(list: ThreadList?, perform: (Intent) ->
                 }
         }
     }
+    if (list?.hasMoreProjects == true)
+        item {
+            TextButton(
+                onClick = { perform(Intent.ExpandProjects) },
+                enabled = !loadingThreads && !list.loadingProjects,
+            ) {
+                LoadingLabel("もっとプロジェクトを表示", list.loadingProjects)
+            }
+        }
+    if (list != null && list.projects.isEmpty())
+        item {
+            Text(
+                "プロジェクトがありません。",
+                Modifier.padding(vertical = 24.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
 }
 
 @Composable

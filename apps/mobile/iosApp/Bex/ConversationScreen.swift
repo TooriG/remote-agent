@@ -112,6 +112,9 @@ struct ThreadScreen: View {
                 if let thread = conversation {
                     let rows = conversationRows(thread.rows, expansion: activityExpansionOverrides)
                     let lastRowId = rows.last?.id
+                    let threadId = thread.id
+                    let firstRowId = thread.rows.first?.id
+                    let followingLatest = isFollowingLatest
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 12) {
                             ForEach(rows) { row in
@@ -149,22 +152,29 @@ struct ThreadScreen: View {
                             followLatest(to: lastRowId, using: proxy)
                         }
                     })
+                    .onScrollPhaseChange { _, phase in
+                        if phase == .interacting {
+                            isFollowingLatest = false
+                        }
+                    }
                     .onScrollGeometryChange(for: ConversationScrollMetrics.self) { geometry in
+                        // Detached readers observe boundaries while lazy size estimates settle.
                         ConversationScrollMetrics(
-                            content: geometry.contentSize,
-                            container: geometry.containerSize,
-                            oldestVisible: geometry.containerSize.height > 0 && geometry.contentSize.height > 0 &&
-                                geometry.visibleRect.minY <= 0,
+                            content: followingLatest ? geometry.contentSize : .zero,
+                            container: followingLatest ? geometry.containerSize : .zero,
+                            oldest: HistoryTopVisibility(
+                                threadId: threadId, firstRowId: firstRowId,
+                                visible: geometry.containerSize.height > 0 && geometry.contentSize.height > 0 &&
+                                    geometry.visibleRect.minY <= 0
+                            ),
                             latestVisible: geometry.containerSize.height > 0 && geometry.contentSize.height > 0 &&
                                 geometry.visibleRect.minY < geometry.contentSize.height &&
                                 geometry.visibleRect.maxY > 0 &&
                                 geometry.contentSize.height - geometry.visibleRect.maxY <= 80
                         )
                     } action: { old, new in
-                        let top = HistoryTopVisibility(threadId: thread.id, firstRowId: thread.rows.first?.id,
-                                                       visible: new.oldestVisible)
-                        if historyTopVisibility != top {
-                            historyTopVisibility = top
+                        if historyTopVisibility != new.oldest {
+                            historyTopVisibility = new.oldest
                         }
                         if latestHistoryRowVisible != new.latestVisible {
                             latestHistoryRowVisible = new.latestVisible
@@ -175,7 +185,7 @@ struct ThreadScreen: View {
                         }
                         loadVisibleHistory()
                     }
-                    .onChange(of: thread.id, initial: true) {
+                    .onChange(of: threadId, initial: true) {
                         expandedItemIds.removeAll()
                         activityExpansionOverrides.removeAll()
                         isFollowingLatest = true

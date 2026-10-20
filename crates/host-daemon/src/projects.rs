@@ -90,7 +90,6 @@ impl ProjectStore {
         &self,
         mut native: Vec<Project>,
     ) -> anyhow::Result<state::Snapshot> {
-        let native_project_ids = native.iter().map(|project| project.id.clone()).collect();
         for mut project in self.read_projects().await? {
             if native.iter().any(|entry| entry.id == project.id) {
                 continue;
@@ -103,34 +102,42 @@ impl ProjectStore {
             }
         }
         let mut snapshot = state::Snapshot {
-            projects: native,
-            native_project_ids,
+            chat_directory: match tokio::fs::canonicalize(self.chat_directory()).await {
+                Ok(path) => Some(dunce::simplified(&path).to_owned()),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error.into()),
+            },
             ..Default::default()
         };
-        for root in snapshot.projects.iter().flat_map(|project| &project.roots) {
-            if !Path::new(&root.path).is_absolute() {
-                continue;
-            }
-            match tokio::fs::canonicalize(&root.path).await {
-                Ok(path) => {
-                    snapshot
-                        .resolved_roots
-                        .insert(root.path.clone(), dunce::simplified(&path).to_owned());
+        for mut project in native {
+            let native_group = project.roots.is_empty();
+            for root in std::mem::take(&mut project.roots) {
+                if Path::new(&root.path).is_absolute() {
+                    match tokio::fs::canonicalize(&root.path).await {
+                        Ok(path) => {
+                            let path = dunce::simplified(&path);
+                            if snapshot.chat_directory.as_deref() == Some(path) {
+                                continue;
+                            }
+                            snapshot
+                                .resolved_roots
+                                .insert(root.path.clone(), path.to_owned());
+                        }
+                        Err(error)
+                            if matches!(
+                                error.kind(),
+                                io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
+                            ) => {}
+                        Err(error) => return Err(error.into()),
+                    }
                 }
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
-                    ) => {}
-                Err(error) => return Err(error.into()),
+                project.roots.push(root);
+            }
+            if native_group || !project.roots.is_empty() {
+                snapshot.projects.push(project);
             }
         }
         snapshot.worktree_roots = crate::worktrees::workspace_roots(&self.path).await?;
-        snapshot.chat_directory = match tokio::fs::canonicalize(self.chat_directory()).await {
-            Ok(path) => Some(dunce::simplified(&path).to_owned()),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-            Err(error) => return Err(error.into()),
-        };
         Ok(snapshot)
     }
 }
@@ -138,6 +145,39 @@ impl ProjectStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn standalone_chat_directory_does_not_become_a_project() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(directory.path()).unwrap();
+        let store = ProjectStore::new(root.join("bex-worktrees.json"));
+        let chats = store.chat_directory();
+        std::fs::create_dir(&chats).unwrap();
+        store.register(&chats).await.unwrap();
+        let workspace = root.join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        let projects = serde_json::from_value(serde_json::json!([
+            {"id":"chats","name":"Chats","roots":[{"path":chats}]},
+            {"id":"mixed","name":"Workspace","roots":[{"path":chats},{"path":workspace}]},
+            {"id":"virtual","name":"Native group","roots":[]}
+        ]))
+        .unwrap();
+        let snapshot = store.load_with_projects(projects).await.unwrap();
+        assert_eq!(snapshot.projects.len(), 2);
+        assert_eq!(snapshot.projects[0].id, "mixed");
+        assert_eq!(snapshot.projects[0].roots.len(), 1);
+        assert_eq!(Path::new(&snapshot.projects[0].roots[0].path), workspace);
+        assert_eq!(snapshot.projects[1].id, "virtual");
+        assert_eq!(
+            snapshot.project_for_workspace(chats.to_str().unwrap()),
+            None
+        );
+        assert!(
+            !snapshot
+                .resolved_roots
+                .contains_key(chats.to_str().unwrap())
+        );
+        assert!(store.load().await.unwrap().projects.is_empty());
+    }
     #[tokio::test]
     async fn native_projects_refresh_and_take_precedence_over_duplicate_bex_roots() {
         let directory = tempfile::tempdir().unwrap();

@@ -180,7 +180,7 @@ impl Operation for SelectAccountForDraft {
                         draft.service_tier.as_deref(),
                         Some(provider),
                         &snapshot.models,
-                        false,
+                        &snapshot.model_errors,
                         snapshot.allows_custom_codex_models(),
                     );
                     let settings = (

@@ -677,7 +677,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 if provider.is_some() && !previous.models.is_empty() {
                     let (model, effort, tier) = supported_settings(
                         draft.model.as_ref(), draft.effort.as_deref(), draft.service_tier.as_deref(),
-                        provider, &previous.models, !previous.model_errors.is_empty(), previous.allows_custom_codex_models(),
+                        provider, &previous.models, &previous.model_errors, previous.allows_custom_codex_models(),
                     );
                     let settings = (model.cloned(), effort.map(str::to_owned), tier.map(str::to_owned));
                     (draft.model, draft.effort, draft.service_tier) = settings;
@@ -823,7 +823,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 _ => unreachable!(),
             };
             if !previous.models.is_empty() {
-                let (model, effort, tier) = supported_settings(draft.model.as_ref(), draft.effort.as_deref(), draft.service_tier.as_deref(), None, &previous.models, !previous.model_errors.is_empty(), previous.allows_custom_codex_models());
+                let (model, effort, tier) = supported_settings(draft.model.as_ref(), draft.effort.as_deref(), draft.service_tier.as_deref(), None, &previous.models, &previous.model_errors, previous.allows_custom_codex_models());
                 let settings = (
                     model.cloned(),
                     effort.map(str::to_owned),
@@ -1201,7 +1201,7 @@ pub(crate) fn normalized_model_drafts(
                 .or_else(|| defaults.and_then(|defaults| defaults.service_tier.as_deref())),
             Some(provider),
             models,
-            !errors.is_empty(),
+            errors,
             allow_custom_codex,
         );
         if (model, effort, tier)
@@ -1226,16 +1226,20 @@ pub(crate) fn supported_settings<'a>(
     selected_tier: Option<&'a str>,
     default_provider: Option<crate::session::ProviderKind>,
     models: &'a [Model],
-    catalog_incomplete: bool,
+    catalog_errors: &serde_json::Map<String, serde_json::Value>,
     allow_custom_codex: bool,
 ) -> (
     Option<&'a crate::models::ModelRef>,
     Option<&'a str>,
     Option<&'a str>,
 ) {
+    let provider = selected_model
+        .filter(|model| !model.id.is_empty())
+        .map(|model| model.provider)
+        .or(default_provider);
     // Codex also accepts explicit IDs outside its recommended picker catalog.
     // Absence in an incomplete catalog cannot invalidate a saved choice either.
-    if (catalog_incomplete
+    if (provider.is_some_and(|provider| catalog_errors.contains_key(provider.key()))
         || selected_model.is_some_and(|model| {
             allow_custom_codex
                 && model.provider == crate::session::ProviderKind::Codex
@@ -1248,10 +1252,6 @@ pub(crate) fn supported_settings<'a>(
     {
         return (selected_model, selected_effort, selected_tier);
     }
-    let provider = selected_model
-        .filter(|model| !model.id.is_empty())
-        .map(|model| model.provider)
-        .or(default_provider);
     let mut available = models
         .iter()
         .filter(|model| provider.is_none_or(|provider| model.model.provider == provider));

@@ -973,17 +973,17 @@ impl Agent for Codex {
             .filter(|value| value["hidden"] != true || value["model"].as_str() == configured)
             .map(native::parse_model)
             .collect::<Result<Vec<_>, _>>()?;
-        if params.cursor.is_none() {
-            if let Ok(config) = config {
-                let account: Result<Value, _> = self
-                    .request("account/read", &serde_json::json!({"refreshToken":false}))
-                    .await;
-                let account_type = account
-                    .as_ref()
-                    .ok()
-                    .and_then(|value| value["account"]["type"].as_str());
-                native::include_configured_model(&mut data, &config["config"], account_type);
-            }
+        if params.cursor.is_none()
+            && let Ok(config) = config
+        {
+            let account: Result<Value, _> = self
+                .request("account/read", &serde_json::json!({"refreshToken":false}))
+                .await;
+            let account_type = account
+                .as_ref()
+                .ok()
+                .and_then(|value| value["account"]["type"].as_str());
+            native::include_configured_model(&mut data, &config["config"], account_type);
         }
         Ok(op::ModelPage {
             data,
