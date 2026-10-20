@@ -1,12 +1,13 @@
 [CmdletBinding()]
 param(
-    [string]$CacheRoot = (Join-Path $PSScriptRoot "../../target/tool-cache/windows-fxc")
+    [string]$CacheRoot
 )
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+if (-not $CacheRoot) { $CacheRoot = Join-Path $PSScriptRoot "../../target/tool-cache/windows-fxc" }
 
 $pin = Get-Content -LiteralPath (Join-Path $PSScriptRoot "manifest.json") -Raw | ConvertFrom-Json
 $directory = [IO.Path]::GetFullPath((Join-Path $CacheRoot $pin.version))

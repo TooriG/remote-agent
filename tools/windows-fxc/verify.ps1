@@ -2,7 +2,11 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $prepare = Join-Path $PSScriptRoot "prepare.ps1"
-$installed = & $prepare
+$installed = if ($env:OS -eq "Windows_NT") {
+    # Exercise the build script's fresh Windows PowerShell process, including -File defaults.
+    & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $prepare
+    if ($LASTEXITCODE -ne 0) { throw "Pinned FXC preparation failed in a fresh process." }
+} else { & $prepare }
 $temporary = Join-Path ([IO.Path]::GetTempPath()) ("bex fxc " + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $temporary | Out-Null
 try {

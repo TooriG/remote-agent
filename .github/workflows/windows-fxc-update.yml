@@ -1,0 +1,60 @@
+name: Update Windows shader compiler
+on:
+  schedule:
+    # Sunday 04:00 Asia/Tokyo, after the other weekly dependency checks.
+    - cron: '0 19 * * 6'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: windows-fxc-update
+  cancel-in-progress: false
+jobs:
+  update:
+    if: github.repository == 'ttizze/remote-agent'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write # Dispatch validation; GITHUB_TOKEN PR events may require approval.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
+      - name: Test update decisions
+        run: nix develop .#native --command pwsh -NoLogo -NoProfile -NonInteractive -File tools/windows-fxc/update.test.ps1
+      - name: Resolve the latest stable NuGet package and hash its compiler
+        run: nix develop .#native --command pwsh -NoLogo -NoProfile -NonInteractive -File tools/windows-fxc/update.ps1
+      - id: pin
+        name: Read the proposed version
+        run: echo "version=$(jq -r .version tools/windows-fxc/manifest.json)" >> "$GITHUB_OUTPUT"
+      - id: pr
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          branch: automation/windows-fxc
+          delete-branch: true
+          add-paths: tools/windows-fxc/manifest.json
+          commit-message: 'Update pinned Windows FXC to ${{ steps.pin.outputs.version }}'
+          title: 'Update pinned Windows FXC to ${{ steps.pin.outputs.version }}'
+          body: |
+            Update Microsoft.Windows.SDK.CPP to the newest stable NuGet package, `${{ steps.pin.outputs.version }}`.
+
+            The updater downloaded the official NuGet archive and recalculated SHA-256 for the archive, x64 fxc.exe and d3dcompiler_47.dll. Preview and unlisted versions are excluded.
+
+            Native clients validation is dispatched for this branch, including the Windows compiler integrity, shader reproducibility, build and packaging checks. Review the results before merging. Builds continue to use the checked-in pin; this workflow does not auto-merge updates.
+      - name: Validate the proposed pin
+        if: steps.pr.outputs.pull-request-number && steps.pr.outputs.pull-request-operation != 'closed'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPDATE_BRANCH: ${{ steps.pr.outputs.pull-request-branch }}
+          UPDATE_SHA: ${{ steps.pr.outputs.pull-request-head-sha }}
+        run: |
+          # Retry a missed dispatch without duplicating validation of an unchanged PR.
+          runs=$(gh run list --workflow native.yml --branch "$UPDATE_BRANCH" --commit "$UPDATE_SHA" \
+            --event workflow_dispatch --limit 1 --json databaseId --jq length --repo "$GITHUB_REPOSITORY")
+          if [[ $runs == 0 ]]; then
+            gh workflow run native.yml --ref "$UPDATE_BRANCH" --repo "$GITHUB_REPOSITORY"
+          fi

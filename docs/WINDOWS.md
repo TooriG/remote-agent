@@ -43,8 +43,7 @@ GPUI's debug renderer otherwise loads shaders from the builder's Cargo registry
 directory and fails on another PC with `Error creating DirectWriteTextSystem`
 and a missing-path error. Runtime users do not need the SDK or Cargo sources.
 
-Shader compilation uses the pinned Microsoft Windows SDK C++ NuGet package
-`10.0.28000.2705`, the latest stable package available on 2026-10-20. The pin is
+Shader compilation uses the Microsoft Windows SDK C++ NuGet package pinned
 in `tools/windows-fxc/manifest.json`. Both ordinary Cargo builds and CI use the
 same verified x64 `fxc.exe` and `d3dcompiler_47.dll`; the package is downloaded
 from Microsoft's official NuGet feed into `target/tool-cache/windows-fxc`.
@@ -58,6 +57,19 @@ HLSL inputs, so changing a pin or shader recompiles its bytecode. Windows CI
 also checks rejection of missing/corrupted compiler files and identical shader
 bytecode from two different source directories. This pins shader compilation;
 it does not establish byte-for-byte reproducibility of the entire MSVC build.
+
+**Update Windows shader compiler** checks the official NuGet feed every Sunday
+at 04:00 Japan time (GitHub may delay scheduled runs). It selects the newest
+listed stable package without downgrading, hashes its archive and matching x64 compiler
+files, and opens or updates one PR on `automation/windows-fxc`. It explicitly
+dispatches **Native clients** validation for the proposed pin; review that run
+before merging the PR. Updates are not auto-merged, and ordinary builds never
+query the latest version. The repository must allow GitHub Actions to create
+pull requests; the updater does not approve them.
+
+To check for an update manually, run the workflow from GitHub Actions, or run
+`scripts/dev-env.sh pwsh -NoProfile -File tools/windows-fxc/update.ps1` locally.
+The local command changes only the manifest when a newer stable version exists.
 
 Install Inno Setup 6.3+ (or supply `-InnoCompiler path/to/ISCC.exe`).
 The script builds desktop, Host, supervisor, and CLI from the same checkout,
