@@ -187,9 +187,6 @@ impl Snapshot {
         if let Some(errors) = list.provider_errors.as_ref() {
             notices.push(format!("会話一覧は部分結果です（{}）。取得できない提供元の保存済み表示は最新とは限りません。", errors.keys().cloned().collect::<Vec<_>>().join("、")));
         }
-        if !self.archived_scopes.is_empty() {
-            notices.push("保存領域が変更されています。以前の下書き・未保存編集は保持しています。Hostの保存先設定を元に戻すと再び表示できます。".into());
-        }
         let summaries = thread_summaries(
             &list.data,
             &self.activity.active,
