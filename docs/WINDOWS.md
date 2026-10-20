@@ -60,7 +60,8 @@ Choose **DeepSeek V4.1 Flash 1017** to use the official `deepseek-flash` route (
 For a separate installation, pass `host-daemon --deepseek C:\path\to\dsh\lib\bin.js`. `BEX_DEEPSEEK_NODE` selects its Node runtime. The standard Windows installation also detects a BEX-managed Harness under `%LOCALAPPDATA%\BEX\deepseek-harness`.
 
 Host・Windows版・Android版は同じ対応版へ更新してください。DeepSeek用APIキーをPCのBEXで設定すると、そのHostへ接続するAndroid端末からも利用できます。
-# Chromeからブラウザデータを取り込む
+
+## Chromeからブラウザデータを取り込む
 
 BEXのブラウザにある「Chromeから取り込む」から、次の操作ができます。
 
@@ -74,4 +75,3 @@ BEXのブラウザにある「Chromeから取り込む」から、次の操作�
 ## 使用量とリセット
 
 利用上限のエラーに表示される「使用量・リセット時刻」から、設定のエージェント画面を開けます。使用量とローカル時刻のリセット予定を確認し、「使用量を再取得」で表示を更新できます。Codexには「追加クレジット・上限を管理」も表示され、BEXのブラウザでChatGPTの管理画面を開きます。ログイン中のアカウントを確認して操作してください。利用枠そのものをBEXから強制リセットする機能ではありません。提供元から取得した使用量には最大60秒のキャッシュがあります。
-

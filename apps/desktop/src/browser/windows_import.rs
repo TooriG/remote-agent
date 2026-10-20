@@ -207,13 +207,21 @@ impl Browser {
         work: impl FnOnce() -> Result<String, String> + Send + 'static,
         cx: &mut Context<Self>,
     ) {
+        self.run_import_future(async move { work() }, cx);
+    }
+
+    fn run_import_future(
+        &mut self,
+        work: impl std::future::Future<Output = Result<String, String>> + Send + 'static,
+        cx: &mut Context<Self>,
+    ) {
         if self.importing {
             return;
         }
         self.importing = true;
         self.error.clear();
         self.import_notice = "取り込み中…".into();
-        let task = cx.background_executor().spawn(async move { work() });
+        let task = cx.background_executor().spawn(work);
         cx.spawn(async move |owner, cx| {
             let result = task.await;
             let _ = owner.update(cx, |s, cx| {
@@ -232,21 +240,23 @@ impl Browser {
         cx.notify();
     }
 
-    fn pick_password_csv(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.importing {
-            return;
-        }
-        // Keep the native child behind the OS picker, restoring the panel state on cancel.
-        self.webview.update(cx, |v, _| v.hide());
-        let path = rfd::FileDialog::new()
-            .set_title("Chromeから書き出したパスワードCSVを選択")
-            .add_filter("Chrome passwords", &["csv"])
-            .pick_file();
-        self.set_visible(self.visible, cx);
-        window.activate_window();
-        if let Some(path) = path {
-            self.run_import(move || import_passwords(&path, &data_path()?), cx);
-        }
+    fn pick_password_csv(&mut self, cx: &mut Context<Self>) {
+        // The OS picker owns its STA thread. Never pump native modal messages
+        // while holding a GPUI entity borrow on the UI thread.
+        self.run_import_future(
+            async {
+                let Some(file) = rfd::AsyncFileDialog::new()
+                    .set_title("Chromeから書き出したパスワードCSVを選択")
+                    .add_filter("Chrome passwords", &["csv"])
+                    .pick_file()
+                    .await
+                else {
+                    return Ok(String::new());
+                };
+                import_passwords(file.path(), &data_path()?)
+            },
+            cx,
+        );
     }
 
     pub(super) fn windows_import_toolbar(&self, cx: &Context<Self>) -> impl IntoElement {
@@ -262,8 +272,8 @@ impl Browser {
                 .disabled(self.importing).dropdown_caret(true)
                 .dropdown_menu(move |mut menu, _, _| {
                     let owner = import_owner.clone();
-                    menu = menu.item(PopupMenuItem::new("パスワードCSVを取り込む…").on_click(move |_, window, cx| {
-                        let _ = owner.update(cx, |s, cx| s.pick_password_csv(window, cx));
+                    menu = menu.item(PopupMenuItem::new("パスワードCSVを取り込む…").on_click(move |_, _, cx| {
+                        let _ = owner.update(cx, |s, cx| s.pick_password_csv(cx));
                     }));
                     let owner = import_owner.clone();
                     menu = menu.item(PopupMenuItem::new("Chromeでパスワードを書き出す…").on_click(move |_, _, cx| {
