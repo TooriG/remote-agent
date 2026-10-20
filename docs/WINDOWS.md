@@ -37,11 +37,27 @@ toolchain job).
 
 Both profiles embed the Windows renderer's compiled shaders. The workspace
 disables `debug_assertions` only for `gpui-pre-windows` in the development
-profile, including its build script, so it compiles HLSL with the Windows SDK's
-`fxc.exe` at build time. Keep this override when building development previews:
+profile, including its build script, so it compiles HLSL at build time. Keep
+this override when building development previews:
 GPUI's debug renderer otherwise loads shaders from the builder's Cargo registry
 directory and fails on another PC with `Error creating DirectWriteTextSystem`
 and a missing-path error. Runtime users do not need the SDK or Cargo sources.
+
+Shader compilation uses the pinned Microsoft Windows SDK C++ NuGet package
+`10.0.28000.2705`, the latest stable package available on 2026-10-20. The pin is
+in `tools/windows-fxc/manifest.json`. Both ordinary Cargo builds and CI use the
+same verified x64 `fxc.exe` and `d3dcompiler_47.dll`; the package is downloaded
+from Microsoft's official NuGet feed into `target/tool-cache/windows-fxc`.
+The package and extracted files are checked with SHA-256. Missing or modified
+cached files stop the build; installed SDKs, PATH and `GPUI_FXC_PATH` cannot
+select a different shader compiler. Delete the affected version's cache to
+restore it from the pinned package. Initial setup needs network access.
+
+The vendored GPUI build script tracks the manifest, preparation script and all
+HLSL inputs, so changing a pin or shader recompiles its bytecode. Windows CI
+also checks rejection of missing/corrupted compiler files and identical shader
+bytecode from two different source directories. This pins shader compilation;
+it does not establish byte-for-byte reproducibility of the entire MSVC build.
 
 Install Inno Setup 6.3+ (or supply `-InnoCompiler path/to/ISCC.exe`).
 The script builds desktop, Host, supervisor, and CLI from the same checkout,

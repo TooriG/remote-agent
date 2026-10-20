@@ -1,0 +1,15 @@
+{
+  "package": "Microsoft.Windows.SDK.CPP",
+  "version": "10.0.28000.2705",
+  "sha256": "a74ca8f9af98bd61925d9e2932ad98f746306123167b8f0bba99cd9ea9f03807",
+  "files": [
+    {
+      "path": "c/bin/10.0.28000.0/x64/fxc.exe",
+      "sha256": "7920b6459ac0800c71bbb9815fa33b1e2a7932f86f5a8f17cff267dc6e8ef7f5"
+    },
+    {
+      "path": "c/bin/10.0.28000.0/x64/d3dcompiler_47.dll",
+      "sha256": "c1de76af7f724c671cb393889a899268e17fd76d0d50a1244678af57567255a1"
+    }
+  ]
+}
