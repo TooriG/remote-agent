@@ -28,14 +28,13 @@ extension ThreadScreen {
                     .top,
                     16
                 )
-        case (let .response(_, turnId, changes, changeDetails), let item?):
+        case (let .response(_, turnId), let item?):
             ThreadMessageRow(
                 item: item,
                 isUser: false,
                 media: model.mediaAccess,
                 selection: selectionActions,
-                timestampMs: row.timestampMs, changes: changes,
-                loadChanges: { changeDetails.forEach { model.perform(.readItem($0)) } },
+                timestampMs: row.timestampMs,
                 fork: turnId
                     .map { id in { complete in model.forkAndOpen(through: id, completion: complete) } }
             )

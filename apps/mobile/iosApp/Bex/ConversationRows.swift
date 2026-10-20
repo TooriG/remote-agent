@@ -53,8 +53,6 @@ struct ThreadMessageRow: View {
     let media: ConversationMediaAccess
     let selection: ConversationSelectionActions
     var timestampMs: UInt64?
-    var changes: [WorkspaceDiffFile] = []
-    var loadChanges: (() -> Void)?
     var fork: ((@escaping (String?) -> Void) -> Void)?
     var restoreUnknown: ((String) -> Void)?
     var discardUnknown: ((String) -> Void)?
@@ -62,7 +60,6 @@ struct ThreadMessageRow: View {
     @State private var forkError: String?
     @State private var copied = false
     @State private var selectingText = false
-    @State private var showingChanges = false
 
     @ViewBuilder private var images: some View {
         let sources = item.data.imageSources
@@ -120,27 +117,6 @@ struct ThreadMessageRow: View {
                     }
                 }
             }
-            if !changes.isEmpty {
-                Button { loadChanges?(); showingChanges = true } label: {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Label("変更ファイル", systemImage: "doc.badge.gearshape").font(.caption.weight(.semibold))
-                        ForEach(changes, id: \.path) { file in
-                            HStack {
-                                Text(file.path).lineLimit(1).truncationMode(.middle)
-                                Spacer(minLength: 8)
-                                if let additions = file.additions {
-                                    Text("+\(additions)").foregroundStyle(.green)
-                                }
-                                if let deletions = file.deletions {
-                                    Text("−\(deletions)").foregroundStyle(.red)
-                                }
-                            }.font(.caption)
-                        }
-                    }
-                    .padding(12).frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(UIColor.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
-                }.buttonStyle(.plain)
-            }
             if isUser, let timestampMs {
                 Text(Date(timeIntervalSince1970: Double(timestampMs) / 1000), style: .time)
                     .font(.caption).foregroundStyle(.secondary)
@@ -193,18 +169,6 @@ struct ThreadMessageRow: View {
             }
         }
         .padding(.bottom, isUser ? 12 : 8)
-        .sheet(isPresented: $showingChanges) {
-            NavigationStack {
-                ScrollView {
-                    LazyVStack(spacing: 16) {
-                        ForEach(changes, id: \.path) { WorkspaceDiffCard(file: $0) }
-                    }.padding(12)
-                }
-                .navigationTitle("変更ファイル")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完了") { showingChanges = false } } }
-            }
-        }
         .sheet(isPresented: $selectingText) {
             NavigationStack {
                 if let text = item.data.body {

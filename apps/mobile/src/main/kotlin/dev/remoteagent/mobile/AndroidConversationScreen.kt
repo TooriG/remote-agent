@@ -217,8 +217,6 @@ private fun ConversationContent(
                 cwd,
                 perform,
                 timestampMs,
-                content.changes,
-                loadChanges = { content.changeDetails.forEach { perform(Intent.ReadItem(it)) {} } },
                 fork =
                     if (threadId != null && content.forkTurnId != null)
                         ({

@@ -40,8 +40,6 @@ internal fun ThreadMessageCard(
     cwd: String,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
     timestampMs: ULong? = null,
-    changes: List<dev.remoteagent.core.WorkspaceDiffFile> = emptyList(),
-    loadChanges: () -> Unit = {},
     fork: (() -> Unit)? = null,
     forking: Boolean = false,
 ) {
@@ -65,7 +63,6 @@ internal fun ThreadMessageCard(
                     }
                 } else ConversationBody(body, cwd, perform)
             }
-        if (changes.isNotEmpty()) ChangedFilesSummary(changes, loadChanges)
         if (!isUser && content.kind == "agent") MessageFooter(content.body.orEmpty(), timestampMs, fork, forking)
         if (isUser) MessageFooter(content.body.orEmpty(), timestampMs, null)
         if (isUser && content.nativeId == null) {
