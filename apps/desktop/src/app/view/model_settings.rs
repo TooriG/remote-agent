@@ -373,7 +373,11 @@ impl Desktop {
                         label
                     },
                     cx,
-                    move |s, _, _| {
+                    move |s, window, cx| {
+                        if s.model_provider != Some(value) {
+                            s.account_code
+                                .update(cx, |input, cx| input.set_value("", window, cx));
+                        }
                         s.model_provider = Some(value);
                         s.account_sign_out = None;
                         if value == ProviderKind::DeepSeek {
@@ -578,8 +582,8 @@ impl Desktop {
                                 "account-start-login",
                                 "アカウントを追加",
                                 cx,
-                                move |s, _, _| {
-                                    s.start_provider_setup(provider);
+                                move |s, window, cx| {
+                                    s.start_provider_setup(provider, window, cx);
                                 },
                             )
                             .icon(IconName::Plus)
@@ -674,7 +678,14 @@ impl Desktop {
             })
     }
 
-    pub(in crate::app) fn start_provider_setup(&mut self, provider: ProviderKind) {
+    pub(in crate::app) fn start_provider_setup(
+        &mut self,
+        provider: ProviderKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.account_code
+            .update(cx, |input, cx| input.set_value("", window, cx));
         self.model_provider = Some(provider);
         if provider == ProviderKind::DeepSeek {
             self.model_panel = ModelPanel::Manage;
@@ -1890,6 +1901,30 @@ mod tests {
         assert!(window.debug_bounds("dsh-key-remove").is_some());
         assert!(window.debug_bounds("account-submit-code").is_some());
         assert!(window.debug_bounds("dsh-openrouter-models").is_some());
+        window.update(|window, cx| {
+            view.read(cx).0.clone().update(cx, |view, cx| {
+                view.account_code.update(cx, |input, cx| {
+                    input.set_value("unsaved-route-key", window, cx)
+                });
+            });
+        });
+        let codex = window.debug_bounds("model-provider-Codex").unwrap();
+        window.simulate_click(codex.center(), Modifiers::default());
+        window.run_until_parked();
+        window.update(|_, cx| {
+            assert!(
+                view.read(cx)
+                    .0
+                    .read(cx)
+                    .account_code
+                    .read(cx)
+                    .value()
+                    .is_empty()
+            )
+        });
+        let dsh = window.debug_bounds("model-provider-DeepSeek").unwrap();
+        window.simulate_click(dsh.center(), Modifiers::default());
+        window.run_until_parked();
         window.update(|_, cx| {
             view.read(cx).0.clone().update(cx, |view, _| {
                 Arc::make_mut(&mut view.snapshot).models = Arc::new(serde_json::from_value(serde_json::json!([
@@ -1924,11 +1959,13 @@ mod tests {
             closing: tokio_util::task::TaskTracker::new(),
             logging_error: None,
         };
-        let mut snapshot = agent_core::state::Snapshot::default();
-        snapshot.models = Arc::new(serde_json::from_value(serde_json::json!([
+        let mut snapshot = agent_core::state::Snapshot {
+            models: Arc::new(serde_json::from_value(serde_json::json!([
             {"id":"official","credentialRoute":"DeepSeek","model":{"provider":"deepseek","id":"[\"deepseek-official\",\"deepseek-flash\"]"},"displayName":"DeepSeek公式 · Flash", "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}},
             {"id":"router","credentialRoute":"OpenRouter","model":{"provider":"deepseek","id":"[\"openrouter\",\"deepseek/deepseek-v4.1-flash\"]"},"displayName":"OpenRouter · DeepSeek V4.1 Flash", "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}}
-        ])).unwrap());
+        ])).unwrap()),
+            ..Default::default()
+        };
         let key = snapshot.navigation.draft_key.clone();
         let official = snapshot.models[0].model.clone();
         Arc::make_mut(&mut snapshot.drafts).insert(

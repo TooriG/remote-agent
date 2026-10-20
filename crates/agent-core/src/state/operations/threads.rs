@@ -986,24 +986,9 @@ impl Operation for LoadModels {
             .as_ref()
             .cloned()
             .unwrap_or_default();
-        snapshot.drafts = normalized_model_drafts(
-            &snapshot.drafts,
-            snapshot.conversations.keys(),
-            &models,
-            &errors,
-            snapshot
-                .account
-                .accounts
-                .as_ref()
-                .map(|accounts| &accounts.selected),
-            &snapshot.navigation.draft_key,
-            &snapshot
-                .model_defaults_for_cwd(&snapshot.navigation.cwd)
-                .providers,
-            snapshot.allows_custom_codex_models(),
-        );
         snapshot.models = Arc::new(models);
         snapshot.model_errors = Arc::new(errors);
+        snapshot.normalize_model_drafts();
         Arc::make_mut(&mut snapshot.operations).retain(|key, state| {
             !matches!(key, OperationKey::ModelSettings { .. })
                 || state.phase == OperationPhase::Running
@@ -1049,22 +1034,7 @@ impl Operation for ReadModelSettings {
             .find(|model| model.model == self.model)
         {
             model.settings = Some(settings);
-            snapshot.drafts = normalized_model_drafts(
-                &snapshot.drafts,
-                snapshot.conversations.keys(),
-                &snapshot.models,
-                &snapshot.model_errors,
-                snapshot
-                    .account
-                    .accounts
-                    .as_ref()
-                    .map(|accounts| &accounts.selected),
-                &snapshot.navigation.draft_key,
-                &snapshot
-                    .model_defaults_for_cwd(&snapshot.navigation.cwd)
-                    .providers,
-                snapshot.allows_custom_codex_models(),
-            );
+            snapshot.normalize_model_drafts();
         }
         Vec::new()
     }
@@ -2201,12 +2171,14 @@ mod tests {
         };
         let session = SessionRef::new(ProviderKind::DeepSeek, "selected-gateway".into()).unwrap();
         let key: DraftKey = session.clone().into();
-        let mut snapshot = Snapshot::default();
-        snapshot.connected = true;
-        snapshot.models = Arc::new(serde_json::from_value(serde_json::json!([
+        let mut snapshot = Snapshot {
+            connected: true,
+            models: Arc::new(serde_json::from_value(serde_json::json!([
             {"id":"official","model":official,"displayName":"Official","isDefault":true, "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}},
             {"id":"gateway","model":selected,"displayName":"Gateway", "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}}
-        ])).unwrap());
+        ])).unwrap()),
+            ..Default::default()
+        };
         Arc::make_mut(&mut snapshot.drafts).insert(
             key.clone(),
             Arc::new(Draft {

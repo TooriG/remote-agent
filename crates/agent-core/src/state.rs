@@ -1205,76 +1205,74 @@ pub(crate) fn allows_custom_codex_models(
         .is_none_or(|plan| plan == "API key")
 }
 
-pub(crate) fn normalized_model_drafts<'a>(
-    drafts: &Arc<BTreeMap<DraftKey, Arc<Draft>>>,
-    initialized_sessions: impl Iterator<Item = &'a crate::session::SessionRef> + Clone,
-    models: &[crate::models::Model],
-    errors: &serde_json::Map<String, serde_json::Value>,
-    selected_accounts: Option<&std::collections::HashMap<crate::session::ProviderKind, String>>,
-    active_draft: &DraftKey,
-    provider_defaults: &HashMap<crate::session::ProviderKind, ProviderModelDefaults>,
-    allow_custom_codex: bool,
-) -> Arc<BTreeMap<DraftKey, Arc<Draft>>> {
-    let mut next = drafts.clone();
-    for (key, previous) in drafts.iter() {
-        // Let the first native read seed a conversation before catalog defaults.
-        if previous.model.is_none()
-            && let DraftKey::Session { session } = key
-            && !initialized_sessions.clone().any(|id| id == session)
-        {
-            continue;
+impl Snapshot {
+    pub(crate) fn normalize_model_drafts(&mut self) {
+        let provider_defaults = self.model_defaults_for_cwd(&self.navigation.cwd).providers;
+        let allow_custom_codex = self.allows_custom_codex_models();
+        let mut next = self.drafts.clone();
+        for (key, previous) in self.drafts.iter() {
+            // Let the first native read seed a conversation before catalog defaults.
+            if previous.model.is_none()
+                && let DraftKey::Session { session } = key
+                && !self.conversations.contains_key(session)
+            {
+                continue;
+            }
+            let selected_provider =
+                crate::presentation::model_settings::draft_provider(key, previous.model.as_ref());
+            if selected_provider.is_none() && key != &self.navigation.draft_key {
+                continue;
+            }
+            let provider = selected_provider.or_else(|| {
+                crate::presentation::model_settings::automatic_provider(
+                    &self.models,
+                    self.account
+                        .accounts
+                        .as_ref()
+                        .map(|accounts| &accounts.selected),
+                    &self.model_errors,
+                )
+            });
+            let Some(provider) = provider else {
+                continue;
+            };
+            let defaults = selected_provider
+                .is_none()
+                .then(|| provider_defaults.get(&provider))
+                .flatten();
+            let (model, effort, tier) = supported_settings(
+                previous
+                    .model
+                    .as_ref()
+                    .or_else(|| defaults.and_then(|defaults| defaults.model.as_ref())),
+                previous
+                    .effort
+                    .as_deref()
+                    .or_else(|| defaults.and_then(|defaults| defaults.effort.as_deref())),
+                previous
+                    .service_tier
+                    .as_deref()
+                    .or_else(|| defaults.and_then(|defaults| defaults.service_tier.as_deref())),
+                Some(provider),
+                &self.models,
+                &self.model_errors,
+                allow_custom_codex,
+            );
+            if (model, effort, tier)
+                != (
+                    previous.model.as_ref(),
+                    previous.effort.as_deref(),
+                    previous.service_tier.as_deref(),
+                )
+            {
+                let draft = shared_mut(&mut next, key).expect("draft came from this map");
+                draft.model = model.cloned();
+                draft.effort = effort.map(str::to_owned);
+                draft.service_tier = tier.map(str::to_owned);
+            }
         }
-        let selected_provider =
-            crate::presentation::model_settings::draft_provider(key, previous.model.as_ref());
-        if selected_provider.is_none() && key != active_draft {
-            continue;
-        }
-        let provider = selected_provider.or_else(|| {
-            crate::presentation::model_settings::automatic_provider(
-                models,
-                selected_accounts,
-                errors,
-            )
-        });
-        let Some(provider) = provider else {
-            continue;
-        };
-        let defaults = selected_provider
-            .is_none()
-            .then(|| provider_defaults.get(&provider))
-            .flatten();
-        let (model, effort, tier) = supported_settings(
-            previous
-                .model
-                .as_ref()
-                .or_else(|| defaults.and_then(|defaults| defaults.model.as_ref())),
-            previous
-                .effort
-                .as_deref()
-                .or_else(|| defaults.and_then(|defaults| defaults.effort.as_deref())),
-            previous
-                .service_tier
-                .as_deref()
-                .or_else(|| defaults.and_then(|defaults| defaults.service_tier.as_deref())),
-            Some(provider),
-            models,
-            errors,
-            allow_custom_codex,
-        );
-        if (model, effort, tier)
-            != (
-                previous.model.as_ref(),
-                previous.effort.as_deref(),
-                previous.service_tier.as_deref(),
-            )
-        {
-            let draft = shared_mut(&mut next, key).expect("draft came from this map");
-            draft.model = model.cloned();
-            draft.effort = effort.map(str::to_owned);
-            draft.service_tier = tier.map(str::to_owned);
-        }
+        self.drafts = next;
     }
-    next
 }
 
 pub(crate) fn supported_settings<'a>(

@@ -36,21 +36,8 @@ impl Operation for ListAccounts {
                 })
             })
             .collect();
-        if !snapshot.models.is_empty() {
-            snapshot.drafts = normalized_model_drafts(
-                &snapshot.drafts,
-                snapshot.conversations.keys(),
-                &snapshot.models,
-                &snapshot.model_errors,
-                Some(&output.selected),
-                &snapshot.navigation.draft_key,
-                &snapshot
-                    .model_defaults_for_cwd(&snapshot.navigation.cwd)
-                    .providers,
-                crate::state::allows_custom_codex_models(Some(&output)),
-            );
-        }
         Arc::make_mut(&mut snapshot.account).accounts = Some(Arc::new(output));
+        snapshot.normalize_model_drafts();
         effects
     }
 }
@@ -311,6 +298,36 @@ impl Operation for SubmitAccountLogin {
         })
     }
     rpc_operation!();
+}
+
+pub use agent_protocol::dsh::{
+    KeyUpdate as UpdateDshCredential, ReadCredentials as ReadDshCredentials,
+};
+impl Operation for ReadDshCredentials {
+    fn key(&self) -> Option<OperationKey> {
+        Some(OperationKey::DshCredentials)
+    }
+    rpc_operation!();
+    fn apply(self, snapshot: &mut Snapshot, credentials: Self::Output) -> Vec<Effect> {
+        Arc::make_mut(&mut snapshot.account).dsh_credentials = Some(Arc::new(credentials));
+        Vec::new()
+    }
+}
+impl Operation for UpdateDshCredential {
+    fn invalidates(&self) -> bool {
+        true
+    }
+    fn key(&self) -> Option<OperationKey> {
+        Some(OperationKey::DshCredentials)
+    }
+    rpc_operation!();
+    fn apply(self, snapshot: &mut Snapshot, credentials: Self::Output) -> Vec<Effect> {
+        Arc::make_mut(&mut snapshot.account).dsh_credentials = Some(Arc::new(credentials));
+        vec![
+            Effect::execute(ListAccounts {}),
+            Effect::execute(LoadModels {}),
+        ]
+    }
 }
 
 #[cfg(test)]
@@ -601,35 +618,5 @@ mod account_model_tests {
                 .as_deref(),
             Some("default")
         );
-    }
-}
-
-pub use agent_protocol::dsh::{
-    KeyUpdate as UpdateDshCredential, ReadCredentials as ReadDshCredentials,
-};
-impl Operation for ReadDshCredentials {
-    fn key(&self) -> Option<OperationKey> {
-        Some(OperationKey::DshCredentials)
-    }
-    rpc_operation!();
-    fn apply(self, snapshot: &mut Snapshot, credentials: Self::Output) -> Vec<Effect> {
-        Arc::make_mut(&mut snapshot.account).dsh_credentials = Some(Arc::new(credentials));
-        Vec::new()
-    }
-}
-impl Operation for UpdateDshCredential {
-    fn invalidates(&self) -> bool {
-        true
-    }
-    fn key(&self) -> Option<OperationKey> {
-        Some(OperationKey::DshCredentials)
-    }
-    rpc_operation!();
-    fn apply(self, snapshot: &mut Snapshot, credentials: Self::Output) -> Vec<Effect> {
-        Arc::make_mut(&mut snapshot.account).dsh_credentials = Some(Arc::new(credentials));
-        vec![
-            Effect::execute(ListAccounts {}),
-            Effect::execute(LoadModels {}),
-        ]
     }
 }

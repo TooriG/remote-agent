@@ -274,18 +274,18 @@ impl DeepSeek {
                     } else {
                         break;
                     }
-                } else if let Some(id) = value["id"].as_u64() {
-                    if let Some(reply) = reader.pending.lock().await.remove(&id) {
-                        let result = if value.get("error").is_some() {
-                            Err(value["error"]["message"]
-                                .as_str()
-                                .unwrap_or("Harness request failed")
-                                .into())
-                        } else {
-                            Ok(value["result"].clone())
-                        };
-                        let _ = reply.send(result);
-                    }
+                } else if let Some(id) = value["id"].as_u64()
+                    && let Some(reply) = reader.pending.lock().await.remove(&id)
+                {
+                    let result = if value.get("error").is_some() {
+                        Err(value["error"]["message"]
+                            .as_str()
+                            .unwrap_or("Harness request failed")
+                            .into())
+                    } else {
+                        Ok(value["result"].clone())
+                    };
+                    let _ = reply.send(result);
                 }
             }
             reader.stop.cancel();

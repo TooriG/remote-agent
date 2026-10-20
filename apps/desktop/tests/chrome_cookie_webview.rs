@@ -225,10 +225,12 @@ fn native_phase(phase: &str, identifier: &str, url: &str, profile: &str) {
                     return;
                 }
 
-                browser.update(cx, |s, cx| {
-                    s.set_visible(true, cx);
-                    s.webview.read(cx).raw().load_url(&url).unwrap();
-                });
+                window.update(cx, |_, window, cx| {
+                    browser.update(cx, |s, cx| {
+                        s.set_visible(true, cx);
+                        s.open_url(&url, window, cx);
+                    });
+                }).unwrap();
                 wait_for_page(
                     &browser,
                     if phase == "import" {

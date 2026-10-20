@@ -48,8 +48,8 @@ impl Desktop {
             ) {
                 let id = format!("connection-agent-{}", agent.name);
                 row = row.child(
-                    self.button(id.clone(), "ログイン", cx, move |view, _, _| {
-                        view.start_provider_setup(provider);
+                    self.button(id.clone(), "ログイン", cx, move |view, window, cx| {
+                        view.start_provider_setup(provider, window, cx);
                     })
                     .debug_selector(move || id.clone())
                     .small()
