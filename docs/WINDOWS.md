@@ -35,6 +35,14 @@ toolchain job).
 ./scripts/package-windows.ps1 -Profile dev
 ```
 
+Both profiles embed the Windows renderer's compiled shaders. The workspace
+disables `debug_assertions` only for `gpui-pre-windows` in the development
+profile, including its build script, so it compiles HLSL with the Windows SDK's
+`fxc.exe` at build time. Keep this override when building development previews:
+GPUI's debug renderer otherwise loads shaders from the builder's Cargo registry
+directory and fails on another PC with `Error creating DirectWriteTextSystem`
+and a missing-path error. Runtime users do not need the SDK or Cargo sources.
+
 Install Inno Setup 6.3+ (or supply `-InnoCompiler path/to/ISCC.exe`).
 The script builds desktop, Host, supervisor, and CLI from the same checkout,
 then writes the EXE installer, optional ZIP, and SHA-256 checksums under `target/windows-packages/`
