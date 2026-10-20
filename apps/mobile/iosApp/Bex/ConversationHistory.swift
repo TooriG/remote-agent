@@ -119,17 +119,49 @@ extension ThreadScreen {
     func loadVisibleHistory() {
         guard isVisible, let thread = conversation, thread.id == model.selectedThreadId,
               model.notice == nil else { return }
-        let oldestVisible = historyTopVisibility == HistoryTopVisibility(
-            threadId: thread.id, firstRowId: thread.rows.first?.id, visible: true
-        )
+        let visibility = historyBoundaryVisibility
         guard AgentCore.shouldLoadHistory(
             hasMore: thread.source.hasMoreHistory(),
             loading: model.loadingHistory,
-            oldestVisible: oldestVisible,
-            latestVisible: latestHistoryRowVisible,
+            oldestVisible: visibility.oldest,
+            latestVisible: visibility.latest,
             followingLatest: isFollowingLatest
         ) else { return }
         model.loadOlderHistory()
+    }
+
+    var historyBoundaryVisibility: (oldest: Bool, latest: Bool) {
+        guard let thread = conversation else { return (false, false) }
+        guard let first = thread.rows.first,
+              let last = conversationRows(thread.rows, expansion: activityExpansionOverrides).last else {
+            // An empty rendered page fits every viewport and can request its next page.
+            return (true, true)
+        }
+        return (
+            visibleHistoryBoundaries.contains(.oldest(threadId: thread.id, rowId: first.id)),
+            visibleHistoryBoundaries.contains(.latest(threadId: thread.id, rowId: last.id))
+        )
+    }
+
+    func historyBoundaryMarker(_ boundary: HistoryBoundary, height: CGFloat) -> some View {
+        Color.clear.frame(height: height)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .id(boundary)
+            .onScrollVisibilityChange(threshold: 0.01) { visible in
+                updateHistoryBoundary(boundary, visible: visible)
+            }
+            .onDisappear { updateHistoryBoundary(boundary, visible: false) }
+    }
+
+    private func updateHistoryBoundary(_ boundary: HistoryBoundary, visible: Bool) {
+        guard visibleHistoryBoundaries.contains(boundary) != visible else { return }
+        if visible {
+            visibleHistoryBoundaries.insert(boundary)
+        } else {
+            visibleHistoryBoundaries.remove(boundary)
+        }
+        loadVisibleHistory()
     }
 
     func threadAccessibilityValue(_ thread: ConversationPresentation) -> String {
@@ -144,17 +176,9 @@ extension ThreadScreen {
     }
 }
 
-struct HistoryTopVisibility: Equatable {
-    let threadId: SessionRef?
-    let firstRowId: String?
-    let visible: Bool
-}
-
-struct ConversationScrollMetrics: Equatable {
-    let content: CGSize
-    let container: CGSize
-    let oldest: HistoryTopVisibility
-    let latestVisible: Bool
+enum HistoryBoundary: Hashable {
+    case oldest(threadId: SessionRef?, rowId: String)
+    case latest(threadId: SessionRef?, rowId: String)
 }
 
 func conversationRows(_ rows: [ThreadConversationRow],
