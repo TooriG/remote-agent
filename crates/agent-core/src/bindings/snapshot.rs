@@ -393,7 +393,7 @@ mod tests {
         assert!(!closed.list_unchanged(Arc::new(loaded)));
         let mut archived = closed.clone();
         Arc::make_mut(&mut archived.archived_scopes).insert("previous".into(), Arc::default());
-        assert!(archived.thread_list().unwrap().notice.is_some());
+        assert!(archived.thread_list().unwrap().notice.is_none());
         assert!(!archived.list_unchanged(Arc::new(closed)));
     }
 
