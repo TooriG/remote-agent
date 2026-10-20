@@ -2263,22 +2263,39 @@ async fn terminal_preserves_output_until_acknowledged_and_serializes_input() {
     server.await.unwrap();
 }
 
+#[rstest::rstest]
 #[tokio::test]
-async fn disconnect_does_not_wait_for_a_terminal_start_reply() {
+async fn disconnect_does_not_wait_for_a_terminal_start_reply(
+    #[values(false, true)] close_store: bool,
+) {
     let (store, mut reader, _writer) = setup(Snapshot::default()).await;
     let starting = store.dispatch(Intent::StartTerminal(op::StartTerminal {
         handle: "starting".into(),
         cwd: "/fixture".into(),
         size: agent_protocol::operations::TerminalSize { cols: 80, rows: 24 },
     }));
-    assert_eq!(read(&mut reader).await["method"], "host/terminal/start");
-    // Keep the response pending: Host cleanup is triggered by connection EOF.
-    tokio::time::timeout(Duration::from_secs(1), store.close())
-        .await
-        .expect("disconnect waited for terminal startup")
-        .unwrap();
+    let request = read(&mut reader).await;
+    assert_eq!(request["method"], "host/terminal/start");
+    // Retain the unanswered request through shutdown. Allow transport cleanup,
+    // but require cancellation rather than the terminal RPC reaching its deadline.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        if close_store {
+            store.close().await
+        } else {
+            store.disconnect().await
+        }
+    })
+    .await
+    .expect("disconnect waited for terminal startup")
+    .unwrap();
     assert!(reader.read_request().await.unwrap().is_none());
-    assert!(starting.await.is_err());
+    assert!(matches!(
+        starting.await,
+        Err(PeerError::ConnectionClosed(_))
+    ));
+    if !close_store {
+        store.close().await.unwrap();
+    }
 }
 
 #[tokio::test]
