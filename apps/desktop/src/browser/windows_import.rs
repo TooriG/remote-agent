@@ -160,7 +160,7 @@ impl BrowserPage {
 }
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{BrowserBookmark, fs, load, update};
     #[test]
     fn imports_merge_reopen_and_preserve_corrupt_storage() {
         let directory = tempfile::tempdir().unwrap();
