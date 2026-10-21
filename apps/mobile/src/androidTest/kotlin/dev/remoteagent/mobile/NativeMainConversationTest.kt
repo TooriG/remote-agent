@@ -3,6 +3,9 @@ package dev.remoteagent.mobile
 import android.graphics.Bitmap
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.Text
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -104,7 +107,12 @@ class NativeMainConversationTest {
             compose.onAllNodesWithContentDescription("分岐").assertCountEquals(0)
             compose.onAllNodesWithContentDescription("コピー").assertCountEquals(2)
             val instrumentation = InstrumentationRegistry.getInstrumentation()
-            val screenshot = instrumentation.uiAutomation.takeScreenshot()
+            val screenshot = compose.onRoot().captureToImage().asAndroidBitmap()
+            val colors = mutableSetOf<Int>()
+            for (y in 0 until screenshot.height step 8) {
+                for (x in 0 until screenshot.width step 8) colors.add(screenshot.getPixel(x, y))
+            }
+            assertTrue("Native conversation screenshot must contain rendered content", colors.size > 4)
             File(instrumentation.targetContext.getExternalFilesDir(null), "native-main-conversation.png").outputStream().use {
                 screenshot.compress(Bitmap.CompressFormat.PNG, 100, it)
             }
