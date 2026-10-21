@@ -499,13 +499,15 @@ impl HostRpcService {
                 t.status == agent_protocol::models::TurnStatus::Running && !t.id.trim().is_empty()
             })
             .map(|t| t.id.as_str());
-        let route = super::submission::submission_target(
+        let route = if !agent.manages_workspace(&target.id) {
+            super::submission::SubmissionTarget::Queue
+        } else { super::submission::submission_target(
             response.thread.status,
             running_turn,
             agent.running_input(),
             response.thread.cwd.as_deref(),
         )
-        .map_err(|e| Failure::new("submission_unavailable", e))?;
+        .map_err(|e| Failure::new("submission_unavailable", e))? };
         let mut reload = state.needs_reload;
         if let super::submission::SubmissionTarget::Start { cwd } = route
             && let Some(directory) = self
@@ -1779,7 +1781,7 @@ fn describe_thread(
     ) {
         thread.project_id = projects.project_membership(thread.cwd.as_deref());
     }
-    thread.capabilities = Some(capabilities);
+    thread.capabilities.get_or_insert(capabilities);
 }
 
 #[cfg(test)]

@@ -129,6 +129,10 @@ pub(crate) trait Agent: Identity {
     }
     fn data_recipient(&self) -> &'static str;
     fn running_input(&self) -> super::submission::RunningInput;
+    /// Cloud conversations own execution without a checkout on this Host.
+    fn manages_workspace(&self, _id: &str) -> bool {
+        true
+    }
     fn capabilities(&self) -> Capabilities;
     fn availability(&self) -> Result<(), Failure>;
     /// Reject creation before the Host creates a workspace. Some adapters can
@@ -214,6 +218,11 @@ pub(crate) trait Agent: Identity {
 }
 
 pub(crate) enum AgentChange {
+    /// External conversations are polled only while a client observes them.
+    Observed {
+        session: SessionRef,
+        changes: Vec<agent_protocol::session::SessionChange>,
+    },
     TaskParent {
         session: SessionRef,
         parent: SessionRef,
@@ -248,6 +257,14 @@ pub(crate) struct AgentEvent {
 impl AgentChange {
     pub fn apply(self, router: &SessionRouter) -> Result<(), String> {
         match self {
+            Self::Observed { session, changes } => {
+                if !router.is_observed(&session) {
+                    return Err("conversation subscription closed".into());
+                }
+                for change in changes {
+                    router.session_change(&session, change);
+                }
+            }
             Self::TaskParent { session, parent } => router.task_parent(session, parent),
             Self::Session { session, change } => router.session_change(&session, change),
             Self::Request {

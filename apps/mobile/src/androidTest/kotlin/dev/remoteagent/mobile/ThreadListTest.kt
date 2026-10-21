@@ -38,7 +38,7 @@ class ThreadListTest {
     @get:Rule val compose = createComposeRule()
 
     @Test
-    fun coordinatorOpensInsideBexFromBothProjectEntriesAndReturnsToTheList() {
+    fun bothCoordinatorEntriesOpenTheOriginalSessionInTheBexConversationScreen() {
         val persisted = JSONObject(Snapshot.empty().serialize().decodeToString()).put(
             "threads", JSONObject("""{"data":[],"projects":[
                 {"id":"claude-project:chan_example","name":"Cloud project","roots":[]}],
@@ -53,12 +53,12 @@ class ThreadListTest {
             }
             compose.onNodeWithText("プロジェクト").performClick()
             compose.onNodeWithContentDescription("Cloud projectのメイン会話を開く").performClick()
-            compose.onNodeWithText("一覧に戻る").assertIsDisplayed().performClick()
             compose.onNodeWithText("メイン会話を開く").assertIsDisplayed().performClick()
-            compose.onNodeWithText("メイン会話").assertIsDisplayed()
-            compose.onNodeWithText("一覧に戻る").performClick()
-            compose.onNodeWithText("Cloud project").assertIsDisplayed()
-            compose.runOnIdle { assertTrue(intents.isEmpty()) }
+            compose.runOnIdle {
+                val expected = SessionRef(ProviderKind.CLAUDE, "chan_example")
+                assertEquals(listOf(expected, expected), intents.map { (it as Intent.ReadThread).v1.threadId })
+                assertTrue(intents.all { (it as Intent.ReadThread).v1.open })
+            }
         }
     }
 

@@ -79,8 +79,6 @@ internal fun ThreadListScreen(
     hostName: String = "My PC",
     connected: Boolean = false,
 ) {
-    var coordinatorUrl by rememberSaveable { mutableStateOf<String?>(null) }
-    val openCoordinator: (String) -> Unit = { coordinatorUrl = it }
     var search by rememberSaveable { mutableStateOf(query.searchTerm) }
     var searching by rememberSaveable { mutableStateOf(query.searchTerm.isNotEmpty()) }
     val focusManager = LocalFocusManager.current
@@ -143,12 +141,10 @@ internal fun ThreadListScreen(
             selectedTab,
             reorder,
             perform,
-            openCoordinator,
             Modifier.weight(1f).fillMaxWidth(),
         )
         NewChatButton(perform)
     }
-    coordinatorUrl?.let { url -> CoordinatorScreen(url) { coordinatorUrl = null } }
 }
 
 @Composable
@@ -171,7 +167,6 @@ private fun ThreadListContent(
     selectedTab: Int,
     reorder: ProjectReorder,
     perform: (Intent) -> Unit,
-    openCoordinator: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Box(modifier.clipToBounds()) {
@@ -184,7 +179,7 @@ private fun ThreadListContent(
             if (selectedTab == 0) {
                 recentChats(list, loadingThreads, perform)
             } else {
-                projectThreads(list, perform, reorder, openCoordinator)
+                projectThreads(list, perform, reorder)
                 if (list?.hasMoreProjects == true)
                     item {
                         TextButton(
@@ -356,7 +351,6 @@ private fun LazyListScope.projectThreads(
     list: ThreadList?,
     perform: (Intent) -> Unit,
     reorder: ProjectReorder,
-    openCoordinator: (String) -> Unit,
 ) {
     val projects = list?.projects.orEmpty()
     projects.forEach { project ->
@@ -366,16 +360,18 @@ private fun LazyListScope.projectThreads(
                 project,
                 perform,
                 reorder,
-                openCoordinator = openCoordinator,
                 modifier = Modifier.alpha(if (reorder.source == project.id) DRAG_PLACEHOLDER_ALPHA else 1f),
             )
             ProjectDropMarker(reorder, project.id, after = true)
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
         }
         if (project.expanded) {
-            project.coordinatorUrl?.let { url ->
+            project.coordinator?.let { session ->
                 item(key = "coordinator:${project.id}") {
-                    TextButton(onClick = { openCoordinator(url) }, modifier = Modifier.fillMaxWidth()) {
+                    TextButton(
+                        onClick = { perform(Intent.ReadThread(ReadThread(session, open = true))) },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
                         Text("メイン会話を開く")
                     }
                     Text(
@@ -412,9 +408,8 @@ private fun ProjectRow(
     reorder: ProjectReorder,
     modifier: Modifier = Modifier,
     floating: Boolean = false,
-    openCoordinator: (String) -> Unit = {},
 ) {
-    val coordinatorUrl = project.coordinatorUrl
+    val coordinator = project.coordinator
     Row(
         modifier.fillMaxWidth().padding(vertical = 10.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -453,8 +448,8 @@ private fun ProjectRow(
                 }
             }
         }
-        if (coordinatorUrl != null) {
-            IconButton(onClick = { openCoordinator(coordinatorUrl) }) {
+        if (coordinator != null) {
+            IconButton(onClick = { perform(Intent.ReadThread(ReadThread(coordinator, open = true))) }) {
                 Icon(painterResource(R.drawable.ic_chat), "${project.name}のメイン会話を開く")
             }
         } else {

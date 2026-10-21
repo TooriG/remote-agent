@@ -106,6 +106,13 @@ adb -P "$server_port" -s "$serial" shell am instrument -w \
 grep -qx 'OK (6 tests)' "$log.thread-list.log"
 
 adb -P "$server_port" -s "$serial" shell am instrument -w \
+    -e class dev.remoteagent.mobile.NativeMainConversationTest \
+    dev.remoteagent.mobile.test/androidx.test.runner.AndroidJUnitRunner | tee "$log.native-main.log"
+grep -qx 'OK (1 test)' "$log.native-main.log"
+adb -P "$server_port" -s "$serial" pull \
+    /sdcard/Android/data/dev.remoteagent.mobile/files/native-main-conversation.png "$log.native-main.png"
+
+adb -P "$server_port" -s "$serial" shell am instrument -w \
     -e class dev.remoteagent.mobile.MessageActionsTest \
     dev.remoteagent.mobile.test/androidx.test.runner.AndroidJUnitRunner | tee "$log.message-actions.log"
 grep -qx 'OK (2 tests)' "$log.message-actions.log"

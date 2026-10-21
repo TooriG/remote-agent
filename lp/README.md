@@ -134,11 +134,12 @@ previews. Conversation images and existing Markdown file links also open preview
 Binary or oversized text files show an explicit unavailable-preview message.
 Draft attachments can be removed without deleting the original phone file.
 
-The project chat icon and 「メイン会話を開く」 show the existing Claude project
-coordinator inside BEX. Sign into Claude in that screen on first use; its web
-sign-in cookies are retained. Use 「一覧に戻る」 to return to the project list,
-Android Back to navigate web history, or 「再読み込み」 to retry a failed load.
-Local worker threads continue to open in the regular BEX conversation screen.
+The project chat icon and 「メイン会話を開く」 open the existing Claude project
+coordinator in BEX's regular native conversation screen. History, Markdown,
+selection/copy, older-message pagination and text input share the existing BEX
+conversation implementation. The paired Host reads and sends channel messages
+with the Claude account selected in BEX; no embedded page or phone web login is
+needed. Local worker threads remain separate conversations in the project.
 
 Conversation website and PR links open Android's browser or matching app. Links
 inside tables behave the same way. If no app can handle a link, BEX displays its
