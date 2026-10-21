@@ -78,16 +78,25 @@ fn project_summary(project: &Project) -> ProjectSummary {
 
 fn coordinator(project_id: &str) -> Option<crate::session::SessionRef> {
     let id = project_id.strip_prefix("claude-project:")?;
-    let suffix = id.strip_prefix("chan_")?;
-    (!suffix.is_empty()
-        && suffix.len() <= 120
-        && suffix
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-'))
-    .then(|| crate::session::SessionRef {
+    coordinator_id(id).then(|| crate::session::SessionRef {
         provider: crate::session::ProviderKind::Claude,
         id: id.into(),
     })
+}
+
+pub(crate) fn is_coordinator_session(session: &crate::session::SessionRef) -> bool {
+    session.provider == crate::session::ProviderKind::Claude && coordinator_id(&session.id)
+}
+
+fn coordinator_id(id: &str) -> bool {
+    let Some(suffix) = id.strip_prefix("chan_") else {
+        return false;
+    };
+    !suffix.is_empty()
+        && suffix.len() <= 120
+        && suffix
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
 }
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ThreadSummary {
