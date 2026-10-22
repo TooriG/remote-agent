@@ -123,6 +123,14 @@ fn open_main_window(cx: &mut App) {
 }
 
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--build-info") {
+        println!("{}", serde_json::json!({
+            "profile": env!("BEX_BUILD_PROFILE"),
+            "debugAssertions": cfg!(debug_assertions),
+            "revision": option_env!("BEX_BUILD_REVISION").unwrap_or("development"),
+        }));
+        return;
+    }
     // GPUI's DirectComposition target is above child HWNDs, hiding WebView2
     // behind the app surface. Use its HWND swap-chain renderer for embedding.
     // Set this before any runtime or platform threads can read the environment.

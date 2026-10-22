@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("dev", "release")]
+    [ValidateSet("release")]
     [string]$Profile = "release",
     [switch]$SkipBuild,
     [string]$BinaryDirectory,
@@ -21,8 +21,7 @@ try {
     $metadataJson = & cargo metadata --locked --no-deps --format-version 1
     if ($LASTEXITCODE -ne 0) { throw "cargo metadata failed." }
     $metadata = $metadataJson | ConvertFrom-Json
-    $directory = if ($Profile -eq "dev") { "debug" } else { "release" }
-    $buildDirectory = Join-Path $metadata.target_directory $directory
+    $buildDirectory = Join-Path $metadata.target_directory "release"
     if ($BinaryDirectory) {
         if (-not $SkipBuild) { throw "BinaryDirectory requires SkipBuild." }
         $buildDirectory = (Resolve-Path -LiteralPath $BinaryDirectory).Path
@@ -59,6 +58,12 @@ try {
             if ($LASTEXITCODE -ne 0) { throw "Windows build failed." }
         } finally { $env:BEX_BUILD_REVISION = $previousRevision }
     }
+    # Read facts from the executable; directory names and caller labels are not proof.
+    $desktopInfo = & (Join-Path $buildDirectory "bex-desktop.exe") --build-info | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0 -or $desktopInfo.profile -ne "release" -or $desktopInfo.debugAssertions) {
+        throw "Distribution requires a release executable with debug assertions disabled."
+    }
+    if ($desktopInfo.revision -ne $revision) { throw "Desktop binary does not match source revision $revision." }
     # A unique staging directory avoids modifying an installed/running Host.
     $packageRoot = Join-Path $metadata.target_directory "windows-packages"
     New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null

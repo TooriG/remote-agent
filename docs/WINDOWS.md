@@ -31,8 +31,6 @@ toolchain job).
 
 ```powershell
 ./scripts/package-windows.ps1
-# Faster local development package:
-./scripts/package-windows.ps1 -Profile dev
 ```
 
 Install Inno Setup 6.3+ (or supply `-InnoCompiler path/to/ISCC.exe`).
@@ -40,6 +38,13 @@ The script builds desktop, Host, supervisor, and CLI from the same checkout,
 then writes the EXE installer, optional ZIP, and SHA-256 checksums under `target/windows-packages/`
 (or the Cargo-configured target directory). `-SkipBuild` packages already-built
 executables and is intended for CI immediately after verification.
+
+Installers always contain release binaries. The packager reads `--build-info`
+from the desktop executable and rejects debug builds or a mismatched source
+revision, including with `-SkipBuild` or `-BinaryDirectory`. GPUI development
+builds read shader files from their build machine and must not be distributed.
+CI installs the EXE in a temporary directory, hides GPUI's build-time shader
+sources, and checks that the installed app opens a window without a panic.
 
 ## 日本語
 
