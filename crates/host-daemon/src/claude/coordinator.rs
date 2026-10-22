@@ -44,6 +44,9 @@ pub(super) struct Client {
 
 impl Client {
     pub fn new(home: PathBuf, native_home: PathBuf, program: PathBuf) -> Result<Self, Failure> {
+        // reqwest's rustls-no-provider feature requires an explicit provider.
+        // Project listing can reach this before dictation or APNs initializes TLS.
+        let _ = rustls::crypto::ring::default_provider().install_default();
         Ok(Self {
             home,
             native_home,
@@ -575,6 +578,44 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+    #[test]
+    fn cold_coordinator_initializes_tls_without_another_feature_running_first() {
+        const CHILD: &str = "BEX_TEST_COLD_COORDINATOR_TLS";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "claude::coordinator::tests::cold_coordinator_initializes_tls_without_another_feature_running_first",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        assert!(rustls::crypto::CryptoProvider::get_default().is_none());
+        let directory = tempfile::tempdir().unwrap();
+        Client::new(
+            directory.path().into(),
+            directory.path().into(),
+            "claude".into(),
+        )
+        .unwrap();
+        // Repeated initialization must also be safe.
+        Client::new(
+            directory.path().into(),
+            directory.path().into(),
+            "claude".into(),
+        )
+        .unwrap();
+    }
+
     fn row(id: &str, time: &str, human: bool, text: &str) -> Value {
         let mut row = json!({"id":id,"channel_id":"chan_fixture","body":text,"created_at":time,"seq":"0","attachments":[]});
         if human {
@@ -681,7 +722,6 @@ mod tests {
 
     #[tokio::test]
     async fn api_reads_and_sends_use_selected_account_and_stable_client_id_without_a_workspace() {
-        let _ = rustls::crypto::ring::default_provider().install_default();
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(
             directory.path().join(".credentials.json"),
