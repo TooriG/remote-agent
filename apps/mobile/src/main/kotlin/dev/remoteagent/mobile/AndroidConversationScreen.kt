@@ -187,26 +187,22 @@ private fun ConversationContent(
     when (val content = row.content) {
         is ConversationRowContent.User -> ThreadMessageCard(content.item, true, cwd, perform, timestampMs)
         is ConversationRowContent.Response ->
-            Column {
-                ThreadMessageCard(
-                    content.item,
-                    false,
-                    cwd,
-                    perform,
-                    timestampMs,
-                    fork =
-                        if (threadId != null && content.forkTurnId != null)
-                            ({
-                                perform(
-                                    Intent.ForkSession(dev.remoteagent.core.ForkSession(threadId, content.forkTurnId))
-                                ) {}
-                            })
-                        else null,
-                    forking = forkPhase is dev.remoteagent.core.OperationPhase.Running,
-                )
-                if (forkPhase is dev.remoteagent.core.OperationPhase.Failed)
-                    Text(forkPhase.message, color = MaterialTheme.colorScheme.error)
-            }
+            ThreadMessageCard(
+                content.item,
+                false,
+                cwd,
+                perform,
+                timestampMs,
+                fork =
+                    if (threadId != null && content.forkTurnId != null)
+                        ({
+                            perform(
+                                Intent.ForkSession(dev.remoteagent.core.ForkSession(threadId, content.forkTurnId))
+                            ) {}
+                        })
+                    else null,
+                forkPhase = forkPhase,
+            )
         is ConversationRowContent.Activity ->
             ThreadActivityCard(content.item, cwd, perform) { itemId ->
                 if (threadId != null) perform(Intent.ReadItem(ReadItem(threadId, content.turnId, itemId))) {}

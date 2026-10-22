@@ -28,7 +28,6 @@ internal fun ComposerStopButton(
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
 ) {
     val stopping = phase is dev.remoteagent.core.OperationPhase.Running
-    val error = (phase as? dev.remoteagent.core.OperationPhase.Failed)?.message
     Column {
         FilledIconButton(
             onClick = { perform(Intent.Interrupt(interrupt)) {} },
@@ -41,6 +40,7 @@ internal fun ComposerStopButton(
             if (stopping) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
             else Box(Modifier.size(16.dp).background(Color.Black, RoundedCornerShape(3.dp)))
         }
-        if (error != null) Text(error, color = MaterialTheme.colorScheme.error)
+        if (phase is dev.remoteagent.core.OperationPhase.Failed)
+            Text("停止できませんでした。再試行してください。", color = MaterialTheme.colorScheme.error)
     }
 }

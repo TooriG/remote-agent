@@ -1,6 +1,9 @@
 package dev.remoteagent.mobile
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.test.assertCountEquals
@@ -10,8 +13,8 @@ import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import dev.remoteagent.core.Intent
-import dev.remoteagent.core.Outcome
+import dev.remoteagent.core.ConversationRowContent
+import dev.remoteagent.core.OperationPhase
 import dev.remoteagent.core.ProviderKind
 import dev.remoteagent.core.SessionRef
 import dev.remoteagent.core.Snapshot
@@ -62,7 +65,7 @@ class MessageActionsTest {
     }
 
     @Test
-    fun forkShowsImmediateProgressPreventsRepeatAndAllowsRetryAfterFailure() {
+    fun forkPhaseShowsProgressPreventsRepeatAndAllowsRetryAfterFailure() {
         conversation().use { snapshot ->
             val projection =
                 projectConversationRows(
@@ -71,20 +74,21 @@ class MessageActionsTest {
                     null,
                 )
             var calls = 0
-            var completion: ((Result<Outcome>) -> Unit)? = null
+            val response = requireNotNull(projection).rows.single { it.content is ConversationRowContent.Response }
+            var phase by mutableStateOf<OperationPhase?>(null)
             compose.setContent {
                 MaterialTheme {
-                    ThreadDetailScreen(
-                        snapshot,
-                        projection,
-                        { intent, done ->
-                            if (intent is Intent.ForkSession) {
-                                calls++
-                                completion = done
-                            }
+                    ThreadMessageCard(
+                        (response.content as ConversationRowContent.Response).item,
+                        false,
+                        "/fixture",
+                        { _, _ -> },
+                        fork = {
+                            calls++
+                            phase = OperationPhase.Running
                         },
-                        null,
-                    ) {}
+                        forkPhase = phase,
+                    )
                 }
             }
             compose.onNodeWithContentDescription("分岐").performClick()
@@ -92,12 +96,12 @@ class MessageActionsTest {
             assertEquals(1, calls)
             // The action is disabled until the actual operation completes.
             compose.onAllNodesWithContentDescription("分岐").assertCountEquals(0)
-            compose.runOnIdle { completion!!(Result.failure(IllegalStateException("offline"))) }
+            compose.runOnIdle { phase = OperationPhase.Failed("offline") }
             compose.onNodeWithText("分岐できませんでした。もう一度お試しください。").assertIsDisplayed()
             compose.onNodeWithContentDescription("分岐").performClick()
             assertEquals(2, calls)
             compose.onNodeWithText("分岐を作成中…").assertIsDisplayed()
-            compose.runOnIdle { completion!!(Result.success(Outcome.Applied)) }
+            compose.runOnIdle { phase = null }
             compose.onNodeWithText("分岐を作成中…").assertDoesNotExist()
             compose.onNodeWithContentDescription("分岐").assertIsDisplayed()
         }

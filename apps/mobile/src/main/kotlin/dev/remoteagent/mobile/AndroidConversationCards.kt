@@ -26,11 +26,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.MarkdownFileKind
 import dev.remoteagent.core.MarkdownFileReference
 import dev.remoteagent.core.Outcome
+import dev.remoteagent.core.OperationPhase
 import dev.remoteagent.core.RenderedItem
 
 @Composable
@@ -41,7 +45,7 @@ internal fun ThreadMessageCard(
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
     timestampMs: ULong? = null,
     fork: (() -> Unit)? = null,
-    forking: Boolean = false,
+    forkPhase: OperationPhase? = null,
 ) {
     val content = remember(item) { item.presentation() }
     val imageFrame = Modifier.widthIn(max = 320.dp).fillMaxWidth().height(320.dp)
@@ -63,7 +67,8 @@ internal fun ThreadMessageCard(
                     }
                 } else ConversationBody(body, cwd, perform)
             }
-        if (!isUser && content.kind == "agent") MessageFooter(content.body.orEmpty(), timestampMs, fork, forking)
+        if (!isUser && content.kind == "agent")
+            MessageFooter(content.body.orEmpty(), timestampMs, fork, forkPhase)
         if (isUser) MessageFooter(content.body.orEmpty(), timestampMs, null)
         if (isUser && content.nativeId == null) {
             content.title?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
@@ -86,8 +91,9 @@ private fun MessageTime(timestampMs: ULong?) {
 }
 
 @Composable
-internal fun MessageFooter(text: String, timestampMs: ULong?, fork: (() -> Unit)?, forking: Boolean = false) {
+internal fun MessageFooter(text: String, timestampMs: ULong?, fork: (() -> Unit)?, forkPhase: OperationPhase? = null) {
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    val forking = forkPhase is OperationPhase.Running
     var copied by remember(text) { mutableStateOf(false) }
     LaunchedEffect(copied) {
         if (copied) {
@@ -95,27 +101,38 @@ internal fun MessageFooter(text: String, timestampMs: ULong?, fork: (() -> Unit)
             copied = false
         }
     }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        IconButton(
-            onClick = {
-                clipboard.setText(androidx.compose.ui.text.AnnotatedString(text))
-                copied = true
-            },
-            enabled = text.isNotEmpty(),
-        ) {
-            Icon(
-                painterResource(if (copied) R.drawable.ic_check else R.drawable.ic_copy),
-                if (copied) "コピーしました" else "コピー",
-                Modifier.size(20.dp),
-            )
-        }
-        fork?.let {
-            IconButton(onClick = it, enabled = !forking) {
-                if (forking) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                else Icon(painterResource(R.drawable.ic_fork), "分岐", Modifier.size(20.dp))
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(
+                onClick = {
+                    clipboard.setText(androidx.compose.ui.text.AnnotatedString(text))
+                    copied = true
+                },
+                enabled = text.isNotEmpty(),
+            ) {
+                Icon(
+                    painterResource(if (copied) R.drawable.ic_check else R.drawable.ic_copy),
+                    if (copied) "コピーしました" else "コピー",
+                    Modifier.size(20.dp),
+                )
             }
+            fork?.let {
+                IconButton(onClick = it, enabled = !forking) {
+                    if (forking) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                    else Icon(painterResource(R.drawable.ic_fork), "分岐", Modifier.size(20.dp))
+                }
+            }
+            MessageTime(timestampMs)
         }
-        MessageTime(timestampMs)
+        if (forkPhase != null)
+            Text(
+                if (forking) "分岐を作成中…" else "分岐できませんでした。もう一度お試しください。",
+                style = MaterialTheme.typography.bodySmall,
+                color =
+                    if (forkPhase is OperationPhase.Failed) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+            )
     }
 }
 
