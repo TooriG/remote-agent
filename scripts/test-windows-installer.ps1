@@ -50,19 +50,22 @@ try {
         Start-Sleep -Milliseconds 500
         $desktop.Refresh()
         if ($desktop.HasExited) { throw "Installed desktop exited during startup: $($desktop.ExitCode)" }
-        if ($desktop.MainWindowHandle -ne [IntPtr]::Zero) { $windowOpened = $true; break }
+        if ($desktop.MainWindowHandle -ne [IntPtr]::Zero -and $desktop.MainWindowTitle -eq "bex") { $windowOpened = $true; break }
     }
     if (-not $windowOpened) { throw "Installed desktop never opened a native window." }
     Start-Sleep -Seconds 8
     $desktop.Refresh()
     if ($desktop.HasExited) { throw "Installed desktop exited after opening its window." }
     $logs = @(Get-ChildItem -LiteralPath (Join-Path $testRoot "state") -Filter "*.jsonl" -Recurse -ErrorAction SilentlyContinue)
+    $startupLogged = $false
     foreach ($log in $logs) {
         foreach ($line in Get-Content -LiteralPath $log.FullName) {
             $record = $line | ConvertFrom-Json
+            if ($record.component -eq "desktop" -and $record.operation -eq "startup") { $startupLogged = $true }
             if ($record.operation -eq "panic") { throw "Installed desktop/Host panicked: $($record.message)" }
         }
     }
+    if (-not $startupLogged) { throw "Desktop startup diagnostic was not recorded in isolated state." }
     Write-Output "PASS: installed release $($metadata.revision) opened a native window without build-time shader sources."
 } finally {
     # Only stop processes executing from this test's unique installation directory.

@@ -80,6 +80,7 @@ try {
         Copy-Item -LiteralPath "docs/WINDOWS.md" -Destination (Join-Path $bundle "README.md")
         @{ revision = $revision; profile = $Profile; target = "x86_64-pc-windows-msvc" } |
             ConvertTo-Json | Set-Content -LiteralPath (Join-Path $bundle "build-info.json") -Encoding UTF8
+        Copy-Item -LiteralPath (Join-Path $bundle "build-info.json") -Destination (Join-Path $bundle "desktop-build-info.json")
         $archive = Join-Path $packageRoot "bex-windows-x86_64-$Profile.zip"
         Compress-Archive -LiteralPath $bundle -DestinationPath $archive -Force
         $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()

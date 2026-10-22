@@ -23,8 +23,24 @@ jobs:
         with:
           toolchain: 1.98.0
       - uses: Swatinem/rust-cache@v2
-      - name: Test workspace libraries
-        run: cargo test --locked --workspace --lib
+      - name: Test SDK and build unit-test prerequisites
+        run: |
+          npm --prefix crates/host-daemon/src/claude/sdk ci --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw "SDK dependency installation failed." }
+          npm --prefix crates/host-daemon/src/claude/sdk test
+          if ($LASTEXITCODE -ne 0) { throw "SDK tests failed." }
+          node scripts/install-claude-sdk.mjs target/debug
+          cargo build --locked -p bex-process --bin bex-provider-supervisor
+          if ($LASTEXITCODE -ne 0) { throw "Supervisor build failed." }
+      - name: Test workspace libraries and binaries
+        run: cargo test --locked --workspace --lib --bins --features agent-core/bindings
+      - name: Test agent peer tools
+        run: cargo test --locked --manifest-path tools/agent-peer/Cargo.toml
+      - name: Reject development installer requests
+        run: |
+          $rejected = $false
+          try { ./scripts/package-windows.ps1 -Profile dev } catch [System.Management.Automation.ParameterBindingException] { $rejected = $true }
+          if (-not $rejected) { throw "Development installer packaging must be rejected." }
       - name: Test download links
         run: node --test lp/download.test.cjs
       - name: Build matching release binaries and installer
