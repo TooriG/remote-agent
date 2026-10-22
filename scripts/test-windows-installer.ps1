@@ -43,7 +43,9 @@ try {
         [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, "Process")
     }
     New-Item -ItemType Directory -Path $env:CODEX_HOME | Out-Null
-    $desktop = Start-Process -FilePath (Join-Path $installDirectory "bex-desktop.exe") -WorkingDirectory $testRoot -WindowStyle Hidden -PassThru
+    # This is the interactive application under test: hiding it defeats the
+    # native-window assertion (Process.MainWindowHandle ignores hidden windows).
+    $desktop = Start-Process -FilePath (Join-Path $installDirectory "bex-desktop.exe") -WorkingDirectory $testRoot -WindowStyle Normal -PassThru
     $deadline = (Get-Date).AddSeconds(45)
     $windowOpened = $false
     while ((Get-Date) -lt $deadline) {
@@ -52,7 +54,13 @@ try {
         if ($desktop.HasExited) { throw "Installed desktop exited during startup: $($desktop.ExitCode)" }
         if ($desktop.MainWindowHandle -ne [IntPtr]::Zero -and $desktop.MainWindowTitle -eq "bex") { $windowOpened = $true; break }
     }
-    if (-not $windowOpened) { throw "Installed desktop never opened a native window." }
+    if (-not $windowOpened) {
+        $desktop | Select-Object Id,SessionId,MainWindowTitle,MainWindowHandle,HasExited | Format-List | Out-String | Write-Output
+        foreach ($log in Get-ChildItem -LiteralPath (Join-Path $testRoot "state") -Filter "*.jsonl" -Recurse -ErrorAction SilentlyContinue) {
+            Get-Content -LiteralPath $log.FullName | Write-Output
+        }
+        throw "Installed desktop never opened a native window."
+    }
     Start-Sleep -Seconds 8
     $desktop.Refresh()
     if ($desktop.HasExited) { throw "Installed desktop exited after opening its window." }
