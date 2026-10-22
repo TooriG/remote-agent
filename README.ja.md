@@ -114,10 +114,6 @@ Windows 11では、ビルド済みZIPを使えばRustのインストールは不
 
 ## クライアントのビルド
 
-macOSを含む各プラットフォームの更新版を公開する開発者は、同じ公開作業内で
-getbex.devの該当ダウンロードも更新・デプロイし、公開サイトのボタンから最新版を
-取得できることを確認してください。[公開チェックリスト](docs/RELEASING.md)に従います。
-
 ```sh
 # Mac配布用（署名証明書が必要。BEX_CODE_SIGN_IDENTITYで選択）
 scripts/dev-env.sh just build-desktop-macos && open target/release/bex.app

@@ -52,8 +52,8 @@ jobs:
         run: |
           nix develop .#native --command cargo test --locked -p agent-transport --lib
           nix develop .#native --command cargo build --locked -p host-fixture -p codex-app-server -p bex-process --bins
-      - name: Verify image attachments against an isolated Host
-        run: nix develop .#android-test --command bash scripts/android-e2e.sh attachments
+      - name: Verify Android acceptance against an isolated Host
+        run: nix develop .#android-test --command bash scripts/android-e2e.sh
       - name: Retain Android verification reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

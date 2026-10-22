@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 : "${ANDROID_HOME:?Run through nix develop .#android-test}"
 mode=${1:-all}
-[[ $mode == all || $mode == terminal || $mode == attachments ]] || { echo "usage: android-e2e.sh [all|terminal|attachments]" >&2; exit 2; }
+[[ $mode == all || $mode == terminal ]] || { echo "usage: android-e2e.sh [all|terminal]" >&2; exit 2; }
 target=${CARGO_TARGET_DIR:-target}
 mkdir -p "$target/qa"
 target=$(cd "$target" && pwd -P)
@@ -89,56 +89,6 @@ prepare_pairing() {
     adb -P "$server_port" -s "$serial" shell run-as dev.remoteagent.mobile mkdir -p cache
     adb -P "$server_port" -s "$serial" shell "run-as dev.remoteagent.mobile sh -c 'cat > cache/fixture-invitation.json'" <"$fixture/invitation.json"
 }
-if [[ $mode == attachments ]]; then
-prepare_pairing
-adb -P "$server_port" -s "$serial" shell am instrument -w -e cwd "$fixture/host/project" \
-    -e class dev.remoteagent.mobile.ConversationRecoveryTest \
-    dev.remoteagent.mobile.test/androidx.test.runner.AndroidJUnitRunner | tee "$log.attachments.log"
-grep -qx 'OK (1 test)' "$log.attachments.log"
-adb -P "$server_port" -s "$serial" shell am instrument -w \
-    -e class dev.remoteagent.mobile.VoiceInputTest \
-    dev.remoteagent.mobile.test/androidx.test.runner.AndroidJUnitRunner | tee "$log.voice.log"
-grep -qx 'OK (3 tests)' "$log.voice.log"
-
-adb -P "$server_port" -s "$serial" shell am instrument -w \
-    -e class dev.remoteagent.mobile.MarkdownLinkTest \
-    dev.remoteagent.mobile.test/androidx.test.runner.AndroidJUnitRunner | tee "$log.links.log"
-grep -qx 'OK (4 tests)' "$log.links.log"
-
-adb -P "$server_port" -s "$serial" shell am instrument -w \
-    -e class dev.remoteagent.mobile.ThreadListTest \
-    dev.remoteagent.mobile.test/androidx.test.runner.AndroidJUnitRunner | tee "$log.thread-list.log"
-grep -qx 'OK (5 tests)' "$log.thread-list.log"
-
-adb -P "$server_port" -s "$serial" shell am instrument -w \
-    -e class dev.remoteagent.mobile.MessageActionsTest \
-    dev.remoteagent.mobile.test/androidx.test.runner.AndroidJUnitRunner | tee "$log.message-actions.log"
-grep -qx 'OK (2 tests)' "$log.message-actions.log"
-
-adb -P "$server_port" -s "$serial" shell am instrument -w \
-    -e class dev.remoteagent.mobile.UnknownSubmissionTest \
-    dev.remoteagent.mobile.test/androidx.test.runner.AndroidJUnitRunner | tee "$log.unknown-submission.log"
-grep -qx 'OK (7 tests)' "$log.unknown-submission.log"
-
-adb -P "$server_port" -s "$serial" shell am instrument -w \
-    -e class dev.remoteagent.mobile.ModelDefaultsTest \
-    dev.remoteagent.mobile.test/androidx.test.runner.AndroidJUnitRunner | tee "$log.model-defaults.log"
-grep -qx 'OK (2 tests)' "$log.model-defaults.log"
-
-adb -P "$server_port" -s "$serial" shell am instrument -w \
-    -e class dev.remoteagent.mobile.ComposerStopTest \
-    dev.remoteagent.mobile.test/androidx.test.runner.AndroidJUnitRunner | tee "$log.composer-stop.log"
-grep -qx 'OK (3 tests)' "$log.composer-stop.log"
-
-adb -P "$server_port" -s "$serial" shell settings put secure show_ime_with_hard_keyboard 1
-adb -P "$server_port" -s "$serial" shell am instrument -w \
-    -e class dev.remoteagent.mobile.ComposerKeyboardTest \
-    dev.remoteagent.mobile.test/androidx.test.runner.AndroidJUnitRunner | tee "$log.keyboard.log"
-grep -qx 'OK (1 test)' "$log.keyboard.log"
-
-echo "Android image attachment, voice input, link and header and keyboard checks passed"
-exit 0
-fi
 if [[ $mode == all ]]; then
 prepare_pairing
 adb -P "$server_port" -s "$serial" shell am instrument -w -e cwd "$fixture/host/project" \
@@ -174,4 +124,11 @@ if ! grep -qx 'OK (1 test)' "$log.terminal.log"; then
 fi
 adb -P "$server_port" -s "$serial" pull /sdcard/Android/data/dev.remoteagent.mobile/files/terminal-input.png "$log.terminal-input.png"
 adb -P "$server_port" -s "$serial" pull /sdcard/Android/data/dev.remoteagent.mobile/files/terminal-retained.png "$log.terminal-retained.png"
+if [[ $mode == all ]]; then
+adb -P "$server_port" -s "$serial" shell settings put secure show_ime_with_hard_keyboard 1
+adb -P "$server_port" -s "$serial" shell am instrument -w \
+    -e class dev.remoteagent.mobile.VoiceInputTest,dev.remoteagent.mobile.MarkdownLinkTest,dev.remoteagent.mobile.MessageActionsTest,dev.remoteagent.mobile.UnknownSubmissionTest,dev.remoteagent.mobile.ModelDefaultsTest,dev.remoteagent.mobile.ComposerStopTest,dev.remoteagent.mobile.ComposerKeyboardTest \
+    dev.remoteagent.mobile.test/androidx.test.runner.AndroidJUnitRunner | tee "$log.ui.log"
+grep -qx 'OK (22 tests)' "$log.ui.log"
+fi
 echo "Android API 37: $mode checks passed; records at $log.*"
