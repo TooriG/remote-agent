@@ -99,7 +99,7 @@ fn open_main_window(cx: &mut App) {
     let window = cx
         .open_window(
             WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                window_bounds: Some(WindowBounds::Maximized(bounds)),
                 titlebar: Some(TitlebarOptions {
                     title: Some("bex".into()),
                     appears_transparent: !cfg!(target_os = "windows"),
