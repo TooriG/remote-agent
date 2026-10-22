@@ -12,6 +12,10 @@ alone does not complete publication.
    revision. Publish the verified artifact or update its distribution channel.
    Use the macOS app bundle archive, the Windows EXE installer with companion
    files, Android APK, or the iOS TestFlight/App Store channel as appropriate.
+   Windows installers must use the release profile. Run
+   `scripts/test-windows-installer.ps1 -Installer <path> -HideShaderSources`
+   on the build runner before publication; success on the build PC with its
+   Cargo source tree still present is not a portability check.
 2. Update the platform entry in [`lp/public/download.js`](../lp/public/download.js),
    including the pinned URL and any changed version, requirements, format or size
    labels. For a stable channel URL such as TestFlight, verify that the new build
