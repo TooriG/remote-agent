@@ -9,7 +9,20 @@ concurrency:
   group: windows-release-installer
   cancel-in-progress: false
 jobs:
+  unix-tools:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tools/agent-peer
+          cache-on-failure: true
+      - run: cargo test --locked --manifest-path tools/agent-peer/Cargo.toml
   windows:
+    needs: unix-tools
     runs-on: windows-2025
     timeout-minutes: 90
     env:
@@ -23,6 +36,8 @@ jobs:
         with:
           toolchain: 1.98.0
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - name: Test SDK and build unit-test prerequisites
         run: |
           npm --prefix crates/host-daemon/src/claude/sdk ci --ignore-scripts --no-audit --no-fund
@@ -34,8 +49,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Supervisor build failed." }
       - name: Test workspace libraries and binaries
         run: cargo test --locked --workspace --lib --bins --features agent-core/bindings
-      - name: Test agent peer tools
-        run: cargo test --locked --manifest-path tools/agent-peer/Cargo.toml
       - name: Reject development installer requests
         run: |
           $rejected = $false
