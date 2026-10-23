@@ -33,6 +33,12 @@ toolchain job).
 ./scripts/package-windows.ps1
 ```
 
+For a development preview, use `./scripts/package-windows.ps1 -Channel dev`.
+This embeds `Bex dev` in the sidebar header and native window title, including
+when the installed executable is launched directly. The default `main` channel
+keeps the `bex` name. Ordinary Cargo builds can select the same channel with
+`BEX_BUILD_CHANNEL=dev`; build optimization profiles are independent of channels.
+
 Both profiles embed the Windows renderer's compiled shaders. The workspace
 disables `debug_assertions` only for `gpui-pre-windows` in the development
 profile, including its build script, so it compiles HLSL at build time. Keep

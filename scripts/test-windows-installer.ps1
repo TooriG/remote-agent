@@ -51,7 +51,7 @@ try {
         Start-Sleep -Milliseconds 500
         $desktop.Refresh()
         if ($desktop.HasExited) { throw "Installed desktop exited during startup: $($desktop.ExitCode)" }
-        if ($desktop.MainWindowHandle -ne [IntPtr]::Zero -and $desktop.MainWindowTitle -eq "bex") { $windowOpened = $true; break }
+        if ($desktop.MainWindowHandle -ne [IntPtr]::Zero -and $desktop.MainWindowTitle -eq $binaryInfo.appName) { $windowOpened = $true; break }
     }
     if (-not $windowOpened) {
         $desktop | Select-Object Id,SessionId,MainWindowTitle,MainWindowHandle,HasExited | Format-List | Out-String | Write-Output

@@ -8,6 +8,7 @@ mod terminal;
 use futures_util::FutureExt;
 use gpui_kit::{component::Root, *};
 const WINDOW_HEADER_HEIGHT: f32 = 44.;
+pub(crate) const APP_NAME: &str = env!("BEX_APP_NAME");
 #[derive(Clone)]
 pub(crate) struct Runtime {
     pub(crate) handle: tokio::runtime::Handle,
@@ -101,7 +102,7 @@ fn open_main_window(cx: &mut App) {
             WindowOptions {
                 window_bounds: Some(WindowBounds::Maximized(bounds)),
                 titlebar: Some(TitlebarOptions {
-                    title: Some("bex".into()),
+                    title: Some(APP_NAME.into()),
                     appears_transparent: !cfg!(target_os = "windows"),
                     traffic_light_position: Some(point(
                         px(14.),
@@ -128,6 +129,7 @@ fn main() {
             "{}",
             serde_json::json!({
                 "profile": env!("BEX_BUILD_PROFILE"),
+                "appName": APP_NAME,
                 "debugAssertions": cfg!(debug_assertions),
                 "revision": option_env!("BEX_BUILD_REVISION").unwrap_or("development"),
             })
