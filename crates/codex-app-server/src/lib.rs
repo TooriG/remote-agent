@@ -12,6 +12,8 @@ use agent_transport::peer::{PeerError, PeerEvent, RpcMessage, RpcPeer, RpcRespon
 use serde::{Deserialize, Serialize};
 use tokio::{process::Child, sync::broadcast};
 
+const CLIENT_NAME: &str = "remote_agent_host";
+
 #[derive(Debug, Clone)]
 pub struct AppServerConfig {
     pub program: PathBuf,
@@ -34,6 +36,17 @@ impl Default for AppServerConfig {
 pub struct InitializeResponse {
     pub user_agent: String,
     pub codex_home: PathBuf,
+}
+
+impl InitializeResponse {
+    /// The server's version in the initialize handshake, not a fresh CLI process.
+    pub fn version(&self) -> Option<&str> {
+        self.user_agent
+            .strip_prefix(CLIENT_NAME)?
+            .strip_prefix('/')?
+            .split_whitespace()
+            .next()
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -60,6 +73,7 @@ pub enum Error {
 
 /// A ready, initialized Codex App Server process.
 pub struct CodexAppServer {
+    executable: PathBuf,
     child: tokio::sync::Mutex<Child>,
     peer: RpcPeer,
     initialize_response: InitializeResponse,
@@ -98,7 +112,7 @@ impl CodexAppServer {
                 "initialize",
                 &InitializeParams {
                     client_info: ClientInfo {
-                        name: "remote_agent_host",
+                        name: CLIENT_NAME,
                         title: "Remote Agent Host",
                         version: env!("CARGO_PKG_VERSION"),
                     },
@@ -113,6 +127,7 @@ impl CodexAppServer {
             .await?;
 
         Ok(Self {
+            executable,
             child: tokio::sync::Mutex::new(child),
             peer,
             initialize_response,
@@ -121,6 +136,10 @@ impl CodexAppServer {
 
     pub fn initialize_response(&self) -> &InitializeResponse {
         &self.initialize_response
+    }
+
+    pub fn executable(&self) -> &std::path::Path {
+        &self.executable
     }
 
     /// Ordered Codex messages, response markers, and connection termination.
@@ -211,6 +230,29 @@ fn ensure_public_line(line: &str) -> Result<(), Error> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn runtime_version_comes_from_the_initialized_server() {
+        for version in ["0.139.0", "0.164.0", "0.163.0-alpha.11.1"] {
+            let initialized = InitializeResponse {
+                user_agent: format!(
+                    "remote_agent_host/{version} (Mac OS; arm64) unknown (remote_agent_host; 0.1.0)"
+                ),
+                codex_home: PathBuf::new(),
+            };
+            assert_eq!(initialized.version(), Some(version));
+        }
+        for user_agent in ["", "remote_agent_host/", "different/0.164.0"] {
+            assert!(
+                InitializeResponse {
+                    user_agent: user_agent.into(),
+                    codex_home: PathBuf::new()
+                }
+                .version()
+                .is_none()
+            );
+        }
+    }
+
     #[tokio::test]
     async fn shutdown_reaps_the_child_even_after_a_transport_write_failure() {
         for broken in [false, true] {
@@ -237,6 +279,7 @@ mod tests {
                 .spawn()
                 .unwrap();
             let server = CodexAppServer {
+                executable: std::env::current_exe().unwrap(),
                 child: tokio::sync::Mutex::new(child),
                 peer,
                 initialize_response: InitializeResponse {

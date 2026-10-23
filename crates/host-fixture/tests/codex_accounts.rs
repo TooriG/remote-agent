@@ -104,7 +104,11 @@ async fn account_switch_keeps_shared_history_and_restores_selection_without_expo
         let server = Arc::new(CodexAppServer::spawn(config.clone()).await.unwrap());
         let adapter = host_daemon::adapters::codex::Codex::new(Ok(server.clone()));
         let accounts_dir = directory.path().join("accounts");
-        adapter.enable_accounts(accounts_dir.clone(), config.clone()).await.unwrap();
+        // A launcher can move after the primary process starts. Account helpers
+        // must still use that process's executable rather than resolve it again.
+        let mut helper_config = config.clone();
+        helper_config.program = directory.path().join("replaced-launcher");
+        adapter.enable_accounts(accounts_dir.clone(), helper_config).await.unwrap();
         let service = HostRpcService::new([adapter.into()], ProjectStore::new(home.join("bex-worktrees.json")));
         let mut session = service.open_session();
         let list = call(&service, &mut session, "host/account/list", json!({})).await;

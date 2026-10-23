@@ -65,11 +65,11 @@ mod tests {
             let request = reader.read_request().await.unwrap().unwrap();
             assert_eq!(request["method"], "host/codex/cli");
             assert_eq!(request["params"]["update"], true);
-            writer.reply(&request, json!({"result":{"running":true,"version":null,"restartRequired":false,"error":null}})).await.unwrap();
+            writer.reply(&request, json!({"result":{"running":true,"active":null,"installed":null,"restartRequired":false,"error":null}})).await.unwrap();
             let poll = reader.read_request().await.unwrap().unwrap();
             assert_eq!(poll["method"], "host/codex/cli");
             assert_eq!(poll["params"]["update"], false);
-            writer.reply(&poll, json!({"result":{"running":false,"version":null,"restartRequired":false,"error":"update denied"}})).await.unwrap();
+            writer.reply(&poll, json!({"result":{"running":false,"active":null,"installed":null,"restartRequired":false,"error":"update denied"}})).await.unwrap();
             receipt.await.unwrap();
             let snapshot = store.snapshot();
             let status = snapshot.account.codex_cli.as_ref().unwrap();
