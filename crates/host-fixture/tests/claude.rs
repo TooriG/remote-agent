@@ -1580,7 +1580,11 @@ async fn claude_accounts_login_switch_resume_cancel_and_logout_without_codex() {
         let fixture = start().await.unwrap();
         let endpoint = Endpoint::bind(fixture.credentials.local_identity().await, Relays::Disabled).await.unwrap();
         let store = Store::connect(&endpoint, &fixture.ticket, snapshot, None).await.unwrap();
-        assert!(store.dispatch(Intent::LoadModels(op::LoadModels {})).await.is_err(), "logged-out Claude and unavailable Codex must not expose models");
+        store.dispatch(Intent::LoadModels(op::LoadModels {})).await.unwrap();
+        let logged_out = store.snapshot();
+        assert!(logged_out.models.is_empty(), "logged-out Claude and unavailable Codex must not expose models");
+        assert!(logged_out.model_errors.contains_key("codex"), "the catalog must retain the unavailable provider's error");
+        assert!(!logged_out.connection_setup().can_start, "a catalog without usable models cannot finish setup");
         store.dispatch(Intent::ListAccounts(op::ListAccounts {})).await.unwrap();
         assert!(!store.snapshot().account.accounts.as_ref().unwrap().selected.contains_key(&agent_protocol::session::ProviderKind::Claude), "restart must preserve logout without selecting the native account");
         store.dispatch(Intent::SelectAccount(op::SelectAccount { provider: agent_protocol::session::ProviderKind::Claude, id: "claude:desktop".into() })).await.unwrap();
