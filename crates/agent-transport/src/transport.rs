@@ -29,7 +29,7 @@ use uuid::Uuid;
 // Bump when shared Postcard types change incompatibly; enum indices and field
 // positions are part of the wire format, even when decoding still succeeds.
 // Version 12 separates model settings and typed credential operations.
-const ALPN: &[u8] = b"remote-agent/streams/12";
+const ALPN: &[u8] = b"remote-agent/streams/13";
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
     #[error("iroh transport failed: {0}")]
@@ -500,17 +500,17 @@ mod tests {
             assert!(accepted.unwrap().is_ok());
             connected.close();
 
-            // A v11 peer uses different model and credential contracts. Reject at TLS
+            // A v12 peer looks up decoration roots on the Host. Reject at TLS
             // negotiation, before any request can be decoded as another type.
             let legacy = iroh::Endpoint::builder(presets::N0)
-                .alpns(vec![b"remote-agent/streams/11".to_vec()])
+                .alpns(vec![b"remote-agent/streams/12".to_vec()])
                 .relay_mode(RelayMode::Disabled)
                 .clear_address_lookup()
                 .bind()
                 .await
                 .unwrap();
             let (connected, accepted) = tokio::join!(
-                legacy.connect(host.0.addr(), b"remote-agent/streams/10"),
+                legacy.connect(host.0.addr(), b"remote-agent/streams/12"),
                 host.accept()
             );
             assert!(connected.is_err());

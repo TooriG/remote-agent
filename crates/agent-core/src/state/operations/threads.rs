@@ -34,10 +34,15 @@ fn decorations(
     projects: &[crate::models::Project],
     threads: &[crate::models::Thread],
 ) -> Option<Effect> {
-    let project_ids: Vec<_> = projects
+    let projects: Vec<_> = projects
         .iter()
         .filter(|project| !project.roots.is_empty())
-        .map(|project| project.id.clone())
+        .map(|project| {
+            (
+                project.id.clone(),
+                project.roots.iter().map(|root| root.path.clone()).collect(),
+            )
+        })
         .collect();
     let threads: Vec<_> = threads
         .iter()
@@ -49,10 +54,10 @@ fn decorations(
             ))
         })
         .collect();
-    (!project_ids.is_empty() || !threads.is_empty()).then(|| {
+    (!projects.is_empty() || !threads.is_empty()).then(|| {
         Effect::execute(ReadListDecorations {
             scope,
-            project_ids,
+            projects,
             threads,
         })
     })

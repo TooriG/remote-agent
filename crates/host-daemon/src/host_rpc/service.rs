@@ -1346,6 +1346,7 @@ impl HostRpcService {
         )
         .await;
         let mut native: Vec<agent_protocol::models::Project> = Vec::new();
+        let mut supplemental = Vec::new();
         let mut codex_project_ids = std::collections::HashSet::new();
         let mut provider_errors = serde_json::Map::new();
         for (provider, result) in catalogs {
@@ -1359,26 +1360,15 @@ impl HostRpcService {
             if provider == ProviderKind::Codex {
                 codex_project_ids.extend(projects.iter().map(|project| project.id.clone()));
                 native.extend(projects);
-                continue;
-            }
-            for mut project in projects {
-                let native_group = project.roots.is_empty();
-                project.roots.retain(|root| {
-                    !native.iter().any(|existing| {
-                        existing.roots.iter().any(|other| {
-                            other.path == root.path
-                                || dunce::canonicalize(&other.path)
-                                    .ok()
-                                    .zip(dunce::canonicalize(&root.path).ok())
-                                    .is_some_and(|(a, b)| a == b)
-                        })
-                    })
-                });
-                if native_group || !project.roots.is_empty() {
-                    native.push(project);
-                }
+            } else {
+                supplemental.extend(projects);
             }
         }
+        let native = tokio::task::spawn_blocking(move || {
+            crate::projects::merge_catalogs(native, supplemental)
+        })
+        .await
+        .map_err(|error| Failure::new("project_state_unavailable", error))?;
         let mut snapshot = self
             .inner
             .projects
@@ -1422,6 +1412,7 @@ impl HostRpcService {
         };
         let started = std::time::Instant::now();
         let snapshot = self.project_snapshot().await?;
+        let projects_elapsed = started.elapsed();
         let deadline = tokio::time::Instant::now() + SESSION_LIST_TIMEOUT;
         let mut listings =
             futures_util::future::join_all(agents.iter().map(|(provider, agent)| async move {
@@ -1527,7 +1518,7 @@ impl HostRpcService {
             page.provider_errors = Some(provider_errors);
         }
         tracing::info!(target: "bex", operation = "host.thread.list.stages",
-            message = %format_args!("roots_ms={} titles={}", started.elapsed().as_millis(), page.data.len()));
+            message = %format_args!("projects_ms={} titles_ms={} titles={}", projects_elapsed.as_millis(), started.elapsed().saturating_sub(projects_elapsed).as_millis(), page.data.len()));
         Ok(page)
     }
 
@@ -1535,29 +1526,31 @@ impl HostRpcService {
         &self,
         params: &op::ReadListDecorations,
     ) -> Result<op::ListDecorations, Failure> {
-        let snapshot = self.project_snapshot().await?;
-        let projects: Vec<_> = snapshot
-            .projects
-            .iter()
-            .filter(|project| params.project_ids.contains(&project.id))
-            .cloned()
-            .collect();
+        let projects = params.projects.clone();
         let icons = tokio::task::spawn_blocking(move || {
             projects
                 .into_iter()
-                .map(|project| {
-                    let icon = project.roots.iter().find_map(|root| {
-                        crate::projects::icons::resolve(std::path::Path::new(&root.path))
+                .map(|(id, roots)| {
+                    let icon = roots.iter().find_map(|root| {
+                        crate::projects::icons::resolve(std::path::Path::new(root))
                     });
-                    (project.id, icon)
+                    (id, icon)
                 })
                 .collect()
         });
+        let worktrees = if params.threads.is_empty() {
+            Default::default()
+        } else {
+            crate::worktrees::workspace_roots(self.inner.projects.path())
+                .await
+                .map_err(|error| Failure::new("worktree_status_failed", error))?
+        };
         let sources: Vec<_> = params
             .threads
             .iter()
             .map(|(id, cwd, branch)| {
-                let mapping = snapshot.worktree_mapping(std::path::Path::new(cwd));
+                let mapping =
+                    crate::projects::state::worktree_mapping(&worktrees, std::path::Path::new(cwd));
                 (
                     id.clone(),
                     crate::worktrees::StatusSource {
@@ -1816,6 +1809,35 @@ fn describe_thread(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn list_decorations_use_the_listed_roots_without_reloading_project_catalogs() {
+        use super::*;
+        let directory = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(directory.path()).unwrap();
+        std::fs::write(
+            root.join("favicon.svg"),
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><path fill="red" d="M0 0h8v8H0z"/></svg>"#,
+        )
+        .unwrap();
+        let state = root.join("bex-worktrees.json");
+        std::fs::write(state.with_file_name("bex-projects.json"), "{").unwrap();
+        let service = HostRpcService::new(
+            [crate::adapters::codex::Codex::new(Err("provider is offline".into())).into()],
+            ProjectStore::new(state),
+        );
+        let params = op::ReadListDecorations {
+            scope: op::ListDecorationScope::Root { part: None },
+            projects: vec![(
+                "listed-project".into(),
+                vec![root.to_string_lossy().into_owned()],
+            )],
+            threads: Vec::new(),
+        };
+        let result = service.list_decorations(&params).await.unwrap();
+        assert!(result.icons["listed-project"].is_some());
+        assert!(result.statuses.is_empty());
+    }
+
     #[tokio::test]
     async fn failed_project_catalog_keeps_registered_projects_and_native_history_visible() {
         use super::*;
@@ -2615,10 +2637,15 @@ mod tests {
                 assert!(result.data[0].turns.is_none() && result.data[0].preview.is_none());
                 let decoration = op::ReadListDecorations {
                     scope: op::ListDecorationScope::Root { part: None },
-                    project_ids: result
+                    projects: result
                         .projects
                         .iter()
-                        .map(|project| project.id.clone())
+                        .map(|project| {
+                            (
+                                project.id.clone(),
+                                project.roots.iter().map(|root| root.path.clone()).collect(),
+                            )
+                        })
                         .collect(),
                     threads: Vec::new(),
                 };

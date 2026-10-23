@@ -267,6 +267,27 @@ pub(super) fn summary(path: &Path) -> Result<crate::host_rpc::agent::SessionSumm
     summary_with_project(path).map(|(summary, _)| summary)
 }
 
+// Ignore tool results and other message bodies while reading list metadata.
+// Keep human input raw until a preview is actually needed.
+#[derive(Default, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct SummaryMetadata<'a> {
+    #[serde(rename = "type")]
+    kind: Value,
+    session_id: Value,
+    #[serde(rename = "session_id")]
+    alternate_session_id: Value,
+    cwd: Value,
+    git_branch: Value,
+    custom_title: Value,
+    ai_title: Value,
+    is_meta: Value,
+    origin: Value,
+    prompt_source: Value,
+    #[serde(borrow)]
+    message: Option<&'a serde_json::value::RawValue>,
+}
+
 fn summary_with_project(
     path: &Path,
 ) -> Result<(
@@ -284,9 +305,14 @@ fn summary_with_project(
         BufReader::new((&mut file).take(MAX_LINE_BYTES as u64)).read_until(b'\n', &mut head)?;
     }
     let mut tail = Vec::new();
-    let offset = metadata.len().saturating_sub(128 * 1024);
-    file.seek(SeekFrom::Start(offset))?;
-    file.take(128 * 1024).read_to_end(&mut tail)?;
+    let offset = metadata
+        .len()
+        .saturating_sub(128 * 1024)
+        .max(head.len() as u64);
+    if offset < metadata.len() {
+        file.seek(SeekFrom::Start(offset))?;
+        file.take(128 * 1024).read_to_end(&mut tail)?;
+    }
     let id = path
         .file_stem()
         .and_then(|id| id.to_str())
@@ -308,41 +334,49 @@ fn summary_with_project(
     let mut project = None;
     for line in head.split(|byte| *byte == b'\n').chain(
         tail.split(|byte| *byte == b'\n')
-            .skip(usize::from(offset > 0)),
+            .skip(usize::from(offset > head.len() as u64)),
     ) {
-        let Ok(value) = serde_json::from_slice::<Value>(line) else {
+        let Ok(value) = serde_json::from_slice::<SummaryMetadata<'_>>(line) else {
             continue;
         };
-        if let Some(session) = value["sessionId"].as_str().or(value["session_id"].as_str())
+        if let Some(session) = value
+            .session_id
+            .as_str()
+            .or(value.alternate_session_id.as_str())
             && session != id
         {
             return Err(anyhow!(
                 "Claude transcript session identity does not match its filename"
             ));
         }
-        if let Some(native_project) = native_project(&value) {
+        if value.kind == "attachment"
+            && let Ok(attachment) = serde_json::from_slice::<Value>(line)
+            && let Some(native_project) = native_project(&attachment)
+        {
             thread.project_id =
                 agent_protocol::models::ProjectMembership::Assigned(native_project.id.clone());
             project = Some(native_project);
         }
-        if let Some(saved_branch) = value["gitBranch"].as_str() {
+        if let Some(saved_branch) = value.git_branch.as_str() {
             branch = Some(saved_branch.to_owned());
         }
-        if let Some(cwd) = value["cwd"].as_str() {
+        if let Some(cwd) = value.cwd.as_str() {
             thread.cwd = Some(cwd.into());
         }
-        if let Some(title) = value["customTitle"].as_str().or(value["aiTitle"].as_str()) {
+        if let Some(title) = value.custom_title.as_str().or(value.ai_title.as_str()) {
             thread.name = Some(title.into());
         }
         if thread.preview.is_none()
-            && value["type"] == "user"
+            && value.kind == "user"
             && native::is_human_input(
-                value["isMeta"] == true,
-                value["origin"]["kind"].as_str(),
-                value["promptSource"].as_str(),
+                value.is_meta == true,
+                value.origin["kind"].as_str(),
+                value.prompt_source.as_str(),
             )
+            && let Some(message) = value.message
+            && let Ok(message) = serde_json::from_str::<Value>(message.get())
         {
-            thread.preview = input_text(&value["message"]["content"]);
+            thread.preview = input_text(&message["content"]);
         }
     }
     Ok((
@@ -807,18 +841,19 @@ mod tests {
         fs::create_dir_all(&directory).unwrap();
         let cwd = root.path().join("shared-workspace");
         let mut expected = BTreeMap::new();
-        for (id, name, project) in [
-            (Uuid::new_v4(), "Games", "chan_games"),
-            (Uuid::new_v4(), "Games", "chan_games"),
-            (Uuid::new_v4(), "Tanks", "chan_tanks"),
+        for (id, name, project, padding_bytes) in [
+            (Uuid::new_v4(), "Games", "chan_games", 180_000),
+            (Uuid::new_v4(), "Games", "chan_games", 1024 * 1024 - 150),
+            (Uuid::new_v4(), "Tanks", "chan_tanks", 180_000),
         ] {
             let file = directory.join(format!("{id}.jsonl"));
             // The old 128 KiB head window cut off real prompt snapshots.
-            let padding = json!({"type":"attachment","attachment":{"type":"catalog","text":"x".repeat(180_000)}});
+            let padding = json!({"type":"attachment","attachment":{"type":"catalog","text":"x".repeat(padding_bytes)}});
+            let trailing = json!({"type":"assistant","message":{"content":"x".repeat(256 * 1024)}});
             fs::write(
                 &file,
                 format!(
-                    "{padding}\n{}\n{}\n",
+                    "{padding}\n{}\n{}\n{trailing}\n",
                     project_snapshot(name, project),
                     json!({"type":"user","sessionId":id,"cwd":cwd,"message":{"content":"hello"}})
                 ),
@@ -1022,6 +1057,75 @@ mod tests {
         let summary = summary(&path).unwrap();
         assert_eq!(summary.thread.cwd.as_deref(), Some("/checkout"));
         assert_eq!(summary.branch.as_deref(), Some("bex/task"));
+        assert_eq!(summary.thread.preview.as_deref(), Some("question"));
+        assert_eq!(fs::read_to_string(path).unwrap(), source);
+    }
+
+    #[test]
+    fn session_summary_keeps_metadata_at_adjacent_and_separated_read_windows() {
+        for gap in [0, 256 * 1024] {
+            let mut source = format!(
+                "{}\n",
+                json!({"type":"user","session_id":ID,"message":{"content":"question"}})
+            );
+            let row = json!({"type":"assistant","message":{"content":""}}).to_string() + "\n";
+            let padding = 1024 * 1024 - source.len() - row.len();
+            source.push_str(
+                &(json!({"type":"assistant","message":{"content":"x".repeat(padding)}})
+                    .to_string()
+                    + "\n"),
+            );
+            assert_eq!(source.len(), 1024 * 1024);
+            if gap > 0 {
+                source.push_str(
+                    &(json!({"type":"assistant","message":{"content":"x".repeat(gap)}})
+                        .to_string()
+                        + "\n"),
+                );
+            }
+            source.push_str(&format!("{}\n", json!({"sessionId":ID,"cwd":"/latest","gitBranch":"feature","customTitle":"Saved title"})));
+            source.push_str(&format!(
+                "{}\n",
+                json!({"type":"assistant","message":{"content":"x".repeat(8 * 1024)}})
+            ));
+            let (_root, path) = fixture(&source);
+            let summary = summary(&path).unwrap();
+            assert_eq!(summary.thread.cwd.as_deref(), Some("/latest"));
+            assert_eq!(summary.branch.as_deref(), Some("feature"));
+            assert_eq!(summary.thread.name.as_deref(), Some("Saved title"));
+            assert_eq!(summary.thread.preview.as_deref(), Some("question"));
+            assert_eq!(fs::read_to_string(path).unwrap(), source);
+        }
+    }
+
+    #[test]
+    fn session_summary_does_not_trust_a_valid_suffix_of_a_corrupt_partial_row() {
+        let header = format!(
+            "{}\n",
+            json!({"type":"user","sessionId":ID,"cwd":"/original","message":{"content":"question"}})
+        );
+        let corrupt = "x".repeat(2 * 1024 * 1024);
+        let forged = format!(
+            "{}\n",
+            json!({"cwd":"/forged","customTitle":"Forged title"})
+        );
+        let empty = json!({"type":"assistant","message":{"content":""}}).to_string() + "\n";
+        let head_padding = 1024 * 1024 - header.len() - empty.len();
+        let head = format!(
+            "{header}{}\n",
+            json!({"type":"assistant","message":{"content":"x".repeat(head_padding)}})
+        );
+        let padding = 128 * 1024 - forged.len() - empty.len();
+        let tail = format!(
+            "{}\n",
+            json!({"type":"assistant","message":{"content":"x".repeat(padding)}})
+        );
+        assert_eq!(forged.len() + tail.len(), 128 * 1024);
+        let source = format!("{head}{corrupt}{forged}{tail}");
+        let (_root, path) = fixture(&source);
+        let summary = summary(&path).unwrap();
+        assert_eq!(summary.thread.cwd.as_deref(), Some("/original"));
+        assert_eq!(summary.thread.name, None);
         assert_eq!(summary.thread.preview.as_deref(), Some("question"));
         assert_eq!(fs::read_to_string(path).unwrap(), source);
     }

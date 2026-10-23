@@ -335,7 +335,7 @@ pub enum ListDecorationScope {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadListDecorations {
     pub scope: ListDecorationScope,
-    pub project_ids: Vec<String>,
+    pub projects: Vec<(String, Vec<String>)>,
     pub threads: Vec<(crate::session::SessionRef, String, Option<String>)>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]

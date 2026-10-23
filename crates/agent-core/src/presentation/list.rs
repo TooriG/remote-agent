@@ -552,7 +552,7 @@ mod tests {
             })).unwrap());
             crate::state::operations::ReadListDecorations {
                 scope: agent_protocol::operations::ListDecorationScope::Root { part: None },
-                project_ids: vec!["project".into()],
+                projects: vec![],
                 threads: vec![],
             }
             .apply(

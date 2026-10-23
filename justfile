@@ -128,7 +128,7 @@ quality language="apple":
 # Audit diff presentation tests in an isolated copy; extra arguments go to cargo-mutants.
 mutants-diff *args:
     mkdir -p target/mutation-diff
-    PROPTEST_RNG_SEED=20260925 cargo mutants --package agent-core --file crates/agent-core/src/presentation/diff.rs --output target/mutation-diff --jobs 2 --build-timeout 900 --timeout 60 --cargo-arg=--locked --cargo-arg=--lib "$@" -- presentation::diff::tests
+    env -u CARGO_TARGET_DIR PROPTEST_RNG_SEED=20260925 cargo mutants --copy-target=false --package agent-core --file crates/agent-core/src/presentation/diff.rs --output target/mutation-diff --jobs 2 --build-timeout 900 --timeout 60 --cargo-arg=--locked --cargo-arg=--lib "$@" -- presentation::diff::tests
 
 # Verify bounded Git path decoding with the dedicated `nix develop .#kani` environment.
 kani-diff *args:

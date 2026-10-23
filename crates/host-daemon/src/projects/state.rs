@@ -30,18 +30,9 @@ impl Snapshot {
                 .unwrap_or(ProjectMembership::Unassigned {})
         }
     }
-    pub(crate) fn worktree_mapping(&self, workspace: &Path) -> Option<(&str, &str)> {
-        self.worktree_roots
-            .iter()
-            .filter(|(root, _)| workspace.starts_with(root))
-            .max_by_key(|(root, _)| root.len())
-            .map(|(root, source)| (root.as_str(), source.as_str()))
-    }
-
     pub(crate) fn project_for_workspace(&self, workspace: &str) -> Option<&str> {
         let workspace = Path::new(workspace);
-        let mapped = self
-            .worktree_mapping(workspace)
+        let mapped = worktree_mapping(&self.worktree_roots, workspace)
             .map(|(root, source)| Path::new(source).join(workspace.strip_prefix(root).unwrap()));
         let workspace = mapped.as_deref().unwrap_or(workspace);
         if !workspace.is_absolute() {
@@ -80,6 +71,17 @@ impl Snapshot {
             matched.map(|(id, _)| id)
         }
     }
+}
+
+pub(crate) fn worktree_mapping<'a>(
+    roots: &'a HashMap<String, String>,
+    workspace: &Path,
+) -> Option<(&'a str, &'a str)> {
+    roots
+        .iter()
+        .filter(|(root, _)| workspace.starts_with(root))
+        .max_by_key(|(root, _)| root.len())
+        .map(|(root, source)| (root.as_str(), source.as_str()))
 }
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 use agent_protocol::models::Project;
 use anyhow::Context;
 use std::{
+    collections::{HashMap, HashSet},
     io,
     path::{Path, PathBuf},
     sync::Arc,
@@ -9,6 +10,41 @@ use std::{
 pub(crate) mod icons;
 pub(crate) mod state;
 pub(crate) mod titles;
+
+/// Keep the primary provider's project roots when catalogs overlap. Resolve each
+/// path once per snapshot, rather than doing filesystem I/O for every root pair.
+pub(crate) fn merge_catalogs(
+    mut primary: Vec<Project>,
+    supplemental: Vec<Project>,
+) -> Vec<Project> {
+    let mut resolved = HashMap::new();
+    for root in primary
+        .iter()
+        .chain(&supplemental)
+        .flat_map(|project| &project.roots)
+    {
+        resolved.entry(root.path.clone()).or_insert_with(|| {
+            dunce::canonicalize(&root.path).unwrap_or_else(|_| root.path.clone().into())
+        });
+    }
+    let mut targets: HashSet<_> = primary
+        .iter()
+        .flat_map(|project| &project.roots)
+        .map(|root| &resolved[&root.path])
+        .collect();
+    for mut project in supplemental {
+        let native_group = project.roots.is_empty();
+        project
+            .roots
+            .retain(|root| !targets.contains(&resolved[&root.path]));
+        if native_group || !project.roots.is_empty() {
+            targets.extend(project.roots.iter().map(|root| &resolved[&root.path]));
+            primary.push(project);
+        }
+    }
+    primary
+}
+
 /// BEX registrations supplement the read-only native provider project catalog.
 #[derive(Debug, Clone)]
 pub struct ProjectStore {
@@ -145,6 +181,69 @@ impl ProjectStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catalog_merge_preserves_project_priority_and_native_groups() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(directory.path()).unwrap();
+        let project = |id: &str, paths: &[&str]| Project {
+            id: id.into(),
+            roots: paths
+                .iter()
+                .map(|path| agent_protocol::models::ProjectRoot {
+                    path: root.join(path).to_string_lossy().into_owned(),
+                })
+                .collect(),
+            ..Default::default()
+        };
+        // Exact missing paths must also deduplicate; resolving them fails.
+        let primary = project("primary", &["missing"]);
+        let mixed = project("mixed", &["missing", "other"]);
+        let group = project("native-group", &[]);
+        assert_eq!(
+            merge_catalogs(
+                vec![primary.clone()],
+                vec![
+                    project("duplicate", &["missing"]),
+                    mixed,
+                    project("later-duplicate", &["other"]),
+                    group.clone(),
+                ],
+            ),
+            vec![primary, project("mixed", &["other"]), group],
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn catalog_merge_compares_resolved_roots_and_keeps_distinct_native_ids() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let workspace = root.join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        let alias = root.join("alias");
+        std::os::unix::fs::symlink(&workspace, &alias).unwrap();
+        let project = |id: &str, path: &Path| Project {
+            id: id.into(),
+            roots: vec![agent_protocol::models::ProjectRoot {
+                path: path.to_string_lossy().into_owned(),
+            }],
+            ..Default::default()
+        };
+        let primary = vec![project("one", &workspace), project("two", &workspace)];
+        assert_eq!(
+            merge_catalogs(primary.clone(), vec![project("alias", &alias)]),
+            primary,
+        );
+        assert_eq!(
+            merge_catalogs(
+                Vec::new(),
+                vec![project("one", &workspace), project("alias", &alias)]
+            ),
+            vec![project("one", &workspace)],
+        );
+    }
+
     #[tokio::test]
     async fn standalone_chat_directory_does_not_become_a_project() {
         let directory = tempfile::tempdir().unwrap();
