@@ -124,10 +124,6 @@ impl Accounts {
         Ok(self.directory.join(uuid.to_string()))
     }
 
-    fn homes<'a>(&'a self, home: &'a Path) -> Option<(&'a Path, &'a Path)> {
-        super::process::homes(&self.native_home, self.native_inherited, home)
-    }
-
     async fn save(&self) -> Result<(), String> {
         let path = self.directory.join("accounts.json");
         let value = self.registry.clone();
@@ -140,7 +136,8 @@ impl Accounts {
     async fn info(&self, home: &Path, id: String) -> Result<Option<Account>, String> {
         let mut process = Cli::start(
             &self.program,
-            self.homes(home).map(|(_, home)| home),
+            super::process::homes(&self.native_home, self.native_inherited, home)
+                .map(|(_, home)| home),
             &["auth", "status", "--json"],
             None,
         )?;
@@ -210,8 +207,7 @@ impl Accounts {
     > {
         let home = self.account_home(id)?;
         let program = self.program.clone();
-        let homes = self
-            .homes(&home)
+        let homes = super::process::homes(&self.native_home, self.native_inherited, &home)
             .map(|(config, credentials)| (config.to_owned(), credentials.to_owned()));
         let directory = self.directory.clone();
         let cache = self.usage.entry(id.to_owned()).or_default().clone();
@@ -293,7 +289,8 @@ impl Accounts {
                 self.revision += 1;
                 let mut process = Cli::start(
                     &self.program,
-                    self.homes(&home).map(|(_, home)| home),
+                    super::process::homes(&self.native_home, self.native_inherited, &home)
+                        .map(|(_, home)| home),
                     &["auth", "logout"],
                     None,
                 )?;
