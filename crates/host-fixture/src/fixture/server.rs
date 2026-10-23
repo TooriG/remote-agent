@@ -333,6 +333,12 @@ pub(super) async fn run(home: PathBuf, config: Config) -> Result<()> {
                     }
                 }
                 "model/list" => {
+                    if let Ok(mode) = fs::read_to_string(context.home.join("model-list-mode")) {
+                        fs::write(context.home.join("model-list-requested"), [])?;
+                        if mode == "silent" {
+                            continue;
+                        }
+                    }
                     let models = json!([{"id":"fixture-model","model":"fixture-model","displayName":"Fixture Model",
                             "defaultServiceTier":"default","serviceTiers":[{"id":"priority","name":"高速"}],
                             "defaultReasoningEffort":"medium","supportedReasoningEfforts":[

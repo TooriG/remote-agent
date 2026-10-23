@@ -217,6 +217,16 @@ fn main() {
         let value: Value = serde_json::from_str(&line.unwrap()).unwrap();
         match value["type"].as_str().unwrap() {
             "control_request" if value["request"]["subtype"] == "initialize" => {
+                if session == "catalog" {
+                    let home = std::env::var_os("CLAUDE_CONFIG_DIR").unwrap();
+                    let home = Path::new(&home);
+                    if let Ok(mode) = fs::read_to_string(home.join("model-list-mode")) {
+                        fs::write(home.join("model-list-requested"), []).unwrap();
+                        if mode == "silent" {
+                            continue;
+                        }
+                    }
+                }
                 if config["initializeError"] == true {
                     emit(
                         json!({"type":"control_response","response":{"subtype":"error","request_id":value["request_id"],"error":"fixture initialization failed"}}),

@@ -104,6 +104,190 @@ async fn start(root: &Path, memory: Arc<Memory>) -> HostFixture {
     .unwrap()
 }
 
+#[rstest::rstest]
+#[case::codex_stalls(true, false)]
+#[case::claude_stalls(false, true)]
+#[case::both_stall(true, true)]
+#[tokio::test]
+async fn setup_catalog_isolates_stalled_native_providers(
+    #[case] codex_stalls: bool,
+    #[case] claude_stalls: bool,
+) {
+    use agent_core::{presentation::connections::AgentAvailability, state::operations::Operation};
+    use agent_protocol::protocol::Response;
+    use host_daemon::{HostRpcService, ProjectStore};
+    use serde_json::json;
+
+    let directory = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(directory.path()).unwrap();
+    let codex_home = root.join("codex");
+    let claude_home = root.join("claude-native");
+    std::fs::create_dir_all(&claude_home).unwrap();
+    let program = host_fixture::fixture::Config::default()
+        .install(
+            Path::new(env!("CARGO_BIN_EXE_bex-codex-fixture")),
+            &codex_home,
+        )
+        .unwrap();
+    std::fs::write(
+        codex_home.join("account-fixture.json"),
+        r#"{"type":"apiKey"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        claude_home.join("fixture-auth.json"),
+        json!({"loggedIn":true,"authMethod":"claude.ai","email":"claude@example.invalid","subscriptionType":"max"}).to_string(),
+    ).unwrap();
+    for (home, stalls) in [(&codex_home, codex_stalls), (&claude_home, claude_stalls)] {
+        std::fs::write(
+            home.join("model-list-mode"),
+            if stalls { "silent" } else { "ready" },
+        )
+        .unwrap();
+    }
+    let config = codex_app_server::AppServerConfig {
+        program,
+        ..Default::default()
+    };
+    let server = Arc::new(
+        codex_app_server::CodexAppServer::spawn(config.clone())
+            .await
+            .unwrap(),
+    );
+    let codex = host_daemon::adapters::codex::Codex::new(Ok(server.clone()));
+    codex
+        .enable_accounts(root.join("accounts"), config)
+        .await
+        .unwrap();
+    let claude = host_daemon::adapters::Claude::load(
+        Path::new(env!("CARGO_BIN_EXE_bex-claude-fixture")).to_owned(),
+        root.join("claude"),
+        Some(claude_home.clone()),
+    )
+    .await
+    .unwrap();
+    let service = HostRpcService::new(
+        [codex.into(), claude.into()],
+        ProjectStore::new(root.join("worktrees.json")),
+    );
+    let session = service.open_session();
+    let accounts = service
+        .dispatch(session.id(), &Call::ListAccounts(Empty {}))
+        .await
+        .unwrap();
+    let Response::Success { result: accounts } =
+        agent_protocol::protocol::decode::<Response<op::Accounts>>(&accounts.initial).unwrap()
+    else {
+        panic!("native accounts must remain readable before discovery");
+    };
+    let mut snapshot = agent_core::state::Snapshot {
+        connected: true,
+        ..Default::default()
+    };
+    agent_core::state::operations::ListAccounts {}.apply(&mut snapshot, accounts);
+    let discovery_service = service.clone();
+    let session_id = session.id();
+    let discovery = tokio::spawn(async move {
+        discovery_service
+            .dispatch(
+                session_id,
+                &Call::ListModels(op::ListModels {
+                    limit: 100,
+                    cursor: None,
+                }),
+            )
+            .await
+            .unwrap()
+    });
+    let response = tokio::time::timeout(Duration::from_secs(25), async {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !codex_home.join("model-list-requested").exists()
+                || !claude_home.join("model-list-requested").exists()
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("Codex and Claude discovery must start independently");
+        discovery.await.unwrap()
+    })
+    .await
+    .expect("discovery must finish before the native client's 30-second deadline");
+    let Response::Success { result: catalog } =
+        agent_protocol::protocol::decode::<Response<op::ModelPage>>(&response.initial).unwrap()
+    else {
+        panic!("a stalled provider must not discard the catalog");
+    };
+    agent_core::state::operations::LoadModels {}.apply(&mut snapshot, catalog);
+    let setup = snapshot.connection_setup();
+    assert_eq!(setup.can_start, !codex_stalls || !claude_stalls);
+    for (provider, stalls) in [
+        (ProviderKind::Codex, codex_stalls),
+        (ProviderKind::Claude, claude_stalls),
+    ] {
+        assert_eq!(
+            snapshot
+                .models
+                .iter()
+                .any(|model| model.model.provider == provider),
+            !stalls
+        );
+        let error = snapshot.model_errors.get(provider.key());
+        if stalls {
+            assert_eq!(error.unwrap()["code"], "provider_timeout");
+        } else {
+            assert!(error.is_none());
+        }
+        let agent = setup
+            .agents
+            .iter()
+            .find(|agent| agent.provider == provider)
+            .unwrap();
+        assert_eq!(
+            agent.availability,
+            if stalls {
+                AgentAvailability::Unavailable
+            } else {
+                AgentAvailability::Ready
+            }
+        );
+    }
+    for home in [&codex_home, &claude_home] {
+        std::fs::write(home.join("model-list-mode"), "ready").unwrap();
+    }
+    let retried = tokio::time::timeout(
+        Duration::from_secs(10),
+        service.dispatch(
+            session.id(),
+            &Call::ListModels(op::ListModels {
+                limit: 100,
+                cursor: None,
+            }),
+        ),
+    )
+    .await
+    .expect("discovery must recover after the native provider responds again")
+    .unwrap();
+    let Response::Success { result: catalog } =
+        agent_protocol::protocol::decode::<Response<op::ModelPage>>(&retried.initial).unwrap()
+    else {
+        panic!("retry must return the recovered catalog");
+    };
+    agent_core::state::operations::LoadModels {}.apply(&mut snapshot, catalog);
+    assert!(snapshot.model_errors.is_empty());
+    let setup = snapshot.connection_setup();
+    assert!(setup.can_start);
+    assert!(
+        setup
+            .agents
+            .iter()
+            .filter(|agent| agent.provider != ProviderKind::DeepSeek)
+            .all(|agent| agent.availability == AgentAvailability::Ready)
+    );
+    drop(session);
+    server.shutdown().await.unwrap();
+}
+
 async fn scenarios(provider: ProviderKind) {
     let directory = tempfile::tempdir().unwrap();
     let root = dunce::canonicalize(directory.path()).unwrap();
