@@ -371,22 +371,6 @@ private fun LazyListScope.projectThreads(
 }
 
 @Composable
-private fun CoordinatorEntry(session: SessionRef, perform: (Intent) -> Unit) {
-    TextButton(
-        onClick = { perform(Intent.ReadThread(ReadThread(session, open = true))) },
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Text("メイン会話を開く")
-    }
-    Text(
-        "タスクの依頼・振り分けはメイン会話へ。以下はこのPCの作業スレッドです。",
-        Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-}
-
-@Composable
 private fun ProjectRow(
     project: ProjectSummary,
     perform: (Intent) -> Unit,
