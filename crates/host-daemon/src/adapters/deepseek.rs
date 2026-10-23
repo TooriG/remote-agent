@@ -304,12 +304,15 @@ impl DeepSeek {
                 let _ = emit(&inner.events, AgentChange::SourceClosed(reader.instance)).await;
             }
         });
-        let initialized = match rpc.call("initialize", json!({"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"bex","version":env!("CARGO_PKG_VERSION")}}), Some(Duration::from_secs(90))).await {Ok(value)=>value,Err(error)=>{rpc.stop.cancel();return Err(error);}};
+        // Discovery can be cancelled before ACP initialization completes. The
+        // reader owns the lifetime pipe, so cancellation must stop it as well.
+        let initializing = rpc.stop.clone().drop_guard();
+        let initialized = rpc.call("initialize", json!({"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"bex","version":env!("CARGO_PKG_VERSION")}}), Some(Duration::from_secs(90))).await?;
         if initialized["protocolVersion"] != 1 {
-            rpc.stop.cancel();
             return Err(failure("Harness requires ACP v1"));
         }
         *slot = Some(rpc.clone());
+        initializing.disarm();
         Ok(rpc)
     }
     async fn update_key(&self, update: KeyUpdate) -> Result<(), Failure> {
@@ -1357,6 +1360,59 @@ async fn prompt(input: &[op::Input]) -> Result<Vec<Value>, Failure> {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    #[tokio::test]
+    async fn stalled_harness_catalog_returns_provider_errors_before_the_client_deadline() {
+        use agent_protocol::protocol::{Call, Response};
+        let root = tempfile::tempdir().unwrap();
+        let adapter = DeepSeek::load(root.path().join("missing-dsh"), root.path().join("dsh"))
+            .await
+            .unwrap();
+        // A concurrent initialization holds the same lock. Model discovery
+        // must bound this wait too, not just the eventual ACP request.
+        let _initializing = adapter.0.rpc.lock().await;
+        let claude = crate::adapters::Claude::load(
+            root.path().join("missing-claude"),
+            root.path().join("claude"),
+            Some(root.path().join("native")),
+        )
+        .await
+        .unwrap();
+        let service = crate::host_rpc::HostRpcService::new(
+            [
+                crate::adapters::Backend::unavailable(ProviderKind::Codex, "offline"),
+                claude.into(),
+                adapter.clone().into(),
+            ],
+            crate::ProjectStore::new(root.path().join("worktrees.json")),
+        );
+        let session = service.open_session();
+        tokio::time::pause();
+        let response = tokio::time::timeout(
+            Duration::from_secs(30),
+            service.dispatch(
+                session.id(),
+                &Call::ListModels(op::ListModels {
+                    limit: 100,
+                    cursor: None,
+                }),
+            ),
+        )
+        .await
+        .expect("one stalled provider must not exhaust the client deadline")
+        .unwrap();
+        let Response::Success { result: page } =
+            agent_protocol::protocol::decode::<Response<op::ModelPage>>(&response.initial).unwrap()
+        else {
+            panic!("provider failures must remain part of the catalog");
+        };
+        assert!(page.data.is_empty());
+        assert!(page.next_cursor.is_none());
+        let errors = page.provider_errors.unwrap();
+        assert_eq!(errors["codex"]["code"], "provider_unavailable");
+        assert_eq!(errors["deepseek"]["code"], "provider_timeout");
+        assert!(!errors.contains_key("claude"));
+    }
 
     #[tokio::test]
     #[ignore = "requires an installed DeepSeek Harness and its supervisor companion"]

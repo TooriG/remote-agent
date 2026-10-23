@@ -20,6 +20,9 @@ use super::routing::{HostReply, HostSession, SessionId, SessionRouter};
 use crate::ProjectStore;
 
 const SESSION_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+// Finish discovery before the client's request deadline, even when a native
+// provider is still initializing. Healthy providers must remain usable.
+const MODEL_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 #[derive(Debug, Clone, Serialize, thiserror::Error)]
 #[error("{message}")]
@@ -894,18 +897,30 @@ impl HostRpcService {
                     provider_errors: None,
                 };
                 let mut next = std::collections::BTreeMap::new();
-                for (provider, cursor) in cursors {
-                    let result = match self.agent(provider) {
-                        Ok(agent) => {
-                            agent
-                                .models(&op::ListModels {
+                let listings = futures_util::future::join_all(cursors.into_iter().map(
+                    |(provider, cursor)| async move {
+                        let result = match self.agent(provider) {
+                            Ok(agent) => tokio::time::timeout(
+                                MODEL_LIST_TIMEOUT,
+                                agent.models(&op::ListModels {
                                     cursor,
-                                    ..params.clone()
-                                })
-                                .await
-                        }
-                        Err(error) => Err(error),
-                    };
+                                    limit: params.limit,
+                                }),
+                            )
+                            .await
+                            .unwrap_or_else(|_| {
+                                Err(Failure::new(
+                                    "provider_timeout",
+                                    "モデル一覧の取得がタイムアウトしました。もう一度お試しください。",
+                                ))
+                            }),
+                            Err(error) => Err(error),
+                        };
+                        (provider, result)
+                    },
+                ))
+                .await;
+                for (provider, result) in listings {
                     match result {
                         Ok(result) => {
                             page.data.extend(result.data);
@@ -922,13 +937,6 @@ impl HostRpcService {
                 }
                 if !next.is_empty() {
                     page.next_cursor = Some(serde_json::to_string(&next)?);
-                }
-                if params.cursor.is_none() && page.data.is_empty() && page.provider_errors.is_some()
-                {
-                    return Err(Failure::new(
-                        "models_unavailable",
-                        serde_json::to_value(&page.provider_errors)?,
-                    ));
                 }
                 page.into()
             }
@@ -1784,6 +1792,44 @@ fn describe_thread(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn failed_model_providers_remain_identifiable_when_no_catalog_is_available() {
+        use super::*;
+        let root = tempfile::tempdir().unwrap();
+        let providers = [
+            ProviderKind::Codex,
+            ProviderKind::Claude,
+            ProviderKind::DeepSeek,
+        ];
+        let service = HostRpcService::new(
+            providers.map(|provider| Backend::unavailable(provider, "offline")),
+            ProjectStore::new(root.path().join("worktrees.json")),
+        );
+        let session = service.open_session();
+        let response = service
+            .dispatch(
+                session.id(),
+                &Call::ListModels(op::ListModels {
+                    cursor: None,
+                    limit: 100,
+                }),
+            )
+            .await
+            .unwrap();
+        let Response::Success { result: page } =
+            agent_protocol::protocol::decode::<Response<op::ModelPage>>(&response.initial).unwrap()
+        else {
+            panic!("catalog failures must retain each provider's error");
+        };
+        assert!(page.data.is_empty());
+        assert!(page.next_cursor.is_none());
+        let errors = page.provider_errors.unwrap();
+        assert_eq!(errors.len(), providers.len());
+        for provider in providers {
+            assert_eq!(errors[provider.key()]["code"], "provider_unavailable");
+        }
+    }
+
     #[tokio::test]
     async fn prefetched_project_titles_continue_past_the_first_native_page() {
         use super::*;
