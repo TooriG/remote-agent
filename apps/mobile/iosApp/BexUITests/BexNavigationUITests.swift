@@ -23,6 +23,7 @@ extension BexLaunchUITests {
         XCTAssertTrue(app.staticTexts["pairing.welcome"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["pairing.scan"].exists)
         XCTAssertEqual(app.buttons["pairing.scan"].label, "QRコードを読み取る")
+        assertUnavailableScannerCanBeCancelled(app)
         XCTAssertFalse(app.descendants(matching: .any)["tasks.list"].exists)
         app.terminate(); app.launch()
         XCTAssertTrue(app.staticTexts["pairing.welcome"].waitForExistence(timeout: 10))
@@ -83,6 +84,20 @@ extension BexLaunchUITests {
         composer.tap()
         XCTAssertTrue(settings.isHittable)
         captureScreen(app, named: "Restored task and selected model")
+    }
+
+    func testSimulatorOpensQrScannerWhileAddingHost() throws {
+        let app = try connectedSimulatorApp()
+        app.buttons["tasks.hosts"].tap()
+        let addHost = app.buttons["profiles.add"]
+        XCTAssertTrue(addHost.waitForExistence(timeout: 10)); addHost.tap()
+        assertUnavailableScannerCanBeCancelled(app)
+        app.buttons["pairing.scan"].tap()
+        XCTAssertTrue(app.staticTexts["scanner.error"].waitForExistence(timeout: 10))
+        app.buttons["scanner.cancel"].tap()
+        let cancel = app.buttons["pairing.cancel"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 10)); cancel.tap()
+        XCTAssertTrue(addHost.waitForExistence(timeout: 10))
     }
 
     func testSimulatorUsesNativeHostNavigationAndPairingDismissal() throws {
@@ -227,26 +242,28 @@ extension BexLaunchUITests {
     }
 
     func dismissModelSettings(_ app: XCUIApplication) {
+        let surface: XCUIElement
         if app.buttons["model.close"].exists {
-            app.buttons["model.close"].tap()
+            surface = app.buttons["model.close"]
+            surface.tap()
         } else if app.buttons["settings.scope.projects"].exists {
             let back = app.navigationBars.buttons["BackButton"]
             XCTAssertTrue(back.waitForExistence(timeout: 10))
             back.tap()
-            let close = app.buttons["settings.close"]
-            XCTAssertTrue(close.waitForExistence(timeout: 10))
-            close.tap()
+            surface = app.buttons["settings.close"]
+            XCTAssertTrue(surface.waitForExistence(timeout: 10))
+            surface.tap()
         } else {
-            let picker = app.descendants(matching: .any)["model.picker"]
-            XCTAssertTrue(picker.waitForExistence(timeout: 10))
-            let handle = picker.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05))
+            surface = app.descendants(matching: .any)["model.picker"]
+            XCTAssertTrue(surface.waitForExistence(timeout: 10))
+            let handle = surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05))
             handle.press(
                 forDuration: 0.1,
                 thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98))
             )
         }
         let dismissed = expectation(for: NSPredicate(format: "exists == false"),
-                                    evaluatedWith: app.textFields["model.search"])
+                                    evaluatedWith: surface)
         wait(for: [dismissed], timeout: 10)
     }
 
@@ -335,6 +352,19 @@ extension BexLaunchUITests {
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "Task reopened after repeated back and cancelled edge swipes"
         screenshot.lifetime = .keepAlways; add(screenshot)
+    }
+
+    private func assertUnavailableScannerCanBeCancelled(_ app: XCUIApplication) {
+        app.buttons["pairing.scan"].tap()
+        let scannerCancel = app.buttons["scanner.cancel"]
+        XCTAssertTrue(scannerCancel.waitForExistence(timeout: 10))
+        allowFirstSystemPermissionIfPresent()
+        let error = app.staticTexts["scanner.error"]
+        XCTAssertTrue(error.waitForExistence(timeout: 10))
+        XCTAssertTrue(error.label.contains("カメラ"))
+        scannerCancel.tap()
+        XCTAssertTrue(app.buttons["pairing.scan"].waitForExistence(timeout: 10))
+        XCTAssertFalse(scannerCancel.exists)
     }
 
     private func backToTaskList(_ app: XCUIApplication, swipe: Bool) {

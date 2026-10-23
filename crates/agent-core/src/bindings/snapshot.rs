@@ -13,6 +13,9 @@ use std::sync::Arc;
 
 #[uniffi::export]
 impl Snapshot {
+    pub fn connection_generation(&self) -> u64 {
+        self.connection_generation
+    }
     pub fn conversation_source(&self) -> Option<Arc<Thread>> {
         self.conversation_thread()
             .map(|value| Arc::new(Thread(value)))
@@ -271,8 +274,10 @@ pub fn project_conversation(
 mod tests {
     #[test]
     fn native_clients_receive_readable_errors_without_rpc_envelopes() {
-        let mut snapshot = crate::state::Snapshot::default();
-        snapshot.error = Some(r#"remote RPC error: {"code":"thread_in_use","message":"private","delivery":"notSent"}"#.into());
+        let snapshot = crate::state::Snapshot {
+            error: Some(r#"remote RPC error: {"code":"thread_in_use","message":"private","delivery":"notSent"}"#.into()),
+            ..Default::default()
+        };
         assert_eq!(
             snapshot.error().as_deref(),
             Some(agent_protocol::error::THREAD_IN_USE_MESSAGE)

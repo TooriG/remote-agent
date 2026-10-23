@@ -354,17 +354,20 @@ impl Desktop {
                         )
                 })
                 .on_link_click(move |url, event, window, cx| {
-                    if let gpui_kit::ClickEvent::Mouse(click) = event {
-                        if click.up.button == MouseButton::Right {
-                            let _ = view.update(cx, |view, cx| {
-                                view.selection.update(cx, |selection, cx| {
-                                    selection.show_context_menu(
-                                        Some(url.to_string()), click.up.position, window, cx,
-                                    );
-                                });
+                    if let gpui_kit::ClickEvent::Mouse(click) = event
+                        && click.up.button == MouseButton::Right
+                    {
+                        let _ = view.update(cx, |view, cx| {
+                            view.selection.update(cx, |selection, cx| {
+                                selection.show_context_menu(
+                                    Some(url.to_string()),
+                                    click.up.position,
+                                    window,
+                                    cx,
+                                );
                             });
-                            return;
-                        }
+                        });
+                        return;
                     }
                     let _ = view.update(cx, |s, cx| {
                         s.click_conversation_link(url, event.modifiers().control, window, cx)

@@ -41,6 +41,18 @@ pub(super) fn parse_model(
     }
     let id = value["model"].take();
     value["model"] = serde_json::json!({"provider":ProviderKind::Codex,"id":id});
+    let settings = [
+        "defaultReasoningEffort",
+        "supportedReasoningEfforts",
+        "serviceTiers",
+        "defaultServiceTier",
+    ]
+    .into_iter()
+    .map(|key| (key.to_owned(), value[key].take()))
+    .collect::<serde_json::Map<_, _>>();
+    value["settings"] = Value::Object(settings);
+    value["settingsDiscovery"] = Value::Bool(false);
+    value["credentialRoute"] = Value::Null;
     serde_json::from_value(value)
 }
 
@@ -66,10 +78,9 @@ pub(super) fn include_configured_model(
             id: id.into(),
         },
         display_name: id.into(),
-        default_reasoning_effort: String::new(),
-        supported_reasoning_efforts: Vec::new(),
-        service_tiers: None,
-        default_service_tier: None,
+        credential_route: None,
+        settings: None,
+        settings_discovery: false,
         is_default: Some(false),
     });
 }
@@ -516,13 +527,6 @@ pub(crate) fn parse_thread(mut value: Value) -> Result<Thread, serde_json::Error
         can_accept_direct_input: field(&value, "canAcceptDirectInput")?,
         name,
         cwd: field(&value, "cwd")?,
-        project_id: match value.get("projectId") {
-            Some(Value::String(id)) => {
-                agent_protocol::models::ProjectMembership::Assigned(id.clone())
-            }
-            Some(Value::Null) => agent_protocol::models::ProjectMembership::Unassigned {},
-            _ => agent_protocol::models::ProjectMembership::Unknown {},
-        },
         status: session_status(&value["status"]),
         turns: take_field::<Option<Vec<Value>>>(&mut value, "turns")?
             .map(|turns| {
@@ -620,7 +624,7 @@ mod tests {
         .unwrap();
         assert_eq!(model.model.provider, ProviderKind::Codex);
         assert_eq!(model.model.id, "native-model");
-        let tiers = model.service_tiers.unwrap();
+        let tiers = model.settings.unwrap().service_tiers.unwrap();
         assert_eq!(
             tiers.iter().map(|tier| tier.fast).collect::<Vec<_>>(),
             [true, false, false]
@@ -637,27 +641,6 @@ mod tests {
     }
 
     #[test]
-    fn native_project_membership_preserves_explicit_assignment_and_projectless_chats() {
-        use agent_protocol::models::ProjectMembership;
-        for (membership, expected) in [
-            (
-                json!("project-a"),
-                ProjectMembership::Assigned("project-a".into()),
-            ),
-            (Value::Null, ProjectMembership::Unassigned {}),
-        ] {
-            let thread =
-                parse_thread(json!({"id":"thread", "projectId":membership, "cwd":"/shared/root"}))
-                    .unwrap();
-            assert_eq!(thread.project_id, expected);
-        }
-        assert_eq!(
-            parse_thread(json!({"id":"thread"})).unwrap().project_id,
-            ProjectMembership::Unknown {}
-        );
-    }
-
-    #[test]
     fn configured_models_do_not_establish_chatgpt_access_or_capabilities() {
         let mut models = Vec::new();
         let config = json!({"model":"gpt-6.1-sol"});
@@ -667,8 +650,7 @@ mod tests {
         include_configured_model(&mut models, &config, Some("apiKey"));
         include_configured_model(&mut models, &config, Some("apiKey"));
         assert_eq!(models.len(), 1);
-        assert!(models[0].supported_reasoning_efforts.is_empty());
-        assert!(models[0].service_tiers.is_none());
+        assert!(models[0].settings.is_none());
     }
 
     #[test]

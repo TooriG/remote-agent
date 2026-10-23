@@ -15,6 +15,14 @@ pub(crate) fn bundled_codex_path() -> Option<&'static Path> {
     }
 }
 
+/// Where a missing Codex can come from, matching the lookup order of `resolve`.
+#[cfg(target_os = "macos")]
+pub(crate) const NOT_FOUND_HINT: &str = "Pass --codex with its path (BEX_CODEX for the desktop app), \
+     put codex on PATH, or install ChatGPT.app in /Applications";
+#[cfg(not(target_os = "macos"))]
+pub(crate) const NOT_FOUND_HINT: &str =
+    "Pass --codex with its path (BEX_CODEX for the desktop app), or put codex on PATH";
+
 pub(crate) fn executable_path(path: &Path) -> Cow<'_, Path> {
     #[cfg(windows)]
     if path.extension().is_none() {

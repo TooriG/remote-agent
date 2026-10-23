@@ -32,9 +32,9 @@
         let
           # Queue validation is not released yet: https://github.com/rhysd/actionlint/pull/654
           workflowLinter = pkgs.actionlint.overrideAttrs (old: {
-            patches = (old.patches or [ ]) ++ [ (pkgs.fetchurl {
+            patches = (old.patches or [ ]) ++ [ (pkgs.fetchpatch {
               url = "https://github.com/rhysd/actionlint/commit/644076a59742c2d1540ebd4686eab3c308f0e562.patch";
-              hash = "sha256-H2y2MlM35dnlSmt7DFYRKVOzDRYzJ2Tw8hWR5nUnwak=";
+              hash = "sha256-Lpd7CTkLbzgvAZV2H8G4GTUoPNDCK7PiW3A40+cquUk=";
             }) ];
             postCheck = (old.postCheck or "") + ''
               go test . -run '^TestLinterLint(OK|Error)$'
@@ -99,7 +99,7 @@
             BEX_NODE_RUNTIME = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "${nodeRuntime}";
             RUST_TOOLCHAIN_VERSION = rustToolchain.version;
             NEXTEST_VERSION = pkgs.cargo-nextest.version;
-            packages = with pkgs; [ rustToolchain kache cargo-mutants cargo-nextest just jq git pkg-config cmake clang workflowLinter nodejs ]
+            packages = with pkgs; [ rustToolchain kache cargo-mutants cargo-nextest just jq git pkg-config cmake clang workflowLinter nodejs powershell ]
               ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
                 lsof
                 alsa-lib fontconfig freetype libxkbcommon wayland libGL vulkan-loader
@@ -126,6 +126,7 @@
               shellcheck
               workflowLinter
               nodejs
+              powershell
               rustToolchain
               kache
               cargo-mutants

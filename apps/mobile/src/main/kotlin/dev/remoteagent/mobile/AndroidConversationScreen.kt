@@ -38,10 +38,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -77,18 +76,10 @@ internal fun ThreadDetailScreen(
     var recoveryExpanded by remember(threadId, snapshot.navigation().draftKey) { mutableStateOf(false) }
     val unknown = remember(projection) { projection?.queued.orEmpty().filter { it.unknownSubmissionId() != null } }
     val unknownIds = remember(unknown) { unknown.mapNotNull { it.unknownSubmissionId() } }
-    var forking by remember(threadId) { mutableStateOf(false) }
-    var forkFailed by remember(threadId) { mutableStateOf(false) }
     val listState = rememberLazyListState()
     var activityExpansion by remember(threadId) { mutableStateOf(emptyMap<String, ActivityExpansion>()) }
     var following by remember(threadId) { mutableStateOf(true) }
-    LaunchedEffect(scrollToTopRequest) {
-        if (scrollToTopRequest > 0) {
-            following = false
-            listState.scrollToItem(0)
-        }
-    }
-    ObserveFollowing(listState, snapshot, following, { following = it }, older)
+    ObserveFollowing(listState, snapshot, following, { following = it }, older, scrollToTopRequest)
     Column(modifier.fillMaxSize()) {
         Box(Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
@@ -106,17 +97,12 @@ internal fun ThreadDetailScreen(
                         threadId,
                         snapshot.navigation().cwd,
                         perform,
-                        forking = forking,
-                        startFork = { intent ->
-                            if (!forking) {
-                                forking = true
-                                forkFailed = false
-                                perform(intent) { result ->
-                                    forking = false
-                                    forkFailed = result.isFailure
+                        forkPhase =
+                            (row.content as? ConversationRowContent.Response)?.forkTurnId?.let { turn ->
+                                threadId?.let {
+                                    snapshot.operationPhase(dev.remoteagent.core.OperationKey.Fork(it, turn))
                                 }
-                            }
-                        },
+                            },
                         activityHeader = { activity ->
                             ActivityHeader(activity, activityExpansion[activity.id]) { choice ->
                                 activityExpansion = activityExpansion + (activity.id to choice)
@@ -131,24 +117,15 @@ internal fun ThreadDetailScreen(
                         UnknownSubmissionSummary(unknownIds, recoveryExpanded, { recoveryExpanded = it }, perform)
                     }
                 }
-                items(projection?.queued.orEmpty().filter { recoveryExpanded || it.unknownSubmissionId() == null },
-                    key = { "queued:${it.id()}" }) {
+                items(
+                    projection?.queued.orEmpty().filter { recoveryExpanded || it.unknownSubmissionId() == null },
+                    key = { "queued:${it.id()}" },
+                ) {
                     ThreadMessageCard(it, true, snapshot.navigation().cwd, perform)
                 }
                 conversationRows(projection?.requestRows.orEmpty(), activityExpansion, renderRow)
             }
             LatestMessageButton(listState) { following = true }
-        }
-        if (forking || forkFailed) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
-                .semantics { liveRegion = androidx.compose.ui.semantics.LiveRegionMode.Polite },
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (forking) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                Text(if (forking) "分岐を作成中…" else "分岐できませんでした。もう一度お試しください。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (forkFailed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
-            }
         }
         composer { following = true }
     }
@@ -203,8 +180,7 @@ private fun ConversationContent(
     threadId: dev.remoteagent.core.SessionRef?,
     cwd: String,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
-    forking: Boolean,
-    startFork: (Intent) -> Unit,
+    forkPhase: dev.remoteagent.core.OperationPhase? = null,
     activityHeader: @Composable (ActivityPresentation) -> Unit,
 ) {
     val timestampMs = row.timestampMs
@@ -217,15 +193,15 @@ private fun ConversationContent(
                 cwd,
                 perform,
                 timestampMs,
-                content.changes,
-                loadChanges = { content.changeDetails.forEach { perform(Intent.ReadItem(it)) {} } },
                 fork =
                     if (threadId != null && content.forkTurnId != null)
                         ({
-                            startFork(Intent.ForkSession(dev.remoteagent.core.ForkSession(threadId, content.forkTurnId)))
+                            perform(
+                                Intent.ForkSession(dev.remoteagent.core.ForkSession(threadId, content.forkTurnId))
+                            ) {}
                         })
                     else null,
-                forking = forking,
+                forkPhase = forkPhase,
             )
         is ConversationRowContent.Activity ->
             ThreadActivityCard(content.item, cwd, perform) { itemId ->
@@ -272,7 +248,7 @@ internal fun ThreadComposer(
     val navigation = snapshot.navigation()
     val draft = snapshot.draft(navigation.draftKey)
     val controls = snapshot.composerControls()
-    var sending by remember { mutableStateOf(false) }
+    val sending = snapshot.operationRunning(dev.remoteagent.core.OperationKey.Submission(navigation.draftKey))
     var uploading by remember(navigation.draftKey) { mutableStateOf(false) }
     val inputUnavailable = navigation.threadId?.let(snapshot::conversation)?.inputUnavailableReason()
     val activeTurn = navigation.threadId?.let(snapshot::conversation)?.activeTurnId()
@@ -298,23 +274,29 @@ internal fun ThreadComposer(
                     style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 VoiceInputButton(snapshot, perform, enabled = inputUnavailable == null && !sending)
                 if (navigation.threadId != null && activeTurn != null) {
-                    ComposerStopButton(Interrupt(navigation.threadId!!, activeTurn), perform)
-                } else FilledIconButton(
-                    onClick = {
-                        sending = true
-                        onSend()
-                        perform(Intent.Submit(navigation.threadId, UUID.randomUUID().toString())) { sending = false }
-                    },
-                    enabled =
-                        snapshot.modelProviderForDraft(navigation.draftKey) != null &&
-                            inputUnavailable == null &&
-                            !sending &&
-                            !uploading &&
-                            (draft.text.isNotBlank() || draft.attachments.isNotEmpty()),
-                ) {
-                    if (sending) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                    else Text("↑", fontSize = 24.sp, modifier = Modifier.semantics { contentDescription = "送信" })
-                }
+                    ComposerStopButton(
+                        Interrupt(navigation.threadId!!, activeTurn),
+                        snapshot.operationPhase(
+                            dev.remoteagent.core.OperationKey.Interrupt(navigation.threadId!!, activeTurn)
+                        ),
+                        perform,
+                    )
+                } else
+                    FilledIconButton(
+                        onClick = {
+                            onSend()
+                            perform(Intent.Submit(navigation.threadId, UUID.randomUUID().toString())) {}
+                        },
+                        enabled =
+                            snapshot.modelProviderForDraft(navigation.draftKey) != null &&
+                                inputUnavailable == null &&
+                                !sending &&
+                                !uploading &&
+                                (draft.text.isNotBlank() || draft.attachments.isNotEmpty()),
+                    ) {
+                        if (sending) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                        else Text("↑", fontSize = 24.sp, modifier = Modifier.semantics { contentDescription = "送信" })
+                    }
             }
         }
     }
@@ -378,7 +360,14 @@ private fun ObserveFollowing(
     following: Boolean,
     follow: (Boolean) -> Unit,
     older: (() -> Unit)?,
+    scrollToTopRequest: Int = 0,
 ) {
+    LaunchedEffect(scrollToTopRequest) {
+        if (scrollToTopRequest > 0) {
+            follow(false)
+            listState.scrollToItem(0)
+        }
+    }
     LaunchedEffect(snapshot) {
         if (following) {
             withFrameNanos {}

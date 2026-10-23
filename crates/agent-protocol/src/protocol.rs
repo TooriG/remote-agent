@@ -120,6 +120,8 @@ results! {
     Session(crate::session::SessionRef), Empty(crate::models::Empty),
     AccountUsage(crate::operations::AccountUsage),
     Accounts(crate::operations::Accounts), Selected(crate::operations::AccountSelection),
+    ModelSettings(crate::models::ModelSettings),
+    DshCredentials(crate::dsh::Credentials),
     Login(crate::operations::AccountLogin), LoginStatus(crate::operations::AccountLoginStatus),
     Files(crate::models::FileList), File(crate::models::FileContent), Grant(crate::models::TransferGrant),
     Transcription(crate::operations::Transcription),

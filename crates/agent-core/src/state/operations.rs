@@ -46,6 +46,8 @@ pub enum Intent {
     ReadPermissionSettings(ReadPermissionSettings),
     UpdatePermissionSettings(UpdatePermissionSettings),
     ListAccounts(ListAccounts),
+    ReadDshCredentials(ReadDshCredentials),
+    UpdateDshCredential(UpdateDshCredential),
     SelectAccount(SelectAccount),
     SelectAccountForDraft(SelectAccountForDraft),
     LogoutAccount(LogoutAccount),
@@ -161,6 +163,11 @@ pub enum Intent {
         thread_id: crate::session::SessionRef,
     },
     LoadModels(LoadModels),
+    ReadModelSettings(ReadModelSettings),
+    SaveDraftModelDefaults {
+        scope: super::ModelDefaultsScope,
+        draft_key: DraftKey,
+    },
     SelectNewChatModel {
         scope: super::ModelDefaultsScope,
         model: Option<crate::models::ModelRef>,
@@ -275,7 +282,11 @@ pub enum OperationKey {
     WorkspaceReview,
     CodexCli,
     Models,
+    ModelSettings {
+        model: crate::models::ModelRef,
+    },
     Accounts,
+    DshCredentials,
     AccountLogin {
         provider: crate::session::ProviderKind,
     },
@@ -303,6 +314,7 @@ pub enum OperationKey {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
 pub enum OperationPhase {
     Running,
     Failed { message: String },

@@ -31,9 +31,9 @@ class ModelDefaultsTest {
                 .put(
                     "models",
                     JSONArray(
-                        """[{"id":"sol","model":{"provider":"codex","id":"sol"},"displayName":"Sol",
+                        """[{"id":"sol","model":{"provider":"codex","id":"sol"},"displayName":"Sol", "settings": {
                         "defaultReasoningEffort":"low","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"medium"}],
-                        "serviceTiers":[{"id":"priority","name":"Fast","fast":true}]}]"""
+                        "serviceTiers":[{"id":"priority","name":"Fast","fast":true}]}}]"""
                     ),
                 )
                 .put(
@@ -99,7 +99,7 @@ class ModelDefaultsTest {
                         selected,
                         { intent, complete ->
                             intents.add(intent)
-                            if (intent is Intent.SelectDefaultModel) complete(Result.failure(IOException("保存できません")))
+                            if (intent is Intent.SaveDraftModelDefaults) complete(Result.failure(IOException("保存できません")))
                             else complete(Result.success(Outcome.Applied))
                         },
                     )

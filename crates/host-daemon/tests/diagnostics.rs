@@ -95,7 +95,10 @@ fi
 printf '%s\n' '{{"id":1,"result":{{"userAgent":"diagnostic-fixture","platformFamily":"unix","platformOs":"test","codexHome":"{}"}}}}'
 read -r initialized
 case {} in
-    eof) exit 0 ;;
+    eof)
+        while [ ! -f "$BEX_DIAGNOSTIC_HOST_READY" ]; do sleep 0.02; done
+        exit 0
+        ;;
     event)
         printf '%s\n' '{{"method":"thread/name/updated","params":{{"text":"PRIVATE_CONVERSATION_SENTINEL"}}}}'
         ;;
@@ -109,6 +112,8 @@ while read -r line; do :; done
             )
             .unwrap();
             fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).unwrap();
+            // The published ticket confirms initialization has completed
+            // before the fixture closes the established stream.
             let mut host = tokio::process::Command::new(env!("CARGO_BIN_EXE_host-daemon"))
                 .args(["--isolated", "--no-relay", "--state-dir"])
                 .arg(&state)
@@ -116,6 +121,7 @@ while read -r line; do :; done
                 .arg(&program)
                 .arg("--claude")
                 .arg(directory.path().join("missing-claude"))
+                .env("BEX_DIAGNOSTIC_HOST_READY", state.join("host.ticket"))
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())

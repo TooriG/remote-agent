@@ -4,9 +4,9 @@ use agent_transport::{diagnostics, peer, transfers, transport};
 #[cfg(test)]
 extern crate self as agent_core;
 
-pub mod client;
 #[cfg(feature = "browser-import")]
 pub mod browser_import;
+pub mod client;
 pub mod composer;
 pub mod persistence;
 pub mod presentation;

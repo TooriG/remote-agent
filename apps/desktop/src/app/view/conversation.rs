@@ -571,89 +571,8 @@ impl Desktop {
                             })
                     );
                 }
-                ConversationRowContent::Response {
-                    item,
-                    fork_turn_id,
-                    changes,
-                    change_details,
-                } => {
+                ConversationRowContent::Response { item, fork_turn_id } => {
                     body = body.child(self.projected_item(item, turn, cx));
-                    if !changes.is_empty() {
-                        let key = format!("response-changes-{}", item.data.id);
-                        let expanded = self.expanded_items.contains(&key);
-                        let toggle = key.clone();
-                        let item_id = item.data.id.clone();
-                        let details = change_details.clone();
-                        let mut summary = v_flex().w_full().min_w_0().gap_2().child("変更ファイル");
-                        for file in changes {
-                            summary = summary.child(
-                                h_flex()
-                                    .w_full()
-                                    .min_w_0()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .text_ellipsis()
-                                            .child(file.path.clone()),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex_shrink_0()
-                                            .child(review_counts(file.additions, file.deletions)),
-                                    ),
-                            );
-                        }
-                        body = body.child(
-                            gpui_kit::base::Button::new(key.clone())
-                                .child(summary)
-                                .w_full()
-                                .min_w_0()
-                                .flex_shrink_0()
-                                .p_3()
-                                .rounded_md()
-                                .text_sm()
-                                .bg(rgb(appearance::RAISED))
-                                .cursor_pointer()
-                                .hover(|style| style.bg(rgb(appearance::HOVER)))
-                                .accessibility_label("変更ファイルの差分を開く")
-                                .on_click(cx.listener(move |view, _, _, cx| {
-                                    toggle_set(&mut view.expanded_items, &toggle);
-                                    if view.expanded_items.contains(&toggle) {
-                                        for detail in &details {
-                                            view.dispatch(Intent::ReadItem(detail.clone()));
-                                        }
-                                    }
-                                    view.remeasure_item(&item_id);
-                                    view.pause_tail();
-                                    cx.notify();
-                                })),
-                        );
-                        if expanded {
-                            for (index, file) in changes.iter().enumerate() {
-                                body = body.child(div().text_sm().child(file.path.clone()));
-                                if file.rows.is_empty() {
-                                    body = body.child(
-                                        div().text_sm().child("差分はまだ取得されていません"),
-                                    );
-                                } else {
-                                    let patch = file
-                                        .rows
-                                        .iter()
-                                        .map(|row| row.text.as_str())
-                                        .collect::<Vec<_>>()
-                                        .join("\n");
-                                    body = body.child(Self::diff(
-                                        &mut self.diffs,
-                                        format!("{key}-{index}"),
-                                        &patch,
-                                        cx,
-                                    ));
-                                }
-                            }
-                        }
-                    }
                     if item.data.kind == "agent" {
                         let text = item.data.body.clone().expect("assistant message has text");
                         body = body.child(
@@ -1095,7 +1014,12 @@ impl Desktop {
                         "リンクを開く",
                         cx,
                         move |view, window, cx| {
-                            view.click_conversation_link(&url, window.modifiers().control, window, cx)
+                            view.click_conversation_link(
+                                &url,
+                                window.modifiers().control,
+                                window,
+                                cx,
+                            )
                         },
                     ));
                 } else {
@@ -1327,9 +1251,9 @@ mod tests {
 #[cfg(test)]
 mod rendering_tests {
     use super::{Desktop, Mode, Snapshot};
-    use agent_core::state::operations as op;
     use crate::app::ImageState;
     use agent_core::presentation::conversation::{RenderedConversation, project_conversation};
+    use agent_core::state::operations as op;
     use gpui_kit as gpui;
     use gpui_kit::{
         AppContext, Context, Entity, IntoElement, Render, RenderImage, TestAppContext, Window, px,

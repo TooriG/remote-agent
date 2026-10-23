@@ -237,7 +237,7 @@ pub struct ProjectRoot {
     pub path: String,
 }
 /// Native model identity scoped by provider; neither field is encoded in the other.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ModelRef {
     pub provider: crate::session::ProviderKind,
     pub id: String,
@@ -249,11 +249,21 @@ pub struct Model {
     pub id: String,
     pub model: ModelRef,
     pub display_name: String,
+    pub credential_route: Option<crate::dsh::KeyProvider>,
+    /// None means capabilities have not been resolved, not that they are unsupported.
+    pub settings: Option<ModelSettings>,
+    #[serde(default)]
+    pub settings_discovery: bool,
+    pub is_default: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelSettings {
     pub default_reasoning_effort: String,
     pub supported_reasoning_efforts: Vec<ReasoningEffort>,
     pub service_tiers: Option<Vec<ServiceTier>>,
     pub default_service_tier: Option<String>,
-    pub is_default: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

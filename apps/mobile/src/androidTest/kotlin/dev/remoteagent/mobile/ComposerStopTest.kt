@@ -1,6 +1,9 @@
 package dev.remoteagent.mobile
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -10,9 +13,11 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import dev.remoteagent.core.Intent
-import dev.remoteagent.core.Outcome
+import dev.remoteagent.core.Interrupt
+import dev.remoteagent.core.OperationPhase
+import dev.remoteagent.core.ProviderKind
+import dev.remoteagent.core.SessionRef
 import dev.remoteagent.core.Snapshot
-import java.io.IOException
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -26,39 +31,66 @@ class ComposerStopTest {
     private fun fixture(status: String, draft: String = ""): Snapshot {
         val identity = JSONObject("""{"provider":"codex","id":"thread"}""")
         val key = JSONObject().put("Session", JSONObject().put("session", identity))
-        val state = JSONObject(Snapshot.empty().serialize().decodeToString())
-            .put("navigation", JSONObject().put("thread_id", identity).put("draft_key", key).put("cwd", "/fixture"))
-            .put("drafts", JSONArray().put(JSONArray().put(key).put(JSONObject().put("text", draft).put("attachments", JSONArray()))))
-            .put("conversations", JSONArray().put(JSONArray().put(identity).put(
-                JSONObject().put("id", identity).put("turns", JSONArray().put(
-                    JSONObject().put("id", "active").put("status", status).put("items", JSONArray())
-                ))
-            )))
+        val state =
+            JSONObject(Snapshot.empty().serialize().decodeToString())
+                .put("navigation", JSONObject().put("thread_id", identity).put("draft_key", key).put("cwd", "/fixture"))
+                .put(
+                    "drafts",
+                    JSONArray()
+                        .put(JSONArray().put(key).put(JSONObject().put("text", draft).put("attachments", JSONArray()))),
+                )
+                .put(
+                    "conversations",
+                    JSONArray()
+                        .put(
+                            JSONArray()
+                                .put(identity)
+                                .put(
+                                    JSONObject()
+                                        .put("id", identity)
+                                        .put(
+                                            "turns",
+                                            JSONArray()
+                                                .put(
+                                                    JSONObject()
+                                                        .put("id", "active")
+                                                        .put("status", status)
+                                                        .put("items", JSONArray())
+                                                ),
+                                        )
+                                )
+                        ),
+                )
         return Snapshot.restore(state.toString().encodeToByteArray())
     }
 
     @Test
-    fun emptyDraftCanStopWithoutAModelCatalogAndFailureCanRetry() {
-        fixture("running").use { snapshot ->
-            val intents = mutableListOf<Intent>()
-            var complete: ((Result<Outcome>) -> Unit)? = null
-            compose.setContent {
-                MaterialTheme {
-                    ThreadComposer(snapshot, { intent, callback -> intents.add(intent); complete = callback }, {}) {}
-                }
+    fun stopPhaseDisablesActionAndFailureCanRetry() {
+        val intents = mutableListOf<Intent>()
+        var phase by mutableStateOf<OperationPhase?>(null)
+        compose.setContent {
+            MaterialTheme {
+                ComposerStopButton(
+                    Interrupt(SessionRef(ProviderKind.CODEX, "thread"), "active"),
+                    phase,
+                    { intent, _ ->
+                        intents.add(intent)
+                        phase = OperationPhase.Running
+                    },
+                )
             }
-            compose.onNodeWithTag("composer.stop").assertIsDisplayed().assertIsEnabled().performClick()
-            compose.onNodeWithTag("composer.stop").assertIsNotEnabled()
-            compose.runOnIdle {
-                val stop = intents.single() as Intent.Interrupt
-                assertEquals("thread", stop.v1.threadId.id)
-                assertEquals("active", stop.v1.turnId)
-                complete!!(Result.failure(IOException("offline")))
-            }
-            compose.onNodeWithText("停止できませんでした。再試行してください。").assertIsDisplayed()
-            compose.onNodeWithTag("composer.stop").assertIsEnabled().performClick()
-            compose.runOnIdle { assertEquals(2, intents.size) }
         }
+        compose.onNodeWithTag("composer.stop").assertIsDisplayed().assertIsEnabled().performClick()
+        compose.onNodeWithTag("composer.stop").assertIsNotEnabled()
+        compose.runOnIdle {
+            val stop = intents.single() as Intent.Interrupt
+            assertEquals("thread", stop.v1.threadId.id)
+            assertEquals("active", stop.v1.turnId)
+            phase = OperationPhase.Failed("offline")
+        }
+        compose.onNodeWithText("停止できませんでした。再試行してください。").assertIsDisplayed()
+        compose.onNodeWithTag("composer.stop").assertIsEnabled().performClick()
+        compose.runOnIdle { assertEquals(2, intents.size) }
     }
 
     @Test

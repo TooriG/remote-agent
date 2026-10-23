@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::{
     io::AsyncReadExt,
-    process::{Child, ChildStdin, ChildStdout},
+    process::{Child, ChildStdin, ChildStdout, Command},
 };
 
 pub(super) fn executable(
@@ -80,7 +80,7 @@ fn runtime_from(
     // sealed Resources directory, rather than alongside its Mach-O executables.
     let (default_node, bridge) = if directory.ends_with("Contents/MacOS") {
         (
-            directory.join(format!("node{}", std::env::consts::EXE_SUFFIX)),
+            bex_process::bundled_node_path(host).expect("Mac bundle has a runtime path"),
             directory
                 .parent()
                 .expect("Contents exists")
@@ -146,6 +146,48 @@ mod tests {
         );
     }
 
+    fn home_variables(homes: Option<(&Path, &Path)>) -> Vec<(String, Option<String>)> {
+        let mut command = Command::new("claude");
+        set_homes(&mut command, homes);
+        command
+            .as_std()
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn inherited_native_home_keeps_the_users_own_claude_login() {
+        let native = Path::new("/home/user/.claude");
+        let account = Path::new("/state/claude/accounts/4c5b");
+        assert_eq!(homes(native, true, native), None);
+        assert!(home_variables(homes(native, true, native)).is_empty());
+
+        // Added accounts still share skills and history but keep their credentials.
+        assert_eq!(homes(native, true, account), Some((native, account)));
+        assert_eq!(
+            home_variables(homes(native, true, account)),
+            [
+                (
+                    "CLAUDE_CONFIG_DIR".into(),
+                    Some(native.display().to_string())
+                ),
+                (
+                    "CLAUDE_SECURESTORAGE_CONFIG_DIR".into(),
+                    Some(account.display().to_string())
+                ),
+            ]
+        );
+
+        // An explicitly chosen native home is not Claude Code's default.
+        assert_eq!(homes(native, false, native), Some((native, native)));
+    }
+
     #[test]
     fn mac_sdk_uses_bundled_node_without_path_and_respects_explicit_overrides() {
         let root = tempfile::tempdir().unwrap();
@@ -154,7 +196,11 @@ mod tests {
         std::fs::create_dir_all(&executables).unwrap();
         std::fs::create_dir_all(&resources).unwrap();
         let host = executables.join("host-daemon");
-        let bundled = executables.join(format!("node{}", std::env::consts::EXE_SUFFIX));
+        let bundled = root
+            .path()
+            .join("Bex Dev.app/Contents/Helpers/Bex Node.app/Contents/MacOS")
+            .join(format!("node{}", std::env::consts::EXE_SUFFIX));
+        std::fs::create_dir_all(bundled.parent().unwrap()).unwrap();
         let bridge = resources.join("bex-claude-sdk.mjs");
         std::fs::write(&bundled, b"bundled runtime").unwrap();
         std::fs::write(&bridge, b"SDK bridge").unwrap();
@@ -275,11 +321,30 @@ pub(crate) enum SdkRequest {
     },
 }
 
+/// Configuration and credential homes for a Claude Code process, or `None` to
+/// keep the Host's own environment. Claude Code keys its credentials on these
+/// variables, so naming even its default directory hides the user's login.
+pub(super) fn homes<'a>(
+    native_home: &'a Path,
+    native_inherited: bool,
+    credentials_home: &'a Path,
+) -> Option<(&'a Path, &'a Path)> {
+    (!native_inherited || credentials_home != native_home)
+        .then_some((native_home, credentials_home))
+}
+
+pub(super) fn set_homes(command: &mut Command, homes: Option<(&Path, &Path)>) {
+    if let Some((config_home, credentials_home)) = homes {
+        command
+            .env("CLAUDE_CONFIG_DIR", config_home)
+            .env("CLAUDE_SECURESTORAGE_CONFIG_DIR", credentials_home);
+    }
+}
+
 impl Process {
     pub(super) async fn start(
         program: &Path,
-        config_home: &Path,
-        credentials_home: &Path,
+        homes: Option<(&Path, &Path)>,
         cwd: &Path,
         session: Option<(&str, bool)>,
         model: Option<(&str, Option<&str>)>,
@@ -290,9 +355,8 @@ impl Process {
         let (node, bridge) = runtime()?;
         let mut command = bex_process::command(&node).map_err(|error| error.to_string())?;
         // Account changes must not replace skills, settings, plugins or history.
+        set_homes(&mut command, homes);
         command
-            .env("CLAUDE_CONFIG_DIR", config_home)
-            .env("CLAUDE_SECURESTORAGE_CONFIG_DIR", credentials_home)
             .env("CLAUDE_CODE_SDK_READS_SESSION_STATE", "1")
             .env_remove("ANTHROPIC_API_KEY")
             .env_remove("ANTHROPIC_AUTH_TOKEN")

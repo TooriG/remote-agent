@@ -864,26 +864,6 @@ impl Agent for Codex {
         )
         .await
     }
-    async fn create_in_project(
-        &self,
-        cwd: &str,
-        model: Option<&str>,
-        browser: Option<Value>,
-        project: Option<&str>,
-    ) -> Result<ThreadResponse, Failure> {
-        let Some(project) = project else {
-            return self.create(cwd, model, browser).await;
-        };
-        self.thread_response(
-            "thread/start",
-            &with_browser_config(
-                serde_json::json!({"cwd":cwd,"model":model,"projectId":project}),
-                browser,
-            ),
-        )
-        .await
-    }
-
     async fn state(&self, id: &str) -> Result<SubmissionState, Failure> {
         if let Some(error) = self.restoration_error.borrow().as_ref() {
             return Err(Failure::new("account_unavailable", error));
@@ -975,48 +955,23 @@ impl Agent for Codex {
             .filter(|value| value["hidden"] != true || value["model"].as_str() == configured)
             .map(native::parse_model)
             .collect::<Result<Vec<_>, _>>()?;
-        if params.cursor.is_none() {
-            if let Ok(config) = config {
-                let account: Result<Value, _> = self
-                    .request("account/read", &serde_json::json!({"refreshToken":false}))
-                    .await;
-                let account_type = account
-                    .as_ref()
-                    .ok()
-                    .and_then(|value| value["account"]["type"].as_str());
-                native::include_configured_model(&mut data, &config["config"], account_type);
-            }
+        if params.cursor.is_none()
+            && let Ok(config) = config
+        {
+            let account: Result<Value, _> = self
+                .request("account/read", &serde_json::json!({"refreshToken":false}))
+                .await;
+            let account_type = account
+                .as_ref()
+                .ok()
+                .and_then(|value| value["account"]["type"].as_str());
+            native::include_configured_model(&mut data, &config["config"], account_type);
         }
         Ok(op::ModelPage {
             data,
             next_cursor: page.next_cursor,
             provider_errors: None,
         })
-    }
-
-    async fn projects(&self) -> Result<Vec<agent_protocol::models::Project>, Failure> {
-        let mut projects = Vec::new();
-        let mut cursor = None;
-        let mut seen = std::collections::HashSet::new();
-        loop {
-            let page: Page<agent_protocol::models::Project> = self
-                .request(
-                    "project/list",
-                    &serde_json::json!({"limit":100,"cursor":cursor}),
-                )
-                .await?;
-            projects.extend(page.data);
-            cursor = page.next_cursor.filter(|cursor| !cursor.is_empty());
-            let Some(next) = &cursor else {
-                return Ok(projects);
-            };
-            if !seen.insert(next.clone()) {
-                return Err(Failure::new(
-                    "invalid_project_list",
-                    "project list cursor repeated",
-                ));
-            }
-        }
     }
 
     async fn catalog(&self, cwd: &str) -> agent_protocol::composer::ComposerCatalog {

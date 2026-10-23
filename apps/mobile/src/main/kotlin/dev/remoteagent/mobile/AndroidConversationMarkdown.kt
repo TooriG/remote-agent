@@ -292,7 +292,7 @@ private fun MarkdownText(
                 }
             } else if (link != null) {
                 withStyle(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)) {
-                    withLink(LinkAnnotation.Clickable("url:$index") { openExternalLink(link) }) {
+                    withLink(LinkAnnotation.Url(link) { openExternalLink(link) }) {
                         append(styledRuns[index])
                     }
                 }

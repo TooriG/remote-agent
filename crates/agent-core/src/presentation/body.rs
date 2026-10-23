@@ -178,47 +178,6 @@ pub fn expanded_body(item: &Item) -> String {
     }
 }
 
-/// Accumulate reported edits in source order without inventing statistics for deferred diffs.
-pub(super) fn changed_files<'a>(
-    changes: impl Iterator<Item = &'a crate::models::FileChange>,
-) -> Vec<super::diff::WorkspaceDiffFile> {
-    let mut files: Vec<super::diff::WorkspaceDiffFile> = Vec::new();
-    for change in changes {
-        let rows = change.diff.as_deref().map(super::diff::parse);
-        let additions = rows
-            .as_ref()
-            .map(|rows| rows.iter().filter(|row| row.kind == "+").count() as u64);
-        let deletions = rows
-            .as_ref()
-            .map(|rows| rows.iter().filter(|row| row.kind == "-").count() as u64);
-        let index = files
-            .iter()
-            .position(|file| file.path == change.path)
-            .unwrap_or_else(|| {
-                files.push(super::diff::WorkspaceDiffFile {
-                    path: change.path.clone(),
-                    additions: Some(0),
-                    deletions: Some(0),
-                    rows: Vec::new(),
-                });
-                files.len() - 1
-            });
-        let file = &mut files[index];
-        file.additions = file
-            .additions
-            .zip(additions)
-            .and_then(|(total, count)| total.checked_add(count));
-        file.deletions = file
-            .deletions
-            .zip(deletions)
-            .and_then(|(total, count)| total.checked_add(count));
-        file.rows.extend(rows.into_iter().flatten().filter(|row| {
-            row.kind != "F" && !(row.kind == "M" && super::diff::is_file_metadata(&row.text))
-        }));
-    }
-    files
-}
-
 /// Native detail views consume typed Markdown blocks; output never becomes executable markup.
 pub(super) fn detail_blocks(item: &Item) -> Vec<super::markdown::MarkdownBlock> {
     use super::markdown::{markdown_blocks, markdown_code_block};
@@ -346,26 +305,6 @@ pub(super) fn detail_blocks(item: &Item) -> Vec<super::markdown::MarkdownBlock> 
 mod tests {
     use super::*;
     use serde_json::{Value, json};
-    #[test]
-    fn reported_edits_keep_order_and_unknown_statistics() {
-        let changes: Vec<crate::models::FileChange> = serde_json::from_value(json!([
-            {"path":"src/a.rs", "kind":"add", "diff":"--- /dev/null\n+++ b/src/a.rs\n@@ -0,0 +1 @@\n+one"},
-            {"path":"src/b.rs", "kind":"add", "diff":null},
-            {"path":"src/a.rs", "kind":{"update":{"movePath":null}}, "diff":"@@ -1 +1 @@\n-one\n+two"}
-        ])).unwrap();
-        let files = changed_files(changes.iter());
-        assert_eq!(
-            files
-                .iter()
-                .map(|file| file.path.as_str())
-                .collect::<Vec<_>>(),
-            ["src/a.rs", "src/b.rs"]
-        );
-        assert_eq!((files[0].additions, files[0].deletions), (Some(2), Some(1)));
-        assert_eq!((files[1].additions, files[1].deletions), (None, None));
-        assert!(files[0].rows.iter().all(|row| !row.text.starts_with("+++")));
-    }
-
     #[test]
     fn command_details_keep_output_literal_and_syntax_information() {
         let item: Item = serde_json::from_value(json!({"id":"cmd","status":"completed","clientInputId":null,"body":{"inline":{"body":{"commandExecution":{"command":"echo hi","cwd":"/workspace","output":"**literal**\n[link](https://example.com)","exitCode":2}}}}})).unwrap();

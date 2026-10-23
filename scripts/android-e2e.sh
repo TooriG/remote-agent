@@ -53,6 +53,11 @@ done
 [[ $boot_completed == 1 ]] || { echo "Android emulator did not complete boot" >&2; exit 1; }
 [[ $(adb -P "$server_port" -s "$serial" shell getprop ro.build.version.sdk | tr -d '\r') == 37 ]]
 [[ $(adb -P "$server_port" -s "$serial" shell getprop ro.build.version.codename | tr -d '\r') == REL ]]
+# Permission-dialog nodes can appear before their entrance animation settles.
+# Configure only this disposable emulator before UI automation starts.
+for scale in window_animation_scale transition_animation_scale animator_duration_scale; do
+    adb -P "$server_port" -s "$serial" shell settings put global "$scale" 0
+done
 adb -P "$server_port" -s "$serial" shell input keyevent 82
 adb -P "$server_port" -s "$serial" install apps/mobile/build/outputs/apk/debug/mobile-debug.apk
 adb -P "$server_port" -s "$serial" install apps/mobile/build/outputs/apk/androidTest/debug/mobile-debug-androidTest.apk
@@ -144,10 +149,10 @@ fi
 if [[ $mode == all ]]; then
 prepare_pairing
 adb -P "$server_port" -s "$serial" shell am instrument -w -e cwd "$fixture/host/project" \
-    -e class dev.remoteagent.mobile.StorePersistenceTest,dev.remoteagent.mobile.ConversationRecoveryTest,dev.remoteagent.mobile.MarkdownTableTest,dev.remoteagent.mobile.ConversationNavigationTest,dev.remoteagent.mobile.ThreadListTest \
+    -e class dev.remoteagent.mobile.StorePersistenceTest,dev.remoteagent.mobile.ConversationRecoveryTest,dev.remoteagent.mobile.MarkdownTableTest,dev.remoteagent.mobile.ConversationNavigationTest,dev.remoteagent.mobile.ThreadListTest,dev.remoteagent.mobile.ComposerControlsTest \
     dev.remoteagent.mobile.test/androidx.test.runner.AndroidJUnitRunner | tee "$log.store.log"
 adb -P "$server_port" -s "$serial" exec-out screencap -p >"$log.final.png"
-grep -qx 'OK (13 tests)' "$log.store.log"
+grep -qx 'OK (14 tests)' "$log.store.log"
 # Each paired test gets a fresh single-use invitation and isolated credentials.
 
 prepare_pairing
@@ -176,4 +181,11 @@ if ! grep -qx 'OK (1 test)' "$log.terminal.log"; then
 fi
 adb -P "$server_port" -s "$serial" pull /sdcard/Android/data/dev.remoteagent.mobile/files/terminal-input.png "$log.terminal-input.png"
 adb -P "$server_port" -s "$serial" pull /sdcard/Android/data/dev.remoteagent.mobile/files/terminal-retained.png "$log.terminal-retained.png"
+if [[ $mode == all ]]; then
+adb -P "$server_port" -s "$serial" shell settings put secure show_ime_with_hard_keyboard 1
+adb -P "$server_port" -s "$serial" shell am instrument -w \
+    -e class dev.remoteagent.mobile.VoiceInputTest,dev.remoteagent.mobile.MarkdownLinkTest,dev.remoteagent.mobile.MessageActionsTest,dev.remoteagent.mobile.UnknownSubmissionTest,dev.remoteagent.mobile.ModelDefaultsTest,dev.remoteagent.mobile.ComposerStopTest,dev.remoteagent.mobile.ComposerKeyboardTest \
+    dev.remoteagent.mobile.test/androidx.test.runner.AndroidJUnitRunner | tee "$log.ui.log"
+grep -qx 'OK (22 tests)' "$log.ui.log"
+fi
 echo "Android API 37: $mode checks passed; records at $log.*"

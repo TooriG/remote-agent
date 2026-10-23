@@ -49,7 +49,7 @@ pub(super) fn notification(
                 scope: agent_protocol::operations::ListDecorationScope::Task {
                     session: session.clone(),
                 },
-                project_ids: Vec::new(),
+                projects: Vec::new(),
                 threads: vec![(session.clone(), cwd.clone(), thread.git_branch.clone())],
             }));
         }

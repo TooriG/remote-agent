@@ -116,6 +116,8 @@ private fun ModelPickerDialog(
                 if (choices.isEmpty()) Text("モデルがありません。検索条件やPCとの接続を確認してください。")
                 ModelQuickSettings(snapshot, perform)
                 SaveNewChatDefaultsButton(snapshot, selected, perform)
+                if (selected?.provider == dev.remoteagent.core.ProviderKind.DEEP_SEEK)
+                    CredentialSettings(snapshot, perform)
             }
         },
         confirmButton = { TextButton(onClick = { dismiss() }) { Text("完了") } },
@@ -139,7 +141,8 @@ private fun SaveNewChatDefaultsButton(
             modifier = Modifier.fillMaxWidth().testTag("model.save-defaults"),
             onClick = {
                 savingDefaults = true
-                saveNewChatDefaults(snapshot, perform) { result ->
+                perform(Intent.SaveDraftModelDefaults(ModelDefaultsScope.Global, snapshot.navigation().draftKey)) {
+                    result ->
                     savingDefaults = false
                     defaultsNotice =
                         result.fold(onSuccess = { "新規チャットの既定に保存しました" }, onFailure = { it.message ?: "既定の保存に失敗しました" })
@@ -150,42 +153,6 @@ private fun SaveNewChatDefaultsButton(
         }
         Text(defaultsNotice ?: "この端末で、次の新規チャットからモデル・推論量・速度を引き継ぎます。", style = MaterialTheme.typography.bodySmall)
     }
-}
-
-/** Reuse Core's persisted presets rather than keeping a second set of Android preferences. */
-internal fun saveNewChatDefaults(
-    snapshot: Snapshot,
-    perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
-    complete: (Result<Unit>) -> Unit,
-) {
-    val key = snapshot.navigation().draftKey
-    val draft = snapshot.draft(key)
-    val model = draft.model ?: snapshot.modelProviderForDraft(key)?.let { snapshot.modelForProvider(key, it) }
-    if (model == null) {
-        complete(Result.failure(IllegalStateException("モデルを選択してください")))
-        return
-    }
-    val controls = snapshot.modelQuickControls(key)
-    val scope = ModelDefaultsScope.Global
-    val intents =
-        listOf(
-            Intent.SelectDefaultModel(scope, model.provider, model),
-            Intent.SelectDefaultEffort(scope, model.provider, controls.effort.takeIf { it.isNotEmpty() }),
-            Intent.SelectDefaultServiceTier(
-                scope,
-                model.provider,
-                controls.speedChoices.firstOrNull { it.selected }?.id,
-            ),
-            Intent.SelectNewChatModel(scope, model),
-        )
-    fun save(index: Int) {
-        if (index == intents.size) complete(Result.success(Unit))
-        else
-            perform(intents[index]) { result ->
-                result.fold(onSuccess = { save(index + 1) }, onFailure = { complete(Result.failure(it)) })
-            }
-    }
-    save(0)
 }
 
 @Composable

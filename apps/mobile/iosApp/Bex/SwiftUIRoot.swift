@@ -6,22 +6,6 @@ struct BexSwiftUIRoot: View {
     @ObservedObject var model: BexAppViewModel
 
     var body: some View {
-        BexScreen(model: model)
-            .onChange(of: model.screen) { screen in
-                if screen != .thread {
-                    model.sideChatRequest = nil
-                }
-            }
-            .sheet(isPresented: $model.isScanning) {
-                BexQrScannerSheet { model.scanned($0) }
-                    .interactiveDismissDisabled()
-            }
-    }
-}
-
-private struct BexScreen: View {
-    @ObservedObject var model: BexAppViewModel
-    var body: some View {
         NavigationStack(path: Binding<[AppScreen]>(
             get: {
                 switch model.screen {
@@ -66,12 +50,16 @@ private struct BexScreen: View {
             .navigationBarTitleDisplayMode(.inline)
         }
         .preferredColorScheme(.dark)
+        .onChange(of: model.screen) { screen in
+            if screen != .thread {
+                model.sideChatRequest = nil
+            }
+        }
     }
 
     private var pairingScreen: some View {
         PairingScreen(canCancel: !model.profiles.isEmpty,
                       connecting: model.isConnecting, error: model.pairingError,
-                      scan: { model.isScanning = true },
                       hostName: model.pairingInvitation?.hostName,
                       aiRecipients: model.pairingInvitation?.aiRecipients ?? [],
                       transcriptionRecipient: model.pairingInvitation?.transcriptionRecipient,
@@ -84,7 +72,6 @@ private struct PairingScreen: View {
     let canCancel: Bool
     let connecting: Bool
     let error: String?
-    let scan: () -> Void
     let hostName: String?
     let aiRecipients: [String]
     let transcriptionRecipient: String?
@@ -94,6 +81,7 @@ private struct PairingScreen: View {
     let cancel: () -> Void
     @State private var contents = ""
     @State private var showsManualPairing = false
+    @State private var isScanning = false
     @FocusState private var editingContents: Bool
 
     var body: some View {
@@ -172,7 +160,7 @@ private struct PairingScreen: View {
                             Text("PCでBexを開き、表示されたQRコードを読み取ってください。")
                                 .font(.subheadline).foregroundStyle(.secondary)
                                 .multilineTextAlignment(.center)
-                            Button(action: scan) {
+                            Button { isScanning = true } label: {
                                 Label("QRコードを読み取る", systemImage: "qrcode.viewfinder")
                                     .font(.headline)
                                     .frame(maxWidth: .infinity, minHeight: 24)
@@ -231,6 +219,15 @@ private struct PairingScreen: View {
         }
         .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("bex")
+        .sheet(isPresented: $isScanning) {
+            BexQrScannerSheet {
+                isScanning = false
+                if let contents = $0 {
+                    prepare(contents)
+                }
+            }
+            .interactiveDismissDisabled()
+        }
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 if canCancel {
@@ -355,7 +352,7 @@ private struct BexQrScannerSheet: View {
 }
 
 private struct BexQrScannerController: UIViewControllerRepresentable {
-    let completion: (String?) -> Void
+    let completion: (String) -> Void
 
     func makeUIViewController(context _: Context) -> BexQrCaptureViewController {
         BexQrCaptureViewController(completion: completion)

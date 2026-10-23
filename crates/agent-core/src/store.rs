@@ -487,7 +487,8 @@ impl Store {
         tokio::select! {
             biased;
             _ = attempt.cancelled() => Err(PeerError::ConnectionClosed("connection attempt cancelled".into()).into()),
-            result = setup => {
+            result = tokio::time::timeout(std::time::Duration::from_secs(45), setup) => {
+                let result = result.map_err(|_| crate::transport::TransportError::Connection("Host recovery timed out".into()))?;
                 let performance = result?;
                 guard.disarm();
                 Ok(performance)
@@ -747,6 +748,7 @@ fn publish_locked(current: &mut Arc<Snapshot>, next: Snapshot) -> bool {
         list_query,
         epoch,
         connected,
+        connection_generation,
         subscriptions,
         error,
     } = &next;
@@ -786,6 +788,7 @@ fn publish_locked(current: &mut Arc<Snapshot>, next: Snapshot) -> bool {
         && Arc::ptr_eq(&current.management, management)
         && Arc::ptr_eq(&current.list_query, list_query)
         && &current.epoch == epoch
+        && current.connection_generation == *connection_generation
         && &current.connected == connected
         && &current.error == error
     {
@@ -888,6 +891,14 @@ fn finish(updates: &watch::Sender<Arc<Snapshot>>, completed: Completed) -> Vec<S
             }
         };
         effects.extend(op::prefetch_composer_catalog(&mut next));
+        effects.extend(op::prefetch_model_settings(
+            next.connected,
+            next.drafts
+                .get(&next.navigation.draft_key)
+                .and_then(|draft| draft.model.as_ref()),
+            &next.models,
+            next.operations.keys(),
+        ));
         let continues = completed.scope.operation.as_ref().is_some_and(|(key, _)| {
             effects
                 .iter()
@@ -1743,8 +1754,8 @@ mod model_reconnection_tests {
     fn reconnect_refreshes_a_cached_catalog_without_clearing_choices() {
         let models = serde_json::from_value(serde_json::json!([
             {"id":"old","model":{"provider":"codex","id":"gpt-6-sol"},
-             "displayName":"GPT-6", "defaultReasoningEffort":"medium",
-             "supportedReasoningEfforts":[]}
+             "displayName":"GPT-6", "settings": { "defaultReasoningEffort":"medium",
+             "supportedReasoningEfforts":[]}}
         ]))
         .unwrap();
         let previous = Snapshot {
@@ -1766,8 +1777,8 @@ mod model_reconnection_tests {
             agent_protocol::operations::ModelPage {
                 data: serde_json::from_value(serde_json::json!([
                     {"id":"new","model":{"provider":"codex","id":"gpt-6.1-sol"},
-                     "displayName":"GPT-6.1", "defaultReasoningEffort":"medium",
-                     "supportedReasoningEfforts":[], "isDefault":true}
+                     "displayName":"GPT-6.1", "isDefault":true, "settings": { "defaultReasoningEffort":"medium",
+                     "supportedReasoningEfforts":[]}}
                 ]))
                 .unwrap(),
                 next_cursor: None,

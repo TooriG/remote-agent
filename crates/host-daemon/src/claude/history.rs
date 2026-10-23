@@ -22,6 +22,7 @@ use uuid::Uuid;
 pub(super) const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_LINE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_FILES: usize = 20_000;
+const SUMMARY_WINDOW_BYTES: usize = 128 * 1024;
 
 pub(super) fn home() -> Result<PathBuf> {
     if let Some(path) = std::env::var_os("CLAUDE_CONFIG_DIR") {
@@ -190,61 +191,6 @@ pub(super) fn files(home: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-/// Project paths come from native metadata, never from Claude's lossy encoded
-/// transcript directory names. This function does not change provider storage.
-pub(super) fn projects(home: &Path, config: &Path) -> Result<Vec<agent_protocol::models::Project>> {
-    let mut roots = std::collections::BTreeSet::<PathBuf>::new();
-    match fs::read(config) {
-        Ok(bytes) => {
-            let value: Value = serde_json::from_slice(&bytes)
-                .context("Claude project configuration cannot be read")?;
-            if let Some(projects) = value["projects"].as_object() {
-                roots.extend(
-                    projects
-                        .keys()
-                        .map(PathBuf::from)
-                        .filter(|path| path.is_absolute()),
-                );
-            }
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
-    }
-    let mut native_projects = BTreeMap::new();
-    for file in files(home)? {
-        let Ok((summary, project)) = summary_with_project(&file) else {
-            continue;
-        };
-        if let Some(project) = project {
-            native_projects.insert(project.id.clone(), project);
-            continue;
-        }
-        if let Some(cwd) = summary.thread.cwd {
-            let path = PathBuf::from(cwd);
-            if path.is_absolute() && !roots.iter().any(|root| path.starts_with(root)) {
-                roots.insert(path);
-            }
-        }
-    }
-    Ok(roots
-        .into_iter()
-        .map(|root| {
-            let root = dunce::canonicalize(&root).unwrap_or(root);
-            let path = root.to_string_lossy().into_owned();
-            agent_protocol::models::Project {
-                list_revision: 0,
-                id: format!("claude-project:{path}"),
-                name: root
-                    .file_name()
-                    .map_or_else(|| path.clone(), |name| name.to_string_lossy().into_owned()),
-                roots: vec![agent_protocol::models::ProjectRoot { path }],
-                favicon_png: None,
-            }
-        })
-        .chain(native_projects.into_values())
-        .collect())
-}
-
 pub(super) fn resolve(home: &Path, id: Uuid) -> Result<PathBuf> {
     let filename = format!("{id}.jsonl");
     let mut matches = files(home)?.into_iter().filter(|path| {
@@ -262,31 +208,50 @@ pub(super) fn resolve(home: &Path, id: Uuid) -> Result<PathBuf> {
     Ok(path)
 }
 
-/// Extract metadata without loading complete tool output or message bodies.
-pub(super) fn summary(path: &Path) -> Result<crate::host_rpc::agent::SessionSummary> {
-    summary_with_project(path).map(|(summary, _)| summary)
+// Ignore tool results and other message bodies while reading list metadata.
+// Keep human input raw until a preview is actually needed.
+#[derive(Default, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct SummaryMetadata<'a> {
+    #[serde(rename = "type")]
+    kind: Value,
+    session_id: Value,
+    #[serde(rename = "session_id")]
+    alternate_session_id: Value,
+    cwd: Value,
+    git_branch: Value,
+    custom_title: Value,
+    ai_title: Value,
+    is_meta: Value,
+    origin: Value,
+    prompt_source: Value,
+    #[serde(borrow)]
+    message: Option<&'a serde_json::value::RawValue>,
 }
 
-fn summary_with_project(
-    path: &Path,
-) -> Result<(
-    crate::host_rpc::agent::SessionSummary,
-    Option<agent_protocol::models::Project>,
-)> {
+/// Extract metadata without loading complete tool output or message bodies.
+pub(super) fn summary(path: &Path) -> Result<crate::host_rpc::agent::SessionSummary> {
     use std::io::{Read, Seek, SeekFrom};
     let mut file = fs::File::open(path)?;
     let metadata = file.metadata()?;
     let mut head = Vec::new();
-    // Native project prompt snapshots can follow large tool catalogs. Finish
-    // the last row so a snapshot crossing the head boundary remains readable.
-    (&mut file).take(1024 * 1024).read_to_end(&mut head)?;
+    // Finish the last row so metadata crossing the boundary stays readable.
+    (&mut file)
+        .take(SUMMARY_WINDOW_BYTES as u64)
+        .read_to_end(&mut head)?;
     if !head.ends_with(b"\n") {
         BufReader::new((&mut file).take(MAX_LINE_BYTES as u64)).read_until(b'\n', &mut head)?;
     }
     let mut tail = Vec::new();
-    let offset = metadata.len().saturating_sub(128 * 1024);
-    file.seek(SeekFrom::Start(offset))?;
-    file.take(128 * 1024).read_to_end(&mut tail)?;
+    let offset = metadata
+        .len()
+        .saturating_sub(SUMMARY_WINDOW_BYTES as u64)
+        .max(head.len() as u64);
+    if offset < metadata.len() {
+        file.seek(SeekFrom::Start(offset))?;
+        file.take(SUMMARY_WINDOW_BYTES as u64)
+            .read_to_end(&mut tail)?;
+    }
     let id = path
         .file_stem()
         .and_then(|id| id.to_str())
@@ -305,96 +270,46 @@ fn summary_with_project(
         ..Default::default()
     };
     let mut branch = None;
-    let mut project = None;
     for line in head.split(|byte| *byte == b'\n').chain(
         tail.split(|byte| *byte == b'\n')
-            .skip(usize::from(offset > 0)),
+            .skip(usize::from(offset > head.len() as u64)),
     ) {
-        let Ok(value) = serde_json::from_slice::<Value>(line) else {
+        let Ok(value) = serde_json::from_slice::<SummaryMetadata<'_>>(line) else {
             continue;
         };
-        if let Some(session) = value["sessionId"].as_str().or(value["session_id"].as_str())
+        if let Some(session) = value
+            .session_id
+            .as_str()
+            .or(value.alternate_session_id.as_str())
             && session != id
         {
             return Err(anyhow!(
                 "Claude transcript session identity does not match its filename"
             ));
         }
-        if let Some(native_project) = native_project(&value) {
-            thread.project_id =
-                agent_protocol::models::ProjectMembership::Assigned(native_project.id.clone());
-            project = Some(native_project);
-        }
-        if let Some(saved_branch) = value["gitBranch"].as_str() {
+        if let Some(saved_branch) = value.git_branch.as_str() {
             branch = Some(saved_branch.to_owned());
         }
-        if let Some(cwd) = value["cwd"].as_str() {
+        if let Some(cwd) = value.cwd.as_str() {
             thread.cwd = Some(cwd.into());
         }
-        if let Some(title) = value["customTitle"].as_str().or(value["aiTitle"].as_str()) {
+        if let Some(title) = value.custom_title.as_str().or(value.ai_title.as_str()) {
             thread.name = Some(title.into());
         }
         if thread.preview.is_none()
-            && value["type"] == "user"
+            && value.kind == "user"
             && native::is_human_input(
-                value["isMeta"] == true,
-                value["origin"]["kind"].as_str(),
-                value["promptSource"].as_str(),
+                value.is_meta == true,
+                value.origin["kind"].as_str(),
+                value.prompt_source.as_str(),
             )
+            && let Some(message) = value.message
+            && let Ok(message) = serde_json::from_str::<Value>(message.get())
         {
-            thread.preview = input_text(&value["message"]["content"]);
+            thread.preview = input_text(&message["content"]);
         }
     }
-    Ok((
-        crate::host_rpc::agent::SessionSummary { thread, branch },
-        project,
-    ))
-}
-
-/// Read only provider-authored prompt metadata, never user text or tool output.
-fn native_project(value: &Value) -> Option<agent_protocol::models::Project> {
-    if value["type"] != "attachment" || value["attachment"]["type"] != "prompt_snapshot" {
-        return None;
-    }
-    for block in value["attachment"]["systemPrompt"].as_array()? {
-        let Some(text) = block.as_str() else { continue };
-        let Some(section) = text
-            .split_once("## Where you are\n\nProject: ")
-            .map(|(_, rest)| rest)
-        else {
-            continue;
-        };
-        let Some((name, id)) = section.lines().next()?.rsplit_once(" (id: `") else {
-            continue;
-        };
-        let Some(id) = id.strip_suffix("`)") else {
-            continue;
-        };
-        if !id.starts_with("chan_")
-            || id.len() <= 5
-            || !id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
-        {
-            continue;
-        }
-        let Some(name) = name
-            .strip_prefix('"')
-            .and_then(|name| name.strip_suffix('"'))
-        else {
-            continue;
-        };
-        if name.trim().is_empty() {
-            continue;
-        }
-        return Some(agent_protocol::models::Project {
-            id: format!("claude-project:{id}"),
-            name: name.into(),
-            // Several Claude projects can share a launch directory. Membership
-            // comes from the native project ID, never from that shared cwd.
-            roots: Vec::new(),
-            ..Default::default()
-        });
-    }
-    None
+    Ok(crate::host_rpc::agent::SessionSummary { thread, branch })
 }
 
 fn input_text(content: &Value) -> Option<String> {
@@ -759,108 +674,6 @@ mod tests {
     use agent_protocol::items::*;
     use serde_json::json;
     const ID: &str = "12345678-1234-4234-8234-123456789abc";
-    #[test]
-    fn project_catalog_reads_config_and_transcript_paths_without_decoding_or_writing_storage() {
-        let root = tempfile::tempdir().unwrap();
-        let home = root.path().join("storage");
-        let transcript_dir = home.join("projects/lossy-name-with-hyphens");
-        fs::create_dir_all(&transcript_dir).unwrap();
-        let configured = root.path().join("project-with-hyphens");
-        let discovered = root.path().join("transcript-project");
-        fs::create_dir_all(&configured).unwrap();
-        fs::create_dir_all(&discovered).unwrap();
-        let config = home.join(".claude.json");
-        let bytes = serde_json::to_vec(
-            &json!({"projects":{(configured.to_str().unwrap()):{},"relative":{}}}),
-        )
-        .unwrap();
-        fs::write(&config, &bytes).unwrap();
-        let transcript = transcript_dir.join(format!("{ID}.jsonl"));
-        let history =
-            json!({"sessionId":ID,"type":"user","cwd":discovered,"message":{"content":"hello"}})
-                .to_string()
-                + "\n";
-        fs::write(&transcript, &history).unwrap();
-        let projects = projects(&home, &config).unwrap();
-        assert_eq!(projects.len(), 2);
-        assert!(projects.iter().any(|project| project.roots[0].path
-            == dunce::canonicalize(&configured).unwrap().to_str().unwrap()));
-        assert!(
-            projects
-                .iter()
-                .any(|project| project.name == "transcript-project")
-        );
-        assert_eq!(fs::read(&config).unwrap(), bytes);
-        assert_eq!(fs::read_to_string(&transcript).unwrap(), history);
-    }
-    fn project_snapshot(name: &str, id: &str) -> Value {
-        json!({"type":"attachment","attachment":{"type":"prompt_snapshot","systemPrompt":[
-            format!("## Where you are\n\nProject: \"{name}\" (id: `{id}`)\nVisibility: private.")
-        ]}})
-    }
-
-    #[test]
-    fn native_project_membership_groups_threads_even_when_they_share_a_directory() {
-        let root = tempfile::tempdir().unwrap();
-        let home = root.path().join("storage");
-        let directory = home.join("projects/shared");
-        fs::create_dir_all(&directory).unwrap();
-        let cwd = root.path().join("shared-workspace");
-        let mut expected = BTreeMap::new();
-        for (id, name, project) in [
-            (Uuid::new_v4(), "Games", "chan_games"),
-            (Uuid::new_v4(), "Games", "chan_games"),
-            (Uuid::new_v4(), "Tanks", "chan_tanks"),
-        ] {
-            let file = directory.join(format!("{id}.jsonl"));
-            // The old 128 KiB head window cut off real prompt snapshots.
-            let padding = json!({"type":"attachment","attachment":{"type":"catalog","text":"x".repeat(180_000)}});
-            fs::write(
-                &file,
-                format!(
-                    "{padding}\n{}\n{}\n",
-                    project_snapshot(name, project),
-                    json!({"type":"user","sessionId":id,"cwd":cwd,"message":{"content":"hello"}})
-                ),
-            )
-            .unwrap();
-            let thread = summary(&file).unwrap().thread;
-            assert_eq!(
-                thread.project_id,
-                agent_protocol::models::ProjectMembership::Assigned(format!(
-                    "claude-project:{project}"
-                ))
-            );
-            expected.insert(format!("claude-project:{project}"), name.to_owned());
-        }
-        let catalog = projects(&home, &home.join("missing-config")).unwrap();
-        assert_eq!(catalog.len(), 2);
-        assert!(catalog.iter().all(|project| project.roots.is_empty()));
-        assert_eq!(
-            catalog
-                .into_iter()
-                .map(|p| (p.id, p.name))
-                .collect::<BTreeMap<_, _>>(),
-            expected
-        );
-    }
-
-    #[test]
-    fn native_project_metadata_does_not_accept_user_text_or_invalid_ids() {
-        let valid = project_snapshot("Games", "chan_games");
-        assert_eq!(native_project(&valid).unwrap().name, "Games");
-        let mut user = valid.clone();
-        user["type"] = json!("user");
-        assert!(native_project(&user).is_none());
-        let mut tool = valid;
-        tool["attachment"]["type"] = json!("tool_result");
-        assert!(native_project(&tool).is_none());
-        for id in ["", "chan_", "session_abc", "chan_abc/path"] {
-            assert!(native_project(&project_snapshot("Games", id)).is_none());
-        }
-        assert!(native_project(&project_snapshot(" ", "chan_games")).is_none());
-    }
-
     const NATIVE: &str = include_str!("../../tests/fixtures/claude-2.1.266.jsonl");
     fn fixture(bytes: &str) -> (tempfile::TempDir, PathBuf) {
         let root = tempfile::tempdir().unwrap();
@@ -1022,6 +835,75 @@ mod tests {
         let summary = summary(&path).unwrap();
         assert_eq!(summary.thread.cwd.as_deref(), Some("/checkout"));
         assert_eq!(summary.branch.as_deref(), Some("bex/task"));
+        assert_eq!(summary.thread.preview.as_deref(), Some("question"));
+        assert_eq!(fs::read_to_string(path).unwrap(), source);
+    }
+
+    #[test]
+    fn session_summary_keeps_metadata_at_adjacent_and_separated_read_windows() {
+        for gap in [0, 256 * 1024] {
+            let mut source = format!(
+                "{}\n",
+                json!({"type":"user","session_id":ID,"message":{"content":"question"}})
+            );
+            let row = json!({"type":"assistant","message":{"content":""}}).to_string() + "\n";
+            let padding = SUMMARY_WINDOW_BYTES - source.len() - row.len();
+            source.push_str(
+                &(json!({"type":"assistant","message":{"content":"x".repeat(padding)}})
+                    .to_string()
+                    + "\n"),
+            );
+            assert_eq!(source.len(), SUMMARY_WINDOW_BYTES);
+            if gap > 0 {
+                source.push_str(
+                    &(json!({"type":"assistant","message":{"content":"x".repeat(gap)}})
+                        .to_string()
+                        + "\n"),
+                );
+            }
+            source.push_str(&format!("{}\n", json!({"sessionId":ID,"cwd":"/latest","gitBranch":"feature","customTitle":"Saved title"})));
+            source.push_str(&format!(
+                "{}\n",
+                json!({"type":"assistant","message":{"content":"x".repeat(8 * 1024)}})
+            ));
+            let (_root, path) = fixture(&source);
+            let summary = summary(&path).unwrap();
+            assert_eq!(summary.thread.cwd.as_deref(), Some("/latest"));
+            assert_eq!(summary.branch.as_deref(), Some("feature"));
+            assert_eq!(summary.thread.name.as_deref(), Some("Saved title"));
+            assert_eq!(summary.thread.preview.as_deref(), Some("question"));
+            assert_eq!(fs::read_to_string(path).unwrap(), source);
+        }
+    }
+
+    #[test]
+    fn session_summary_does_not_trust_a_valid_suffix_of_a_corrupt_partial_row() {
+        let header = format!(
+            "{}\n",
+            json!({"type":"user","sessionId":ID,"cwd":"/original","message":{"content":"question"}})
+        );
+        let corrupt = "x".repeat(2 * 1024 * 1024);
+        let forged = format!(
+            "{}\n",
+            json!({"cwd":"/forged","customTitle":"Forged title"})
+        );
+        let empty = json!({"type":"assistant","message":{"content":""}}).to_string() + "\n";
+        let head_padding = SUMMARY_WINDOW_BYTES - header.len() - empty.len();
+        let head = format!(
+            "{header}{}\n",
+            json!({"type":"assistant","message":{"content":"x".repeat(head_padding)}})
+        );
+        let padding = SUMMARY_WINDOW_BYTES - forged.len() - empty.len();
+        let tail = format!(
+            "{}\n",
+            json!({"type":"assistant","message":{"content":"x".repeat(padding)}})
+        );
+        assert_eq!(forged.len() + tail.len(), SUMMARY_WINDOW_BYTES);
+        let source = format!("{head}{corrupt}{forged}{tail}");
+        let (_root, path) = fixture(&source);
+        let summary = summary(&path).unwrap();
+        assert_eq!(summary.thread.cwd.as_deref(), Some("/original"));
+        assert_eq!(summary.thread.name, None);
         assert_eq!(summary.thread.preview.as_deref(), Some("question"));
         assert_eq!(fs::read_to_string(path).unwrap(), source);
     }

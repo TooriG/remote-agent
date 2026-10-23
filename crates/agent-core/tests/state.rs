@@ -290,6 +290,16 @@ fn model_settings_corpus() {
         let draft: Draft = serde_json::from_value(case["draft"].clone()).unwrap();
         let models = serde_json::from_value(case["models"].clone()).unwrap();
         let mut previous = Snapshot {
+            account: Arc::new(agent_core::state::AccountState {
+                accounts: Some(Arc::new(
+                    serde_json::from_value(json!({
+                        "accounts":[{"id":"chatgpt","provider":"codex","planType":"pro"}],
+                        "selected":{"codex":"chatgpt"}
+                    }))
+                    .unwrap(),
+                )),
+                ..Default::default()
+            }),
             drafts: Arc::new(BTreeMap::from([(
                 SessionRef {
                     provider: ProviderKind::Codex,
@@ -493,10 +503,9 @@ fn activity_corpus_applies_even_without_a_loaded_conversation() {
 fn new_chat_selects_catalog_defaults_in_either_load_order() {
     use agent_core::state::Intent;
     let models = serde_json::from_value::<Vec<agent_protocol::models::Model>>(json!([{
-        "id":"model", "model":{"provider": "codex", "id": "model"}, "displayName":"Model",
+        "id":"model", "model":{"provider": "codex", "id": "model"}, "displayName":"Model", "isDefault":true, "settings": {
         "defaultReasoningEffort":"high", "supportedReasoningEfforts":[{"reasoningEffort":"high"}],
-        "defaultServiceTier":"priority", "serviceTiers":[{"id":"priority","fast":true}], "isDefault":true
-    }]))
+        "defaultServiceTier":"priority", "serviceTiers":[{"id":"priority","fast":true}]}}]))
     .unwrap();
     for catalog_first in [false, true] {
         let mut current = Snapshot::default();
@@ -835,7 +844,7 @@ fn disconnected_catalog_reads_do_not_apply_or_retry_stale_responses() {
     let mut state = Snapshot::default();
     let before = state.clone();
     assert!(op::LoadModels {}.stale(&mut state, serde_json::from_value(json!({
-        "data":[{"id":"old","model":{"provider": "codex", "id": "old"},"displayName":"Old", "defaultReasoningEffort":"medium","supportedReasoningEfforts":[]}]
+        "data":[{"id":"old","model":{"provider": "codex", "id": "old"},"displayName":"Old", "settings": { "defaultReasoningEffort":"medium","supportedReasoningEfforts":[]}}]
     })).unwrap()).is_empty());
     assert!(
         op::ListAccounts {}
@@ -887,9 +896,9 @@ fn incomplete_model_catalog_preserves_restored_choices_and_defaults_only_new_dra
         op::LoadModels {}.apply(
             &mut state,
             serde_json::from_value(json!({"data":[{
-            "id":"claude:default","model":{"provider": "claude", "id": "default"},"displayName":"Claude",
+            "id":"claude:default","model":{"provider": "claude", "id": "default"},"displayName":"Claude", "settings": {
             "defaultReasoningEffort":"low","supportedReasoningEfforts":[{"reasoningEffort":"low"}]
-        }],"providerErrors":errors}))
+        }}],"providerErrors":errors}))
             .unwrap(),
         );
         assert_eq!(*state.drafts[&DraftKey::from("saved")], draft);
@@ -943,10 +952,10 @@ fn incomplete_model_catalog_preserves_restored_choices_and_defaults_only_new_dra
         .0;
         assert_eq!(*state.drafts[&DraftKey::from("saved")], draft);
         let catalog = serde_json::from_value(json!({"data":[{
-            "id":"codex-model","model":{"provider": "codex", "id": "codex-model"},"displayName":"Codex",
+            "id":"codex-model","model":{"provider": "codex", "id": "codex-model"},"displayName":"Codex", "settings": {
             "defaultReasoningEffort":"high","supportedReasoningEfforts":[{"reasoningEffort":"high"}],
             "serviceTiers":[{"id":"priority","fast":true}]
-        }]})).unwrap();
+        }}]})).unwrap();
         op::LoadModels {}.apply(&mut state, catalog);
         assert_eq!(*state.drafts[&DraftKey::from("saved")], draft);
         assert!(state.drafts[&automatic].model.is_none());

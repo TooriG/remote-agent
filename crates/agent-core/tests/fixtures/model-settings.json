@@ -19,22 +19,24 @@
           "id": "model-a"
         },
         "displayName": "Model A",
-        "defaultReasoningEffort": "medium",
-        "defaultServiceTier": "priority",
-        "supportedReasoningEfforts": [
-          {
-            "reasoningEffort": "max"
-          },
-          {
-            "reasoningEffort": "medium"
-          }
-        ],
-        "serviceTiers": [
-          {
-            "id": "priority",
-            "fast": true
-          }
-        ]
+        "settings": {
+          "defaultReasoningEffort": "medium",
+          "defaultServiceTier": "priority",
+          "supportedReasoningEfforts": [
+            {
+              "reasoningEffort": "max"
+            },
+            {
+              "reasoningEffort": "medium"
+            }
+          ],
+          "serviceTiers": [
+            {
+              "id": "priority",
+              "fast": true
+            }
+          ]
+        }
       }
     ],
     "expected": {
@@ -68,14 +70,16 @@
           "id": "model-a"
         },
         "displayName": "Model A",
-        "defaultReasoningEffort": "medium",
-        "defaultServiceTier": "priority",
-        "supportedReasoningEfforts": [
-          {
-            "reasoningEffort": "medium"
-          }
-        ],
-        "serviceTiers": []
+        "settings": {
+          "defaultReasoningEffort": "medium",
+          "defaultServiceTier": "priority",
+          "supportedReasoningEfforts": [
+            {
+              "reasoningEffort": "medium"
+            }
+          ],
+          "serviceTiers": []
+        }
       }
     ],
     "expected": {
@@ -109,22 +113,24 @@
           "id": "model-a"
         },
         "displayName": "Model A",
-        "defaultReasoningEffort": "unknown",
-        "defaultServiceTier": "priority",
-        "supportedReasoningEfforts": [
-          {
-            "reasoningEffort": "medium"
-          },
-          {
-            "reasoningEffort": "max"
-          }
-        ],
-        "serviceTiers": [
-          {
-            "id": "priority",
-            "fast": true
-          }
-        ]
+        "settings": {
+          "defaultReasoningEffort": "unknown",
+          "defaultServiceTier": "priority",
+          "supportedReasoningEfforts": [
+            {
+              "reasoningEffort": "medium"
+            },
+            {
+              "reasoningEffort": "max"
+            }
+          ],
+          "serviceTiers": [
+            {
+              "id": "priority",
+              "fast": true
+            }
+          ]
+        }
       }
     ],
     "expected": {
@@ -139,7 +145,7 @@
     }
   },
   {
-    "name": "empty catalog preserves selected model and clears unsupported options",
+    "name": "empty catalog preserves selected model and unresolved options",
     "draft": {
       "text": "keep text",
       "attachments": [],
@@ -158,7 +164,8 @@
         "provider": "codex",
         "id": "model-a"
       },
-      "effort": null
+      "effort": "max",
+      "service_tier": "priority"
     }
   },
   {
@@ -181,22 +188,24 @@
           "id": "model-a"
         },
         "displayName": "Model A",
-        "defaultReasoningEffort": "medium",
-        "defaultServiceTier": "priority",
-        "supportedReasoningEfforts": [
-          {
-            "reasoningEffort": "medium"
-          },
-          {
-            "reasoningEffort": "max"
-          }
-        ],
-        "serviceTiers": [
-          {
-            "id": "priority",
-            "fast": true
-          }
-        ]
+        "settings": {
+          "defaultReasoningEffort": "medium",
+          "defaultServiceTier": "priority",
+          "supportedReasoningEfforts": [
+            {
+              "reasoningEffort": "medium"
+            },
+            {
+              "reasoningEffort": "max"
+            }
+          ],
+          "serviceTiers": [
+            {
+              "id": "priority",
+              "fast": true
+            }
+          ]
+        }
       },
       {
         "id": "model-b",
@@ -205,22 +214,24 @@
           "id": "model-b"
         },
         "displayName": "Model A",
-        "defaultReasoningEffort": "medium",
-        "defaultServiceTier": "priority",
-        "supportedReasoningEfforts": [
-          {
-            "reasoningEffort": "medium"
-          },
-          {
-            "reasoningEffort": "max"
-          }
-        ],
-        "serviceTiers": [
-          {
-            "id": "priority",
-            "fast": true
-          }
-        ]
+        "settings": {
+          "defaultReasoningEffort": "medium",
+          "defaultServiceTier": "priority",
+          "supportedReasoningEfforts": [
+            {
+              "reasoningEffort": "medium"
+            },
+            {
+              "reasoningEffort": "max"
+            }
+          ],
+          "serviceTiers": [
+            {
+              "id": "priority",
+              "fast": true
+            }
+          ]
+        }
       }
     ],
     "expected": {
@@ -258,22 +269,24 @@
           "id": "model-a"
         },
         "displayName": "Model A",
-        "defaultReasoningEffort": "medium",
-        "defaultServiceTier": "priority",
-        "supportedReasoningEfforts": [
-          {
-            "reasoningEffort": "medium"
-          },
-          {
-            "reasoningEffort": "max"
-          }
-        ],
-        "serviceTiers": [
-          {
-            "id": "priority",
-            "fast": true
-          }
-        ]
+        "settings": {
+          "defaultReasoningEffort": "medium",
+          "defaultServiceTier": "priority",
+          "supportedReasoningEfforts": [
+            {
+              "reasoningEffort": "medium"
+            },
+            {
+              "reasoningEffort": "max"
+            }
+          ],
+          "serviceTiers": [
+            {
+              "id": "priority",
+              "fast": true
+            }
+          ]
+        }
       },
       {
         "id": "model-b",
@@ -282,23 +295,25 @@
           "id": "model-b"
         },
         "displayName": "Model A",
-        "defaultReasoningEffort": "medium",
-        "defaultServiceTier": "priority",
-        "supportedReasoningEfforts": [
-          {
-            "reasoningEffort": "medium"
-          },
-          {
-            "reasoningEffort": "max"
-          }
-        ],
-        "serviceTiers": [
-          {
-            "id": "priority",
-            "fast": true
-          }
-        ],
-        "isDefault": true
+        "isDefault": true,
+        "settings": {
+          "defaultReasoningEffort": "medium",
+          "defaultServiceTier": "priority",
+          "supportedReasoningEfforts": [
+            {
+              "reasoningEffort": "medium"
+            },
+            {
+              "reasoningEffort": "max"
+            }
+          ],
+          "serviceTiers": [
+            {
+              "id": "priority",
+              "fast": true
+            }
+          ]
+        }
       }
     ],
     "expected": {

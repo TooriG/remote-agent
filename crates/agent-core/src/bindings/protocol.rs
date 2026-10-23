@@ -83,11 +83,21 @@ struct Model {
     pub id: String,
     pub model: ModelRef,
     pub display_name: String,
+    pub credential_route: Option<agent_protocol::dsh::KeyProvider>,
+    pub settings: Option<ModelSettings>,
+    pub settings_discovery: bool,
+    pub is_default: Option<bool>,
+}
+#[uniffi::remote(Record)]
+struct ModelSettings {
     pub default_reasoning_effort: String,
     pub supported_reasoning_efforts: Vec<ReasoningEffort>,
     pub service_tiers: Option<Vec<ServiceTier>>,
     pub default_service_tier: Option<String>,
-    pub is_default: Option<bool>,
+}
+#[uniffi::remote(Record)]
+struct ReadModelSettings {
+    pub model: ModelRef,
 }
 #[uniffi::remote(Record)]
 struct ServiceTier {
@@ -652,4 +662,25 @@ struct UpdatePermissionSettings {
     pub provider: ProviderKind,
     pub mode: PermissionMode,
     pub version: String,
+}
+
+use agent_protocol::dsh::*;
+#[uniffi::remote(Enum)]
+enum KeyProvider {
+    DeepSeek,
+    OpenRouter,
+    NanoGpt,
+    OpenAI,
+    Anthropic,
+    Gemini,
+    Groq,
+    Mistral,
+    Xai,
+}
+#[uniffi::remote(Record)]
+struct ReadCredentials {}
+#[uniffi::remote(Record)]
+struct KeyUpdate {
+    pub provider: KeyProvider,
+    pub key: Option<String>,
 }

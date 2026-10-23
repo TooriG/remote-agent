@@ -12,12 +12,14 @@ use agent_protocol::protocol::{Body, Call, Response};
 use agent_transport::peer::RpcMessageError;
 use serde::Serialize;
 
-use super::agent::{Agent, Identity, SessionListScope, SessionSummary, session_pages};
+use super::agent::{Agent, Identity, SessionListScope, read_session_page, session_pages};
 use futures_util::{StreamExt, TryStreamExt};
 use std::collections::HashMap;
 
 use super::routing::{HostReply, HostSession, SessionId, SessionRouter};
 use crate::ProjectStore;
+
+const SESSION_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 #[derive(Debug, Clone, Serialize, thiserror::Error)]
 #[error("{message}")]
@@ -102,9 +104,17 @@ impl HostRpcService {
         let listings =
             futures_util::future::join_all(agents.into_iter().map(|(_, agent)| async move {
                 tokio::time::timeout(
-                    std::time::Duration::from_secs(5),
-                    session_pages(agent.as_ref(), "", SessionListScope::Loaded, 100, 100)
-                        .try_collect::<Vec<_>>(),
+                    SESSION_LIST_TIMEOUT,
+                    session_pages(
+                        agent.as_ref(),
+                        "",
+                        SessionListScope::Loaded,
+                        100,
+                        100,
+                        None,
+                        None,
+                    )
+                    .try_collect::<Vec<_>>(),
                 )
                 .await
             }))
@@ -501,13 +511,15 @@ impl HostRpcService {
             .map(|t| t.id.as_str());
         let route = if !agent.manages_workspace(&target.id) {
             super::submission::SubmissionTarget::Queue
-        } else { super::submission::submission_target(
-            response.thread.status,
-            running_turn,
-            agent.running_input(),
-            response.thread.cwd.as_deref(),
-        )
-        .map_err(|e| Failure::new("submission_unavailable", e))? };
+        } else {
+            super::submission::submission_target(
+                response.thread.status,
+                running_turn,
+                agent.running_input(),
+                response.thread.cwd.as_deref(),
+            )
+            .map_err(|e| Failure::new("submission_unavailable", e))?
+        };
         let mut reload = state.needs_reload;
         if let super::submission::SubmissionTarget::Start { cwd } = route
             && let Some(directory) = self
@@ -851,6 +863,21 @@ impl HostRpcService {
                 .codex_cli(params.update)
                 .await?
                 .into(),
+            Call::ReadModelSettings(params) => self
+                .agent(params.model.provider)?
+                .model_settings(&params.model.id)
+                .await?
+                .into(),
+            Call::ReadDshCredentials(_) => self
+                .agent(ProviderKind::DeepSeek)?
+                .dsh_credentials()
+                .await?
+                .into(),
+            Call::UpdateDshCredential(update) => self
+                .agent(ProviderKind::DeepSeek)?
+                .update_dsh_credential(update.clone())
+                .await?
+                .into(),
             Call::ListModels(params) => {
                 let cursors: std::collections::BTreeMap<ProviderKind, Option<String>> = params
                     .cursor
@@ -978,19 +1005,21 @@ impl HostRpcService {
                 .into(),
             Call::ListAgents(params) => {
                 let agent = self.agent(params.thread_id.provider)?;
-                let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+                let deadline = tokio::time::Instant::now() + SESSION_LIST_TIMEOUT;
                 let mut threads = session_pages(
                     agent.as_ref(),
                     "",
                     SessionListScope::Descendants(&params.thread_id.id),
                     100,
                     100,
+                    Some(deadline),
+                    None,
                 )
-                .map_ok(|page| futures_util::stream::iter(page.into_iter().map(Ok)))
+                .map_ok(|page| futures_util::stream::iter(page.into_iter().map(Ok::<_, Failure>)))
                 .try_flatten()
                 .boxed();
                 let mut agents = Vec::new();
-                while let Some(summary) = next_title(&mut threads, deadline).await? {
+                while let Some(summary) = threads.try_next().await? {
                     let thread = crate::projects::titles::summary(summary.thread);
                     if let (Some(id), Some(parent_id)) = (thread.id, thread.parent_id) {
                         agents.push(agent_protocol::models::AgentObservation {
@@ -1138,7 +1167,15 @@ impl HostRpcService {
         }
         let mut threads = Vec::new();
         for (_, agent) in self.agents() {
-            let pages = session_pages(agent.as_ref(), "", SessionListScope::All, 100, 100);
+            let pages = session_pages(
+                agent.as_ref(),
+                "",
+                SessionListScope::All,
+                100,
+                100,
+                None,
+                None,
+            );
             futures_util::pin_mut!(pages);
             while let Some(result) = pages.next().await {
                 match result {
@@ -1311,40 +1348,25 @@ impl HostRpcService {
     }
 
     async fn project_snapshot(&self) -> Result<crate::projects::state::Snapshot, Failure> {
-        let mut native = match self.agent(ProviderKind::Codex) {
-            Ok(agent) if agent.availability().is_ok() => agent.projects().await?,
-            _ => Vec::new(),
-        };
-        let codex_project_ids = native.iter().map(|project| project.id.clone()).collect();
-        // Claude catalogs are read-only native metadata; listing them does not
-        // require an executable CLI or an authenticated inference account.
-        if let Ok(agent) = self.agent(ProviderKind::Claude) {
-            for mut project in agent.projects().await? {
-                let native_group = project.roots.is_empty();
-                project.roots.retain(|root| {
-                    !native.iter().any(|existing| {
-                        existing.roots.iter().any(|other| {
-                            other.path == root.path
-                                || dunce::canonicalize(&other.path)
-                                    .ok()
-                                    .zip(dunce::canonicalize(&root.path).ok())
-                                    .is_some_and(|(a, b)| a == b)
-                        })
-                    })
-                });
-                if native_group || !project.roots.is_empty() {
-                    native.push(project);
-                }
-            }
-        }
         let mut snapshot = self
             .inner
             .projects
-            .load_with_projects(native)
+            .load()
             .await
             .map_err(|error| Failure::new("project_state_unavailable", error))?;
-        // Only IDs from Codex can be sent to Codex's create_in_project API.
-        snapshot.native_project_ids = codex_project_ids;
+        if let Ok(agent) = self.agent(ProviderKind::Claude)
+            && let Ok(projects) = agent.cloud_projects().await
+        {
+            for project in projects
+                .into_iter()
+                .filter(|project| project.roots.is_empty())
+            {
+                snapshot
+                    .projects
+                    .retain(|existing| existing.id != project.id);
+                snapshot.projects.push(project);
+            }
+        }
         Ok(snapshot)
     }
 
@@ -1378,30 +1400,51 @@ impl HostRpcService {
             crate::projects::titles::TitleQuery::Project { .. } => (100, 100),
         };
         let started = std::time::Instant::now();
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-        let (snapshot, mut listings) = tokio::join!(
-            self.project_snapshot(),
-            futures_util::future::join_all(agents.iter().map(|(provider, agent)| async move {
-                let scope = if search.trim().is_empty() {
-                    SessionListScope::Roots
-                } else {
-                    SessionListScope::All
-                };
+        let scope = if search.trim().is_empty() {
+            SessionListScope::Roots
+        } else {
+            SessionListScope::All
+        };
+        let ((snapshot, projects_elapsed), (first_pages, first_pages_elapsed)) = tokio::join!(
+            async { (self.project_snapshot().await, started.elapsed()) },
+            async {
+                let started = tokio::time::Instant::now();
+                let deadline = started + SESSION_LIST_TIMEOUT;
+                let pages = futures_util::future::join_all(agents.iter().map(|(_, agent)| {
+                    read_session_page(
+                        Agent::list(agent.as_ref(), search, None, scope, first_page_size),
+                        deadline,
+                    )
+                }))
+                .await;
+                (pages, started.elapsed())
+            },
+        );
+        let snapshot = snapshot?;
+        // Project discovery must not consume the native page-read budget.
+        // Reuse the first pages and give subsequent reads only the time left.
+        let deadline =
+            tokio::time::Instant::now() + SESSION_LIST_TIMEOUT.saturating_sub(first_pages_elapsed);
+        let initial_elapsed = started.elapsed();
+        let mut listings = futures_util::future::join_all(agents.iter().zip(first_pages).map(
+            |((provider, agent), page)| async move {
                 let mut threads = session_pages(
                     agent.as_ref(),
                     search,
                     scope,
                     first_page_size,
                     later_page_size,
+                    Some(deadline),
+                    Some(page),
                 )
-                .map_ok(|page| futures_util::stream::iter(page.into_iter().map(Ok)))
+                .map_ok(|page| futures_util::stream::iter(page.into_iter().map(Ok::<_, Failure>)))
                 .try_flatten()
                 .boxed();
-                let head = next_title(&mut threads, deadline).await;
+                let head = threads.try_next().await;
                 (*provider, agent.capabilities(), threads, head)
-            }))
-        );
-        let snapshot = snapshot?;
+            },
+        ))
+        .await;
         let mut titles = crate::projects::titles::TitleList::new(&snapshot.projects, query);
         let mut provider_errors = self
             .provider_errors()
@@ -1434,7 +1477,7 @@ impl HostRpcService {
                 {
                     group.push((head.as_mut().unwrap().take().unwrap(), *capabilities));
                     if group.len() < maximum {
-                        *head = next_title(threads, deadline).await;
+                        *head = threads.try_next().await;
                     }
                 }
             }
@@ -1456,7 +1499,7 @@ impl HostRpcService {
             // needs rows; do not start another read after its lookahead.
             for (_, _, threads, head) in &mut listings {
                 if matches!(head, Ok(None)) {
-                    *head = next_title(threads, deadline).await;
+                    *head = threads.try_next().await;
                 }
             }
         }
@@ -1483,7 +1526,7 @@ impl HostRpcService {
             page.provider_errors = Some(provider_errors);
         }
         tracing::info!(target: "bex", operation = "host.thread.list.stages",
-            message = %format_args!("roots_ms={} titles={}", started.elapsed().as_millis(), page.data.len()));
+            message = %format_args!("projects_ms={} titles_ms={} titles={}", projects_elapsed.as_millis(), (first_pages_elapsed + started.elapsed().saturating_sub(initial_elapsed)).as_millis(), page.data.len()));
         Ok(page)
     }
 
@@ -1491,29 +1534,31 @@ impl HostRpcService {
         &self,
         params: &op::ReadListDecorations,
     ) -> Result<op::ListDecorations, Failure> {
-        let snapshot = self.project_snapshot().await?;
-        let projects: Vec<_> = snapshot
-            .projects
-            .iter()
-            .filter(|project| params.project_ids.contains(&project.id))
-            .cloned()
-            .collect();
+        let projects = params.projects.clone();
         let icons = tokio::task::spawn_blocking(move || {
             projects
                 .into_iter()
-                .map(|project| {
-                    let icon = project.roots.iter().find_map(|root| {
-                        crate::projects::icons::resolve(std::path::Path::new(&root.path))
+                .map(|(id, roots)| {
+                    let icon = roots.iter().find_map(|root| {
+                        crate::projects::icons::resolve(std::path::Path::new(root))
                     });
-                    (project.id, icon)
+                    (id, icon)
                 })
                 .collect()
         });
+        let worktrees = if params.threads.is_empty() {
+            Default::default()
+        } else {
+            crate::worktrees::workspace_roots(self.inner.projects.path())
+                .await
+                .map_err(|error| Failure::new("worktree_status_failed", error))?
+        };
         let sources: Vec<_> = params
             .threads
             .iter()
             .map(|(id, cwd, branch)| {
-                let mapping = snapshot.worktree_mapping(std::path::Path::new(cwd));
+                let mapping =
+                    crate::projects::state::worktree_mapping(&worktrees, std::path::Path::new(cwd));
                 (
                     id.clone(),
                     crate::worktrees::StatusSource {
@@ -1589,16 +1634,11 @@ impl HostRpcService {
                 Err(error) => return Err(Failure::new("worktree_creation_failed", error)),
             }
         }
-        let projects = self.project_snapshot().await?;
-        let project = projects
-            .project_for_workspace(params.cwd.as_deref().unwrap_or_default())
-            .filter(|id| projects.native_project_ids.contains(*id));
         self.start_thread(agent.as_ref(), |browser| {
-            agent.create_in_project(
+            agent.create(
                 params.cwd.as_deref().unwrap_or_default(),
                 params.model.as_ref().map(|m| m.id.as_str()),
                 browser,
-                project,
             )
         })
         .await
@@ -1749,84 +1789,265 @@ fn session_target(request: &Call) -> (Option<&agent_protocol::session::SessionRe
     }
 }
 
-async fn next_title(
-    threads: &mut futures_util::stream::BoxStream<'_, Result<SessionSummary, Failure>>,
-    deadline: tokio::time::Instant,
-) -> Result<Option<SessionSummary>, Failure> {
-    // Poll the deadline before a queued read, including when both are ready,
-    // so expired admissions cannot start another native request.
-    tokio::select! {
-        biased;
-        _ = tokio::time::sleep_until(deadline) => Err(Failure::new(
-            "provider_timeout",
-            "session listing timed out; results are partial",
-        )),
-        result = threads.try_next() => result,
-    }
-}
-
 fn describe_thread(
     thread: &mut Thread,
     capabilities: agent_protocol::session::Capabilities,
     projects: &crate::projects::state::Snapshot,
 ) {
-    // A null native ID also occurs for existing folder-based Codex conversations.
-    // Only a non-null native assignment can override workspace membership.
-    if !matches!(
-        thread.project_id,
-        agent_protocol::models::ProjectMembership::Assigned(_)
-    ) {
+    let cloud_channel = thread.id.as_ref().is_some_and(|session| {
+        session.provider == ProviderKind::Claude
+            && crate::claude::coordinator::is_channel(&session.id)
+    });
+    if cloud_channel {
+        thread.capabilities.get_or_insert(capabilities);
+    } else {
         thread.project_id = projects.project_membership(thread.cwd.as_deref());
+        thread.capabilities = Some(capabilities);
     }
-    thread.capabilities.get_or_insert(capabilities);
 }
 
 #[cfg(test)]
 mod tests {
-    #[tokio::test]
-    async fn native_projects_include_existing_threads_without_a_native_assignment() {
+    #[test]
+    fn cloud_channels_keep_provider_membership_and_composer_capabilities() {
         use super::*;
-        use agent_protocol::models::{Project, ProjectMembership, ProjectRoot};
+        let mut thread = Thread {
+            id: Some(agent_protocol::session::SessionRef {
+                provider: ProviderKind::Claude,
+                id: "chan_cloud".into(),
+            }),
+            project_id: agent_protocol::models::ProjectMembership::Assigned(
+                "claude-project:chan_cloud".into(),
+            ),
+            capabilities: Some(agent_protocol::session::Capabilities {
+                model_change: false,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        describe_thread(
+            &mut thread,
+            agent_protocol::session::Capabilities {
+                model_change: true,
+                ..Default::default()
+            },
+            &Default::default(),
+        );
+        assert_eq!(
+            thread.project_id.as_deref(),
+            Some("claude-project:chan_cloud")
+        );
+        assert!(!thread.capabilities.unwrap().model_change);
+    }
+
+    #[tokio::test]
+    async fn prefetched_project_titles_continue_past_the_first_native_page() {
+        use super::*;
+        let root = tempfile::tempdir().unwrap();
+        let cwd = dunce::canonicalize(root.path()).unwrap();
+        let native = root.path().join("native");
+        let transcripts = native.join("projects/shared");
+        std::fs::create_dir_all(&transcripts).unwrap();
+        let mut expected = std::collections::HashSet::new();
+        for _ in 0..102 {
+            let id = uuid::Uuid::new_v4();
+            expected.insert(id.to_string());
+            let user = serde_json::json!({"type":"user","sessionId":id,"cwd":cwd,"message":{"content":"hello"}});
+            std::fs::write(transcripts.join(format!("{id}.jsonl")), format!("{user}\n")).unwrap();
+        }
+        let agent = crate::adapters::Claude::load(
+            root.path().join("missing-cli"),
+            root.path().join("state"),
+            Some(native),
+        )
+        .await
+        .unwrap();
+        let projects = ProjectStore::new(root.path().join("bex-worktrees.json"));
+        projects.register(&cwd).await.unwrap();
+        let service = HostRpcService::new([agent.into()], projects);
+        let snapshot = service.project_snapshot().await.unwrap();
+        let page = service
+            .host_title_list(
+                "",
+                crate::projects::titles::TitleQuery::Project {
+                    id: &snapshot.projects[0].id,
+                    limit: 101,
+                    searching: false,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(page.data.len(), 101, "{:?}", page.provider_errors);
+        assert!(page.has_more);
+        let ids: std::collections::HashSet<_> = page
+            .data
+            .into_iter()
+            .map(|thread| thread.id.unwrap().id)
+            .collect();
+        assert_eq!(ids.len(), 101);
+        assert!(ids.is_subset(&expected));
+    }
+
+    #[tokio::test]
+    async fn list_decorations_use_the_listed_roots_without_reloading_project_catalogs() {
+        use super::*;
+        let directory = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(directory.path()).unwrap();
+        std::fs::write(
+            root.join("favicon.svg"),
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><path fill="red" d="M0 0h8v8H0z"/></svg>"#,
+        )
+        .unwrap();
+        let state = root.join("bex-worktrees.json");
+        std::fs::write(state.with_file_name("bex-projects.json"), "{").unwrap();
+        let service = HostRpcService::new(
+            [crate::adapters::codex::Codex::new(Err("provider is offline".into())).into()],
+            ProjectStore::new(state),
+        );
+        let params = op::ReadListDecorations {
+            scope: op::ListDecorationScope::Root { part: None },
+            projects: vec![(
+                "listed-project".into(),
+                vec![root.to_string_lossy().into_owned()],
+            )],
+            threads: Vec::new(),
+        };
+        let result = service.list_decorations(&params).await.unwrap();
+        assert!(result.icons["listed-project"].is_some());
+        assert!(result.statuses.is_empty());
+    }
+
+    #[tokio::test]
+    async fn native_project_metadata_does_not_change_registered_membership() {
+        use super::*;
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        let workspace = dunce::canonicalize(&workspace).unwrap();
+        let projects = ProjectStore::new(root.path().join("bex-worktrees.json"));
+        projects.register(&workspace).await.unwrap();
+        let registered = projects.load().await.unwrap().projects[0].id.clone();
+        let native = root.path().join("native");
+        let transcripts = native.join("projects/shared");
+        std::fs::create_dir_all(&transcripts).unwrap();
+        let mut expected = Vec::new();
+        for cwd in [&workspace, &root.path().join("outside")] {
+            let id = uuid::Uuid::new_v4();
+            let metadata = serde_json::json!({"type":"attachment","attachment":{
+                "type":"prompt_snapshot","systemPrompt":[
+                    "## Where you are\n\nProject: \"Native\" (id: `chan_native`)\n"
+                ]
+            }});
+            let user = serde_json::json!({"type":"user","sessionId":id,"cwd":cwd,"message":{"content":"hello"}});
+            std::fs::write(
+                transcripts.join(format!("{id}.jsonl")),
+                format!("{metadata}\n{user}\n"),
+            )
+            .unwrap();
+            expected.push(id.to_string());
+        }
+        std::fs::write(native.join(".claude.json"), "{").unwrap();
+        let claude = crate::adapters::Claude::load(
+            root.path().join("missing-cli"),
+            root.path().join("state"),
+            Some(native.clone()),
+        )
+        .await
+        .unwrap();
+        let service = HostRpcService::new([claude.into()], projects);
+        let session = service.open_session();
+        for repaired in [false, true] {
+            if repaired {
+                std::fs::write(native.join(".claude.json"), "{}").unwrap();
+            }
+            let response = service
+                .dispatch(
+                    session.id(),
+                    &Call::ListSessions(op::ListSessions {
+                        query: Default::default(),
+                    }),
+                )
+                .await
+                .unwrap();
+            let Response::Success { result } = agent_protocol::protocol::decode::<
+                Response<agent_protocol::models::ThreadList>,
+            >(&response.initial)
+            .unwrap() else {
+                panic!("project metadata failure must not fail session listing")
+            };
+            assert!(
+                result
+                    .projects
+                    .iter()
+                    .any(|project| project.id == registered)
+            );
+            assert_eq!(result.data.len(), 2);
+            for id in &expected {
+                assert!(
+                    result
+                        .data
+                        .iter()
+                        .any(|thread| thread.id.as_ref().is_some_and(|thread| &thread.id == id))
+                );
+            }
+            assert_eq!(result.projects.len(), 1);
+            assert!(
+                result
+                    .data
+                    .iter()
+                    .any(|thread| thread.project_id.as_deref() == Some(registered.as_str()))
+            );
+            assert!(result.data.iter().any(|thread| thread.project_id.is_none()));
+        }
+    }
+
+    #[tokio::test]
+    async fn registered_roots_determine_membership_for_both_providers() {
+        use super::*;
+        use agent_protocol::models::ProjectMembership;
         let directory = tempfile::tempdir().unwrap();
         let root = dunce::canonicalize(directory.path()).unwrap();
         let project = root.join("project");
         std::fs::create_dir(&project).unwrap();
-        let projects = ProjectStore::new(root.join("bex-worktrees.json"))
-            .load_with_projects(vec![Project {
-                id: "native".into(),
-                name: "Native project".into(),
-                roots: vec![ProjectRoot {
-                    path: project.to_str().unwrap().into(),
-                }],
-                ..Default::default()
-            }])
-            .await
-            .unwrap();
-        for (cwd, membership, expected) in [
-            (
-                project.clone(),
-                ProjectMembership::Unassigned {},
-                Some("native"),
-            ),
-            (
-                project.clone(),
-                ProjectMembership::Unknown {},
-                Some("native"),
-            ),
-            (
-                project.clone(),
-                ProjectMembership::Assigned("explicit-other".into()),
-                Some("explicit-other"),
-            ),
-            (root.join("outside"), ProjectMembership::Unassigned {}, None),
-        ] {
-            let mut thread = Thread {
-                cwd: Some(cwd.to_str().unwrap().into()),
-                project_id: membership,
-                ..Default::default()
-            };
-            describe_thread(&mut thread, Default::default(), &projects);
-            assert_eq!(thread.project_id.as_deref(), expected);
+        let store = ProjectStore::new(root.join("bex-worktrees.json"));
+        store.register(&project).await.unwrap();
+        let projects = store.load().await.unwrap();
+        let registered = projects.projects[0].id.as_str();
+        for provider in [ProviderKind::Codex, ProviderKind::Claude] {
+            for (cwd, membership, expected) in [
+                (
+                    project.clone(),
+                    ProjectMembership::Unassigned {},
+                    Some(registered),
+                ),
+                (
+                    project.clone(),
+                    ProjectMembership::Unknown {},
+                    Some(registered),
+                ),
+                (
+                    project.clone(),
+                    ProjectMembership::Assigned("native-other".into()),
+                    Some(registered),
+                ),
+                (
+                    root.join("outside"),
+                    ProjectMembership::Assigned("native-other".into()),
+                    None,
+                ),
+            ] {
+                let mut thread = Thread {
+                    id: Some(agent_protocol::session::SessionRef {
+                        provider,
+                        id: "thread".into(),
+                    }),
+                    cwd: Some(cwd.to_str().unwrap().into()),
+                    project_id: membership,
+                    ..Default::default()
+                };
+                describe_thread(&mut thread, Default::default(), &projects);
+                assert_eq!(thread.project_id.as_deref(), expected);
+            }
         }
     }
     #[tokio::test]
@@ -1834,21 +2055,26 @@ mod tests {
         use super::*;
         let directory = tempfile::tempdir().unwrap();
         let service = HostRpcService::new(
-            [crate::adapters::codex::Codex::new(Err("Codex executable is missing".into())).into()],
+            [
+                crate::adapters::codex::Codex::new(Err("Codex executable is missing".into()))
+                    .into(),
+            ],
             ProjectStore::new(directory.path().join("projects.json")),
         );
         let connection = service.open_session();
         let response = service
-            .dispatch(connection.id(), &Call::ListModels(op::ListModels {
-                selected_model: None,
-                limit: 100,
-                cursor: None,
-            }))
+            .dispatch(
+                connection.id(),
+                &Call::ListModels(op::ListModels {
+                    limit: 100,
+                    cursor: None,
+                }),
+            )
             .await
             .unwrap();
-        let Response::Success { result } = agent_protocol::protocol::decode::<Response<op::ModelPage>>(
-            &response.initial,
-        ).unwrap() else {
+        let Response::Success { result } =
+            agent_protocol::protocol::decode::<Response<op::ModelPage>>(&response.initial).unwrap()
+        else {
             panic!("provider setup errors must remain a structured catalog");
         };
         assert!(result.data.is_empty());
@@ -1972,61 +2198,6 @@ mod tests {
     }
 
     use agent_protocol::session::ProviderKind;
-
-    #[tokio::test(start_paused = true)]
-    async fn expired_title_deadlines_do_not_poll_the_provider() {
-        use super::*;
-        let now = tokio::time::Instant::now();
-        for deadline in [
-            now,
-            now - std::time::Duration::from_secs(1),
-            now + std::time::Duration::from_secs(1),
-        ] {
-            let polls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            let observed = polls.clone();
-            let mut threads = futures_util::stream::once(async move {
-                if deadline > now {
-                    tokio::time::sleep_until(deadline).await;
-                }
-                observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Ok(SessionSummary {
-                    thread: Thread::default(),
-                    branch: None,
-                })
-            })
-            .boxed();
-            assert_eq!(
-                next_title(&mut threads, deadline).await.err().unwrap().code,
-                "provider_timeout"
-            );
-            assert_eq!(polls.load(std::sync::atomic::Ordering::SeqCst), 0);
-        }
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn title_reads_share_one_deadline_across_pages() {
-        use super::*;
-        let start = tokio::time::Instant::now();
-        let deadline = start + std::time::Duration::from_secs(5);
-        let mut threads = futures_util::stream::iter([4, 2])
-            .then(|seconds| async move {
-                tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
-                Ok(SessionSummary {
-                    thread: Thread::default(),
-                    branch: None,
-                })
-            })
-            .boxed();
-        assert!(next_title(&mut threads, deadline).await.unwrap().is_some());
-        assert_eq!(
-            next_title(&mut threads, deadline).await.err().unwrap().code,
-            "provider_timeout"
-        );
-        assert_eq!(
-            tokio::time::Instant::now() - start,
-            std::time::Duration::from_secs(5)
-        );
-    }
 
     #[tokio::test]
     async fn successful_configuration_clears_the_provider_startup_error() {
@@ -2399,83 +2570,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn claude_native_projects_keep_shared_directory_threads_below_the_project() {
-        use super::*;
-        let root = tempfile::tempdir().unwrap();
-        let native = root.path().join("native");
-        let transcripts = native.join("projects/shared");
-        std::fs::create_dir_all(&transcripts).unwrap();
-        for project in ["chan_games", "chan_tanks"] {
-            let id = uuid::Uuid::new_v4();
-            let snapshot = serde_json::json!({"type":"attachment","attachment":{
-                "type":"prompt_snapshot","systemPrompt":[format!("## Where you are\n\nProject: \"{project}\" (id: `{project}`)\n")]
-            }});
-            let user = serde_json::json!({"type":"user","sessionId":id,"cwd":root.path(),"message":{"content":"hello"}});
-            std::fs::write(
-                transcripts.join(format!("{id}.jsonl")),
-                format!("{snapshot}\n{user}\n"),
-            )
-            .unwrap();
-        }
-        let claude = crate::adapters::Claude::load(
-            root.path().join("missing-cli"),
-            root.path().join("state"),
-            Some(native),
-        )
-        .await
-        .unwrap();
-        let service = HostRpcService::new(
-            [
-                Backend::unavailable(ProviderKind::Codex, "unavailable"),
-                claude.into(),
-            ],
-            ProjectStore::new(root.path().join("bex-worktrees.json")),
-        );
-        let session = service.open_session();
-        let response = service
-            .dispatch(
-                session.id(),
-                &Call::ListSessions(op::ListSessions {
-                    query: Default::default(),
-                }),
-            )
-            .await
-            .unwrap();
-        let Response::Success { result } = agent_protocol::protocol::decode::<
-            Response<agent_protocol::models::ThreadList>,
-        >(&response.initial)
-        .unwrap() else {
-            panic!("list failed")
-        };
-        assert_eq!(result.projects.len(), 2);
-        for project in &result.projects {
-            assert!(project.roots.is_empty());
-            let response = service
-                .dispatch(
-                    session.id(),
-                    &Call::ListProjectSessions(op::ListProjectSessions {
-                        project_id: project.id.clone(),
-                        limit: 5,
-                        search_term: String::new(),
-                    }),
-                )
-                .await
-                .unwrap();
-            let Response::Success { result: page } = agent_protocol::protocol::decode::<
-                Response<agent_protocol::models::ThreadList>,
-            >(&response.initial)
-            .unwrap() else {
-                panic!("project page failed")
-            };
-            assert_eq!(page.data.len(), 1);
-            assert_eq!(
-                page.data[0].project_id.as_deref(),
-                Some(project.id.as_str())
-            );
-        }
-    }
-
-    #[tokio::test]
     async fn task_list_refreshes_branding_for_all_project_headers() {
         use super::*;
         let root = tempfile::tempdir().unwrap();
@@ -2537,10 +2631,15 @@ mod tests {
                 assert!(result.data[0].turns.is_none() && result.data[0].preview.is_none());
                 let decoration = op::ReadListDecorations {
                     scope: op::ListDecorationScope::Root { part: None },
-                    project_ids: result
+                    projects: result
                         .projects
                         .iter()
-                        .map(|project| project.id.clone())
+                        .map(|project| {
+                            (
+                                project.id.clone(),
+                                project.roots.iter().map(|root| root.path.clone()).collect(),
+                            )
+                        })
                         .collect(),
                     threads: Vec::new(),
                 };

@@ -48,7 +48,7 @@ The session architecture, limits, local data and verification matrix are documen
 
 ## Run the Host
 
-The Host needs Git and at least one available agent for conversations. Codex is optional; the Host prefers Codex bundled with ChatGPT Desktop on macOS, then `codex` on PATH; `--codex <path>` is authoritative.
+The Host needs Git and at least one available agent for conversations. Codex is optional; the Host uses `codex` on PATH, falling back to Codex bundled with ChatGPT Desktop on macOS; `--codex <path>` is authoritative.
 
 Claude conversations run through the official Agent SDK. The Mac app includes a signed, portable Node.js runtime, so users with Claude Code installed do not need to install Node or npm. The app uses its bundled Node by default; `BEX_NODE` can explicitly select another executable. A standalone Host requires Node.js 22 or newer on its PATH or selected with `BEX_NODE`. The Nix development environment includes Node and pins the Mac distribution runtime by version and checksum. The SDK is pinned in an npm lockfile and shipped as `bex-claude-sdk.mjs` beside a standalone Host or in a Mac app's sealed Resources.
 
@@ -113,10 +113,6 @@ Windows 11 users can run a prebuilt ZIP without installing Rust. See
 release downloads, verified CI development artifacts, and source builds.
 
 ## Build the clients
-
-Developers publishing updates for any platform, including macOS, must also update
-and deploy that platform's download on https://getbex.dev and verify its public
-buttons deliver the latest published build. Follow the [release checklist](docs/RELEASING.md).
 
 ```sh
 # Mac release (requires a signing certificate; BEX_CODE_SIGN_IDENTITY selects it)

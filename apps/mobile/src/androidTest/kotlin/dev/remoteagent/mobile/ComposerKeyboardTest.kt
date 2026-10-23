@@ -9,9 +9,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Scaffold
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.performClick
 import androidx.core.view.WindowInsetsCompat
 import dev.remoteagent.core.Snapshot
@@ -53,21 +53,27 @@ class ComposerKeyboardTest {
             }
             // Wait for inset animations: the surface must end within its normal 8dp margin of the IME.
             compose.waitUntil(10_000) {
-                val ime = WindowInsetsCompat.toWindowInsetsCompat(view.rootWindowInsets, view)
-                    .getInsets(WindowInsetsCompat.Type.ime()).bottom
+                val ime =
+                    WindowInsetsCompat.toWindowInsetsCompat(view.rootWindowInsets, view)
+                        .getInsets(WindowInsetsCompat.Type.ime())
+                        .bottom
                 val bottom = compose.onNodeWithTag("conversation.composer").fetchSemanticsNode().boundsInRoot.bottom
                 val gap = view.height - ime - bottom
                 ime > 0 && gap >= -density && gap <= 12 * density
             }
             compose.runOnIdle {
-                val manager = compose.activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)
-                    as android.view.inputmethod.InputMethodManager
+                val manager =
+                    compose.activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)
+                        as android.view.inputmethod.InputMethodManager
                 manager.hideSoftInputFromWindow(view.windowToken, 0)
             }
             compose.waitUntil(10_000) {
                 !WindowInsetsCompat.toWindowInsetsCompat(view.rootWindowInsets, view)
                     .isVisible(WindowInsetsCompat.Type.ime()) &&
-                    kotlin.math.abs(compose.onNodeWithTag("conversation.composer").fetchSemanticsNode().boundsInRoot.bottom - originalBottom) < density
+                    kotlin.math.abs(
+                        compose.onNodeWithTag("conversation.composer").fetchSemanticsNode().boundsInRoot.bottom -
+                            originalBottom
+                    ) < density
             }
             assertTrue(originalBottom > view.height / 2f)
         }

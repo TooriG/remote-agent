@@ -48,7 +48,7 @@ Android 17では、LAN接続を開く前に付近のデバイスへのアクセ�
 
 ## Hostの起動
 
-会話にはGitと、利用可能なエージェントが最低1つ必要です。Codexは任意です。macOSではChatGPT Desktop同梱のCodexを優先し、次にPATH上の`codex`を使います。`--codex <path>`で明示した実行ファイルが最優先です。
+会話にはGitと、利用可能なエージェントが最低1つ必要です。Codexは任意です。PATH上の`codex`を使い、見つからない場合はmacOSのChatGPT Desktop同梱版を使います。`--codex <path>`で明示した実行ファイルが最優先です。
 
 Claudeとの会話は公式Agent SDKが実行します。Macアプリは署名済みのポータブルなNode.jsを同梱するため、Claude Codeがインストール済みならNodeやnpmを別途用意する必要はありません。既定ではアプリ内のNodeを使い、`BEX_NODE`で別の実行ファイルを明示できます。単体HostではPATHにNode.js 22以降を置くか、`BEX_NODE`で指定してください。Nixの開発環境はNode.jsを含み、Mac同梱用ランタイムのバージョンとチェックサムも固定します。SDKはnpmのlockfileに固定し、Hostへ同梱するコードを生成します。
 
@@ -113,10 +113,6 @@ Windows 11では、ビルド済みZIPを使えばRustのインストールは不
 [Windows版の利用手順](docs/WINDOWS.md)を参照してください。
 
 ## クライアントのビルド
-
-macOSを含む各プラットフォームの更新版を公開する開発者は、同じ公開作業内で
-getbex.devの該当ダウンロードも更新・デプロイし、公開サイトのボタンから最新版を
-取得できることを確認してください。[公開チェックリスト](docs/RELEASING.md)に従います。
 
 ```sh
 # Mac配布用（署名証明書が必要。BEX_CODE_SIGN_IDENTITYで選択）

@@ -2,12 +2,12 @@ package dev.remoteagent.mobile
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.width
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
@@ -16,13 +16,13 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
-import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipe
-import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.unit.dp
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.ProviderKind
 import dev.remoteagent.core.SessionRef
@@ -64,13 +64,18 @@ class ThreadListTest {
 
     @Test
     fun recentChatsShowProjectNamesAndOpenTheOriginalConversation() {
-        val persisted = JSONObject(Snapshot.empty().serialize().decodeToString()).put(
-            "threads", JSONObject("""{"data":[
+        val persisted =
+            JSONObject(Snapshot.empty().serialize().decodeToString())
+                .put(
+                    "threads",
+                    JSONObject(
+                        """{"data":[
                 {"id":{"provider":"codex","id":"project-chat"},"name":"Project conversation","projectId":"bex","updatedAt":20},
                 {"id":{"provider":"claude","id":"standalone"},"name":"Standalone conversation","updatedAt":10}],
                 "projects":[{"id":"bex","name":"BEX project","roots":[]}],
-                "hasMore":true,"hasMoreProjects":false,"limit":5,"projectPages":{}}"""),
-        )
+                "hasMore":true,"hasMoreProjects":false,"limit":5,"projectPages":{}}"""
+                    ),
+                )
         Snapshot.restore(persisted.toString().encodeToByteArray()).use { snapshot ->
             val intents = mutableListOf<Intent>()
             compose.setContent {
@@ -82,7 +87,10 @@ class ThreadListTest {
             compose.onNodeWithText("BEX project").assertIsDisplayed()
             compose.onNodeWithText("Standalone conversation").assertIsDisplayed()
             compose.onNodeWithText("Project conversation").performClick()
-            assertEquals(SessionRef(ProviderKind.CODEX, "project-chat"), (intents.single() as Intent.ReadThread).v1.threadId)
+            assertEquals(
+                SessionRef(ProviderKind.CODEX, "project-chat"),
+                (intents.single() as Intent.ReadThread).v1.threadId,
+            )
             compose.onNodeWithText("もっと見る").performClick()
             assertEquals(Intent.ExpandRecentChats, intents.last())
         }
@@ -90,22 +98,29 @@ class ThreadListTest {
 
     @Test
     fun projectHandlesDragBothDirectionsAndCancelWithoutOpeningChats() {
-        val persisted = JSONObject(Snapshot.empty().serialize().decodeToString()).put(
-            "threads", JSONObject("""{"data":[],"projects":[
+        val persisted =
+            JSONObject(Snapshot.empty().serialize().decodeToString())
+                .put(
+                    "threads",
+                    JSONObject(
+                        """{"data":[],"projects":[
                 {"id":"a","name":"Alpha","roots":[]},
                 {"id":"b","name":"Beta","roots":[]}],
-                "hasMore":false,"hasMoreProjects":false,"limit":5,"projectPages":{}}"""),
-        )
+                "hasMore":false,"hasMoreProjects":false,"limit":5,"projectPages":{}}"""
+                    ),
+                )
         Snapshot.restore(persisted.toString().encodeToByteArray()).use { snapshot ->
             val intents = mutableListOf<Intent>()
             compose.setContent {
-                BexTheme { ThreadListScreen(snapshot.threadList(), snapshot.listQuery(), false, { intents.add(it) }, {}) }
+                BexTheme {
+                    ThreadListScreen(snapshot.threadList(), snapshot.listQuery(), false, { intents.add(it) }, {})
+                }
             }
             compose.onNodeWithText("プロジェクト").performClick()
             val alpha = compose.onNodeWithContentDescription("Alphaの順番を変更。上下にドラッグ")
             val beta = compose.onNodeWithContentDescription("Betaの順番を変更。上下にドラッグ")
-            val distance = beta.fetchSemanticsNode().boundsInRoot.center.y -
-                alpha.fetchSemanticsNode().boundsInRoot.center.y
+            val distance =
+                beta.fetchSemanticsNode().boundsInRoot.center.y - alpha.fetchSemanticsNode().boundsInRoot.center.y
             compose.mainClock.autoAdvance = false
             alpha.performTouchInput {
                 down(center)
@@ -146,26 +161,28 @@ class ThreadListTest {
             compose.setContent {
                 BexTheme {
                     Box(Modifier.width(320.dp)) {
-                    ThreadListScreen(
-                        snapshot.threadList(),
-                        snapshot.listQuery(),
-                        false,
-                        { intents.add(it) },
-                        { openedHosts = true },
-                        hostName = "Development PC",
-                        connected = true,
-                    )
+                        ThreadListScreen(
+                            snapshot.threadList(),
+                            snapshot.listQuery(),
+                            false,
+                            { intents.add(it) },
+                            { openedHosts = true },
+                            hostName = "Development PC",
+                            connected = true,
+                        )
                     }
                 }
             }
             compose.onNodeWithText("ワークスペース").assertDoesNotExist()
             compose.onNodeWithContentDescription("接続中").assertIsDisplayed()
-            val header = listOf(
-                compose.onNodeWithText("bex"),
-                compose.onNodeWithText("Development PC"),
-                compose.onNodeWithContentDescription("検索"),
-                compose.onNodeWithContentDescription("更新"),
-            ).map { it.assertIsDisplayed().fetchSemanticsNode().boundsInRoot }
+            val header =
+                listOf(
+                        compose.onNodeWithText("bex"),
+                        compose.onNodeWithText("Development PC"),
+                        compose.onNodeWithContentDescription("検索"),
+                        compose.onNodeWithContentDescription("更新"),
+                    )
+                    .map { it.assertIsDisplayed().fetchSemanticsNode().boundsInRoot }
             header.forEach { assertEquals(header.first().center.y, it.center.y, 1f) }
             compose.onNodeWithText("Development PC").performClick()
             assertTrue(openedHosts)

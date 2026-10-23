@@ -152,12 +152,11 @@ impl Snapshot {
             if let Some(project) = self.chat_placement(id) {
                 thread.project_id = crate::models::ProjectMembership::Assigned(project.to_owned());
             }
-            if let Some(project) = thread.project_id.as_ref() {
-                if self.project_preference(project).is_some_and(|p| p.hidden)
-                    || !self.project_chat_visible(project, &thread)
-                {
-                    continue;
-                }
+            if let Some(project) = thread.project_id.as_ref()
+                && (self.project_preference(project).is_some_and(|p| p.hidden)
+                    || !self.project_chat_visible(project, &thread))
+            {
+                continue;
             }
             if rows
                 .get(id)
@@ -180,9 +179,7 @@ impl Snapshot {
             &project_ids,
         );
         let limit = self.list_query.limit as usize;
-        list.has_more |= list.threads.len() > limit
-            || source.has_more_projects
-            || self.project_threads.values().any(|page| page.has_more);
+        list.has_more |= list.threads.len() > limit;
         list.threads.truncate(limit);
         for project in &source.projects {
             let key = crate::state::operations::OperationKey::ProjectList {
@@ -572,7 +569,7 @@ mod tests {
             })).unwrap());
             crate::state::operations::ReadListDecorations {
                 scope: agent_protocol::operations::ListDecorationScope::Root { part: None },
-                project_ids: vec!["project".into()],
+                projects: vec![],
                 threads: vec![],
             }
             .apply(

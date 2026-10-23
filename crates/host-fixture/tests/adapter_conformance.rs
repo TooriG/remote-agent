@@ -474,7 +474,9 @@ async fn session_pages_preserve_healthy_listings_and_reject_repeated_native_curs
     .unwrap();
     let host = start(&root, Arc::new(Memory::default())).await;
     let local = host.local().await.unwrap();
-    let session = create(&local.peer, ProviderKind::Claude, &root).await;
+    let chats = root.join("bex-chats");
+    std::fs::create_dir(&chats).unwrap();
+    let session = create(&local.peer, ProviderKind::Claude, &chats).await;
     let (_, mut events) = open(&local.peer, &session).await;
     local
         .peer
@@ -744,7 +746,9 @@ async fn title_lists_stop_after_visible_sections_and_merge_provider_pages_in_ord
     std::fs::write(&fixture, serde_json::to_vec(&threads).unwrap()).unwrap();
     let host = start(&root, Arc::new(Memory::default())).await;
     let local = host.local().await.unwrap();
-    let session = create(&local.peer, ProviderKind::Claude, &root).await;
+    let chats = root.join("bex-chats");
+    std::fs::create_dir(&chats).unwrap();
+    let session = create(&local.peer, ProviderKind::Claude, &chats).await;
     let (_, mut events) = open(&local.peer, &session).await;
     local
         .peer
@@ -1112,7 +1116,6 @@ async fn adapter_initialization_failure_preserves_the_other_provider_and_host() 
     let models = local
         .peer
         .call(&op::ListModels {
-            selected_model: None,
             cursor: None,
             limit: 100,
         })

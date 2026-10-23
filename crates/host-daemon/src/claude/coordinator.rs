@@ -22,7 +22,7 @@ use std::{
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 
-pub(super) fn is_channel(id: &str) -> bool {
+pub(crate) fn is_channel(id: &str) -> bool {
     id.strip_prefix("chan_").is_some_and(|suffix| {
         !suffix.is_empty()
             && suffix.len() <= 120
@@ -36,6 +36,7 @@ pub(super) fn is_channel(id: &str) -> bool {
 pub(super) struct Client {
     home: PathBuf,
     native_home: PathBuf,
+    native_inherited: bool,
     program: PathBuf,
     http: reqwest::Client,
     refresh: Arc<Mutex<()>>,
@@ -43,13 +44,19 @@ pub(super) struct Client {
 }
 
 impl Client {
-    pub fn new(home: PathBuf, native_home: PathBuf, program: PathBuf) -> Result<Self, Failure> {
+    pub fn new(
+        home: PathBuf,
+        native_home: PathBuf,
+        native_inherited: bool,
+        program: PathBuf,
+    ) -> Result<Self, Failure> {
         // reqwest's rustls-no-provider feature requires an explicit provider.
         // Project listing can reach this before dictation or APNs initializes TLS.
         let _ = rustls::crypto::ring::default_provider().install_default();
         Ok(Self {
             home,
             native_home,
+            native_inherited,
             program,
             http: reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
@@ -90,8 +97,7 @@ impl Client {
             let cwd = tempfile::tempdir().map_err(|_| auth_error())?;
             let (process, _) = Process::start(
                 &self.program,
-                &self.native_home,
-                &self.home,
+                super::process::homes(&self.native_home, self.native_inherited, &self.home),
                 cwd.path(),
                 None,
                 None,
@@ -470,6 +476,7 @@ impl Coordinators {
         &self,
         home: PathBuf,
         native_home: PathBuf,
+        native_inherited: bool,
         program: PathBuf,
     ) -> Result<Client, Failure> {
         let mut cached = self.client.lock().await;
@@ -478,7 +485,7 @@ impl Coordinators {
         {
             return Ok(client.clone());
         }
-        let client = Client::new(home, native_home, program)?;
+        let client = Client::new(home, native_home, native_inherited, program)?;
         *cached = Some(client.clone());
         Ok(client)
     }
@@ -604,6 +611,7 @@ mod tests {
         Client::new(
             directory.path().into(),
             directory.path().into(),
+            false,
             "claude".into(),
         )
         .unwrap();
@@ -611,6 +619,7 @@ mod tests {
         Client::new(
             directory.path().into(),
             directory.path().into(),
+            false,
             "claude".into(),
         )
         .unwrap();
@@ -771,6 +780,7 @@ mod tests {
         let mut client = Client::new(
             directory.path().into(),
             directory.path().into(),
+            false,
             "unused-cli".into(),
         )
         .unwrap();

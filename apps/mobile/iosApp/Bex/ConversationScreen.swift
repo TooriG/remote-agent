@@ -18,8 +18,7 @@ struct ThreadScreen: View {
     @State var showingModelSettings = false
     @State var isVisible = false
     @State var isFollowingLatest = true
-    @State var historyTopVisibility: HistoryTopVisibility?
-    @State var latestHistoryRowVisible = false
+    @State var visibleHistoryBoundaries = Set<HistoryBoundary>()
     @State var expandedItemIds = Set<String>()
     @State var activityExpansionOverrides = [String: ActivityExpansion]()
     @FocusState var composerFocused: Bool
@@ -28,6 +27,7 @@ struct ThreadScreen: View {
         chatContent
             .onDisappear {
                 isVisible = false
+                visibleHistoryBoundaries.removeAll()
                 dictation.cancel()
             }
             .onChange(of: model.composerFocusRequest) { _ in
@@ -112,12 +112,30 @@ struct ThreadScreen: View {
                 if let thread = conversation {
                     let rows = conversationRows(thread.rows, expansion: activityExpansionOverrides)
                     let lastRowId = rows.last?.id
+                    let threadId = thread.id
+                    let firstRowId = thread.rows.first?.id
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 12) {
                             ForEach(rows) { row in
                                 conversationRow(row)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .id(row.id)
+                                    .overlay(alignment: .top) {
+                                        if row.id == rows.first?.id, let firstRowId {
+                                            historyBoundaryMarker(
+                                                .oldest(threadId: threadId, rowId: firstRowId),
+                                                height: 1
+                                            )
+                                        }
+                                    }
+                                    .overlay(alignment: .bottom) {
+                                        if row.id == lastRowId {
+                                            historyBoundaryMarker(
+                                                .latest(threadId: threadId, rowId: row.id),
+                                                height: 80
+                                            )
+                                        }
+                                    }
                             }
                         }
                         .padding(.horizontal, 16)
@@ -128,6 +146,7 @@ struct ThreadScreen: View {
                     }
                     .defaultScrollAnchor(.bottom, for: .initialOffset)
                     .defaultScrollAnchor(.bottom, for: .alignment)
+                    .defaultScrollAnchor(isFollowingLatest ? .bottom : nil, for: .sizeChanges)
                     // Tail updates preserve a detached reader; prepends retain native offset correction.
                     .transaction(value: lastRowId) { transaction in
                         if !isFollowingLatest {
@@ -144,38 +163,18 @@ struct ThreadScreen: View {
                         }
                         loadVisibleHistory()
                     }.onEnded { gesture in
-                        if gesture.translation.height < -abs(gesture.translation.width), latestHistoryRowVisible {
+                        if gesture.translation.height < -abs(gesture.translation.width),
+                           historyBoundaryVisibility.latest {
                             isFollowingLatest = true
                             followLatest(to: lastRowId, using: proxy)
                         }
                     })
-                    .onScrollGeometryChange(for: ConversationScrollMetrics.self) { geometry in
-                        ConversationScrollMetrics(
-                            content: geometry.contentSize,
-                            container: geometry.containerSize,
-                            oldestVisible: geometry.containerSize.height > 0 && geometry.contentSize.height > 0 &&
-                                geometry.visibleRect.minY <= 0,
-                            latestVisible: geometry.containerSize.height > 0 && geometry.contentSize.height > 0 &&
-                                geometry.visibleRect.minY < geometry.contentSize.height &&
-                                geometry.visibleRect.maxY > 0 &&
-                                geometry.contentSize.height - geometry.visibleRect.maxY <= 80
-                        )
-                    } action: { old, new in
-                        let top = HistoryTopVisibility(threadId: thread.id, firstRowId: thread.rows.first?.id,
-                                                       visible: new.oldestVisible)
-                        if historyTopVisibility != top {
-                            historyTopVisibility = top
+                    .onScrollPhaseChange { _, phase in
+                        if phase == .interacting {
+                            isFollowingLatest = false
                         }
-                        if latestHistoryRowVisible != new.latestVisible {
-                            latestHistoryRowVisible = new.latestVisible
-                        }
-                        // Lazy rows settle after insertion; sending also resizes the keyboard and composer.
-                        if old.content != new.content || old.container != new.container || !new.latestVisible {
-                            followLatest(to: lastRowId, using: proxy)
-                        }
-                        loadVisibleHistory()
                     }
-                    .onChange(of: thread.id, initial: true) {
+                    .onChange(of: threadId, initial: true) {
                         expandedItemIds.removeAll()
                         activityExpansionOverrides.removeAll()
                         isFollowingLatest = true
@@ -183,7 +182,7 @@ struct ThreadScreen: View {
                     }
                     .onChange(of: lastRowId) { followLatest(to: lastRowId, using: proxy) }
                     .overlay(alignment: .bottom) {
-                        if !latestHistoryRowVisible {
+                        if !historyBoundaryVisibility.latest {
                             Button {
                                 isFollowingLatest = true
                                 withAnimation { followLatest(to: lastRowId, using: proxy) }

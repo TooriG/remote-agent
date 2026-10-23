@@ -2,7 +2,7 @@
 //! the client-facing conversation and adapts official Agent SDK events.
 use agent_protocol::{execution::*, items::*};
 mod accounts;
-mod coordinator;
+pub(crate) mod coordinator;
 mod history;
 mod native;
 mod permissions;
@@ -99,6 +99,7 @@ pub struct Claude {
     program: PathBuf,
     directory: PathBuf,
     native_home: PathBuf,
+    native_inherited: bool,
     accounts: AsyncMutex<accounts::Accounts>,
     records: AsyncMutex<HashMap<String, Arc<AsyncMutex<Record>>>>,
     processes: Arc<Semaphore>,
@@ -151,6 +152,7 @@ impl Claude {
         native_home: Option<PathBuf>,
     ) -> anyhow::Result<Self> {
         crate::platform::create_state_directory(&directory)?;
+        let native_inherited = native_home.is_none();
         let native_home = native_home.map(Ok).unwrap_or_else(history::home)?;
         let path = std::env::var_os("PATH");
         let program = process::executable(&program, path.as_deref()).unwrap_or(program);
@@ -158,6 +160,7 @@ impl Claude {
             program.clone(),
             directory.join("accounts"),
             native_home.clone(),
+            native_inherited,
         )
         .await?;
         let (events, event_receiver) = mpsc::channel(256);
@@ -166,6 +169,7 @@ impl Claude {
             program,
             directory,
             native_home,
+            native_inherited,
             records: AsyncMutex::new(HashMap::new()),
             processes: Arc::new(Semaphore::new(8)),
             events,
@@ -190,7 +194,12 @@ impl Claude {
                 )
             })?;
         self.coordinators
-            .client(home, self.native_home.clone(), self.program.clone())
+            .client(
+                home,
+                self.native_home.clone(),
+                self.native_inherited,
+                self.program.clone(),
+            )
             .await
     }
 
@@ -204,8 +213,7 @@ impl Claude {
         let cwd = tempfile::tempdir_in(&self.directory).map_err(|error| error.to_string())?;
         let (process, initialized) = Process::start(
             &self.program,
-            &self.native_home,
-            &auth_home,
+            process::homes(&self.native_home, self.native_inherited, &auth_home),
             cwd.path(),
             None,
             None,
@@ -258,10 +266,14 @@ impl Claude {
                     id: name.into(),
                     model,
                     display_name: display.into(),
-                    default_reasoning_effort: default,
-                    supported_reasoning_efforts: efforts,
-                    service_tiers: Some(Vec::new()),
-                    default_service_tier: None,
+                    credential_route: None,
+                    settings_discovery: false,
+                    settings: Some(agent_protocol::models::ModelSettings {
+                        default_reasoning_effort: default,
+                        supported_reasoning_efforts: efforts,
+                        service_tiers: Some(Vec::new()),
+                        default_service_tier: None,
+                    }),
                     is_default: Some(false),
                 })
             })
@@ -732,8 +744,7 @@ impl Claude {
                 .map_err(|_| "Claude process capacity reached (8); wait for an active or retained session to finish")?;
             let (mut process, initialized) = Process::start(
                 &self.program,
-                &self.native_home,
-                &auth_home,
+                process::homes(&self.native_home, self.native_inherited, &auth_home),
                 Path::new(&cwd),
                 Some((&session, state.resumable)),
                 Some((&model, effort)),
@@ -1864,27 +1875,11 @@ impl Agent for Claude {
             provider_errors: None,
         })
     }
-    async fn projects(&self) -> Result<Vec<agent_protocol::models::Project>, Failure> {
-        let home = self.native_home.clone();
-        let default_home = directories::BaseDirs::new().map(|base| base.home_dir().join(".claude"));
-        let config = if default_home.as_deref() == Some(home.as_path()) {
-            home.with_file_name(".claude.json")
-        } else {
-            home.join(".claude.json")
+    async fn cloud_projects(&self) -> Result<Vec<agent_protocol::models::Project>, Failure> {
+        let Ok(client) = self.coordinator_client().await else {
+            return Ok(Vec::new());
         };
-        let mut projects = tokio::task::spawn_blocking(move || history::projects(&home, &config))
-            .await
-            .map_err(|error| Failure::new("claude_projects_unavailable", error))?
-            .map_err(|error| Failure::new("claude_projects_unavailable", error))?;
-        if let Ok(client) = self.coordinator_client().await
-            && let Ok(cloud) = self.coordinators.projects(&client).await
-        {
-            for project in cloud {
-                projects.retain(|existing| existing.id != project.id);
-                projects.push(project);
-            }
-        }
-        Ok(projects)
+        self.coordinators.projects(&client).await
     }
     async fn catalog(&self, cwd: &str) -> agent_protocol::composer::ComposerCatalog {
         use agent_protocol::composer::{ComposerCandidate, ComposerCatalog};
@@ -1911,8 +1906,7 @@ impl Agent for Claude {
                 .map_err(|error| error.to_string())?;
             let (process, initialized) = Process::start(
                 &self.program,
-                &self.native_home,
-                &auth_home,
+                process::homes(&self.native_home, self.native_inherited, &auth_home),
                 directory,
                 None,
                 None,

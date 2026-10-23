@@ -14,6 +14,7 @@ unit-tests *targets:
     #!/usr/bin/env bash
     set -uo pipefail
     failed=0
+    pwsh -NoLogo -NoProfile -NonInteractive -File tools/windows-fxc/update.test.ps1 || failed=1
     npm --prefix crates/host-daemon/src/claude/sdk ci --ignore-scripts --no-audit --no-fund || failed=1
     npm --prefix crates/host-daemon/src/claude/sdk test || failed=1
     node scripts/install-claude-sdk.mjs "${CARGO_TARGET_DIR:-target}/debug" || failed=1
@@ -95,6 +96,7 @@ conversation-ui:
         testSimulatorRetriesSideChatPreparationWithoutLosingOriginalDraft \
         testSimulatorSelectsAssistantTextInPlaceAndAddsOnlySelectionToDraft \
         testSimulatorUsesNativeHostNavigationAndPairingDismissal \
+        testSimulatorOpensQrScannerWhileAddingHost \
         testSimulatorRemovesHostAndRequiresPairingAfterRelaunch \
         testSimulatorRendersEveryActivityFamilyAndHidesStateOnlyItems \
         testSimulatorUsesNativeProjectDisclosureAndDirectoryNavigation \
@@ -126,7 +128,7 @@ quality language="apple":
 # Audit diff presentation tests in an isolated copy; extra arguments go to cargo-mutants.
 mutants-diff *args:
     mkdir -p target/mutation-diff
-    PROPTEST_RNG_SEED=20260925 cargo mutants --package agent-core --file crates/agent-core/src/presentation/diff.rs --output target/mutation-diff --jobs 2 --build-timeout 900 --timeout 60 --cargo-arg=--locked --cargo-arg=--lib "$@" -- presentation::diff::tests
+    env -u CARGO_TARGET_DIR PROPTEST_RNG_SEED=20260925 cargo mutants --copy-target=false --package agent-core --file crates/agent-core/src/presentation/diff.rs --output target/mutation-diff --jobs 2 --build-timeout 900 --timeout 60 --cargo-arg=--locked --cargo-arg=--lib "$@" -- presentation::diff::tests
 
 # Verify bounded Git path decoding with the dedicated `nix develop .#kani` environment.
 kani-diff *args:

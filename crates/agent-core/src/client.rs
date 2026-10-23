@@ -70,7 +70,6 @@ pub trait ClientExt {
         operation: &O,
     ) -> Result<Option<(O::Output, Updates, uuid::Uuid)>, PeerError>;
     async fn models(&self) -> Result<ModelPage, PeerError>;
-    async fn models_for(&self, selected_model: Option<crate::models::ModelRef>) -> Result<ModelPage, PeerError>;
     async fn respond(&self, request: &Request, answer: &Answer) -> Result<(), PeerError>;
     async fn session_images(
         &self,
@@ -99,9 +98,6 @@ impl ClientExt for Client {
     }
 
     async fn models(&self) -> Result<ModelPage, PeerError> {
-        self.models_for(None).await
-    }
-    async fn models_for(&self, selected_model: Option<crate::models::ModelRef>) -> Result<ModelPage, PeerError> {
         let mut provider_errors = Map::<String, Value>::new();
         let mut models: Vec<crate::models::Model> = Vec::new();
         let mut cursor = None;
@@ -109,7 +105,6 @@ impl ClientExt for Client {
         loop {
             let page = self
                 .call(&ListModels {
-                    selected_model: selected_model.clone(),
                     limit: 100,
                     cursor: cursor.clone(),
                 })
