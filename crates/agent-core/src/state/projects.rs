@@ -578,7 +578,7 @@ mod tests {
     }
     proptest::proptest! {
         #[test]
-        fn visibility_round_trips_without_mutating_native_projects(steps in proptest::collection::vec((proptest::bool::ANY, proptest::bool::ANY),0..30)) {
+        fn visibility_round_trips_without_mutating_host_projects(steps in proptest::collection::vec((proptest::bool::ANY, proptest::bool::ANY),0..30)) {
             let mut s=fixture(); let native=s.threads.clone();
             for (pinned,hidden) in steps {
                 s=dispatch(&s,Intent::SetProjectPinned {project_id:"a".into(),pinned});

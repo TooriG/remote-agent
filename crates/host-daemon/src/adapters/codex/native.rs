@@ -527,13 +527,6 @@ pub(crate) fn parse_thread(mut value: Value) -> Result<Thread, serde_json::Error
         can_accept_direct_input: field(&value, "canAcceptDirectInput")?,
         name,
         cwd: field(&value, "cwd")?,
-        project_id: match value.get("projectId") {
-            Some(Value::String(id)) => {
-                agent_protocol::models::ProjectMembership::Assigned(id.clone())
-            }
-            Some(Value::Null) => agent_protocol::models::ProjectMembership::Unassigned {},
-            _ => agent_protocol::models::ProjectMembership::Unknown {},
-        },
         status: session_status(&value["status"]),
         turns: take_field::<Option<Vec<Value>>>(&mut value, "turns")?
             .map(|turns| {
@@ -644,27 +637,6 @@ mod tests {
                 "serviceTiers":["invalid"]
             }))
             .is_err()
-        );
-    }
-
-    #[test]
-    fn native_project_membership_preserves_explicit_assignment_and_projectless_chats() {
-        use agent_protocol::models::ProjectMembership;
-        for (membership, expected) in [
-            (
-                json!("project-a"),
-                ProjectMembership::Assigned("project-a".into()),
-            ),
-            (Value::Null, ProjectMembership::Unassigned {}),
-        ] {
-            let thread =
-                parse_thread(json!({"id":"thread", "projectId":membership, "cwd":"/shared/root"}))
-                    .unwrap();
-            assert_eq!(thread.project_id, expected);
-        }
-        assert_eq!(
-            parse_thread(json!({"id":"thread"})).unwrap().project_id,
-            ProjectMembership::Unknown {}
         );
     }
 

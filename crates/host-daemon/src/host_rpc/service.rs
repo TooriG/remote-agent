@@ -1347,55 +1347,11 @@ impl HostRpcService {
     }
 
     async fn project_snapshot(&self) -> Result<crate::projects::state::Snapshot, Failure> {
-        let catalogs = futures_util::future::join_all(
-            [ProviderKind::Codex, ProviderKind::Claude].map(|provider| async move {
-                let result = match self.agent(provider) {
-                    // Claude history metadata remains readable without its CLI.
-                    Ok(agent)
-                        if provider == ProviderKind::Claude || agent.availability().is_ok() =>
-                    {
-                        agent.projects().await
-                    }
-                    _ => Ok(Vec::new()),
-                };
-                (provider, result)
-            }),
-        )
-        .await;
-        let mut native: Vec<agent_protocol::models::Project> = Vec::new();
-        let mut supplemental = Vec::new();
-        let mut codex_project_ids = std::collections::HashSet::new();
-        let mut provider_errors = serde_json::Map::new();
-        for (provider, result) in catalogs {
-            let projects = match result {
-                Ok(projects) => projects,
-                Err(error) => {
-                    provider_errors.insert(provider.key().into(), serde_json::to_value(error)?);
-                    continue;
-                }
-            };
-            if provider == ProviderKind::Codex {
-                codex_project_ids.extend(projects.iter().map(|project| project.id.clone()));
-                native.extend(projects);
-            } else {
-                supplemental.extend(projects);
-            }
-        }
-        let (native, resolved_roots) = tokio::task::spawn_blocking(move || {
-            crate::projects::merge_catalogs(native, supplemental)
-        })
-        .await
-        .map_err(|error| Failure::new("project_state_unavailable", error))?;
-        let mut snapshot = self
-            .inner
+        self.inner
             .projects
-            .load_with_projects(native, resolved_roots)
+            .load()
             .await
-            .map_err(|error| Failure::new("project_state_unavailable", error))?;
-        // Only IDs from Codex can be sent to Codex's create_in_project API.
-        snapshot.native_project_ids = codex_project_ids;
-        snapshot.provider_errors = provider_errors;
-        Ok(snapshot)
+            .map_err(|error| Failure::new("project_state_unavailable", error))
     }
 
     async fn host_title_list(
@@ -1479,7 +1435,6 @@ impl HostRpcService {
             .as_object()
             .cloned()
             .unwrap_or_default();
-        provider_errors.extend(snapshot.provider_errors.clone());
         let successful = listings.iter().any(|(_, _, _, head)| head.is_ok());
         while let Some(newest) = listings
             .iter()
@@ -1663,16 +1618,11 @@ impl HostRpcService {
                 Err(error) => return Err(Failure::new("worktree_creation_failed", error)),
             }
         }
-        let projects = self.project_snapshot().await?;
-        let project = projects
-            .project_for_workspace(params.cwd.as_deref().unwrap_or_default())
-            .filter(|id| projects.native_project_ids.contains(*id));
         self.start_thread(agent.as_ref(), |browser| {
-            agent.create_in_project(
+            agent.create(
                 params.cwd.as_deref().unwrap_or_default(),
                 params.model.as_ref().map(|m| m.id.as_str()),
                 browser,
-                project,
             )
         })
         .await
@@ -1828,19 +1778,7 @@ fn describe_thread(
     capabilities: agent_protocol::session::Capabilities,
     projects: &crate::projects::state::Snapshot,
 ) {
-    // A null native ID also occurs for existing folder-based Codex conversations.
-    // Only a non-null native assignment can override workspace membership.
-    let catalog_failed = thread
-        .id
-        .as_ref()
-        .is_some_and(|id| projects.provider_errors.contains_key(id.provider.key()));
-    let known_project = thread
-        .project_id
-        .as_ref()
-        .is_some_and(|id| projects.projects.iter().any(|project| &project.id == id));
-    if thread.project_id.is_none() || (catalog_failed && !known_project) {
-        thread.project_id = projects.project_membership(thread.cwd.as_deref());
-    }
+    thread.project_id = projects.project_membership(thread.cwd.as_deref());
     thread.capabilities = Some(capabilities);
 }
 
@@ -1868,10 +1806,9 @@ mod tests {
         )
         .await
         .unwrap();
-        let service = HostRpcService::new(
-            [agent.into()],
-            ProjectStore::new(root.path().join("bex-worktrees.json")),
-        );
+        let projects = ProjectStore::new(root.path().join("bex-worktrees.json"));
+        projects.register(&cwd).await.unwrap();
+        let service = HostRpcService::new([agent.into()], projects);
         let snapshot = service.project_snapshot().await.unwrap();
         let page = service
             .host_title_list(
@@ -1925,7 +1862,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failed_project_catalog_keeps_registered_projects_and_native_history_visible() {
+    async fn native_project_metadata_does_not_change_registered_membership() {
         use super::*;
         let root = tempfile::tempdir().unwrap();
         let workspace = root.path().join("workspace");
@@ -1997,108 +1934,64 @@ mod tests {
                         .any(|thread| thread.id.as_ref().is_some_and(|thread| &thread.id == id))
                 );
             }
-            if repaired {
-                assert!(result.data.iter().all(
-                    |thread| thread.project_id.as_deref() == Some("claude-project:chan_native")
-                ));
-                assert_ne!(
-                    result.provider_errors.as_ref().unwrap()["claude"]["code"],
-                    "claude_projects_unavailable"
-                );
-            } else {
-                assert!(
-                    result
-                        .data
-                        .iter()
-                        .any(|thread| thread.project_id.as_deref() == Some(registered.as_str()))
-                );
-                assert!(result.data.iter().any(|thread| thread.project_id.is_none()));
-                assert_eq!(
-                    result.provider_errors.as_ref().unwrap()["claude"]["code"],
-                    "claude_projects_unavailable"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn project_catalog_failure_only_replaces_unresolvable_assignments_for_its_provider() {
-        use super::*;
-        use agent_protocol::models::{Project, ProjectMembership};
-        let mut projects = crate::projects::state::Snapshot::default();
-        projects.projects = vec![Project {
-            id: "known".into(),
-            ..Default::default()
-        }];
-        projects.provider_errors =
-            serde_json::from_value(serde_json::json!({"claude":{"message":"unavailable"}}))
-                .unwrap();
-        for (provider, project, expected) in [
-            (ProviderKind::Claude, "missing", None),
-            (ProviderKind::Claude, "known", Some("known")),
-            (ProviderKind::Codex, "missing", Some("missing")),
-        ] {
-            let mut thread = Thread {
-                id: Some(agent_protocol::session::SessionRef {
-                    provider,
-                    id: "thread".into(),
-                }),
-                cwd: Some(std::env::temp_dir().to_string_lossy().into_owned()),
-                project_id: ProjectMembership::Assigned(project.into()),
-                ..Default::default()
-            };
-            describe_thread(&mut thread, Default::default(), &projects);
-            assert_eq!(thread.project_id.as_deref(), expected);
+            assert_eq!(result.projects.len(), 1);
+            assert!(
+                result
+                    .data
+                    .iter()
+                    .any(|thread| thread.project_id.as_deref() == Some(registered.as_str()))
+            );
+            assert!(result.data.iter().any(|thread| thread.project_id.is_none()));
         }
     }
 
     #[tokio::test]
-    async fn native_projects_include_existing_threads_without_a_native_assignment() {
+    async fn registered_roots_determine_membership_for_both_providers() {
         use super::*;
-        use agent_protocol::models::{Project, ProjectMembership, ProjectRoot};
+        use agent_protocol::models::ProjectMembership;
         let directory = tempfile::tempdir().unwrap();
         let root = dunce::canonicalize(directory.path()).unwrap();
         let project = root.join("project");
         std::fs::create_dir(&project).unwrap();
-        let projects = ProjectStore::new(root.join("bex-worktrees.json"))
-            .load_with_projects(
-                vec![Project {
-                    id: "native".into(),
-                    name: "Native project".into(),
-                    roots: vec![ProjectRoot {
-                        path: project.to_str().unwrap().into(),
-                    }],
+        let store = ProjectStore::new(root.join("bex-worktrees.json"));
+        store.register(&project).await.unwrap();
+        let projects = store.load().await.unwrap();
+        let registered = projects.projects[0].id.as_str();
+        for provider in [ProviderKind::Codex, ProviderKind::Claude] {
+            for (cwd, membership, expected) in [
+                (
+                    project.clone(),
+                    ProjectMembership::Unassigned {},
+                    Some(registered),
+                ),
+                (
+                    project.clone(),
+                    ProjectMembership::Unknown {},
+                    Some(registered),
+                ),
+                (
+                    project.clone(),
+                    ProjectMembership::Assigned("native-other".into()),
+                    Some(registered),
+                ),
+                (
+                    root.join("outside"),
+                    ProjectMembership::Assigned("native-other".into()),
+                    None,
+                ),
+            ] {
+                let mut thread = Thread {
+                    id: Some(agent_protocol::session::SessionRef {
+                        provider,
+                        id: "thread".into(),
+                    }),
+                    cwd: Some(cwd.to_str().unwrap().into()),
+                    project_id: membership,
                     ..Default::default()
-                }],
-                Default::default(),
-            )
-            .await
-            .unwrap();
-        for (cwd, membership, expected) in [
-            (
-                project.clone(),
-                ProjectMembership::Unassigned {},
-                Some("native"),
-            ),
-            (
-                project.clone(),
-                ProjectMembership::Unknown {},
-                Some("native"),
-            ),
-            (
-                project.clone(),
-                ProjectMembership::Assigned("explicit-other".into()),
-                Some("explicit-other"),
-            ),
-            (root.join("outside"), ProjectMembership::Unassigned {}, None),
-        ] {
-            let mut thread = Thread {
-                cwd: Some(cwd.to_str().unwrap().into()),
-                project_id: membership,
-                ..Default::default()
-            };
-            describe_thread(&mut thread, Default::default(), &projects);
-            assert_eq!(thread.project_id.as_deref(), expected);
+                };
+                describe_thread(&mut thread, Default::default(), &projects);
+                assert_eq!(thread.project_id.as_deref(), expected);
+            }
         }
     }
     #[tokio::test]
@@ -2584,83 +2477,6 @@ mod tests {
                 assert_eq!(response["error"]["code"], "provider_unavailable");
                 assert_eq!(response["error"]["delivery"], "notSent");
             }
-        }
-    }
-
-    #[tokio::test]
-    async fn claude_native_projects_keep_shared_directory_threads_below_the_project() {
-        use super::*;
-        let root = tempfile::tempdir().unwrap();
-        let native = root.path().join("native");
-        let transcripts = native.join("projects/shared");
-        std::fs::create_dir_all(&transcripts).unwrap();
-        for project in ["chan_games", "chan_tanks"] {
-            let id = uuid::Uuid::new_v4();
-            let snapshot = serde_json::json!({"type":"attachment","attachment":{
-                "type":"prompt_snapshot","systemPrompt":[format!("## Where you are\n\nProject: \"{project}\" (id: `{project}`)\n")]
-            }});
-            let user = serde_json::json!({"type":"user","sessionId":id,"cwd":root.path(),"message":{"content":"hello"}});
-            std::fs::write(
-                transcripts.join(format!("{id}.jsonl")),
-                format!("{snapshot}\n{user}\n"),
-            )
-            .unwrap();
-        }
-        let claude = crate::adapters::Claude::load(
-            root.path().join("missing-cli"),
-            root.path().join("state"),
-            Some(native),
-        )
-        .await
-        .unwrap();
-        let service = HostRpcService::new(
-            [
-                Backend::unavailable(ProviderKind::Codex, "unavailable"),
-                claude.into(),
-            ],
-            ProjectStore::new(root.path().join("bex-worktrees.json")),
-        );
-        let session = service.open_session();
-        let response = service
-            .dispatch(
-                session.id(),
-                &Call::ListSessions(op::ListSessions {
-                    query: Default::default(),
-                }),
-            )
-            .await
-            .unwrap();
-        let Response::Success { result } = agent_protocol::protocol::decode::<
-            Response<agent_protocol::models::ThreadList>,
-        >(&response.initial)
-        .unwrap() else {
-            panic!("list failed")
-        };
-        assert_eq!(result.projects.len(), 2);
-        for project in &result.projects {
-            assert!(project.roots.is_empty());
-            let response = service
-                .dispatch(
-                    session.id(),
-                    &Call::ListProjectSessions(op::ListProjectSessions {
-                        project_id: project.id.clone(),
-                        limit: 5,
-                        search_term: String::new(),
-                    }),
-                )
-                .await
-                .unwrap();
-            let Response::Success { result: page } = agent_protocol::protocol::decode::<
-                Response<agent_protocol::models::ThreadList>,
-            >(&response.initial)
-            .unwrap() else {
-                panic!("project page failed")
-            };
-            assert_eq!(page.data.len(), 1);
-            assert_eq!(
-                page.data[0].project_id.as_deref(),
-                Some(project.id.as_str())
-            );
         }
     }
 

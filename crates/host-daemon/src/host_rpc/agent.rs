@@ -214,15 +214,6 @@ pub(crate) trait Agent: Identity {
         browser: Option<Value>,
     ) -> Result<ThreadResponse, Failure>;
     async fn state(&self, id: &str) -> Result<SubmissionState, Failure>;
-    async fn create_in_project(
-        &self,
-        cwd: &str,
-        model: Option<&str>,
-        browser: Option<Value>,
-        _project: Option<&str>,
-    ) -> Result<ThreadResponse, Failure> {
-        self.create(cwd, model, browser).await
-    }
     async fn submit(
         &self,
         input: &op::Submission,
@@ -240,9 +231,6 @@ pub(crate) trait Agent: Identity {
             "unsupported",
             "Model settings cannot be discovered",
         ))
-    }
-    async fn projects(&self) -> Result<Vec<agent_protocol::models::Project>, Failure> {
-        Ok(Vec::new())
     }
     async fn catalog(&self, cwd: &str) -> ComposerCatalog;
     /// Explain uncertainty when native history cannot prove inactivity. Providers

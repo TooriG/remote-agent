@@ -489,15 +489,6 @@ fallbacks remain available for API-key accounts. Incomplete catalog reads preser
 saved choices. Effort and service-tier options come from the provider; the Host
 does not invent capabilities for a configured ID.
 
-The Host reads Codex projects through `project/list`, retaining native project
-IDs, names, roots and explicit conversation assignments. When a conversation has
-no native assignment, its working directory determines its project; unrelated
-directories and the Host's standalone chat directory stay unassigned.
-BEX-only registered roots remain available. This reads native state
-without editing `.codex-global-state.json`.
-Starting a conversation in a native project passes its project ID to Codex, so
-the assignment survives reopening in either client.
-
 ## Requests and approvals
 
 Pending server requests are part of the live conversation state, even though

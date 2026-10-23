@@ -1819,19 +1819,6 @@ impl Agent for Claude {
             provider_errors: None,
         })
     }
-    async fn projects(&self) -> Result<Vec<agent_protocol::models::Project>, Failure> {
-        let home = self.native_home.clone();
-        let default_home = directories::BaseDirs::new().map(|base| base.home_dir().join(".claude"));
-        let config = if default_home.as_deref() == Some(home.as_path()) {
-            home.with_file_name(".claude.json")
-        } else {
-            home.join(".claude.json")
-        };
-        tokio::task::spawn_blocking(move || history::projects(&home, &config))
-            .await
-            .map_err(|error| Failure::new("claude_projects_unavailable", error))?
-            .map_err(|error| Failure::new("claude_projects_unavailable", error))
-    }
     async fn catalog(&self, cwd: &str) -> agent_protocol::composer::ComposerCatalog {
         use agent_protocol::composer::{ComposerCandidate, ComposerCatalog};
         let mut catalog = ComposerCatalog {

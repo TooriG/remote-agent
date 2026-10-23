@@ -215,7 +215,7 @@ pub struct Snapshot {
     /// Mobile recent feed loads project pages independently of expansion.
     #[serde(skip)]
     pub recent_chats: bool,
-    /// Device-owned organization, scoped by Host storage identity and native project ID.
+    /// Device-owned organization, scoped by Host storage identity and registered project ID.
     #[serde(default)]
     pub project_preferences: Arc<BTreeMap<String, BTreeMap<String, ProjectPreferences>>>,
     #[serde(skip)]

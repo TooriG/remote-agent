@@ -1,7 +1,6 @@
 use agent_protocol::models::Project;
 use anyhow::Context;
 use std::{
-    collections::{HashMap, HashSet},
     io,
     path::{Path, PathBuf},
     sync::Arc,
@@ -11,50 +10,7 @@ pub(crate) mod icons;
 pub(crate) mod state;
 pub(crate) mod titles;
 
-/// Keep the primary provider's project roots when catalogs overlap. Resolve each
-/// path once per snapshot, rather than doing filesystem I/O for every root pair.
-pub(crate) fn merge_catalogs(
-    mut primary: Vec<Project>,
-    supplemental: Vec<Project>,
-) -> (Vec<Project>, HashMap<String, PathBuf>) {
-    let mut resolved = HashMap::new();
-    for root in primary
-        .iter()
-        .chain(&supplemental)
-        .flat_map(|project| &project.roots)
-    {
-        resolved.entry(root.path.clone()).or_insert_with(|| {
-            match dunce::canonicalize(&root.path) {
-                Ok(path) => (path, true),
-                Err(_) => (root.path.clone().into(), false),
-            }
-        });
-    }
-    let mut targets: HashSet<_> = primary
-        .iter()
-        .flat_map(|project| &project.roots)
-        .map(|root| &resolved[&root.path].0)
-        .collect();
-    for mut project in supplemental {
-        let native_group = project.roots.is_empty();
-        project
-            .roots
-            .retain(|root| !targets.contains(&resolved[&root.path].0));
-        if native_group || !project.roots.is_empty() {
-            targets.extend(project.roots.iter().map(|root| &resolved[&root.path].0));
-            primary.push(project);
-        }
-    }
-    (
-        primary,
-        resolved
-            .into_iter()
-            .filter_map(|(path, (resolved, canonical))| canonical.then_some((path, resolved)))
-            .collect(),
-    )
-}
-
-/// BEX registrations supplement the read-only native provider project catalog.
+/// The Host owns project registration independently of native provider catalogs.
 #[derive(Debug, Clone)]
 pub struct ProjectStore {
     path: PathBuf,
@@ -127,26 +83,7 @@ impl ProjectStore {
         .await??;
         Ok(path.into())
     }
-    #[cfg(test)]
     pub(crate) async fn load(&self) -> anyhow::Result<state::Snapshot> {
-        self.load_with_projects(Vec::new(), HashMap::new()).await
-    }
-    pub(crate) async fn load_with_projects(
-        &self,
-        mut native: Vec<Project>,
-        resolved_roots: HashMap<String, PathBuf>,
-    ) -> anyhow::Result<state::Snapshot> {
-        for mut project in self.read_projects().await? {
-            if native.iter().any(|entry| entry.id == project.id) {
-                continue;
-            }
-            project
-                .roots
-                .retain(|root| !native.iter().any(|entry| entry.roots.contains(root)));
-            if !project.roots.is_empty() {
-                native.push(project);
-            }
-        }
         let mut snapshot = state::Snapshot {
             chat_directory: match tokio::fs::canonicalize(self.chat_directory()).await {
                 Ok(path) => Some(dunce::simplified(&path).to_owned()),
@@ -155,15 +92,10 @@ impl ProjectStore {
             },
             ..Default::default()
         };
-        for mut project in native {
-            let native_group = project.roots.is_empty();
+        for mut project in self.read_projects().await? {
             for root in std::mem::take(&mut project.roots) {
                 if Path::new(&root.path).is_absolute() {
-                    let resolved = match resolved_roots.get(&root.path) {
-                        Some(path) => Ok(path.clone()),
-                        None => tokio::fs::canonicalize(&root.path).await,
-                    };
-                    match resolved {
+                    match tokio::fs::canonicalize(&root.path).await {
                         Ok(path) => {
                             let path = dunce::simplified(&path);
                             if snapshot.chat_directory.as_deref() == Some(path) {
@@ -183,7 +115,7 @@ impl ProjectStore {
                 }
                 project.roots.push(root);
             }
-            if native_group || !project.roots.is_empty() {
+            if !project.roots.is_empty() {
                 snapshot.projects.push(project);
             }
         }
@@ -197,95 +129,6 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn project_membership_uses_the_roots_already_resolved_by_the_catalog_walk() {
-        let directory = tempfile::tempdir().unwrap();
-        let root = dunce::canonicalize(directory.path()).unwrap();
-        // A native alias can disappear after it has been resolved for this snapshot.
-        let alias = root.join("native-alias").to_string_lossy().into_owned();
-        let project = Project {
-            id: "native".into(),
-            roots: vec![agent_protocol::models::ProjectRoot {
-                path: alias.clone(),
-            }],
-            ..Default::default()
-        };
-        let snapshot = ProjectStore::new(root.join("bex-worktrees.json"))
-            .load_with_projects(vec![project], [(alias, root.clone())].into())
-            .await
-            .unwrap();
-        assert_eq!(
-            snapshot.project_for_workspace(root.to_str().unwrap()),
-            Some("native")
-        );
-    }
-
-    #[test]
-    fn catalog_merge_preserves_project_priority_and_native_groups() {
-        let directory = tempfile::tempdir().unwrap();
-        let root = dunce::canonicalize(directory.path()).unwrap();
-        let project = |id: &str, paths: &[&str]| Project {
-            id: id.into(),
-            roots: paths
-                .iter()
-                .map(|path| agent_protocol::models::ProjectRoot {
-                    path: root.join(path).to_string_lossy().into_owned(),
-                })
-                .collect(),
-            ..Default::default()
-        };
-        // Exact missing paths must also deduplicate; resolving them fails.
-        let primary = project("primary", &["missing"]);
-        let mixed = project("mixed", &["missing", "other"]);
-        let group = project("native-group", &[]);
-        let (catalog, resolved) = merge_catalogs(
-            vec![primary.clone()],
-            vec![
-                project("duplicate", &["missing"]),
-                mixed,
-                project("later-duplicate", &["other"]),
-                group.clone(),
-            ],
-        );
-        assert_eq!(catalog, vec![primary, project("mixed", &["other"]), group]);
-        assert!(resolved.is_empty());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn catalog_merge_compares_resolved_roots_and_keeps_distinct_native_ids() {
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path();
-        let workspace = root.join("workspace");
-        std::fs::create_dir(&workspace).unwrap();
-        let alias = root.join("alias");
-        std::os::unix::fs::symlink(&workspace, &alias).unwrap();
-        let project = |id: &str, path: &Path| Project {
-            id: id.into(),
-            roots: vec![agent_protocol::models::ProjectRoot {
-                path: path.to_string_lossy().into_owned(),
-            }],
-            ..Default::default()
-        };
-        let primary = vec![project("one", &workspace), project("two", &workspace)];
-        let (catalog, resolved) = merge_catalogs(primary.clone(), vec![project("alias", &alias)]);
-        assert_eq!(catalog, primary);
-        for path in [&workspace, &alias] {
-            assert_eq!(
-                resolved[path.to_str().unwrap()],
-                dunce::canonicalize(&workspace).unwrap()
-            );
-        }
-        assert_eq!(
-            merge_catalogs(
-                Vec::new(),
-                vec![project("one", &workspace), project("alias", &alias)]
-            )
-            .0,
-            vec![project("one", &workspace)],
-        );
-    }
-
-    #[tokio::test]
     async fn standalone_chat_directory_does_not_become_a_project() {
         let directory = tempfile::tempdir().unwrap();
         let root = dunce::canonicalize(directory.path()).unwrap();
@@ -295,21 +138,20 @@ mod tests {
         store.register(&chats).await.unwrap();
         let workspace = root.join("workspace");
         std::fs::create_dir(&workspace).unwrap();
-        let projects = serde_json::from_value(serde_json::json!([
+        let projects = serde_json::json!([
             {"id":"chats","name":"Chats","roots":[{"path":chats}]},
-            {"id":"mixed","name":"Workspace","roots":[{"path":chats},{"path":workspace}]},
-            {"id":"virtual","name":"Native group","roots":[]}
-        ]))
+            {"id":"mixed","name":"Workspace","roots":[{"path":chats},{"path":workspace}]}
+        ]);
+        std::fs::write(
+            root.join("bex-projects.json"),
+            serde_json::to_vec(&projects).unwrap(),
+        )
         .unwrap();
-        let snapshot = store
-            .load_with_projects(projects, HashMap::new())
-            .await
-            .unwrap();
-        assert_eq!(snapshot.projects.len(), 2);
+        let snapshot = store.load().await.unwrap();
+        assert_eq!(snapshot.projects.len(), 1);
         assert_eq!(snapshot.projects[0].id, "mixed");
         assert_eq!(snapshot.projects[0].roots.len(), 1);
         assert_eq!(Path::new(&snapshot.projects[0].roots[0].path), workspace);
-        assert_eq!(snapshot.projects[1].id, "virtual");
         assert_eq!(
             snapshot.project_for_workspace(chats.to_str().unwrap()),
             None
@@ -319,35 +161,6 @@ mod tests {
                 .resolved_roots
                 .contains_key(chats.to_str().unwrap())
         );
-        assert!(store.load().await.unwrap().projects.is_empty());
-    }
-    #[tokio::test]
-    async fn native_projects_refresh_and_take_precedence_over_duplicate_bex_roots() {
-        let directory = tempfile::tempdir().unwrap();
-        let root = dunce::canonicalize(directory.path()).unwrap();
-        let project = root.join("project");
-        std::fs::create_dir(&project).unwrap();
-        let store = ProjectStore::new(root.join("bex-worktrees.json"));
-        store.register(&project).await.unwrap();
-        let native = Project {
-            id: "native-project".into(),
-            name: "Codex project name".into(),
-            roots: vec![agent_protocol::models::ProjectRoot {
-                path: project.to_str().unwrap().into(),
-            }],
-            ..Default::default()
-        };
-        let snapshot = store
-            .load_with_projects(vec![native.clone()], HashMap::new())
-            .await
-            .unwrap();
-        assert_eq!(snapshot.projects, [native]);
-        assert_eq!(
-            snapshot.project_for_workspace(project.to_str().unwrap()),
-            Some("native-project")
-        );
-        assert_eq!(store.load().await.unwrap().projects.len(), 1);
-        assert!(!root.join(".codex-global-state.json").exists());
     }
     #[tokio::test]
     async fn registration_is_durable_idempotent_and_refreshes_worktree_roots() {
