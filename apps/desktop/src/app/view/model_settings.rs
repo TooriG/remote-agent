@@ -1154,6 +1154,7 @@ impl Desktop {
             || self.busy > 0
             || !self.snapshot.connected
             || self.snapshot.account.login.is_some();
+        let provider_locked = !self.snapshot.can_change_provider(self.draft_key().clone());
         let mut agents = v_flex()
             .w(px(112.))
             .flex_shrink_0()
@@ -1191,13 +1192,13 @@ impl Desktop {
                         button.bg(rgb(appearance::SELECTED))
                     })
                     .accessibility_label(label)
-                    .tooltip(if self.selected().is_some() {
+                    .tooltip(if provider_locked {
                         "この会話のエージェントは固定です。別のエージェントは新しい会話で選べます。"
                     } else {
                         label
                     })
                     .debug_selector(move || format!("model-agent-{label}"))
-                    .disabled(disabled || self.selected().is_some())
+                    .disabled(disabled || provider_locked)
                     .on_click(cx.listener(move |s, _, window, cx| {
                         s.model_provider = Some(value);
                         s.model_search
@@ -1214,7 +1215,7 @@ impl Desktop {
                     })),
             );
         }
-        if let Some(session) = self.selected() {
+        if let Some(session) = self.selected().filter(|_| provider_locked) {
             let label = match session.provider {
                 ProviderKind::Codex => "Codex",
                 ProviderKind::Claude => "Claude",
@@ -1253,6 +1254,10 @@ impl Desktop {
                             })),
                     ),
             );
+        } else if self.selected().is_some() {
+            body = body.child(div().text_xs().text_color(rgb(appearance::MUTED)).child(
+                "応答が始まる前に失敗しました。別のエージェントを選ぶと、入力と添付を復元して再送できます。",
+            ));
         } else {
             body = body.child(div().text_xs().text_color(rgb(appearance::MUTED)).child(
                 "Codex・Claude・DSH（DeepSeek / OpenRouterなど）を選んで会話を始められます。",

@@ -71,6 +71,13 @@ pub struct ComposerControls {
 
 #[cfg_attr(feature = "bindings", uniffi::export)]
 impl Snapshot {
+    pub fn can_change_provider(&self, key: crate::state::DraftKey) -> bool {
+        match key {
+            crate::state::DraftKey::Local { .. } => true,
+            crate::state::DraftKey::Session { session } => self.recoverable_model_draft(&session).is_some(),
+        }
+    }
+
     /// Present only operations owned by this conversation's execution surface.
     pub fn composer_controls(&self) -> ComposerControls {
         let session = self.navigation.thread_id.as_ref();
