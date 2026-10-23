@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const source = fs.readFileSync(__dirname + '/public/download.js', 'utf8');
 const download = 'https://github.com/ttizze/remote-agent/releases/download/prd-75/bex-windows-x86_64-setup.exe';
-const preview = 'https://github.com/TooriG/remote-agent/releases/download/windows-preview-20261023-main-668a0202/bex-windows-x86_64-setup.exe';
+const preview = 'https://github.com/TooriG/remote-agent/releases/download/windows-preview-20261024-dev-label-bba992e4/bex-windows-x86_64-setup.exe';
 
 async function renderWindows({ language = 'en', platform = 'Win32', userAgent, assets = [], ok = true, fail = false } = {}) {
   const element = () => ({ classList: { toggle() {} }, innerHTML: '', href: '' });
