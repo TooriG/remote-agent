@@ -32,9 +32,9 @@
         let
           # Queue validation is not released yet: https://github.com/rhysd/actionlint/pull/654
           workflowLinter = pkgs.actionlint.overrideAttrs (old: {
-            patches = (old.patches or [ ]) ++ [ (pkgs.fetchurl {
+            patches = (old.patches or [ ]) ++ [ (pkgs.fetchpatch {
               url = "https://github.com/rhysd/actionlint/commit/644076a59742c2d1540ebd4686eab3c308f0e562.patch";
-              hash = "sha256-H2y2MlM35dnlSmt7DFYRKVOzDRYzJ2Tw8hWR5nUnwak=";
+              hash = "sha256-Lpd7CTkLbzgvAZV2H8G4GTUoPNDCK7PiW3A40+cquUk=";
             }) ];
             postCheck = (old.postCheck or "") + ''
               go test . -run '^TestLinterLint(OK|Error)$'
