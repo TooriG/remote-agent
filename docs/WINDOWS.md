@@ -48,6 +48,11 @@ sources, and checks that the installed app opens a window without a panic.
 
 ## 日本語
 
+Codexを公式Windowsインストーラーで導入した場合、BEXはPATHに加えて
+`%LOCALAPPDATA%\OpenAI\Codex\bin`のインストール済み実行ファイルを検出します。
+Codex更新後にスタートメニューのPATHが古いままでも、Windowsの再起動は不要です。
+明示的に指定した`BEX_CODEX`と、利用できるPATH上のCodexを優先します。
+
 getbex.dev からWindows用EXEインストーラーを取得して実行します。BEX本体・Host・CLI・Claude SDKをまとめて配置し、スタートメニューにBEXを登録します。ZIPの展開やRustの導入は不要です。Git、Node.js、利用するエージェントとWebView2は別途必要です。
 
 更新前に実行中のタスクを終え、BEXとHostを終了してから新しいEXEを実行してください。会話・アカウントのデータはインストール先の外に保存されます。対象はWindows 11・x86-64です。

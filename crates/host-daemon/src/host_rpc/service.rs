@@ -900,13 +900,10 @@ impl HostRpcService {
                 if !next.is_empty() {
                     page.next_cursor = Some(serde_json::to_string(&next)?);
                 }
-                if params.cursor.is_none() && page.data.is_empty() && page.provider_errors.is_some()
-                {
-                    return Err(Failure::new(
-                        "models_unavailable",
-                        serde_json::to_value(&page.provider_errors)?,
-                    ));
-                }
+                // Even when every provider is unavailable, return the catalog
+                // with its per-provider errors. Serializing that map into an
+                // RPC error message gets redacted to "[payload omitted]" and
+                // prevents clients from explaining which provider needs setup.
                 page.into()
             }
 
@@ -1832,6 +1829,34 @@ mod tests {
             assert_eq!(thread.project_id.as_deref(), expected);
         }
     }
+    #[tokio::test]
+    async fn unavailable_model_catalog_preserves_provider_setup_errors() {
+        use super::*;
+        let directory = tempfile::tempdir().unwrap();
+        let service = HostRpcService::new(
+            [crate::adapters::codex::Codex::new(Err("Codex executable is missing".into())).into()],
+            ProjectStore::new(directory.path().join("projects.json")),
+        );
+        let connection = service.open_session();
+        let response = service
+            .dispatch(connection.id(), &Call::ListModels(op::ListModels {
+                selected_model: None,
+                limit: 100,
+                cursor: None,
+            }))
+            .await
+            .unwrap();
+        let Response::Success { result } = agent_protocol::protocol::decode::<Response<op::ModelPage>>(
+            &response.initial,
+        ).unwrap() else {
+            panic!("provider setup errors must remain a structured catalog");
+        };
+        assert!(result.data.is_empty());
+        let errors = result.provider_errors.unwrap();
+        assert_eq!(errors["codex"]["message"], "Codex executable is missing");
+        assert_eq!(errors["codex"]["code"], "provider_unavailable");
+    }
+
     #[tokio::test]
     async fn live_activity_registration_falls_back_without_apns_and_rejects_malformed_tokens() {
         use super::*;
