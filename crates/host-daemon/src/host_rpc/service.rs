@@ -1364,7 +1364,7 @@ impl HostRpcService {
                 supplemental.extend(projects);
             }
         }
-        let native = tokio::task::spawn_blocking(move || {
+        let (native, resolved_roots) = tokio::task::spawn_blocking(move || {
             crate::projects::merge_catalogs(native, supplemental)
         })
         .await
@@ -1372,7 +1372,7 @@ impl HostRpcService {
         let mut snapshot = self
             .inner
             .projects
-            .load_with_projects(native)
+            .load_with_projects(native, resolved_roots)
             .await
             .map_err(|error| Failure::new("project_state_unavailable", error))?;
         // Only IDs from Codex can be sent to Codex's create_in_project API.
@@ -1975,14 +1975,17 @@ mod tests {
         let project = root.join("project");
         std::fs::create_dir(&project).unwrap();
         let projects = ProjectStore::new(root.join("bex-worktrees.json"))
-            .load_with_projects(vec![Project {
-                id: "native".into(),
-                name: "Native project".into(),
-                roots: vec![ProjectRoot {
-                    path: project.to_str().unwrap().into(),
+            .load_with_projects(
+                vec![Project {
+                    id: "native".into(),
+                    name: "Native project".into(),
+                    roots: vec![ProjectRoot {
+                        path: project.to_str().unwrap().into(),
+                    }],
+                    ..Default::default()
                 }],
-                ..Default::default()
-            }])
+                Default::default(),
+            )
             .await
             .unwrap();
         for (cwd, membership, expected) in [

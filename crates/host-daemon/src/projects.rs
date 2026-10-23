@@ -16,7 +16,7 @@ pub(crate) mod titles;
 pub(crate) fn merge_catalogs(
     mut primary: Vec<Project>,
     supplemental: Vec<Project>,
-) -> Vec<Project> {
+) -> (Vec<Project>, HashMap<String, PathBuf>) {
     let mut resolved = HashMap::new();
     for root in primary
         .iter()
@@ -24,25 +24,34 @@ pub(crate) fn merge_catalogs(
         .flat_map(|project| &project.roots)
     {
         resolved.entry(root.path.clone()).or_insert_with(|| {
-            dunce::canonicalize(&root.path).unwrap_or_else(|_| root.path.clone().into())
+            match dunce::canonicalize(&root.path) {
+                Ok(path) => (path, true),
+                Err(_) => (root.path.clone().into(), false),
+            }
         });
     }
     let mut targets: HashSet<_> = primary
         .iter()
         .flat_map(|project| &project.roots)
-        .map(|root| &resolved[&root.path])
+        .map(|root| &resolved[&root.path].0)
         .collect();
     for mut project in supplemental {
         let native_group = project.roots.is_empty();
         project
             .roots
-            .retain(|root| !targets.contains(&resolved[&root.path]));
+            .retain(|root| !targets.contains(&resolved[&root.path].0));
         if native_group || !project.roots.is_empty() {
-            targets.extend(project.roots.iter().map(|root| &resolved[&root.path]));
+            targets.extend(project.roots.iter().map(|root| &resolved[&root.path].0));
             primary.push(project);
         }
     }
-    primary
+    (
+        primary,
+        resolved
+            .into_iter()
+            .filter_map(|(path, (resolved, canonical))| canonical.then_some((path, resolved)))
+            .collect(),
+    )
 }
 
 /// BEX registrations supplement the read-only native provider project catalog.
@@ -120,11 +129,12 @@ impl ProjectStore {
     }
     #[cfg(test)]
     pub(crate) async fn load(&self) -> anyhow::Result<state::Snapshot> {
-        self.load_with_projects(Vec::new()).await
+        self.load_with_projects(Vec::new(), HashMap::new()).await
     }
     pub(crate) async fn load_with_projects(
         &self,
         mut native: Vec<Project>,
+        resolved_roots: HashMap<String, PathBuf>,
     ) -> anyhow::Result<state::Snapshot> {
         for mut project in self.read_projects().await? {
             if native.iter().any(|entry| entry.id == project.id) {
@@ -149,7 +159,11 @@ impl ProjectStore {
             let native_group = project.roots.is_empty();
             for root in std::mem::take(&mut project.roots) {
                 if Path::new(&root.path).is_absolute() {
-                    match tokio::fs::canonicalize(&root.path).await {
+                    let resolved = match resolved_roots.get(&root.path) {
+                        Some(path) => Ok(path.clone()),
+                        None => tokio::fs::canonicalize(&root.path).await,
+                    };
+                    match resolved {
                         Ok(path) => {
                             let path = dunce::simplified(&path);
                             if snapshot.chat_directory.as_deref() == Some(path) {
@@ -182,6 +196,29 @@ impl ProjectStore {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn project_membership_uses_the_roots_already_resolved_by_the_catalog_walk() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(directory.path()).unwrap();
+        // A native alias can disappear after it has been resolved for this snapshot.
+        let alias = root.join("native-alias").to_string_lossy().into_owned();
+        let project = Project {
+            id: "native".into(),
+            roots: vec![agent_protocol::models::ProjectRoot {
+                path: alias.clone(),
+            }],
+            ..Default::default()
+        };
+        let snapshot = ProjectStore::new(root.join("bex-worktrees.json"))
+            .load_with_projects(vec![project], [(alias, root.clone())].into())
+            .await
+            .unwrap();
+        assert_eq!(
+            snapshot.project_for_workspace(root.to_str().unwrap()),
+            Some("native")
+        );
+    }
+
     #[test]
     fn catalog_merge_preserves_project_priority_and_native_groups() {
         let directory = tempfile::tempdir().unwrap();
@@ -200,18 +237,17 @@ mod tests {
         let primary = project("primary", &["missing"]);
         let mixed = project("mixed", &["missing", "other"]);
         let group = project("native-group", &[]);
-        assert_eq!(
-            merge_catalogs(
-                vec![primary.clone()],
-                vec![
-                    project("duplicate", &["missing"]),
-                    mixed,
-                    project("later-duplicate", &["other"]),
-                    group.clone(),
-                ],
-            ),
-            vec![primary, project("mixed", &["other"]), group],
+        let (catalog, resolved) = merge_catalogs(
+            vec![primary.clone()],
+            vec![
+                project("duplicate", &["missing"]),
+                mixed,
+                project("later-duplicate", &["other"]),
+                group.clone(),
+            ],
         );
+        assert_eq!(catalog, vec![primary, project("mixed", &["other"]), group]);
+        assert!(resolved.is_empty());
     }
 
     #[cfg(unix)]
@@ -231,15 +267,20 @@ mod tests {
             ..Default::default()
         };
         let primary = vec![project("one", &workspace), project("two", &workspace)];
-        assert_eq!(
-            merge_catalogs(primary.clone(), vec![project("alias", &alias)]),
-            primary,
-        );
+        let (catalog, resolved) = merge_catalogs(primary.clone(), vec![project("alias", &alias)]);
+        assert_eq!(catalog, primary);
+        for path in [&workspace, &alias] {
+            assert_eq!(
+                resolved[path.to_str().unwrap()],
+                dunce::canonicalize(&workspace).unwrap()
+            );
+        }
         assert_eq!(
             merge_catalogs(
                 Vec::new(),
                 vec![project("one", &workspace), project("alias", &alias)]
-            ),
+            )
+            .0,
             vec![project("one", &workspace)],
         );
     }
@@ -260,7 +301,10 @@ mod tests {
             {"id":"virtual","name":"Native group","roots":[]}
         ]))
         .unwrap();
-        let snapshot = store.load_with_projects(projects).await.unwrap();
+        let snapshot = store
+            .load_with_projects(projects, HashMap::new())
+            .await
+            .unwrap();
         assert_eq!(snapshot.projects.len(), 2);
         assert_eq!(snapshot.projects[0].id, "mixed");
         assert_eq!(snapshot.projects[0].roots.len(), 1);
@@ -294,7 +338,7 @@ mod tests {
             ..Default::default()
         };
         let snapshot = store
-            .load_with_projects(vec![native.clone()])
+            .load_with_projects(vec![native.clone()], HashMap::new())
             .await
             .unwrap();
         assert_eq!(snapshot.projects, [native]);
