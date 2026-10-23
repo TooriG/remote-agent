@@ -12,7 +12,7 @@ use agent_protocol::protocol::{Body, Call, Response};
 use agent_transport::peer::RpcMessageError;
 use serde::Serialize;
 
-use super::agent::{Agent, Identity, SessionListScope, session_pages};
+use super::agent::{Agent, Identity, SessionListScope, read_session_page, session_pages};
 use futures_util::{StreamExt, TryStreamExt};
 use std::collections::HashMap;
 
@@ -105,8 +105,16 @@ impl HostRpcService {
             futures_util::future::join_all(agents.into_iter().map(|(_, agent)| async move {
                 tokio::time::timeout(
                     SESSION_LIST_TIMEOUT,
-                    session_pages(agent.as_ref(), "", SessionListScope::Loaded, 100, 100, None)
-                        .try_collect::<Vec<_>>(),
+                    session_pages(
+                        agent.as_ref(),
+                        "",
+                        SessionListScope::Loaded,
+                        100,
+                        100,
+                        None,
+                        None,
+                    )
+                    .try_collect::<Vec<_>>(),
                 )
                 .await
             }))
@@ -1004,6 +1012,7 @@ impl HostRpcService {
                     100,
                     100,
                     Some(deadline),
+                    None,
                 )
                 .map_ok(|page| futures_util::stream::iter(page.into_iter().map(Ok::<_, Failure>)))
                 .try_flatten()
@@ -1157,7 +1166,15 @@ impl HostRpcService {
         }
         let mut threads = Vec::new();
         for (_, agent) in self.agents() {
-            let pages = session_pages(agent.as_ref(), "", SessionListScope::All, 100, 100, None);
+            let pages = session_pages(
+                agent.as_ref(),
+                "",
+                SessionListScope::All,
+                100,
+                100,
+                None,
+                None,
+            );
             futures_util::pin_mut!(pages);
             while let Some(result) = pages.next().await {
                 match result {
@@ -1411,16 +1428,34 @@ impl HostRpcService {
             crate::projects::titles::TitleQuery::Project { .. } => (100, 100),
         };
         let started = std::time::Instant::now();
-        let snapshot = self.project_snapshot().await?;
-        let projects_elapsed = started.elapsed();
-        let deadline = tokio::time::Instant::now() + SESSION_LIST_TIMEOUT;
-        let mut listings =
-            futures_util::future::join_all(agents.iter().map(|(provider, agent)| async move {
-                let scope = if search.trim().is_empty() {
-                    SessionListScope::Roots
-                } else {
-                    SessionListScope::All
-                };
+        let scope = if search.trim().is_empty() {
+            SessionListScope::Roots
+        } else {
+            SessionListScope::All
+        };
+        let ((snapshot, projects_elapsed), (first_pages, first_pages_elapsed)) = tokio::join!(
+            async { (self.project_snapshot().await, started.elapsed()) },
+            async {
+                let started = tokio::time::Instant::now();
+                let deadline = started + SESSION_LIST_TIMEOUT;
+                let pages = futures_util::future::join_all(agents.iter().map(|(_, agent)| {
+                    read_session_page(
+                        Agent::list(agent.as_ref(), search, None, scope, first_page_size),
+                        deadline,
+                    )
+                }))
+                .await;
+                (pages, started.elapsed())
+            },
+        );
+        let snapshot = snapshot?;
+        // Project discovery must not consume the native page-read budget.
+        // Reuse the first pages and give subsequent reads only the time left.
+        let deadline =
+            tokio::time::Instant::now() + SESSION_LIST_TIMEOUT.saturating_sub(first_pages_elapsed);
+        let initial_elapsed = started.elapsed();
+        let mut listings = futures_util::future::join_all(agents.iter().zip(first_pages).map(
+            |((provider, agent), page)| async move {
                 let mut threads = session_pages(
                     agent.as_ref(),
                     search,
@@ -1428,14 +1463,16 @@ impl HostRpcService {
                     first_page_size,
                     later_page_size,
                     Some(deadline),
+                    Some(page),
                 )
                 .map_ok(|page| futures_util::stream::iter(page.into_iter().map(Ok::<_, Failure>)))
                 .try_flatten()
                 .boxed();
                 let head = threads.try_next().await;
                 (*provider, agent.capabilities(), threads, head)
-            }))
-            .await;
+            },
+        ))
+        .await;
         let mut titles = crate::projects::titles::TitleList::new(&snapshot.projects, query);
         let mut provider_errors = self
             .provider_errors()
@@ -1518,7 +1555,7 @@ impl HostRpcService {
             page.provider_errors = Some(provider_errors);
         }
         tracing::info!(target: "bex", operation = "host.thread.list.stages",
-            message = %format_args!("projects_ms={} titles_ms={} titles={}", projects_elapsed.as_millis(), started.elapsed().saturating_sub(projects_elapsed).as_millis(), page.data.len()));
+            message = %format_args!("projects_ms={} titles_ms={} titles={}", projects_elapsed.as_millis(), (first_pages_elapsed + started.elapsed().saturating_sub(initial_elapsed)).as_millis(), page.data.len()));
         Ok(page)
     }
 
@@ -1809,6 +1846,55 @@ fn describe_thread(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn prefetched_project_titles_continue_past_the_first_native_page() {
+        use super::*;
+        let root = tempfile::tempdir().unwrap();
+        let cwd = dunce::canonicalize(root.path()).unwrap();
+        let native = root.path().join("native");
+        let transcripts = native.join("projects/shared");
+        std::fs::create_dir_all(&transcripts).unwrap();
+        let mut expected = std::collections::HashSet::new();
+        for _ in 0..102 {
+            let id = uuid::Uuid::new_v4();
+            expected.insert(id.to_string());
+            let user = serde_json::json!({"type":"user","sessionId":id,"cwd":cwd,"message":{"content":"hello"}});
+            std::fs::write(transcripts.join(format!("{id}.jsonl")), format!("{user}\n")).unwrap();
+        }
+        let agent = crate::adapters::Claude::load(
+            root.path().join("missing-cli"),
+            root.path().join("state"),
+            Some(native),
+        )
+        .await
+        .unwrap();
+        let service = HostRpcService::new(
+            [agent.into()],
+            ProjectStore::new(root.path().join("bex-worktrees.json")),
+        );
+        let snapshot = service.project_snapshot().await.unwrap();
+        let page = service
+            .host_title_list(
+                "",
+                crate::projects::titles::TitleQuery::Project {
+                    id: &snapshot.projects[0].id,
+                    limit: 101,
+                    searching: false,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(page.data.len(), 101, "{:?}", page.provider_errors);
+        assert!(page.has_more);
+        let ids: std::collections::HashSet<_> = page
+            .data
+            .into_iter()
+            .map(|thread| thread.id.unwrap().id)
+            .collect();
+        assert_eq!(ids.len(), 101);
+        assert!(ids.is_subset(&expected));
+    }
+
     #[tokio::test]
     async fn list_decorations_use_the_listed_roots_without_reloading_project_catalogs() {
         use super::*;

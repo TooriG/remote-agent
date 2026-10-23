@@ -47,23 +47,28 @@ pub(crate) fn session_pages<'a>(
     first_limit: u32,
     later_limit: u32,
     deadline: Option<tokio::time::Instant>,
+    first_page: Option<Result<SessionPage, Failure>>,
 ) -> impl Stream<Item = Result<Vec<SessionSummary>, Failure>> + 'a {
     futures_util::stream::try_unfold(
-        Some((None, std::collections::HashSet::new())),
+        Some((None, std::collections::HashSet::new(), first_page)),
         move |state| async move {
-            let Some((cursor, mut seen)) = state else {
+            let Some((cursor, mut seen, first_page)) = state else {
                 return Ok(None);
             };
-            let limit = if cursor.is_none() {
-                first_limit
+            let page = if let Some(page) = first_page {
+                page?
             } else {
-                later_limit
-            };
-            let read = Agent::list(agent, search, cursor, scope, limit);
-            let page = if let Some(deadline) = deadline {
-                read_session_page(read, deadline).await?
-            } else {
-                read.await?
+                let limit = if cursor.is_none() {
+                    first_limit
+                } else {
+                    later_limit
+                };
+                let read = Agent::list(agent, search, cursor, scope, limit);
+                if let Some(deadline) = deadline {
+                    read_session_page(read, deadline).await?
+                } else {
+                    read.await?
+                }
             };
             let next = page.next_cursor.filter(|cursor| !cursor.is_empty());
             if let Some(cursor) = &next
@@ -74,13 +79,16 @@ pub(crate) fn session_pages<'a>(
                     "session list cursor repeated",
                 ));
             }
-            Ok(Some((page.data, next.map(|cursor| (Some(cursor), seen)))))
+            Ok(Some((
+                page.data,
+                next.map(|cursor| (Some(cursor), seen, None)),
+            )))
         },
     )
     .fuse()
 }
 
-async fn read_session_page(
+pub(super) async fn read_session_page(
     read: impl Future<Output = Result<SessionPage, Failure>>,
     deadline: tokio::time::Instant,
 ) -> Result<SessionPage, Failure> {
@@ -396,22 +404,7 @@ mod tests {
 
     #[tokio::test]
     async fn buffered_titles_and_exhaustion_do_not_spend_the_native_read_budget() {
-        let root = tempfile::tempdir().unwrap();
-        let native = root.path().join("native");
-        let transcripts = native.join("projects/shared");
-        std::fs::create_dir_all(&transcripts).unwrap();
-        for _ in 0..2 {
-            let id = uuid::Uuid::new_v4();
-            let user = serde_json::json!({"type":"user","sessionId":id,"cwd":root.path(),"message":{"content":"hello"}});
-            std::fs::write(transcripts.join(format!("{id}.jsonl")), format!("{user}\n")).unwrap();
-        }
-        let agent = crate::adapters::Claude::load(
-            root.path().join("missing-cli"),
-            root.path().join("state"),
-            Some(native),
-        )
-        .await
-        .unwrap();
+        let (_root, agent, _) = two_session_history().await;
         for first_limit in [2, 1] {
             let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
             let mut titles = session_pages(
@@ -421,6 +414,7 @@ mod tests {
                 first_limit,
                 2,
                 Some(deadline),
+                None,
             )
             .map_ok(|page| futures_util::stream::iter(page.into_iter().map(Ok::<_, Failure>)))
             .try_flatten()
@@ -448,5 +442,84 @@ mod tests {
             }
             tokio::time::resume();
         }
+    }
+
+    async fn two_session_history() -> (tempfile::TempDir, crate::adapters::Claude, Vec<String>) {
+        let root = tempfile::tempdir().unwrap();
+        let native = root.path().join("native");
+        let transcripts = native.join("projects/shared");
+        std::fs::create_dir_all(&transcripts).unwrap();
+        let mut expected = Vec::new();
+        for _ in 0..2 {
+            let id = uuid::Uuid::new_v4();
+            expected.push(id.to_string());
+            let user = serde_json::json!({"type":"user","sessionId":id,"cwd":root.path(),"message":{"content":"hello"}});
+            std::fs::write(transcripts.join(format!("{id}.jsonl")), format!("{user}\n")).unwrap();
+        }
+        expected.sort();
+        let agent = crate::adapters::Claude::load(
+            root.path().join("missing-cli"),
+            root.path().join("state"),
+            Some(native),
+        )
+        .await
+        .unwrap();
+        (root, agent, expected)
+    }
+
+    #[tokio::test]
+    async fn prefetched_pages_survive_project_waits_and_continue_from_their_cursor() {
+        let (_root, agent, expected) = two_session_history().await;
+        for first_limit in [1, 2] {
+            let first_page =
+                Agent::list(&agent, "", None, SessionListScope::All, first_limit).await;
+            let first_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            tokio::time::pause();
+            tokio::time::advance(Duration::from_secs(6)).await;
+            // A complete prefetched page needs no budget. A continuation gets
+            // the remaining native-read budget after project discovery ends.
+            let deadline = if first_limit == 2 {
+                first_deadline
+            } else {
+                tokio::time::Instant::now() + Duration::from_secs(1)
+            };
+            let pages = session_pages(
+                &agent,
+                "",
+                SessionListScope::All,
+                first_limit,
+                2,
+                Some(deadline),
+                Some(first_page),
+            );
+            // Native filesystem work uses real blocking threads.
+            tokio::time::resume();
+            let pages: Vec<_> = pages.try_collect().await.unwrap();
+            let mut actual: Vec<_> = pages
+                .into_iter()
+                .flatten()
+                .map(|summary| summary.thread.id.unwrap().id)
+                .collect();
+            actual.sort();
+            assert_eq!(actual, expected);
+        }
+        let mut failed = session_pages(
+            &agent,
+            "",
+            SessionListScope::All,
+            2,
+            2,
+            None,
+            Some(Err(Failure::new(
+                "provider_timeout",
+                "first read timed out",
+            ))),
+        )
+        .boxed();
+        assert_eq!(
+            failed.try_next().await.err().unwrap().code,
+            "provider_timeout"
+        );
+        assert!(failed.try_next().await.unwrap().is_none());
     }
 }
