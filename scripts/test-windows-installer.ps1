@@ -23,16 +23,15 @@ try {
         throw "Installed executable is not the expected release build."
     }
     if ($HideShaderSources) {
-        $cargoRoot = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE ".cargo" }
-        $registryRoot = [IO.Path]::GetFullPath((Join-Path $cargoRoot "registry/src")) + [IO.Path]::DirectorySeparatorChar
-        foreach ($crate in Get-ChildItem -LiteralPath $registryRoot -Directory | Get-ChildItem -Directory -Filter "gpui-pre-windows-*") {
-            $source = [IO.Path]::GetFullPath((Join-Path $crate.FullName "src"))
-            if (-not $source.StartsWith($registryRoot, [StringComparison]::OrdinalIgnoreCase)) { throw "Shader source outside Cargo registry." }
-            $destination = $source + ".install-test-hidden"
-            Move-Item -LiteralPath $source -Destination $destination
-            $hidden += @{ source = $source; destination = $destination }
-        }
-        if ($hidden.Count -eq 0) { throw "No GPUI shader source found to hide; regression test would be ineffective." }
+        # Cargo patches GPUI to this vendored crate. Hiding an unused registry
+        # copy would not exercise the source path embedded in the executable.
+        $shaderRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../vendor/gpui_windows")) + [IO.Path]::DirectorySeparatorChar
+        $source = [IO.Path]::GetFullPath((Join-Path $shaderRoot "src"))
+        if (-not $source.StartsWith($shaderRoot, [StringComparison]::OrdinalIgnoreCase)) { throw "Shader source outside vendored GPUI." }
+        if (-not (Test-Path -LiteralPath $source)) { throw "Vendored GPUI source is unavailable; regression test would be ineffective." }
+        $destination = $source + ".install-test-hidden"
+        Move-Item -LiteralPath $source -Destination $destination
+        $hidden += @{ source = $source; destination = $destination }
     }
     foreach ($entry in @{
         BEX_STATE_DIR = (Join-Path $testRoot "state")
