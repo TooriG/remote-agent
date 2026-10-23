@@ -53,6 +53,10 @@ Codexを公式Windowsインストーラーで導入した場合、BEXはPATHに�
 Codex更新後にスタートメニューのPATHが古いままでも、Windowsの再起動は不要です。
 明示的に指定した`BEX_CODEX`と、利用できるPATH上のCodexを優先します。
 
+Claude Codeも公式インストーラーの`%USERPROFILE%\.local\bin\claude.exe`を検出します。
+Claude Codeが未導入の場合は、ログイン開始前に導入先を案内します。
+中止時は一時認証の終了を確認し、後片付けに失敗しても再試行できる状態を保持します。
+
 getbex.dev からWindows用EXEインストーラーを取得して実行します。BEX本体・Host・CLI・Claude SDKをまとめて配置し、スタートメニューにBEXを登録します。ZIPの展開やRustの導入は不要です。Git、Node.js、利用するエージェントとWebView2は別途必要です。
 
 更新前に実行中のタスクを終え、BEXとHostを終了してから新しいEXEを実行してください。会話・アカウントのデータはインストール先の外に保存されます。対象はWindows 11・x86-64です。
