@@ -817,7 +817,7 @@ mod credential_control_tests {
                 ],
             }));
         let controls = snapshot.credential_controls();
-        assert_eq!(controls.len(), 9);
+        assert_eq!(controls.len(), KeyProvider::ALL.len());
         assert!(
             !controls
                 .iter()
