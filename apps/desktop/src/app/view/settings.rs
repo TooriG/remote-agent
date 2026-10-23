@@ -152,7 +152,7 @@ impl Desktop {
                 SettingsPage::Agents => body.child(self.account_controls(true, cx)),
                 SettingsPage::Connections => {
                     let setup = self.snapshot.connection_setup();
-                    let agent_controls = self.connection_agent_controls(&setup.agents, cx);
+                    let agent_controls = self.connection_agent_controls(&setup.agents, false, cx);
                     let header = section_heading(
                         "作業するコンピューター",
                         "このPCや、自分のクラウドVMを選びます。",

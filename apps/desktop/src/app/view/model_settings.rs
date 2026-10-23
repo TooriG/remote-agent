@@ -684,8 +684,18 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.account_code
-            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.account_code.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+            input.set_placeholder(
+                if provider == ProviderKind::DeepSeek {
+                    "APIキーを貼り付け"
+                } else {
+                    "ブラウザに表示された認証コードを貼り付け"
+                },
+                window,
+                cx,
+            );
+        });
         self.model_provider = Some(provider);
         if provider == ProviderKind::DeepSeek {
             self.model_panel = ModelPanel::Manage;
@@ -708,7 +718,7 @@ impl Desktop {
         self.perform(intent, OperationCompletion::Account);
     }
 
-    fn credential_controls(&self, cx: &Context<Self>) -> AnyElement {
+    pub(super) fn credential_controls(&self, cx: &Context<Self>) -> AnyElement {
         let disabled = !self.snapshot.connected
             || self
                 .snapshot
@@ -866,9 +876,9 @@ impl Desktop {
             .gap_3()
             .text_sm()
             .child(if login.requires_code_submission {
-                "ブラウザでログインし、認証コードを貼り付けてください。"
+                "① ブラウザでログイン → ② 表示された認証コードを下の欄に貼り付け → ③「接続」を押してください。"
             } else {
-                "ブラウザでログインし、次のコードを入力してください。"
+                "① コードをコピー → ② ブラウザでログイン → ③ ブラウザ側にコードを入力してください。"
             })
             .child(
                 self.button(
@@ -934,12 +944,13 @@ impl Desktop {
             );
         }
         form = form
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(appearance::MUTED))
-                    .child("ログインが完了すると、自動で接続されます。"),
-            )
+            .child(div().text_xs().text_color(rgb(appearance::MUTED)).child(
+                if login.requires_code_submission {
+                    "この欄に貼り付けるのは認証コードです。接続後、AIの確認が終わると次へ進めます。"
+                } else {
+                    "ブラウザでの認証後、自動で接続されます。この画面でのコード入力は不要です。"
+                },
+            ))
             .when(!self.account_polling && !self.account_busy, |form| {
                 form.child(
                     self.button(

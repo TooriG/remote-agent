@@ -345,6 +345,15 @@ impl Hosts {
                             )
                         }),
                 );
+            if cards {
+                card = card.child(div().text_xs().text_color(rgb(appearance::MUTED)).child(
+                    if remote.is_none() {
+                        "このPC上でAIがファイルの読み書きやコマンドの実行を行います。"
+                    } else {
+                        "接続先のPC上にあるファイルとAIを使って作業します。"
+                    },
+                ));
+            }
             if selected {
                 let details = v_flex()
                     .gap_2()
@@ -367,7 +376,7 @@ impl Hosts {
         choices = choices.child(
             Button::new("onboarding-add-remote")
                 .accessibility_label(if cards {
-                    "クラウドVM・別のPCに接続"
+                    "別のPC・自分のクラウドVMに接続（任意）"
                 } else {
                     "接続先を追加"
                 })
@@ -381,7 +390,7 @@ impl Hosts {
                             IconName::Plus
                         }))
                         .child(if cards {
-                            "クラウドVM・別のPCに接続"
+                            "別のPC・自分のクラウドVMに接続（任意）"
                         } else {
                             "接続先を追加"
                         }),
@@ -479,19 +488,20 @@ impl Hosts {
                     ),
                 );
         }
-        choices = choices.child(
-            h_flex()
-                .items_center()
-                .gap_3()
-                .p_4()
-                .when(cards, |view| view.rounded(px(12.)).border_1())
-                .when(!cards, |view| view.border_t_1())
-                .border_color(rgb(appearance::BORDER))
-                .text_color(rgb(appearance::MUTED))
-                .child(Icon::new(IconName::Network))
-                .child(div().flex_1().child("Bexの実行環境"))
-                .child(div().text_xs().child("今後対応")),
-        );
+        choices = choices.when(!cards, |choices| {
+            choices.child(
+                h_flex()
+                    .items_center()
+                    .gap_3()
+                    .p_4()
+                    .border_t_1()
+                    .border_color(rgb(appearance::BORDER))
+                    .text_color(rgb(appearance::MUTED))
+                    .child(Icon::new(IconName::Network))
+                    .child(div().flex_1().child("Bexの実行環境"))
+                    .child(div().text_xs().child("今後対応")),
+            )
+        });
         if let Some(error) = self.error.as_ref().or(self.snapshot.error.as_ref()) {
             choices = choices.child(
                 div()
