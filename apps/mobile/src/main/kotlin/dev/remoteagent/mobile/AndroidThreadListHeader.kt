@@ -71,4 +71,3 @@ internal fun CoordinatorEntry(session: SessionRef, perform: (Intent) -> Unit) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 }
-
