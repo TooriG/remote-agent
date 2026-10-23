@@ -35,18 +35,18 @@ fn resolve_from(
         return Err(Error::ExecutableNotFound(program.to_path_buf()));
     }
 
+    if let Some(path) = path {
+        for directory in env::split_paths(path) {
+            let candidate = directory.join(executable_path(program));
+            if let Some(resolved) = resolve_candidate(Some(&candidate))? {
+                return Ok(resolved);
+            }
+        }
+    }
     if program == Path::new(DEFAULT_CODEX_PROGRAM)
         && let Some(resolved) = resolve_candidate(bundled_codex)?
     {
         return Ok(resolved);
-    }
-
-    let path = path.ok_or_else(|| Error::ExecutableNotFound(program.to_path_buf()))?;
-    for directory in env::split_paths(path) {
-        let candidate = directory.join(executable_path(program));
-        if let Some(resolved) = resolve_candidate(Some(&candidate))? {
-            return Ok(resolved);
-        }
     }
     Err(Error::ExecutableNotFound(program.to_path_buf()))
 }
@@ -86,7 +86,7 @@ mod tests {
     }
 
     #[test]
-    fn resolves_explicit_then_bundled_then_path_and_reports_missing_candidates() {
+    fn resolves_explicit_then_path_then_bundled_and_reports_missing_candidates() {
         let root = tempfile::tempdir().unwrap();
         let bundled = root
             .path()
@@ -105,18 +105,44 @@ mod tests {
             resolve_from(&explicit, Some(&path), Some(&bundled)).unwrap(),
             fs::canonicalize(&explicit).unwrap()
         );
+        let relative_root = tempfile::tempdir_in(".").unwrap();
+        let relative = Path::new(relative_root.path().file_name().unwrap())
+            .join(executable_path(Path::new("codex")));
+        write_executable(&relative);
         assert_eq!(
-            resolve_from(Path::new("codex"), Some(&path), Some(&bundled)).unwrap(),
-            fs::canonicalize(&bundled).unwrap()
+            resolve_from(&relative, Some(&path), Some(&bundled)).unwrap(),
+            fs::canonicalize(&relative).unwrap()
         );
-        fs::remove_file(&bundled).unwrap();
         assert_eq!(
             resolve_from(Path::new("codex"), Some(&path), Some(&bundled)).unwrap(),
             fs::canonicalize(&path_codex).unwrap()
         );
-        fs::remove_file(&path_codex).unwrap();
-        assert!(
-            matches!(resolve_from(Path::new("codex"), Some(&path), Some(&bundled)), Err(Error::ExecutableNotFound(path)) if path == Path::new("codex"))
+        assert_eq!(
+            resolve_from(Path::new("custom-codex"), Some(&path), Some(&bundled)).unwrap(),
+            fs::canonicalize(&competing).unwrap()
         );
+        fs::remove_file(&explicit).unwrap();
+        assert!(matches!(
+            resolve_from(&explicit, Some(&path), Some(&bundled)),
+            Err(Error::ResolveExecutable { program, .. }) if program == explicit
+        ));
+        fs::remove_file(&path_codex).unwrap();
+        assert_eq!(
+            resolve_from(Path::new("codex"), Some(&path), Some(&bundled)).unwrap(),
+            fs::canonicalize(&bundled).unwrap()
+        );
+        assert_eq!(
+            resolve_from(Path::new("codex"), None, Some(&bundled)).unwrap(),
+            fs::canonicalize(&bundled).unwrap()
+        );
+        assert!(
+            matches!(resolve_from(Path::new("custom-codex"), None, Some(&bundled)), Err(Error::ExecutableNotFound(path)) if path == Path::new("custom-codex"))
+        );
+        fs::remove_file(&bundled).unwrap();
+        for path in [Some(path.as_os_str()), None] {
+            assert!(
+                matches!(resolve_from(Path::new("codex"), path, Some(&bundled)), Err(Error::ExecutableNotFound(program)) if program == Path::new("codex"))
+            );
+        }
     }
 }
