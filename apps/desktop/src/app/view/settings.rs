@@ -244,7 +244,6 @@ impl Desktop {
             .label(label)
             .dropdown_caret(true)
             .small()
-            .ghost()
             .debug_selector(move || id.into())
             .dropdown_menu(move |mut menu, _, _| {
                 for choice in &choices {

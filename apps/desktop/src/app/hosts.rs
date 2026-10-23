@@ -307,7 +307,6 @@ impl Hosts {
                                         })
                                         .child(name.to_owned()),
                                 )
-                                .ghost()
                                 .flex_1()
                                 .on_click(cx.listener(move |_, _, _, cx| {
                                     cx.emit(HostEvent::Selected(destination.clone()));
@@ -329,7 +328,6 @@ impl Hosts {
                                 Button::new(format!("remove-{id}"))
                                     .icon(IconName::Close)
                                     .small()
-                                    .ghost()
                                     .accessibility_label("保存した接続を削除")
                                     .tooltip("保存した接続を削除")
                                     .disabled(self.busy || !self.snapshot.connected)
@@ -395,7 +393,6 @@ impl Hosts {
                             "接続先を追加"
                         }),
                 )
-                .ghost()
                 .w_full()
                 .when(!cards, |button| {
                     button.h(px(48.)).px_4().text_color(rgb(0x8bb7f9))
@@ -418,7 +415,6 @@ impl Hosts {
                     Button::new(id)
                         .label(label)
                         .small()
-                        .ghost()
                         .selected(self.use_ssh == use_ssh)
                         .disabled(disabled)
                         .on_click(cx.listener(move |view, _, _, cx| {
@@ -543,7 +539,6 @@ impl Hosts {
             .min_w_0()
             .max_w(px(200.))
             .flex_shrink_1()
-            .ghost()
             .dropdown_menu(move |mut menu, _, _| {
                 let local = owner.clone();
                 menu = menu.item(
@@ -636,7 +631,6 @@ impl Render for Hosts {
                         .child(Button::new("copy-invite")
                             .label("招待をコピー")
                             .icon(IconName::Copy)
-                            .ghost()
                             .on_click(cx.listener(|view, _, _, cx| {
                                 if let Some((text, _)) = &view.invitation {
                                     cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
@@ -669,7 +663,6 @@ impl Render for Hosts {
                         Button::new("refresh-hosts")
                             .icon(IconName::RotateCw)
                             .small()
-                            .ghost()
                             .accessibility_label("接続一覧を更新")
                             .tooltip("接続一覧を更新")
                             .disabled(disabled)
@@ -723,7 +716,6 @@ impl Render for Hosts {
                             Button::new(format!("revoke-{index}"))
                                 .label("接続を解除")
                                 .small()
-                                .ghost()
                                 .text_color(rgb(0x8bb7f9))
                                 .disabled(disabled)
                                 .on_click(cx.listener(move |view, _, _, cx| {

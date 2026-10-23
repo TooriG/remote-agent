@@ -79,7 +79,6 @@ impl Desktop {
                     )
                     .debug_selector(move || id.clone())
                     .small()
-                    .ghost()
                     .disabled(disabled),
                 );
             }
@@ -108,8 +107,7 @@ impl Desktop {
                         });
                     },
                 )
-                .small()
-                .ghost(),
+                .small(),
             );
         }
         body
@@ -331,7 +329,6 @@ impl Desktop {
                                 )
                                 .icon(IconName::RotateCw)
                                 .small()
-                                .ghost()
                                 .disabled(self.connecting),
                             ),
                     )
