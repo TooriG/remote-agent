@@ -260,12 +260,7 @@ internal fun ThreadComposer(
         Column(Modifier.padding(8.dp)) {
             inputUnavailable?.let { Text(it) }
             DraftAttachments(draft.attachments, navigation.draftKey, perform)
-            val cursor = draft.text.toByteArray(Charsets.UTF_8).size.toUInt()
-            if (controls.canInvokeLocalTools) ComposerInvocationPicker(snapshot.composerSuggestions(draft.text, cursor)) { invocation ->
-                insertInvocation(draft.text, cursor, invocation.kind, invocation.name)?.let {
-                    perform(Intent.InsertInvocation(navigation.draftKey, it.text, invocation)) {}
-                }
-            }
+            ComposerInvocations(snapshot, perform)
             ComposerTextInput(snapshot, perform)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (controls.canAttachFiles) attach { uploading = it }
@@ -298,6 +293,22 @@ internal fun ThreadComposer(
                         else Text("↑", fontSize = 24.sp, modifier = Modifier.semantics { contentDescription = "送信" })
                     }
             }
+        }
+    }
+}
+
+@Composable
+private fun ComposerInvocations(
+    snapshot: Snapshot,
+    perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
+) {
+    val navigation = snapshot.navigation()
+    val draft = snapshot.draft(navigation.draftKey)
+    if (!snapshot.composerControls().canInvokeLocalTools) return
+    val cursor = draft.text.toByteArray(Charsets.UTF_8).size.toUInt()
+    ComposerInvocationPicker(snapshot.composerSuggestions(draft.text, cursor)) { invocation ->
+        insertInvocation(draft.text, cursor, invocation.kind, invocation.name)?.let {
+            perform(Intent.InsertInvocation(navigation.draftKey, it.text, invocation)) {}
         }
     }
 }
