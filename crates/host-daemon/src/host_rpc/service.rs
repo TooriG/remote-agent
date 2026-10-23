@@ -12,12 +12,14 @@ use agent_protocol::protocol::{Body, Call, Response};
 use agent_transport::peer::RpcMessageError;
 use serde::Serialize;
 
-use super::agent::{Agent, Identity, SessionListScope, SessionSummary, session_pages};
+use super::agent::{Agent, Identity, SessionListScope, session_pages};
 use futures_util::{StreamExt, TryStreamExt};
 use std::collections::HashMap;
 
 use super::routing::{HostReply, HostSession, SessionId, SessionRouter};
 use crate::ProjectStore;
+
+const SESSION_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 #[derive(Debug, Clone, Serialize, thiserror::Error)]
 #[error("{message}")]
@@ -102,8 +104,8 @@ impl HostRpcService {
         let listings =
             futures_util::future::join_all(agents.into_iter().map(|(_, agent)| async move {
                 tokio::time::timeout(
-                    std::time::Duration::from_secs(5),
-                    session_pages(agent.as_ref(), "", SessionListScope::Loaded, 100, 100)
+                    SESSION_LIST_TIMEOUT,
+                    session_pages(agent.as_ref(), "", SessionListScope::Loaded, 100, 100, None)
                         .try_collect::<Vec<_>>(),
                 )
                 .await
@@ -994,19 +996,20 @@ impl HostRpcService {
                 .into(),
             Call::ListAgents(params) => {
                 let agent = self.agent(params.thread_id.provider)?;
-                let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+                let deadline = tokio::time::Instant::now() + SESSION_LIST_TIMEOUT;
                 let mut threads = session_pages(
                     agent.as_ref(),
                     "",
                     SessionListScope::Descendants(&params.thread_id.id),
                     100,
                     100,
+                    Some(deadline),
                 )
-                .map_ok(|page| futures_util::stream::iter(page.into_iter().map(Ok)))
+                .map_ok(|page| futures_util::stream::iter(page.into_iter().map(Ok::<_, Failure>)))
                 .try_flatten()
                 .boxed();
                 let mut agents = Vec::new();
-                while let Some(summary) = next_title(&mut threads, deadline).await? {
+                while let Some(summary) = threads.try_next().await? {
                     let thread = crate::projects::titles::summary(summary.thread);
                     if let (Some(id), Some(parent_id)) = (thread.id, thread.parent_id) {
                         agents.push(agent_protocol::models::AgentObservation {
@@ -1154,7 +1157,7 @@ impl HostRpcService {
         }
         let mut threads = Vec::new();
         for (_, agent) in self.agents() {
-            let pages = session_pages(agent.as_ref(), "", SessionListScope::All, 100, 100);
+            let pages = session_pages(agent.as_ref(), "", SessionListScope::All, 100, 100, None);
             futures_util::pin_mut!(pages);
             while let Some(result) = pages.next().await {
                 match result {
@@ -1418,9 +1421,9 @@ impl HostRpcService {
             crate::projects::titles::TitleQuery::Project { .. } => (100, 100),
         };
         let started = std::time::Instant::now();
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-        let (snapshot, mut listings) = tokio::join!(
-            self.project_snapshot(),
+        let snapshot = self.project_snapshot().await?;
+        let deadline = tokio::time::Instant::now() + SESSION_LIST_TIMEOUT;
+        let mut listings =
             futures_util::future::join_all(agents.iter().map(|(provider, agent)| async move {
                 let scope = if search.trim().is_empty() {
                     SessionListScope::Roots
@@ -1433,15 +1436,15 @@ impl HostRpcService {
                     scope,
                     first_page_size,
                     later_page_size,
+                    Some(deadline),
                 )
-                .map_ok(|page| futures_util::stream::iter(page.into_iter().map(Ok)))
+                .map_ok(|page| futures_util::stream::iter(page.into_iter().map(Ok::<_, Failure>)))
                 .try_flatten()
                 .boxed();
-                let head = next_title(&mut threads, deadline).await;
+                let head = threads.try_next().await;
                 (*provider, agent.capabilities(), threads, head)
             }))
-        );
-        let snapshot = snapshot?;
+            .await;
         let mut titles = crate::projects::titles::TitleList::new(&snapshot.projects, query);
         let mut provider_errors = self
             .provider_errors()
@@ -1475,7 +1478,7 @@ impl HostRpcService {
                 {
                     group.push((head.as_mut().unwrap().take().unwrap(), *capabilities));
                     if group.len() < maximum {
-                        *head = next_title(threads, deadline).await;
+                        *head = threads.try_next().await;
                     }
                 }
             }
@@ -1497,7 +1500,7 @@ impl HostRpcService {
             // needs rows; do not start another read after its lookahead.
             for (_, _, threads, head) in &mut listings {
                 if matches!(head, Ok(None)) {
-                    *head = next_title(threads, deadline).await;
+                    *head = threads.try_next().await;
                 }
             }
         }
@@ -1787,22 +1790,6 @@ fn session_target(request: &Call) -> (Option<&agent_protocol::session::SessionRe
         Call::ReadTurnItems(p) => (Some(&p.session), None),
         Call::RenameSession(p) => (Some(&p.thread_id), None),
         _ => (None, None),
-    }
-}
-
-async fn next_title(
-    threads: &mut futures_util::stream::BoxStream<'_, Result<SessionSummary, Failure>>,
-    deadline: tokio::time::Instant,
-) -> Result<Option<SessionSummary>, Failure> {
-    // Poll the deadline before a queued read, including when both are ready,
-    // so expired admissions cannot start another native request.
-    tokio::select! {
-        biased;
-        _ = tokio::time::sleep_until(deadline) => Err(Failure::new(
-            "provider_timeout",
-            "session listing timed out; results are partial",
-        )),
-        result = threads.try_next() => result,
     }
 }
 
@@ -2118,61 +2105,6 @@ mod tests {
     }
 
     use agent_protocol::session::ProviderKind;
-
-    #[tokio::test(start_paused = true)]
-    async fn expired_title_deadlines_do_not_poll_the_provider() {
-        use super::*;
-        let now = tokio::time::Instant::now();
-        for deadline in [
-            now,
-            now - std::time::Duration::from_secs(1),
-            now + std::time::Duration::from_secs(1),
-        ] {
-            let polls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            let observed = polls.clone();
-            let mut threads = futures_util::stream::once(async move {
-                if deadline > now {
-                    tokio::time::sleep_until(deadline).await;
-                }
-                observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Ok(SessionSummary {
-                    thread: Thread::default(),
-                    branch: None,
-                })
-            })
-            .boxed();
-            assert_eq!(
-                next_title(&mut threads, deadline).await.err().unwrap().code,
-                "provider_timeout"
-            );
-            assert_eq!(polls.load(std::sync::atomic::Ordering::SeqCst), 0);
-        }
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn title_reads_share_one_deadline_across_pages() {
-        use super::*;
-        let start = tokio::time::Instant::now();
-        let deadline = start + std::time::Duration::from_secs(5);
-        let mut threads = futures_util::stream::iter([4, 2])
-            .then(|seconds| async move {
-                tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
-                Ok(SessionSummary {
-                    thread: Thread::default(),
-                    branch: None,
-                })
-            })
-            .boxed();
-        assert!(next_title(&mut threads, deadline).await.unwrap().is_some());
-        assert_eq!(
-            next_title(&mut threads, deadline).await.err().unwrap().code,
-            "provider_timeout"
-        );
-        assert_eq!(
-            tokio::time::Instant::now() - start,
-            std::time::Duration::from_secs(5)
-        );
-    }
 
     #[tokio::test]
     async fn successful_configuration_clears_the_provider_startup_error() {
