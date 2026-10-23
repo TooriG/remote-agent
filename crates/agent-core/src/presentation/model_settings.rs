@@ -1,33 +1,4 @@
 //! Model-picker and quick-control decisions shared by native clients.
-
-pub fn codex_cli_status_lines(
-    status: Option<&agent_protocol::operations::CodexCliStatus>,
-) -> Vec<String> {
-    let Some(status) = status else {
-        return vec!["実行中のCLIは未確認です。".into()];
-    };
-    let mut lines = match &status.active {
-        Some(active) => vec![
-            format!(
-                "実行中: {}",
-                active.version.as_deref().unwrap_or("バージョン不明")
-            ),
-            format!("実行ファイル: {}", active.executable),
-        ],
-        None => vec!["Codex CLIは起動していません。".into()],
-    };
-    if status.restart_required {
-        if let Some(installed) = &status.installed {
-            lines.push(format!(
-                "次回起動: {}",
-                installed.version.as_deref().unwrap_or("バージョン不明")
-            ));
-            lines.push(format!("参照先: {}", installed.executable));
-        }
-        lines.push("CLIの更新または参照先の変更を検出しました。実行中の会話が終わってからHostを再起動してください。".into());
-    }
-    lines
-}
 use crate::{
     models::{Model, ModelRef},
     session::ProviderKind,
@@ -410,48 +381,6 @@ mod tests {
     use super::*;
     use crate::state::Draft;
     use std::sync::Arc;
-
-    #[test]
-    fn cli_display_distinguishes_the_running_process_from_the_next_launch() {
-        use agent_protocol::operations::{CodexCliInstallation, CodexCliStatus};
-        let active = CodexCliInstallation {
-            executable: "/old/codex".into(),
-            version: Some("codex-cli 0.139.0".into()),
-        };
-        let installed = CodexCliInstallation {
-            executable: "/new/codex".into(),
-            version: Some("codex-cli 0.164.0".into()),
-        };
-        let status = CodexCliStatus {
-            active: Some(active.clone()),
-            installed: Some(installed),
-            restart_required: true,
-            ..Default::default()
-        };
-        let lines = codex_cli_status_lines(Some(&status));
-        assert_eq!(
-            &lines[..4],
-            [
-                "実行中: codex-cli 0.139.0",
-                "実行ファイル: /old/codex",
-                "次回起動: codex-cli 0.164.0",
-                "参照先: /new/codex"
-            ]
-        );
-        assert!(lines.last().unwrap().contains("Hostを再起動"));
-        assert_eq!(
-            codex_cli_status_lines(Some(&CodexCliStatus {
-                active: Some(active.clone()),
-                installed: Some(active),
-                ..Default::default()
-            })),
-            ["実行中: codex-cli 0.139.0", "実行ファイル: /old/codex"]
-        );
-        assert_eq!(
-            codex_cli_status_lines(Some(&CodexCliStatus::default())),
-            ["Codex CLIは起動していません。"]
-        );
-    }
 
     #[test]
     fn speed_choices_preserve_native_multipliers_and_select_each_tier() {

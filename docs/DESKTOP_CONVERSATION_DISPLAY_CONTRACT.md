@@ -773,21 +773,6 @@ checks for both providers, and iOS
 `testSimulatorSwitchesCodexAccountsAndForksConversation`, and
 `testSimulatorAddsClaudeAccountAndKeepsCodexSelected`.
 
-## Codex CLI identity and updates
-
-- CLI settings show the version and executable of the running App Server,
-  captured at startup, separately from the installation selected for the next
-  start. A newly installed version must never relabel a running older process.
-- External updates, launcher changes and installers that fail after replacing
-  the executable still report the installation change and require a Host restart.
-  An update that leaves the active installation unchanged needs no restart.
-- Account helpers use the primary App Server's resolved executable until the
-  Host restarts. Desktop preserves an inherited provider PATH order, adding
-  fallback installation directories only after it.
-
-Acceptance: Host CLI updater replacement and partial-installation tests, core
-CLI display tests, and App Server runtime-version tests.
-
 ## Composer keyboard navigation
 
 - Desktop composer Up on the first visual row moves the caret to the start;

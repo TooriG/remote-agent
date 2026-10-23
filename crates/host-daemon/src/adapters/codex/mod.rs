@@ -107,12 +107,8 @@ impl Codex {
             tracing::error!(target: "bex", operation = "host.codex", message = %error);
         }
         let available = process.is_ok();
-        let cli = cli::Updater::new(
-            config.program.clone(),
-            config.codex_home.clone(),
-            process.as_deref().ok().map(cli::active_installation),
-        );
-        let adapter = Self::with_cli(process, cli);
+        let mut adapter = Self::new(process);
+        adapter.cli = cli::Updater::new(config.clone());
         if available && let Err(error) = adapter.enable_accounts(account_directory, config).await {
             tracing::error!(target: "bex", operation = "host.codex.accounts", message = %error);
         }
@@ -120,16 +116,6 @@ impl Codex {
     }
 
     pub fn new(process: Result<Arc<CodexAppServer>, String>) -> Self {
-        let config = Config::default();
-        let cli = cli::Updater::new(
-            config.program,
-            config.codex_home,
-            process.as_deref().ok().map(cli::active_installation),
-        );
-        Self::with_cli(process, cli)
-    }
-
-    fn with_cli(process: Result<Arc<CodexAppServer>, String>, cli: cli::Updater) -> Self {
         let directory = process
             .as_ref()
             .ok()
@@ -141,7 +127,7 @@ impl Codex {
                     .unwrap_or_default()
             });
         Self {
-            cli,
+            cli: cli::Updater::new(Config::default()),
             accounts: Arc::default(),
             list_access: tokio::sync::Semaphore::new(4),
             restoration_error: tokio::sync::watch::channel(None).0,
@@ -155,16 +141,12 @@ impl Codex {
     pub async fn enable_accounts(
         &self,
         directory: PathBuf,
-        mut config: codex_app_server::AppServerConfig,
+        config: codex_app_server::AppServerConfig,
     ) -> Result<(), String> {
-        // All account helpers belong to this running provider generation.
-        // A CLI update must not mix a new helper with the old primary process.
-        let server = self.server().map_err(|error| error.to_string())?;
-        config.program = server.executable().to_path_buf();
         let accounts = crate::adapters::codex::accounts::Accounts::load(
             directory,
             config,
-            server,
+            self.server().map_err(|error| error.to_string())?,
             self.restoration_error.clone(),
         )
         .await

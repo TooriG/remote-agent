@@ -52,17 +52,9 @@ pub struct CodexCliRequest {
 #[serde(rename_all = "camelCase")]
 pub struct CodexCliStatus {
     pub running: bool,
-    pub active: Option<CodexCliInstallation>,
-    pub installed: Option<CodexCliInstallation>,
+    pub version: Option<String>,
     pub restart_required: bool,
     pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CodexCliInstallation {
-    pub executable: String,
-    pub version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

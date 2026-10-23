@@ -412,8 +412,7 @@ impl Desktop {
             let updating = self.snapshot.operation_running(op::OperationKey::CodexCli);
             let mut controls = v_flex().gap_2()
                 .child(div().font_semibold().child("Codex CLI"))
-                .children(agent_core::presentation::model_settings::codex_cli_status_lines(cli)
-                    .into_iter().map(|line| div().text_sm().child(line)))
+                .child(cli.and_then(|status| status.version.clone()).unwrap_or_else(|| "バージョン未確認".into()))
                 .child(div().text_sm().text_color(rgb(appearance::MUTED))
                     .child("選択中の環境のCLIを更新します。更新後は実行中の会話が終わってからHostを再起動してください。モデル一覧は再接続時に再取得します。"))
                 .child(h_flex().gap_2()
@@ -424,13 +423,20 @@ impl Desktop {
                         s.dispatch(Intent::ManageCodexCli(op::ManageCodexCli { update: false }));
                         s.refresh_accounts_and_models();
                     }).disabled(disabled || updating)));
-            if let Some(error) = cli.and_then(|status| status.error.as_ref()) {
-                controls = controls.child(
-                    div()
-                        .text_sm()
-                        .text_color(rgb(0xff8e86))
-                        .child(error.clone()),
-                );
+            if let Some(cli) = cli {
+                if cli.restart_required {
+                    controls = controls.child(
+                        "更新が完了しました。新しいCLIを使用するにはHostを再起動してください。",
+                    );
+                }
+                if let Some(error) = &cli.error {
+                    controls = controls.child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(0xff8e86))
+                            .child(error.clone()),
+                    );
+                }
             }
             body = body.child(controls);
         }
