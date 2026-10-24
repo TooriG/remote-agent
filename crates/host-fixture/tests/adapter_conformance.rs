@@ -267,15 +267,8 @@ async fn setup_catalog_isolates_stalled_native_providers(
     .unwrap();
     std::fs::write(
         claude_home.join("fixture-auth.json"),
-        json!({"loggedIn":true,"authMethod":"claude.ai","email":"claude@example.invalid","subscriptionType":"max"}).to_string(),
+        json!({"tokenSource":"oauth","apiKeySource":"none","email":"claude@example.invalid","subscriptionType":"max"}).to_string(),
     ).unwrap();
-    for (home, stalls) in [(&codex_home, codex_stalls), (&claude_home, claude_stalls)] {
-        std::fs::write(
-            home.join("model-list-mode"),
-            if stalls { "silent" } else { "ready" },
-        )
-        .unwrap();
-    }
     let config = codex_app_server::AppServerConfig {
         program,
         ..Default::default()
@@ -316,6 +309,15 @@ async fn setup_catalog_isolates_stalled_native_providers(
         ..Default::default()
     };
     agent_core::state::operations::ListAccounts {}.apply(&mut snapshot, accounts);
+    // Account checks also use SDK initialization. Stall only the model discovery
+    // phase whose timeout and recovery this contract verifies.
+    for (home, stalls) in [(&codex_home, codex_stalls), (&claude_home, claude_stalls)] {
+        std::fs::write(
+            home.join("model-list-mode"),
+            if stalls { "silent" } else { "ready" },
+        )
+        .unwrap();
+    }
     let discovery_service = service.clone();
     let session_id = session.id();
     let discovery = tokio::spawn(async move {
