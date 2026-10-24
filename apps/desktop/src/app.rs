@@ -47,6 +47,7 @@ struct ProjectEditor {
 }
 
 enum OperationCompletion {
+    ProjectImport,
     Busy,
     Composer(u64),
     Editor(u64),
@@ -192,6 +193,7 @@ pub(crate) struct Desktop {
     hosts: Option<Entity<Hosts>>,
     side_chat_mode: bool,
     onboarding: bool,
+    import_projects: bool,
     initial_cwd: Option<String>,
     busy: usize,
     error: String,
@@ -484,6 +486,7 @@ impl Desktop {
             onboarding: !side_chat_mode
                 && !platform::state_dir()
                     .is_ok_and(|directory| directory.join("onboarding.completed").is_file()),
+            import_projects: false,
             initial_cwd,
             busy: 0,
             error: String::new(),
@@ -714,6 +717,9 @@ impl Desktop {
                             self.explain_selection(&text, cx);
                         }
                         self.dispatch(Intent::ReadWorktreeSettings(op::ReadWorktreeSettings {}));
+                        if self.import_projects {
+                            self.dispatch(Intent::ScanProjects(op::ScanProjects {}));
+                        }
                         if self.tab == Tab::Settings {
                             self.dispatch(Intent::ListWorktrees(op::ListWorktrees {}));
                         }
@@ -726,7 +732,10 @@ impl Desktop {
             Update::Recording(id, event) => self.recording_update(id, event),
             Update::PersistenceError(error) => self.set_error(error),
             Update::OnboardingCompleted(result) => match result {
-                Ok(()) => self.onboarding = false,
+                Ok(()) => {
+                    self.onboarding = false;
+                    self.import_projects = false;
+                }
                 Err(error) => self.set_error(error),
             },
             Update::Folder(result) => {
@@ -772,6 +781,22 @@ impl Desktop {
         cx: &mut Context<Self>,
     ) {
         match kind {
+            OperationCompletion::ProjectImport => {
+                self.accept_snapshot(window, cx);
+                if result.is_ok()
+                    && self
+                        .snapshot
+                        .project_import
+                        .result
+                        .as_ref()
+                        .is_some_and(|result| result.errors.is_empty())
+                {
+                    self.complete_onboarding();
+                } else if let Err(error) = result {
+                    self.set_error(error);
+                }
+                return;
+            }
             OperationCompletion::Composer(revision) => {
                 if self.composer_pending == Some(revision) {
                     self.composer_pending = None;

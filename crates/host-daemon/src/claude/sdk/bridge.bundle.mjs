@@ -25985,6 +25985,25 @@ function spawnClaudeCodeProcess({ command, args, ...options }) {
 }
 
 // bridge.mjs
+import { existsSync as existsSync2 } from "node:fs";
+var managedMcpPath = process.platform === "darwin" ? "/Library/Application Support/ClaudeCode/managed-mcp.json" : process.platform === "win32" ? "C:\\Program Files\\ClaudeCode\\managed-mcp.json" : "/etc/claude-code/managed-mcp.json";
+function probeOptions(managedMcpConfig, environment) {
+  return {
+    persistSession: false,
+    settings: { disableAllHooks: true },
+    allowedTools: [],
+    mcpServers: {},
+    // Claude rejects strict MCP configuration alongside managed policy.
+    ...managedMcpConfig ? {} : { strictMcpConfig: true },
+    env: {
+      ...environment,
+      ENABLE_CLAUDEAI_MCP_SERVERS: "false",
+      FORCE_CODE_TERMINAL: void 0,
+      CLAUDE_CODE_AUTO_CONNECT_IDE: "0",
+      CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL: "1"
+    }
+  };
+}
 async function runBridge(lines, emit2, startQuery = mGe) {
   const iterator = lines[Symbol.asyncIterator]();
   const first = await iterator.next();
@@ -26054,7 +26073,8 @@ async function runBridge(lines, emit2, startQuery = mGe) {
       url: body.url,
       requestedSchema: body.requestedSchema
     }, context.signal),
-    onUserDialog: async () => ({ behavior: "cancelled" })
+    onUserDialog: async () => ({ behavior: "cancelled" }),
+    ...config.probe ? probeOptions(existsSync2(managedMcpPath), process.env) : {}
   };
   const q2 = startQuery({ options, prompt: (async function* () {
     while (!closing) {

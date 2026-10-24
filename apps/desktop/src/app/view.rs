@@ -169,7 +169,7 @@ impl Render for Desktop {
                 .text_size(px(14.))
                 .child(gallery);
         }
-        if self.onboarding && self.tab == Tab::Chat {
+        if self.import_projects || (self.onboarding && self.tab == Tab::Chat) {
             return self.onboarding_view(window, cx);
         }
         if composer_visible

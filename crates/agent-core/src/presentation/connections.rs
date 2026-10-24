@@ -19,6 +19,7 @@ pub struct ConnectionAgent {
     pub name: String,
     pub availability: AgentAvailability,
     pub label: String,
+    pub detail: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -91,6 +92,17 @@ impl Snapshot {
             ConnectionAgent {
                 provider,
                 name: name.into(),
+                detail: (availability == AgentAvailability::Unavailable)
+                    .then(|| {
+                        self.model_errors
+                            .get(provider.key())
+                            .and_then(|error| error.get("message"))
+                            .and_then(Value::as_str)
+                            .map(str::to_owned)
+                            .or_else(|| self.operation_error(OperationKey::Models))
+                            .or_else(|| self.operation_error(OperationKey::Accounts))
+                    })
+                    .flatten(),
                 availability,
                 label: match availability {
                     AgentAvailability::Checking => "確認中…",
@@ -128,6 +140,35 @@ pub fn validate_ssh_destination(destination: &str) -> Result<&str, &'static str>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn setup_retains_the_failed_providers_reason_without_blaming_other_agents() {
+        let mut snapshot = Snapshot {
+            connected: true,
+            ..Default::default()
+        };
+        snapshot.model_errors = std::sync::Arc::new(
+            serde_json::from_value(serde_json::json!({
+                "codex": {"code":"provider_timeout", "message":"Codex model discovery timed out"}
+            }))
+            .unwrap(),
+        );
+        let agents = snapshot.connection_setup().agents;
+        assert_eq!(
+            agents[0].detail.as_deref(),
+            Some("Codex model discovery timed out")
+        );
+        assert!(agents[1].detail.is_none());
+        assert!(agents[2].detail.is_none());
+        snapshot.connected = false;
+        assert!(
+            snapshot
+                .connection_setup()
+                .agents
+                .iter()
+                .all(|agent| agent.detail.is_none())
+        );
+    }
 
     #[test]
     fn failed_checks_stop_spinning_and_retries_keep_cached_ready_agents() {

@@ -1,5 +1,30 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { spawnClaudeCodeProcess } from "./session-state.mjs";
+import { existsSync } from "node:fs";
+
+const managedMcpPath = process.platform === "darwin"
+  ? "/Library/Application Support/ClaudeCode/managed-mcp.json"
+  : process.platform === "win32"
+    ? "C:\\Program Files\\ClaudeCode\\managed-mcp.json"
+    : "/etc/claude-code/managed-mcp.json";
+
+export function probeOptions(managedMcpConfig, environment) {
+  return {
+    persistSession: false,
+    settings: { disableAllHooks: true },
+    allowedTools: [],
+    mcpServers: {},
+    // Claude rejects strict MCP configuration alongside managed policy.
+    ...(managedMcpConfig ? {} : { strictMcpConfig: true }),
+    env: {
+      ...environment,
+      ENABLE_CLAUDEAI_MCP_SERVERS: "false",
+      FORCE_CODE_TERMINAL: undefined,
+      CLAUDE_CODE_AUTO_CONNECT_IDE: "0",
+      CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL: "1",
+    },
+  };
+}
 
 /** The SDK owns Claude's protocol, callbacks and process lifecycle. */
 export async function runBridge(lines, emit, startQuery = query) {
@@ -55,6 +80,7 @@ export async function runBridge(lines, emit, startQuery = query) {
       mode: body.mode, url: body.url, requestedSchema: body.requestedSchema,
     }, context.signal),
     onUserDialog: async () => ({ behavior: "cancelled" }),
+    ...(config.probe ? probeOptions(existsSync(managedMcpPath), process.env) : {}),
   };
   const q = startQuery({ options, prompt: (async function* () {
     while (!closing) {

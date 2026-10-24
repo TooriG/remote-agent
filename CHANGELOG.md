@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add first-run selection and import of existing Codex and Claude Code projects, with skipping, retry, partial results and a Settings entry for later imports. Register folders without copying native history or changing session IDs. Show provider-specific setup errors and retry controls; disable user hooks and automatic MCP/IDE connections during Claude capability probes.
+
 - Fix Windows desktop startup stack overflow and restore the native draggable title bar. Removing an image attachment no longer opens its gallery.
 - Include the configured Codex model in the picker when absent from the recommended catalog, support explicit Codex model IDs, and preserve their selection across catalog refreshes.
 - Read Codex projects through the native project API, retain their names, roots and explicit conversation membership, and combine them with BEX-only projects without rewriting Codex desktop state.

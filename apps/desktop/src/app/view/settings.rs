@@ -157,6 +157,16 @@ impl Desktop {
                         "作業するコンピューター",
                         "このPCや、自分のクラウドVMを選びます。",
                     );
+                    body = body.child(
+                        self.button(
+                            "settings-import-projects",
+                            "既存のプロジェクトを取り込む",
+                            cx,
+                            |view, _, _| view.open_project_import(),
+                        )
+                        .debug_selector(|| "settings-import-projects".into())
+                        .disabled(!self.snapshot.connected),
+                    );
                     body.children(self.hosts.as_ref().map(|hosts| {
                         hosts.update(cx, |view, cx| {
                             v_flex()

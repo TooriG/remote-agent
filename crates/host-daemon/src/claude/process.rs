@@ -361,7 +361,8 @@ impl Process {
         let initialized: Result<Value, String> = tokio::time::timeout(Duration::from_secs(30), async {
             process.input.write_line(&json!({"type":"initialize", "program":program,"cwd":cwd,
                 "sessionId":session.map(|(id,_)|id),"resume":session.is_some_and(|(_,resume)|resume),
-                "model":model.map(|(model,_)|model),"effort":model.and_then(|(_,effort)|effort),"browser":browser}).to_string())
+                "model":model.map(|(model,_)|model),"effort":model.and_then(|(_,effort)|effort),"browser":browser,
+                "probe":session.is_none()}).to_string())
                 .await.map_err(|error|error.to_string())?;
             match process.read().await?.ok_or("Claude SDK exited before initialization")? {
                 Event::Ready { initialized } => Ok(initialized),

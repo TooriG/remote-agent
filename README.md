@@ -48,6 +48,8 @@ The session architecture, limits, local data and verification matrix are documen
 
 ## Run the Host
 
+On desktop, first-run setup checks the selected computer and agents, then lets you import existing Codex and Claude Code projects. Recent Git repositories with at least three conversations are selected by default. Import registers selected folders and keeps native conversations and session IDs intact. You can defer agent setup, skip import, or reopen import from Settings → Computers and connections. Discovery retains healthy providers' results when another provider fails. The flow and Claude capability-probe isolation reference [T3 Code's welcome wizard](https://github.com/pingdotgg/t3code/blob/4fef307dd0a0e9eb1a7bd610ed390b6764295a65/docs/user/welcome-wizard.md).
+
 The Host needs Git and at least one available agent for conversations. Codex is optional; the Host uses `codex` on PATH, falling back to Codex bundled with ChatGPT Desktop on macOS; `--codex <path>` is authoritative.
 
 Claude conversations run through the official Agent SDK. The Mac app includes a signed, portable Node.js runtime, so users with Claude Code installed do not need to install Node or npm. The app uses its bundled Node by default; `BEX_NODE` can explicitly select another executable. A standalone Host requires Node.js 22 or newer on its PATH or selected with `BEX_NODE`. The Nix development environment includes Node and pins the Mac distribution runtime by version and checksum. The SDK is pinned in an npm lockfile and shipped as `bex-claude-sdk.mjs` beside a standalone Host or in a Mac app's sealed Resources.

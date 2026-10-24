@@ -20,6 +20,7 @@ use super::routing::{HostReply, HostSession, SessionId, SessionRouter};
 use crate::ProjectStore;
 
 const SESSION_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+mod project_import;
 // Finish discovery before the client's request deadline, even when a native
 // provider is still initializing. Healthy providers must remain usable.
 const MODEL_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
@@ -980,6 +981,8 @@ impl HostRpcService {
                 .await
                 .map_err(|error| Failure::new("project_add_failed", error))?)
             .into(),
+            Call::ScanProjects(_) => self.scan_projects().await?.into(),
+            Call::ImportProjects(params) => self.import_projects(&params.paths).await?.into(),
             Call::ReadListDecorations(params) => self.list_decorations(params).await?.into(),
             Call::ListSessions(params) => {
                 let started = std::time::Instant::now();

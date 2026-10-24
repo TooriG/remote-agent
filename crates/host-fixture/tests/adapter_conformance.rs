@@ -104,6 +104,137 @@ async fn start(root: &Path, memory: Arc<Memory>) -> HostFixture {
     .unwrap()
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn initial_import_discovers_native_projects_and_continues_the_original_session() {
+    use agent_core::{
+        state::{Intent, Snapshot, operations as core_op},
+        store::Store,
+    };
+    use agent_transport::transport::{Endpoint, Relays};
+    let directory = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(directory.path()).unwrap();
+    let repository = root.join("existing-project");
+    let other = root.join("unselected-project");
+    for path in [&repository, &other] {
+        std::fs::create_dir_all(path).unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "--quiet"])
+                .arg(path)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let threads: Vec<_> = (0..106).map(|index| serde_json::json!({
+        "id":format!("external-{index}"), "cwd":if index == 105 { &other } else { &repository },
+        "name":format!("Existing conversation {index}"), "updatedAt":now, "model":"fixture-model",
+        "historyMode":"paginated", "status":{"type":"notLoaded"},
+        "turns":[{"id":"original-turn","status":"completed","items":[
+            {"id":"original-user","type":"userMessage","content":[{"type":"text","text":"original input"}]},
+            {"id":"original-answer","type":"agentMessage","text":"original answer","phase":"final_answer"}
+        ]}]
+    })).collect();
+    std::fs::write(
+        root.join("list-fixture.json"),
+        serde_json::to_vec(&threads).unwrap(),
+    )
+    .unwrap();
+    let host = start(&root, Arc::new(Memory::default())).await;
+    let endpoint = Endpoint::bind(host.credentials.local_identity().await, Relays::Disabled)
+        .await
+        .unwrap();
+    let store = Store::connect(&endpoint, &host.ticket, Snapshot::default(), None)
+        .await
+        .unwrap();
+    store
+        .dispatch(Intent::ScanProjects(core_op::ScanProjects {}))
+        .await
+        .unwrap();
+    let scan = store.snapshot();
+    let candidates = &scan.project_import.scan.as_ref().unwrap().projects;
+    assert_eq!(candidates.len(), 2);
+    assert_eq!(
+        candidates
+            .iter()
+            .find(|candidate| candidate.name == "existing-project")
+            .unwrap()
+            .conversation_count,
+        105,
+        "scan must follow native pagination"
+    );
+    let selected = dunce::simplified(&repository).to_str().unwrap().to_owned();
+    assert_eq!(
+        scan.project_import.selected.iter().collect::<Vec<_>>(),
+        [&selected]
+    );
+    assert!(
+        !root.join("bex-projects.json").exists(),
+        "scanning and skipping cannot register anything"
+    );
+    store
+        .dispatch(Intent::ImportProjects(core_op::ImportProjects {}))
+        .await
+        .unwrap();
+    let result = store.snapshot();
+    assert_eq!(
+        result
+            .project_import
+            .result
+            .as_ref()
+            .unwrap()
+            .imported
+            .as_slice(),
+        std::slice::from_ref(&selected)
+    );
+    assert!(
+        result
+            .project_import
+            .result
+            .as_ref()
+            .unwrap()
+            .errors
+            .is_empty()
+    );
+    let registered: Vec<agent_protocol::models::Project> =
+        serde_json::from_slice(&std::fs::read(root.join("bex-projects.json")).unwrap()).unwrap();
+    assert_eq!(registered.len(), 1);
+    assert_eq!(registered[0].roots[0].path, selected);
+    let local = host.local().await.unwrap();
+    let id = SessionRef::new(ProviderKind::Codex, "external-0".into()).unwrap();
+    let (opened, mut events) = open(&local.peer, &id).await;
+    assert_eq!(opened.response.thread.id.as_ref(), Some(&id));
+    assert_eq!(
+        opened.response.thread.project_id,
+        agent_protocol::models::ProjectMembership::Assigned(registered[0].id.clone())
+    );
+    assert!(
+        opened
+            .response
+            .thread
+            .turns
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|turn| turn.id.as_str() == "original-turn")
+    );
+    local
+        .peer
+        .call(&submission(&id, "continue imported conversation"))
+        .await
+        .unwrap();
+    assert_eq!(finished(&mut events).await.status, TurnStatus::Completed);
+    drop(events);
+    local.close().await;
+    store.close().await.unwrap();
+    endpoint.close().await;
+    host.close().await.unwrap();
+}
+
 #[rstest::rstest]
 #[case::codex_stalls(true, false)]
 #[case::claude_stalls(false, true)]

@@ -209,9 +209,18 @@ pub struct TerminalView {
     pub accepts_input: bool,
     pub output: Vec<TerminalOutput>,
 }
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProjectImportState {
+    pub scan: Option<agent_protocol::project_import::ProjectScan>,
+    pub selected: BTreeSet<String>,
+    pub result: Option<agent_protocol::project_import::ProjectImportResult>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Object))]
 pub struct Snapshot {
+    #[serde(skip)]
+    pub project_import: Arc<ProjectImportState>,
     /// Mobile recent feed loads project pages independently of expansion.
     #[serde(skip)]
     pub recent_chats: bool,
@@ -321,6 +330,10 @@ impl Snapshot {
         self.operations
             .get(&key)
             .is_some_and(|state| state.phase == operations::OperationPhase::Running)
+    }
+    pub fn project_import_busy(&self) -> bool {
+        self.operation_running(op::OperationKey::ProjectScan)
+            || self.operation_running(op::OperationKey::ProjectImport)
     }
     pub fn operation_error(&self, key: operations::OperationKey) -> Option<String> {
         self.operations
@@ -454,7 +467,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
         RevokeDevice, ListFiles, ReadFile,
         SaveFile, ReviewWorkspace, ReadWorktreeSettings,
         UpdateWorktreeSettings, ListWorktrees, RemoveWorktree, ListProjectSessions,
-        ListAgents, AddProject, CreateSession,
+        ListAgents, AddProject, ScanProjects, ImportProjects, CreateSession,
         ReadThread, OpenRequest, ReadItem, ResizeTerminal,
         Interrupt,
         WriteTerminal, DownloadFile, LoadSessionImages, LoadVisualization,
@@ -470,6 +483,20 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 next.observed_agents = thread_id;
                 let effects = op::refresh_agents(next.connected, next.observed_agents.as_ref());
                 return (next, effects);
+            }
+        }
+        Intent::SelectImportProject { path, selected } => {
+            if !next.project_import_busy()
+                && next.project_import.scan.as_ref().is_some_and(|scan| scan.projects.iter().any(|project| project.path == path && !project.registered))
+            {
+                let selection = &mut Arc::make_mut(&mut next.project_import).selected;
+                if selected { selection.insert(path); } else { selection.remove(&path); }
+            }
+        }
+        Intent::SelectAllImportProjects { selected } => {
+            if !next.project_import_busy() {
+                Arc::make_mut(&mut next.project_import).selected = next.project_import.scan.as_ref().map(|scan| scan.projects.iter()
+                    .filter(|project| selected && !project.registered).map(|project| project.path.clone()).collect()).unwrap_or_default();
             }
         }
         Intent::ReadOlder { thread_id } => {
@@ -968,6 +995,7 @@ fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
             if next.storage_scope == scope {
                 return (next, Vec::new());
             }
+            next.project_import = Arc::default();
             next.terminals = Arc::default();
             next.observed_agents = None;
             next.task_activity = None;

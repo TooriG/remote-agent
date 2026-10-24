@@ -717,6 +717,7 @@ fn apply_locked(current: &mut Arc<Snapshot>, event: Event) -> (Vec<Scheduled>, b
 fn publish_locked(current: &mut Arc<Snapshot>, next: Snapshot) -> bool {
     // No `..`: adding a Snapshot field must update the publication contract.
     let Snapshot {
+        project_import,
         recent_chats,
         operations,
         operation_sequence,
@@ -758,6 +759,7 @@ fn publish_locked(current: &mut Arc<Snapshot>, next: Snapshot) -> bool {
         _ => false,
     };
     if current.recent_chats == *recent_chats
+        && Arc::ptr_eq(&current.project_import, project_import)
         && Arc::ptr_eq(&current.operations, operations)
         && current.operation_sequence == *operation_sequence
         && current.model_defaults == *model_defaults
@@ -1631,6 +1633,9 @@ mod tests {
     fn every_snapshot_field_notifies_subscribers_independently() {
         type Change = fn(&mut Snapshot);
         let changes: &[(&str, Change)] = &[
+            ("project_import", |snapshot| {
+                snapshot.project_import = Arc::default()
+            }),
             ("operations", |snapshot| {
                 snapshot.operations = Arc::default()
             }),

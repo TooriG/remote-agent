@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { runBridge } from "./bridge.mjs";
+import { runBridge, probeOptions } from "./bridge.mjs";
 import { spawn } from "node:child_process";
 import { mkdtemp, symlink, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -23,6 +23,39 @@ function channel() {
     },
   };
 }
+
+test("catalog probes cannot run user hooks, tools or automatic IDE connections", async () => {
+  for (const probe of [true, false]) {
+    const input = channel();
+    const output = channel();
+    const reader = output[Symbol.asyncIterator]();
+    input.push(JSON.stringify({ type: "initialize", cwd: "/fixture", probe }));
+    let options;
+    const bridge = runBridge(input, () => {}, (configured) => {
+      options = configured.options;
+      return {
+        async initializationResult() { return {}; },
+        next: reader.next.bind(reader),
+        close() { output.close(); },
+      };
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    input.close();
+    await bridge;
+    if (probe) {
+      assert.equal(options.persistSession, false);
+      assert.deepEqual(options.settings, { disableAllHooks: true });
+      assert.deepEqual(options.allowedTools, []);
+      assert.deepEqual(options.mcpServers, {});
+      assert.equal(options.env.ENABLE_CLAUDEAI_MCP_SERVERS, "false");
+      assert.equal(options.env.CLAUDE_CODE_AUTO_CONNECT_IDE, "0");
+      assert.equal(options.env.CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL, "1");
+    } else {
+      assert.equal(options.settings, undefined);
+      assert.equal(options.allowedTools, undefined);
+    }
+  }
+});
 
 test("SDK callbacks wait for Host answers and cancel when the SDK aborts", async () => {
   const input = channel();
@@ -145,4 +178,13 @@ test("persistent SDK input stays open across results and additional messages", a
   input.close();
   await bridge;
   await consumed;
+});
+
+test("managed MCP policy retains probe isolation without the incompatible strict flag", () => {
+  const managed = probeOptions(true, { PATH: "/fixture/bin" });
+  const { strictMcpConfig, ...isolated } = probeOptions(false, { PATH: "/fixture/bin" });
+  assert.equal(strictMcpConfig, true);
+  assert.equal(managed.strictMcpConfig, undefined);
+  assert.deepEqual(isolated, managed);
+  assert.equal(managed.env.PATH, "/fixture/bin");
 });

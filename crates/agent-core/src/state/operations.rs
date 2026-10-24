@@ -78,6 +78,15 @@ pub enum Intent {
         thread_id: Option<crate::session::SessionRef>,
     },
     AddProject(AddProject),
+    ScanProjects(ScanProjects),
+    ImportProjects(ImportProjects),
+    SelectImportProject {
+        path: String,
+        selected: bool,
+    },
+    SelectAllImportProjects {
+        selected: bool,
+    },
     ShowRecentChats,
     ExpandRecentChats,
     ExpandProjects,
@@ -243,6 +252,8 @@ pub enum StalePolicy {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
 pub enum OperationKey {
+    ProjectScan,
+    ProjectImport,
     TaskActivity,
     LiveActivity {
         activity_id: Option<String>,
@@ -451,6 +462,8 @@ mod workspace;
 pub use workspace::*;
 mod threads;
 pub use threads::*;
+mod project_import;
+pub use project_import::*;
 mod submission;
 pub use submission::*;
 

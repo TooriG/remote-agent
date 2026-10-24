@@ -3,6 +3,7 @@
 use crate::{models::*, session::*};
 use agent_protocol::live_activity::*;
 use agent_protocol::permissions::*;
+use agent_protocol::project_import::ScanProjects;
 use agent_protocol::{browser::*, composer::*, diagnostics::*, operations::*, requests::*};
 use serde_json::Value;
 #[uniffi::remote(Enum)]
@@ -551,6 +552,8 @@ struct TerminalSize {
 struct AddProject {
     pub cwd: String,
 }
+#[uniffi::remote(Record)]
+struct ScanProjects {}
 #[uniffi::remote(Record)]
 struct ListSessions {
     pub query: crate::models::ListQuery,

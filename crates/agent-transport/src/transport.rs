@@ -29,7 +29,7 @@ use uuid::Uuid;
 // Bump when shared Postcard types change incompatibly; enum indices and field
 // positions are part of the wire format, even when decoding still succeeds.
 // Version 12 separates model settings and typed credential operations.
-const ALPN: &[u8] = b"remote-agent/streams/13";
+const ALPN: &[u8] = b"remote-agent/streams/14";
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
     #[error("iroh transport failed: {0}")]

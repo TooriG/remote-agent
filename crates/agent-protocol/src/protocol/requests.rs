@@ -73,6 +73,8 @@ contracts! {
     SessionScope, "host/session/scope" => (m::Empty, String),
     ReadItem, "host/session/item/read" => (op::ReadItem, op::ItemResponse) [clone, op::ReadItem::validate],
     AddProject, "host/project/add" => (op::AddProject, String) [clone],
+    ScanProjects, "host/project/scan" => (crate::project_import::ScanProjects, crate::project_import::ProjectScan) [clone],
+    ImportProjects, "host/project/import" => (crate::project_import::ImportProjects, crate::project_import::ProjectImportResult) [clone],
     ListSessions, "host/session/list" => (op::ListSessions, m::ThreadList) [clone],
     ListProjectSessions, "host/project/sessions" => (op::ListProjectSessions, m::ThreadList) [clone],
     ReadListDecorations, "host/session/decorations/read" => (op::ReadListDecorations, op::ListDecorations) [clone],

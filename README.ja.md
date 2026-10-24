@@ -48,6 +48,8 @@ Android 17では、LAN接続を開く前に付近のデバイスへのアクセ�
 
 ## Hostの起動
 
+デスクトップの初回設定では、環境とAIを確認した後、Codex・Claude Codeの既存プロジェクトを選んで取り込めます。直近30日以内に使い、会話が3件以上あるGitリポジトリを初期選択します。取り込みは選んだフォルダーの登録で、ネイティブの履歴と会話IDは保持します。AIの設定と取り込みは後回しにでき、後から「設定 → 端末と接続」でも取り込めます。一部のAIの探索に失敗しても、他のAIの候補は残ります。画面の流れとClaude確認プロセスの設定は[T3 Codeの初回設定](https://github.com/pingdotgg/t3code/blob/4fef307dd0a0e9eb1a7bd610ed390b6764295a65/docs/user/welcome-wizard.md)を参考にしています。
+
 会話にはGitと、利用可能なエージェントが最低1つ必要です。Codexは任意です。PATH上の`codex`を使い、見つからない場合はmacOSのChatGPT Desktop同梱版を使います。`--codex <path>`で明示した実行ファイルが最優先です。
 
 Claudeとの会話は公式Agent SDKが実行します。Macアプリは署名済みのポータブルなNode.jsを同梱するため、Claude Codeがインストール済みならNodeやnpmを別途用意する必要はありません。既定ではアプリ内のNodeを使い、`BEX_NODE`で別の実行ファイルを明示できます。単体HostではPATHにNode.js 22以降を置くか、`BEX_NODE`で指定してください。Nixの開発環境はNode.jsを含み、Mac同梱用ランタイムのバージョンとチェックサムも固定します。SDKはnpmのlockfileに固定し、Hostへ同梱するコードを生成します。

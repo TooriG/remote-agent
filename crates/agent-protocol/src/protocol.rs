@@ -112,6 +112,8 @@ results! {
     History(crate::session::HistoryPage),
     Thread(crate::models::ThreadResponse), Threads(crate::models::ThreadList),
     Decorations(crate::operations::ListDecorations),
+    ProjectScan(crate::project_import::ProjectScan),
+    ProjectImport(crate::project_import::ProjectImportResult),
     Agents(Vec<crate::models::AgentObservation>),
     ComposerCatalog(crate::composer::ComposerCatalog),
     PermissionSettings(crate::permissions::PermissionSettings),
