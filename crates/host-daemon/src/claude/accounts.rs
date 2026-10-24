@@ -8,7 +8,6 @@ use agent_protocol::{
     session::ProviderKind,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::{
     path::{Path, PathBuf},
     process::Stdio,
@@ -26,6 +25,36 @@ use tokio::{
 struct Registry {
     accounts: Vec<Account>,
     selected_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Info {
+    email: Option<String>,
+    subscription_type: Option<String>,
+    token_source: Option<String>,
+    api_key_source: Option<String>,
+}
+
+impl Info {
+    fn account(self, id: String) -> Option<Account> {
+        let plan = self.subscription_type.filter(|plan| !plan.is_empty())?;
+        if self.token_source.as_deref() == Some("none") {
+            return None;
+        }
+        Some(Account {
+            id,
+            provider: ProviderKind::Claude,
+            email: self.email,
+            plan_type: Some(plan),
+            usage: None,
+        })
+    }
+
+    fn logged_out(&self) -> bool {
+        self.token_source.as_deref() == Some("none")
+            && self.api_key_source.as_deref() == Some("none")
+    }
 }
 
 impl Default for Registry {
@@ -57,7 +86,7 @@ struct Login {
 struct Cli {
     child: Child,
     input: Option<ChildStdin>,
-    output: JoinHandle<Result<Vec<u8>, String>>,
+    output: JoinHandle<Result<(), String>>,
 }
 impl Drop for Cli {
     fn drop(&mut self) {
@@ -133,27 +162,17 @@ impl Accounts {
             .map_err(|_| "Claude アカウントを保存できません。".into())
     }
 
-    async fn info(&self, home: &Path, id: String) -> Result<Option<Account>, String> {
-        let mut process = Cli::start(
+    async fn info(&self, home: &Path) -> Result<Info, String> {
+        let cwd = tempfile::tempdir_in(&self.directory).map_err(|error| error.to_string())?;
+        let probe = super::process::Process::probe(
             &self.program,
             super::process::homes(&self.native_home, self.native_inherited, home)
-                .map(|(_, home)| home),
-            &["auth", "status", "--json"],
-            None,
-        )?;
-        let (_, output) = process.finish().await?;
-        let value: Value =
-            serde_json::from_slice(&output).map_err(|_| "Claude の認証状態を読み取れません。")?;
-        if value["loggedIn"] != true || value["authMethod"] != "claude.ai" {
-            return Ok(None);
-        }
-        Ok(Some(Account {
-            id,
-            provider: ProviderKind::Claude,
-            email: value["email"].as_str().map(str::to_owned),
-            plan_type: value["subscriptionType"].as_str().map(str::to_owned),
-            usage: None,
-        }))
+                .map(|(_, home)| (home, home)),
+            cwd.path(),
+        )
+        .await?;
+        serde_json::from_value(probe.initialized["account"].clone())
+            .map_err(|_| "Claude の認証状態を読み取れません。".into())
     }
 
     pub(crate) async fn list(&mut self) -> Result<(Vec<Account>, Option<String>), String> {
@@ -164,8 +183,9 @@ impl Accounts {
             .is_none_or(|at| at.elapsed() >= Duration::from_secs(60))
         {
             let native = self
-                .info(&self.native_home, "claude:desktop".into())
-                .await?;
+                .info(&self.native_home)
+                .await?
+                .account("claude:desktop".into());
             let previous = self
                 .registry
                 .accounts
@@ -214,37 +234,16 @@ impl Accounts {
         Ok(async move {
             cache
                 .read(async {
-                    let (mut process, _) = super::process::Process::start(
+                    super::process::Process::probe(
                         &program,
                         homes
                             .as_ref()
                             .map(|(config, credentials)| (config.as_path(), credentials.as_path())),
                         &directory,
-                        None,
-                        None,
-                        None,
                     )
-                    .await?;
-                    let result =
-                        async {
-                            process.write(&super::process::Input::Usage).await?;
-                            while let Some(event) = process.read().await? {
-                                if let super::process::Event::Error { message } = event {
-                                    return Err(message);
-                                }
-                                if let super::process::Event::Usage { usage, error } = event {
-                                    return match (usage, error) {
-                                        (Some(usage), None) => Ok(super::usage::windows(&usage)),
-                                        (_, error) => Err(error
-                                            .unwrap_or_else(|| "Claude usage unavailable".into())),
-                                    };
-                                }
-                            }
-                            Err("Claude exited".into())
-                        }
-                        .await;
-                    let _ = process.finish().await;
-                    result
+                    .await?
+                    .usage
+                    .map(|usage| super::usage::windows(&usage))
                 })
                 .await
         })
@@ -257,8 +256,9 @@ impl Accounts {
         match command {
             AccountCommand::Select { id } => {
                 let home = self.account_home(&id)?;
-                self.info(&home, id.clone())
+                self.info(&home)
                     .await?
+                    .account(id.clone())
                     .ok_or("Claude に再ログインしてください。")?;
                 let previous = self.registry.selected_id.replace(id.clone());
                 if let Err(error) = self.save().await {
@@ -294,7 +294,7 @@ impl Accounts {
                     &["auth", "logout"],
                     None,
                 )?;
-                if !process.finish().await?.0 {
+                if !process.finish().await? {
                     return Err("Claude のログアウトに失敗しました。".into());
                 }
                 self.registry.accounts.retain(|account| account.id != id);
@@ -414,8 +414,9 @@ impl Accounts {
                 }
                 let home = login.home.clone();
                 let account = self
-                    .info(&home, id.clone())
+                    .info(&home)
                     .await?
+                    .account(id.clone())
                     .ok_or("Claude のログインが完了していません。")?;
                 self.registry.accounts.push(account);
                 if let Err(error) = self.save().await {
@@ -443,27 +444,16 @@ impl Accounts {
         if let Some(login) = self.login.as_mut() {
             login.process.input.take();
             let _ = login.process.child.wait().await;
+            let home = login.home.clone();
             // A completion can race cancellation; let the CLI remove its credentials.
-            let mut process =
-                Cli::start(&self.program, Some(&login.home), &["auth", "logout"], None)?;
-            if !process.finish().await?.0 {
-                // A failed logout is harmless only when the CLI explicitly confirms
-                // there are no credentials. Keep the login available for retry on
-                // every other failure, including an unreadable status response.
-                let mut status = Cli::start(
-                    &self.program,
-                    Some(&login.home),
-                    &["auth", "status", "--json"],
-                    None,
-                )?;
-                let (_, output) = status.finish().await?;
-                let value: Value = serde_json::from_slice(&output)
-                    .map_err(|_| "Claude の認証状態を読み取れません。")?;
-                if value["loggedIn"] != false {
-                    return Err("Claude の認証手続きを破棄できません。".into());
-                }
+            let mut process = Cli::start(&self.program, Some(&home), &["auth", "logout"], None)?;
+            // A failed logout is harmless only when the SDK explicitly confirms
+            // there are no credentials. Keep the login available for retry on
+            // every other failure, including an unreadable status response.
+            if !process.finish().await? && !self.info(&home).await?.logged_out() {
+                return Err("Claude の認証手続きを破棄できません。".into());
             }
-            tokio::fs::remove_dir_all(&login.home)
+            tokio::fs::remove_dir_all(&home)
                 .await
                 .map_err(|_| "Claude の一時設定を削除できません。")?;
             self.login = None;
@@ -506,22 +496,22 @@ impl Cli {
         })
     }
 
-    async fn finish(&mut self) -> Result<(bool, Vec<u8>), String> {
+    async fn finish(&mut self) -> Result<bool, String> {
         let status = tokio::time::timeout(Duration::from_secs(30), self.child.wait())
             .await
             .map_err(|_| "Claude の認証処理がタイムアウトしました。")?
             .map_err(|_| "Claude の認証処理が終了しました。")?;
         self.input.take();
-        let output = (&mut self.output)
+        (&mut self.output)
             .await
             .map_err(|_| "Claude の認証応答を読み取れません。")??;
-        Ok((status.success(), output))
+        Ok(status.success())
     }
 }
 async fn read_output(
     mut reader: impl AsyncRead + Unpin,
     mut url: Option<oneshot::Sender<String>>,
-) -> Result<Vec<u8>, String> {
+) -> Result<(), String> {
     let mut output = Vec::new();
     let mut buffer = [0; 4096];
     loop {
@@ -561,12 +551,131 @@ async fn read_output(
             }
         }
     }
-    Ok(output)
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn sdk_identity_requires_a_subscription_and_explicit_logout_requires_no_credentials() {
+        for (value, subscribed, logged_out) in [
+            (
+                json!({"email":"account@example.invalid","subscriptionType":"max","tokenSource":"oauth","apiKeySource":"none"}),
+                true,
+                false,
+            ),
+            (json!({"subscriptionType":"max"}), true, false),
+            (
+                json!({"subscriptionType":"max","tokenSource":"none","apiKeySource":"none"}),
+                false,
+                true,
+            ),
+            (
+                json!({"tokenSource":"none","apiKeySource":"none"}),
+                false,
+                true,
+            ),
+            (
+                json!({"subscriptionType":"","tokenSource":"oauth"}),
+                false,
+                false,
+            ),
+            (
+                json!({"tokenSource":"none","apiKeySource":"ANTHROPIC_API_KEY"}),
+                false,
+                false,
+            ),
+            (json!({"tokenSource":"none"}), false, false),
+            (json!({}), false, false),
+        ] {
+            let info: Info = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(info.logged_out(), logged_out, "{value}");
+            let account = info.account("claude:test".into());
+            assert_eq!(account.is_some(), subscribed, "{value}");
+            if let Some(account) = account {
+                assert_eq!(account.id, "claude:test");
+                assert_eq!(account.provider, ProviderKind::Claude);
+                assert_eq!(account.email.as_deref(), value["email"].as_str());
+                assert_eq!(account.plan_type.as_deref(), Some("max"));
+                assert!(account.usage.is_none());
+            }
+        }
+        for invalid in [json!(null), json!([]), json!({"tokenSource":false})] {
+            assert!(serde_json::from_value::<Info>(invalid).is_err());
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn sdk_status_waits_for_usage_and_keeps_identity_when_usage_fails() {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let directory = tempfile::tempdir().unwrap();
+            let native = directory.path().join("native");
+            std::fs::create_dir(&native).unwrap();
+            let program = directory.path().join("claude.mjs");
+            std::fs::write(&program, r#"#!/usr/bin/env node
+import assert from 'node:assert/strict';
+import { createInterface } from 'node:readline';
+import { appendFileSync, existsSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+assert.ok(!process.argv.includes('auth'));
+assert.equal(process.env.CLAUDE_CONFIG_DIR, process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR);
+const home = process.env.CLAUDE_CONFIG_DIR;
+for await (const line of createInterface({ input: process.stdin })) {
+  const message = JSON.parse(line);
+  assert.equal(message.type, 'control_request');
+  const operation = message.request.subtype;
+  appendFileSync(join(home, 'operations'), `${operation}\n`);
+  let response;
+  if (operation === 'initialize') {
+    response = { account: existsSync(join(home, 'invalid-account')) ? null : {
+      email: 'sdk@example.invalid', subscriptionType: 'max', tokenSource: 'oauth', apiKeySource: 'none'
+    } };
+  } else {
+    assert.equal(operation, 'get_usage');
+    assert.equal(message.request.skip_behaviors, true);
+    writeFileSync(join(home, 'usage-requested'), '');
+    while (!existsSync(join(home, 'usage-release'))) await new Promise(resolve => setTimeout(resolve, 10));
+    response = {};
+  }
+  const error = operation === 'get_usage' && existsSync(join(home, 'usage-error'));
+  process.stdout.write(`${JSON.stringify({ type: 'control_response', response: {
+    request_id: message.request_id, subtype: error ? 'error' : 'success',
+    ...(error ? { error: 'usage unavailable' } : { response })
+  } })}\n`);
+}
+"#).unwrap();
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let mut accounts = Accounts::load(program, directory.path().join("accounts"), native.clone(), false).await.unwrap();
+            let mut info = Box::pin(accounts.info(&native));
+            tokio::select! {
+                _ = &mut info => panic!("status returned before usage completed"),
+                _ = async {
+                    while !native.join("usage-requested").exists() {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                } => {}
+            }
+            std::fs::write(native.join("usage-release"), "").unwrap();
+            let account = info.await.unwrap().account("claude:desktop".into()).unwrap();
+            assert_eq!(account.email.as_deref(), Some("sdk@example.invalid"));
+            assert_eq!(account.plan_type.as_deref(), Some("max"));
+            assert_eq!(std::fs::read_to_string(native.join("operations")).unwrap(), "initialize\nget_usage\n");
+
+            std::fs::write(native.join("usage-error"), "").unwrap();
+            let (listed, selected) = accounts.list().await.unwrap();
+            assert_eq!(listed, vec![account]);
+            assert_eq!(selected.as_deref(), Some("claude:desktop"));
+            std::fs::write(native.join("invalid-account"), "").unwrap();
+            accounts.native_checked_at = None;
+            assert!(accounts.list().await.is_err());
+            assert_eq!(accounts.registry.accounts, listed);
+        }).await.unwrap();
+    }
 
     #[tokio::test]
     async fn repeated_listing_reuses_native_identity_but_expiration_rechecks_it() {

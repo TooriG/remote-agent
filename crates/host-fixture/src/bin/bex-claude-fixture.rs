@@ -217,6 +217,17 @@ fn main() {
         let value: Value = serde_json::from_str(&line.unwrap()).unwrap();
         match value["type"].as_str().unwrap() {
             "control_request" if value["request"]["subtype"] == "initialize" => {
+                let home = std::env::var_os("CLAUDE_SECURESTORAGE_CONFIG_DIR").unwrap();
+                let home = Path::new(&home);
+                let account = if config["unauthenticated"] == true {
+                    json!({})
+                } else if let Ok(bytes) = fs::read(home.join("fixture-auth.json")) {
+                    serde_json::from_slice(&bytes).unwrap()
+                } else if session == "catalog" {
+                    json!({"tokenSource":"none","apiKeySource":"none"})
+                } else {
+                    json!({"subscriptionType":"Claude Max","tokenSource":"oauth","apiKeySource":"none"})
+                };
                 if session == "catalog" {
                     let home = std::env::var_os("CLAUDE_CONFIG_DIR").unwrap();
                     let home = Path::new(&home);
@@ -246,7 +257,7 @@ fn main() {
                                 {"value":"custom","displayName":"Custom model"}
                             ])),
                             "commands":[{"name":"fixture-skill","description":"Fixture skill"}],
-                            "account":if config["unauthenticated"] == true {json!({})} else {json!({"subscriptionType":"Claude Max"})}
+                            "account":account
                         }}}),
                     );
                 }
@@ -255,7 +266,9 @@ fn main() {
                 assert_eq!(value["request"]["skip_behaviors"], true);
                 let home = std::env::var_os("CLAUDE_SECURESTORAGE_CONFIG_DIR").unwrap();
                 let home = Path::new(&home);
-                if home.join("usage-paused").exists() {
+                if fs::read_to_string(home.join("usage-paused"))
+                    .is_ok_and(|cwd| Path::new(&cwd) == std::env::current_dir().unwrap())
+                {
                     fs::write(home.join("usage-requested"), "").unwrap();
                     while home.join("usage-paused").exists() {
                         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -484,20 +497,6 @@ fn auth(args: &[String]) {
     fs::create_dir_all(&home).unwrap();
     let file = home.join("fixture-auth.json");
     match args.get(1).map(String::as_str) {
-        Some("status") => {
-            if home.join("invalid-auth-status").exists() {
-                println!("unavailable");
-                std::process::exit(1);
-            }
-            let value = fs::read(&file)
-                .ok()
-                .map(|bytes| serde_json::from_slice::<Value>(&bytes).unwrap())
-                .unwrap_or(json!({"loggedIn":false,"authMethod":"none"}));
-            println!("{value}");
-            if value["loggedIn"] == false {
-                std::process::exit(1);
-            }
-        }
         Some("login") => {
             assert!(args.iter().any(|arg| arg == "--claudeai"));
             println!(
@@ -510,7 +509,7 @@ fn auth(args: &[String]) {
             if code.trim() != "fixture-code" {
                 std::process::exit(1);
             }
-            fs::write(file, serde_json::to_vec(&json!({"loggedIn":true,"authMethod":"claude.ai","email":"claude@example.invalid","subscriptionType":"max"})).unwrap()).unwrap();
+            fs::write(file, serde_json::to_vec(&json!({"tokenSource":"oauth","apiKeySource":"none","email":"claude@example.invalid","subscriptionType":"max"})).unwrap()).unwrap();
         }
         Some("logout") => {
             if home.join("fail-auth-logout").exists() {

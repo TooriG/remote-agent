@@ -1504,13 +1504,13 @@ async fn claude_accounts_login_switch_resume_cancel_and_logout_without_codex() {
         let root = dunce::canonicalize(directory.path()).unwrap();
         let native = root.join("claude-native");
         std::fs::create_dir_all(&native).unwrap();
-        std::fs::write(native.join("fixture-auth.json"), json!({"loggedIn":true,"authMethod":"claude.ai","email":"native@example.invalid","subscriptionType":"pro"}).to_string()).unwrap();
+        std::fs::write(native.join("fixture-auth.json"), json!({"tokenSource":"oauth","apiKeySource":"none","email":"native@example.invalid","subscriptionType":"pro"}).to_string()).unwrap();
         std::fs::create_dir_all(native.join("skills/account-test")).unwrap();
         std::fs::write(native.join("skills/account-test/SKILL.md"), "shared skill").unwrap();
         std::fs::write(native.join("settings.json"), r#"{"model":"shared-model"}"#).unwrap();
         let memory = Arc::new(Memory::default());
         let start = || HostFixture::start(&root, AppServerConfig { program: root.join("missing-codex"), ..Default::default() }, memory.clone(), "Claude accounts", false, Some(fixture_program()));
-        std::fs::write(native.join("usage-paused"), "").unwrap();
+        std::fs::write(native.join("usage-paused"), root.join("claude/accounts").to_string_lossy().as_bytes()).unwrap();
         let fixture = start().await.unwrap();
         let (store, endpoint) = connect(&fixture, Snapshot::default()).await;
         // Usage stays blocked until after selection. The outer deadline detects
@@ -1609,11 +1609,11 @@ async fn claude_cancel_recovers_from_logout_failure_only_when_logged_out() {
         let root = tempfile::tempdir().unwrap();
         let fixture = host(root.path(), Arc::new(Memory::default()), fixture_program()).await;
         let (store, endpoint) = connect(&fixture, Snapshot::default()).await;
-        for status in [
-            json!({"loggedIn": false}),
-            json!({"loggedIn": true}),
-            json!({}),
-            json!(null),
+        for (status, logged_out) in [
+            (json!({"tokenSource":"none","apiKeySource":"none"}), true),
+            (json!({"tokenSource":"oauth","apiKeySource":"none"}), false),
+            (json!({}), false),
+            (json!(null), false),
         ] {
             store
                 .dispatch(Intent::StartAccountLogin(op::StartAccountLogin {
@@ -1628,9 +1628,6 @@ async fn claude_cancel_recovers_from_logout_failure_only_when_logged_out() {
                 .join(login.login_id.strip_prefix("claude:").unwrap());
             std::fs::write(profile.join("fail-auth-logout"), "").unwrap();
             std::fs::write(profile.join("fixture-auth.json"), status.to_string()).unwrap();
-            if status.is_null() {
-                std::fs::write(profile.join("invalid-auth-status"), "").unwrap();
-            }
             let cancel = || {
                 Intent::CancelAccountLogin(op::CancelAccountLogin {
                     provider: ProviderKind::Claude,
@@ -1638,7 +1635,7 @@ async fn claude_cancel_recovers_from_logout_failure_only_when_logged_out() {
                 })
             };
             let result = store.dispatch(cancel()).await;
-            if status["loggedIn"] == false {
+            if logged_out {
                 result.unwrap();
             } else {
                 assert!(result.is_err(), "unconfirmed cleanup must fail");

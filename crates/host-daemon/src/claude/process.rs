@@ -82,6 +82,11 @@ pub(super) struct Process {
     stderr: tokio::task::JoinHandle<String>,
 }
 
+pub(super) struct Probe {
+    pub(super) initialized: Value,
+    pub(super) usage: Result<Value, String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,6 +312,19 @@ pub(super) fn set_homes(command: &mut Command, homes: Option<(&Path, &Path)>) {
 }
 
 impl Process {
+    pub(super) async fn probe(
+        program: &Path,
+        homes: Option<(&Path, &Path)>,
+        cwd: &Path,
+    ) -> Result<Probe, String> {
+        let (mut process, initialized) = Self::start(program, homes, cwd, None, None, None).await?;
+        // A short-lived probe must let an in-flight OAuth refresh finish before
+        // closing the CLI. Usage failures do not discard initialization metadata.
+        let usage = process.usage().await;
+        process.finish().await?;
+        Ok(Probe { initialized, usage })
+    }
+
     pub(super) async fn start(
         program: &Path,
         homes: Option<(&Path, &Path)>,
@@ -400,6 +418,28 @@ impl Process {
                     .map_err(|error| format!("invalid Claude SDK event: {error}"))
             })
             .transpose()
+    }
+
+    async fn usage(&mut self) -> Result<Value, String> {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            self.write(&Input::Usage).await?;
+            while let Some(event) = self.read().await? {
+                match event {
+                    Event::Error { message } => return Err(message),
+                    Event::Usage {
+                        usage: Some(usage),
+                        error: None,
+                    } => return Ok(usage),
+                    Event::Usage { error, .. } => {
+                        return Err(error.unwrap_or_else(|| "Claude usage unavailable".into()));
+                    }
+                    _ => {}
+                }
+            }
+            Err("Claude exited".into())
+        })
+        .await
+        .map_err(|_| "Claude の利用状況の取得がタイムアウトしました。".to_owned())?
     }
 
     pub(super) async fn finish(self) -> Result<(), String> {

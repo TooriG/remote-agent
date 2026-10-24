@@ -126,7 +126,10 @@ RPCs keep the original App Server and `CODEX_HOME`; only authentication helpers
 have private homes. Claude conversations, model discovery and usage requests use
 the native `CLAUDE_CONFIG_DIR` for settings, skills, plugins and history, and
 `CLAUDE_SECURESTORAGE_CONFIG_DIR` for the selected account's credentials. Claude
-login/status/logout helpers retain private account metadata. The Host does not
+login/logout helpers and SDK account probes retain private account metadata.
+Account and capability probes read SDK initialization metadata and await a usage
+request before closing the process, allowing OAuth refreshes to finish without a
+model prompt. A failed usage request does not erase the account's identity. The Host does not
 copy or link the shared conversation configuration into account directories.
 
 ## Process ownership and deployment

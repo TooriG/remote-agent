@@ -185,17 +185,13 @@ impl Claude {
             return Ok(Vec::new());
         };
         let cwd = tempfile::tempdir_in(&self.directory).map_err(|error| error.to_string())?;
-        let (process, initialized) = Process::start(
+        let probe = Process::probe(
             &self.program,
             process::homes(&self.native_home, self.native_inherited, &auth_home),
             cwd.path(),
-            None,
-            None,
-            None,
         )
         .await?;
-        process.finish().await?;
-        let entries = initialized["models"]
+        let entries = probe.initialized["models"]
             .as_array()
             .ok_or("Claude Code did not return a model catalog")?;
         entries
@@ -1844,23 +1840,13 @@ impl Agent for Claude {
                 .clone()
                 .try_acquire_owned()
                 .map_err(|error| error.to_string())?;
-            let (process, initialized) = Process::start(
+            let probe = Process::probe(
                 &self.program,
                 process::homes(&self.native_home, self.native_inherited, &auth_home),
                 directory,
-                None,
-                None,
-                None,
             )
             .await?;
-            if let Err(error) = process.finish().await {
-                catalog
-                    .errors
-                    .entry(ProviderKind::Claude)
-                    .or_default()
-                    .push(error);
-            }
-            let commands = initialized["commands"]
+            let commands = probe.initialized["commands"]
                 .as_array()
                 .ok_or("スキル一覧を取得できませんでした。")?;
             Ok::<_, String>(
