@@ -122,7 +122,7 @@ struct ConversationMarkdown: View {
                                                 blocks: [block],
                                                 actions: selection,
                                                 cwd: media.cwd,
-                                                identifier: textIdentifier
+                                                identifier: "markdown.cell.\(part.id).\(row).\(column)"
                                             )
                                         }
                                     }

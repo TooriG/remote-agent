@@ -23,6 +23,7 @@ final class BexAppViewModel: ObservableObject {
     private(set) var models: [Model] = []
     private var presentationTask: Task<Void, Never>?
     private var pendingPresentation: ConversationPresentationInput?
+    private var recentConversations: [ConversationPresentation] = []
 
     private(set) var store: AgentStore?
     private var initialization: Task<Void, Never>?
@@ -104,6 +105,9 @@ final class BexAppViewModel: ObservableObject {
         cancelInitialization()
         let old = store
         store = nil
+        recentConversations.removeAll()
+        pendingPresentation = nil
+        conversation = nil
         isConnecting = false
         return old
     }
@@ -216,6 +220,9 @@ final class BexAppViewModel: ObservableObject {
                     UserDefaults.standard.set(id, forKey: "bex.selected-host")
                     selectedProfileId = id
                     store = owner
+                    recentConversations.removeAll()
+                    pendingPresentation = nil
+                    conversation = nil
                     publish(owner.snapshot())
                     screen = .threads
                     pairingInvitation = nil
@@ -264,6 +271,7 @@ final class BexAppViewModel: ObservableObject {
 
 extension BexAppViewModel {
     func publish(_ next: AgentCore.Snapshot) {
+        guard !next.unchanged(other: snapshot) else { return }
         if let name = next.hostName(),
            let index = profiles.firstIndex(where: { $0.id == selectedProfileId }),
            profiles[index].name != name {
@@ -284,11 +292,10 @@ extension BexAppViewModel {
             models = next.models()
         }
         let changed = !next.conversationUnchanged(other: snapshot)
-        let source = next.conversationSource()
         snapshot = next
         synchronizeLiveActivities(foreground: UIApplication.shared.applicationState == .active)
         if changed {
-            projectConversation(source)
+            projectConversation(next.conversationSource())
         }
         persistence?.cancel()
         if listChanged {
@@ -303,8 +310,13 @@ extension BexAppViewModel {
     }
 
     private func projectConversation(_ source: AgentCore.Thread?) {
-        if conversation?.id != source?.id() {
+        guard let source else {
             conversation = nil
+            pendingPresentation = nil
+            return
+        }
+        if conversation?.id != source.id() {
+            conversation = recentConversations.first { $0.id == source.id() }
         }
         pendingPresentation = ConversationPresentationInput(source: source, snapshot: snapshot, host: selectedProfileId)
         guard presentationTask == nil else { return }
@@ -317,9 +329,14 @@ extension BexAppViewModel {
                 }.value
                 if selectedProfileId == input.host, snapshot.conversationUnchanged(other: input.snapshot) {
                     conversation = rendered
+                    if rendered.id != nil {
+                        recentConversations.removeAll { $0.id == rendered.id }
+                        recentConversations.insert(rendered, at: 0)
+                        if recentConversations.count > 3 {
+                            recentConversations.removeLast()
+                        }
+                    }
                 }
-                // Coalesce updates off MainActor before publishing parsed, stably sized rows.
-                try? await Task.sleep(nanoseconds: 100_000_000)
             }
             self?.presentationTask = nil
         }

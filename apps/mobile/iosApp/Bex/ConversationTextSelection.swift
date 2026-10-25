@@ -21,54 +21,25 @@ struct AssistantSelectableText: UIViewRepresentable {
         Coordinator(self)
     }
 
-    func makeUIView(context: Context) -> ConversationTextView {
-        let view = ConversationTextView(usingTextLayoutManager: false)
-        view.scrollsToTop = false
-        view.isEditable = false
-        view.isSelectable = true
-        view.isScrollEnabled = false
-        view.backgroundColor = .clear
-        view.textContainerInset = .zero
-        view.textContainer.lineFragmentPadding = 0
-        view.delegate = context.coordinator
-        view.accessibilityIdentifier = identifier
-        view.linkTextAttributes = [
-            .foregroundColor: UIColor.systemBlue,
-            .underlineStyle: NSUnderlineStyle.single.rawValue
-        ]
+    func makeUIView(context: Context) -> ConversationTextContainer {
+        let view = ConversationTextContainer()
+        view.textView.delegate = context.coordinator
+        view.textView.accessibilityIdentifier = identifier
+        view.update(blocks: blocks, dark: colorScheme == .dark, sizeCategory: sizeCategory)
         return view
     }
 
-    func updateUIView(_ view: ConversationTextView, context: Context) {
-        let coordinator = context.coordinator
-        coordinator.parent = self
-        guard coordinator.blocks != blocks || coordinator.sizeCategory != sizeCategory || coordinator
-            .colorScheme != colorScheme else { return }
-        coordinator.blocks = blocks
-        coordinator.sizeCategory = sizeCategory
-        coordinator.colorScheme = colorScheme
-        view.setContent(ConversationAttributedText.attributedText(blocks, dark: colorScheme == .dark,
-                                                                  attachmentWidth: view.attachmentWidth))
+    func updateUIView(_ view: ConversationTextContainer, context: Context) {
+        context.coordinator.parent = self
+        view.update(blocks: blocks, dark: colorScheme == .dark, sizeCategory: sizeCategory)
     }
 
-    func sizeThatFits(_ proposal: ProposedViewSize, uiView: ConversationTextView, context _: Context) -> CGSize? {
-        let width = proposal.width ?? ceil(uiView.attributedText.size().width)
-        guard width > 0 else { return nil }
-        if uiView.attachmentWidth != width {
-            uiView.attachmentWidth = width
-            uiView.setContent(ConversationAttributedText.attributedText(blocks, dark: colorScheme == .dark,
-                                                                        attachmentWidth: width))
-        }
-        let size = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
-        return CGSize(width: width, height: size.height)
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: ConversationTextContainer, context _: Context) -> CGSize? {
+        uiView.measure(width: proposal.width)
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: AssistantSelectableText
-        var blocks: [ConversationMarkdownContent.Block] = []
-        var sizeCategory: ContentSizeCategory?
-        var colorScheme: ColorScheme?
-
         init(_ parent: AssistantSelectableText) {
             self.parent = parent
         }
@@ -127,7 +98,7 @@ struct AssistantSelectableText: UIViewRepresentable {
     }
 }
 
-private enum ConversationAttributedText {
+enum ConversationAttributedText {
     static func attributedText(_ blocks: [ConversationMarkdownContent.Block],
                                dark: Bool, attachmentWidth: CGFloat) -> NSAttributedString {
         let text = NSMutableAttributedString(string: "")
@@ -192,15 +163,17 @@ private enum ConversationAttributedText {
                 weight: .regular
             )
         }
-        var traits = runFont.fontDescriptor.symbolicTraits
-        if run.strong {
-            traits.insert(.traitBold)
-        }
-        if run.emphasis {
-            traits.insert(.traitItalic)
-        }
-        if let descriptor = runFont.fontDescriptor.withSymbolicTraits(traits) {
-            runFont = UIFont(descriptor: descriptor, size: runFont.pointSize)
+        if run.strong || run.emphasis {
+            var traits = runFont.fontDescriptor.symbolicTraits
+            if run.strong {
+                traits.insert(.traitBold)
+            }
+            if run.emphasis {
+                traits.insert(.traitItalic)
+            }
+            if let descriptor = runFont.fontDescriptor.withSymbolicTraits(traits) {
+                runFont = UIFont(descriptor: descriptor, size: runFont.pointSize)
+            }
         }
         var attributes: [NSAttributedString.Key: Any] = [.font: runFont, .foregroundColor: UIColor.label]
         if let color = dark ? run.darkColor : run.lightColor {
@@ -286,53 +259,5 @@ private enum ConversationAttributedText {
         let base = style.code ? UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
             : UIFont.systemFont(ofSize: size, weight: style.header == nil ? .regular : .semibold)
         return UIFontMetrics.default.scaledFont(for: base)
-    }
-}
-
-/// Decorations stay in the same native text view as selectable prose.
-final class ConversationTextView: UITextView {
-    var attachmentWidth: CGFloat = 300
-
-    func setContent(_ content: NSAttributedString) {
-        let range = selectedRange
-        let old = text as NSString
-        let next = content.string as NSString
-        let keepSelection = range.length > 0 && NSMaxRange(range) <= old.length && NSMaxRange(range) <= next.length
-            && ConversationAttributedText.selectedText(attributedText, range: range) == ConversationAttributedText
-            .selectedText(
-                content,
-                range: range
-            )
-        textStorage.setAttributedString(content)
-        selectedRange = keepSelection ? range : NSRange(location: 0, length: 0)
-        invalidateIntrinsicContentSize()
-    }
-
-    static let quote = NSAttributedString.Key("bex.quote")
-    static let rule = NSAttributedString.Key("bex.rule")
-
-    override func draw(_ rect: CGRect) {
-        super.draw(rect)
-        let range = NSRange(location: 0, length: textStorage.length)
-        for attribute in [Self.quote, Self.rule] {
-            textStorage.enumerateAttribute(attribute, in: range) { value, range, _ in
-                guard value as? Bool == true else { return }
-                let glyphs = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
-                let bounds = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
-                let line = UIBezierPath()
-                if attribute == Self.quote {
-                    let lineX = max(1, bounds.minX - 10) + textContainerInset.left
-                    line.move(to: CGPoint(x: lineX, y: bounds.minY + textContainerInset.top))
-                    line.addLine(to: CGPoint(x: lineX, y: bounds.maxY + textContainerInset.top))
-                    line.lineWidth = 2
-                } else {
-                    line.move(to: CGPoint(x: 0, y: bounds.midY + textContainerInset.top))
-                    line.addLine(to: CGPoint(x: self.bounds.width, y: bounds.midY + textContainerInset.top))
-                    line.lineWidth = 0.5
-                }
-                UIColor.separator.setStroke()
-                line.stroke()
-            }
-        }
     }
 }

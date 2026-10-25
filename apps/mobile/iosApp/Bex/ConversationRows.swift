@@ -47,7 +47,7 @@ struct ThreadErrorRow: View {
     }
 }
 
-struct ThreadMessageRow: View {
+struct ThreadMessageRow: View, Equatable {
     let item: ConversationItem
     let isUser: Bool
     let media: ConversationMediaAccess
@@ -60,6 +60,16 @@ struct ThreadMessageRow: View {
     var discardUnknown: ((String) -> Void)?
     @State private var copied = false
     @State private var selectingText = false
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.item === rhs.item && lhs.isUser == rhs.isUser
+            && lhs.media.host == rhs.media.host && lhs.media.cwd == rhs.media.cwd
+            && lhs.timestampMs == rhs.timestampMs && lhs.forking == rhs.forking && lhs.forkError == rhs.forkError
+            && (lhs.fork == nil) == (rhs.fork == nil)
+            && (lhs.selection.askInSideChat == nil) == (rhs.selection.askInSideChat == nil)
+            && (lhs.restoreUnknown == nil) == (rhs.restoreUnknown == nil)
+            && (lhs.discardUnknown == nil) == (rhs.discardUnknown == nil)
+    }
 
     @ViewBuilder private var images: some View {
         let sources = item.data.imageSources
@@ -183,7 +193,7 @@ struct ThreadMessageRow: View {
     }
 }
 
-struct ThreadItemRow: View {
+struct ThreadItemRow: View, Equatable {
     let item: ConversationItem
     let media: ConversationMediaAccess
     let selection: ConversationSelectionActions
@@ -192,6 +202,12 @@ struct ThreadItemRow: View {
     let loadDetails: () async -> String?
     @State private var detailError: String?
     @State private var retry = 0
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.item === rhs.item && lhs.isExpanded == rhs.isExpanded
+            && lhs.media.host == rhs.media.host && lhs.media.cwd == rhs.media.cwd
+            && (lhs.selection.askInSideChat == nil) == (rhs.selection.askInSideChat == nil)
+    }
 
     private var icon: String {
         switch item.data.kind {

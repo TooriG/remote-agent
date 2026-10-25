@@ -121,11 +121,13 @@ hydration must not change this default.
   screen. Latest-message positioning must settle before paging a scrollable
   initial page. Preserve latest following and the reader's position when
   prepending older pages; never request duplicate pages while a read is pending.
-- iPhone observes the realized oldest/latest row boundaries with scroll visibility
-  callbacks. Native size-change anchoring owns latest following; estimated lazy
-  content sizes must not drive repeated scroll commands. Empty rendered pages
-  remain eligible for bounded paging. This follows [Apple's lazy-stack scrolling
-  guidance](https://developer.apple.com/videos/play/wwdc2026/321/).
+- iPhone measures the loaded page's rows and observes their oldest/latest
+  boundaries with scroll visibility callbacks. Native text drawing stays within
+  the viewport. `ScrollPosition` follows the measured viewport's end while latest
+  following is enabled and retains a detached reader's position; estimated row
+  sizes and timed scroll retries must not drive positioning. Empty rendered pages
+  remain eligible for bounded paging. See [Apple's scroll position
+  guidance](https://developer.apple.com/documentation/swiftui/scrollposition).
 - Retain cached history only when its suffix matches the refreshed page's
   prefix in order, preserving repeated turn occurrences from the server page.
   A shared ID elsewhere

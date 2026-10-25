@@ -16,8 +16,7 @@ struct ConversationPresentation: Sendable {
     private let projection: RenderedConversation
     private let queued: [String: ConversationItem]
 
-    static func project(_ source: AgentCore.Thread?, snapshot: AgentCore.Snapshot, previous: Self?) -> Self? {
-        guard let source else { return nil }
+    static func project(_ source: AgentCore.Thread, snapshot: AgentCore.Snapshot, previous: Self?) -> Self {
         let rendered = AgentCore.projectConversation(snapshot: snapshot, source: source, previous: previous?.projection)
         if let previous, rendered.unchanged(other: previous.projection) {
             return previous

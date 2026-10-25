@@ -4,11 +4,6 @@ import UIKit
 
 /// History and row presentation
 extension ThreadScreen {
-    func followLatest(to id: String?, using proxy: ScrollViewProxy) {
-        guard isFollowingLatest, let id else { return }
-        proxy.scrollTo(id, anchor: .bottom)
-    }
-
     @ViewBuilder
     func conversationRow(_ row: ThreadConversationRow) -> some View {
         switch row.content {
@@ -47,7 +42,7 @@ extension ThreadScreen {
                         session: $0,
                         turn: turn
                     )) } }
-            )
+            ).equatable()
         case let (.activityHeader(activity), _): activityHeader(activity)
         case (let .activity(_, turnId), let item?): activityItem(item, turnId: turnId)
         case let (.pendingRequest(request), _): ThreadRequestRow(request: request) { answer, complete in model.respond(
@@ -69,7 +64,7 @@ extension ThreadScreen {
             timestampMs: timestampMs,
             restoreUnknown: { model.restoreUnknownSubmission($0) },
             discardUnknown: { model.discardUnknownSubmission($0) }
-        )
+        ).equatable()
     }
 
     func activityItem(_ item: ConversationItem, turnId: String) -> some View {
@@ -93,7 +88,7 @@ extension ThreadScreen {
                     itemId: item.data.nativeId ?? item.data.id
                 )
             }
-        )
+        ).equatable()
     }
 
     @ViewBuilder

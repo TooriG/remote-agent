@@ -6,6 +6,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C0DE00000000000000000601 /* ConversationTextLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000602 /* ConversationTextLayout.swift */; };
 		C0DE0000000000000000029A /* BexModelScopeUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000039A /* BexModelScopeUITests.swift */; };
 		C0DE00000000000000000401 /* AgentSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000402; };
         D60000000000000000000001 /* SkeletonUI in Frameworks */ = {isa = PBXBuildFile; productRef = D60000000000000000000002; };
@@ -69,6 +70,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		C0DE00000000000000000602 /* ConversationTextLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationTextLayout.swift; sourceTree = "<group>"; };
 		C0DE0000000000000000039A /* BexModelScopeUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BexModelScopeUITests.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000402 /* AgentSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSettings.swift; sourceTree = "<group>"; };
         F1E85101D97E4E84A7B33C96 /* WorkspaceScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceScreen.swift; sourceTree = "<group>"; };
@@ -205,6 +207,7 @@
 				B2E000270000000000000002 /* ConversationRequest.swift */,
 				63950266A2798560BC414B70 /* ConversationMedia.swift */,
 				C0DE00000000000000000005 /* ConversationTextSelection.swift */,
+				C0DE00000000000000000602 /* ConversationTextLayout.swift */,
 				C0DE00000000000000000006 /* ConversationSideChat.swift */,
 				D074DC0F6B272156A6A39ED4 /* ConversationMarkdown.swift */,
 				123AEE37BEE0000000000002 /* ConversationVisualization.swift */,
@@ -382,6 +385,7 @@
 				B2E000270000000000000001 /* ConversationRequest.swift in Sources */,
 				2DCDAABCD1000D782FF1BE5B /* ConversationMedia.swift in Sources */,
 				C0DE00000000000000000105 /* ConversationTextSelection.swift in Sources */,
+				C0DE00000000000000000601 /* ConversationTextLayout.swift in Sources */,
 				C0DE00000000000000000106 /* ConversationSideChat.swift in Sources */,
 				FCD15282ED580E15F2FE6024 /* ConversationMarkdown.swift in Sources */,
 				123AEE37BEE0000000000001 /* ConversationVisualization.swift in Sources */,

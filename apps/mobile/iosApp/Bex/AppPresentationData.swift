@@ -20,7 +20,7 @@ struct HostProfile: Codable, Identifiable {
 }
 
 struct ConversationPresentationInput {
-    let source: AgentCore.Thread?
+    let source: AgentCore.Thread
     let snapshot: AgentCore.Snapshot
     let host: String?
 }

@@ -13,6 +13,9 @@ use std::sync::Arc;
 
 #[uniffi::export]
 impl Snapshot {
+    pub fn unchanged(&self, other: Arc<Self>) -> bool {
+        std::ptr::eq(self, other.as_ref())
+    }
     pub fn connection_generation(&self) -> u64 {
         self.connection_generation
     }
@@ -286,6 +289,24 @@ mod tests {
     }
 
     use super::*;
+
+    #[tokio::test]
+    async fn native_snapshot_identity_distinguishes_edits_from_duplicate_publication() {
+        let store = crate::store::Store::offline(Snapshot::default());
+        let before = store.snapshot();
+        let edit = || crate::state::Intent::SetDraftText {
+            thread_id: crate::state::DraftKey::Local {
+                key: "draft".into(),
+            },
+            text: "日本語の下書き".into(),
+        };
+        store.dispatch(edit()).await.unwrap();
+        let edited = store.snapshot();
+        assert!(!edited.unchanged(before));
+        store.dispatch(edit()).await.unwrap();
+        assert!(edited.unchanged(store.snapshot()));
+        store.close().await.unwrap();
+    }
 
     #[test]
     fn native_list_publication_follows_project_lifecycle_without_republishing_other_operations() {

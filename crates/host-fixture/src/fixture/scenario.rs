@@ -299,9 +299,13 @@ pub(super) async fn run(
     )?;
     if prompt.contains("[long-markdown]") {
         let body = "Markdown stream fixture ".repeat(80) + "\n";
+        let prose = (0..300)
+            .map(|index| format!("Paragraph {index}. {}\n\n", "Long selectable prose retains its complete text while the reader edits a draft. ".repeat(4)))
+            .collect::<String>();
+        let ending = format!("\n```\n\n{prose}**MARKDOWN_STREAM_COMPLETE**");
         for chunk in std::iter::once("```text\n")
             .chain(std::iter::repeat_n(body.as_str(), 36))
-            .chain(std::iter::once("\n```\n\n**MARKDOWN_STREAM_COMPLETE**"))
+            .chain(std::iter::once(ending.as_str()))
         {
             if interrupted(&stop, Duration::from_millis(250)).await {
                 return Ok(());

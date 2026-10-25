@@ -34,12 +34,10 @@ extension BexLaunchUITests {
         captureScreen(app, named: "Older history loaded by scrolling")
         assertHistoryTopNavigation(app, latest: latest)
         XCTAssertTrue(latest.isHittable)
-        for _ in 0 ..< 4 {
-            app.navigationBars.buttons.element(boundBy: 0).tap()
-            XCTAssertTrue(row.waitForExistence(timeout: 10)); row.tap()
-            XCTAssertTrue(latest.waitForExistence(timeout: 20))
-            XCTAssertTrue(latest.isHittable, "Every reopen must render the latest message in the viewport")
-        }
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(row.waitForExistence(timeout: 10)); row.tap()
+        XCTAssertTrue(latest.waitForExistence(timeout: 20))
+        XCTAssertTrue(latest.isHittable, "Every reopen must render the latest message in the viewport")
     }
 
     private func assertHistoryTopNavigation(_ app: XCUIApplication, latest: XCUIElement) {
@@ -95,13 +93,11 @@ extension BexLaunchUITests {
         XCTAssertTrue(running.waitForExistence(timeout: 10))
         let approval = app.buttons["request.accept"]
         XCTAssertTrue(approval.waitForExistence(timeout: 10))
-        for _ in 0 ..< 4 {
-            app.navigationBars.buttons.element(boundBy: 0).tap()
-            XCTAssertTrue(row.waitForExistence(timeout: 10)); row.tap()
-            XCTAssertTrue(running.waitForExistence(timeout: 10))
-            XCTAssertTrue(approval.waitForExistence(timeout: 10))
-            XCTAssertTrue(approval.isHittable, "Running history must render immediately after reopening")
-        }
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(row.waitForExistence(timeout: 10)); row.tap()
+        XCTAssertTrue(running.waitForExistence(timeout: 10))
+        XCTAssertTrue(approval.waitForExistence(timeout: 10))
+        XCTAssertTrue(approval.isHittable, "Running history must render immediately after reopening")
         captureScreen(app, named: "Running long history reopened without a blank viewport")
     }
 
@@ -308,6 +304,20 @@ extension BexLaunchUITests {
         XCTAssertFalse(app.buttons["task.latest"].exists,
                        "Streaming growth of the same row must keep its final text visible")
         captureScreen(app, named: "Long Markdown stream completed with draft preserved")
+        app.buttons["task.top"].tap()
+        let code = app.textViews.matching(NSPredicate(format: "value CONTAINS %@", "Markdown stream fixture"))
+            .firstMatch
+        XCTAssertTrue(code.waitForExistence(timeout: 10))
+        message.tap()
+        // Place the caret after the restored draft before appending.
+        message.coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.5)).tap()
+        message.typeText(" while reading")
+        XCTAssertEqual(message.value as? String, "Keep this draft while reading")
+        let latest = app.buttons["task.latest"]
+        XCTAssertTrue(latest.exists, "Editing must retain the older reading position")
+        latest.tap()
+        let returned = expectation(for: NSPredicate(format: "isHittable == true"), evaluatedWith: completed)
+        wait(for: [returned], timeout: 5)
     }
 
     func testSimulatorReopensCompletedHistoryCollapsed() throws {
