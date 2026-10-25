@@ -356,8 +356,9 @@ pub(super) async fn run(home: PathBuf, config: Config) -> Result<()> {
                         list_contents = contents;
                         threads.clear();
                         let summaries: Vec<Map<String, Value>> = serde_json::from_slice(list_contents.as_ref().unwrap())?;
-                        for mut summary in summaries {
+                        for (index, mut summary) in summaries.into_iter().enumerate() {
                             let thread_id = summary["id"].as_str().ok_or("fixture thread lacks id")?.to_owned();
+                            summary.insert("path".into(), json!(context.home.join(format!("imported-{index}.jsonl"))));
                             let mut thread = Thread::new(thread_id.clone(), summary.remove("cwd").unwrap_or(Value::Null));
                             let persisted_turns = summary.remove("turns");
                             thread.metadata.extend(summary);

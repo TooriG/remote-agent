@@ -113,6 +113,9 @@ async fn initial_import_discovers_native_projects_and_continues_the_original_ses
     use agent_transport::transport::{Endpoint, Relays};
     let directory = tempfile::tempdir().unwrap();
     let root = dunce::canonicalize(directory.path()).unwrap();
+    let original_directory = tempfile::tempdir().unwrap();
+    let original_rollout = original_directory.path().join("original-session.jsonl");
+    std::fs::write(&original_rollout, "original session history\n").unwrap();
     let repository = root.join("existing-project");
     let other = root.join("unselected-project");
     for path in [&repository, &other] {
@@ -132,6 +135,7 @@ async fn initial_import_discovers_native_projects_and_continues_the_original_ses
         .as_secs();
     let threads: Vec<_> = (0..106).map(|index| serde_json::json!({
         "id":format!("external-{index}"), "cwd":if index == 105 { &other } else { &repository },
+        "path":original_rollout,
         "name":format!("Existing conversation {index}"), "updatedAt":now, "model":"fixture-model",
         "historyMode":"paginated", "status":{"type":"notLoaded"},
         "turns":[{"id":"original-turn","status":"completed","items":[
@@ -228,6 +232,11 @@ async fn initial_import_discovers_native_projects_and_continues_the_original_ses
         .await
         .unwrap();
     assert_eq!(finished(&mut events).await.status, TurnStatus::Completed);
+    assert_eq!(
+        std::fs::read_to_string(&original_rollout).unwrap(),
+        "original session history\n",
+        "continuing an imported fixture must preserve the original native rollout"
+    );
     drop(events);
     local.close().await;
     store.close().await.unwrap();
