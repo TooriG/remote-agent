@@ -1,4 +1,5 @@
 // Separate iPhone app and sandbox for the development Host.
+CURRENT_PROJECT_VERSION = 85
 BEX_DEV_BUNDLE_Bex = dev.remoteagent.mobile.ios.dev
 BEX_DEV_BUNDLE_BexTaskActivity = dev.remoteagent.mobile.ios.dev.TaskActivity
 BEX_DEV_BUNDLE_BexUITests = dev.remoteagent.mobile.ios.dev.uitests
