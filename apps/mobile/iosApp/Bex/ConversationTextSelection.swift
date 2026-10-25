@@ -132,9 +132,6 @@ private enum ConversationAttributedText {
                                dark: Bool, attachmentWidth: CGFloat) -> NSAttributedString {
         let text = NSMutableAttributedString(string: "")
         for (index, block) in blocks.enumerated() {
-            if index > 0 {
-                text.append(NSAttributedString(string: "\n"))
-            }
             let start = text.length
             let style = block.style
             let font = font(for: style)
@@ -172,6 +169,11 @@ private enum ConversationAttributedText {
             if style.rule {
                 text.addAttributes([ConversationTextView.rule: true, .foregroundColor: UIColor.clear,
                                     copySource: "---"], range: paragraphRange)
+            }
+            // TextKit needs the paragraph's font and style on its terminating newline too.
+            // Keep the separator outside decoration/copy ranges so copying retains line breaks.
+            if index + 1 < blocks.count {
+                text.append(NSAttributedString(string: "\n", attributes: [.font: font]))
             }
             text.addAttribute(
                 .paragraphStyle,
