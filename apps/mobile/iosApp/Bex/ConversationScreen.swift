@@ -148,6 +148,9 @@ struct ThreadScreen: View {
                     .padding(.horizontal, 16)
                     .padding(.vertical, 6)
                 }
+                // Keep the scroll view's identity off introspection's marker views.
+                .accessibilityIdentifier("task.detail")
+                .accessibilityValue(threadAccessibilityValue(thread))
                 .introspect(.scrollView, on: .iOS(.v26...)) { scroll in
                     scrollController.onScrollToTop = { followLatest.wrappedValue = false }
                     scrollController.attach(to: scroll)
@@ -170,8 +173,6 @@ struct ThreadScreen: View {
                         transaction.scrollContentOffsetAdjustmentBehavior = .disabled
                     }
                 }
-                .accessibilityIdentifier("task.detail")
-                .accessibilityValue(threadAccessibilityValue(thread))
                 .buttonStyle(.plain)
                 .simultaneousGesture(DragGesture(minimumDistance: 1).onChanged { gesture in
                     guard isFollowingLatest,
