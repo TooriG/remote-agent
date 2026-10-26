@@ -66,15 +66,7 @@ async function main() {
     writeFileSync(join(directory, `${profile.uuid}.mobileprovision`), Buffer.from(profile.profileContent, 'base64'), { mode: 0o600 });
     mapping[identifier] = profile.name;
   }
-  writeFileSync('target/apple-release/provisioning.json', JSON.stringify({ profiles: mapping }) + '\n');
-  // Conditional settings belong in xcconfig: xcodebuild CLI assignments split at the first '='.
-  writeFileSync('target/apple-release/signing.xcconfig', [
-    'CODE_SIGN_STYLE[sdk=iphoneos*] = Manual',
-    'CODE_SIGN_IDENTITY[sdk=iphoneos*] = Apple Distribution',
-    'DEVELOPMENT_TEAM[sdk=iphoneos*] = K65K9J8686',
-    `PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*] = ${result.prefix} $(PRODUCT_BUNDLE_IDENTIFIER)`,
-    '',
-  ].join('\n'));
+  writeFileSync('target/apple-release/provisioning.json', JSON.stringify({ prefix: result.prefix, profiles: mapping }) + '\n');
   console.log('Installed App Store provisioning profiles for BEX and its activity extension.');
 }
 

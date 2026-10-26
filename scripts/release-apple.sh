@@ -27,9 +27,11 @@ mv "$output/notarized.zip" "$zip"
 archive="$output/Bex.xcarchive"
 auth=(-authenticationKeyPath "$BEX_ASC_PRIVATE_KEY_FILE" -authenticationKeyID "$BEX_ASC_KEY_ID" -authenticationKeyIssuerID "$BEX_ASC_ISSUER_ID")
 node scripts/apple-provisioning.mjs
-# Scope distribution settings to device targets; Swift package build plugins run on macOS.
+profile_specifier="BEX_IOS_PROFILE_SPECIFIER=$(jq -er .prefix "$output/provisioning.json") "'$(PRODUCT_BUNDLE_IDENTIFIER)'
+# Only the app and extension consume these settings; Swift package build plugins keep their defaults.
 just ios-archive "$archive" "$output/DerivedData" "${auth[@]}" \
-    "CURRENT_PROJECT_VERSION=$BEX_BUILD_NUMBER" -xcconfig "$output/signing.xcconfig" \
+    "CURRENT_PROJECT_VERSION=$BEX_BUILD_NUMBER" BEX_IOS_CODE_SIGN_STYLE=Manual \
+    'BEX_IOS_CODE_SIGN_IDENTITY=Apple Distribution' "$profile_specifier" \
     "OTHER_CODE_SIGN_FLAGS=--keychain $BEX_CODE_SIGN_KEYCHAIN"
 app="$archive/Products/Applications/Bex.app"
 codesign --verify --deep --strict "$app"

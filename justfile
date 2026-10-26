@@ -14,7 +14,7 @@ unit-tests *targets:
     #!/usr/bin/env bash
     set -uo pipefail
     failed=0
-    node --test scripts/apple-release.test.mjs scripts/apple-provisioning.test.mjs || failed=1
+    node --test scripts/apple-*.test.mjs || failed=1
     node --test apps/desktop/src/browser/password-fill.test.cjs || failed=1
     pwsh -NoLogo -NoProfile -NonInteractive -File tools/windows-fxc/update.test.ps1 || failed=1
     npm --prefix crates/host-daemon/src/claude/sdk ci --ignore-scripts --no-audit --no-fund || failed=1

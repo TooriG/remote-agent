@@ -97,7 +97,7 @@ jobs:
           nix develop .#native --command actionlint
           nix develop .#native --command pwsh -NoLogo -NoProfile -NonInteractive -File tools/windows-fxc/update.test.ps1
           nix develop .#native --command node --test lp/download.test.cjs
-          nix develop .#native --command node --test scripts/apple-release.test.mjs
+          nix develop .#native --command node --test scripts/apple-*.test.mjs
           nix develop .#native --command npm --prefix crates/host-daemon/src/visualize ci --ignore-scripts --no-audit
           nix develop .#native --command npm --prefix crates/host-daemon/src/visualize run vendor
           git diff --exit-code -- crates/host-daemon/src/visualize
