@@ -77,8 +77,7 @@ private fun ModelPickerDialog(
 ) {
     val key = snapshot.navigation().draftKey
     var query by remember(key) { mutableStateOf("") }
-    val fixedProvider = snapshot.navigation().threadId?.provider
-    val choices = snapshot.modelsMatching(fixedProvider, query)
+    val choices = snapshot.modelsMatching(null, query)
     AlertDialog(
         onDismissRequest = { dismiss() },
         title = { Text("モデルと実行設定") },
@@ -91,8 +90,8 @@ private fun ModelPickerDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                if (fixedProvider != null)
-                    Text("この会話のAIは固定されています。別のAIは新規チャットで選べます。", style = MaterialTheme.typography.bodySmall)
+                if (snapshot.navigation().threadId != null)
+                    Text("次の送信時に選んだAIへ履歴を引き継ぎます。", style = MaterialTheme.typography.bodySmall)
                 LazyColumn(Modifier.heightIn(max = 220.dp)) {
                     items(choices, key = { "${it.model.provider}:${it.model.id}" }) { choice ->
                         TextButton(

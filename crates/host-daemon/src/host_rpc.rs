@@ -2,6 +2,7 @@
 //! Backend adapters translate their protocols into the shared conversation API.
 
 pub(crate) mod agent;
+mod conversations;
 pub(crate) mod requests;
 pub(crate) mod routing;
 pub(crate) mod service;

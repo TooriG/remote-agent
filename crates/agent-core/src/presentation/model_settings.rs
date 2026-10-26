@@ -6,13 +6,20 @@ use crate::{
 };
 use agent_protocol::operations::UsageWindow;
 
-pub(crate) fn draft_provider(
-    key: &crate::state::DraftKey,
-    model: Option<&ModelRef>,
-) -> Option<ProviderKind> {
-    match key {
-        crate::state::DraftKey::Session { session } => Some(session.provider),
-        crate::state::DraftKey::Local { .. } => model.map(|model| model.provider),
+impl Snapshot {
+    pub(crate) fn draft_provider(
+        &self,
+        key: &crate::state::DraftKey,
+        model: Option<&ModelRef>,
+    ) -> Option<ProviderKind> {
+        model.map(|model| model.provider).or_else(|| match key {
+            crate::state::DraftKey::Session { session } => Some(
+                self.thread_metadata(session)
+                    .and_then(|thread| thread.active_provider)
+                    .unwrap_or(session.provider),
+            ),
+            crate::state::DraftKey::Local { .. } => None,
+        })
     }
 }
 
@@ -183,7 +190,7 @@ impl Snapshot {
         &self,
         thread_id: crate::state::DraftKey,
     ) -> Option<ProviderKind> {
-        draft_provider(
+        self.draft_provider(
             &thread_id,
             self.drafts
                 .get(&thread_id)

@@ -31,9 +31,6 @@ impl Snapshot {
             let (Some(id), Some(parent)) = (&thread.id, &thread.parent_id) else {
                 continue;
             };
-            if id.provider != parent.provider {
-                continue;
-            }
             let observed = self.activity.active.get(id).copied();
             let (status, active) = agent_status(
                 match thread.status {
@@ -62,12 +59,12 @@ impl Snapshot {
             );
         }
         for (owner, thread) in self.conversations.iter() {
-            for item in thread
-                .turns
-                .iter()
-                .flatten()
-                .flat_map(|turn| turn.items.iter().flatten())
-            {
+            for (item, provider) in thread.turns.iter().flatten().flat_map(|turn| {
+                turn.items
+                    .iter()
+                    .flatten()
+                    .map(move |item| (item, turn.provider.unwrap_or(owner.provider)))
+            }) {
                 let ItemBody::Subagent {
                     tool,
                     prompt,
@@ -86,7 +83,7 @@ impl Snapshot {
                     .or(prompt.as_deref())
                     .map(str::to_owned);
                 if receivers.is_empty() {
-                    if owner.provider != ProviderKind::Claude {
+                    if provider != ProviderKind::Claude {
                         continue;
                     }
                     let key = format!("item:{owner}:{}", item.id);
@@ -125,7 +122,7 @@ impl Snapshot {
                     );
                 } else {
                     for receiver in receivers {
-                        if receiver.provider != owner.provider {
+                        if receiver.provider != provider {
                             continue;
                         }
                         let key = format!("session:{receiver}");

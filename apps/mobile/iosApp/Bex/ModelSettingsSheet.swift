@@ -41,7 +41,7 @@ struct ModelSettingsScreen: View {
     }
 
     private var provider: ProviderKind? {
-        (defaults || model.isNewThread ? providerOverride : nil)
+        providerOverride
             ?? model.snapshot.modelProviderForDraft(threadId: model.coreDraftKey)
     }
 
@@ -61,7 +61,7 @@ struct ModelSettingsScreen: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
-            ModelAgentRail(provider: provider, disabled: disabled || (!defaults && !model.isNewThread),
+            ModelAgentRail(provider: provider, disabled: disabled,
                            select: selectProvider)
             Divider().padding(.vertical, 8)
             ScrollView {

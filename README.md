@@ -167,7 +167,9 @@ The Host runs the unmodified CLI with streaming JSON input/output and its own pe
 
 Text, PNG/JPEG/GIF/WebP images, file references, tool approvals, user questions, interruption and subsequent turns use the same Store and authenticated transport as Codex. Working-directory selection and automatic worktree settings apply to both. Claude's native transcript is the only persistent conversation source. The Host reads its configured native directory (`--claude-home`, `CLAUDE_CONFIG_DIR`, or `~/.claude`) without launching inference and never writes bex conversation records. Disconnecting a client leaves execution running; reconnecting opens the current snapshot, including currently valid unanswered requests, without replaying events.
 
-Create a new conversation to switch between Codex and Claude. Claude currently accepts subsequent input after the active turn completes or is interrupted; the composer explains this limit and retains the draft during a running turn. Claude-to-Codex delegation and Claude forks/side chats are not implemented. Codex startup failure or exit does not stop the Host, Claude turns, pairing, files, or workspace selection. The Host owns PTYs independently of Codex and retains device-owned shells across client disconnections. Dictation and Codex account operations still require Codex. Worktree deletion is blocked while Codex conversation activity cannot be checked. The CLI integration has been exercised with Claude Code 2.1.266.
+Use the model picker to switch between Codex, Claude, and DSH within a conversation. Finish the current response and unanswered requests, then send the next message to continue in the same conversation and workspace. Returning to an agent reuses its native session and supplies history it has not seen. Long handoffs favor the original request and recent exchanges; agents can retrieve omitted material with the Host's history command. Past attachments, reasoning, and native tool state are not transferred. Native transcripts remain the source of conversation text; `bex-conversations.json` stores provider bindings and the context delivered during handoffs. Update the Host and clients from the same revision.
+
+Claude-to-Codex delegation and Claude's own forks/side chats are not implemented. Codex startup failure or exit does not stop the Host, Claude turns, pairing, files, or workspace selection. The Host owns PTYs independently of Codex and retains device-owned shells across client disconnections. Dictation and Codex account operations still require Codex. Worktree deletion is blocked while Codex conversation activity cannot be checked. The CLI integration has been exercised with Claude Code 2.1.266.
 
 Mac conversation file links open the Host's parent directory and file editor in the Files panel, retaining unsaved file drafts and revision checks. Side Chat displays files and diffs in its own panel with a return-to-chat control, preserving the conversation draft.
 
@@ -187,7 +189,7 @@ Voice input appends recognized text on Stop or submits it with the draft and att
 
 ```sh
 agent-cli --ticket <endpoint-ticket> --identity-file <32-byte-key> [--invitation <uuid>] list
-agent-cli <connection> send <thread-id> <text> --client-message-id <id> [--model m] [--effort e]
+agent-cli <connection> send <thread-id> <text> --client-message-id <id> [--model m] [--provider codex|claude|deepseek] [--effort e]
 agent-cli <connection> approve 7 --decision 2          # numeric request ID
 agent-cli <connection> approve '"request-id"' --decision 2   # string request ID
 ```

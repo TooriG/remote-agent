@@ -1024,12 +1024,6 @@ fn account_usage_view(usage: Option<&agent_protocol::operations::AccountUsage>) 
 
 impl Desktop {
     fn show_openrouter_models(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self
-            .selected()
-            .is_some_and(|session| session.provider != ProviderKind::DeepSeek)
-        {
-            self.new_chat(self.snapshot.selected_directory(), window, cx);
-        }
         self.model_provider = Some(ProviderKind::DeepSeek);
         self.model_panel = ModelPanel::Models;
         self.model_search
@@ -1190,13 +1184,9 @@ impl Desktop {
                         button.bg(rgb(appearance::SELECTED))
                     })
                     .accessibility_label(label)
-                    .tooltip(if self.selected().is_some() {
-                        "この会話のエージェントは固定です。別のエージェントは新しい会話で選べます。"
-                    } else {
-                        label
-                    })
+                    .tooltip(label)
                     .debug_selector(move || format!("model-agent-{label}"))
-                    .disabled(disabled || self.selected().is_some())
+                    .disabled(disabled)
                     .on_click(cx.listener(move |s, _, window, cx| {
                         s.model_provider = Some(value);
                         s.model_search
@@ -1213,16 +1203,11 @@ impl Desktop {
                     })),
             );
         }
-        if let Some(session) = self.selected() {
-            let label = match session.provider {
-                ProviderKind::Codex => "Codex",
-                ProviderKind::Claude => "Claude",
-                ProviderKind::DeepSeek => "DSH",
-            };
+        if self.selected().is_some() {
             body = body.child(
                 v_flex()
-                    .id("model-agent-locked-notice")
-                    .debug_selector(|| "model-agent-locked-notice".into())
+                    .id("model-agent-handoff-notice")
+                    .debug_selector(|| "model-agent-handoff-notice".into())
                     .gap_2()
                     .p_2()
                     .rounded(px(8.))
@@ -1230,26 +1215,13 @@ impl Desktop {
                     .child(
                         div()
                             .text_sm()
-                            .child(format!("この会話は{label}を使用しています")),
+                            .child("AIを切り替えて会話を続けられます"),
                     )
                     .child(
                         div()
                             .text_xs()
                             .text_color(rgb(appearance::MUTED))
-                            .child("別のエージェントは、新しい会話で選べます。"),
-                    )
-                    .child(
-                        Button::new("model-new-chat")
-                            .label("新しい会話でエージェントを選ぶ")
-                            .accessibility_label("新しい会話でエージェントを選ぶ")
-                            .debug_selector(|| "model-new-chat".into())
-                            .disabled(disabled)
-                            .on_click(cx.listener(|s, _, window, cx| {
-                                let cwd = s.snapshot.selected_directory();
-                                s.model_provider = None;
-                                s.new_chat(cwd, window, cx);
-                                cx.notify();
-                            })),
+                            .child("次の送信時に履歴を引き継ぎます。実行中の応答がある場合は完了を待ってください。"),
                     ),
             );
         } else {
@@ -1739,7 +1711,7 @@ mod tests {
                 <= window.debug_bounds("model-effort").unwrap().left()
         );
         assert!(window.debug_bounds("model-choice-gpt").is_some());
-        assert!(window.debug_bounds("model-agent-locked-notice").is_none());
+        assert!(window.debug_bounds("model-agent-handoff-notice").is_none());
         let model = window.debug_bounds("model-choice-gpt").unwrap();
         let effort = window.debug_bounds("model-picker-effort").unwrap();
         let speed = window.debug_bounds("model-picker-speed").unwrap();
@@ -1816,14 +1788,20 @@ mod tests {
         });
         window.run_until_parked();
         let claude = window.debug_bounds("model-agent-Claude").unwrap();
-        let notice = window.debug_bounds("model-agent-locked-notice").unwrap();
-        let new_chat = window.debug_bounds("model-new-chat").unwrap();
+        let notice = window.debug_bounds("model-agent-handoff-notice").unwrap();
         let summary = window.debug_bounds("model-account-summary").unwrap();
         assert!(notice.bottom() <= summary.top());
-        assert!(new_chat.bottom() <= notice.bottom());
         window.simulate_click(claude.center(), Modifiers::default());
-        window.update(|_, cx| assert!(view.read(cx).0.read(cx).model_provider.is_none()));
-        assert!(window.debug_bounds("model-choice-gpt").is_some());
+        window.run_until_parked();
+        window.update(|_, cx| {
+            let desktop = view.read(cx).0.read(cx);
+            assert_eq!(
+                desktop.model_provider,
+                Some(agent_protocol::session::ProviderKind::Claude)
+            );
+            assert_eq!(desktop.selected().unwrap().id, "existing");
+        });
+        assert!(window.debug_bounds("model-choice-claude:sonnet").is_some());
         window.update(|_, cx| {
             view.read(cx).0.clone().update(cx, |view, cx| {
                 view.model_panel = ModelPanel::Manage;
@@ -1834,7 +1812,12 @@ mod tests {
         window.run_until_parked();
         let claude = window.debug_bounds("model-provider-Claude").unwrap();
         window.simulate_click(claude.center(), Modifiers::default());
-        window.update(|_, cx| assert!(view.read(cx).0.read(cx).model_provider.is_none()));
+        window.update(|_, cx| {
+            assert_eq!(
+                view.read(cx).0.read(cx).model_provider,
+                Some(agent_protocol::session::ProviderKind::Claude)
+            )
+        });
     }
     #[gpui::test]
     fn dsh_key_form_switches_provider_without_carrying_the_previous_secret(

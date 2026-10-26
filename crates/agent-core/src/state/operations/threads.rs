@@ -196,7 +196,7 @@ fn merge_received(
             let Some(id) = cached.id.as_ref() else {
                 continue;
             };
-            let provider = id.provider.key();
+            let provider = cached.active_provider.unwrap_or(id.provider).key();
             if errors.contains_key(provider)
                 && !threads
                     .data
@@ -790,7 +790,12 @@ fn select_thread(snapshot: &mut Snapshot, id: crate::session::SessionRef, cwd: S
             previous.model.as_ref(),
             previous.effort.as_deref(),
             previous.service_tier.as_deref(),
-            Some(id.provider),
+            Some(
+                snapshot
+                    .thread_metadata(&id)
+                    .and_then(|thread| thread.active_provider)
+                    .unwrap_or(id.provider),
+            ),
             &snapshot.models,
             &snapshot.model_errors,
             snapshot.allows_custom_codex_models(),
@@ -839,7 +844,12 @@ pub(super) fn open_thread(
                 model.as_ref(),
                 None,
                 None,
-                Some(id.provider),
+                Some(
+                    snapshot
+                        .thread_metadata(&id)
+                        .and_then(|thread| thread.active_provider)
+                        .unwrap_or(id.provider),
+                ),
                 &snapshot.models,
                 &snapshot.model_errors,
                 snapshot.allows_custom_codex_models(),
@@ -886,10 +896,27 @@ pub(super) fn refresh_thread(snapshot: &mut Snapshot, incoming: Thread) {
     {
         let count = thread.turns.as_ref().map_or(0, Vec::len);
         if thread.history_cursor.is_some() && turns.len() > count {
+            let managed_start = thread
+                .active_provider
+                .and_then(|_| thread.history_cursor.as_ref()?.parse::<usize>().ok())
+                .and_then(|start| start.checked_add(count)?.checked_sub(turns.len()));
             thread.turns = Some(turns);
-            thread.history_cursor = cached.history_cursor.clone();
-            thread.history_has_more = cached.history_has_more;
-            thread.history_read_state = cached.history_read_state.clone();
+            if let Some(start) = managed_start {
+                thread.history_cursor = (start > 0).then(|| start.to_string());
+                thread.history_has_more = Some(start > 0);
+                thread.history_read_state = Some(crate::session::HistoryReadState::new(
+                    if start > 0 {
+                        crate::session::HistoryReadKind::Partial
+                    } else {
+                        crate::session::HistoryReadKind::Complete
+                    },
+                    vec![],
+                ));
+            } else {
+                thread.history_cursor = cached.history_cursor.clone();
+                thread.history_has_more = cached.history_has_more;
+                thread.history_read_state = cached.history_read_state.clone();
+            }
         } else {
             thread.turns = Some(turns[turns.len() - count..].to_vec());
         }
@@ -1155,6 +1182,54 @@ mod tests {
         );
         assert_eq!(snapshot.drafts[&key], draft);
         assert_eq!(snapshot.navigation.thread_id.as_ref(), Some(&id));
+    }
+
+    #[test]
+    fn managed_refresh_retains_loaded_turns_and_recomputes_the_older_cursor() {
+        let id = SessionRef {
+            provider: ProviderKind::Codex,
+            id: "managed".into(),
+        };
+        let turn = |number: usize| {
+            Arc::new(crate::models::Turn {
+                id: number.to_string().into(),
+                ..Default::default()
+            })
+        };
+        let mut snapshot = Snapshot::default();
+        Arc::make_mut(&mut snapshot.conversations).insert(
+            id.clone(),
+            Arc::new(Thread {
+                id: Some(id.clone()),
+                turns: Some((10..20).map(turn).collect()),
+                history_cursor: Some("native-cursor".into()),
+                history_has_more: Some(true),
+                ..Default::default()
+            }),
+        );
+        refresh_thread(
+            &mut snapshot,
+            Thread {
+                id: Some(id.clone()),
+                active_provider: Some(ProviderKind::Claude),
+                turns: Some((16..21).map(turn).collect()),
+                history_cursor: Some("16".into()),
+                history_has_more: Some(true),
+                ..Default::default()
+            },
+        );
+        let updated = &snapshot.conversations[&id];
+        assert_eq!(
+            updated
+                .turns
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|turn| turn.id.as_str())
+                .collect::<Vec<_>>(),
+            (10..21).map(|n| n.to_string()).collect::<Vec<_>>()
+        );
+        assert_eq!(updated.history_cursor.as_deref(), Some("10"));
     }
 
     #[test]

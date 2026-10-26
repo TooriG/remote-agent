@@ -5,6 +5,7 @@ pub mod diagnostics;
 pub mod dsh;
 pub mod error;
 pub mod execution;
+pub mod handoff;
 pub mod ids;
 pub mod items;
 pub mod live_activity;

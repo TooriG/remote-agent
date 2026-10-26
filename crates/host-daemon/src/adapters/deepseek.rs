@@ -1248,7 +1248,6 @@ impl Agent for DeepSeek {
         }
     }
     async fn discard_workspace_processes(&self, dir: &Path) -> Result<(), Failure> {
-        let rpc = self.rpc().await?;
         let ids: Vec<_> = self
             .0
             .records
@@ -1264,13 +1263,22 @@ impl Agent for DeepSeek {
             .map(|(id, _)| id.clone())
             .collect();
         for id in ids {
-            if rpc.loaded.lock().await.remove(&id) {
+            self.unload(&id).await?;
+        }
+        Ok(())
+    }
+    async fn unload(&self, id: &str) -> Result<(), Failure> {
+        let rpc = self.0.rpc.lock().await.clone();
+        if let Some(rpc) = rpc {
+            let loaded = rpc.loaded.lock().await.contains(id);
+            if loaded {
                 rpc.call(
                     "session/close",
                     json!({"sessionId":id}),
                     Some(Duration::from_secs(30)),
                 )
                 .await?;
+                rpc.loaded.lock().await.remove(id);
             }
         }
         Ok(())

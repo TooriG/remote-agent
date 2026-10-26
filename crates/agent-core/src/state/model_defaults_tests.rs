@@ -971,6 +971,59 @@ fn initial_provider_choice_uses_preset_options_for_an_unassigned_local_draft() {
 }
 
 #[test]
+fn existing_conversation_can_choose_another_provider_without_losing_its_draft() {
+    let id = agent_protocol::session::SessionRef {
+        provider: ProviderKind::Codex,
+        id: "existing".into(),
+    };
+    let key = DraftKey::from(id.clone());
+    let mut snapshot = Snapshot {
+        models: Arc::new(catalog()),
+        ..Default::default()
+    };
+    Arc::make_mut(&mut snapshot.conversations).insert(
+        id.clone(),
+        Arc::new(agent_protocol::models::Thread {
+            id: Some(id.clone()),
+            active_provider: Some(ProviderKind::Claude),
+            ..Default::default()
+        }),
+    );
+    assert_eq!(
+        snapshot.model_provider_for_draft(key.clone()),
+        Some(ProviderKind::Claude)
+    );
+    snapshot = apply(
+        &snapshot,
+        Intent::SetDraft {
+            thread_id: key.clone(),
+            draft: agent_core::state::Draft {
+                text: "keep this requirement".into(),
+                model: Some(catalog()[0].model.clone()),
+                effort: Some("high".into()),
+                service_tier: Some("priority".into()),
+                ..Default::default()
+            },
+        },
+    );
+    let next = apply(
+        &snapshot,
+        Intent::SelectModel {
+            thread_id: key.clone(),
+            model: catalog()[1].model.clone(),
+        },
+    );
+    assert_eq!(
+        next.model_provider_for_draft(key.clone()),
+        Some(ProviderKind::Claude)
+    );
+    assert_eq!(next.drafts[&key].text, "keep this requirement");
+    assert_eq!(next.drafts[&key].effort.as_deref(), Some("medium"));
+    assert_ne!(next.drafts[&key].service_tier.as_deref(), Some("priority"));
+    assert!(next.conversations.contains_key(&id));
+}
+
+#[test]
 fn saving_a_draft_preset_commits_all_settings_and_preserves_other_providers() {
     let mut snapshot = Snapshot::default();
     let preserved = ProviderModelDefaults {

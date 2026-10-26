@@ -86,8 +86,29 @@ pub(super) fn notification(
         }
         Notification::SessionUpdated { thread, project } => {
             let mut next = previous.clone();
+            let changed = thread
+                .id
+                .as_ref()
+                .filter(|id| previous.connected && previous.subscriptions.contains_key(*id))
+                .filter(|id| {
+                    previous.thread_metadata(id).is_some_and(|old| {
+                        old.active_provider.unwrap_or(id.provider)
+                            != thread.active_provider.unwrap_or(id.provider)
+                    })
+                })
+                .cloned();
             next.receive_session_summary(*thread, project);
-            (next, Vec::new())
+            if let Some(id) = &changed
+                && let Some(cached) = shared_mut(&mut next.conversations, id)
+            {
+                cached.history_cursor = None;
+                cached.history_has_more = Some(false);
+            }
+            let effects = changed
+                .into_iter()
+                .map(|id| Effect::execute(op::ReadThread::new(id)))
+                .collect();
+            (next, effects)
         }
         _ => (previous.clone(), Vec::new()),
     }
@@ -259,9 +280,6 @@ fn fleet_contains(
     let mut ancestor = session;
     // The number of known sessions also bounds malformed parent cycles.
     for _ in 0..=conversations.len() {
-        if ancestor.provider != root.provider {
-            return false;
-        }
         if ancestor == root {
             return true;
         }

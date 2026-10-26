@@ -62,6 +62,17 @@ fn machine_name() -> String {
 
 #[derive(clap::Subcommand)]
 pub(crate) enum Mode {
+    /// Read conversation context without starting an agent. Positions and text
+    /// offsets paginate the same history referenced by provider handoffs.
+    History {
+        session: agent_protocol::session::SessionRef,
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        #[arg(long, default_value_t = 0)]
+        text_offset: usize,
+    },
     /// Print a one-use pairing invitation as JSON (seven days by default).
     Invite,
     /// Print the running Host's identity, paired devices and provider errors as JSON.

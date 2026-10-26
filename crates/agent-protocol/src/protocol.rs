@@ -105,6 +105,7 @@ macro_rules! results {
     }
 }
 results! {
+    HandoffHistory(crate::handoff::Page),
     TaskActivity(crate::live_activity::TaskActivityState),
     LiveActivity(crate::live_activity::LiveActivityRegistration),
     Browser(crate::browser::BrowserFrame),

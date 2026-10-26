@@ -20,6 +20,7 @@ use super::routing::{HostReply, HostSession, SessionId, SessionRouter};
 use crate::ProjectStore;
 
 const SESSION_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+mod conversations;
 mod project_import;
 // Finish discovery before the client's request deadline, even when a native
 // provider is still initializing. Healthy providers must remain usable.
@@ -96,6 +97,8 @@ struct ServiceInner {
     permission_settings_access: tokio::sync::Mutex<()>,
     terminals: crate::terminals::Terminals,
     dictation: crate::dictation::Dictation,
+    conversations: super::conversations::Conversations,
+    history_scope: OnceLock<(std::path::PathBuf, bool)>,
 }
 
 impl HostRpcService {
@@ -134,7 +137,11 @@ impl HostRpcService {
                     .all(|summary| summary.thread.list_stale != Some(true));
                 successful |= fresh;
                 complete &= fresh;
-                native.extend(pages.into_iter().flatten().map(|summary| summary.thread));
+                for summary in pages.into_iter().flatten() {
+                    if let Some(thread) = self.inner.conversations.summary(summary.thread)? {
+                        native.push(thread);
+                    }
+                }
             } else {
                 complete = false;
             }
@@ -185,6 +192,10 @@ impl HostRpcService {
         }
         Self {
             inner: Arc::new(ServiceInner {
+                history_scope: OnceLock::new(),
+                conversations: super::conversations::Conversations::new(
+                    projects.path().with_file_name("bex-conversations.json"),
+                ),
                 browser: OnceLock::new(),
                 agents,
                 startup_errors,
@@ -403,7 +414,12 @@ impl HostRpcService {
                 .map(|(target, _)| self.inner.router.retain_execution(target.clone()))
                 .transpose()
                 .map_err(|error| Failure::new("invalid_params", error))?;
-            let _serial = if let Some((target, _)) = submission {
+            let _serial = if let Some(target) = target.as_ref().filter(|_| {
+                matches!(
+                    message,
+                    Call::Submit(_) | Call::RenameSession(_) | Call::ForkSession(_)
+                )
+            }) {
                 Some(self.inner.router.submission_lock(target).lock_owned().await)
             } else {
                 None
@@ -469,6 +485,76 @@ impl HostRpcService {
         target: &agent_protocol::session::SessionRef,
         input: &op::Submission,
     ) -> Result<op::SubmissionReceipt, Failure> {
+        let row = self.inner.conversations.get(target)?;
+        if let Some(receipt) = row
+            .as_ref()
+            .and_then(|row| {
+                row.handoffs.iter().rev().find(|handoff| {
+                    handoff.input_id == input.client_user_message_id && handoff.receipt.is_some()
+                })
+            })
+            .and_then(|handoff| handoff.receipt.clone())
+        {
+            return Ok(receipt);
+        }
+        let active = row.as_ref().map_or(target, |row| &row.active);
+        if row.as_ref().is_some_and(|row| {
+            row.handoffs.iter().any(|handoff| {
+                handoff.input_id == input.client_user_message_id
+                    && matches!(
+                        handoff.submission,
+                        agent_protocol::session::SubmissionDelivery::Sending
+                            | agent_protocol::session::SubmissionDelivery::Unknown
+                    )
+            })
+        }) {
+            return Err(Failure::unknown(
+                "submission_delivery_unknown",
+                "The previous provider input may already have run. It will not be sent again.",
+            ));
+        }
+        if input
+            .model
+            .as_ref()
+            .is_some_and(|model| model.provider != active.provider)
+            || row.as_ref().is_some_and(|row| {
+                row.handoffs.iter().any(|handoff| {
+                    handoff.session == row.active
+                        && handoff.delivery == super::conversations::Delivery::Pending
+                })
+            })
+        {
+            let result = self.switch_provider(target, input).await;
+            if result.is_err()
+                && let Some(mut current) = self.inner.conversations.get(target)?
+            {
+                if current.active == *active
+                    && current
+                        .segments
+                        .last()
+                        .is_some_and(|segment| segment.end.is_some())
+                {
+                    current.restore_source(active.clone());
+                    self.inner.conversations.save(current)?;
+                }
+            }
+            return result;
+        }
+        let mut native = input.clone();
+        native.thread_id = active.clone();
+        let mut receipt = self.submit_native(target, active, &native).await?;
+        if let Some(row) = row.as_ref() {
+            receipt.turn_id = receipt.turn_id.map(|id| row.identity(active, &id).into());
+        }
+        Ok(receipt)
+    }
+
+    async fn submit_native(
+        &self,
+        root: &agent_protocol::session::SessionRef,
+        target: &agent_protocol::session::SessionRef,
+        input: &op::Submission,
+    ) -> Result<op::SubmissionReceipt, Failure> {
         if input
             .model
             .as_ref()
@@ -476,7 +562,7 @@ impl HostRpcService {
         {
             return Err(Failure::new(
                 "provider_mismatch",
-                "別のプロバイダーのモデルを使う場合は新しい会話を作成してください。",
+                "The model must belong to the target provider.",
             ));
         }
         let agent = self.agent(target.provider)?;
@@ -489,7 +575,7 @@ impl HostRpcService {
                 "native session identity changed",
             ));
         }
-        response.thread = self.inner.router.overlay_execution(target, response.thread);
+        response.thread = self.inner.router.overlay_execution(root, response.thread);
         let projects = self.project_snapshot().await?;
         describe_thread(&mut response.thread, agent.capabilities(), &projects);
         if response
@@ -512,10 +598,14 @@ impl HostRpcService {
             .find(|t| {
                 t.status == agent_protocol::models::TurnStatus::Running && !t.id.trim().is_empty()
             })
-            .map(|t| t.id.as_str());
+            .map(|t| {
+                super::conversations::source(&t.id)
+                    .map(|(_, id)| id)
+                    .unwrap_or_else(|_| t.id.to_string())
+            });
         let route = super::submission::submission_target(
             response.thread.status,
-            running_turn,
+            running_turn.as_deref(),
             agent.running_input(),
             response.thread.cwd.as_deref(),
         )
@@ -539,7 +629,7 @@ impl HostRpcService {
                 input,
                 route,
                 reload,
-                self.browser_config(&target.to_string())?,
+                self.browser_config(&root.to_string())?,
             )
             .await?;
         response.thread.updated_at = Some(
@@ -548,7 +638,14 @@ impl HostRpcService {
                 .unwrap_or_default()
                 .as_secs_f64(),
         );
-        response.thread = self.inner.router.overlay_execution(target, response.thread);
+        response.thread = self.inner.router.overlay_execution(root, response.thread);
+        if let Some(row) = self.inner.conversations.get(root)? {
+            row.describe(&mut response.thread);
+            response.thread.capabilities = Some(agent_protocol::session::Capabilities {
+                rename: true,
+                ..agent.capabilities()
+            });
+        }
         self.notify_session_updated(response.thread, &projects.projects);
         Ok(receipt)
     }
@@ -603,7 +700,9 @@ impl HostRpcService {
                 anyhow::bail!("invalid session reference or zero history limit");
             }
             let target = params.session.clone();
-            let agent = self.agent(target.provider)?;
+            let row = self.inner.conversations.get(&target)?;
+            let native = row.as_ref().map_or(&target, |row| &row.active);
+            let agent = self.agent(native.provider)?;
             let limit = params.limit;
             let read = self
                 .inner
@@ -612,15 +711,18 @@ impl HostRpcService {
                 .map_err(anyhow::Error::msg)?;
             let revision = self.inner.router.list_revision();
             let started = std::time::Instant::now();
-            let mut response = agent.open(&target.id, limit, params.include_activity).await?;
+            let mut response = if let Some(row) = &row {
+                Self::conversation_page(self.conversation_history(row, false).await?, None, limit)?
+            } else { agent.open(&target.id, limit, params.include_activity).await? };
             response.thread.list_revision = revision;
             let native_ms = started.elapsed().as_millis();
             if response.thread.id.as_ref() != Some(&target) {
                 return Err(anyhow::anyhow!("native session identity changed"));
             }
+            let capabilities = response.thread.capabilities.unwrap_or_else(|| agent.capabilities());
             describe_thread(
                 &mut response.thread,
-                agent.capabilities(),
+                capabilities,
                 &self.project_snapshot().await?,
             );
             let project_ms = started.elapsed().as_millis() - native_ms;
@@ -680,6 +782,27 @@ impl HostRpcService {
                 item: Arc::unwrap_or_clone(item),
                 transfer: None,
             }
+        } else if let Some(row) = self.inner.conversations.get(target)? {
+            let (source, turn) = row.source(&params.turn_id)?;
+            let (item_source, item) = row.source(&params.item_id)?;
+            if source != item_source
+                || !row.segments.iter().any(|segment| segment.session == source)
+            {
+                return Err(Failure::new(
+                    "invalid_history_reference",
+                    "The item is outside this conversation.",
+                ));
+            }
+            let mut output = self
+                .agent(source.provider)?
+                .read_item(&op::ReadItem {
+                    thread_id: source.clone(),
+                    turn_id: turn.into(),
+                    item_id: item.into(),
+                })
+                .await?;
+            row.item(&source, &mut output.item);
+            output
         } else {
             self.agent(target.provider)?.read_item(params).await?
         };
@@ -727,9 +850,13 @@ impl HostRpcService {
                 .map(Into::into);
         }
         if let Some(target) = target_session {
-            let capabilities = self.agent(target.provider)?.capabilities();
-            if matches!(request, Call::ForkSession(_)) && !capabilities.fork
-                || matches!(request, Call::RenameSession(_)) && !capabilities.rename
+            let row = self.inner.conversations.get(target)?;
+            let native = row.as_ref().map_or(target, |row| &row.active);
+            let capabilities = self.agent(native.provider)?.capabilities();
+            if matches!(request, Call::ForkSession(_)) && row.is_none() && !capabilities.fork
+                || matches!(request, Call::RenameSession(_))
+                    && row.is_none()
+                    && !capabilities.rename
             {
                 return Err(Failure::new(
                     "unsupported_operation",
@@ -738,6 +865,27 @@ impl HostRpcService {
             }
         }
         let response = match request {
+            Call::ReadHandoffHistory(params) => {
+                let history = if let Some(row) = self.inner.conversations.get(&params.session)? {
+                    self.conversation_history(&row, true).await?
+                } else {
+                    self.native_history(&params.session, true).await?
+                };
+                let messages = history
+                    .thread
+                    .turns
+                    .iter()
+                    .flatten()
+                    .flat_map(|turn| agent_protocol::handoff::Message::from_turn(turn))
+                    .collect::<Vec<_>>();
+                agent_protocol::handoff::page(
+                    &messages,
+                    params.offset,
+                    params.limit,
+                    params.text_offset,
+                )
+                .into()
+            }
             Call::ReadTaskActivity(_) => self.read_task_activity().await?.into(),
             Call::RegisterLiveActivity(params) => {
                 params
@@ -773,10 +921,27 @@ impl HostRpcService {
                     .router
                     .retain_execution(params.session.clone())
                     .map_err(|error| Failure::new("invalid_params", error))?;
-                let items = self
-                    .agent(params.session.provider)?
-                    .read_turn_items(&params.session.id, &params.turn_id)
-                    .await?;
+                let items = if let Some(row) = self.inner.conversations.get(&params.session)? {
+                    let (source, turn) = row.source(&params.turn_id)?;
+                    if !row.segments.iter().any(|segment| segment.session == source) {
+                        return Err(Failure::new(
+                            "invalid_history_reference",
+                            "The turn is outside this conversation.",
+                        ));
+                    }
+                    let mut items = self
+                        .agent(source.provider)?
+                        .read_turn_items(&source.id, &turn.into())
+                        .await?;
+                    for item in &mut items {
+                        row.item(&source, Arc::make_mut(item));
+                    }
+                    items
+                } else {
+                    self.agent(params.session.provider)?
+                        .read_turn_items(&params.session.id, &params.turn_id)
+                        .await?
+                };
                 self.inner
                     .router
                     .finish_turn_read(read, session, params.turn_id.clone(), items)
@@ -784,10 +949,13 @@ impl HostRpcService {
                 agent_protocol::models::Empty {}.into()
             }
             Call::ReadHistory(params) => {
-                let mut page = self
-                    .agent(params.session.provider)?
-                    .read_history(&params.session.id, &params.cursor, params.include_activity)
-                    .await?;
+                let mut page = if let Some(row) = self.inner.conversations.get(&params.session)? {
+                    self.read_conversation_page(&row, &params.cursor).await?
+                } else {
+                    self.agent(params.session.provider)?
+                        .read_history(&params.session.id, &params.cursor, params.include_activity)
+                        .await?
+                };
                 agent_protocol::models::defer_item_details(
                     &mut page.turns,
                     agent_protocol::models::MAX_INLINE_ITEM_BYTES,
@@ -1014,12 +1182,14 @@ impl HostRpcService {
                 .await?
                 .into(),
             Call::ListAgents(params) => {
-                let agent = self.agent(params.thread_id.provider)?;
+                let row = self.inner.conversations.get(&params.thread_id)?;
+                let native = row.as_ref().map_or(&params.thread_id, |row| &row.active);
+                let agent = self.agent(native.provider)?;
                 let deadline = tokio::time::Instant::now() + SESSION_LIST_TIMEOUT;
                 let mut threads = session_pages(
                     agent.as_ref(),
                     "",
-                    SessionListScope::Descendants(&params.thread_id.id),
+                    SessionListScope::Descendants(&native.id),
                     100,
                     100,
                     Some(deadline),
@@ -1030,7 +1200,13 @@ impl HostRpcService {
                 .boxed();
                 let mut agents = Vec::new();
                 while let Some(summary) = threads.try_next().await? {
-                    let thread = crate::projects::titles::summary(summary.thread);
+                    let Some(thread) = self
+                        .inner
+                        .conversations
+                        .summary(crate::projects::titles::summary(summary.thread))?
+                    else {
+                        continue;
+                    };
                     if let (Some(id), Some(parent_id)) = (thread.id, thread.parent_id) {
                         agents.push(agent_protocol::models::AgentObservation {
                             id,
@@ -1123,6 +1299,12 @@ impl HostRpcService {
                 .map_err(|error| Failure::new("file_operation_failed", error))?,
             Call::ForkSession(params) => {
                 let target = target_session.expect("session-scoped fork");
+                if let Some(row) = self.inner.conversations.get(target)? {
+                    return self
+                        .fork_conversation(&row, &params.last_turn_id)
+                        .await
+                        .map(Into::into);
+                }
                 let agent = self.agent(target.provider)?;
                 self.start_thread(agent.as_ref(), |browser| {
                     agent.fork(&target.id, &params.last_turn_id, browser)
@@ -1132,13 +1314,39 @@ impl HostRpcService {
             }
             Call::Interrupt(params) => {
                 let target = target_session.expect("session-scoped interrupt");
-                self.agent(target.provider)?
-                    .interrupt(&target.id, &params.turn_id)
+                let row = self.inner.conversations.get(target)?;
+                let native = row.as_ref().map_or(target, |row| &row.active);
+                let turn = if let Some(row) = row.as_ref() {
+                    let (source, id) = row.source(&params.turn_id)?;
+                    if &source != native {
+                        return Err(Failure::new(
+                            "invalid_turn",
+                            "Only the current provider's turn can be interrupted.",
+                        ));
+                    }
+                    id.into()
+                } else {
+                    params.turn_id.clone()
+                };
+                self.agent(native.provider)?
+                    .interrupt(&native.id, &turn)
                     .await?
                     .into()
             }
             Call::RenameSession(params) => {
                 let target = target_session.expect("session-scoped rename");
+                if let Some(mut row) = self.inner.conversations.get(target)? {
+                    row.name = Some(params.name.clone());
+                    self.inner.conversations.save(row)?;
+                    self.inner.router.broadcast(
+                        agent_protocol::protocol::Notification::SessionRenamed {
+                            session: target.clone(),
+                            name: Some(params.name.clone()),
+                            revision: 0,
+                        },
+                    );
+                    return Ok(agent_protocol::models::Empty {}.into());
+                }
                 let result = self
                     .agent(target.provider)?
                     .rename(&target.id, &params.name)
@@ -1264,6 +1472,7 @@ impl HostRpcService {
             } else {
                 None
             };
+            let display = self.inner.conversations.summary(thread)?;
             for index in matching {
                 let worktree = &mut worktrees[index];
                 if active {
@@ -1273,7 +1482,9 @@ impl HostRpcService {
                         "稼働状況を確認できないため削除できません: {warning}"
                     ));
                 }
-                if let Some(id) = &thread.id {
+                if let Some(thread) = &display
+                    && let Some(id) = &thread.id
+                {
                     worktree
                         .threads
                         .push(agent_protocol::models::WorktreeThread {
@@ -1400,7 +1611,7 @@ impl HostRpcService {
         } else {
             SessionListScope::All
         };
-        let ((snapshot, projects_elapsed), (first_pages, first_pages_elapsed)) = tokio::join!(
+        let ((snapshot, projects_elapsed), (mut first_pages, first_pages_elapsed)) = tokio::join!(
             async { (self.project_snapshot().await, started.elapsed()) },
             async {
                 let started = tokio::time::Instant::now();
@@ -1420,6 +1631,46 @@ impl HostRpcService {
         // Reuse the first pages and give subsequent reads only the time left.
         let deadline =
             tokio::time::Instant::now() + SESSION_LIST_TIMEOUT.saturating_sub(first_pages_elapsed);
+        if !search.trim().is_empty() {
+            let targets = self.inner.conversations.search_targets(search)?;
+            let found =
+                futures_util::future::join_all(targets.into_iter().map(|target| async move {
+                    let response = tokio::time::timeout_at(deadline, async {
+                        self.agent(target.provider)?
+                            .open(&target.id, 1, false)
+                            .await
+                    })
+                    .await;
+                    (target.provider, response)
+                }))
+                .await;
+            for (provider, result) in found {
+                if let Ok(Ok(response)) = result
+                    && let Some(index) = agents
+                        .iter()
+                        .position(|(candidate, _)| *candidate == provider)
+                    && let Ok(page) = &mut first_pages[index]
+                {
+                    if !page
+                        .data
+                        .iter()
+                        .any(|summary| summary.thread.id == response.thread.id)
+                    {
+                        page.data.push(super::agent::SessionSummary {
+                            branch: response.thread.git_branch.clone(),
+                            thread: response.thread,
+                        });
+                        page.data.sort_by(|left, right| {
+                            right
+                                .thread
+                                .updated_at
+                                .unwrap_or_default()
+                                .total_cmp(&left.thread.updated_at.unwrap_or_default())
+                        });
+                    }
+                }
+            }
+        }
         let initial_elapsed = started.elapsed();
         let mut listings = futures_util::future::join_all(agents.iter().zip(first_pages).map(
             |((provider, agent), page)| async move {
@@ -1478,7 +1729,9 @@ impl HostRpcService {
             }
             group.sort_by(|(a, _), (b, _)| a.thread.id.cmp(&b.thread.id));
             for (summary, capabilities) in group {
-                let mut thread = summary.thread;
+                let Some(mut thread) = self.inner.conversations.summary(summary.thread)? else {
+                    continue;
+                };
                 thread.git_branch = summary.branch;
                 describe_thread(&mut thread, capabilities, &snapshot);
                 titles.push(thread);
@@ -1690,10 +1943,33 @@ impl HostRpcService {
 
             for (_, agent) in self.agents() {
                 if let Some(mut events) = agent.event_stream() {
+                    let supports_fork = agent.capabilities().fork;
                     let router = self.inner.router.clone();
+                    let owner = Arc::downgrade(&self.inner);
                     tokio::spawn(async move {
                         while let Some(event) = events.recv().await {
-                            let result = event.change.apply(&router);
+                            let Some(inner) = owner.upgrade() else {
+                                break;
+                            };
+                            let bindings = if matches!(
+                                event.change,
+                                super::agent::AgentChange::Stopped { .. }
+                            ) {
+                                inner.conversations.active_bindings()
+                            } else {
+                                Ok(Vec::new())
+                            };
+                            let result = bindings
+                                .and_then(|bindings| {
+                                    inner
+                                        .conversations
+                                        .route(event.change, supports_fork)
+                                        .map(|event| (bindings, event))
+                                })
+                                .map_err(|error| error.to_string())
+                                .and_then(|(bindings, event)| {
+                                    event.map_or(Ok(()), |event| event.apply(&router, &bindings))
+                                });
                             if let Some(applied) = event.applied {
                                 let _ = applied.send(result);
                             }

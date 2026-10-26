@@ -872,8 +872,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             let thread_id = match intent {
                 Intent::SelectModel { thread_id, model } => {
                     if draft.model.as_ref() != Some(&model) {
-                        if matches!(&thread_id, DraftKey::Local { .. })
-                            && draft.model.as_ref().is_none_or(|selected| selected.provider != model.provider)
+                        if draft.model.as_ref().is_none_or(|selected| selected.provider != model.provider)
                         {
                             let defaults = previous.model_defaults_for_cwd(&previous.navigation.cwd);
                             let settings = defaults.providers.get(&model.provider);
@@ -1246,8 +1245,7 @@ impl Snapshot {
             {
                 continue;
             }
-            let selected_provider =
-                crate::presentation::model_settings::draft_provider(key, previous.model.as_ref());
+            let selected_provider = self.draft_provider(key, previous.model.as_ref());
             if selected_provider.is_none() && key != &self.navigation.draft_key {
                 continue;
             }
@@ -1442,9 +1440,9 @@ fn submission(
     client_user_message_id: agent_protocol::ids::ClientInputId,
     clear_draft: Option<Arc<Draft>>,
 ) -> (Snapshot, Vec<Effect>) {
-    let provider =
-        crate::presentation::model_settings::draft_provider(&draft_key, draft.model.as_ref())
-            .or_else(|| previous.model_provider_for_draft(draft_key.clone()));
+    let provider = previous
+        .draft_provider(&draft_key, draft.model.as_ref())
+        .or_else(|| previous.model_provider_for_draft(draft_key.clone()));
     if thread_id.is_none() && provider.is_none() {
         let mut next = previous.clone();
         next.error = Some("利用可能なエージェントを選択してください。".into());

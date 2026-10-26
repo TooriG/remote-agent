@@ -862,6 +862,48 @@ impl Agent for Codex {
         )
         .await
     }
+    async fn inject_history(
+        &self,
+        id: &str,
+        context: &agent_protocol::handoff::Context,
+    ) -> Result<bool, Failure> {
+        let state = self.state(id).await?;
+        if state.needs_reload {
+            self.thread_response(
+                "thread/resume",
+                &serde_json::json!({"threadId":id,"cwd":state.response.thread.cwd}),
+            )
+            .await
+            .map_err(Failure::before_submission)?;
+        }
+        match self
+            .request::<_, Value>(
+                "thread/inject_items",
+                &serde_json::json!({"threadId":id,"items":context.native_items()}),
+            )
+            .await
+        {
+            Ok(_) => Ok(true),
+            Err(error)
+                if error
+                    .execution
+                    .as_ref()
+                    .and_then(|error| error.provider_code.as_deref())
+                    == Some("-32601") =>
+            {
+                Ok(false)
+            }
+            Err(mut error) => {
+                error.delivery = agent_protocol::error::Delivery::Unknown;
+                Err(error)
+            }
+        }
+    }
+    async fn unload(&self, id: &str) -> Result<(), Failure> {
+        self.request::<_, Value>("thread/unsubscribe", &serde_json::json!({"threadId":id}))
+            .await?;
+        Ok(())
+    }
     async fn state(&self, id: &str) -> Result<SubmissionState, Failure> {
         if let Some(error) = self.restoration_error.borrow().as_ref() {
             return Err(Failure::new("account_unavailable", error));
@@ -1261,7 +1303,7 @@ mod tests {
                 super::event_change(uuid::Uuid::nil(), &super::RpcMessage::parse(&line).unwrap())
                     .unwrap()
             {
-                change.apply(&router).unwrap();
+                change.apply(&router, &[]).unwrap();
             }
             assert!(connection.recv().now_or_never().is_none());
         }

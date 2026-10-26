@@ -229,9 +229,12 @@ impl Operation for SendSubmission {
             draft_key: self.thread_id.clone().into(),
         })
     }
-    type Input = bool;
+    type Input = (bool, Option<crate::session::ProviderKind>);
     fn capture(&self, snapshot: &Snapshot) -> Result<Self::Input, PeerError> {
-        Ok(!snapshot.subscriptions.contains_key(&self.thread_id))
+        Ok((
+            !snapshot.subscriptions.contains_key(&self.thread_id),
+            snapshot.draft_provider(&self.thread_id.clone().into(), self.draft.model.as_ref()),
+        ))
     }
     const STALE_POLICY: StalePolicy = StalePolicy::Apply;
     fn submission_id(&self) -> Option<&str> {
@@ -248,7 +251,7 @@ impl Operation for SendSubmission {
     }
     async fn run(
         &self,
-        needs_subscription: Self::Input,
+        (needs_subscription, provider): Self::Input,
         context: &mut Execution<'_>,
     ) -> Result<Self::Output, PeerError> {
         if needs_subscription {
@@ -270,9 +273,7 @@ impl Operation for SendSubmission {
             self.draft
                 .invocations
                 .iter()
-                .filter(|item| {
-                    item.provider == self.thread_id.provider && item.is_in(&self.draft.text)
-                })
+                .filter(|item| Some(item.provider) == provider && item.is_in(&self.draft.text))
                 .map(agent_protocol::composer::Invocation::input),
         );
         for attachment in &self.draft.attachments {

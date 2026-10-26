@@ -57,6 +57,9 @@ pub struct ConversationRow {
 #[derive(Clone)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
 pub enum ConversationRowContent {
+    ProviderHandoff {
+        text: String,
+    },
     User {
         item: Arc<RenderedItem>,
     },
@@ -307,6 +310,8 @@ pub fn project_conversation(
         .iter()
         .enumerate()
         .map(|(index, turn)| {
+            let handoff = index.checked_sub(1).and_then(|previous| native[previous].provider).zip(turn.provider)
+                .filter(|(from, to)| from != to).map(|(from, to)| format!("{from:?} → {to:?} に切り替えました"));
             let pending = pending
                 .iter()
                 .filter(|(_, p)| pending_turn(p) == Some(index));
@@ -314,6 +319,7 @@ pub fn project_conversation(
             let old = cached.get(turn.id.as_str()).copied();
             if let Some(old) = old
                 && Arc::ptr_eq(turn, &old.source)
+                && old.rows.iter().find_map(|row| match &row.content { ConversationRowContent::ProviderHandoff { text } => Some(text), _ => None }) == handoff.as_ref()
                 && pending
                     .clone()
                     .map(|(id, p)| (id, Arc::as_ptr(p)))
@@ -328,6 +334,7 @@ pub fn project_conversation(
             render_turn(
                 source.id.as_ref(),
                 source.capabilities.unwrap_or_default().fork,
+                handoff,
                 turn.clone(),
                 pending.cloned().collect(),
                 requests.cloned().collect(),
@@ -381,12 +388,16 @@ pub fn project_conversation(
 fn render_turn(
     session: Option<&crate::session::SessionRef>,
     supports_fork: bool,
+    handoff: Option<String>,
     source: Arc<models::Turn>,
     pending: PendingItems,
     requests: Vec<Arc<WireRequest>>,
     previous: Option<&Arc<RenderedTurn>>,
 ) -> Arc<RenderedTurn> {
-    let provider = session.map(|session| session.provider);
+    let provider = source
+        .provider
+        .or_else(|| session.map(|session| session.provider));
+    let supports_fork = source.supports_fork.unwrap_or(supports_fork);
     let cached: HashMap<_, _> = previous
         .into_iter()
         .flat_map(|turn| turn.items())
@@ -451,6 +462,7 @@ fn render_turn(
     let mut occurrences = HashMap::new();
     let mut push = |content: ConversationRowContent| {
         let id = match &content {
+            ProviderHandoff { .. } => format!("history-handoff:{}", source.id),
             User { item } | Activity { item, .. } | Response { item, .. } => {
                 format!("history-item:{}:{}", source.id, item.data.id)
             }
@@ -487,6 +499,9 @@ fn render_turn(
             timestamp_ms,
         });
     };
+    if let Some(text) = handoff {
+        push(ProviderHandoff { text });
+    }
     for segment in project_items(&source, order.len(), metadata) {
         let segment = &segment;
         let group = |role| {
@@ -835,6 +850,39 @@ mod tests {
         }
     }
     #[test]
+    fn older_history_reveals_a_provider_boundary_without_stale_cached_rows() {
+        let mut snapshot = fixture();
+        let session = snapshot.conversations.keys().next().unwrap().clone();
+        let thread = Arc::make_mut(
+            Arc::make_mut(&mut snapshot.conversations)
+                .get_mut(&session)
+                .unwrap(),
+        );
+        let turns = thread.turns.as_mut().unwrap();
+        Arc::make_mut(&mut turns[0]).provider = Some(crate::session::ProviderKind::Codex);
+        Arc::make_mut(&mut turns[1]).provider = Some(crate::session::ProviderKind::Claude);
+        let old = turns.remove(0);
+        let initial = project_snapshot(snapshot.clone(), None);
+        assert!(
+            !initial.turns[0]
+                .conversation_rows()
+                .iter()
+                .any(|row| matches!(row.content, ConversationRowContent::ProviderHandoff { .. }))
+        );
+        let thread = Arc::make_mut(
+            Arc::make_mut(&mut snapshot.conversations)
+                .get_mut(&session)
+                .unwrap(),
+        );
+        thread.turns.as_mut().unwrap().insert(0, old);
+        let loaded = project_snapshot(snapshot, Some(&initial));
+        assert!(
+            matches!(&loaded.turns[1].conversation_rows()[0].content, ConversationRowContent::ProviderHandoff { text } if text == "Codex → Claude に切り替えました")
+        );
+        assert!(!Arc::ptr_eq(&initial.turns[0], &loaded.turns[1]));
+    }
+
+    #[test]
     fn completed_edits_stay_in_collapsed_activity_when_details_load() {
         let mut snapshot = fixture();
         let session = agent_protocol::session::SessionRef {
@@ -1014,6 +1062,7 @@ mod tests {
             let projected = render_turn(
                 Some(&crate::session::SessionRef::new(crate::session::ProviderKind::Codex, "session".into()).unwrap()),
                 false,
+                None,
                 Arc::new(models::Turn {
                     id: "turn".into(),
                     status: models::TurnStatus::Completed,

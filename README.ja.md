@@ -136,7 +136,9 @@ Hostは変更していないCLIを、ストリーミングJSON入出力と独自
 
 テキスト、PNG・JPEG・GIF・WebP画像、ファイル参照、ツール承認、ユーザーへの質問、中断、後続ターンは、Codexと同じStore・認証済み接続を使います。作業ディレクトリ選択と自動ワークツリー設定も共通です。永続的な会話の唯一の保存元はClaudeのネイティブ記録です。Hostは`--claude-home`、`CLAUDE_CONFIG_DIR`、または`~/.claude`を推論実行なしで読み、Bex独自の会話記録は書きません。クライアントを切断しても実行は続き、再接続ではイベントを再送せず、現在有効な未回答の要求を含む最新の状態を開きます。
 
-CodexとClaudeの切り替えには新しい会話を作成します。Claudeへの後続入力は、現在のターンの完了・中断後に送れます。実行中は入力欄でこの制限を示し、下書きを保持します。ClaudeからCodexへの委任、Claudeのフォーク・サイドチャットは未実装です。Codexの起動失敗・終了でも、Host、Claudeの実行、ペアリング、ファイル、作業場所の選択は停止しません。HostはCodexと独立してPTYを所有し、端末に属するシェルはクライアントの切断後も保持します。音声入力とCodexアカウント操作にはCodexが必要です。Codexの会話活動を確認できない場合はワークツリー削除を禁止します。CLI連携はClaude Code 2.1.266で検証しています。
+会話中もモデル選択からCodex・Claude・DSHを切り替えられます。現在の応答と未回答の確認を終え、次のメッセージを送信すると、同じ会話・作業場所で続行します。以前使ったAIへ戻ると、そのAIのネイティブ会話を再利用し、まだ見ていない履歴を渡します。長い履歴は最初の依頼と最近のやり取りを優先し、省いた内容はAIがHostの履歴コマンドで参照できます。過去の添付や思考・ツールの内部状態は移しません。本文は引き続き各AIのネイティブ記録を使い、切替先の対応と投入した文脈を`bex-conversations.json`へ保存します。Hostとクライアントを同じリビジョンから更新してください。
+
+ClaudeからCodexへの委任、Claude自体のフォーク・サイドチャットは未実装です。Codexの起動失敗・終了でも、Host、Claudeの実行、ペアリング、ファイル、作業場所の選択は停止しません。HostはCodexと独立してPTYを所有し、端末に属するシェルはクライアントの切断後も保持します。音声入力とCodexアカウント操作にはCodexが必要です。Codexの会話活動を確認できない場合はワークツリー削除を禁止します。CLI連携はClaude Code 2.1.266で検証しています。
 
 Macで会話内のファイルリンクを開くと、FilesパネルにHost上の親ディレクトリとエディターを表示し、未保存の編集とリビジョン確認を保持します。Side Chatは独自パネルでファイル・差分を表示し、下書きを保ったまま会話へ戻れます。
 
@@ -156,7 +158,7 @@ Macの設定は、Bexが作成したワークツリーと会話を**作成済み
 
 ```sh
 agent-cli --ticket <endpoint-ticket> --identity-file <32-byte-key> [--invitation <uuid>] list
-agent-cli <connection> send <thread-id> <text> --client-message-id <id> [--model m] [--effort e]
+agent-cli <connection> send <thread-id> <text> --client-message-id <id> [--model m] [--provider codex|claude|deepseek] [--effort e]
 agent-cli <connection> approve 7 --decision 2               # 数値の要求ID
 agent-cli <connection> approve '"request-id"' --decision 2  # 文字列の要求ID
 ```

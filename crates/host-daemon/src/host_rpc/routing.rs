@@ -1034,11 +1034,22 @@ impl SessionRouter {
         self.close_failed(failed);
         self.prune(&target, &actor);
     }
-    pub(crate) fn fail_provider(&self, provider: ProviderKind, message: &str) {
+    pub(crate) fn fail_provider(
+        &self,
+        provider: ProviderKind,
+        message: &str,
+        bindings: &[(SessionRef, ProviderKind)],
+    ) {
         let actors: Vec<_> = lock_state(&self.state)
             .executions
             .iter()
-            .filter(|(target, _)| target.provider == provider)
+            .filter(|(target, _)| {
+                bindings
+                    .iter()
+                    .find(|(root, _)| root == *target)
+                    .map_or(target.provider, |(_, active)| *active)
+                    == provider
+            })
             .map(|(target, actor)| (target.clone(), actor.clone()))
             .collect();
         for (target, actor) in actors {
@@ -2222,7 +2233,7 @@ mod tests {
             lock_state(&router.actor(&target)).timeline.status,
             SessionStatus::Running
         );
-        router.fail_provider(ProviderKind::Codex, "provider stopped");
+        router.fail_provider(ProviderKind::Codex, "provider stopped", &[]);
         let actor = router.actor(&target);
         let state = lock_state(&actor);
         let live = &state.timeline;
@@ -2508,7 +2519,7 @@ fn identical_native_request_ids_keep_their_source_instance() {
     crate::adapters::codex::event_change(requests[0].0, &RpcMessage::parse(&resolved).unwrap())
         .unwrap()
         .unwrap()
-        .apply(&router)
+        .apply(&router, &[])
         .unwrap();
     assert!(router.request_session(&requests[0].2).is_none());
     for (_, target, id) in &requests[1..] {

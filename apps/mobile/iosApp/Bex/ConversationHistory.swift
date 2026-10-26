@@ -17,6 +17,7 @@ extension ThreadScreen {
     @ViewBuilder
     func nativeConversationRow(_ row: ConversationRow, item: ConversationItem?) -> some View {
         switch (row.content, item) {
+        case let (.providerHandoff(text), _): Text(text).font(.caption).foregroundStyle(.secondary).padding(.vertical, 8)
         case let (.user, item?):
             userMessageRow(item, timestampMs: row.timestampMs)
                 .padding(

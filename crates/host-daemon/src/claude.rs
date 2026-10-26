@@ -125,6 +125,13 @@ struct Idle {
     released: CancellationToken,
 }
 
+impl Idle {
+    async fn close(self) -> Result<(), String> {
+        self.released.cancel();
+        self.process.finish().await
+    }
+}
+
 struct Running {
     turn_id: agent_protocol::ids::TurnId,
     input: mpsc::Sender<Command>,
@@ -530,8 +537,7 @@ impl Claude {
             };
             // Retained processes still hold the deleted directory's inode.
             if let Some(idle) = idle {
-                idle.released.cancel();
-                idle.process.finish().await.map_err(anyhow::Error::msg)?;
+                idle.close().await.map_err(anyhow::Error::msg)?;
             }
         }
         Ok(())
@@ -1889,6 +1895,27 @@ impl Agent for Claude {
             .await
             .map_err(|e| Failure::new("workspace_resume_failed", e))
     }
+    async fn unload(&self, id: &str) -> Result<(), Failure> {
+        let record = self.records.lock().await.get(id).cloned();
+        let idle = if let Some(record) = record {
+            let mut record = record.lock().await;
+            if record.running.is_some() {
+                return Err(Failure::new(
+                    "provider_switch_busy",
+                    "Claude is still running.",
+                ));
+            }
+            record.idle.take()
+        } else {
+            None
+        };
+        if let Some(idle) = idle {
+            idle.close()
+                .await
+                .map_err(|error| Failure::new("provider_unload_failed", error))?;
+        }
+        Ok(())
+    }
     async fn read_permissions(
         &self,
     ) -> Result<agent_protocol::permissions::PermissionSettings, Failure> {
@@ -2176,7 +2203,7 @@ mod execution_tests {
         let consumer = router.clone();
         tokio::spawn(async move {
             while let Some(event) = receiver.recv().await {
-                let result = event.change.apply(&consumer);
+                let result = event.change.apply(&consumer, &[]);
                 if let Some(applied) = event.applied {
                     let _ = applied.send(result);
                 }

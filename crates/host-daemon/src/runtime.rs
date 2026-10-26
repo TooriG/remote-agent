@@ -95,6 +95,7 @@ pub(crate) async fn run(config: StartupConfig) -> Result<()> {
         [codex.into(), claude, deepseek],
         ProjectStore::new(directory.join("bex-worktrees.json")),
     );
+    service.set_history_scope(directory.clone(), config.isolated);
     service
         .enable_apns(
             &directory.join("bex-apns.json"),

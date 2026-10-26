@@ -31,6 +31,20 @@ pub(crate) async fn run(mode: Mode, state_dir: Option<PathBuf>, isolated: bool) 
         let session = endpoint.connect(&ticket).await?;
         let (client, _events) = session.open_peer(Duration::from_secs(15), 8).await?;
         let result = match mode {
+            Mode::History {
+                session,
+                offset,
+                limit,
+                text_offset,
+            } => client
+                .call(&agent_protocol::handoff::ReadHistory {
+                    session,
+                    offset,
+                    limit,
+                    text_offset,
+                })
+                .await
+                .map(|value| serde_json::to_value(value).expect("history serializes")),
             Mode::Invite => client
                 .request::<agent_protocol::models::Invitation>(&Call::Invite(
                     agent_protocol::models::Empty {},

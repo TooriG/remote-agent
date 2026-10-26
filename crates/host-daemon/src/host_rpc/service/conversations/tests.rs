@@ -1,0 +1,1071 @@
+use super::*;
+use crate::host_rpc::agent::{
+    AccountCommand, AccountReply, AgentChange, AgentEvent, SessionPage, SessionSummary,
+    SubmissionState, emit,
+};
+use agent_protocol::{
+    composer::ComposerCatalog,
+    execution::{ItemStatus, SessionStatus, TurnStatus},
+    ids::TurnId,
+    items::{AssistantPhase, ItemBody},
+    models::{Empty, Item, ModelRef, Turn},
+    permissions::{PermissionMode, PermissionSettings},
+    session::{Capabilities, SessionChange},
+};
+use serde::de::DeserializeOwned;
+use std::{
+    path::{Path, PathBuf},
+    sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
+use tokio::sync::mpsc;
+
+/// Independent native sessions, including persisted history and provider
+/// acknowledgements. Assertions observe the Host boundary, not a reimplementation
+/// of its handoff/routing decisions.
+struct NativeAgent {
+    provider: ProviderKind,
+    directory: PathBuf,
+    records: Arc<Mutex<HashMap<String, ThreadResponse>>>,
+    inputs: Arc<Mutex<Vec<op::Submission>>>,
+    injected: Arc<Mutex<Vec<(String, handoff::Context)>>>,
+    released: Arc<Mutex<Vec<String>>>,
+    next: Arc<AtomicUsize>,
+    fail_submit: AtomicUsize,
+    fail_inject: AtomicUsize,
+    fail_open: AtomicUsize,
+    events: mpsc::Sender<AgentEvent>,
+    receiver: Mutex<Option<mpsc::Receiver<AgentEvent>>>,
+}
+
+fn unsupported() -> Failure {
+    Failure::new("unsupported", "not used in this fixture")
+}
+
+impl NativeAgent {
+    fn new(provider: ProviderKind, directory: PathBuf) -> Arc<Self> {
+        let (events, receiver) = mpsc::channel(32);
+        Arc::new(Self {
+            provider,
+            directory,
+            records: Default::default(),
+            inputs: Default::default(),
+            injected: Default::default(),
+            released: Default::default(),
+            next: Default::default(),
+            fail_submit: AtomicUsize::new(0),
+            fail_inject: AtomicUsize::new(0),
+            fail_open: AtomicUsize::new(0),
+            events,
+            receiver: Mutex::new(Some(receiver)),
+        })
+    }
+    fn restarted(&self) -> Arc<Self> {
+        let (events, receiver) = mpsc::channel(32);
+        Arc::new(Self {
+            provider: self.provider,
+            directory: self.directory.clone(),
+            records: self.records.clone(),
+            inputs: self.inputs.clone(),
+            injected: self.injected.clone(),
+            released: self.released.clone(),
+            next: self.next.clone(),
+            fail_submit: AtomicUsize::new(0),
+            fail_inject: AtomicUsize::new(0),
+            fail_open: AtomicUsize::new(0),
+            events,
+            receiver: Mutex::new(Some(receiver)),
+        })
+    }
+    fn backend(self: &Arc<Self>) -> Backend {
+        Backend {
+            provider: self.provider,
+            agent: Ok(self.clone()),
+            dictation: None,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl Identity for NativeAgent {
+    async fn list(&self) -> Result<op::Accounts, Failure> {
+        Ok(op::Accounts {
+            accounts: vec![],
+            selected: Default::default(),
+            error: None,
+        })
+    }
+    async fn account(&self, _: AccountCommand) -> Result<AccountReply, Failure> {
+        Err(unsupported())
+    }
+    async fn usage(&self, _: &str) -> Result<op::AccountUsage, Failure> {
+        Err(unsupported())
+    }
+}
+
+#[async_trait::async_trait]
+impl Agent for NativeAgent {
+    fn data_recipient(&self) -> &'static str {
+        "fixture"
+    }
+    fn running_input(&self) -> crate::host_rpc::submission::RunningInput {
+        crate::host_rpc::submission::RunningInput::SteerOrQueue
+    }
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            additional_input: true,
+            model_change: true,
+            rename: true,
+            fork: self.provider == ProviderKind::Codex,
+        }
+    }
+    fn availability(&self) -> Result<(), Failure> {
+        Ok(())
+    }
+    fn validate_create(&self) -> Result<(), Failure> {
+        Ok(())
+    }
+    fn storage_directory(&self) -> &Path {
+        &self.directory
+    }
+    async fn list(
+        &self,
+        search: &str,
+        _: Option<String>,
+        scope: SessionListScope<'_>,
+        _: u32,
+    ) -> Result<SessionPage, Failure> {
+        let mut data = self
+            .records
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|record| {
+                !matches!(scope, SessionListScope::Descendants(_))
+                    && record
+                        .thread
+                        .preview
+                        .as_deref()
+                        .unwrap_or("")
+                        .contains(search)
+            })
+            .map(|record| {
+                let mut thread = record.thread.clone();
+                thread.turns = None;
+                SessionSummary {
+                    thread,
+                    branch: None,
+                }
+            })
+            .collect::<Vec<_>>();
+        data.sort_by(|a, b| {
+            b.thread
+                .updated_at
+                .partial_cmp(&a.thread.updated_at)
+                .unwrap()
+        });
+        Ok(SessionPage {
+            data,
+            next_cursor: None,
+        })
+    }
+    async fn open(&self, id: &str, limit: usize, _: bool) -> Result<ThreadResponse, Failure> {
+        if self.fail_open.swap(0, Ordering::SeqCst) != 0 {
+            return Err(Failure::new(
+                "native_resume_failed",
+                "native session cannot be loaded",
+            ));
+        }
+        let mut response = self
+            .records
+            .lock()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .ok_or_else(unsupported)?;
+        let turns = response.thread.turns.take().unwrap_or_default();
+        let start = turns.len().saturating_sub(limit);
+        response.thread.turns = Some(turns[start..].to_vec());
+        response.thread.history_cursor = (start > 0).then(|| start.to_string());
+        response.thread.history_has_more = Some(start > 0);
+        Ok(response)
+    }
+    async fn read_history(&self, id: &str, cursor: &str, _: bool) -> Result<HistoryPage, Failure> {
+        let response = self
+            .records
+            .lock()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .ok_or_else(unsupported)?;
+        let end: usize = cursor.parse().unwrap();
+        let start = end.saturating_sub(100);
+        let turns = response.thread.turns.unwrap();
+        Ok(HistoryPage {
+            turns: turns[start..end].to_vec(),
+            next_cursor: (start > 0).then(|| start.to_string()),
+        })
+    }
+    async fn read_item(&self, params: &op::ReadItem) -> Result<op::ItemResponse, Failure> {
+        let records = self.records.lock().unwrap();
+        let item = records
+            .get(&params.thread_id.id)
+            .and_then(|record| record.thread.turns.as_ref())
+            .and_then(|turns| turns.iter().rev().find(|turn| turn.id == params.turn_id))
+            .and_then(|turn| turn.items.as_ref())
+            .and_then(|items| items.iter().find(|item| item.id == params.item_id))
+            .cloned()
+            .ok_or_else(unsupported)?;
+        Ok(op::ItemResponse {
+            item: (*item).clone(),
+            transfer: None,
+        })
+    }
+    async fn read_turn_items(&self, id: &str, turn: &TurnId) -> Result<Vec<Arc<Item>>, Failure> {
+        Ok(self
+            .records
+            .lock()
+            .unwrap()
+            .get(id)
+            .and_then(|record| record.thread.turns.as_ref())
+            .and_then(|turns| turns.iter().rev().find(|candidate| &candidate.id == turn))
+            .and_then(|turn| turn.items.clone())
+            .ok_or_else(unsupported)?)
+    }
+    async fn create(
+        &self,
+        cwd: &str,
+        model: Option<&str>,
+        _: Option<serde_json::Value>,
+    ) -> Result<ThreadResponse, Failure> {
+        let id = format!(
+            "{}-{}",
+            self.provider.key(),
+            self.next.fetch_add(1, Ordering::SeqCst)
+        );
+        let response = ThreadResponse {
+            thread: Thread {
+                id: Some(SessionRef {
+                    provider: self.provider,
+                    id: id.clone(),
+                }),
+                cwd: Some(cwd.into()),
+                name: Some(format!("{} conversation", self.provider.key())),
+                status: SessionStatus::Idle,
+                turns: Some(vec![]),
+                ..Default::default()
+            },
+            model: Some(ModelRef {
+                provider: self.provider,
+                id: model.unwrap_or("model").into(),
+            }),
+        };
+        self.records.lock().unwrap().insert(id, response.clone());
+        Ok(response)
+    }
+    async fn state(&self, id: &str) -> Result<SubmissionState, Failure> {
+        Ok(SubmissionState {
+            response: self.open(id, usize::MAX, true).await?,
+            needs_reload: false,
+        })
+    }
+    async fn inject_history(&self, id: &str, context: &handoff::Context) -> Result<bool, Failure> {
+        if self.provider != ProviderKind::Codex {
+            return Ok(false);
+        }
+        self.injected
+            .lock()
+            .unwrap()
+            .push((id.into(), context.clone()));
+        if self.fail_inject.swap(0, Ordering::SeqCst) != 0 {
+            return Err(Failure::unknown(
+                "injection_unknown",
+                "connection lost after writing history",
+            ));
+        }
+        Ok(true)
+    }
+    async fn unload(&self, id: &str) -> Result<(), Failure> {
+        self.released.lock().unwrap().push(id.into());
+        Ok(())
+    }
+    async fn submit(
+        &self,
+        input: &op::Submission,
+        _: crate::host_rpc::submission::SubmissionTarget<'_>,
+        _: bool,
+        _: Option<serde_json::Value>,
+    ) -> Result<op::SubmissionReceipt, Failure> {
+        match self.fail_submit.swap(0, Ordering::SeqCst) {
+            1 => return Err(Failure::new("refused", "prompt refused before consumption")),
+            2 => {
+                return Err(Failure::unknown(
+                    "submission_unknown",
+                    "acknowledgement lost",
+                ));
+            }
+            _ => {}
+        }
+        self.inputs.lock().unwrap().push(input.clone());
+        let ordinal = self.records.lock().unwrap()[&input.thread_id.id]
+            .thread
+            .turns
+            .as_ref()
+            .map_or(0, Vec::len);
+        let mut user = Item::new(
+            format!("user-{ordinal}").into(),
+            ItemStatus::Completed,
+            ItemBody::UserMessage {
+                text: None,
+                content: op::Input::message_parts(&input.input),
+            },
+        );
+        user.client_input_id = Some(input.client_user_message_id.clone());
+        let turn_id: TurnId = format!("turn-{ordinal}").into();
+        let turn = Turn {
+            id: turn_id.clone(),
+            status: TurnStatus::Completed,
+            items: Some(vec![
+                Arc::new(user),
+                Arc::new(Item::new(
+                    format!("answer-{ordinal}").into(),
+                    ItemStatus::Completed,
+                    ItemBody::AssistantText {
+                        text: format!("answer {}", input.client_user_message_id),
+                        phase: AssistantPhase::Final,
+                    },
+                )),
+            ]),
+            ..Default::default()
+        };
+        {
+            let mut records = self.records.lock().unwrap();
+            let record = records.get_mut(&input.thread_id.id).unwrap();
+            record
+                .thread
+                .turns
+                .get_or_insert_default()
+                .push(Arc::new(turn.clone()));
+            record.thread.updated_at = Some(record.thread.turns.as_ref().unwrap().len() as f64);
+            record
+                .thread
+                .preview
+                .get_or_insert_with(|| format!("request {}", input.client_user_message_id));
+            record.model = input.model.clone();
+        }
+        emit(
+            &self.events,
+            AgentChange::Session {
+                session: input.thread_id.clone(),
+                change: SessionChange::Turn {
+                    turn,
+                    completed: true,
+                },
+            },
+        )
+        .await
+        .map_err(|error| Failure::new("event_failed", error))?;
+        Ok(op::SubmissionReceipt {
+            turn_id: Some(turn_id),
+        })
+    }
+    async fn interrupt(&self, _: &str, _: &TurnId) -> Result<Empty, Failure> {
+        Ok(Empty {})
+    }
+    async fn models(&self, _: &op::ListModels) -> Result<op::ModelPage, Failure> {
+        Ok(op::ModelPage {
+            data: vec![],
+            next_cursor: None,
+            provider_errors: None,
+        })
+    }
+    async fn catalog(&self, _: &str) -> ComposerCatalog {
+        ComposerCatalog::default()
+    }
+    async fn discard_workspace_processes(&self, _: &Path) -> Result<(), Failure> {
+        Ok(())
+    }
+    async fn read_permissions(&self) -> Result<PermissionSettings, Failure> {
+        Err(unsupported())
+    }
+    async fn update_permissions(
+        &self,
+        _: PermissionMode,
+        _: &str,
+    ) -> Result<PermissionSettings, Failure> {
+        Err(unsupported())
+    }
+    async fn fork(
+        &self,
+        id: &str,
+        turn: &str,
+        _: Option<serde_json::Value>,
+    ) -> Result<ThreadResponse, Failure> {
+        let source = self.open(id, usize::MAX, true).await?;
+        let mut response = self
+            .create(source.thread.cwd.as_deref().unwrap(), None, None)
+            .await?;
+        let mut turns = source.thread.turns.unwrap();
+        turns.truncate(
+            turns
+                .iter()
+                .rposition(|candidate| candidate.id.as_str() == turn)
+                .unwrap()
+                + 1,
+        );
+        response.thread.turns = Some(turns);
+        self.records.lock().unwrap().insert(
+            response.thread.id.as_ref().unwrap().id.clone(),
+            response.clone(),
+        );
+        Ok(response)
+    }
+    async fn rename(&self, _: &str, _: &str) -> Result<Empty, Failure> {
+        Ok(Empty {})
+    }
+    fn event_stream(&self) -> Option<mpsc::Receiver<AgentEvent>> {
+        self.receiver.lock().unwrap().take()
+    }
+    async fn shutdown(&self) {}
+}
+
+fn service(path: &Path, a: &Arc<NativeAgent>, b: &Arc<NativeAgent>) -> HostRpcService {
+    HostRpcService::new(
+        [a.backend(), b.backend()],
+        ProjectStore::new(path.join("worktrees.json")),
+    )
+}
+
+async fn call<T: DeserializeOwned>(
+    service: &HostRpcService,
+    session: SessionId,
+    request: Call,
+) -> Result<T, agent_protocol::error::RpcFailure> {
+    let reply = service.dispatch(session, &request).await.unwrap();
+    match agent_protocol::protocol::decode::<Response<T>>(&reply.initial).unwrap() {
+        Response::Success { result } => Ok(result),
+        Response::Failure { error } => Err(error),
+    }
+}
+
+async fn send(
+    service: &HostRpcService,
+    session: SessionId,
+    root: &SessionRef,
+    provider: ProviderKind,
+    id: &str,
+    text: &str,
+) -> Result<op::SubmissionReceipt, agent_protocol::error::RpcFailure> {
+    call(
+        service,
+        session,
+        Call::Submit(op::Submission {
+            thread_id: root.clone(),
+            client_user_message_id: id.into(),
+            input: vec![op::Input::Text { text: text.into() }],
+            model: Some(ModelRef {
+                provider,
+                id: "model".into(),
+            }),
+            effort: None,
+            service_tier: None,
+        }),
+    )
+    .await
+}
+
+async fn history(
+    service: &HostRpcService,
+    session: SessionId,
+    root: &SessionRef,
+) -> ThreadResponse {
+    call::<agent_protocol::session::OpenedSession>(
+        service,
+        session,
+        Call::OpenSession(agent_protocol::session::OpenSession {
+            session: root.clone(),
+            limit: 1000,
+            include_activity: true,
+        }),
+    )
+    .await
+    .unwrap()
+    .response
+}
+
+#[tokio::test]
+async fn round_trip_reuses_native_sessions_transfers_only_missing_history_and_reopens_after_restart()
+ {
+    let directory = tempfile::tempdir().unwrap();
+    let a = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));
+    let b = NativeAgent::new(ProviderKind::Claude, directory.path().join("claude"));
+    let root = a
+        .create(directory.path().to_str().unwrap(), Some("model"), None)
+        .await
+        .unwrap()
+        .thread
+        .id
+        .unwrap();
+    let host = service(directory.path(), &a, &b);
+    let client = host.open_session();
+    send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "a1",
+        "Keep this original constraint",
+    )
+    .await
+    .unwrap();
+    let first = send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Claude,
+        "b1",
+        "Review the implementation",
+    )
+    .await
+    .unwrap();
+    let b_input = b.inputs.lock().unwrap()[0].clone();
+    assert_eq!(*a.released.lock().unwrap(), [root.id.clone()]);
+    let op::Input::Text { text } = &b_input.input[0] else {
+        panic!()
+    };
+    assert!(text.contains("Keep this original constraint"));
+    assert!(text.contains("answer a1"));
+    let second = send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "a2",
+        "Fix the review findings",
+    )
+    .await
+    .unwrap();
+    let injection = a.injected.lock().unwrap()[0].clone();
+    assert_eq!(injection.0, root.id);
+    assert_eq!(
+        injection
+            .1
+            .messages
+            .iter()
+            .map(|message| message.text.as_str())
+            .collect::<Vec<_>>(),
+        ["Review the implementation", "answer b1"]
+    );
+    assert_eq!(a.next.load(Ordering::SeqCst), 1);
+    let _: agent_protocol::models::Empty = call(
+        &host,
+        client.id(),
+        Call::RenameSession(op::RenameSession {
+            thread_id: root.clone(),
+            name: "Shared logical title".into(),
+        }),
+    )
+    .await
+    .unwrap();
+    let listed: agent_protocol::models::ThreadList = call(
+        &host,
+        client.id(),
+        Call::ListSessions(op::ListSessions {
+            query: agent_protocol::models::ListQuery {
+                search_term: "Shared logical".into(),
+                ..Default::default()
+            },
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(listed.data.len(), 1);
+    assert_eq!(listed.data[0].id.as_ref(), Some(&root));
+    let visible = history(&host, client.id(), &root).await;
+    assert_eq!(visible.thread.id.as_ref(), Some(&root));
+    assert_eq!(visible.thread.active_provider, Some(ProviderKind::Codex));
+    let turns = visible.thread.turns.as_ref().unwrap();
+    assert_eq!(
+        turns
+            .iter()
+            .map(|turn| turn.provider.unwrap())
+            .collect::<Vec<_>>(),
+        [
+            ProviderKind::Codex,
+            ProviderKind::Claude,
+            ProviderKind::Codex
+        ]
+    );
+    let texts = turns
+        .iter()
+        .flat_map(|turn| handoff::Message::from_turn(turn))
+        .map(|message| message.text)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        texts,
+        [
+            "Keep this original constraint",
+            "answer a1",
+            "Review the implementation",
+            "answer b1",
+            "Fix the review findings",
+            "answer a2"
+        ]
+    );
+    assert_ne!(first.turn_id, second.turn_id);
+    let detail: op::ItemResponse = call(
+        &host,
+        client.id(),
+        Call::ReadItem(op::ReadItem {
+            thread_id: root.clone(),
+            turn_id: turns[1].id.clone(),
+            item_id: turns[1].items.as_ref().unwrap()[0].id.clone(),
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        handoff::Message::from_turn(&Turn {
+            items: Some(vec![Arc::new(detail.item)]),
+            ..Default::default()
+        })[0]
+            .text,
+        "Review the implementation"
+    );
+    let fork: ThreadResponse = call(
+        &host,
+        client.id(),
+        Call::ForkSession(op::ForkSession::new(root.clone(), turns[2].id.clone())),
+    )
+    .await
+    .unwrap();
+    assert_eq!(fork.thread.turns.as_ref().unwrap().len(), 3);
+    assert_ne!(fork.thread.id, Some(root.clone()));
+    drop(client);
+    drop(host);
+    let a = a.restarted();
+    let b = b.restarted();
+    let restarted = service(directory.path(), &a, &b);
+    let client = restarted.open_session();
+    assert_eq!(
+        history(&restarted, client.id(), &root)
+            .await
+            .thread
+            .turns
+            .as_ref()
+            .unwrap()
+            .len(),
+        3
+    );
+    send(
+        &restarted,
+        client.id(),
+        &root,
+        ProviderKind::Claude,
+        "b2",
+        "Check the fix",
+    )
+    .await
+    .unwrap();
+    assert_eq!(b.next.load(Ordering::SeqCst), 1);
+    let inputs = b.inputs.lock().unwrap();
+    let op::Input::Text { text } = &inputs[1].input[0] else {
+        panic!()
+    };
+    assert!(text.contains("Fix the review findings"));
+    assert!(!text.contains("Keep this original constraint"));
+}
+
+#[tokio::test]
+async fn refused_inline_handoff_is_retryable_and_unknown_turn_delivery_is_not_replayed() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = NativeAgent::new(ProviderKind::Codex, directory.path().join("a"));
+    let b = NativeAgent::new(ProviderKind::Claude, directory.path().join("b"));
+    let root = a
+        .create(directory.path().to_str().unwrap(), None, None)
+        .await
+        .unwrap()
+        .thread
+        .id
+        .unwrap();
+    let host = service(directory.path(), &a, &b);
+    let client = host.open_session();
+    send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "original",
+        "Original constraint",
+    )
+    .await
+    .unwrap();
+    b.fail_submit.store(1, Ordering::SeqCst);
+    assert_eq!(
+        send(
+            &host,
+            client.id(),
+            &root,
+            ProviderKind::Claude,
+            "refused",
+            "Review"
+        )
+        .await
+        .unwrap_err()
+        .delivery,
+        agent_protocol::error::Delivery::NotSent
+    );
+    send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "extra",
+        "A new source requirement",
+    )
+    .await
+    .unwrap();
+    send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Claude,
+        "retry",
+        "Review",
+    )
+    .await
+    .unwrap();
+    let inputs = b.inputs.lock().unwrap();
+    let op::Input::Text { text } = &inputs[0].input[0] else {
+        panic!()
+    };
+    assert!(text.contains("Original constraint"));
+    assert!(text.contains("A new source requirement"));
+    drop(inputs);
+    a.fail_submit.store(2, Ordering::SeqCst);
+    assert_eq!(
+        send(
+            &host,
+            client.id(),
+            &root,
+            ProviderKind::Codex,
+            "unknown",
+            "May already have run"
+        )
+        .await
+        .unwrap_err()
+        .delivery,
+        agent_protocol::error::Delivery::Unknown
+    );
+    assert_eq!(
+        send(
+            &host,
+            client.id(),
+            &root,
+            ProviderKind::Codex,
+            "unknown",
+            "May already have run"
+        )
+        .await
+        .unwrap_err()
+        .delivery,
+        agent_protocol::error::Delivery::Unknown
+    );
+    assert_eq!(a.inputs.lock().unwrap().len(), 2);
+    drop(client);
+    drop(host);
+    let restarted = service(directory.path(), &a.restarted(), &b.restarted());
+    let client = restarted.open_session();
+    assert_eq!(
+        send(
+            &restarted,
+            client.id(),
+            &root,
+            ProviderKind::Codex,
+            "unknown",
+            "May already have run"
+        )
+        .await
+        .unwrap_err()
+        .delivery,
+        agent_protocol::error::Delivery::Unknown
+    );
+}
+
+#[tokio::test]
+async fn uncertain_native_injection_uses_a_new_binding_without_replaying_the_request() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = NativeAgent::new(ProviderKind::Codex, directory.path().join("a"));
+    let b = NativeAgent::new(ProviderKind::Claude, directory.path().join("b"));
+    let root = b
+        .create(directory.path().to_str().unwrap(), None, None)
+        .await
+        .unwrap()
+        .thread
+        .id
+        .unwrap();
+    let host = service(directory.path(), &a, &b);
+    let client = host.open_session();
+    send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Claude,
+        "b1",
+        "Original",
+    )
+    .await
+    .unwrap();
+    a.fail_inject.store(1, Ordering::SeqCst);
+    assert!(
+        send(
+            &host,
+            client.id(),
+            &root,
+            ProviderKind::Codex,
+            "a1",
+            "Continue"
+        )
+        .await
+        .is_err()
+    );
+    assert!(a.inputs.lock().unwrap().is_empty());
+    let receipt = send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "a1",
+        "Continue",
+    )
+    .await
+    .unwrap();
+    let duplicate = send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "a1",
+        "Continue",
+    )
+    .await
+    .unwrap();
+    assert_eq!(receipt.turn_id, duplicate.turn_id);
+    assert_eq!(a.next.load(Ordering::SeqCst), 2);
+    assert_eq!(a.inputs.lock().unwrap().len(), 1);
+    let injections = a.injected.lock().unwrap();
+    assert_ne!(injections[0].0, injections[1].0);
+    assert_eq!(injections[1].1.messages[0].text, "Original");
+}
+
+#[tokio::test]
+async fn a_running_source_blocks_switching_and_a_failed_resume_gets_full_context() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = NativeAgent::new(ProviderKind::Codex, directory.path().join("a"));
+    let b = NativeAgent::new(ProviderKind::Claude, directory.path().join("b"));
+    let root = a
+        .create(directory.path().to_str().unwrap(), None, None)
+        .await
+        .unwrap()
+        .thread
+        .id
+        .unwrap();
+    let host = service(directory.path(), &a, &b);
+    let client = host.open_session();
+    a.records
+        .lock()
+        .unwrap()
+        .get_mut(&root.id)
+        .unwrap()
+        .thread
+        .status = SessionStatus::Running;
+    assert_eq!(
+        send(
+            &host,
+            client.id(),
+            &root,
+            ProviderKind::Claude,
+            "blocked",
+            "Review"
+        )
+        .await
+        .unwrap_err()
+        .code,
+        "provider_switch_busy"
+    );
+    assert_eq!(b.next.load(Ordering::SeqCst), 0);
+    a.records
+        .lock()
+        .unwrap()
+        .get_mut(&root.id)
+        .unwrap()
+        .thread
+        .status = SessionStatus::Idle;
+    send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "a1",
+        "Original constraint",
+    )
+    .await
+    .unwrap();
+    send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Claude,
+        "b1",
+        "Review",
+    )
+    .await
+    .unwrap();
+    a.fail_open.store(1, Ordering::SeqCst);
+    send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "a2",
+        "Continue",
+    )
+    .await
+    .unwrap();
+    assert_eq!(a.next.load(Ordering::SeqCst), 2);
+    let injections = a.injected.lock().unwrap();
+    assert_ne!(injections[0].0, root.id);
+    assert_eq!(
+        injections[0]
+            .1
+            .messages
+            .iter()
+            .map(|message| message.text.as_str())
+            .collect::<Vec<_>>(),
+        ["Original constraint", "answer a1", "Review", "answer b1"]
+    );
+    drop(injections);
+    let visible = history(&host, client.id(), &root).await;
+    let ids = visible
+        .thread
+        .turns
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(|turn| &turn.id)
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(
+        ids.len(),
+        3,
+        "native turn-0 occurs in three sessions and must remain distinct"
+    );
+}
+
+#[tokio::test]
+async fn long_history_is_transferred_beyond_the_visible_page_and_older_pages_keep_order() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = NativeAgent::new(ProviderKind::Codex, directory.path().join("a"));
+    let b = NativeAgent::new(ProviderKind::Claude, directory.path().join("b"));
+    let root = a
+        .create(directory.path().to_str().unwrap(), None, None)
+        .await
+        .unwrap()
+        .thread
+        .id
+        .unwrap();
+    let mut turns = Vec::new();
+    for index in 0..150 {
+        turns.push(Arc::new(Turn {
+            id: format!("old-{index}").into(),
+            status: TurnStatus::Completed,
+            items: Some(vec![Arc::new(Item::new(
+                format!("user-{index}").into(),
+                ItemStatus::Completed,
+                ItemBody::UserMessage {
+                    text: Some(if index == 0 {
+                        "Original requirement outside the first native page".into()
+                    } else {
+                        format!("request {index}")
+                    }),
+                    content: vec![],
+                },
+            ))]),
+            ..Default::default()
+        }));
+    }
+    a.records
+        .lock()
+        .unwrap()
+        .get_mut(&root.id)
+        .unwrap()
+        .thread
+        .turns = Some(turns);
+    let host = service(directory.path(), &a, &b);
+    let client = host.open_session();
+    send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Claude,
+        "b1",
+        "Continue",
+    )
+    .await
+    .unwrap();
+    let inputs = b.inputs.lock().unwrap();
+    let op::Input::Text { text } = &inputs[0].input[0] else {
+        panic!()
+    };
+    assert!(text.contains("Original requirement outside the first native page"));
+    assert!(text.contains("request 149"));
+    drop(inputs);
+    let opened: agent_protocol::session::OpenedSession = call(
+        &host,
+        client.id(),
+        Call::OpenSession(agent_protocol::session::OpenSession {
+            session: root.clone(),
+            limit: 5,
+            include_activity: true,
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(opened.response.thread.turns.as_ref().unwrap().len(), 5);
+    let mut count = 5;
+    let mut cursor = opened.response.thread.history_cursor;
+    while let Some(value) = cursor {
+        let page: HistoryPage = call(
+            &host,
+            client.id(),
+            Call::ReadHistory(agent_protocol::session::ReadHistory {
+                session: root.clone(),
+                cursor: value,
+                include_activity: true,
+            }),
+        )
+        .await
+        .unwrap();
+        count += page.turns.len();
+        cursor = page.next_cursor;
+    }
+    assert_eq!(count, 151);
+    let page: handoff::Page = call(
+        &host,
+        client.id(),
+        Call::ReadHandoffHistory(handoff::ReadHistory {
+            session: root,
+            offset: 0,
+            limit: 1,
+            text_offset: 0,
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        page.items[0].message.text,
+        "Original requirement outside the first native page"
+    );
+    assert_eq!(page.next_offset, Some(1));
+}

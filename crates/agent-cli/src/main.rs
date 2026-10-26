@@ -42,6 +42,9 @@ enum Command {
         client_message_id: String,
         #[arg(long)]
         model: Option<String>,
+        /// Switch provider within the same conversation on this submission.
+        #[arg(long, requires = "model", value_parser = parse_provider)]
+        provider: Option<agent_protocol::session::ProviderKind>,
         #[arg(long)]
         effort: Option<String>,
     },
@@ -140,17 +143,20 @@ async fn run(args: Args) -> anyhow::Result<()> {
             text,
             client_message_id,
             model,
+            provider,
             effort,
         } => {
+            let snapshot = store.snapshot();
+            let key = thread_id.clone().into();
+            let provider = provider
+                .or_else(|| snapshot.model_provider_for_draft(key))
+                .unwrap_or(thread_id.provider);
             store
                 .dispatch(Intent::SetDraft {
                     thread_id: thread_id.clone().into(),
                     draft: Draft {
                         text,
-                        model: model.map(|id| agent_protocol::models::ModelRef {
-                            provider: thread_id.provider,
-                            id,
-                        }),
+                        model: model.map(|id| agent_protocol::models::ModelRef { provider, id }),
                         effort,
                         ..Default::default()
                     },
@@ -207,4 +213,9 @@ async fn run(args: Args) -> anyhow::Result<()> {
     }
     store.close().await?;
     Ok(())
+}
+
+fn parse_provider(value: &str) -> Result<agent_protocol::session::ProviderKind, String> {
+    serde_json::from_value(serde_json::Value::String(value.into()))
+        .map_err(|_| "provider must be codex, claude or deepseek".into())
 }

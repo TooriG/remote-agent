@@ -549,8 +549,17 @@ impl Desktop {
                 ConversationRowContent::PendingRequest { request } => {
                     body = body.child(self.request_card(request, cx));
                 }
+                ConversationRowContent::ProviderHandoff { text } => {
+                    body = body.child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(appearance::MUTED))
+                            .py_2()
+                            .child(text.clone()),
+                    );
+                }
                 ConversationRowContent::Error { error } => {
-                    let provider = session.map(|s| s.provider);
+                    let provider = turn.provider.or_else(|| session.map(|s| s.provider));
                     body = body.child(
                         v_flex().gap_2()
                             .child(div().text_color(rgb(0xff8e86)).child(error.message.clone()))

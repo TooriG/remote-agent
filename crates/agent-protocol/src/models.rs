@@ -93,6 +93,8 @@ pub struct Thread {
     #[serde(default)]
     pub submissions: BTreeMap<crate::ids::ClientInputId, crate::session::SubmissionDelivery>,
     pub id: Option<crate::session::SessionRef>,
+    /// The public identity remains stable across provider handoffs.
+    pub active_provider: Option<crate::session::ProviderKind>,
     pub parent_id: Option<crate::session::SessionRef>,
     pub can_accept_direct_input: Option<bool>,
     pub name: Option<String>,
@@ -116,6 +118,8 @@ pub struct Thread {
 #[serde(rename_all = "camelCase")]
 pub struct Turn {
     pub id: crate::ids::TurnId,
+    pub provider: Option<crate::session::ProviderKind>,
+    pub supports_fork: Option<bool>,
     #[serde(default)]
     pub status: TurnStatus,
     pub items: Option<Vec<Arc<Item>>>,

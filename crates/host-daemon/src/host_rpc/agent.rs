@@ -214,6 +214,19 @@ pub(crate) trait Agent: Identity {
         browser: Option<Value>,
     ) -> Result<ThreadResponse, Failure>;
     async fn state(&self, id: &str) -> Result<SubmissionState, Failure>;
+    /// False is an explicit unsupported operation, before any history mutation.
+    /// Other failures may have delivered history and must not be blindly retried.
+    async fn inject_history(
+        &self,
+        _id: &str,
+        _context: &agent_protocol::handoff::Context,
+    ) -> Result<bool, Failure> {
+        Ok(false)
+    }
+    /// Release an idle runtime while preserving its native conversation.
+    async fn unload(&self, _id: &str) -> Result<(), Failure> {
+        Ok(())
+    }
     async fn submit(
         &self,
         input: &op::Submission,
@@ -289,7 +302,11 @@ pub(crate) struct AgentEvent {
     pub applied: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
 }
 impl AgentChange {
-    pub fn apply(self, router: &SessionRouter) -> Result<(), String> {
+    pub fn apply(
+        self,
+        router: &SessionRouter,
+        bindings: &[(SessionRef, agent_protocol::session::ProviderKind)],
+    ) -> Result<(), String> {
         match self {
             Self::TaskParent { session, parent } => router.task_parent(session, parent),
             Self::Session { session, change } => router.session_change(&session, change),
@@ -310,7 +327,7 @@ impl AgentChange {
                     revision: 0,
                 })
             }
-            Self::Stopped { provider, reason } => router.fail_provider(provider, &reason),
+            Self::Stopped { provider, reason } => router.fail_provider(provider, &reason, bindings),
         }
         Ok(())
     }
