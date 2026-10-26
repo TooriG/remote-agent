@@ -811,13 +811,14 @@ fn select_thread(snapshot: &mut Snapshot, id: crate::session::SessionRef, cwd: S
     if !snapshot.drafts.contains_key(&key) || !Arc::ptr_eq(&draft, &previous) {
         Arc::make_mut(&mut snapshot.drafts).insert(key, draft);
     }
-    if snapshot.navigation.cwd != cwd {
-        clear_workspace_location(Arc::make_mut(&mut snapshot.workspace));
-    }
-    let navigation = Arc::make_mut(&mut snapshot.navigation);
-    navigation.thread_id = Some(id.clone());
-    navigation.draft_key = id.into();
-    navigation.cwd = cwd;
+    navigate(
+        snapshot,
+        Navigation {
+            thread_id: Some(id.clone()),
+            draft_key: id.into(),
+            cwd,
+        },
+    );
 }
 
 pub(super) fn open_thread(

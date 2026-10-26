@@ -8,6 +8,7 @@ mod view;
 
 use crate::{Runtime, appearance, diff::DiffView, platform, store_session::StoreSession};
 use agent_core::{
+    panels::{Kind as Panel, Layout as PanelLayout, Panels, Scope as PanelScope},
     presentation::conversation::{ActivityExpansion, ConversationRowContent},
     state::{Attachment, Draft, DraftKey, Intent, ModelDefaultsScope, PendingSubmission, Snapshot},
     store::Outcome,
@@ -95,15 +96,23 @@ enum ModelPanel {
     Accounts,
     Manage,
 }
-#[derive(Clone, Copy, PartialEq)]
-enum Panel {
-    Home,
-    Agents,
-    Terminal,
-    SideChat,
-    Browser,
-    Files,
-    Diff,
+enum SurfaceResource {
+    Diff(Entity<DiffView>),
+    Pending {
+        url: Option<String>,
+    },
+    Browser {
+        view: Entity<crate::browser::Browser>,
+        _events: Subscription,
+        _observation: Subscription,
+    },
+    Terminal(Entity<crate::terminal::Terminal>),
+    SideChat(Entity<Desktop>),
+    #[cfg(target_os = "windows")]
+    Starting {
+        _task: Task<()>,
+        url: Option<String>,
+    },
 }
 pub(crate) enum Mode {
     Main,
@@ -237,14 +246,10 @@ pub(crate) struct Desktop {
     tab: Tab,
     settings_page: SettingsPage,
     sidebar: bool,
-    panel_open: bool,
-    panel: Panel,
-    side_chat: Option<Entity<Desktop>>,
-    terminal: Option<Entity<crate::terminal::Terminal>>,
-    browser: Option<Entity<crate::browser::Browser>>,
-    pending_browser_url: Option<String>,
-    #[cfg(target_os = "windows")]
-    browser_initialization: Option<Task<()>>,
+    panels: Panels,
+    surface_resources: HashMap<u64, SurfaceResource>,
+    panel_menu_open: bool,
+    panel_focus: FocusHandle,
     dictation: Option<Dictation>,
     review_expanded: bool,
     source_paths: Vec<String>,
@@ -354,7 +359,12 @@ impl Desktop {
                     }
                     selection::SelectionAction::AskSideChat(text) => {
                         view.open_panel(Panel::SideChat, window, cx);
-                        if let Some(chat) = &view.side_chat {
+                        if let Some(SurfaceResource::SideChat(chat)) = view
+                            .panels
+                            .get(&view.panel_scope())
+                            .active
+                            .and_then(|id| view.surface_resources.get(&id))
+                        {
                             chat.update(cx, |chat, cx| chat.quote_selection(text, window, cx));
                         }
                     }
@@ -363,7 +373,12 @@ impl Desktop {
                             view.explain_selection(text, cx);
                         } else {
                             view.open_panel(Panel::SideChat, window, cx);
-                            if let Some(chat) = &view.side_chat {
+                            if let Some(SurfaceResource::SideChat(chat)) = view
+                                .panels
+                                .get(&view.panel_scope())
+                                .active
+                                .and_then(|id| view.surface_resources.get(&id))
+                            {
                                 chat.update(cx, |chat, cx| chat.explain_selection(text, cx));
                             }
                         }
@@ -530,14 +545,10 @@ impl Desktop {
             tab: Tab::Chat,
             settings_page: SettingsPage::Agents,
             sidebar: true,
-            panel_open: false,
-            panel: Panel::Home,
-            side_chat: None,
-            terminal: None,
-            browser: None,
-            pending_browser_url: None,
-            #[cfg(target_os = "windows")]
-            browser_initialization: None,
+            panels: Panels::default(),
+            surface_resources: HashMap::new(),
+            panel_menu_open: false,
+            panel_focus: cx.focus_handle(),
             dictation: None,
             review_expanded: false,
             source_paths: Vec::new(),
@@ -959,6 +970,21 @@ impl Desktop {
                 .get(self.draft_key())
                 .map(|draft| &draft.attachments);
         let navigated = previous.navigation.draft_key != self.snapshot.navigation.draft_key;
+        // Store snapshots may coalesce creation and send acceptance. Use the
+        // durable core identity transition rather than transient pending sends.
+        for (draft, session) in self.snapshot.draft_sessions.iter() {
+            if previous.draft_sessions.get(draft) != Some(session) {
+                let before = PanelScope {
+                    draft: draft.clone(),
+                    ..self.panel_scope()
+                };
+                let after = PanelScope {
+                    draft: session.into(),
+                    ..self.panel_scope()
+                };
+                self.panels.rekey(&before, after);
+            }
+        }
         let project_for_selected = |snapshot: &Snapshot| {
             snapshot
                 .thread_metadata(snapshot.navigation.thread_id.as_ref()?)
@@ -1089,6 +1115,15 @@ impl Desktop {
         }
         if changed && let Some(session) = &self.session {
             session.save(self.snapshot.clone());
+        }
+        if navigated {
+            let panel = self.panels.get(&self.panel_scope());
+            if panel.open
+                && matches!(panel.kind(), Panel::File | Panel::Files)
+                && let Some(id) = panel.active
+            {
+                self.activate_surface(id, window, cx);
+            }
         }
     }
     fn draft_key(&self) -> &DraftKey {
@@ -1367,8 +1402,6 @@ impl Desktop {
         self.worktree_dirty = false;
         self.worktree_saving = false;
         self.worktree_save_pending = false;
-        self.side_chat = None;
-        self.terminal = None;
         self.images.clear();
         self.image_gallery = None;
         self.rows.clear();
@@ -1477,79 +1510,213 @@ impl Desktop {
             }));
         }
     }
-    fn open_panel(&mut self, panel: Panel, window: &mut Window, cx: &mut Context<Self>) {
-        let result = match panel {
-            Panel::SideChat if self.side_chat.is_none() => {
-                self.side_chat = Some(cx.new(|cx| {
-                    Self::new(
-                        Mode::SideChat {
-                            remote: self.remote.clone(),
-                            cwd: self.snapshot.selected_directory(),
-                        },
-                        window,
-                        cx,
-                    )
-                }));
-                Ok(())
+    fn panel_scope(&self) -> PanelScope {
+        PanelScope {
+            host: self
+                .remote
+                .as_ref()
+                .map_or_else(|| "local".into(), |host| host.id.clone()),
+            storage: self.snapshot.storage_scope.clone(),
+            draft: self.draft_key().clone(),
+        }
+    }
+    fn open_panel(&mut self, kind: Panel, window: &mut Window, cx: &mut Context<Self>) {
+        let id = self.panels.open(self.panel_scope(), kind, None);
+        self.tab = Tab::Chat;
+        self.activate_surface(id, window, cx);
+    }
+    fn hide_surfaces(&mut self, cx: &mut App) {
+        self.cancel_recording();
+        for resource in self.surface_resources.values() {
+            match resource {
+                SurfaceResource::Browser { view, .. } => {
+                    view.update(cx, |view, cx| view.set_visible(false, cx))
+                }
+                SurfaceResource::SideChat(view) => {
+                    view.update(cx, |view, cx| view.hide_surfaces(cx))
+                }
+                _ => (),
             }
-            Panel::Terminal if self.terminal.is_none() => {
-                self.terminal = Some(crate::terminal::Terminal::new(
-                    self.remote.as_ref().map_or("", |remote| &remote.ticket),
-                    self.snapshot.navigation.cwd.clone(),
-                    window,
-                    cx,
-                ));
-                Ok(())
+        }
+    }
+    fn start_browser(
+        &mut self,
+        id: u64,
+        url: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        #[cfg(target_os = "windows")]
+        {
+            let owner = cx.entity().downgrade();
+            match crate::browser::Browser::start(window, cx, move |result, window, cx| {
+                let _ = owner.update(cx, |view, cx| {
+                    let Some(SurfaceResource::Starting { url, .. }) =
+                        view.surface_resources.remove(&id)
+                    else {
+                        return;
+                    };
+                    match result {
+                        Ok(browser) => view.attach_browser(id, browser, url, window, cx),
+                        Err(error) => view.set_error(error),
+                    }
+                    cx.notify();
+                });
+            }) {
+                Ok(task) => {
+                    self.surface_resources
+                        .insert(id, SurfaceResource::Starting { _task: task, url });
+                }
+                Err(error) => self.set_error(error),
             }
-            #[cfg(target_os = "windows")]
-            Panel::Browser if self.browser.is_none() && self.browser_initialization.is_none() => {
-                let owner = cx.entity().downgrade();
-                crate::browser::Browser::start(window, cx, move |result, window, cx| {
-                    let _ = owner.update(cx, |s, cx| {
-                        s.browser_initialization = None;
-                        match result {
-                            Ok(view) => {
-                                s.browser = Some(view);
-                                s.navigate_pending_browser_url(window, cx);
-                            }
-                            Err(error) => s.set_error(error),
-                        }
-                        cx.notify();
-                    });
-                })
-                .map(|task| self.browser_initialization = Some(task))
+        }
+        #[cfg(not(target_os = "windows"))]
+        match crate::browser::Browser::new(
+            wry::WebViewBuilder::new(),
+            #[cfg(target_os = "macos")]
+            crate::browser::import_sources(),
+            window,
+            cx,
+        ) {
+            Ok(browser) => self.attach_browser(id, browser, url, window, cx),
+            Err(error) => self.set_error(error),
+        }
+    }
+    fn attach_browser(
+        &mut self,
+        id: u64,
+        browser: Entity<crate::browser::Browser>,
+        url: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        browser.update(cx, |view, cx| {
+            view.set_visible(false, cx);
+            if let Some(url) = url {
+                view.open_url(&url, window, cx);
             }
-            #[cfg(not(target_os = "windows"))]
-            Panel::Browser if self.browser.is_none() => crate::browser::Browser::new(
-                wry::WebViewBuilder::new(),
-                #[cfg(target_os = "macos")]
-                crate::browser::ChromeProfileSource::default(),
-                window,
-                cx,
-            )
-            .map(|view| self.browser = Some(view)),
-            _ => Ok(()),
-        };
-        if let Err(error) = result {
+        });
+        let events = cx.subscribe_in(
+            &browser,
+            window,
+            move |view, _, event: &crate::browser::OpenTab, _, cx| {
+                if let Some(scope) = view.panels.scope(id).cloned() {
+                    view.open_browser(scope, &event.0, cx);
+                }
+            },
+        );
+        let observation = cx.observe(&browser, |_, _, cx| cx.notify());
+        self.surface_resources.insert(
+            id,
+            SurfaceResource::Browser {
+                view: browser,
+                _events: events,
+                _observation: observation,
+            },
+        );
+    }
+    fn open_browser(&mut self, scope: PanelScope, url: &str, cx: &mut Context<Self>) {
+        if let Err(error) = agent_protocol::browser::browser_url(url) {
             self.set_error(error);
+            cx.notify();
             return;
         }
-        self.panel = panel;
-        self.panel_open = true;
-        self.tab = Tab::Chat;
-        self.navigate_pending_browser_url(window, cx);
+        let current = scope == self.panel_scope();
+        let id = self.panels.open(scope, Panel::Browser, None);
+        self.surface_resources.insert(
+            id,
+            SurfaceResource::Pending {
+                url: Some(url.into()),
+            },
+        );
+        if current {
+            self.tab = Tab::Chat;
+        }
         cx.notify();
     }
-    fn open_browser_url(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
-        self.pending_browser_url = Some(url.to_owned());
-        self.open_panel(Panel::Browser, window, cx);
-    }
-    fn navigate_pending_browser_url(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(browser) = self.browser.clone()
-            && let Some(url) = self.pending_browser_url.take()
-        {
-            browser.update(cx, |browser, cx| browser.open_url(&url, window, cx));
+    fn activate_surface(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let key = self.panel_scope();
+        if !self.panels.activate(&key, id) {
+            return;
         }
+        let surface = self.panels.get(&key).selected().unwrap().clone();
+        match surface.kind {
+            Panel::Browser => {
+                self.surface_resources
+                    .entry(id)
+                    .or_insert(SurfaceResource::Pending { url: None });
+            }
+            Panel::Terminal => {
+                if !self.surface_resources.contains_key(&id) {
+                    let terminal = crate::terminal::Terminal::new(
+                        self.remote.as_ref().map_or("", |remote| &remote.ticket),
+                        self.snapshot.navigation.cwd.clone(),
+                        format!("bex-terminal-{}", uuid::Uuid::new_v4()),
+                        window,
+                        cx,
+                    );
+                    self.surface_resources
+                        .insert(id, SurfaceResource::Terminal(terminal));
+                }
+                if let Some(SurfaceResource::Terminal(terminal)) = self.surface_resources.get(&id) {
+                    terminal.update(cx, |terminal, cx| terminal.focus(window, cx));
+                }
+            }
+            Panel::SideChat => {
+                if !self.surface_resources.contains_key(&id) {
+                    let chat = cx.new(|cx| {
+                        Self::new(
+                            Mode::SideChat {
+                                remote: self.remote.clone(),
+                                cwd: self.snapshot.selected_directory(),
+                            },
+                            window,
+                            cx,
+                        )
+                    });
+                    self.surface_resources
+                        .insert(id, SurfaceResource::SideChat(chat));
+                }
+            }
+            Panel::File => {
+                if let Some(path) = surface.path {
+                    self.dispatch(Intent::ReadFile(op::ReadFile {
+                        path,
+                        discard_draft: false,
+                    }));
+                }
+            }
+            Panel::Files => self.dispatch(Intent::ListFiles(op::ListFiles {
+                path: surface
+                    .path
+                    .unwrap_or_else(|| self.snapshot.navigation.cwd.clone()),
+            })),
+            Panel::Diff => self.refresh_review(),
+            Panel::Agents | Panel::Home => (),
+        }
+        cx.notify();
+    }
+    fn close_surface(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        if self.panels.scope(id) != Some(&self.panel_scope()) {
+            return;
+        }
+        self.panels.close(&self.panel_scope(), id);
+        match self.surface_resources.remove(&id) {
+            Some(SurfaceResource::Browser { view, .. }) => {
+                view.update(cx, |view, cx| view.set_visible(false, cx));
+            }
+            Some(SurfaceResource::Terminal(view)) => view.update(cx, |view, _| view.close()),
+            Some(SurfaceResource::SideChat(view)) => {
+                view.update(cx, |view, cx| view.hide_surfaces(cx))
+            }
+            _ => (),
+        }
+        if let Some(next) = self.panels.get(&self.panel_scope()).active {
+            self.activate_surface(next, window, cx);
+        } else {
+            self.panel_focus.focus(window, cx);
+        }
+        cx.notify();
     }
     fn pick_folder(&mut self) {
         self.busy += 1;
@@ -1735,12 +1902,14 @@ impl Desktop {
         );
     }
     fn browse(&mut self, path: String) {
-        self.panel = Panel::Files;
-        self.panel_open = true;
+        self.panels
+            .open(self.panel_scope(), Panel::Files, Some(path.clone()));
         self.tab = Tab::Chat;
         self.dispatch(Intent::ListFiles(op::ListFiles { path }));
     }
     fn edit(&mut self, path: String, discard_draft: bool) {
+        self.panels
+            .open(self.panel_scope(), Panel::File, Some(path.clone()));
         self.dispatch(Intent::ReadFile(op::ReadFile {
             path,
             discard_draft,

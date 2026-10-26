@@ -139,10 +139,8 @@ impl Desktop {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let view = diffs
-            .entry(id.clone())
-            .or_insert_with(|| {
-                cx.new(|_| DiffView::new(patch.to_owned().into(), id == "workspace-patch"))
-            })
+            .entry(id)
+            .or_insert_with(|| cx.new(|_| DiffView::new(patch.to_owned().into(), false)))
             .clone();
         view.update(cx, |s, cx| s.set_source(patch, cx));
         view.into_any_element()
@@ -563,8 +561,8 @@ impl Desktop {
                                             s.model_panel = ModelPanel::Manage;
                                         }).small())
                                         .when(provider == Some(agent_protocol::session::ProviderKind::Codex), |actions| {
-                                            actions.child(self.button(format!("usage-manage-{}", turn.id), "追加クレジット・上限を管理", cx, |s, window, cx| {
-                                                s.open_browser_url("https://chatgpt.com/settings/usage", window, cx);
+                                            actions.child(self.button(format!("usage-manage-{}", turn.id), "追加クレジット・上限を管理", cx, |s, _, cx| {
+                                                s.open_browser(s.panel_scope(), "https://chatgpt.com/settings/usage", cx);
                                             }).small())
                                         })
                                 )
@@ -1014,12 +1012,7 @@ impl Desktop {
                         "リンクを開く",
                         cx,
                         move |view, window, cx| {
-                            view.click_conversation_link(
-                                &url,
-                                window.modifiers().control,
-                                window,
-                                cx,
-                            )
+                            view.click_conversation_link(&url, window.modifiers().control, cx)
                         },
                     ));
                 } else {

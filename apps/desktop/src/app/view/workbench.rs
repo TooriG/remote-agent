@@ -1,25 +1,28 @@
 use super::*;
 
+const TOOLS: [(Panel, IconName, &str, &str); 6] = [
+    (Panel::Browser, IconName::Globe, "ブラウザ", "B"),
+    (Panel::Terminal, IconName::SquareTerminal, "ターミナル", "T"),
+    (Panel::Files, IconName::Folder, "ファイル", "F"),
+    (Panel::Diff, IconName::Replace, "差分", "D"),
+    (Panel::SideChat, IconName::Bot, "サイドチャット", "S"),
+    (Panel::Agents, IconName::Network, "エージェント", "A"),
+];
+
 impl Desktop {
+    fn panel_available(&self, panel: Panel) -> bool {
+        matches!(panel, Panel::Browser | Panel::Agents)
+            || (self.snapshot.connected && !self.snapshot.navigation.cwd.is_empty())
+    }
     pub(super) fn open_review(&mut self, path: Option<&str>, cx: &mut Context<Self>) {
-        self.panel = Panel::Diff;
-        self.panel_open = true;
+        let id = self.panels.open(self.panel_scope(), Panel::Diff, None);
         self.tab = Tab::Chat;
+        let diff = self.workspace_diff(id, cx);
         if let Some(path) = path {
-            let source = self
-                .snapshot
-                .workspace
-                .review
-                .as_ref()
-                .map_or("", |review| review.diff.as_str());
-            Self::diff(&mut self.diffs, "workspace-patch".into(), source, cx);
-            if let Some(diff) = self.diffs.get("workspace-patch") {
-                diff.update(cx, |diff, cx| {
-                    diff.reveal_path(path, cx);
-                });
-            }
+            diff.update(cx, |diff, cx| diff.reveal_path(path, cx));
         }
         self.refresh_review();
+        cx.notify();
     }
 
     pub(super) fn review_card(&self, cx: &Context<Self>) -> AnyElement {
@@ -193,8 +196,69 @@ impl Desktop {
                     }),
             );
         }
-        let mut editor = v_flex().flex_1().min_h_0().min_w_0().gap_2();
-        if let Some(file) = &self.snapshot.workspace.file {
+        v_flex()
+            .size_full()
+            .min_h_0()
+            .p_4()
+            .gap_3()
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(Self::icon_button(
+                        "parent-directory",
+                        IconName::ArrowUp,
+                        "親フォルダ",
+                        cx,
+                        |s, _, cx| {
+                            let path = s.path.read(cx).value();
+                            s.browse(
+                                Path::new(path.as_ref())
+                                    .parent()
+                                    .unwrap_or(Path::new("/"))
+                                    .to_string_lossy()
+                                    .into_owned(),
+                            );
+                        },
+                    ))
+                    .child(Input::new(&self.path).small().aria_label("フォルダのパス"))
+                    .child(Self::icon_button(
+                        "browse",
+                        IconName::ArrowRight,
+                        "フォルダを開く",
+                        cx,
+                        |s, _, cx| s.browse(s.path.read(cx).value().to_string()),
+                    )),
+            )
+            .child(
+                div()
+                    .id("file-list")
+                    .debug_selector(|| "conversation-files".into())
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .child(entries),
+            )
+            .into_any_element()
+    }
+    fn file_editor(&self, cx: &Context<Self>) -> AnyElement {
+        let mut editor = v_flex()
+            .debug_selector(|| "conversation-file".into())
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            .gap_2();
+        let selected = self
+            .panels
+            .get(&self.panel_scope())
+            .selected()
+            .and_then(|surface| surface.path.as_deref());
+        if let Some(file) = self
+            .snapshot
+            .workspace
+            .file
+            .as_ref()
+            .filter(|file| selected == Some(file.path.as_str()))
+        {
             editor = editor
                 .child(
                     h_flex().gap_2().child(IconName::FileText).child(
@@ -263,179 +327,245 @@ impl Desktop {
                     div()
                         .text_sm()
                         .text_color(rgb(appearance::MUTED))
-                        .child("ファイルを選択して編集"),
+                        .child("ファイルを読み込み中…"),
                 );
         }
-        v_flex()
-            .size_full()
-            .min_h_0()
-            .p_4()
-            .gap_3()
-            .child(
-                h_flex()
-                    .gap_2()
-                    .child(Self::icon_button(
-                        "parent-directory",
-                        IconName::ArrowUp,
-                        "親フォルダ",
-                        cx,
-                        |s, _, cx| {
-                            let path = s.path.read(cx).value();
-                            s.browse(
-                                Path::new(path.as_ref())
-                                    .parent()
-                                    .unwrap_or(Path::new("/"))
-                                    .to_string_lossy()
-                                    .into_owned(),
-                            );
-                        },
-                    ))
-                    .child(Input::new(&self.path).small().aria_label("フォルダのパス"))
-                    .child(Self::icon_button(
-                        "browse",
-                        IconName::ArrowRight,
-                        "フォルダを開く",
-                        cx,
-                        |s, _, cx| s.browse(s.path.read(cx).value().to_string()),
-                    )),
-            )
-            .child(
-                div()
-                    .id("file-list")
-                    .debug_selector(|| "conversation-files".into())
-                    .h(px(160.))
-                    .flex_shrink_0()
-                    .overflow_y_scroll()
-                    .child(entries),
-            )
-            .child(div().h(px(1.)).bg(rgb(appearance::BORDER)))
-            .child(editor)
-            .into_any_element()
+        editor.p_4().into_any_element()
     }
     pub(super) fn workbench(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        const TOOLS: [(Panel, IconName, &str); 5] = [
-            (Panel::Agents, IconName::Network, "エージェント"),
-            (Panel::Terminal, IconName::SquareTerminal, "ターミナル"),
-            (Panel::SideChat, IconName::Bot, "サイドチャット"),
-            (Panel::Browser, IconName::Globe, "ブラウザ"),
-            (Panel::Files, IconName::Folder, "ファイラ"),
-        ];
-        let toolbar = if self.side_chat_mode {
-            h_flex().h_10().px_2().child(
-                self.button(
-                    "back-side-chat",
-                    "サイドチャットに戻る",
-                    cx,
-                    |view, _, _| {
-                        view.panel_open = false;
-                    },
-                )
-                .icon(IconName::ArrowLeft)
-                .debug_selector(|| "back-side-chat".into()),
-            )
-        } else {
-            let selected = TOOLS.iter().position(|(panel, _, _)| *panel == self.panel);
-            let tabs = TabBar::new("workbench-tabs")
-                .small()
-                .underline()
-                .when_some(selected, |bar, ix| bar.selected_index(ix))
-                .children(
-                    TOOLS
-                        .iter()
-                        .map(|(_, icon, label)| UiTab::new().icon(icon.clone()).aria_label(*label)),
-                )
-                .on_click(cx.listener(|s, ix: &usize, w, cx| {
-                    let panel = TOOLS[*ix].0;
-                    if panel == Panel::Files {
-                        s.browse(s.snapshot.navigation.cwd.clone());
-                    } else {
-                        s.open_panel(panel, w, cx);
-                    }
-                }));
-            h_flex()
-                .h_10()
-                .px_2()
-                .gap_1()
-                .border_b_1()
-                .border_color(rgb(appearance::BORDER))
-                .child(Self::icon_button(
-                    "panel-home",
-                    IconName::LayoutDashboard,
-                    "パネルのホーム",
-                    cx,
-                    |s, _, _| s.panel = Panel::Home,
-                ))
-                .child(tabs)
-                .child(div().flex_1())
-                .when(self.panel == Panel::Terminal, |bar| {
-                    bar.child(Self::icon_button(
-                        "new-terminal",
-                        IconName::Plus,
-                        "新しいターミナル",
-                        cx,
-                        |s, w, cx| {
-                            s.terminal = None;
-                            s.open_panel(Panel::Terminal, w, cx);
-                        },
-                    ))
-                })
-                .when(self.panel == Panel::SideChat, |bar| {
-                    bar.child(Self::icon_button(
-                        "new-side-chat",
-                        new_chat_icon(),
-                        "新しいサイドチャット",
-                        cx,
-                        |s, window, cx| {
-                            if let Some(chat) = &s.side_chat {
-                                chat.update(cx, |chat, cx| {
-                                    chat.new_chat(String::new(), window, cx);
-                                });
+        let panel = self.panels.get(&self.panel_scope());
+        let layout = panel.layout;
+        let active = panel.active;
+        let kind = panel.kind();
+        let tabs = panel
+            .surfaces
+            .iter()
+            .map(|surface| {
+                let id = surface.id;
+                let (_, icon, label, _) = TOOLS
+                    .iter()
+                    .find(|(kind, _, _, _)| {
+                        *kind
+                            == if surface.kind == Panel::File {
+                                Panel::Files
+                            } else {
+                                surface.kind
                             }
+                    })
+                    .unwrap();
+                let title = match self.surface_resources.get(&id) {
+                    Some(SurfaceResource::Browser { view, .. }) => view.read(cx).title(cx),
+                    _ => surface
+                        .path
+                        .as_ref()
+                        .map_or_else(|| label.to_string(), |path| file_name(path)),
+                };
+                h_flex()
+                    .gap_1()
+                    .rounded_md()
+                    .when(Some(id) == active, |tab| tab.bg(rgb(appearance::RAISED)))
+                    .child(
+                        Button::new(("surface-tab", id as usize))
+                            .label(title)
+                            .icon(icon.clone())
+                            .small()
+                            .ghost()
+                            .selected(Some(id) == active)
+                            .debug_selector(move || format!("surface-tab-{id}"))
+                            .on_click(cx.listener(move |view, _, window, cx| {
+                                view.activate_surface(id, window, cx)
+                            })),
+                    )
+                    .child(
+                        Self::icon_button(
+                            format!("close-surface-{id}"),
+                            IconName::Close,
+                            "タブを閉じる",
+                            cx,
+                            move |view, window, cx| view.close_surface(id, window, cx),
+                        )
+                        .debug_selector(move || {
+                            if Some(id) == active {
+                                "active-surface-close".into()
+                            } else {
+                                format!("close-surface-{id}")
+                            }
+                        }),
+                    )
+            })
+            .collect::<Vec<_>>();
+        let owner = cx.entity().downgrade();
+        let menu_owner = owner.clone();
+        let add = Button::new("panel-add")
+            .debug_selector(|| "panel-add".into())
+            .icon(IconName::Plus)
+            .small()
+            .ghost()
+            .tooltip("機能を開く")
+            .accessibility_label("機能を開く")
+            .dropdown_menu(move |mut menu, _, cx| {
+                for (panel, icon, label, _) in TOOLS {
+                    let enabled = menu_owner
+                        .upgrade()
+                        .is_some_and(|view| view.read(cx).panel_available(panel));
+                    let owner = menu_owner.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(label)
+                            .icon(icon)
+                            .disabled(!enabled)
+                            .on_click(move |_, window, cx| {
+                                let _ =
+                                    owner.update(cx, |view, cx| view.open_panel(panel, window, cx));
+                            }),
+                    );
+                }
+                menu
+            })
+            .on_open_change(move |open, _, cx| {
+                let _ = owner.update(cx, |view, cx| {
+                    // Native browser views must sit behind the surface menu.
+                    view.panel_menu_open = *open;
+                    cx.notify();
+                });
+            });
+        let toolbar = h_flex()
+            .h_10()
+            .px_2()
+            .gap_1()
+            .flex_shrink_0()
+            .child(
+                h_flex()
+                    .id("surface-tabs")
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_x_scroll()
+                    .gap_1()
+                    .children(tabs)
+                    .child(add),
+            )
+            .when(!self.side_chat_mode, |bar| {
+                bar.child(
+                    Self::icon_button(
+                        "panel-expand",
+                        if layout == PanelLayout::Expanded {
+                            IconName::Minimize
+                        } else {
+                            IconName::Maximize
                         },
-                    ))
-                })
-                .child(Self::icon_button(
-                    "close-panel",
-                    IconName::Close,
-                    "右パネルを閉じる",
-                    cx,
-                    |s, _, _| s.panel_open = false,
-                ))
-        };
-        let body = match self.panel {
+                        "パネルを拡大・縮小",
+                        cx,
+                        |view, _, _| {
+                            let key = view.panel_scope();
+                            let layout = if view.panels.get(&key).layout == PanelLayout::Expanded {
+                                PanelLayout::Right
+                            } else {
+                                PanelLayout::Expanded
+                            };
+                            view.panels.set_layout(key, layout);
+                        },
+                    )
+                    .debug_selector(|| "panel-expand".into()),
+                )
+                .child(
+                    Self::icon_button(
+                        "panel-bottom",
+                        IconName::PanelBottom,
+                        "下に配置",
+                        cx,
+                        |view, _, _| {
+                            view.panels
+                                .set_layout(view.panel_scope(), PanelLayout::Bottom)
+                        },
+                    )
+                    .debug_selector(|| "panel-bottom".into())
+                    .selected(layout == PanelLayout::Bottom),
+                )
+                .child(
+                    Self::icon_button(
+                        "panel-right",
+                        IconName::PanelRight,
+                        "右に配置",
+                        cx,
+                        |view, _, _| {
+                            view.panels
+                                .set_layout(view.panel_scope(), PanelLayout::Right)
+                        },
+                    )
+                    .debug_selector(|| "panel-right".into())
+                    .selected(layout == PanelLayout::Right),
+                )
+            })
+            .when(self.side_chat_mode, |bar| {
+                bar.child(
+                    Self::icon_button(
+                        "back-side-chat",
+                        IconName::ArrowLeft,
+                        "サイドチャットに戻る",
+                        cx,
+                        |view, _, _| view.panels.set_open(view.panel_scope(), false),
+                    )
+                    .debug_selector(|| "back-side-chat".into()),
+                )
+            });
+        let body = match kind {
             Panel::Home => {
-                let mut chooser = v_flex().w_full().max_w(px(400.)).gap_2();
-                for (ix, (panel, icon, label)) in TOOLS.iter().enumerate() {
+                let mut chooser = v_flex()
+                    .w_full()
+                    .max_w(px(300.))
+                    .gap_1()
+                    .child(div().text_sm().mb_3().text_center().child("機能を開く"));
+                for (ix, (panel, icon, label, shortcut)) in TOOLS.iter().enumerate() {
                     let panel = *panel;
                     chooser = chooser.child(
-                        self.button(format!("tool-{ix}"), *label, cx, move |s, w, cx| {
-                            if panel == Panel::Files {
-                                s.browse(s.snapshot.navigation.cwd.clone());
-                            } else {
-                                s.open_panel(panel, w, cx);
-                            }
+                        self.button(format!("tool-{ix}"), *label, cx, move |view, window, cx| {
+                            view.open_panel(panel, window, cx);
                         })
+                        .debug_selector(move || format!("surface-{ix}"))
                         .icon(icon.clone())
                         .w_full()
-                        .h_10()
-                        .bg(rgb(appearance::RAISED))
-                        .disabled(
-                            !matches!(panel, Panel::Browser | Panel::Agents)
-                                && (!self.snapshot.connected
-                                    || self.snapshot.navigation.cwd.is_empty()),
-                        ),
+                        .h_8()
+                        .justify_start()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(appearance::MUTED))
+                                .child(*shortcut),
+                        )
+                        .disabled(!self.panel_available(panel)),
                     );
                 }
                 v_flex()
+                    .id("surface-launcher")
+                    .debug_selector(|| "surface-launcher".into())
                     .size_full()
-                    .p_8()
+                    .p_6()
                     .items_center()
                     .justify_center()
+                    .track_focus(&self.panel_focus)
+                    .on_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
+                        if event.keystroke.modifiers.control
+                            || event.keystroke.modifiers.platform
+                            || event.keystroke.modifiers.alt
+                        {
+                            return;
+                        }
+                        let Some((kind, _, _, _)) = TOOLS.iter().find(|(_, _, _, shortcut)| {
+                            shortcut.eq_ignore_ascii_case(event.keystroke.key.as_str())
+                        }) else {
+                            return;
+                        };
+                        let kind = *kind;
+                        if view.panel_available(kind) {
+                            view.open_panel(kind, window, cx);
+                            cx.stop_propagation();
+                        }
+                    }))
                     .child(chooser)
                     .into_any_element()
             }
             Panel::Agents => self.agents_panel(),
             Panel::Files => self.files(cx),
+            Panel::File => self.file_editor(cx),
             Panel::Diff => v_flex()
                 .size_full()
                 .min_h_0()
@@ -466,25 +596,31 @@ impl Desktop {
                 )
                 .child(self.diff_file_menu(cx))
                 .child(
-                    div().flex_1().min_h_0().child(Self::diff(
-                        &mut self.diffs,
-                        "workspace-patch".into(),
-                        self.snapshot
-                            .workspace
-                            .review
-                            .as_ref()
-                            .map_or("", |review| review.diff.as_str()),
-                        cx,
-                    )),
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .child(self.workspace_diff(active.unwrap(), cx)),
                 )
                 .into_any_element(),
-            Panel::SideChat => tool_view(self.side_chat.as_ref()),
-            Panel::Terminal => tool_view(self.terminal.as_ref()),
-            #[cfg(target_os = "windows")]
-            Panel::Browser if self.browser_initialization.is_some() => {
-                div().p_4().child("ブラウザを起動中…").into_any_element()
+            Panel::SideChat | Panel::Terminal | Panel::Browser => {
+                match active.and_then(|id| self.surface_resources.get(&id)) {
+                    Some(SurfaceResource::SideChat(view)) => view.clone().into_any_element(),
+                    Some(SurfaceResource::Terminal(view)) => view.clone().into_any_element(),
+                    Some(SurfaceResource::Diff(view)) => view.clone().into_any_element(),
+                    Some(SurfaceResource::Browser { view, .. }) => view.clone().into_any_element(),
+                    Some(SurfaceResource::Pending { .. }) => {
+                        div().p_4().child("ブラウザを起動中…").into_any_element()
+                    }
+                    #[cfg(target_os = "windows")]
+                    Some(SurfaceResource::Starting { .. }) => {
+                        div().p_4().child("ブラウザを起動中…").into_any_element()
+                    }
+                    None => div()
+                        .p_4()
+                        .child("機能を開けませんでした。「＋」から再試行してください。")
+                        .into_any_element(),
+                }
             }
-            Panel::Browser => tool_view(self.browser.as_ref()),
         };
         v_flex()
             .size_full()
@@ -497,6 +633,22 @@ impl Desktop {
 }
 
 impl Desktop {
+    fn workspace_diff(&mut self, id: u64, cx: &mut Context<Self>) -> Entity<DiffView> {
+        let source = self
+            .snapshot
+            .workspace
+            .review
+            .as_ref()
+            .map_or("", |review| review.diff.as_str());
+        if let Some(SurfaceResource::Diff(view)) = self.surface_resources.get(&id) {
+            view.update(cx, |view, cx| view.set_source(source, cx));
+            return view.clone();
+        }
+        let view = cx.new(|_| DiffView::new(source.to_owned().into(), true));
+        self.surface_resources
+            .insert(id, SurfaceResource::Diff(view.clone()));
+        view
+    }
     fn diff_file_menu(&self, cx: &Context<Self>) -> AnyElement {
         let entity = cx.entity().downgrade();
         Button::new("diff-file-navigation")
@@ -532,12 +684,107 @@ impl Desktop {
     }
 }
 
-fn tool_view<V: Render>(view: Option<&Entity<V>>) -> AnyElement {
-    view.map(|view| view.clone().into_any_element())
-        .unwrap_or_else(|| {
-            div()
-                .p_4()
-                .child("パネルを開けませんでした。ツールを選び直してください。")
-                .into_any_element()
-        })
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::prelude::v1::test;
+
+    #[gpui::test]
+    fn surface_tabs_and_layout_follow_the_conversation_and_last_close_returns_to_the_launcher(
+        cx: &mut TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        cx.update(|cx| {
+            crate::appearance::init(cx);
+            cx.set_global(Runtime {
+                handle: runtime.handle().clone(),
+                connections: Arc::default(),
+                closing: tokio_util::task::TaskTracker::new(),
+                logging_error: None,
+            });
+        });
+        let (view, window) = cx.add_window_view(|window, cx| {
+            let mut desktop = Desktop::new(Mode::Main, window, cx);
+            desktop.onboarding = false;
+            desktop.panels.set_open(desktop.panel_scope(), true);
+            desktop
+        });
+        window.simulate_resize(size(px(1600.), px(900.)));
+        window.run_until_parked();
+        assert!(window.debug_bounds("surface-launcher").is_some());
+        assert!(
+            window.debug_bounds("panel-add").unwrap().center().x
+                < window.debug_bounds("surface-launcher").unwrap().center().x,
+            "the empty panel's add button belongs on the left"
+        );
+        let agents = window.debug_bounds("surface-5").unwrap().center();
+        window.simulate_click(agents, Modifiers::default());
+        window.run_until_parked();
+        assert!(window.debug_bounds("agents-panel").is_some());
+        let (a, diff) = view.update(window, |view, cx| {
+            let a = view.panel_scope();
+            view.open_review(None, cx);
+            (a, view.panels.get(&view.panel_scope()).active.unwrap())
+        });
+        window.run_until_parked();
+        assert!(window.debug_bounds("diff-file-navigation").is_some());
+        let bottom = window.debug_bounds("panel-bottom").unwrap().center();
+        window.simulate_click(bottom, Modifiers::default());
+        window.run_until_parked();
+        let chat = window.debug_bounds("conversation-chat").unwrap();
+        let diff_menu = window.debug_bounds("diff-file-navigation").unwrap();
+        assert!(
+            diff_menu.top() >= chat.bottom(),
+            "bottom placement must put the surface below the chat"
+        );
+        view.update(window, |view, cx| {
+            assert_eq!(view.panels.get(&a).layout, PanelLayout::Bottom);
+            let b = PanelScope {
+                draft: DraftKey::from("other-conversation"),
+                ..view.panel_scope()
+            };
+            Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).navigation).draft_key =
+                b.draft.clone();
+            assert!(!view.panels.get(&b).open);
+            view.panels.set_open(b, true);
+            cx.notify();
+        });
+        window.run_until_parked();
+        assert!(window.debug_bounds("surface-launcher").is_some());
+        assert!(window.debug_bounds("diff-file-navigation").is_none());
+        view.update(window, |view, cx| {
+            Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).navigation).draft_key =
+                a.draft.clone();
+            assert_eq!(view.panels.get(&a).active, Some(diff));
+            assert_eq!(view.panels.get(&a).surfaces.len(), 2);
+            cx.notify();
+        });
+        window.run_until_parked();
+        assert!(window.debug_bounds("diff-file-navigation").is_some());
+        let expand = window.debug_bounds("panel-expand").unwrap().center();
+        window.simulate_click(expand, Modifiers::default());
+        window.run_until_parked();
+        assert!(window.debug_bounds("conversation-chat").is_none());
+        let right = window.debug_bounds("panel-right").unwrap().center();
+        window.simulate_click(right, Modifiers::default());
+        window.run_until_parked();
+        assert!(window.debug_bounds("conversation-chat").is_some());
+        let close = window
+            .debug_bounds("active-surface-close")
+            .unwrap()
+            .center();
+        window.simulate_click(close, Modifiers::default());
+        window.run_until_parked();
+        assert!(window.debug_bounds("agents-panel").is_some());
+        let close = window
+            .debug_bounds("active-surface-close")
+            .unwrap()
+            .center();
+        window.simulate_click(close, Modifiers::default());
+        window.run_until_parked();
+        assert!(window.debug_bounds("surface-launcher").is_some());
+    }
 }

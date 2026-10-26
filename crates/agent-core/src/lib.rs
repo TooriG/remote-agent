@@ -8,6 +8,7 @@ extern crate self as agent_core;
 pub mod browser_import;
 pub mod client;
 pub mod composer;
+pub mod panels;
 pub mod persistence;
 pub mod presentation;
 pub mod privacy;

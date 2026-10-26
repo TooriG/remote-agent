@@ -14,9 +14,8 @@ use super::*;
 use agent_core::{presentation::error::error_message, state::operations as op};
 use base64::Engine;
 use gpui_kit::component::{
-    resizable::{h_resizable, resizable_panel},
+    resizable::{h_resizable, resizable_panel, v_resizable},
     sidebar::{Sidebar, SidebarItem, SidebarMenuItem},
-    tab::{Tab as UiTab, TabBar},
 };
 use std::path::PathBuf;
 
@@ -132,11 +131,18 @@ fn conversation_file_path(source: &str, cwd: &str) -> Result<PathBuf, String> {
 
 impl Render for Desktop {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let panel = self.panels.get(&self.panel_scope());
+        let panel_open = panel.open;
+        let panel_kind = panel.kind();
+        let panel_layout = panel.layout;
+        let active_surface = panel.active;
         let active = self.project_editor.is_none()
             && self.image_gallery.is_none()
-            && self.panel_open
+            && !self.onboarding
+            && !self.import_projects
+            && panel_open
             && self.tab == Tab::Chat;
-        let thread_id = (active && self.panel == Panel::Agents)
+        let thread_id = (active && panel_kind == Panel::Agents)
             .then(|| self.snapshot.navigation.thread_id.clone())
             .flatten();
         if self.snapshot.observed_agents != thread_id {
@@ -145,20 +151,37 @@ impl Render for Desktop {
         let composer_visible = self.project_editor.is_none()
             && self.image_gallery.is_none()
             && self.tab == Tab::Chat
-            && (!self.panel_open
-                || (!self.side_chat_mode && window.viewport_size().width >= px(1080.)));
+            && (!panel_open
+                || (!self.side_chat_mode
+                    && panel_layout != PanelLayout::Expanded
+                    && (panel_layout == PanelLayout::Bottom
+                        || window.viewport_size().width >= px(1080.))));
         if !composer_visible {
             self.cancel_recording();
         }
-        if let Some(chat) = &self.side_chat
-            && (!active || self.panel != Panel::SideChat)
+        if active
+            && let Some(id) = active_surface
+            && matches!(
+                self.surface_resources.get(&id),
+                Some(SurfaceResource::Pending { .. })
+            )
+            && let Some(SurfaceResource::Pending { url }) = self.surface_resources.remove(&id)
         {
-            chat.update(cx, |chat, _| chat.cancel_recording());
+            self.start_browser(id, url, window, cx);
         }
-        if let Some(view) = self.browser.clone() {
-            view.update(cx, |v, cx| {
-                v.set_visible(active && self.panel == Panel::Browser, cx)
-            });
+        for (id, resource) in &self.surface_resources {
+            match resource {
+                SurfaceResource::Browser { view, .. } => view.update(cx, |view, cx| {
+                    view.set_visible(
+                        active && Some(*id) == active_surface && !self.panel_menu_open,
+                        cx,
+                    );
+                }),
+                SurfaceResource::SideChat(chat) if !active || Some(*id) != active_surface => {
+                    chat.update(cx, |chat, cx| chat.hide_surfaces(cx));
+                }
+                _ => (),
+            }
         }
         if self.image_gallery.is_some() {
             let gallery = self.image_gallery_view(window, cx);
@@ -206,6 +229,10 @@ impl Render for Desktop {
 
 impl Desktop {
     fn conversation_content(&mut self, width: Pixels, cx: &mut Context<Self>) -> AnyElement {
+        let panel = self.panels.get(&self.panel_scope());
+        let panel_open = panel.open;
+        let panel_kind = panel.kind();
+        let panel_layout = panel.layout;
         let wide = width >= px(1080.);
         let title = self
             .thread()
@@ -246,50 +273,67 @@ impl Desktop {
                 "エージェント",
                 cx,
                 |s, _, _| {
-                    s.panel = Panel::Agents;
-                    s.panel_open = true;
+                    s.panels.open(s.panel_scope(), Panel::Agents, None);
                 },
             )
             .debug_selector(|| "agents-toggle".into())
-            .selected(self.panel_open && self.panel == Panel::Agents),
+            .selected(panel_open && panel_kind == Panel::Agents),
         );
         header = header.child(
             Self::icon_button(
                 "panel-toggle",
-                if self.panel_open {
+                if panel_open {
                     IconName::PanelRightClose
                 } else {
                     IconName::PanelRightOpen
                 },
                 "右パネルを切り替え",
                 cx,
-                |s, _, _| s.panel_open = !s.panel_open,
+                |s, window, cx| {
+                    let key = s.panel_scope();
+                    let open = !s.panels.get(&key).open;
+                    s.panels.set_open(key.clone(), open);
+                    if open && s.panels.get(&key).active.is_none() {
+                        s.panel_focus.focus(window, cx);
+                    }
+                },
             )
             .debug_selector(|| "panel-toggle".into())
-            .selected(self.panel_open),
+            .selected(panel_open),
         );
         let content = if self.side_chat_mode {
-            if self.panel_open {
+            if panel_open {
                 self.workbench(cx)
             } else {
                 self.chat(cx)
             }
-        } else if self.panel_open {
+        } else if panel_open {
             let right = self.workbench(cx);
-            if wide {
-                h_resizable("chat-workbench-split")
-                    .child(
-                        resizable_panel()
-                            .size_range(px(360.)..px(2400.))
-                            .child(self.chat(cx)),
-                    )
-                    .child(
-                        resizable_panel()
-                            .size(px(540.))
-                            .size_range(px(320.)..px(1100.))
-                            .child(right),
-                    )
-                    .into_any_element()
+            if panel_layout == PanelLayout::Bottom {
+                v_resizable(SharedString::from(format!(
+                    "chat-workbench-bottom-split:{:?}",
+                    self.panel_scope()
+                )))
+                .child(resizable_panel().child(self.chat(cx)))
+                .child(resizable_panel().size(px(360.)).child(right))
+                .into_any_element()
+            } else if wide && panel_layout == PanelLayout::Right {
+                h_resizable(SharedString::from(format!(
+                    "chat-workbench-split:{:?}",
+                    self.panel_scope()
+                )))
+                .child(
+                    resizable_panel()
+                        .size_range(px(360.)..px(2400.))
+                        .child(self.chat(cx)),
+                )
+                .child(
+                    resizable_panel()
+                        .size(px(540.))
+                        .size_range(px(320.)..px(1100.))
+                        .child(right),
+                )
+                .into_any_element()
             } else {
                 right
             }
