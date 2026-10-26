@@ -389,6 +389,24 @@ impl Desktop {
                 cx.notify();
             }));
         let composer = v_flex()
+            .id("composer-file-drop")
+            .can_drop({
+                let enabled = self.snapshot.connected
+                    && (self.remote.is_none() || !self.snapshot.navigation.cwd.is_empty())
+                    && self.busy == 0 && phase.is_none();
+                move |value, _, _| enabled && value.is::<gpui_kit::ExternalPaths>()
+            })
+            .on_drop(cx.listener(|s, paths: &gpui_kit::ExternalPaths, window, cx| {
+                cx.stop_propagation();
+                if !s.snapshot.connected || s.busy > 0 || s.dictation.is_some()
+                    || (s.remote.is_some() && s.snapshot.navigation.cwd.is_empty()) {
+                    return;
+                }
+                let paths = paths.paths().to_vec();
+                s.attach_sources(move || Ok(paths.into_iter().filter(|path| path.is_file()).collect()));
+                s.composer.read(cx).focus_handle(cx).focus(window, cx);
+                cx.notify();
+            }))
             .key_context("ChatComposer")
             .track_focus(&self.composer.read(cx).focus_handle(cx))
             .capture_key_down(cx.listener(|s, event: &KeyDownEvent, window, cx| {
@@ -430,6 +448,9 @@ impl Desktop {
             .bg(rgb(appearance::SURFACE))
             .border_1()
             .border_color(rgb(appearance::BORDER))
+            .drag_over::<gpui_kit::ExternalPaths>(|style, _, _, _| {
+                style.border_color(rgb(0x60a5fa)).bg(rgb(0x172334))
+            })
             .when(phase.is_none(), |composer| {
                 composer.child(
                     div().px_2().pt(px(10.)).pb_1().child(
