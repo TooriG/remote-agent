@@ -16,8 +16,8 @@ permissions:
   contents: read
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  # Verify the newest revision; client selection includes unverified earlier changes.
-  cancel-in-progress: true
+  # Finish a running main revision and keep only the newest pending revision.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 env:
   CARGO_BUILD_JOBS: 4
   CARGO_INCREMENTAL: 0
