@@ -37,10 +37,13 @@ impl Page {
             lease: Instant::now(),
         }
     }
-    fn expire_control(&mut self, now: Instant) {
+    fn expire_control(&mut self, now: Instant) -> bool {
         if !self.controller.is_empty() && now >= self.lease {
             self.controller.clear();
             self.generation += 1;
+            true
+        } else {
+            false
         }
     }
 }
@@ -150,7 +153,9 @@ impl Browser {
             state.pages.insert(thread.into(), Page::new(context));
         }
         let page = state.pages.get_mut(thread).unwrap();
-        page.expire_control(Instant::now());
+        if page.expire_control(Instant::now()) {
+            chrome.invalidate_refs(&page.tabs);
+        }
         let targets = chrome.targets().await?;
         // Include transitive popups only from this conversation's known targets.
         loop {
@@ -199,10 +204,16 @@ impl Browser {
             &request.tab_id,
             &request.action,
         )?;
+        let current_generation = state.pages[&thread].generation
+            + state
+                .chrome
+                .as_ref()
+                .unwrap()
+                .navigation(&state.pages[&thread].active);
         let page = state.pages.get_mut(&thread).unwrap();
         validate_control(
             &page.controller,
-            page.generation,
+            current_generation,
             &client,
             request.generation,
             &request.action,
@@ -350,10 +361,21 @@ impl Browser {
             chrome.resize(&session, *width, *height).await?;
             page.width = *width;
             page.height = *height;
+            page.generation += 1;
             return Ok(ActionOutput::default());
         }
         validate_point(page.width, page.height, action)?;
-        chrome.action(&session, action).await
+        let output = chrome.action(&session, action).await?;
+        if matches!(
+            action,
+            BrowserAction::Navigate { .. }
+                | BrowserAction::Back
+                | BrowserAction::Forward
+                | BrowserAction::Reload
+        ) {
+            page.generation += 1;
+        }
+        Ok(output)
     }
 
     async fn frame(
@@ -368,6 +390,9 @@ impl Browser {
         chrome.resize(&session, page.width, page.height).await?;
         let image = match capture {
             Capture::None => Vec::new(),
+            _ if chrome.dialog(&session).is_some() => {
+                chrome.cached_image(&session).unwrap_or_default()
+            }
             Capture::Viewer => chrome.latest_image(&session).await?,
             Capture::Snapshot => chrome.screenshot(&session).await?,
         };
@@ -397,7 +422,7 @@ impl Browser {
             } else {
                 BrowserController::AnotherViewer
             },
-            generation: page.generation,
+            generation: page.generation + chrome.navigation(&page.active),
             can_go_back,
             can_go_forward,
             loading: chrome.loading(&session),

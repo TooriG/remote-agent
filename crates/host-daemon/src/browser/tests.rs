@@ -51,13 +51,13 @@ fn handoff_excludes_other_viewers_agents_and_stale_input() {
     page.controller = "1:phone".into();
     page.generation = 2;
     page.lease = now + Duration::from_secs(15);
-    page.expire_control(now + Duration::from_secs(14));
+    assert!(!page.expire_control(now + Duration::from_secs(14)));
     assert_eq!(page.controller, "1:phone");
     assert_eq!(page.generation, 2);
-    page.expire_control(now + Duration::from_secs(15));
+    assert!(page.expire_control(now + Duration::from_secs(15)));
     assert!(page.controller.is_empty());
     assert_eq!(page.generation, 3);
-    page.expire_control(now + Duration::from_secs(16));
+    assert!(!page.expire_control(now + Duration::from_secs(16)));
     assert_eq!(page.generation, 3);
 }
 

@@ -33,6 +33,7 @@ pub(crate) struct Browser {
     error: Option<String>,
     pending: VecDeque<BrowserRequest>,
     visible: bool,
+    covered: bool,
     personal_mode: bool,
     personal: Option<Entity<personal::Browser>>,
     focus: FocusHandle,
@@ -152,6 +153,7 @@ impl Browser {
                 error: None,
                 pending: VecDeque::new(),
                 visible: false,
+                covered: false,
                 personal_mode,
                 personal: None,
                 focus,
@@ -235,15 +237,16 @@ impl Browser {
             .unwrap_or_else(|| "AI ブラウザ".into())
     }
 
-    pub(crate) fn set_visible(&mut self, visible: bool, cx: &mut App) {
+    pub(crate) fn set_visible(&mut self, visible: bool, covered: bool, cx: &mut App) {
         if self.visible && !visible && self.owns_control() {
             self.pending
                 .push_back(self.request(BrowserAction::ReleaseControl));
         }
         self.visible = visible;
+        self.covered = covered;
         if let Some(personal) = &self.personal {
             personal.update(cx, |view, cx| {
-                view.set_visible(visible && self.personal_mode, cx)
+                view.set_visible(visible && self.personal_mode && !covered, cx)
             });
         }
     }
@@ -256,7 +259,7 @@ impl Browser {
         cx: &mut Context<Self>,
     ) {
         view.update(cx, |view, cx| {
-            view.set_visible(self.visible && self.personal_mode, cx);
+            view.set_visible(self.visible && self.personal_mode && !self.covered, cx);
             if let Some(url) = url {
                 view.open_url(&url, window, cx);
             }

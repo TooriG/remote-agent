@@ -273,10 +273,20 @@ impl Chrome {
     }
 
     pub async fn targets(&mut self) -> Result<Vec<Target>, String> {
-        serde_json::from_value(
+        let targets: Vec<Target> = serde_json::from_value(
             self.call(None, "Target.getTargets", json!({})).await?["targetInfos"].clone(),
         )
-        .map_err(|_| "ブラウザのタブ一覧を取得できません。".into())
+        .map_err(|_| "ブラウザのタブ一覧を取得できません。".to_owned())?;
+        let removed: Vec<_> = self
+            .sessions
+            .keys()
+            .filter(|id| !targets.iter().any(|target| &target.target_id == *id))
+            .cloned()
+            .collect();
+        for target in removed {
+            self.forget_target(&target);
+        }
+        Ok(targets)
     }
     pub async fn create_context(&mut self) -> Result<String, String> {
         self.call(
@@ -303,13 +313,27 @@ impl Chrome {
     pub async fn close_tab(&mut self, target: &str) -> Result<(), String> {
         self.call(None, "Target.closeTarget", json!({"targetId":target}))
             .await?;
+        self.forget_target(target);
+        Ok(())
+    }
+    fn forget_target(&mut self, target: &str) {
         if let Some(session) = self.sessions.remove(target) {
-            self.events.lock().unwrap().dialogs.remove(&session);
-            self.events.lock().unwrap().frames.remove(&session);
+            let mut events = self.events.lock().unwrap();
+            events.dialogs.remove(&session);
+            events.frames.remove(&session);
+            events.streaming.remove(&session);
+            events.loading.remove(&session);
+            events.navigation.remove(&session);
             self.sizes.remove(&session);
             self.refs.remove(&session);
         }
-        Ok(())
+    }
+
+    pub fn navigation(&self, target: &str) -> u64 {
+        self.sessions
+            .get(target)
+            .and_then(|session| self.events.lock().unwrap().navigation.get(session).copied())
+            .unwrap_or(0)
     }
     pub async fn resize(&mut self, session: &str, width: u32, height: u32) -> Result<(), String> {
         if self.sizes.get(session) == Some(&(width, height)) {
@@ -397,15 +421,7 @@ impl Chrome {
             return Err(error);
         }
         let size = self.sizes.get(session).copied().unwrap_or((WIDTH, HEIGHT));
-        let cached = self
-            .events
-            .lock()
-            .unwrap()
-            .frames
-            .get(session)
-            .filter(|frame| (frame.width, frame.height) == size)
-            .map(|frame| frame.image.clone());
-        if let Some(image) = cached {
+        if let Some(image) = self.cached_image(session) {
             return Ok(image);
         }
         let image = self.screenshot(session).await?;
@@ -418,6 +434,16 @@ impl Chrome {
             },
         );
         Ok(image)
+    }
+    pub fn cached_image(&self, session: &str) -> Option<Vec<u8>> {
+        let size = self.sizes.get(session).copied().unwrap_or((WIDTH, HEIGHT));
+        self.events
+            .lock()
+            .unwrap()
+            .frames
+            .get(session)
+            .filter(|frame| (frame.width, frame.height) == size)
+            .map(|frame| frame.image.clone())
     }
     pub async fn screenshot(&mut self, session: &str) -> Result<Vec<u8>, String> {
         self.call(Some(session), "Page.bringToFront", json!({}))
@@ -599,6 +625,9 @@ impl Chrome {
         session: &str,
         action: &BrowserAction,
     ) -> Result<ActionOutput, String> {
+        if matches!(action, BrowserAction::Snapshot) && self.dialog(session).is_some() {
+            return Ok(ActionOutput::default());
+        }
         self.call(Some(session), "Page.bringToFront", json!({}))
             .await?;
         let (method, params) = match action {
@@ -820,6 +849,8 @@ mod tests {
                     } else {
                         json!({"id":request["id"],"result":{"data":"/9j/2Q=="}})
                     };
+                } else if method == "Target.getTargets" {
+                    response = json!({"id":request["id"],"result":{"targetInfos":[]}});
                 }
                 socket
                     .send(Message::Text(response.to_string().into()))
@@ -855,6 +886,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn closed_targets_release_frames_dialogs_and_element_references() {
+        let (mut chrome, server, _) = fixture(0, false).await;
+        chrome.sessions.insert("closed".into(), "page".into());
+        chrome
+            .refs
+            .insert("page".into(), (0, HashMap::from([("ref=old".into(), 1)])));
+        chrome.latest_image("page").await.unwrap();
+        assert!(chrome.cached_image("page").is_some());
+        assert!(chrome.targets().await.unwrap().is_empty());
+        assert!(chrome.cached_image("page").is_none());
+        assert!(
+            chrome
+                .element("page", "ref=old", "function(){}", json!([]))
+                .await
+                .is_err()
+        );
+        chrome.shutdown().await;
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn streamed_frames_replace_idle_cache_without_polling_screenshots() {
         let (mut chrome, server, events) = fixture(0, false).await;
         assert_eq!(
@@ -874,6 +926,22 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(latest, [0xff, 0xd8, 0xff, 0xd9, 0, 1]);
+        events.send(json!({"sessionId":"page","method":"Page.javascriptDialogOpening","params":{"message":"fixture dialog","type":"alert"}})).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while chrome.dialog("page").is_none() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            chrome
+                .action("page", &BrowserAction::Snapshot)
+                .await
+                .unwrap()
+                .page_text
+                .is_empty()
+        );
         chrome.shutdown().await;
         let methods = server.await.unwrap();
         assert_eq!(
@@ -887,6 +955,10 @@ mod tests {
             methods
                 .iter()
                 .any(|method| method == "Page.screencastFrameAck")
+        );
+        assert!(
+            !methods.iter().any(|method| method == "Runtime.evaluate"),
+            "inspection must not block on page scripts behind a modal dialog"
         );
     }
 

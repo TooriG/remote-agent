@@ -129,9 +129,11 @@ private class BrowserSession(private val thread: SessionRef) {
 }
 
 private suspend fun decodeBrowserImage(bytes: ByteArray): ImageBitmap? =
-    if (bytes.isEmpty()) null else withContext(Dispatchers.Default) {
-        checkNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size)).asImageBitmap()
-    }
+    if (bytes.isEmpty()) null
+    else
+        withContext(Dispatchers.Default) {
+            checkNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size)).asImageBitmap()
+        }
 
 @Composable
 private fun BrowserPane(

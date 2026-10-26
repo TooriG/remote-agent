@@ -173,7 +173,8 @@ impl Render for Desktop {
             match resource {
                 SurfaceResource::Browser { view, .. } => view.update(cx, |view, cx| {
                     view.set_visible(
-                        active && Some(*id) == active_surface && !self.panel_menu_open,
+                        active && Some(*id) == active_surface,
+                        self.panel_menu_open,
                         cx,
                     );
                 }),

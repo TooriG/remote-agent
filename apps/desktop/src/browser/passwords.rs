@@ -246,8 +246,8 @@ impl Browser {
             Ok::<_, String>(Zeroizing::new(format!(
                 "({})({origin},{},{})",
                 include_str!("password-fill.js"),
-                &*username,
-                &*password
+                username.as_str(),
+                password.as_str()
             )))
         });
         cx.spawn(async move |owner, cx| {
@@ -356,7 +356,7 @@ impl Browser {
 
 #[cfg(test)]
 mod tests {
-    use super::{chromium_key, read_passwords};
+    use super::chromium_key;
     use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
 
     fn storage_secret() -> Result<Vec<u8>, String> {
@@ -386,6 +386,7 @@ mod tests {
 
     #[test]
     fn browser_password_import_decrypts_and_keeps_accounts_scoped() {
+        use super::read_passwords;
         let (root, db) = fixture();
         insert(
             &db,
@@ -432,6 +433,7 @@ mod tests {
 
     #[test]
     fn browser_password_import_fails_closed_without_echoing_source_values() {
+        use super::read_passwords;
         let (root, db) = fixture();
         insert(
             &db,

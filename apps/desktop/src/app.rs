@@ -1520,7 +1520,7 @@ impl Desktop {
         for resource in self.surface_resources.values() {
             match resource {
                 SurfaceResource::Browser { view, .. } => {
-                    view.update(cx, |view, cx| view.set_visible(false, cx))
+                    view.update(cx, |view, cx| view.set_visible(false, false, cx))
                 }
                 SurfaceResource::SideChat(view) => {
                     view.update(cx, |view, cx| view.hide_surfaces(cx))
@@ -1650,7 +1650,7 @@ impl Desktop {
         self.panels.close(&self.panel_scope(), id);
         match self.surface_resources.remove(&id) {
             Some(SurfaceResource::Browser { view, .. }) => {
-                view.update(cx, |view, cx| view.set_visible(false, cx));
+                view.update(cx, |view, cx| view.set_visible(false, false, cx));
             }
             Some(SurfaceResource::Terminal(view)) => view.update(cx, |view, _| view.close()),
             Some(SurfaceResource::SideChat(view)) => {
