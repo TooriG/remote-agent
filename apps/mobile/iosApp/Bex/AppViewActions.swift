@@ -139,13 +139,13 @@ extension BexAppViewModel {
 
     func loadOlderHistory(
         _ id: SessionRef,
-        completion: @escaping (_ succeeded: Bool, _ rowCount: Int, _ hasMore: Bool) -> Void
+        completion: @escaping (_ succeeded: Bool, _ turnCount: UInt64, _ hasMore: Bool) -> Void
     ) {
         guard selectedThreadId == id else { return }
         notice = nil
         perform(.readOlder(threadId: id)) { [weak self] result in
             guard let self else { return }
-            completion((try? result.get()) != nil, snapshot.conversation(id: id)?.rows.count ?? 0,
+            completion((try? result.get()) != nil, snapshot.conversation(id: id)?.turnCount() ?? 0,
                        snapshot.historyControl(session: id)?.hasMore ?? false)
         }
     }

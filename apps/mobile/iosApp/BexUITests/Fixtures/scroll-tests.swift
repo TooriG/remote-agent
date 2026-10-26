@@ -10,15 +10,15 @@ struct ConversationScrollTests {
     }
 
     static let scenarios = [
-        (early: false, native: false, cancel: false, height: 1100.0, rows: 2, more: true,
+        (early: false, native: false, cancel: false, height: 1100.0, turns: UInt64(2), more: true,
          message: "Prepending must preserve the visible marker position"),
-        (early: false, native: true, cancel: false, height: 1100.0, rows: 2, more: true,
+        (early: false, native: true, cancel: false, height: 1100.0, turns: 2, more: true,
          message: "Native offset correction must not be applied twice"),
-        (early: true, native: false, cancel: false, height: 1100.0, rows: 2, more: true,
+        (early: true, native: false, cancel: false, height: 1100.0, turns: 2, more: true,
          message: "History completion before layout must retain the reading position"),
-        (early: false, native: false, cancel: false, height: -40.0, rows: 1, more: false,
+        (early: false, native: false, cancel: false, height: -40.0, turns: 1, more: false,
          message: "Removing the last page control must preserve the visible message"),
-        (early: false, native: false, cancel: true, height: 1100.0, rows: 2, more: true,
+        (early: false, native: false, cancel: true, height: 1100.0, turns: 2, more: true,
          message: "Navigation must cancel a pending restoration")
     ]
 
@@ -31,19 +31,19 @@ struct ConversationScrollTests {
     @MainActor static func checkCanceledLoads(_ controller: ConversationScrollObserver.Coordinator,
                                               scroll: UIScrollView) {
         for succeeded in [false, true] {
-            let request = controller.captureReadingPosition(rowCount: 1, hasMoreHistory: true)
-            controller.historyLoaded(request, succeeded: succeeded, rowCount: succeeded ? 1 : 2, hasMoreHistory: true)
+            let request = controller.captureReadingPosition(turnCount: 1, hasMoreHistory: true)
+            controller.historyLoaded(request, succeeded: succeeded, turnCount: succeeded ? 1 : 2, hasMoreHistory: true)
             let prior = scroll.contentOffset
             scroll.contentSize.height += 500
             check(scroll.contentOffset == prior, "Failed and empty pages must not anchor later stream updates")
         }
-        let obsolete = controller.captureReadingPosition(rowCount: 1, hasMoreHistory: true)
-        let current = controller.captureReadingPosition(rowCount: 1, hasMoreHistory: true)
-        controller.historyLoaded(obsolete, succeeded: true, rowCount: 2, hasMoreHistory: true)
+        let obsolete = controller.captureReadingPosition(turnCount: 1, hasMoreHistory: true)
+        let current = controller.captureReadingPosition(turnCount: 1, hasMoreHistory: true)
+        controller.historyLoaded(obsolete, succeeded: true, turnCount: 2, hasMoreHistory: true)
         let prior = scroll.contentOffset
         scroll.contentSize.height += 500
         check(scroll.contentOffset == prior, "A superseded load must not restore a new request's reading position")
-        controller.historyLoaded(current, succeeded: true, rowCount: 2, hasMoreHistory: true)
+        controller.historyLoaded(current, succeeded: true, turnCount: 2, hasMoreHistory: true)
         check(scroll.contentOffset.y == prior.y + 500, "The current request must still restore after an old completion")
     }
 
@@ -59,13 +59,13 @@ struct ConversationScrollTests {
         scroll.contentOffset.y = 200
         let readingY = marker.convert(marker.bounds, to: root).minY
         for scenario in scenarios {
-            let request = controller.captureReadingPosition(rowCount: 1, hasMoreHistory: true)
+            let request = controller.captureReadingPosition(turnCount: 1, hasMoreHistory: true)
             await flushMainQueue() // Unrelated idle updates must not consume the capture.
             if scenario.early {
                 controller.historyLoaded(
                     request,
                     succeeded: true,
-                    rowCount: scenario.rows,
+                    turnCount: scenario.turns,
                     hasMoreHistory: scenario.more
                 )
                 await flushMainQueue()
@@ -83,7 +83,7 @@ struct ConversationScrollTests {
                 controller.historyLoaded(
                     request,
                     succeeded: true,
-                    rowCount: scenario.rows,
+                    turnCount: scenario.turns,
                     hasMoreHistory: scenario.more
                 )
             }

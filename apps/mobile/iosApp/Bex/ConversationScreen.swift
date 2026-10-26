@@ -123,7 +123,7 @@ struct ThreadScreen: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
                         if let session = thread.id, let history {
-                            historyControl(history, session: session, rowCount: thread.rows.count)
+                            historyControl(history, session: session, turnCount: thread.source.turnCount())
                         }
                         ForEach(rows) { row in
                             conversationRow(row)

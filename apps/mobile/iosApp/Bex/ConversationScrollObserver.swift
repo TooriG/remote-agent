@@ -45,7 +45,7 @@ struct ConversationScrollObserver: UIViewRepresentable {
         let id: UUID
         var offset: CGPoint
         let height: CGFloat
-        let rowCount: Int
+        let turnCount: UInt64
         let hasMoreHistory: Bool
         var ready = false
     }
@@ -57,12 +57,12 @@ struct ConversationScrollObserver: UIViewRepresentable {
         private var historyAnchor: ReadingPosition?
         private var contentSizeObservation: NSKeyValueObservation?
 
-        func captureReadingPosition(rowCount: Int, hasMoreHistory: Bool) -> UUID? {
+        func captureReadingPosition(turnCount: UInt64, hasMoreHistory: Bool) -> UUID? {
             guard let scrollView else { return nil }
             let id = UUID()
             historyAnchor = ReadingPosition(id: id, offset: scrollView.contentOffset,
                                             height: scrollView.contentSize.height,
-                                            rowCount: rowCount, hasMoreHistory: hasMoreHistory)
+                                            turnCount: turnCount, hasMoreHistory: hasMoreHistory)
             return id
         }
 
@@ -70,9 +70,9 @@ struct ConversationScrollObserver: UIViewRepresentable {
             historyAnchor = nil
         }
 
-        func historyLoaded(_ id: UUID?, succeeded: Bool, rowCount: Int, hasMoreHistory: Bool) {
+        func historyLoaded(_ id: UUID?, succeeded: Bool, turnCount: UInt64, hasMoreHistory: Bool) {
             guard let id, var anchor = historyAnchor, anchor.id == id else { return }
-            guard succeeded, rowCount != anchor.rowCount || hasMoreHistory != anchor.hasMoreHistory else {
+            guard succeeded, turnCount != anchor.turnCount || hasMoreHistory != anchor.hasMoreHistory else {
                 cancelHistoryRestoration()
                 return
             }
