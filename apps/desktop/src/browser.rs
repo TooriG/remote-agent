@@ -1,12 +1,14 @@
-use agent_protocol::browser::browser_url;
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-use gpui_kit::component::{
-    Disableable,
-    menu::{DropdownMenu, PopupMenuItem},
+mod personal;
+
+use crate::{Runtime, appearance};
+use agent_core::store::Store;
+use agent_protocol::{
+    browser::{BrowserAction, BrowserController, BrowserFrame, BrowserKey, BrowserRequest},
+    session::SessionRef,
 };
 use gpui_kit::{
     component::{
-        IconName, Sizable,
+        Disableable, IconName, Selectable, Sizable,
         button::{Button, ButtonVariants},
         h_flex,
         input::{Input, InputEvent, InputState},
@@ -15,1003 +17,831 @@ use gpui_kit::{
     prelude::FluentBuilder,
     *,
 };
-use gpui_wry::WebView;
-
-#[cfg(target_os = "windows")]
-mod windows_import;
-
-enum Event {
-    Location(String),
-    Navigate(String),
-    Title(String),
-}
-
-#[cfg(target_os = "macos")]
-type StoragePassword = fn() -> Result<Vec<u8>, String>;
-
-#[cfg(target_os = "macos")]
-pub(crate) struct ImportSource {
-    pub(crate) name: &'static str,
-    pub(crate) root: std::path::PathBuf,
-    pub(crate) password: StoragePassword,
-}
-
-#[cfg(target_os = "macos")]
-fn keychain_secret(service: &str, account: &str) -> Result<Vec<u8>, String> {
-    security_framework::passwords::get_generic_password(service, account).map_err(|_| {
-        "ブラウザのKeychainにアクセスできません。アクセスを許可して再試行してください".into()
-    })
-}
-
-#[cfg(target_os = "macos")]
-pub(crate) fn import_sources() -> Vec<ImportSource> {
-    let Some(dirs) = directories::BaseDirs::new() else {
-        return Vec::new();
-    };
-    let root = dirs.home_dir().join("Library/Application Support");
-    let definitions: [(&str, &str, StoragePassword); 6] = [
-        ("Chrome", "Google/Chrome", || {
-            keychain_secret("Chrome Safe Storage", "Chrome")
-        }),
-        ("Microsoft Edge", "Microsoft Edge", || {
-            keychain_secret("Microsoft Edge Safe Storage", "Microsoft Edge")
-        }),
-        ("Brave", "BraveSoftware/Brave-Browser", || {
-            keychain_secret("Brave Safe Storage", "Brave")
-        }),
-        ("Arc", "Arc/User Data", || {
-            keychain_secret("Arc Safe Storage", "Arc")
-        }),
-        ("Vivaldi", "Vivaldi", || {
-            keychain_secret("Vivaldi Safe Storage", "Vivaldi")
-        }),
-        ("Opera", "com.operasoftware.Opera", || {
-            keychain_secret("Opera Safe Storage", "Opera")
-        }),
-    ];
-    definitions
-        .into_iter()
-        .filter_map(|(name, directory, password)| {
-            let root = root.join(directory);
-            root.is_dir().then_some(ImportSource {
-                name,
-                root,
-                password,
-            })
-        })
-        .collect()
-}
-
-pub(crate) struct Browser {
-    webview: Entity<WebView>,
-    address: Entity<InputState>,
-    error: String,
-    title: String,
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    importing: bool,
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    import_notice: String,
-    #[cfg(target_os = "macos")]
-    sources: Vec<ImportSource>,
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    visible: bool,
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    profile_menu_open: bool,
-    _subscription: Subscription,
-}
+use std::{collections::VecDeque, ops::Range, sync::Arc, time::Duration};
 
 pub(crate) struct OpenTab(pub(crate) String);
+
+pub(crate) struct Browser {
+    store: Option<Arc<Store>>,
+    thread: Option<SessionRef>,
+    runtime: Runtime,
+    client: String,
+    frame: BrowserFrame,
+    image: Option<Arc<RenderImage>>,
+    address: Entity<InputState>,
+    dialog_input: Entity<InputState>,
+    error: Option<String>,
+    pending: VecDeque<BrowserRequest>,
+    visible: bool,
+    personal_mode: bool,
+    personal: Option<Entity<personal::Browser>>,
+    focus: FocusHandle,
+    bounds: Bounds<Pixels>,
+    composition: String,
+    composition_selection: Range<usize>,
+    _poll: Task<()>,
+    _subscriptions: Vec<Subscription>,
+    #[cfg(target_os = "windows")]
+    personal_start: Option<Task<()>>,
+}
 impl EventEmitter<OpenTab> for Browser {}
 
 impl Browser {
-    pub(crate) fn title(&self, cx: &App) -> String {
-        if !self.title.is_empty() {
-            return self.title.clone();
-        }
-        let address = self.address.read(cx).value();
-        url::Url::parse(address.as_ref())
-            .ok()
-            .and_then(|url| url.host_str().map(str::to_owned))
-            .unwrap_or_else(|| "新しいタブ".into())
-    }
-
-    fn prepare(
-        builder: wry::WebViewBuilder<'_>,
-    ) -> (wry::WebViewBuilder<'_>, async_channel::Receiver<Event>) {
-        let (tx, rx) = async_channel::unbounded();
-        let navigation = tx.clone();
-        let title = tx.clone();
-        let builder = builder
-            .with_document_title_changed_handler(move |value| {
-                let _ = title.try_send(Event::Title(value));
-            })
-            .with_url("about:blank")
-            .with_background_color((24, 24, 24, 255))
-            .with_focused(false)
-            .with_accept_first_mouse(true)
-            // A browsing page never receives the terminal's privileged IPC bridge.
-            .with_navigation_handler(|url| browser_url(&url).is_ok())
-            .with_new_window_req_handler(move |url, _| {
-                let _ = navigation.try_send(Event::Navigate(url));
-                wry::NewWindowResponse::Deny
-            })
-            .with_on_page_load_handler(move |_, url| {
-                let _ = tx.try_send(Event::Location(url));
-            });
-        (builder, rx)
-    }
-
-    #[cfg(target_os = "windows")]
-    pub(crate) fn start(
-        window: &mut Window,
-        cx: &mut App,
-        ready: impl FnOnce(Result<Entity<Self>, String>, &mut Window, &mut App) + 'static,
-    ) -> Result<Task<()>, String> {
-        use wry::raw_window_handle::HasWindowHandle;
-        let directory = directories::ProjectDirs::from("app", "bex", "BEX")
-            .ok_or("ブラウザの保存先を取得できません")?
-            .data_local_dir()
-            .join("browser-profile");
-        let raw_parent = window.window_handle().map_err(|e| e.to_string())?.as_raw();
-        Ok(window.spawn(cx, async move |cx| {
-            // The owning Desktop retains this task, cancelling it before its window is
-            // destroyed. Never retain a GPUI App/Window borrow across WebView2 awaits:
-            // the synchronous builder pumps messages and re-enters GPUI updates.
-            let parent = unsafe { wry::raw_window_handle::WindowHandle::borrow_raw(raw_parent) };
-            let mut context = wry::WebContext::new(Some(directory));
-            let (builder, rx) = Self::prepare(wry::WebViewBuilder::new_with_web_context(&mut context));
-            let result = builder
-                .build_as_child_async(&parent)
-                .await
-                .map_err(|e| e.to_string())
-                .and_then(|raw| {
-                    use windows::core::Interface;
-                    use wry::WebViewExtWindows;
-                    unsafe {
-                        let settings = raw.controller().CoreWebView2().and_then(|view| view.Settings()).and_then(|settings| settings.cast::<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings4>()).map_err(|error| error.to_string())?;
-                        settings.SetIsPasswordAutosaveEnabled(true).map_err(|error| error.to_string())?;
-                        settings.SetIsGeneralAutofillEnabled(true).map_err(|error| error.to_string())?;
-                    }
-                    Ok(raw)
-                });
-            let _ = cx.update(move |window, cx| {
-                let result = result.map(|raw| Self::attach(raw, rx, window, cx));
-                ready(result, window, cx);
-            });
-        }))
-    }
-
-    #[cfg(not(target_os = "windows"))]
     pub(crate) fn new(
-        builder: wry::WebViewBuilder<'_>,
-        #[cfg(target_os = "macos")] sources: Vec<ImportSource>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Result<Entity<Self>, String> {
-        let (builder, rx) = Self::prepare(builder);
-        let raw = builder.build_as_child(window).map_err(|e| e.to_string())?;
-        Ok(Self::attach(
-            raw,
-            rx,
-            #[cfg(target_os = "macos")]
-            sources,
-            window,
-            cx,
-        ))
-    }
-
-    fn attach(
-        raw: wry::WebView,
-        rx: async_channel::Receiver<Event>,
-        #[cfg(target_os = "macos")] sources: Vec<ImportSource>,
+        store: Option<Arc<Store>>,
+        thread: Option<SessionRef>,
+        url: Option<String>,
         window: &mut Window,
         cx: &mut App,
     ) -> Entity<Self> {
-        let webview = cx.new(|cx| WebView::new(raw, window, cx));
-        webview.update(cx, |view, _| view.hide());
-        let address = cx.new(|cx| InputState::new(window, cx).placeholder("URL を入力"));
-        cx.new(|cx: &mut Context<Self>| {
-            let subscription = cx.subscribe_in(&address, window, |s, _, event, _, cx| {
+        let runtime = cx.global::<Runtime>().clone();
+        let address = cx.new(|cx| InputState::new(window, cx).placeholder("検索または URL を入力"));
+        let dialog_input = cx.new(|cx| InputState::new(window, cx));
+        let focus = cx.focus_handle();
+        let personal_mode = url.is_some() || thread.is_none();
+        let view = cx.new(|cx: &mut Context<Self>| {
+            let subscription = cx.subscribe_in(&address, window, |view, _, event, _, cx| {
                 if matches!(event, InputEvent::PressEnter { .. }) {
-                    s.navigate(cx);
+                    view.navigate(cx);
                 }
             });
-            cx.spawn_in(window, async move |view, cx| {
-                while let Ok(event) = rx.recv().await {
-                    if view
-                        .update_in(cx, |s, window, cx| {
-                            match event {
-                                Event::Location(url) => s.address.update(cx, |input, cx| {
-                                    input.set_value(
-                                        if url == "about:blank" {
-                                            String::new()
-                                        } else {
-                                            url
-                                        },
-                                        window,
-                                        cx,
-                                    )
-                                }),
-                                Event::Title(title) => s.title = title,
-                                Event::Navigate(url) => {
-                                    cx.emit(OpenTab(url));
-                                }
-                            }
-                            cx.notify();
-                        })
-                        .is_err()
-                    {
+            let poll = cx.spawn_in(window, async move |view, cx| {
+                loop {
+                    let Ok(job) = view.update_in(cx, |view, _, _| view.next_request()) else {
                         break;
+                    };
+                    if let Some((runtime, store, request)) = job {
+                        let result = runtime
+                            .handle
+                            .spawn(async move {
+                                let frame = store
+                                    .browser(request)
+                                    .await
+                                    .map_err(|error| error.to_string())?;
+                                let image = if frame.image.is_empty() {
+                                    None
+                                } else {
+                                    let mut rgba = image::load_from_memory(&frame.image)
+                                        .map_err(|_| "ブラウザ画像を読み取れません。")?
+                                        .into_rgba8();
+                                    for pixel in rgba.pixels_mut() {
+                                        pixel.0.swap(0, 2);
+                                    }
+                                    Some(Arc::new(RenderImage::new(vec![image::Frame::new(rgba)])))
+                                };
+                                Ok::<_, String>((frame, image))
+                            })
+                            .await;
+                        let result =
+                            result.unwrap_or_else(|_| Err("ブラウザとの接続が切れました。".into()));
+                        if view
+                            .update_in(cx, |view, window, cx| {
+                                match result {
+                                    Ok((frame, image)) => {
+                                        if !view
+                                            .address
+                                            .read(cx)
+                                            .focus_handle(cx)
+                                            .is_focused(window)
+                                        {
+                                            let url = frame
+                                                .tabs
+                                                .iter()
+                                                .find(|tab| tab.id == frame.tab_id)
+                                                .map(|tab| {
+                                                    if tab.url == "about:blank" {
+                                                        String::new()
+                                                    } else {
+                                                        tab.url.clone()
+                                                    }
+                                                })
+                                                .unwrap_or_default();
+                                            view.address.update(cx, |input, cx| {
+                                                input.set_value(url, window, cx)
+                                            });
+                                        }
+                                        if image.is_some() {
+                                            view.image = image;
+                                        }
+                                        view.frame = frame;
+                                        view.error = None;
+                                    }
+                                    Err(error) => view.error = Some(error),
+                                }
+                                cx.notify();
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
                     }
+                    cx.background_executor()
+                        .timer(Duration::from_millis(150))
+                        .await;
                 }
-            })
-            .detach();
+            });
             Self {
-                webview,
+                store,
+                thread,
+                runtime,
+                client: uuid::Uuid::new_v4().to_string(),
+                frame: BrowserFrame::default(),
+                image: None,
                 address,
-                title: String::new(),
-                error: String::new(),
-                #[cfg(any(target_os = "macos", target_os = "windows"))]
-                importing: false,
-                #[cfg(any(target_os = "macos", target_os = "windows"))]
-                import_notice: String::new(),
-                #[cfg(target_os = "macos")]
-                sources,
-                #[cfg(any(target_os = "macos", target_os = "windows"))]
-                visible: true,
-                #[cfg(any(target_os = "macos", target_os = "windows"))]
-                profile_menu_open: false,
-                _subscription: subscription,
-            }
-        })
-    }
-    pub(crate) fn set_visible(&mut self, visible: bool, cx: &mut App) {
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
-        {
-            self.visible = visible;
-        }
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
-        let visible = visible && !self.profile_menu_open;
-        self.webview.update(cx, |view, _| {
-            if view.visible() != visible {
-                if visible {
-                    view.show();
-                } else {
-                    view.hide();
-                }
+                dialog_input,
+                error: None,
+                pending: VecDeque::new(),
+                visible: false,
+                personal_mode,
+                personal: None,
+                focus,
+                bounds: Bounds::default(),
+                composition: String::new(),
+                composition_selection: 0..0,
+                _poll: poll,
+                _subscriptions: vec![subscription],
+                #[cfg(target_os = "windows")]
+                personal_start: None,
             }
         });
+        if personal_mode {
+            view.update(cx, |view, cx| view.start_personal(url, window, cx));
+        }
+        view
     }
-    pub(crate) fn open_url(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
-        self.address
-            .update(cx, |input, cx| input.set_value(url.to_owned(), window, cx));
-        self.navigate(cx);
+
+    fn next_request(&mut self) -> Option<(Runtime, Arc<Store>, BrowserRequest)> {
+        let store = self.store.clone()?;
+        self.thread.as_ref()?;
+        let request = self.pending.pop_front().or_else(|| {
+            (self.visible && !self.personal_mode).then(|| self.request(BrowserAction::Read))
+        })?;
+        Some((self.runtime.clone(), store, request))
     }
-    fn navigate(&mut self, cx: &mut Context<Self>) {
-        match browser_url(self.address.read(cx).value().as_ref()) {
-            Ok(url) => {
-                self.error.clear();
-                if let Err(e) = self.webview.read(cx).raw().load_url(&url) {
-                    self.error = e.to_string();
-                }
-            }
-            Err(e) => self.error = e,
+
+    fn request(&self, action: BrowserAction) -> BrowserRequest {
+        BrowserRequest {
+            thread_id: self
+                .thread
+                .clone()
+                .expect("a shared browser has a conversation"),
+            client_id: self.client.clone(),
+            generation: self.frame.generation,
+            tab_id: self.frame.tab_id.clone(),
+            image_id: self.frame.image_id.clone(),
+            action,
+        }
+    }
+
+    fn owns_control(&self) -> bool {
+        self.frame.controller == BrowserController::You
+    }
+
+    fn send(&mut self, action: BrowserAction, cx: &mut Context<Self>) {
+        if self.thread.is_some() && self.pending.len() < 64 {
+            self.pending.push_back(self.request(action));
         }
         cx.notify();
     }
 
-    #[cfg(target_os = "macos")]
-    fn import_cookies(
+    fn navigate(&mut self, cx: &mut Context<Self>) {
+        match agent_core::browser_view::address_url(self.address.read(cx).value().as_ref()) {
+            Ok(url) => self.send(BrowserAction::Navigate { url }, cx),
+            Err(error) => {
+                self.error = Some(error);
+                cx.notify();
+            }
+        }
+    }
+
+    pub(crate) fn title(&self, cx: &App) -> String {
+        if self.personal_mode {
+            return self
+                .personal
+                .as_ref()
+                .map_or_else(|| "個人用ブラウザ".into(), |view| view.read(cx).title(cx));
+        }
+        self.frame
+            .tabs
+            .iter()
+            .find(|tab| tab.id == self.frame.tab_id)
+            .map(|tab| {
+                if tab.title.is_empty() || tab.url == "about:blank" {
+                    "AI ブラウザ".into()
+                } else {
+                    tab.title.clone()
+                }
+            })
+            .unwrap_or_else(|| "AI ブラウザ".into())
+    }
+
+    pub(crate) fn set_visible(&mut self, visible: bool, cx: &mut App) {
+        if self.visible && !visible && self.owns_control() {
+            self.pending
+                .push_back(self.request(BrowserAction::ReleaseControl));
+        }
+        self.visible = visible;
+        if let Some(personal) = &self.personal {
+            personal.update(cx, |view, cx| {
+                view.set_visible(visible && self.personal_mode, cx)
+            });
+        }
+    }
+
+    fn attach_personal(
         &mut self,
-        profile: std::path::PathBuf,
-        password: impl FnOnce() -> Result<Vec<u8>, String> + Send + 'static,
+        view: Entity<personal::Browser>,
+        url: Option<String>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        use futures_util::{FutureExt, future::Either};
-        use wry::WebViewExtMacOS;
-        if self.importing {
-            return;
-        }
-        self.importing = true;
-        self.error.clear();
-        self.import_notice =
-            "ブラウザのCookieを読み込み中… Keychainの確認が出たら許可してください".into();
-        let read = cx.background_executor().spawn(async move {
-            read_chrome_cookies(&profile, chrono::Utc::now().timestamp(), password)
+        view.update(cx, |view, cx| {
+            view.set_visible(self.visible && self.personal_mode, cx);
+            if let Some(url) = url {
+                view.open_url(&url, window, cx);
+            }
         });
-        cx.spawn(async move |owner, cx| {
-            let result = async {
-                let (cookies, skipped) = read.await?;
-                let count = cookies.len();
-                if count == 0 {
-                    return Ok(format!("取り込めるCookieがありません（期限切れなど{skipped}件を除外）"));
-                }
-                let store = owner.update(cx, |s, cx| unsafe {
-                    s.webview.read(cx).raw().webview().configuration().websiteDataStore().httpCookieStore()
-                }).map_err(|_| "ブラウザが閉じられました".to_string())?;
-                let timer = cx.background_executor().timer(std::time::Duration::from_secs(30));
-                match futures_util::future::select(install_chrome_cookies(&store, cookies).boxed_local(), timer.boxed_local()).await {
-                    Either::Left((result, _)) => result?,
-                    Either::Right(_) => return Err("Cookieの保存が時間内に完了しませんでした。一部保存された可能性があります。再試行してください".into()),
-                }
-                owner.update(cx, |s, cx| s.webview.read(cx).raw().reload())
-                    .map_err(|_| "ブラウザが閉じられました".to_string())?
-                    .map_err(|_| "Cookieは保存しましたが再読み込みに失敗しました。再読み込みしてください".to_string())?;
-                Ok(format!("Cookieを{count}件取り込みました（期限切れなど{skipped}件を除外）。ログイン状態はサイトで確認してください"))
-            }.await;
-            let _ = owner.update(cx, |s, cx| {
-                s.importing = false;
-                match result {
-                    Ok(notice) => s.import_notice = notice,
-                    Err(error) => { s.import_notice.clear(); s.error = error; }
-                }
-                cx.notify();
-            });
-        }).detach();
+        self._subscriptions
+            .push(cx.subscribe(&view, |_, _, event: &personal::OpenTab, cx| {
+                cx.emit(OpenTab(event.0.clone()))
+            }));
+        self._subscriptions
+            .push(cx.observe(&view, |_, _, cx| cx.notify()));
+        self.personal = Some(view);
         cx.notify();
     }
 
-    #[cfg(target_os = "macos")]
-    fn cookie_import_button(&self, cx: &Context<Self>) -> impl IntoElement {
-        let owner = cx.entity().downgrade();
-        let visibility = owner.clone();
-        let sources: Vec<_> = self
-            .sources
-            .iter()
-            .map(|source| (source.name, source.root.clone(), source.password))
-            .collect();
-        Button::new("import-browser-cookies")
-            .label(if self.importing { "取り込み中…" } else { "ログイン状態を取り込む" })
-            .accessibility_label("ブラウザからCookieを取り込む")
-            .tooltip("Cookieを共通プロファイルに取り込み、すべての会話で使います。保存パスワードは対象外です。")
-            .small().ghost().disabled(self.importing).dropdown_caret(true)
-            .dropdown_menu(move |mut menu, window, cx| {
-                if sources.is_empty() {
-                    return menu.item(PopupMenuItem::new("対応ブラウザが見つかりません").disabled(true));
-                }
-                for (name, root, password) in &sources {
-                    let owner = owner.clone();
-                    let profiles = chromium_profiles(root);
-                    let password = *password;
-                    menu = menu.submenu(*name, window, cx, move |mut menu, _, _| {
-                        match &profiles {
-                            Ok(profiles) => for (name, path) in profiles {
-                                let owner = owner.clone();
-                                let path = path.clone();
-                                menu = menu.item(PopupMenuItem::new(name.clone()).on_click(move |_, _, cx| {
-                                    let _ = owner.update(cx, |view, cx| view.import_cookies(path.clone(), password, cx));
-                                }));
-                            },
-                            Err(error) => {
-                                let owner = owner.clone();
-                                let error = error.clone();
-                                menu = menu.item(PopupMenuItem::new(error.clone()).on_click(move |_, _, cx| {
-                                    let _ = owner.update(cx, |view, cx| { view.error = error.clone(); cx.notify(); });
-                                }));
-                            }
-                        }
-                        menu
-                    });
-                }
-                menu
-            })
-            .on_open_change(move |open, _, cx| {
-                let _ = visibility.update(cx, |s, cx| {
-                    // Native WebViews sit above GPUI popovers; retain the panel's requested visibility.
-                    s.profile_menu_open = *open;
-                    s.set_visible(s.visible, cx);
-                    cx.notify();
+    fn start_personal(&mut self, url: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+        if self.personal.is_some() {
+            return;
+        }
+        #[cfg(target_os = "windows")]
+        {
+            if self.personal_start.is_some() {
+                return;
+            }
+            let owner = cx.entity().downgrade();
+            match personal::Browser::start(window, cx, move |result, window, cx| {
+                let _ = owner.update(cx, |view, cx| match result {
+                    Ok(personal) => view.attach_personal(personal, url, window, cx),
+                    Err(error) => {
+                        view.error = Some(error);
+                        cx.notify();
+                    }
                 });
-            })
+            }) {
+                Ok(task) => self.personal_start = Some(task),
+                Err(error) => self.error = Some(error),
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        match personal::Browser::new(
+            wry::WebViewBuilder::new(),
+            #[cfg(target_os = "macos")]
+            personal::import_sources(),
+            window,
+            cx,
+        ) {
+            Ok(view) => self.attach_personal(view, url, window, cx),
+            Err(error) => self.error = Some(error),
+        }
+    }
+
+    fn page_point(&self, position: Point<Pixels>) -> Option<(f64, f64)> {
+        let width = self.frame.width as f32;
+        let height = self.frame.height as f32;
+        if width == 0. || height == 0. {
+            return None;
+        }
+        let scale = (self.bounds.size.width / px(width)).min(self.bounds.size.height / px(height));
+        let x = ((position.x - self.bounds.left()) / px(1.)
+            - (self.bounds.size.width / px(1.) - width * scale) / 2.)
+            / scale;
+        let y = ((position.y - self.bounds.top()) / px(1.)
+            - (self.bounds.size.height / px(1.) - height * scale) / 2.)
+            / scale;
+        ((0.0..width).contains(&x) && (0.0..height).contains(&y))
+            .then_some((f64::from(x), f64::from(y)))
+    }
+
+    fn key(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.owns_control() {
+            return;
+        }
+        let key = &event.keystroke;
+        let action = match key.key.as_str() {
+            "enter" => Some(BrowserKey::Enter),
+            "tab" => Some(BrowserKey::Tab),
+            "backspace" => Some(BrowserKey::Backspace),
+            "escape" => Some(BrowserKey::Escape),
+            "up" => Some(BrowserKey::ArrowUp),
+            "down" => Some(BrowserKey::ArrowDown),
+            "left" => Some(BrowserKey::ArrowLeft),
+            "right" => Some(BrowserKey::ArrowRight),
+            "delete" => Some(BrowserKey::Delete),
+            "home" => Some(BrowserKey::Home),
+            "end" => Some(BrowserKey::End),
+            "pageup" => Some(BrowserKey::PageUp),
+            "pagedown" => Some(BrowserKey::PageDown),
+            "a" if key.modifiers.platform || key.modifiers.control => Some(BrowserKey::SelectAll),
+            _ => None,
+        };
+        if let Some(key) = action {
+            self.send(BrowserAction::Key { key }, cx);
+            cx.stop_propagation();
+        } else if key.key == "v" && (key.modifiers.platform || key.modifiers.control) {
+            if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                self.send(BrowserAction::Type { text }, cx);
+            }
+            cx.stop_propagation();
+        }
+    }
+}
+
+impl Drop for Browser {
+    fn drop(&mut self) {
+        if self.owns_control()
+            && let (Some(store), Some(thread)) = (self.store.clone(), self.thread.clone())
+        {
+            let request = BrowserRequest {
+                thread_id: thread,
+                tab_id: self.frame.tab_id.clone(),
+                image_id: String::new(),
+                client_id: self.client.clone(),
+                generation: self.frame.generation,
+                action: BrowserAction::ReleaseControl,
+            };
+            self.runtime.handle.spawn(async move {
+                let _ = store.browser(request).await;
+            });
+        }
     }
 }
 
 impl Render for Browser {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let owns = self.owns_control();
+        let tabs = self.frame.tabs.clone();
+        let active = self.frame.tab_id.clone();
+        let entity = cx.entity();
         v_flex()
             .size_full()
-            .min_w_0()
             .min_h_0()
+            .bg(rgb(appearance::BACKGROUND))
             .child(
                 h_flex()
+                    .h_8()
+                    .px_2()
                     .gap_1()
-                    .p_2()
+                    .border_b_1()
+                    .border_color(rgb(appearance::BORDER))
                     .child(
-                        Button::new("browser-back")
-                            .icon(IconName::ArrowLeft)
+                        Button::new("browser-shared")
+                            .label("AI と共有")
                             .small()
                             .ghost()
-                            .tooltip("戻る")
-                            .accessibility_label("戻る")
-                            .on_click(cx.listener(|s, _, _, cx| {
-                                let _ = s.webview.read(cx).raw().evaluate_script("history.back()");
-                            })),
-                    )
-                    .child(
-                        Button::new("browser-forward")
-                            .icon(IconName::ArrowRight)
-                            .small()
-                            .ghost()
-                            .tooltip("進む")
-                            .accessibility_label("進む")
-                            .on_click(cx.listener(|s, _, _, cx| {
-                                let _ = s
-                                    .webview
-                                    .read(cx)
-                                    .raw()
-                                    .evaluate_script("history.forward()");
-                            })),
-                    )
-                    .child(
-                        Button::new("browser-reload")
-                            .icon(IconName::RotateCw)
-                            .small()
-                            .ghost()
-                            .tooltip("再読み込み")
-                            .accessibility_label("再読み込み")
-                            .on_click(cx.listener(|s, _, _, cx| {
-                                if let Err(e) = s.webview.read(cx).raw().reload() {
-                                    s.error = e.to_string();
-                                    cx.notify();
+                            .selected(!self.personal_mode)
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                view.personal_mode = false;
+                                if let Some(personal) = &view.personal {
+                                    personal.update(cx, |view, cx| view.set_visible(false, cx));
                                 }
+                                cx.notify();
                             })),
                     )
                     .child(
-                        Input::new(&self.address)
-                            .small()
-                            .aria_label("ブラウザの URL"),
-                    )
-                    .child(
-                        Button::new("browser-go")
-                            .icon(IconName::ArrowRight)
+                        Button::new("browser-personal")
+                            .label("個人用")
                             .small()
                             .ghost()
-                            .tooltip("URL を開く")
-                            .accessibility_label("URL を開く")
-                            .on_click(cx.listener(|s, _, _, cx| s.navigate(cx))),
+                            .selected(self.personal_mode)
+                            .on_click(cx.listener(|view, _, window, cx| {
+                                if view.owns_control() {
+                                    view.send(BrowserAction::ReleaseControl, cx);
+                                }
+                                view.personal_mode = true;
+                                view.start_personal(None, window, cx);
+                                if let Some(personal) = &view.personal {
+                                    personal.update(cx, |view, cx| view.set_visible(true, cx));
+                                }
+                                cx.notify();
+                            })),
                     ),
             )
             .map(|body| {
-                #[cfg(target_os = "windows")]
-                let body = body.child(self.windows_import_toolbar(cx));
-                #[cfg(target_os = "macos")]
-                let body = body.child(h_flex().px_2().pb_2().child(self.cookie_import_button(cx)));
-                #[cfg(any(target_os = "macos", target_os = "windows"))]
-                let body = body.when(!self.import_notice.is_empty(), |body| {
-                    body.child(
-                        div()
-                            .px_3()
-                            .pb_2()
-                            .text_sm()
-                            .child(self.import_notice.clone()),
-                    )
-                });
-                body
-            })
-            .when(!self.error.is_empty(), |body| {
-                body.child(
-                    div()
-                        .px_3()
-                        .pb_2()
-                        .text_sm()
-                        .text_color(rgb(0xff8e86))
-                        .child(self.error.clone()),
-                )
-            })
-            .child(div().flex_1().min_h_0().pl_1().child(self.webview.clone()))
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn chromium_profiles(root: &std::path::Path) -> Result<Vec<(String, std::path::PathBuf)>, String> {
-    let bytes = std::fs::read(root.join("Local State")).map_err(|_| {
-        "ブラウザのプロファイルが見つかりません。取り込み元のブラウザを一度起動してください"
-            .to_string()
-    })?;
-    let result: Vec<_> = agent_core::browser_import::parse_chrome_profiles(&bytes)?
-        .into_iter()
-        .filter_map(|profile| {
-            let path = root.join(&profile.directory);
-            chrome_cookie_path(&path)
-                .is_some()
-                .then(|| (format!("{} ({})", profile.name, profile.directory), path))
-        })
-        .collect();
-    if result.is_empty() {
-        return Err("CookieのあるChromeプロファイルが見つかりません".into());
-    }
-    Ok(result)
-}
-
-#[cfg(target_os = "macos")]
-fn chrome_cookie_path(profile: &std::path::Path) -> Option<std::path::PathBuf> {
-    ["Network/Cookies", "Cookies"]
-        .into_iter()
-        .map(|name| profile.join(name))
-        .find(|path| path.is_file())
-}
-
-#[cfg(target_os = "macos")]
-struct ChromeCookie {
-    domain: String,
-    name: String,
-    value: zeroize::Zeroizing<String>,
-    path: String,
-    secure: bool,
-    http_only: bool,
-    same_site: i64,
-    expires: Option<i64>,
-}
-
-#[cfg(target_os = "macos")]
-fn read_chrome_cookies(
-    profile: &std::path::Path,
-    now: i64,
-    password: impl FnOnce() -> Result<Vec<u8>, String>,
-) -> Result<(Vec<ChromeCookie>, usize), String> {
-    use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
-    use sha2::{Digest, Sha256};
-    use zeroize::Zeroizing;
-    let path = chrome_cookie_path(profile).ok_or("ブラウザのCookieファイルが見つかりません")?;
-    let mut db =
-        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .map_err(|_| {
-                "ブラウザのCookieを開けません。ファイルのアクセス権を確認してください".to_string()
-            })?;
-    db.busy_timeout(std::time::Duration::from_secs(3))
-        .map_err(|_| "Cookieの読み込み設定に失敗しました")?;
-    // One read transaction includes committed WAL rows without copying or modifying Chrome's DB.
-    let transaction = db
-        .transaction()
-        .map_err(|_| "ブラウザのCookieを読み取れません。再試行してください")?;
-    let schema: i64 = transaction
-        .query_row("SELECT value FROM meta WHERE key = 'version'", [], |row| {
-            row.get::<_, String>(0)?
-                .parse::<i64>()
-                .map_err(|_| rusqlite::Error::InvalidQuery)
-        })
-        .map_err(|_| "ブラウザのCookie形式を確認できません")?;
-    // The selected columns and cipher are checked below. Schema 24 and later
-    // bind decrypted values to the host; a later additive schema is compatible.
-    if schema < 23 {
-        return Err("このブラウザのCookie形式にはまだ対応していません".into());
-    }
-    let mut statement = transaction.prepare("SELECT host_key, name, value, encrypted_value, path, is_secure, is_httponly, samesite, expires_utc, has_expires, top_frame_site_key FROM cookies")
-        .map_err(|_| "ブラウザのCookie形式を読み取れません")?;
-    let rows = statement
-        .query_map([], |row| {
-            let expires: i64 = row.get(8)?;
-            Ok((
-                ChromeCookie {
-                    domain: row.get(0)?,
-                    name: row.get(1)?,
-                    value: Zeroizing::new(row.get(2)?),
-                    path: row.get(4)?,
-                    secure: row.get(5)?,
-                    http_only: row.get(6)?,
-                    same_site: row.get(7)?,
-                    expires: if row.get::<_, bool>(9)? {
-                        Some(expires / 1_000_000 - 11_644_473_600)
-                    } else {
-                        None
-                    },
-                },
-                row.get::<_, Vec<u8>>(3)?,
-                row.get::<_, String>(10)?,
-            ))
-        })
-        .map_err(|_| "ブラウザのCookieを読み取れません")?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| "ブラウザのCookieに読み取れないデータがあります")?;
-    drop(statement);
-    drop(transaction);
-    drop(db);
-    let mut password = Some(password);
-    let mut key = None;
-    let mut cookies = Vec::new();
-    let mut skipped = 0;
-    let mut identities = std::collections::HashSet::new();
-    for (mut cookie, encrypted, partition) in rows {
-        if !partition.is_empty() || cookie.expires.is_some_and(|expires| expires <= now) {
-            skipped += 1;
-            continue;
-        }
-        if !encrypted.is_empty() {
-            if !cookie.value.is_empty() {
-                return Err("ブラウザのCookieに矛盾する値があります".into());
-            }
-            let encrypted = encrypted
-                .strip_prefix(b"v10")
-                .ok_or("未対応のCookie暗号化方式です。取り込みは行いませんでした")?;
-            if key.is_none() {
-                let secret = Zeroizing::new(password.take().expect("key requested once")()?);
-                let mut derived = Zeroizing::new([0u8; 16]);
-                pbkdf2::pbkdf2_hmac::<sha1::Sha1>(&secret, b"saltysalt", 1003, derived.as_mut());
-                key = Some(derived);
-            }
-            let key = key.as_ref().expect("derived key");
-            let clear = Zeroizing::new(
-                cbc::Decryptor::<aes::Aes128>::new((&**key).into(), (&[b' '; 16]).into())
-                    .decrypt_padded_vec_mut::<Pkcs7>(encrypted)
-                    .map_err(|_| "ブラウザのCookieを復号できません。取り込みは行いませんでした")?,
-            );
-            let value = if schema >= 24 {
-                if clear.len() < 32 || clear[..32] != Sha256::digest(cookie.domain.as_bytes())[..] {
-                    return Err(
-                        "ブラウザのCookieのドメイン検証に失敗しました。取り込みは行いませんでした"
-                            .into(),
+                if self.personal_mode {
+                    return body.child(
+                        self.personal
+                            .as_ref()
+                            .map(|view| view.clone().into_any_element())
+                            .unwrap_or_else(|| {
+                                div()
+                                    .p_4()
+                                    .child(
+                                        self.error
+                                            .clone()
+                                            .unwrap_or_else(|| "ブラウザを準備中…".into()),
+                                    )
+                                    .into_any_element()
+                            }),
                     );
                 }
-                &clear[32..]
-            } else {
-                &clear[..]
-            };
-            cookie.value = Zeroizing::new(
-                std::str::from_utf8(value)
-                    .map_err(|_| "ブラウザのCookieの文字コードに対応していません")?
-                    .to_owned(),
-            );
-        }
-        if !matches!(cookie.same_site, -1..=2)
-            || cookie.domain.is_empty()
-            || !cookie.path.starts_with('/')
-            || cookie
-                .name
-                .bytes()
-                .any(|b| b <= 0x20 || b >= 0x7f || b"()<>@,;:\\\"/[]?={}".contains(&b))
-            || cookie
-                .value
-                .bytes()
-                .any(|b| b < 0x20 || b == 0x7f || b == b';')
-            || url::Host::parse(cookie.domain.trim_start_matches('.')).is_err()
-        {
-            return Err(
-                "ブラウザのCookieに未対応の属性があります。取り込みは行いませんでした".into(),
-            );
-        }
-        if !identities.insert((
-            cookie.domain.clone(),
-            cookie.name.clone(),
-            cookie.path.clone(),
-        )) {
-            return Err(
-                "WebViewで区別できないCookieが重複しています。取り込みは行いませんでした".into(),
-            );
-        }
-        cookies.push(cookie);
-    }
-    Ok((cookies, skipped))
-}
-
-#[cfg(target_os = "macos")]
-fn native_chrome_cookie(
-    cookie: &ChromeCookie,
-) -> Result<objc2::rc::Retained<objc2_foundation::NSHTTPCookie>, String> {
-    use objc2::runtime::AnyObject;
-    use objc2_foundation::*;
-    // Preserve Chrome's leading dot: cookie::Cookie::domain() strips it and changes host scope.
-    unsafe {
-        let properties: objc2::rc::Retained<
-            NSMutableDictionary<NSHTTPCookiePropertyKey, AnyObject>,
-        > = NSMutableDictionary::from_slices(
-            &[
-                NSHTTPCookieName,
-                NSHTTPCookieValue,
-                NSHTTPCookieDomain,
-                NSHTTPCookiePath,
-            ],
-            &[
-                &*NSString::from_str(&cookie.name),
-                &*NSString::from_str(&cookie.value),
-                &*NSString::from_str(&cookie.domain),
-                &*NSString::from_str(&cookie.path),
-            ],
-        );
-        if cookie.secure {
-            properties.insert(NSHTTPCookieSecure, ns_string!("TRUE"));
-        }
-        if cookie.http_only {
-            properties.insert(ns_string!("HttpOnly"), ns_string!("TRUE"));
-        }
-        if let Some(expires) = cookie.expires {
-            properties.insert(
-                NSHTTPCookieExpires,
-                &*NSDate::dateWithTimeIntervalSince1970(expires as f64),
-            );
-        } else {
-            properties.insert(NSHTTPCookieDiscard, ns_string!("TRUE"));
-        }
-        match cookie.same_site {
-            0 => {
-                properties.insert(NSHTTPCookieSameSitePolicy, ns_string!("none"));
-            }
-            // WebKit interprets nil as unrestricted; preserve Chrome's Lax-by-default policy.
-            -1 | 1 => {
-                properties.insert(NSHTTPCookieSameSitePolicy, NSHTTPCookieSameSiteLax);
-            }
-            2 => {
-                properties.insert(NSHTTPCookieSameSitePolicy, NSHTTPCookieSameSiteStrict);
-            }
-            _ => {}
-        }
-        NSHTTPCookie::cookieWithProperties(&properties)
-            .ok_or_else(|| "WebViewに渡せないCookieがあります。取り込みは行いませんでした".into())
-    }
-}
-
-#[cfg(target_os = "macos")]
-async fn install_chrome_cookies(
-    store: &objc2_web_kit::WKHTTPCookieStore,
-    cookies: Vec<ChromeCookie>,
-) -> Result<(), String> {
-    // Validate the whole batch before updating any existing browser cookie.
-    let native = cookies
-        .into_iter()
-        .map(|cookie| native_chrome_cookie(&cookie))
-        .collect::<Result<Vec<_>, _>>()?;
-    let (tx, rx) = async_channel::unbounded();
-    for cookie in &native {
-        let tx = tx.clone();
-        unsafe {
-            store.setCookie_completionHandler(
-                cookie,
-                Some(&block2::RcBlock::new(move || {
-                    let _ = tx.try_send(());
-                })),
-            );
-        }
-        rx.recv()
-            .await
-            .map_err(|_| "Cookieの保存完了を確認できません")?;
-    }
-    let (tx, rx) = async_channel::bounded(1);
-    unsafe {
-        store.getAllCookies(&block2::RcBlock::new(
-            move |stored: std::ptr::NonNull<
-                objc2_foundation::NSArray<objc2_foundation::NSHTTPCookie>,
-            >| {
-                let identity = |cookie: &objc2_foundation::NSHTTPCookie| {
-                    (
-                        cookie.domain().to_string(),
-                        cookie.path().to_string(),
-                        cookie.name().to_string(),
+                body.child(
+                    h_flex()
+                        .id("browser-tabs")
+                        .h_8()
+                        .px_2()
+                        .gap_1()
+                        .overflow_x_scroll()
+                        .children(tabs.into_iter().map(|tab| {
+                            let id = tab.id.clone();
+                            let close = id.clone();
+                            h_flex()
+                                .gap_1()
+                                .rounded_md()
+                                .when(tab.id == active, |tab| tab.bg(rgb(appearance::RAISED)))
+                                .child(
+                                    Button::new(SharedString::from(format!("browser-tab-{id}")))
+                                        .label(
+                                            if tab.title.is_empty() || tab.url == "about:blank" {
+                                                "新しいタブ".into()
+                                            } else {
+                                                tab.title
+                                            },
+                                        )
+                                        .small()
+                                        .ghost()
+                                        .disabled(!owns)
+                                        .on_click(cx.listener(move |view, _, _, cx| {
+                                            view.send(
+                                                BrowserAction::SelectTab { id: id.clone() },
+                                                cx,
+                                            )
+                                        })),
+                                )
+                                .child(
+                                    Button::new(SharedString::from(format!(
+                                        "browser-close-{close}"
+                                    )))
+                                    .icon(IconName::Close)
+                                    .small()
+                                    .ghost()
+                                    .disabled(!owns)
+                                    .accessibility_label("タブを閉じる")
+                                    .on_click(cx.listener(move |view, _, _, cx| {
+                                        view.send(BrowserAction::CloseTab { id: close.clone() }, cx)
+                                    })),
+                                )
+                        }))
+                        .child(
+                            Button::new("browser-new-tab")
+                                .icon(IconName::Plus)
+                                .small()
+                                .ghost()
+                                .disabled(!owns)
+                                .accessibility_label("新しいタブ")
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    view.send(
+                                        BrowserAction::OpenTab {
+                                            url: "about:blank".into(),
+                                        },
+                                        cx,
+                                    )
+                                })),
+                        ),
+                )
+                .child(
+                    h_flex()
+                        .h_10()
+                        .px_2()
+                        .gap_1()
+                        .border_b_1()
+                        .border_color(rgb(appearance::BORDER))
+                        .child(
+                            Button::new("browser-back")
+                                .icon(IconName::ChevronLeft)
+                                .small()
+                                .ghost()
+                                .disabled(!owns || !self.frame.can_go_back)
+                                .accessibility_label("前のページ")
+                                .on_click(
+                                    cx.listener(|view, _, _, cx| {
+                                        view.send(BrowserAction::Back, cx)
+                                    }),
+                                ),
+                        )
+                        .child(
+                            Button::new("browser-forward")
+                                .icon(IconName::ChevronRight)
+                                .small()
+                                .ghost()
+                                .disabled(!owns || !self.frame.can_go_forward)
+                                .accessibility_label("次のページ")
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    view.send(BrowserAction::Forward, cx)
+                                })),
+                        )
+                        .child(
+                            Button::new("browser-reload")
+                                .icon(IconName::RotateCw)
+                                .small()
+                                .ghost()
+                                .disabled(!owns)
+                                .accessibility_label("再読み込み")
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    view.send(BrowserAction::Reload, cx)
+                                })),
+                        )
+                        .child(
+                            div().flex_1().min_w_0().child(
+                                Input::new(&self.address)
+                                    .small()
+                                    .disabled(!owns)
+                                    .aria_label("ブラウザの URL"),
+                            ),
+                        )
+                        .child(
+                            Button::new("browser-go")
+                                .icon(IconName::ArrowRight)
+                                .small()
+                                .ghost()
+                                .disabled(!owns)
+                                .accessibility_label("URL を開く")
+                                .on_click(cx.listener(|view, _, _, cx| view.navigate(cx))),
+                        ),
+                )
+                .child(
+                    h_flex()
+                        .px_3()
+                        .py_1()
+                        .gap_2()
+                        .text_xs()
+                        .text_color(rgb(appearance::MUTED))
+                        .child(div().flex_1().child(if owns {
+                            "操作中 · あなた"
+                        } else if self.frame.controller == BrowserController::Agent {
+                            "AI が操作できます"
+                        } else {
+                            "別の端末が操作中"
+                        }))
+                        .child(
+                            Button::new("browser-control")
+                                .label(if owns {
+                                    "AI に操作を戻す"
+                                } else {
+                                    "操作権を取得"
+                                })
+                                .small()
+                                .ghost()
+                                .disabled(self.frame.tab_id.is_empty())
+                                .on_click(cx.listener(move |view, _, _, cx| {
+                                    view.send(
+                                        if owns {
+                                            BrowserAction::ReleaseControl
+                                        } else {
+                                            BrowserAction::TakeControl
+                                        },
+                                        cx,
+                                    )
+                                })),
+                        )
+                        .child(
+                            Button::new("browser-viewport")
+                                .label(if self.frame.width == 390 {
+                                    "デスクトップ"
+                                } else {
+                                    "モバイル"
+                                })
+                                .small()
+                                .ghost()
+                                .disabled(!owns)
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    let (width, height) = if view.frame.width == 390 {
+                                        (1280, 800)
+                                    } else {
+                                        (390, 844)
+                                    };
+                                    view.send(BrowserAction::Resize { width, height }, cx);
+                                })),
+                        ),
+                )
+                .when_some(self.error.clone(), |body, error| {
+                    body.child(div().px_3().py_2().text_sm().child(error))
+                })
+                .when_some(self.frame.dialog.clone(), |body, dialog| {
+                    body.child(
+                        v_flex()
+                            .p_3()
+                            .gap_2()
+                            .child(dialog.message)
+                            .when(dialog.prompt, |body| {
+                                body.child(Input::new(&self.dialog_input).small())
+                            })
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .child(
+                                        Button::new("browser-dialog-cancel")
+                                            .label("キャンセル")
+                                            .small()
+                                            .disabled(!owns)
+                                            .on_click(cx.listener(|view, _, _, cx| {
+                                                view.send(
+                                                    BrowserAction::Dialog {
+                                                        accept: false,
+                                                        text: String::new(),
+                                                    },
+                                                    cx,
+                                                )
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new("browser-dialog-ok")
+                                            .label("OK")
+                                            .small()
+                                            .disabled(!owns)
+                                            .on_click(cx.listener(|view, _, _, cx| {
+                                                let text =
+                                                    view.dialog_input.read(cx).value().to_string();
+                                                view.send(
+                                                    BrowserAction::Dialog { accept: true, text },
+                                                    cx,
+                                                );
+                                            })),
+                                    ),
+                            ),
                     )
-                };
-                let stored: std::collections::HashMap<_, _> = stored
-                    .as_ref()
-                    .iter()
-                    .map(|cookie| (identity(&cookie), cookie))
-                    .collect();
-                let matches = native.iter().all(|expected| {
-                    stored.get(&identity(expected)).is_some_and(|actual| {
-                        actual.value() == expected.value()
-                            && actual.isHTTPOnly() == expected.isHTTPOnly()
-                            && actual.isSecure() == expected.isSecure()
-                            && actual.isSessionOnly() == expected.isSessionOnly()
-                            && actual.expiresDate() == expected.expiresDate()
-                            && actual.sameSitePolicy() == expected.sameSitePolicy()
-                    })
-                });
-                let _ = tx.try_send(matches);
-            },
-        ));
+                })
+                .child(
+                    div()
+                        .id("shared-browser-content")
+                        .relative()
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_hidden()
+                        .track_focus(&self.focus)
+                        .on_key_down(cx.listener(Self::key))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|view, event: &MouseDownEvent, window, cx| {
+                                view.focus.focus(window, cx);
+                                if view.owns_control()
+                                    && let Some((x, y)) = view.page_point(event.position)
+                                {
+                                    view.send(BrowserAction::Click { x, y }, cx);
+                                }
+                            }),
+                        )
+                        .on_scroll_wheel(cx.listener(|view, event: &ScrollWheelEvent, _, cx| {
+                            if view.owns_control()
+                                && let Some((x, y)) = view.page_point(event.position)
+                            {
+                                let delta = event.delta.pixel_delta(px(16.));
+                                view.send(
+                                    BrowserAction::Scroll {
+                                        x,
+                                        y,
+                                        delta_x: f64::from(
+                                            (-delta.x / px(1.)).clamp(-4096., 4096.),
+                                        ),
+                                        delta_y: f64::from(
+                                            (-delta.y / px(1.)).clamp(-4096., 4096.),
+                                        ),
+                                    },
+                                    cx,
+                                );
+                            }
+                        }))
+                        .map(|body| {
+                            if let Some(image) = self.image.clone().filter(|_| {
+                                self.frame
+                                    .tabs
+                                    .iter()
+                                    .any(|tab| tab.id == active && tab.url != "about:blank")
+                            }) {
+                                body.child(img(image).size_full().object_fit(ObjectFit::Contain))
+                            } else {
+                                body.child(
+                                    v_flex()
+                                        .size_full()
+                                        .items_center()
+                                        .justify_center()
+                                        .gap_2()
+                                        .text_color(rgb(appearance::MUTED))
+                                        .child("ブラウザで確認する")
+                                        .child(div().text_sm().child(if self.thread.is_some() {
+                                            "URL を開くか、AI にブラウザ操作を依頼してください。"
+                                        } else {
+                                            "会話を始めると、AI と同じタブを利用できます。"
+                                        })),
+                                )
+                            }
+                        })
+                        .child(
+                            canvas(
+                                move |bounds, _, cx| {
+                                    entity.update(cx, |view, _| view.bounds = bounds);
+                                },
+                                {
+                                    let entity = cx.entity();
+                                    move |bounds, _, window, cx| {
+                                        entity.update(cx, |view, cx| {
+                                            if view.owns_control() {
+                                                window.handle_input(
+                                                    &view.focus,
+                                                    ElementInputHandler::new(
+                                                        bounds,
+                                                        entity.clone(),
+                                                    ),
+                                                    cx,
+                                                );
+                                            }
+                                        });
+                                    }
+                                },
+                            )
+                            .absolute()
+                            .size_full(),
+                        ),
+                )
+            })
     }
-    if !rx
-        .recv()
-        .await
-        .map_err(|_| "Cookieの保存結果を確認できません")?
-    {
-        return Err("一部のCookieを元の属性で保存できませんでした。保存済みのCookieもあります。再試行してください".into());
-    }
-    Ok(())
 }
 
-#[cfg(all(test, target_os = "macos"))]
-mod chrome_tests {
-    use rusqlite::Connection;
-
-    pub(super) fn fixture() -> (tempfile::TempDir, Connection) {
-        let directory = tempfile::tempdir().unwrap();
-        let db = Connection::open(directory.path().join("Cookies")).unwrap();
-        db.execute_batch(include_str!("../tests/fixtures/chrome-cookies.sql"))
-            .unwrap();
-        (directory, db)
+impl EntityInputHandler for Browser {
+    fn text_for_range(
+        &mut self,
+        range: Range<usize>,
+        actual: &mut Option<Range<usize>>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<String> {
+        let chars: Vec<u16> = self.composition.encode_utf16().collect();
+        let end = range.end.min(chars.len());
+        let start = range.start.min(end);
+        *actual = Some(start..end);
+        Some(String::from_utf16_lossy(&chars[start..end]))
     }
-    pub(super) fn password() -> Result<Vec<u8>, String> {
-        Ok(b"fixture-password".to_vec())
-    }
-
-    #[test]
-    fn decrypts_chrome_v24_and_preserves_native_cookie_attributes() {
-        use super::{native_chrome_cookie, read_chrome_cookies};
-        let (directory, db) = fixture();
-        let original = std::fs::read(directory.path().join("Cookies")).unwrap();
-        let (cookies, skipped) =
-            read_chrome_cookies(directory.path(), 1_700_000_000, password).unwrap();
-        assert_eq!((cookies.len(), skipped), (1, 0));
-        let cookie = &cookies[0];
-        assert_eq!(&**cookie.value, "fixture-login");
-        assert_eq!(cookie.expires, Some(1_800_000_000));
-        let native = native_chrome_cookie(cookie).unwrap();
-        assert_eq!(native.domain().to_string(), ".example.test");
-        assert_eq!(native.name().to_string(), "login");
-        assert_eq!(native.value().to_string(), "fixture-login");
-        assert_eq!(native.path().to_string(), "/account");
-        assert!(native.isHTTPOnly());
-        assert!(native.isSecure());
-        assert!(!native.isSessionOnly());
-        assert_eq!(native.sameSitePolicy().unwrap().to_string(), "lax");
-        assert_eq!(
-            native.expiresDate().unwrap().timeIntervalSince1970(),
-            1_800_000_000.0
-        );
-        assert_eq!(
-            std::fs::read(directory.path().join("Cookies")).unwrap(),
-            original
-        );
-        assert_eq!(
-            db.query_row("SELECT count(*) FROM cookies", [], |r| r.get::<_, i64>(0))
-                .unwrap(),
-            1
-        );
-    }
-
-    #[test]
-    fn reads_committed_wal_session_cookies_without_reading_keychain_or_uncommitted_rows() {
-        use super::{native_chrome_cookie, read_chrome_cookies};
-        let (directory, db) = fixture();
-        db.execute_batch(
-            "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;
-            UPDATE cookies SET value='session', encrypted_value=X'', host_key='example.test',
-            has_expires=0, is_persistent=0, expires_utc=0, is_secure=0, is_httponly=0, samesite=2;
-            BEGIN IMMEDIATE; UPDATE cookies SET value='uncommitted';",
-        )
-        .unwrap();
-        let (cookies, skipped) = read_chrome_cookies(directory.path(), 1_900_000_000, || {
-            panic!("plaintext needs no Keychain")
+    fn selected_text_range(
+        &mut self,
+        _: bool,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<UTF16Selection> {
+        Some(UTF16Selection {
+            range: self.composition_selection.clone(),
+            reversed: false,
         })
-        .unwrap();
-        assert_eq!((cookies.len(), skipped), (1, 0));
-        let native = native_chrome_cookie(&cookies[0]).unwrap();
-        assert_eq!(native.value().to_string(), "session");
-        assert_eq!(native.domain().to_string(), "example.test");
-        assert!(!native.isHTTPOnly());
-        assert!(!native.isSecure());
-        assert!(native.isSessionOnly());
-        assert!(native.expiresDate().is_none());
-        assert_eq!(native.sameSitePolicy().unwrap().to_string(), "strict");
-        db.execute_batch("ROLLBACK;").unwrap();
     }
-
-    #[test]
-    fn supports_v23_ciphertext_and_empty_values_and_samesite_none() {
-        use super::{native_chrome_cookie, read_chrome_cookies};
-        let (directory, db) = fixture();
-        db.execute_batch("UPDATE meta SET value='23' WHERE key='version';
-            UPDATE cookies SET encrypted_value=X'7631309d53da233d3900ecc985316cd65cae4a', samesite=0;").unwrap();
-        let (cookies, _) = read_chrome_cookies(directory.path(), 0, password).unwrap();
-        assert_eq!(&**cookies[0].value, "fixture-login");
-        // Foundation represents unrestricted cookies as nil, which WebKit maps to None.
-        assert!(
-            native_chrome_cookie(&cookies[0])
-                .unwrap()
-                .sameSitePolicy()
-                .is_none()
-        );
-        db.execute_batch("UPDATE cookies SET encrypted_value=X'', value='', samesite=-1;")
-            .unwrap();
-        let (cookies, _) =
-            read_chrome_cookies(directory.path(), 0, || panic!("empty plaintext")).unwrap();
-        assert_eq!(cookies.len(), 1);
-        assert!(cookies[0].value.is_empty());
-        assert_eq!(
-            native_chrome_cookie(&cookies[0])
-                .unwrap()
-                .sameSitePolicy()
-                .unwrap()
-                .to_string(),
-            "lax"
-        );
+    fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<Range<usize>> {
+        (!self.composition.is_empty()).then(|| 0..self.composition.encode_utf16().count())
     }
-
-    #[test]
-    fn excludes_expired_and_partitioned_cookies_without_decrypting_them() {
-        use super::read_chrome_cookies;
-        let (directory, db) = fixture();
-        let (cookies, skipped) =
-            read_chrome_cookies(directory.path(), 1_800_000_000, || panic!("expired")).unwrap();
-        assert!(cookies.is_empty());
-        assert_eq!(skipped, 1);
-        db.execute_batch("UPDATE cookies SET top_frame_site_key='https://other.test';")
-            .unwrap();
-        let (cookies, skipped) =
-            read_chrome_cookies(directory.path(), 0, || panic!("partitioned")).unwrap();
-        assert!(cookies.is_empty());
-        assert_eq!(skipped, 1);
+    fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.composition.clear();
+        self.composition_selection = 0..0;
+        cx.notify();
     }
-
-    #[test]
-    fn rejects_wrong_key_domain_hash_and_unknown_format_without_exposing_values() {
-        use super::read_chrome_cookies;
-        let (directory, db) = fixture();
-        for password in [b"wrong".to_vec(), Vec::new()] {
-            let error = read_chrome_cookies(directory.path(), 0, || Ok(password))
-                .err()
-                .unwrap();
-            assert!(!error.contains("fixture-login"));
+    fn replace_text_in_range(
+        &mut self,
+        _: Option<Range<usize>>,
+        text: &str,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.composition.clear();
+        self.composition_selection = 0..0;
+        if self.owns_control() {
+            self.send(BrowserAction::Type { text: text.into() }, cx);
         }
-        db.execute_batch("UPDATE cookies SET host_key='.elsewhere.test';")
-            .unwrap();
-        assert!(
-            read_chrome_cookies(directory.path(), 0, password)
-                .err()
-                .unwrap()
-                .contains("ドメイン検証")
-        );
-        db.execute_batch("UPDATE cookies SET encrypted_value=X'763230001122';")
-            .unwrap();
-        assert!(read_chrome_cookies(directory.path(), 0, || panic!("unknown cipher")).is_err());
-        db.execute_batch("UPDATE meta SET value='22' WHERE key='version';")
-            .unwrap();
-        assert!(read_chrome_cookies(directory.path(), 0, || panic!("unknown schema")).is_err());
     }
-
-    #[test]
-    fn later_cookie_schemas_still_require_the_domain_binding() {
-        use super::read_chrome_cookies;
-        let (directory, db) = fixture();
-        db.execute_batch("UPDATE meta SET value='25' WHERE key='version';")
-            .unwrap();
-        let (cookies, skipped) = read_chrome_cookies(directory.path(), 0, password).unwrap();
-        assert_eq!((cookies.len(), skipped), (1, 0));
-        assert_eq!(&**cookies[0].value, "fixture-login");
-        db.execute_batch("UPDATE cookies SET host_key='.elsewhere.test';")
-            .unwrap();
-        assert!(read_chrome_cookies(directory.path(), 0, password).is_err());
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        _: Option<Range<usize>>,
+        text: &str,
+        selected: Option<Range<usize>>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.composition = text.into();
+        let end = text.encode_utf16().count();
+        self.composition_selection = selected.unwrap_or(end..end);
+        cx.notify();
     }
-
-    #[test]
-    fn can_retry_after_denied_keychain_and_missing_database() {
-        use super::read_chrome_cookies;
-        let directory = tempfile::tempdir().unwrap();
-        assert!(read_chrome_cookies(directory.path(), 0, password).is_err());
-        assert!(!directory.path().join("Cookies").exists());
-        let db = Connection::open(directory.path().join("Cookies")).unwrap();
-        db.execute_batch(include_str!("../tests/fixtures/chrome-cookies.sql"))
-            .unwrap();
-        assert_eq!(
-            read_chrome_cookies(directory.path(), 0, || Err("denied".into()))
-                .err()
-                .unwrap(),
-            "denied"
-        );
-        let (cookies, skipped) = read_chrome_cookies(directory.path(), 0, password).unwrap();
-        assert_eq!((cookies.len(), skipped), (1, 0));
+    fn bounds_for_range(
+        &mut self,
+        _: Range<usize>,
+        _: Bounds<Pixels>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<Bounds<Pixels>> {
+        Some(self.bounds)
     }
-
-    #[test]
-    fn lists_named_profiles_with_both_cookie_locations_and_rejects_path_traversal() {
-        use super::chromium_profiles;
-        let directory = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(directory.path().join("Default/Network")).unwrap();
-        std::fs::create_dir_all(directory.path().join("Profile 2")).unwrap();
-        std::fs::write(directory.path().join("Default/Network/Cookies"), []).unwrap();
-        std::fs::write(directory.path().join("Profile 2/Cookies"), []).unwrap();
-        std::fs::write(directory.path().join("Local State"), r#"{"profile":{"info_cache":{"Default":{"name":"個人用"},"Profile 2":{"name":"仕事用"},"Missing":{"name":"removed"},"../escape":{"name":"invalid"}}}}"#).unwrap();
-        let profiles = chromium_profiles(directory.path()).unwrap();
-        assert_eq!(profiles.len(), 2);
-        assert_eq!(
-            profiles[0],
-            ("個人用 (Default)".into(), directory.path().join("Default"))
-        );
-        assert_eq!(
-            profiles[1],
-            (
-                "仕事用 (Profile 2)".into(),
-                directory.path().join("Profile 2")
-            )
-        );
-        std::fs::write(directory.path().join("Local State"), "broken").unwrap();
-        assert!(chromium_profiles(directory.path()).is_err());
+    fn character_index_for_point(
+        &mut self,
+        _: Point<Pixels>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<usize> {
+        Some(0)
     }
 }

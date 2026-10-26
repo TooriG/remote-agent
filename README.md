@@ -134,8 +134,9 @@ and files.
 On iPhone, open the workspace from the conversation's grid button; its tabs select
 terminal, browser or files. Closing the terminal view or disconnecting retains its
 shell; choose **終了** to end it. Host restart ends shells. The browser shares the
-conversation's Host-owned pages with the agent; its login profile survives Host
-restart, while open tabs need not.
+conversation's Host-owned tabs with the agent on desktop, iPhone and Android.
+Choose **操作権を取得** before interacting, then **AI に操作を戻す** to let the agent
+continue. Agent conversations have separate, temporary login storage.
 
 On Mac and iPhone, select assistant text to quote it into the draft or ask about it in a side chat. Closing an iPhone side chat restores the original conversation and draft. Mac also supports right-click Copy and Google Search, and own-message hover actions for copying or returning text to the composer. Command activity starts collapsed while running and after reopening; explicit expansion is preserved.
 
@@ -175,9 +176,7 @@ Claude-to-Codex delegation and Claude's own forks/side chats are not implemented
 
 Mac conversation file links open the Host's parent directory and file editor in the Files panel, retaining unsaved file drafts and revision checks. Side Chat displays files and diffs in its own panel with a return-to-chat control, preserving the conversation draft.
 
-On Mac, open **ブラウザ → ログイン状態を取り込む** and choose a browser and profile. Chrome, Microsoft Edge, Brave, Arc, Vivaldi and Opera are supported. Allow the source browser’s macOS Keychain prompt when requested. The import copies cookies without changing the source browser, and all conversation browser tabs share the imported login state. Persistent cookies retain their expiration across bex restarts; session cookies remain session-only. Repeat the import to refresh a login. Saved passwords, local storage and device-bound credentials are not copied, so some sites still require signing in inside bex.
-
-Reader and native-attribute regressions run with `scripts/dev-env.sh cargo test --locked -p bex-desktop --bin bex-desktop chrome_tests`. On macOS 26, `scripts/dev-env.sh just macos-e2e` exercises the real Browser view, encrypted fixture database, denied-access retry, authenticated HTTP, HttpOnly protection, and persistence in a fresh process using a disposable WebKit data store. The test also records the domain-scope loss in the pinned lb-wry `set_cookie` implementation, which is why import uses WebKit's native cookie store directly.
+On Mac, choose **ブラウザ → 個人用 → ブラウザから取り込む**, then select Chrome, Microsoft Edge, Brave, Arc, Vivaldi or Opera and a profile. **ログイン状態（Cookie）** copies login cookies into the persistent personal browser. **保存パスワード → Keychain** reads supported encrypted logins directly into BEX's local macOS Keychain entries, without exporting a plaintext file. Allow the source browser's Keychain prompt when requested. Use **保存パスワード** on a matching HTTPS site and select an account to fill it; this does not submit the form. The same control can delete this site's saved passwords. Passwords and personal-browser logins are not shared with agent tools or remote devices. Local storage, passkeys and device-bound credentials are not copied; some sites require signing in again.
 
 Desktop conversation lists and titles refresh after messages and completed turns. The execution header shows elapsed time and the latest action; command output has a copy control. Click the change summary or a changed file to open the diff, choose files from its selector, and expand long unchanged sections. During dictation the composer shows a microphone waveform with cancel, stop, and send controls; Escape cancels recording and preserves the draft.
 

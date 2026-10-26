@@ -32,6 +32,11 @@ fn error(error: impl std::fmt::Display) -> AgentError {
     }
 }
 
+#[uniffi::export]
+pub fn browser_address_url(input: String) -> Result<String, AgentError> {
+    crate::browser_view::address_url(&input).map_err(error)
+}
+
 #[derive(uniffi::Record)]
 pub struct Connection {
     pub ticket: String,

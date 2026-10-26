@@ -3,7 +3,7 @@
 // Embedding the browser also includes menu/event APIs used only by the desktop owner.
 #![allow(dead_code)]
 #[cfg(target_os = "macos")]
-include!("../src/browser.rs");
+include!("../src/browser/personal.rs");
 
 #[cfg(not(target_os = "macos"))]
 fn main() {

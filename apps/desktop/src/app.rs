@@ -108,11 +108,6 @@ enum SurfaceResource {
     },
     Terminal(Entity<crate::terminal::Terminal>),
     SideChat(Entity<Desktop>),
-    #[cfg(target_os = "windows")]
-    Starting {
-        _task: Task<()>,
-        url: Option<String>,
-    },
 }
 pub(crate) enum Mode {
     Main,
@@ -1541,56 +1536,13 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        #[cfg(target_os = "windows")]
-        {
-            let owner = cx.entity().downgrade();
-            match crate::browser::Browser::start(window, cx, move |result, window, cx| {
-                let _ = owner.update(cx, |view, cx| {
-                    let Some(SurfaceResource::Starting { url, .. }) =
-                        view.surface_resources.remove(&id)
-                    else {
-                        return;
-                    };
-                    match result {
-                        Ok(browser) => view.attach_browser(id, browser, url, window, cx),
-                        Err(error) => view.set_error(error),
-                    }
-                    cx.notify();
-                });
-            }) {
-                Ok(task) => {
-                    self.surface_resources
-                        .insert(id, SurfaceResource::Starting { _task: task, url });
-                }
-                Err(error) => self.set_error(error),
-            }
-        }
-        #[cfg(not(target_os = "windows"))]
-        match crate::browser::Browser::new(
-            wry::WebViewBuilder::new(),
-            #[cfg(target_os = "macos")]
-            crate::browser::import_sources(),
+        let browser = crate::browser::Browser::new(
+            self.session.as_ref().map(|session| session.store.clone()),
+            self.snapshot.navigation.thread_id.clone(),
+            url,
             window,
             cx,
-        ) {
-            Ok(browser) => self.attach_browser(id, browser, url, window, cx),
-            Err(error) => self.set_error(error),
-        }
-    }
-    fn attach_browser(
-        &mut self,
-        id: u64,
-        browser: Entity<crate::browser::Browser>,
-        url: Option<String>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        browser.update(cx, |view, cx| {
-            view.set_visible(false, cx);
-            if let Some(url) = url {
-                view.open_url(&url, window, cx);
-            }
-        });
+        );
         let events = cx.subscribe_in(
             &browser,
             window,

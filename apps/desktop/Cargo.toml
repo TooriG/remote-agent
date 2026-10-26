@@ -48,7 +48,7 @@ cbc = { version = "0.1", features = ["alloc"] }
 pbkdf2 = "0.12"
 sha1 = "0.10"
 sha2 = "0.10"
-zeroize = "1"
+zeroize = { version = "1", features = ["serde"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 security-framework = "3"
 objc2 = "0.6"

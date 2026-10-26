@@ -77,6 +77,8 @@ internal enum class Screen {
 }
 
 /** One core Snapshot feeds Compose; all business changes are queued typed intents. */
+// The selected Store owns browser requests as well as conversation operations.
+@Suppress("TooManyFunctions")
 internal class AndroidAppModel(private val context: Context) : ViewModel() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val repository = AndroidMobileRepository(context)
@@ -137,6 +139,17 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         } catch (error: SerializationException) {
             notice = error.message
         }
+    }
+
+    suspend fun browser(
+        expectedProfile: String?,
+        request: dev.remoteagent.core.BrowserRequest,
+    ): dev.remoteagent.core.BrowserFrame {
+        val store = owner ?: error("Host に接続してください。")
+        check(profileId == expectedProfile)
+        val frame = store.browser(request)
+        if (owner !== store || profileId != expectedProfile) throw CancellationException()
+        return frame
     }
 
     fun perform(intent: Intent, complete: (Result<Outcome>) -> Unit = {}) {
@@ -565,7 +578,10 @@ private fun androidx.compose.foundation.layout.ColumnScope.ConversationPane(mode
         ) {
             scrollToTopRequest += 1
         }
-        TerminalLauncher(model.snapshot, model::perform)
+        androidx.compose.foundation.layout.Row {
+            TerminalLauncher(model.snapshot, model::perform)
+            BrowserLauncher(model.snapshot.navigation().threadId, model.profileId, model::browser)
+        }
         ThreadDetailScreen(
             model.snapshot,
             model.conversation,

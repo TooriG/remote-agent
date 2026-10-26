@@ -1,14 +1,18 @@
 //! Shared browser contract. The Host owns pages; clients render frames and send input.
 use serde::{Deserialize, Serialize};
 
-pub const WIDTH: u32 = 1024;
-pub const HEIGHT: u32 = 768;
+pub const WIDTH: u32 = 1280;
+pub const HEIGHT: u32 = 800;
+pub const MAX_WIDTH: u32 = 7680;
+pub const MAX_HEIGHT: u32 = 4320;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct BrowserRequest {
     pub thread_id: crate::session::SessionRef,
     pub tab_id: String,
     pub image_id: String,
+    pub client_id: String,
+    pub generation: u64,
     pub action: BrowserAction,
 }
 impl std::fmt::Debug for BrowserRequest {
@@ -20,12 +24,49 @@ impl std::fmt::Debug for BrowserRequest {
 #[derive(Clone, Serialize, Deserialize)]
 pub enum BrowserAction {
     Read,
+    TakeControl,
+    ReleaseControl,
+    OpenTab {
+        url: String,
+    },
+    CloseTab {
+        id: String,
+    },
+    Resize {
+        width: u32,
+        height: u32,
+    },
     Navigate {
         url: String,
     },
     Click {
         x: f64,
         y: f64,
+    },
+    Hover {
+        x: f64,
+        y: f64,
+    },
+    Drag {
+        x: f64,
+        y: f64,
+        to_x: f64,
+        to_y: f64,
+    },
+    Snapshot,
+    Evaluate {
+        expression: String,
+    },
+    ClickElement {
+        selector: String,
+    },
+    Fill {
+        selector: String,
+        text: String,
+    },
+    SelectOption {
+        selector: String,
+        value: String,
     },
     Scroll {
         x: f64,
@@ -55,15 +96,28 @@ impl BrowserAction {
         fn point(x: f64, y: f64) -> bool {
             x.is_finite()
                 && y.is_finite()
-                && (0.0..f64::from(WIDTH)).contains(&x)
-                && (0.0..f64::from(HEIGHT)).contains(&y)
+                && (0.0..f64::from(MAX_WIDTH)).contains(&x)
+                && (0.0..f64::from(MAX_HEIGHT)).contains(&y)
         }
         let valid = match self {
-            Self::Navigate { url } => {
+            Self::Navigate { url } | Self::OpenTab { url } => {
                 browser_url(url)?;
                 url.len() <= 8192
             }
-            Self::Click { x, y } => point(*x, *y),
+            Self::Click { x, y } | Self::Hover { x, y } => point(*x, *y),
+            Self::Drag { x, y, to_x, to_y } => point(*x, *y) && point(*to_x, *to_y),
+            Self::Resize { width, height } => {
+                (320..=MAX_WIDTH).contains(width) && (240..=MAX_HEIGHT).contains(height)
+            }
+            Self::Evaluate { expression } => {
+                !expression.trim().is_empty() && expression.len() <= 16 * 1024
+            }
+            Self::ClickElement { selector } => !selector.is_empty() && selector.len() <= 4096,
+            Self::Fill { selector, text }
+            | Self::SelectOption {
+                selector,
+                value: text,
+            } => !selector.is_empty() && selector.len() <= 4096 && text.len() <= 16 * 1024,
             Self::Scroll {
                 x,
                 y,
@@ -77,7 +131,7 @@ impl BrowserAction {
                     && delta_y.abs() <= 4096.0
             }
             Self::Type { text } | Self::Dialog { text, .. } => text.len() <= 16 * 1024,
-            Self::SelectTab { id } => !id.is_empty() && id.len() <= 256,
+            Self::SelectTab { id } | Self::CloseTab { id } => !id.is_empty() && id.len() <= 256,
             _ => true,
         };
         if valid {
@@ -99,6 +153,11 @@ pub enum BrowserKey {
     ArrowLeft,
     ArrowRight,
     SelectAll,
+    Delete,
+    Home,
+    End,
+    PageUp,
+    PageDown,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -114,6 +173,14 @@ pub struct BrowserDialog {
     pub prompt: bool,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub enum BrowserController {
+    #[default]
+    Agent,
+    You,
+    AnotherViewer,
+}
+
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct BrowserFrame {
     pub tabs: Vec<BrowserTab>,
@@ -124,6 +191,13 @@ pub struct BrowserFrame {
     pub image: Vec<u8>,
     pub image_id: String,
     pub dialog: Option<BrowserDialog>,
+    pub controller: BrowserController,
+    pub generation: u64,
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
+    pub loading: bool,
+    pub page_text: String,
+    pub value: String,
 }
 impl std::fmt::Debug for BrowserFrame {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -136,6 +210,13 @@ impl std::fmt::Debug for BrowserFrame {
 impl BrowserRequest {
     pub fn validate(&self) -> Result<(), String> {
         self.thread_id.validate()?;
+        if self.client_id.is_empty()
+            || self.client_id.len() > 128
+            || self.tab_id.len() > 256
+            || self.image_id.len() > 256
+        {
+            return Err("ブラウザ接続情報が不正です。".into());
+        }
         self.action.validate()
     }
 }
@@ -150,7 +231,10 @@ mod tests {
                 x: f64::NAN,
                 y: 0.0,
             },
-            BrowserAction::Click { x: 1024.0, y: 0.0 },
+            BrowserAction::Click {
+                x: f64::from(MAX_WIDTH),
+                y: 0.0,
+            },
             BrowserAction::Scroll {
                 x: 0.0,
                 y: 0.0,
@@ -190,7 +274,16 @@ pub fn browser_url(input: &str) -> Result<String, String> {
     let source = if input.contains("://") {
         input.to_owned()
     } else {
-        format!("https://{input}")
+        let host = input.split(['/', '?', '#']).next().unwrap_or_default();
+        let local = host == "localhost"
+            || host.starts_with("localhost:")
+            || host == "127.0.0.1"
+            || host.starts_with("127.0.0.1:")
+            || host == "0.0.0.0"
+            || host.starts_with("0.0.0.0:")
+            || host == "[::1]"
+            || host.starts_with("[::1]:");
+        format!("{}://{input}", if local { "http" } else { "https" })
     };
     let url = url::Url::parse(&source).map_err(|_| "URL が不正です")?;
     if !matches!(url.scheme(), "http" | "https")
