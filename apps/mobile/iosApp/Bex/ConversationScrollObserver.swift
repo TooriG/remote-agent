@@ -2,27 +2,31 @@ import UIKit
 
 /// Own the native scroll view's status-bar navigation and history insertion offset.
 final class ConversationScrollObserver: NSObject, UIScrollViewDelegate {
+    private struct HistoryPage: Equatable {
+        let turnCount: UInt64
+        let hasMore: Bool
+    }
+
     private struct ReadingPosition {
         let id: UUID
         var offset: CGPoint
         let height: CGFloat
-        let turnCount: UInt64
-        let hasMoreHistory: Bool
-        var ready = false
+        let page: HistoryPage
+        var loadedPage: HistoryPage?
     }
 
     var onScrollToTop: () -> Void = {}
     private weak var scrollView: UIScrollView?
     private weak var original: UIScrollViewDelegate?
     private var historyAnchor: ReadingPosition?
-    private var contentSizeObservation: NSKeyValueObservation?
+    private var renderedPage: HistoryPage?
 
     func captureReadingPosition(turnCount: UInt64, hasMoreHistory: Bool) -> UUID? {
         guard let scrollView else { return nil }
         let id = UUID()
         historyAnchor = ReadingPosition(id: id, offset: scrollView.contentOffset,
                                         height: scrollView.contentSize.height,
-                                        turnCount: turnCount, hasMoreHistory: hasMoreHistory)
+                                        page: HistoryPage(turnCount: turnCount, hasMore: hasMoreHistory))
         return id
     }
 
@@ -32,18 +36,26 @@ final class ConversationScrollObserver: NSObject, UIScrollViewDelegate {
 
     func historyLoaded(_ id: UUID?, succeeded: Bool, turnCount: UInt64, hasMoreHistory: Bool) {
         guard let id, var anchor = historyAnchor, anchor.id == id else { return }
-        guard succeeded, turnCount != anchor.turnCount || hasMoreHistory != anchor.hasMoreHistory else {
+        let page = HistoryPage(turnCount: turnCount, hasMore: hasMoreHistory)
+        guard succeeded, page != anchor.page else {
             cancelHistoryRestoration()
             return
         }
-        anchor.ready = true
+        anchor.loadedPage = page
         historyAnchor = anchor
         restoreReadingPosition()
     }
 
+    func historyDidLayout(turnCount: UInt64, hasMoreHistory: Bool) {
+        renderedPage = HistoryPage(turnCount: turnCount, hasMore: hasMoreHistory)
+        restoreReadingPosition()
+    }
+
     private func restoreReadingPosition() {
-        guard let anchor = historyAnchor, anchor.ready, let scrollView,
-              scrollView.contentSize.height != anchor.height else { return }
+        // Snapshot controls can update before the detached row projection.
+        // Only the geometry of the completed page belongs to this insertion.
+        guard let anchor = historyAnchor, let page = anchor.loadedPage,
+              page == renderedPage, let scrollView else { return }
         historyAnchor = nil
         let offset = CGPoint(x: anchor.offset.x,
                              y: anchor.offset.y + scrollView.contentSize.height - anchor.height)
@@ -54,10 +66,6 @@ final class ConversationScrollObserver: NSObject, UIScrollViewDelegate {
         if scrollView !== scroll {
             detach()
             scrollView = scroll
-            // The operation can finish before SwiftUI lays out its new rows.
-            contentSizeObservation = scroll.observe(\.contentSize) { [weak self] _, _ in
-                self?.restoreReadingPosition()
-            }
         }
         if scroll.delegate !== self {
             original = scroll.delegate
@@ -67,7 +75,7 @@ final class ConversationScrollObserver: NSObject, UIScrollViewDelegate {
 
     func detach() {
         cancelHistoryRestoration()
-        contentSizeObservation = nil
+        renderedPage = nil
         if scrollView?.delegate === self {
             scrollView?.delegate = original
         }

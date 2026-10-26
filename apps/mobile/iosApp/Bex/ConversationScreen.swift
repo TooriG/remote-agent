@@ -128,10 +128,12 @@ struct ThreadScreen: View {
                 let rows = conversationRows(thread.rows, expansion: activityExpansionOverrides)
                 let lastRowId = rows.last?.id
                 let latestBoundary = lastRowId.map { LatestBoundary(threadId: thread.id, rowId: $0) }
+                let turnCount = thread.source.turnCount()
+                let hasMoreHistory = history?.hasMore ?? false
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
                         if let session = thread.id, let history {
-                            historyControl(history, session: session, turnCount: thread.source.turnCount())
+                            historyControl(history, session: session, turnCount: turnCount)
                         }
                         ForEach(rows) { row in
                             conversationRow(row)
@@ -160,8 +162,12 @@ struct ThreadScreen: View {
                 .onScrollGeometryChange(for: ConversationScrollLayout.self) { geometry in
                     ConversationScrollLayout(contentHeight: geometry.contentSize.height,
                                              containerHeight: geometry.containerSize.height,
-                                             insets: geometry.contentInsets)
-                } action: { _, _ in
+                                             insets: geometry.contentInsets,
+                                             turnCount: turnCount,
+                                             hasMoreHistory: hasMoreHistory)
+                } action: { _, layout in
+                    scrollController.historyDidLayout(turnCount: layout.turnCount,
+                                                      hasMoreHistory: layout.hasMoreHistory)
                     if isFollowingLatest {
                         scrollPosition.scrollTo(edge: .bottom)
                     }
@@ -250,6 +256,8 @@ private struct ConversationScrollLayout: Equatable {
     let contentHeight: CGFloat
     let containerHeight: CGFloat
     let insets: EdgeInsets
+    let turnCount: UInt64
+    let hasMoreHistory: Bool
 }
 
 /// Conversation navigation
