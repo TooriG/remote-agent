@@ -220,7 +220,7 @@ fn form_and_url_answers_cannot_bypass_field_constraints() {
 }
 
 #[test]
-fn requests_and_specialized_tool_answers_round_trip_through_postcard() {
+fn requests_and_specialized_tool_answers_round_trip_through_the_wire_format() {
     let request = agent_protocol::requests::Request {
         id: "request".into(),
         target: RequestTarget::Turn {

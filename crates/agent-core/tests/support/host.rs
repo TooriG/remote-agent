@@ -1,4 +1,4 @@
-// Scripted unit-test Host over the actual QUIC/Postcard transport.
+// Scripted unit-test Host over the actual QUIC/MessagePack transport.
 // JSON values below are fixture data, never an alternate transport.
 use agent_core::state::Snapshot;
 use agent_protocol::protocol;
@@ -281,7 +281,7 @@ impl Writer {
     }
     pub async fn reply(&self, request: &Request, value: Value) -> std::io::Result<()> {
         let mut value = self.prepare(Some(request), value)?.unwrap();
-        // The corpus is data for a typed result; only its Postcard frame is sent.
+        // The corpus is data for a typed result; only its MessagePack frame is sent.
         value["id"] = 0.into();
         let response = protocol::json_boundary::response(request.call.method(), &value.to_string())
             .map_err(std::io::Error::other)?;

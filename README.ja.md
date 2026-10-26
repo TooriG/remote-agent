@@ -2,7 +2,9 @@
 
 [English](README.md) | [日本語](README.ja.md)
 
-bexは、信頼できるコンピューター上のCodexとClaude Codeを、Macアプリ、iPhoneアプリ、Androidアプリ、またはヘッドレスCLIから操作するアプリです。Rust製のHostデーモンがエージェントのプロセスを管理します。すべてのクライアントは認証済みのirohストリームで共通のPostcard RPC型を使い、同じRustの`Store`へ操作を送ります。動作変更は[CHANGELOG.md](CHANGELOG.md)を参照してください。
+bexは、信頼できるコンピューター上のCodexとClaude Codeを、Macアプリ、iPhoneアプリ、Androidアプリ、またはヘッドレスCLIから操作するアプリです。Rust製のHostデーモンがエージェントのプロセスを管理します。すべてのクライアントは認証済みのirohストリームで共通のMessagePack RPC型を使い、同じRustの`Store`へ操作を送ります。動作変更は[CHANGELOG.md](CHANGELOG.md)を参照してください。
+
+通信に互換性のあるHostとクライアントは、別々のタイミングで更新できます。従来の位置依存の通信形式から切り替える際は、一度だけ両側の更新が必要です。
 
 irohは公開リリースを使い、netwatch 0.19.3は[UDPの再バインド回復](https://github.com/n0-computer/net-tools/pull/235)を含むフォークのコミットに固定しています。UDPの再バインド失敗時は、非同期I/Oを終了せず、100ミリ秒から5秒までの指数バックオフで再試行します。ソケットを明示的に閉じると回復処理を中止します。修正が含まれる上流リリースを採用したら、このパッチを削除します。
 
@@ -142,9 +144,9 @@ ClaudeからCodexへの委任、Claude自体のフォーク・サイドチャッ
 
 Macで会話内のファイルリンクを開くと、FilesパネルにHost上の親ディレクトリとエディターを表示し、未保存の編集とリビジョン確認を保持します。Side Chatは独自パネルでファイル・差分を表示し、下書きを保ったまま会話へ戻れます。
 
-Macで**ブラウザ → Chromeから取り込む**を開き、Chromeのプロファイルを選ぶと、CookieをBexのブラウザーへコピーします。macOSが**Chrome Safe Storage**のキーチェーンアクセスを求めたら許可してください。Chromeのデータベースは変更せず、ドメイン・名前・パスでCookieを統合し、保存を確認してから現在のページを再読み込みします。永続CookieはBex再起動後も期限を保持し、セッションCookieはセッション内のみ有効です。継続同期ではなく1回のコピーなので、ログインを更新するには再取り込みします。期限切れ・トップレベルサイトで分割されたCookieは除外して件数を表示します。ローカルストレージや端末に紐付く認証など、Cookie以外の状態はコピーしないため、Bex内でのログインが必要なサイトもあります。
+Macで**ブラウザ → ログイン状態を取り込む**を開き、取り込み元のブラウザとプロファイルを選びます。Chrome・Microsoft Edge・Brave・Arc・Vivaldi・Operaに対応しています。取り込み元のブラウザについてmacOSがキーチェーンアクセスを求めたら許可してください。元のブラウザを変更せずにCookieをコピーし、すべての会話のブラウザタブでログイン状態を共有します。永続CookieはBex再起動後も期限を保持し、セッションCookieはセッション内のみ有効です。ログイン状態を更新するには再取り込みします。保存パスワード・ローカルストレージ・端末に紐付く認証はコピーしないため、Bex内でのログインが必要なサイトもあります。
 
-Cookie取り込みはmacOS Chromeのデータベースバージョン23・24に対応します。読み取り・属性の回帰確認は`scripts/dev-env.sh cargo test --locked -p bex-desktop --bin bex-desktop chrome_tests`で実行します。macOS 26の`scripts/dev-env.sh just macos-e2e`は、使い捨てWebKit保存領域で、実際のBrowser画面、暗号化フィクスチャ、アクセス拒否後の再試行、認証付きHTTP、HttpOnly保護、新規プロセスでの永続性を検証します。固定したlb-wryの`set_cookie`でドメインの範囲が失われる問題も記録しており、そのため取り込みはWebKitのネイティブCookieストアを直接使います。
+読み取り・属性の回帰確認は`scripts/dev-env.sh cargo test --locked -p bex-desktop --bin bex-desktop chrome_tests`で実行します。macOS 26の`scripts/dev-env.sh just macos-e2e`は、使い捨てWebKit保存領域で、実際のBrowser画面、暗号化フィクスチャ、アクセス拒否後の再試行、認証付きHTTP、HttpOnly保護、新規プロセスでの永続性を検証します。固定したlb-wryの`set_cookie`でドメインの範囲が失われる問題も記録しており、そのため取り込みはWebKitのネイティブCookieストアを直接使います。
 
 デスクトップの会話一覧・タイトルはメッセージ送信とターン完了後に更新します。実行ヘッダーは経過時間と最新の操作を表示し、コマンド出力にはコピー操作があります。変更要約・ファイルを押すと差分を開き、ファイル選択や長い未変更部分の展開ができます。音声入力中は、キャンセル・停止・送信付きの波形を表示します。Escapeで録音を中止して下書きを保持します。
 

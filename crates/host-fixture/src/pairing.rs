@@ -225,6 +225,9 @@ fn route(
         "/fail-next-history-read" => {
             fs::write(root.join("fail-next-history-read"), "")?;
         }
+        "/fail-next-history-page" => {
+            fs::write(root.join("fail-next-history-page"), "")?;
+        }
         "/hold-history-reads" => {
             fs::write(root.join("hold-history-reads"), [])?;
         }

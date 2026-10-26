@@ -74,6 +74,26 @@ pub struct Workspace {
     pub settings: Option<Arc<WorktreeSettings>>,
     pub worktrees: Option<Arc<Vec<crate::models::Worktree>>>,
 }
+/// Only conversation-owned selections are cached; Host settings stay shared.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct WorkspaceLocation {
+    cwd: String,
+    directory: Option<Arc<FileList>>,
+    file: Option<Arc<FileContent>>,
+    review_cwd: Option<String>,
+    review: Option<Arc<WorkspaceReview>>,
+}
+impl Workspace {
+    fn location(&self, cwd: String) -> WorkspaceLocation {
+        WorkspaceLocation {
+            cwd,
+            directory: self.directory.clone(),
+            file: self.file.clone(),
+            review_cwd: self.review_cwd.clone(),
+            review: self.review.clone(),
+        }
+    }
+}
 /// New drafts have a local identity; existing drafts use the complete session identity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
@@ -266,11 +286,16 @@ pub struct Snapshot {
     pub model_errors: Arc<Map<String, Value>>,
     #[serde(with = "crate::persistence::entries")]
     pub drafts: Arc<BTreeMap<DraftKey, Arc<Draft>>>,
+    /// Startup identity changes outlive pending sends, which subscribers may coalesce.
+    #[serde(skip)]
+    pub draft_sessions: Arc<BTreeMap<DraftKey, crate::session::SessionRef>>,
     pub pending_submissions:
         Arc<BTreeMap<agent_protocol::ids::ClientInputId, Arc<PendingSubmission>>>,
     pub file_drafts: Arc<BTreeMap<String, Arc<FileDraft>>>,
     #[serde(default)]
     pub workspace: Arc<Workspace>,
+    #[serde(skip)]
+    pub workspaces: Arc<BTreeMap<DraftKey, WorkspaceLocation>>,
     pub navigation: Arc<Navigation>,
     pub activity: Arc<Activity>,
     #[serde(default)]
@@ -500,6 +525,9 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             }
         }
         Intent::ReadOlder { thread_id } => {
+            if previous.operation_running(op::OperationKey::History { session: thread_id.clone() }) {
+                return (next, Vec::new());
+            }
             if let Some(cursor) = previous.conversations.get(&thread_id).and_then(|thread| thread.history_cursor.clone()) {
                 return prepare(previous, next, op::ReadHistory { session: thread_id, cursor, include_activity: false });
             }
@@ -937,6 +965,24 @@ fn set_draft_text(snapshot: &mut Snapshot, thread_id: DraftKey, text: String) {
 }
 
 fn navigate(snapshot: &mut Snapshot, navigation: Navigation) {
+    if snapshot.navigation.draft_key != navigation.draft_key {
+        let workspaces = Arc::make_mut(&mut snapshot.workspaces);
+        workspaces.insert(
+            snapshot.navigation.draft_key.clone(),
+            snapshot.workspace.location(snapshot.navigation.cwd.clone()),
+        );
+        let location = workspaces
+            .remove(&navigation.draft_key)
+            .filter(|location| location.cwd == navigation.cwd)
+            .unwrap_or_default();
+        let workspace = Arc::make_mut(&mut snapshot.workspace);
+        workspace.directory = location.directory;
+        workspace.file = location.file;
+        workspace.review_cwd = location.review_cwd;
+        workspace.review = location.review;
+    } else if snapshot.navigation.cwd != navigation.cwd || navigation.draft_key.is_empty() {
+        clear_workspace_location(Arc::make_mut(&mut snapshot.workspace));
+    }
     let previous_id = snapshot.navigation.thread_id.clone();
     if previous_id != navigation.thread_id {
         snapshot.observed_agents = None;
@@ -951,9 +997,6 @@ fn navigate(snapshot: &mut Snapshot, navigation: Navigation) {
                     .is_none_or(|thread| thread.requests.is_empty())
         })
         .and_then(|id| Arc::make_mut(&mut snapshot.subscriptions).remove(&id));
-    if snapshot.navigation.cwd != navigation.cwd || navigation.draft_key.is_empty() {
-        clear_workspace_location(Arc::make_mut(&mut snapshot.workspace));
-    }
     if let Some(id) = &navigation.thread_id
         && snapshot.activity.unread.contains(id)
     {
@@ -1020,6 +1063,8 @@ fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
                 next.conversations = Arc::default();
                 next.threads = None;
                 next.workspace = Arc::default();
+                next.workspaces = Arc::default();
+                next.draft_sessions = Arc::default();
                 next.account = Arc::default();
                 next.models = Arc::default();
                 next.model_errors = Arc::default();
@@ -1520,6 +1565,37 @@ fn submission(
 }
 
 #[cfg(test)]
+mod workspace_navigation_tests {
+    use super::*;
+    #[test]
+    fn same_directory_conversations_restore_their_own_workspace_without_persisting_host_results() {
+        let a = DraftKey::from("a");
+        let b = DraftKey::from("b");
+        let navigation = |key: DraftKey| Navigation {
+            draft_key: key,
+            cwd: "/project".into(),
+            ..Default::default()
+        };
+        let mut state = Snapshot {
+            navigation: Arc::new(navigation(a.clone())),
+            ..Default::default()
+        };
+        Arc::make_mut(&mut state.workspace).review_cwd = Some("a-review".into());
+        navigate(&mut state, navigation(b.clone()));
+        assert!(state.workspace.review_cwd.is_none());
+        Arc::make_mut(&mut state.workspace).review_cwd = Some("b-review".into());
+        navigate(&mut state, navigation(a));
+        assert_eq!(state.workspace.review_cwd.as_deref(), Some("a-review"));
+        navigate(&mut state, navigation(b));
+        assert_eq!(state.workspace.review_cwd.as_deref(), Some("b-review"));
+        let restored =
+            crate::persistence::decode(&crate::persistence::encode(&state).unwrap()).unwrap();
+        assert!(restored.workspaces.is_empty());
+        assert_eq!(restored.workspace, Arc::default());
+    }
+}
+
+#[cfg(test)]
 mod submission_tests {
     use super::*;
 
@@ -1720,3 +1796,76 @@ impl Snapshot {
 #[cfg(test)]
 #[path = "state/model_defaults_tests.rs"]
 mod model_defaults_tests;
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+    use crate::session::SessionRef;
+    use operations::{OperationKey, OperationPhase, OperationState};
+
+    #[test]
+    fn older_history_deduplicates_only_a_running_request_for_the_same_session() {
+        let session =
+            SessionRef::new(crate::session::ProviderKind::Codex, "history".into()).unwrap();
+        let other = SessionRef::new(crate::session::ProviderKind::Codex, "other".into()).unwrap();
+        for cursor in [None, Some("older".to_owned())] {
+            for (owner, phase, blocked) in [
+                (session.clone(), OperationPhase::Running, true),
+                (other.clone(), OperationPhase::Running, false),
+                (
+                    session.clone(),
+                    OperationPhase::Failed {
+                        message: "retry".into(),
+                    },
+                    false,
+                ),
+            ] {
+                let snapshot = Snapshot {
+                    connected: true,
+                    conversations: Arc::new(
+                        [(
+                            session.clone(),
+                            Arc::new(Thread {
+                                id: Some(session.clone()),
+                                history_cursor: cursor.clone(),
+                                history_has_more: Some(true),
+                                ..Default::default()
+                            }),
+                        )]
+                        .into(),
+                    ),
+                    operations: Arc::new(
+                        [(
+                            OperationKey::History { session: owner },
+                            OperationState {
+                                generation: 1,
+                                phase,
+                            },
+                        )]
+                        .into(),
+                    ),
+                    ..Default::default()
+                };
+                let (next, effects) = reduce(
+                    &snapshot,
+                    Event::Intent(Intent::ReadOlder {
+                        thread_id: session.clone(),
+                    }),
+                );
+                if blocked {
+                    assert_eq!(next, snapshot);
+                    assert!(
+                        effects.is_empty(),
+                        "A pending page cannot be requested twice"
+                    );
+                } else {
+                    assert_eq!(
+                        effects.len(),
+                        1,
+                        "A failed request must be retryable independently of other sessions"
+                    );
+                }
+            }
+        }
+    }
+}

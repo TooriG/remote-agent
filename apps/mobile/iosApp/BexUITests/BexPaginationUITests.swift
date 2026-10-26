@@ -3,6 +3,121 @@ import XCTest
 
 /// XCTest selectors remain on BexLaunchUITests for the fixture runner.
 extension BexLaunchUITests {
+    func testSimulatorOpensLongInterruptedHistoryAtLatestMessage() throws {
+        #if !targetEnvironment(simulator)
+            throw XCTSkip("Simulator-only isolated long-history fixture")
+        #endif
+        let app = try connectedSimulatorApp()
+        try useSimulatorListFixture("long-conversation")
+        app.terminate(); app.launch()
+        expandSimulatorProject(app)
+        let row = app.descendants(matching: .any)["tasks.row.codex:fixture-long-history"]
+        XCTAssertTrue(row.waitForExistence(timeout: 30)); row.tap()
+        let detail = app.descendants(matching: .any)["task.detail"]
+        XCTAssertTrue(detail.waitForExistence(timeout: 30))
+        let latest = app.descendants(matching: .any)["item.long-9-0"]
+        XCTAssertTrue(latest.waitForExistence(timeout: 20))
+        let visible = expectation(for: NSPredicate(format: "isHittable == true"), evaluatedWith: latest)
+        wait(for: [visible], timeout: 5)
+        captureScreen(app, named: "Long interrupted history at latest message")
+        let initialItems = loadedItems(in: detail)
+        XCTAssertGreaterThan(initialItems, 0)
+        let loadEarlier = app.buttons["history.load"]
+        for _ in 0 ..< 40 {
+            if loadEarlier.isHittable {
+                break
+            }
+            detail.swipeDown(velocity: .fast)
+        }
+        XCTAssertTrue(loadEarlier.isHittable)
+        XCTAssertEqual(loadedItems(in: detail), initialItems,
+                       "Scrolling reveals loaded history without fetching another page")
+        let anchor = app.descendants(matching: .any)["item.long-5-0"]
+        XCTAssertTrue(anchor.isHittable)
+        waitForStableFrame(anchor)
+        let readingPosition = anchor.frame.minY
+        loadEarlier.tap()
+        let loaded = expectation(for: NSPredicate { _, _ in self.loadedItems(in: detail) > initialItems },
+                                 evaluatedWith: detail)
+        wait(for: [loaded], timeout: 20)
+        waitForStableFrame(anchor)
+        XCTAssertEqual(anchor.frame.minY, readingPosition, accuracy: 3,
+                       "Prepending history must preserve the visible message position")
+        XCTAssertFalse(latest.isHittable, "Prepending history must not jump back to the latest message")
+        XCTAssertFalse(loadEarlier.exists, "The control disappears after the oldest page is loaded")
+        captureScreen(app, named: "Earlier turns loaded without moving the reader")
+        assertHistoryTopNavigation(app, latest: latest)
+        XCTAssertTrue(latest.isHittable)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(row.waitForExistence(timeout: 10)); row.tap()
+        XCTAssertTrue(latest.waitForExistence(timeout: 20))
+        XCTAssertTrue(latest.isHittable, "Every reopen must render the latest message in the viewport")
+    }
+
+    private func assertHistoryTopNavigation(_ app: XCUIApplication, latest: XCUIElement) {
+        let latestButton = app.buttons["task.latest"]
+        XCTAssertTrue(latestButton.waitForExistence(timeout: 5))
+        latestButton.tap()
+        for scrollToTop in [
+            { app.buttons["task.top"].tap() },
+            { app.coordinate(withNormalizedOffset: CGVector(dx: 0.18, dy: 0))
+                .withOffset(CGVector(dx: 0, dy: 32)).tap() }
+        ] {
+            XCTAssertTrue(latest.isHittable)
+            XCTAssertFalse(latestButton.exists)
+            scrollToTop()
+            XCTAssertTrue(latestButton.waitForExistence(timeout: 5))
+            XCTAssertFalse(latest.isHittable, "Top navigation must not snap back to the latest message")
+            latestButton.tap()
+        }
+    }
+
+    func testSimulatorLoadsEarlierHistoryOnTapAndRetriesFailedPage() throws {
+        let app = try connectedSimulatorApp()
+        try useSimulatorListFixture("viewport-conversation")
+        app.terminate(); app.launch()
+        expandSimulatorProject(app)
+        let row = app.descendants(matching: .any)["tasks.row.codex:fixture-viewport-history"]
+        XCTAssertTrue(row.waitForExistence(timeout: 30)); row.tap()
+        let detail = app.descendants(matching: .any)["task.detail"]
+        XCTAssertTrue(detail.waitForExistence(timeout: 30))
+        let latest = app.descendants(matching: .any)["item.long-latest-message"]
+        XCTAssertTrue(latest.waitForExistence(timeout: 20))
+        let loadEarlier = app.buttons["history.load"]
+        XCTAssertTrue(loadEarlier.waitForExistence(timeout: 10))
+        XCTAssertTrue(loadEarlier.isHittable, "A short initial page must keep the manual control visible")
+        let initialItems = loadedItems(in: detail)
+        XCTAssertGreaterThan(initialItems, 0)
+        XCTAssertTrue(latest.isHittable)
+        try simulatorFixture("fail-next-history-page")
+        loadEarlier.tap()
+        let error = app.staticTexts["history.error"]
+        XCTAssertTrue(error.waitForExistence(timeout: 20))
+        XCTAssertTrue(error.label.contains("fixture older history page failed"))
+        XCTAssertFalse(app.staticTexts["notice"].exists, "A page failure belongs beside the retry control")
+        XCTAssertEqual(loadedItems(in: detail), initialItems, "A failed page must keep all loaded messages")
+        XCTAssertTrue(loadEarlier.isEnabled, "The failed page can be retried")
+        XCTAssertTrue(latest.isHittable)
+        waitForStableFrame(latest)
+        let readingPosition = latest.frame.minY
+        captureScreen(app, named: "Earlier history page failed with inline retry")
+        loadEarlier.tap()
+        let loaded = expectation(for: NSPredicate { _, _ in self.loadedItems(in: detail) > initialItems },
+                                 evaluatedWith: detail)
+        wait(for: [loaded], timeout: 20)
+        XCTAssertFalse(error.exists)
+        XCTAssertFalse(loadEarlier.exists)
+        waitForStableFrame(latest)
+        XCTAssertEqual(latest.frame.minY, readingPosition, accuracy: 3)
+        XCTAssertTrue(latest.isHittable, "Retrying a page must preserve the current reading position")
+        captureScreen(app, named: "Earlier history retry preserved the latest message position")
+    }
+
+    private func loadedItems(in detail: XCUIElement) -> Int {
+        let value = detail.value as? String ?? ""
+        return Int(value.components(separatedBy: "items=").last ?? "") ?? -1
+    }
+
     func testSimulatorLoadsLatestFiveTitlesPerProjectAndExpandsOneProject() throws {
         #if !targetEnvironment(simulator)
             throw XCTSkip("This test uses the isolated Simulator fixture")

@@ -5,7 +5,7 @@ its currently deployed static assets so download changes can be reviewed here.
 
 Windows buttons download the published `bex-windows-x86_64-setup.exe` installer directly, including when the GitHub release API is unavailable. Run the EXE to install BEX and all companion Host/CLI/Claude SDK files into the current user's Programs folder and create a Start menu shortcut. No ZIP extraction or Rust compilation is needed. Git, Node.js, the chosen agents and WebView2 are separate runtime prerequisites.
 
-The latest-release API may replace the pinned Windows preview only with an uploaded `bex-windows-x86_64-setup.exe` from the upstream repository. Old ZIP-only releases never override the EXE download. Native clients builds the installer with Inno Setup after Windows tests, retains it as an artifact, and uploads the EXE/checksum on release publication. The ZIP remains an optional diagnostic artifact, not a site download.
+The GitHub Releases API selects the newest uploaded Mac ZIP and Windows EXE independently from stable upstream releases. If an asset or the API is unavailable, the pinned download remains available. Native clients builds the Windows installer with Inno Setup after tests, retains it as an artifact, and uploads the EXE/checksum on release publication. The Windows ZIP remains an optional diagnostic artifact, not a site download.
 
 Android phones show the Android download action prominently. Android buttons link
 directly to the fork's verified Android preview APK release asset,

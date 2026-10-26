@@ -32,7 +32,16 @@ output="$(cargo metadata --no-deps --format-version 1 | jq -er .target_directory
 export BEX_BUILD_REVISION
 BEX_BUILD_REVISION=$(git rev-parse HEAD)
 if ! git diff --quiet HEAD --; then BEX_BUILD_REVISION+=-dirty; fi
-sign() { /usr/bin/codesign --force --sign "$identity" --timestamp=none "$@"; }
+sign() {
+    local options=(--force --sign "$identity")
+    if [[ ${BEX_DISTRIBUTION_SIGNING:-0} == 1 ]]; then
+        options+=(--options runtime --timestamp)
+    else
+        options+=(--timestamp=none)
+    fi
+    if [[ -n ${BEX_CODE_SIGN_KEYCHAIN:-} ]]; then options+=(--keychain "$BEX_CODE_SIGN_KEYCHAIN"); fi
+    /usr/bin/codesign "${options[@]}" "$@"
+}
 verify() { /usr/bin/codesign --verify --deep --strict "$1"; }
 cargo build --locked --profile "$profile" "${packages[@]}"
 if [[ $product == host ]]; then
@@ -76,6 +85,10 @@ cp "${BEX_NODE_RUNTIME:?Use the pinned Nix development environment}/bin/node" "$
 cp apps/desktop/macos/Node.Info.plist "$node_bundle/Contents/Info.plist"
 cp "$BEX_NODE_RUNTIME/share/doc/node/LICENSE" "$resources/Node-LICENSE.txt"
 cp apps/desktop/macos/Info.plist "$bundle/Contents/Info.plist"
+if [[ -n ${BEX_BUILD_NUMBER:-} ]]; then
+    [[ $BEX_BUILD_NUMBER =~ ^[1-9][0-9]*$ ]] || { echo 'Invalid Mac build number.' >&2; exit 1; }
+    /usr/bin/plutil -replace CFBundleVersion -string "$BEX_BUILD_NUMBER" "$bundle/Contents/Info.plist"
+fi
 # Use macOS's libiconv so the app also runs on Macs without Nix.
 for executable in "$executables/bex" "$executables/host-daemon" "$executables/bex-provider-supervisor"; do
     while IFS= read -r library; do

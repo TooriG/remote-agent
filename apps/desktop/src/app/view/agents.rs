@@ -126,7 +126,7 @@ mod tests {
         let (view, window) = cx.add_window_view(|window,cx| {
             let mut desktop = Desktop::new(Mode::Main,window,cx);
             desktop.onboarding = false;
-            desktop.panel_open = false;
+            desktop.panels.set_open(desktop.panel_scope(), false);
             let parent = agent_protocol::session::SessionRef { provider:agent_protocol::session::ProviderKind::Codex, id:"parent".into() };
             let snapshot = Arc::make_mut(&mut desktop.snapshot);
             snapshot.threads = Some(Arc::new(serde_json::from_value(serde_json::json!({
@@ -155,7 +155,7 @@ mod tests {
         );
         let row_before = window.debug_bounds("agent-row").unwrap();
         view.update(window, |desktop, cx| {
-            assert!(desktop.panel == Panel::Agents);
+            assert!(desktop.panels.get(&desktop.panel_scope()).kind() == Panel::Agents);
             assert_eq!(desktop.selected().unwrap().id, "parent");
             assert_eq!(desktop.draft().text, "Keep my draft");
             assert_eq!(desktop.snapshot.thread_list().unwrap().threads.len(), 1);

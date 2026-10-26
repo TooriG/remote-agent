@@ -175,6 +175,7 @@ impl StartSubmission {
             snapshot.error = Some("thread ID is missing".into());
             return Vec::new();
         };
+        Arc::make_mut(&mut snapshot.draft_sessions).insert(draft_key.clone(), id.clone());
         let current = snapshot.drafts.get(&draft_key);
         let empty = Arc::new(Draft {
             text: String::new(),
@@ -188,6 +189,14 @@ impl StartSubmission {
         } else {
             empty
         };
+        if current_view {
+            Arc::make_mut(&mut snapshot.workspaces).insert(
+                id.clone().into(),
+                snapshot.workspace.location(snapshot.navigation.cwd.clone()),
+            );
+        } else if let Some(workspace) = Arc::make_mut(&mut snapshot.workspaces).remove(&draft_key) {
+            Arc::make_mut(&mut snapshot.workspaces).insert(id.clone().into(), workspace);
+        }
         let mut effects = if current_view {
             open_thread(snapshot, thread, None)
         } else {
@@ -197,6 +206,7 @@ impl StartSubmission {
         let drafts = Arc::make_mut(&mut snapshot.drafts);
         if remove_original {
             drafts.remove(&draft_key);
+            Arc::make_mut(&mut snapshot.workspaces).remove(&draft_key);
         }
         drafts.insert(id.clone().into(), target);
         if let Some(pending) =
@@ -372,6 +382,48 @@ impl Operation for UploadAttachment {
         self.attachment.path = path;
         add_attachment(snapshot, self.draft_key, self.attachment);
         Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod startup_identity_tests {
+    use super::*;
+    #[rstest::rstest]
+    fn completed_startup_keeps_the_panel_identity_after_pending_input_is_gone(
+        #[values(true, false)] current_view: bool,
+    ) {
+        let draft_key = DraftKey::from("local");
+        let session = crate::session::SessionRef {
+            provider: crate::session::ProviderKind::Codex,
+            id: "created".into(),
+        };
+        let mut snapshot = Snapshot::default();
+        Arc::make_mut(&mut snapshot.navigation).draft_key = if current_view {
+            draft_key.clone()
+        } else {
+            DraftKey::from("other")
+        };
+        let navigation = snapshot.navigation.clone();
+        let thread: Thread =
+            serde_json::from_value(serde_json::json!({"id":session, "cwd":"/project"})).unwrap();
+        let _ = StartSubmission {
+            provider: session.provider,
+            draft_key: draft_key.clone(),
+            cwd: Some("/project".into()),
+            client_user_message_id: "submitted".into(),
+            draft: Arc::default(),
+        }
+        .complete(&mut snapshot, thread, current_view);
+        assert!(snapshot.pending_submissions.is_empty());
+        assert_eq!(snapshot.draft_sessions.get(&draft_key), Some(&session));
+        if current_view {
+            assert_eq!(snapshot.navigation.thread_id.as_ref(), Some(&session));
+        } else {
+            assert_eq!(snapshot.navigation, navigation);
+        }
+        let restored =
+            crate::persistence::decode(&crate::persistence::encode(&snapshot).unwrap()).unwrap();
+        assert!(restored.draft_sessions.is_empty());
     }
 }
 

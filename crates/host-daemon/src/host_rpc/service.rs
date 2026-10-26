@@ -886,6 +886,12 @@ impl HostRpcService {
                 )
                 .into()
             }
+            Call::Unsupported => {
+                return Err(Failure::new(
+                    "method_not_found",
+                    "このHostはこの操作に対応していません。PC側のBEXを更新してください。",
+                ));
+            }
             Call::ReadTaskActivity(_) => self.read_task_activity().await?.into(),
             Call::RegisterLiveActivity(params) => {
                 params

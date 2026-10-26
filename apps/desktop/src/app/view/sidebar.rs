@@ -828,7 +828,7 @@ mod tests {
         let (view, window) = cx.add_window_view(|window, cx| {
             let mut desktop = Desktop::new(Mode::Main, window, cx);
             desktop.onboarding = false;
-            desktop.panel_open = false;
+            desktop.panels.set_open(desktop.panel_scope(), false);
             let session = agent_protocol::session::SessionRef {
                 provider: agent_protocol::session::ProviderKind::Codex,
                 id: "fixture".into(),

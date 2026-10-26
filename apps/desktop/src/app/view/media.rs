@@ -370,7 +370,7 @@ impl Desktop {
                         return;
                     }
                     let _ = view.update(cx, |s, cx| {
-                        s.click_conversation_link(url, event.modifiers().control, window, cx)
+                        s.click_conversation_link(url, event.modifiers().control, cx)
                     });
                 }),
         );
@@ -383,11 +383,10 @@ impl Desktop {
         &mut self,
         source: &str,
         control: bool,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if control && (source.starts_with("https://") || source.starts_with("http://")) {
-            self.open_browser_url(source, window, cx);
+            self.open_browser(self.panel_scope(), source, cx);
         } else {
             self.open_conversation_link(source, cx);
         }
@@ -818,8 +817,8 @@ mod file_panel_tests {
                 view.composer.update(cx, |input, cx| {
                     input.set_value("Keep this draft", window, cx)
                 });
-                view.panel = Panel::Files;
-                view.panel_open = true;
+                view.panels.open(view.panel_scope(), Panel::Files, None);
+                view.panels.set_open(view.panel_scope(), true);
                 cx.notify();
             });
         });
@@ -848,7 +847,7 @@ mod file_panel_tests {
                     "Markdown links use the same image viewer"
                 );
                 view.image_gallery = None;
-                view.panel_open = false;
+                view.panels.set_open(view.panel_scope(), false);
                 view.open_conversation_link(
                     &directory
                         .path()
@@ -856,7 +855,10 @@ mod file_panel_tests {
                         .to_string_lossy(),
                     cx,
                 );
-                assert!(!view.panel_open, "installers must bypass the editor panel");
+                assert!(
+                    !view.panels.get(&view.panel_scope()).open,
+                    "installers must bypass the editor panel"
+                );
                 assert!(view.image_gallery.is_none());
                 assert_eq!(view.composer.read(cx).value().as_ref(), "Keep this draft");
                 view.open_file(directory.path().join("readme.txt"), cx);
@@ -864,7 +866,10 @@ mod file_panel_tests {
                     view.image_gallery.is_none(),
                     "text files must retain the editor route"
                 );
-                assert!(view.panel_open && view.panel == Panel::Files);
+                assert!(
+                    view.panels.get(&view.panel_scope()).open
+                        && view.panels.get(&view.panel_scope()).kind() == Panel::File
+                );
             });
         });
     }
@@ -914,31 +919,38 @@ mod file_panel_tests {
                     input.set_value("Keep this side draft", window, cx)
                 });
                 view.open_conversation_link("readme.txt:1", cx);
-                assert!(view.panel_open && view.panel == Panel::Files);
+                assert!(
+                    view.panels.get(&view.panel_scope()).open
+                        && view.panels.get(&view.panel_scope()).kind() == Panel::File
+                );
                 #[cfg(target_os = "windows")]
                 {
-                    // Hold initialization pending to exercise clicks arriving before WebView2 is ready.
-                    view.browser_initialization = Some(cx.spawn(async |_, _| {
-                        std::future::pending::<()>().await;
-                    }));
-                    view.click_conversation_link("https://example.com/first", true, window, cx);
-                    assert!(view.panel_open && view.panel == Panel::Browser);
+                    view.click_conversation_link("https://example.com/first", true, cx);
+                    assert!(
+                        view.panels.get(&view.panel_scope()).open
+                            && view.panels.get(&view.panel_scope()).kind() == Panel::Browser
+                    );
                     assert_eq!(
-                        view.pending_browser_url.as_deref(),
+                        view.panels.get(&view.panel_scope()).active.and_then(|id| {
+                            match view.surface_resources.get(&id) {
+                                Some(SurfaceResource::Pending { url }) => url.as_deref(),
+                                _ => None,
+                            }
+                        }),
                         Some("https://example.com/first")
                     );
-                    view.click_conversation_link(
-                        "http://localhost:3000/next?q=1#detail",
-                        true,
-                        window,
-                        cx,
-                    );
+                    view.click_conversation_link("http://localhost:3000/next?q=1#detail", true, cx);
                     assert_eq!(
-                        view.pending_browser_url.as_deref(),
+                        view.panels.get(&view.panel_scope()).active.and_then(|id| {
+                            match view.surface_resources.get(&id) {
+                                Some(SurfaceResource::Pending { url }) => url.as_deref(),
+                                _ => None,
+                            }
+                        }),
                         Some("http://localhost:3000/next?q=1#detail")
                     );
-                    view.click_conversation_link("readme.txt:1", true, window, cx);
-                    assert!(view.panel == Panel::Files);
+                    view.click_conversation_link("readme.txt:1", true, cx);
+                    assert!(view.panels.get(&view.panel_scope()).kind() == Panel::File);
                     assert_eq!(
                         view.composer.read(cx).value().as_ref(),
                         "Keep this side draft"
@@ -949,7 +961,7 @@ mod file_panel_tests {
         });
         window.run_until_parked();
         assert!(
-            window.debug_bounds("conversation-files").is_some(),
+            window.debug_bounds("conversation-file").is_some(),
             "file links must show the file panel"
         );
         let back = window
@@ -962,7 +974,7 @@ mod file_panel_tests {
                     view.composer.read(cx).value().as_ref(),
                     "Keep this side draft"
                 );
-                assert!(!view.panel_open);
+                assert!(!view.panels.get(&view.panel_scope()).open);
                 view.open_review(None, cx);
                 cx.notify();
             })
@@ -980,7 +992,7 @@ mod file_panel_tests {
                     view.composer.read(cx).value().as_ref(),
                     "Keep this side draft"
                 );
-                assert!(!view.panel_open);
+                assert!(!view.panels.get(&view.panel_scope()).open);
             })
         });
     }

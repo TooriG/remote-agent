@@ -740,9 +740,11 @@ fn publish_locked(current: &mut Arc<Snapshot>, next: Snapshot) -> bool {
         models,
         model_errors,
         drafts,
+        draft_sessions,
         pending_submissions,
         file_drafts,
         workspace,
+        workspaces,
         navigation,
         activity,
         management,
@@ -782,9 +784,11 @@ fn publish_locked(current: &mut Arc<Snapshot>, next: Snapshot) -> bool {
         && Arc::ptr_eq(&current.models, models)
         && Arc::ptr_eq(&current.model_errors, model_errors)
         && Arc::ptr_eq(&current.drafts, drafts)
+        && Arc::ptr_eq(&current.draft_sessions, draft_sessions)
         && Arc::ptr_eq(&current.pending_submissions, pending_submissions)
         && Arc::ptr_eq(&current.file_drafts, file_drafts)
         && Arc::ptr_eq(&current.workspace, workspace)
+        && Arc::ptr_eq(&current.workspaces, workspaces)
         && Arc::ptr_eq(&current.navigation, navigation)
         && Arc::ptr_eq(&current.activity, activity)
         && Arc::ptr_eq(&current.management, management)

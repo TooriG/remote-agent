@@ -1,5 +1,7 @@
 // Run on macOS with `cargo test -p bex-desktop --test chrome_cookie_webview`.
 // Each WebKit persistence phase runs in a fresh process with a unique data store.
+// Embedding the browser also includes menu/event APIs used only by the desktop owner.
+#![allow(dead_code)]
 #[cfg(target_os = "macos")]
 include!("../src/browser.rs");
 
@@ -204,7 +206,7 @@ fn native_phase(phase: &str, identifier: &str, url: &str, profile: &str) {
                                 wry::WebViewBuilder::new()
                                     .with_data_store_identifier(identifier)
                                     .with_incognito(phase == "cleanup"),
-                                ChromeProfileSource { root: profile.parent().map(std::path::Path::to_path_buf), password: chrome_tests::password },
+                                vec![ImportSource { name: "Chrome", root: profile.parent().unwrap().to_path_buf(), password: chrome_tests::password }],
                                 window,
                                 cx,
                             )
@@ -244,7 +246,7 @@ fn native_phase(phase: &str, identifier: &str, url: &str, profile: &str) {
                 if phase == "import" {
                     seed_existing_cookies(&browser, cx).await;
                     browser.update(cx, |s, cx| {
-                        s.import_chrome(profile.clone(), || Err("fixture denied".into()), cx)
+                        s.import_cookies(profile.clone(), || Err("fixture denied".into()), cx)
                     });
                     wait_for_import(&browser, cx).await;
                     browser.update(cx, |s, cx| {
@@ -254,9 +256,9 @@ fn native_phase(phase: &str, identifier: &str, url: &str, profile: &str) {
                     });
                     wait_for_page(&browser, "Logged out", cx).await;
                     browser.update(cx, |s, cx| {
-                        s.import_chrome(profile, chrome_tests::password, cx);
+                        s.import_cookies(profile, chrome_tests::password, cx);
                         // An overlapping import must not replace the in-flight operation.
-                        s.import_chrome(
+                        s.import_cookies(
                             std::path::PathBuf::new(),
                             || panic!("overlapping import"),
                             cx,

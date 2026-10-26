@@ -2,6 +2,68 @@ use super::*;
 use gpui_kit::component::button::ButtonCustomVariant;
 
 impl Desktop {
+    fn history_control(
+        &self,
+        control: agent_core::presentation::conversation::HistoryControl,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let label: SharedString = control.load_label.into();
+        h_flex()
+            .w_full()
+            .justify_center()
+            .px_6()
+            .py_2()
+            .child(
+                v_flex()
+                    .w_full()
+                    .max_w(px(CHAT_WIDTH))
+                    .gap_1p5()
+                    .when(control.has_more, |body| {
+                        body.child(
+                            Button::new("conversation-history-load")
+                                .debug_selector(|| "conversation-history-load".into())
+                                .accessibility_label(label.clone())
+                                .small()
+                                .ghost()
+                                .w_full()
+                                .disabled(control.loading)
+                                .child(
+                                    h_flex()
+                                        .w_full()
+                                        .gap_3()
+                                        .child(div().flex_1().h(px(1.)).bg(rgb(appearance::BORDER)))
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(rgb(appearance::MUTED))
+                                                .child(label),
+                                        )
+                                        .child(
+                                            div().flex_1().h(px(1.)).bg(rgb(appearance::BORDER)),
+                                        ),
+                                )
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    if let Some(thread_id) = view.selected().cloned() {
+                                        view.pause_tail();
+                                        view.dispatch(Intent::ReadOlder { thread_id });
+                                        cx.notify();
+                                    }
+                                })),
+                        )
+                    })
+                    .when_some(control.error, |body, error| {
+                        body.child(
+                            div()
+                                .debug_selector(|| "conversation-history-error".into())
+                                .text_xs()
+                                .text_center()
+                                .text_color(rgb(appearance::MUTED))
+                                .child(error),
+                        )
+                    }),
+            )
+            .into_any_element()
+    }
     fn composer_context(&self, cx: &Context<Self>) -> AnyElement {
         let mut row = h_flex()
             .w_full()
@@ -182,6 +244,7 @@ impl Desktop {
         let history = list(self.list.clone(), move |index, _, cx| {
             entity
                 .update(cx, |view, cx| match view.rows.get(index).cloned() {
+                    Some(ConversationRow::History(control)) => view.history_control(control, cx),
                     Some(ConversationRow::Turn(turn)) => {
                         let session = view
                             .rendered
@@ -531,8 +594,9 @@ impl Desktop {
 }
 
 #[cfg(test)]
-mod attachment_tests {
+mod composer_tests {
     use super::*;
+    use agent_protocol::{execution::TurnStatus, items::ItemBody};
     use core::prelude::v1::test;
     use gpui_kit as gpui;
 
@@ -541,6 +605,220 @@ mod attachment_tests {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             self.0.update(cx, |view, cx| view.chat(cx))
         }
+    }
+
+    #[gpui::test]
+    fn history_control_preserves_visible_content_and_offers_retry_after_a_failed_page(
+        cx: &mut TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        cx.update(|cx| {
+            crate::appearance::init(cx);
+            cx.set_global(crate::Runtime {
+                handle: runtime.handle().clone(),
+                connections: Arc::new(crate::platform::Connections::default()),
+                closing: tokio_util::task::TaskTracker::new(),
+                logging_error: None,
+            });
+        });
+        let session = SessionRef {
+            provider: agent_protocol::session::ProviderKind::Codex,
+            id: "history".into(),
+        };
+        let turns = |range: std::ops::Range<usize>| {
+            range
+                .map(|index| {
+                    Arc::new(Turn {
+                        id: format!("turn-{index}").into(),
+                        status: TurnStatus::Completed,
+                        items: Some(vec![Arc::new(Item::new(
+                            format!("answer-{index}").into(),
+                            Default::default(),
+                            ItemBody::AssistantText {
+                                text: format!(
+                                    "Answer {index}\n{}",
+                                    "Earlier conversation text.\n".repeat(8)
+                                ),
+                                phase: agent_protocol::items::AssistantPhase::Final,
+                            },
+                        ))]),
+                        ..Default::default()
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut handle = None;
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let desktop = cx.new(|cx| {
+                Desktop::new(
+                    Mode::SideChat {
+                        remote: Some(RemoteHost {
+                            id: "fixture".into(),
+                            name: "fixture".into(),
+                            ticket: "invalid".into(),
+                        }),
+                        cwd: "/fixture".into(),
+                    },
+                    window,
+                    cx,
+                )
+            });
+            desktop.update(cx, |view, cx| {
+                let snapshot = Arc::make_mut(&mut view.snapshot);
+                let navigation = Arc::make_mut(&mut snapshot.navigation);
+                navigation.thread_id = Some(session.clone());
+                navigation.draft_key = session.clone().into();
+                Arc::make_mut(&mut snapshot.conversations).insert(
+                    session.clone(),
+                    Arc::new(Thread {
+                        id: Some(session.clone()),
+                        turns: Some(turns(2..8)),
+                        history_has_more: Some(true),
+                        history_cursor: Some("older-page".into()),
+                        history_read_state: Some(agent_protocol::session::HistoryReadState::new(
+                            agent_protocol::session::HistoryReadKind::Partial,
+                            Vec::new(),
+                        )),
+                        ..Default::default()
+                    }),
+                );
+                view.sync_rows(true, window, cx);
+                view.list.scroll_to(ListOffset::default());
+            });
+            handle = Some(desktop.clone());
+            ComposerView(desktop)
+        });
+        let desktop = handle.unwrap();
+        window.simulate_resize(size(px(800.), px(700.)));
+        window.run_until_parked();
+        let button = window
+            .debug_bounds("conversation-history-load")
+            .expect("older-history control at the top");
+        window.simulate_click(button.center(), Modifiers::default());
+        let top = window.update(|_, cx| {
+            desktop.update(cx, |view, _| {
+                assert!(!view.list.is_following_tail());
+                view.list.bounds_for_item(1).unwrap().top()
+            })
+        });
+        window.update(|window, cx| {
+            desktop.update(cx, |view, cx| {
+                let thread = Arc::make_mut(
+                    Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).conversations)
+                        .get_mut(&session)
+                        .unwrap(),
+                );
+                thread.turns = Some(turns(0..8));
+                view.sync_rows(false, window, cx);
+                cx.notify();
+            })
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            desktop.update(cx, |view, _| {
+                assert!(
+                    (view.list.bounds_for_item(3).unwrap().top() - top).abs() < px(1.),
+                    "prepending history must keep the old first answer at the same screen position"
+                );
+                view.list.scroll_to(ListOffset::default());
+            })
+        });
+        let key = op::OperationKey::History {
+            session: session.clone(),
+        };
+        let mut store_handle = None;
+        window.update(|window, cx| {
+            desktop.update(cx, |view, cx| {
+                let store = runtime.block_on(async {
+                    Arc::new(agent_core::store::Store::offline((*view.snapshot).clone()))
+                });
+                view.snapshot = store.snapshot();
+                let app_runtime = view.runtime.clone();
+                view.session = Some(runtime.block_on(async {
+                    let (updates, receive) = async_channel::unbounded();
+                    tokio::spawn(StoreSession::publish(
+                        Ok(store.clone()),
+                        app_runtime,
+                        updates,
+                        Some,
+                        |_| None,
+                    ));
+                    receive.recv().await.unwrap().unwrap().unwrap()
+                }));
+                store_handle = Some(store);
+                view.sync_rows(false, window, cx);
+                cx.notify();
+            })
+        });
+        window.run_until_parked();
+        let store = store_handle.unwrap();
+        for attempt in 0..2 {
+            let previous_generation = store
+                .snapshot()
+                .operations
+                .get(&key)
+                .map_or(0, |state| state.generation);
+            let button = window.debug_bounds("conversation-history-load").unwrap();
+            window.simulate_click(button.center(), Modifiers::default());
+            runtime.block_on(async {
+                let mut updates = store.subscribe();
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    loop {
+                        let failed = updates
+                            .borrow_and_update()
+                            .operations
+                            .get(&key)
+                            .is_some_and(|state| {
+                                state.generation > previous_generation
+                                    && matches!(state.phase, op::OperationPhase::Failed { .. })
+                            });
+                        if failed {
+                            break;
+                        }
+                        updates.changed().await.unwrap();
+                    }
+                })
+                .await
+                .expect("each button press must execute a history request, including retry");
+            });
+            window.update(|window, cx| {
+                desktop.update(cx, |view, cx| {
+                    view.accept_snapshot(window, cx);
+                    cx.notify();
+                })
+            });
+            window.run_until_parked();
+            assert!(
+                window.debug_bounds("conversation-history-error").is_some(),
+                "request failure {attempt} must appear inline"
+            );
+        }
+        assert!(
+            window.debug_bounds("conversation-history-load").is_some(),
+            "the same control remains available to retry"
+        );
+        window.update(|window, cx| {
+            desktop.update(cx, |view, cx| {
+                view.session.take();
+                let snapshot = Arc::make_mut(&mut view.snapshot);
+                Arc::make_mut(&mut snapshot.operations).remove(&key);
+                let thread = Arc::make_mut(
+                    Arc::make_mut(&mut snapshot.conversations)
+                        .get_mut(&session)
+                        .unwrap(),
+                );
+                thread.history_has_more = Some(false);
+                thread.history_cursor = None;
+                view.sync_rows(false, window, cx);
+                cx.notify();
+            })
+        });
+        window.run_until_parked();
+        assert!(window.debug_bounds("conversation-history-load").is_none());
+        assert!(window.debug_bounds("conversation-history-error").is_none());
     }
 
     #[gpui::test]

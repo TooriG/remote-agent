@@ -4,6 +4,36 @@ import UIKit
 
 /// History and row presentation
 extension ThreadScreen {
+    func historyControl(_ control: HistoryControl, session: SessionRef) -> some View {
+        VStack(spacing: 6) {
+            if control.hasMore {
+                Button {
+                    isFollowingLatest = false
+                    model.loadOlderHistory(session)
+                } label: {
+                    HStack(spacing: 12) {
+                        Rectangle().frame(height: 1).foregroundStyle(Color(UIColor.separator))
+                        Text(control.loadLabel).fixedSize()
+                        Rectangle().frame(height: 1).foregroundStyle(Color(UIColor.separator))
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 8)
+                    .contentShape(Rectangle())
+                }
+                .disabled(control.loading)
+                .accessibilityIdentifier("history.load")
+            }
+            if let error = control.error {
+                Text(error).font(.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .multilineTextAlignment(.center)
+                    .accessibilityIdentifier("history.error")
+            }
+        }
+        .padding(.bottom, 8)
+    }
+
     @ViewBuilder
     func conversationRow(_ row: ThreadConversationRow) -> some View {
         switch row.content {
@@ -112,52 +142,23 @@ extension ThreadScreen {
         }
     }
 
-    func loadVisibleHistory() {
-        guard isVisible, let thread = conversation, thread.id == model.selectedThreadId,
-              model.notice == nil else { return }
-        let visibility = historyBoundaryVisibility
-        guard AgentCore.shouldLoadHistory(
-            hasMore: thread.source.hasMoreHistory(),
-            loading: model.loadingHistory,
-            oldestVisible: visibility.oldest,
-            latestVisible: visibility.latest,
-            followingLatest: isFollowingLatest
-        ) else { return }
-        model.loadOlderHistory()
-    }
-
-    var historyBoundaryVisibility: (oldest: Bool, latest: Bool) {
-        guard let thread = conversation else { return (false, false) }
-        guard let first = thread.rows.first,
-              let last = conversationRows(thread.rows, expansion: activityExpansionOverrides).last else {
-            // An empty rendered page fits every viewport and can request its next page.
-            return (true, true)
-        }
-        return (
-            visibleHistoryBoundaries.contains(.oldest(threadId: thread.id, rowId: first.id)),
-            visibleHistoryBoundaries.contains(.latest(threadId: thread.id, rowId: last.id))
-        )
-    }
-
-    func historyBoundaryMarker(_ boundary: HistoryBoundary, height: CGFloat) -> some View {
-        Color.clear.frame(height: height)
+    func latestBoundaryMarker(_ boundary: LatestBoundary) -> some View {
+        Color.clear.frame(height: 80)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
             .id(boundary)
             .onScrollVisibilityChange(threshold: 0.01) { visible in
-                updateHistoryBoundary(boundary, visible: visible)
+                if visible {
+                    visibleLatest = boundary
+                } else if visibleLatest == boundary {
+                    visibleLatest = nil
+                }
             }
-            .onDisappear { updateHistoryBoundary(boundary, visible: false) }
-    }
-
-    private func updateHistoryBoundary(_ boundary: HistoryBoundary, visible: Bool) {
-        guard visibleHistoryBoundaries.contains(boundary) != visible else { return }
-        if visible {
-            visibleHistoryBoundaries.insert(boundary)
-        } else {
-            visibleHistoryBoundaries.remove(boundary)
-        }
-        loadVisibleHistory()
+            .onDisappear {
+                if visibleLatest == boundary {
+                    visibleLatest = nil
+                }
+            }
     }
 
     func threadAccessibilityValue(_ thread: ConversationPresentation) -> String {
@@ -172,9 +173,9 @@ extension ThreadScreen {
     }
 }
 
-enum HistoryBoundary: Hashable {
-    case oldest(threadId: SessionRef?, rowId: String)
-    case latest(threadId: SessionRef?, rowId: String)
+struct LatestBoundary: Hashable {
+    let threadId: SessionRef?
+    let rowId: String
 }
 
 func conversationRows(_ rows: [ThreadConversationRow],

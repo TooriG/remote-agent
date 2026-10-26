@@ -72,6 +72,7 @@ impl Terminal {
     pub(crate) fn new(
         remote: &str,
         cwd: String,
+        handle: String,
         window: &mut Window,
         cx: &mut App,
     ) -> Entity<Self> {
@@ -95,7 +96,6 @@ impl Terminal {
         });
         let size = TerminalSize { cols: 80, rows: 24 };
         let focus = cx.focus_handle();
-        focus.focus(window, cx);
         cx.new(|cx: &mut Context<Self>| {
             StoreSession::on_app_quit(cx, |view| &mut view.session);
             cx.spawn_in(window, async move |view, cx| {
@@ -113,7 +113,7 @@ impl Terminal {
                 session: None,
                 snapshot: Arc::default(),
                 runtime,
-                handle: agent_core::client::terminal_handle(cwd.clone()),
+                handle,
                 cwd,
                 started: false,
                 sequence: 0,
@@ -146,6 +146,21 @@ impl Terminal {
                 }
             });
         }
+    }
+    pub(crate) fn close(&mut self) {
+        if let Some(session) = self.session.take() {
+            let handle = self.handle.clone();
+            self.runtime.handle.spawn(async move {
+                let _ = session
+                    .store
+                    .dispatch(Intent::KillTerminal(op::KillTerminal { handle }))
+                    .await;
+                drop(session);
+            });
+        }
+    }
+    pub(crate) fn focus(&self, window: &mut Window, cx: &mut App) {
+        self.focus.focus(window, cx);
     }
     fn input(&mut self, data: Vec<u8>, cx: &mut Context<Self>) {
         if data.is_empty() {

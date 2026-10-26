@@ -505,8 +505,8 @@ impl Desktop {
                         })
                         .when(manage && provider == ProviderKind::Codex, |row| {
                             row.child(
-                                self.button(format!("account-usage-manage-{index}"), "追加クレジット・上限を管理", cx, |s, window, cx| {
-                                    s.open_browser_url("https://chatgpt.com/settings/usage", window, cx);
+                                self.button(format!("account-usage-manage-{index}"), "追加クレジット・上限を管理", cx, |s, _, cx| {
+                                    s.open_browser(s.panel_scope(), "https://chatgpt.com/settings/usage", cx);
                                 }).small().ghost()
                             ).child(div().text_xs().text_color(rgb(appearance::MUTED))
                                 .child("利用枠は表示時刻に自動リセットされます。上限の変更・追加クレジットは管理画面で行えます。"))
