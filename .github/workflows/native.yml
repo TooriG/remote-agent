@@ -8,6 +8,10 @@ on:
     types: [published]
   workflow_dispatch:
     inputs:
+      ios-tests:
+        description: Space-separated iPhone UI test selectors; leave empty for full CI
+        type: string
+        default: ''
       ios-test-rounds:
         description: Fresh Simulator and Host rounds per iPhone runner, to measure flaky tests
         type: number
@@ -15,7 +19,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}${{ inputs.ios-tests && '-focused' || '' }}
   # Finish a running main revision and keep only the newest pending revision.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 env:
@@ -54,7 +58,7 @@ jobs:
             pull_request) base=$(git rev-parse HEAD^1) ;;
             push)
               # Cancelled or failed runs leave their changes for the next push.
-              base=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow native.yml --branch main \
+              base=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow native.yml --branch main --event push \
                 --status success --limit 1 --json headSha --jq '.[0].headSha // ""')
               if [[ -z "$base" ]] || ! git fetch --no-tags --depth=1 origin "$base"; then verify_all; fi
               ;;
@@ -80,6 +84,7 @@ jobs:
           done < <(git diff --name-only "$base" HEAD)
           printf 'android=%s\niphone=%s\nmac=%s\n' "$android" "$iphone" "$mac" | tee -a "$GITHUB_OUTPUT"
   repository:
+    if: ${{ !inputs.ios-tests }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -101,6 +106,7 @@ jobs:
           nix develop .#native --command npm --prefix crates/host-daemon/src/claude/sdk test
           git diff --exit-code -- crates/host-daemon/src/claude/sdk/bridge.bundle.mjs crates/host-daemon/src/claude/sdk/SDK-LICENSE.md
   toolchain:
+    if: ${{ !inputs.ios-tests }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -117,6 +123,7 @@ jobs:
           echo "version=$(nix eval --raw .#devShells.x86_64-linux.native.RUST_TOOLCHAIN_VERSION)" >> "$GITHUB_OUTPUT"
           echo "nextest-version=$(nix eval --raw .#devShells.x86_64-linux.native.NEXTEST_VERSION)" >> "$GITHUB_OUTPUT"
   linux:
+    if: ${{ !inputs.ios-tests }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -164,7 +171,7 @@ jobs:
     needs: changes
     permissions:
       contents: write # Attach the tested Android preview APK on release publication.
-    if: needs.changes.outputs.android == 'true'
+    if: needs.changes.outputs.android == 'true' && !inputs.ios-tests
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -238,7 +245,7 @@ jobs:
   mac:
     name: Mac
     needs: changes
-    if: needs.changes.outputs.mac == 'true'
+    if: needs.changes.outputs.mac == 'true' && !inputs.ios-tests
     concurrency:
       # Optional PRs share one Apple slot; main and manual clients stay parallel.
       group: native-apple-${{ github.event_name == 'pull_request' && 'pr' || format('{0}-{1}', github.run_id, github.job) }}
@@ -298,11 +305,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # With Mac, four jobs stay within the hosted macOS concurrency limit.
-          - { shard: 0, label: 1/3 }
-          - { shard: 1, label: 2/3 }
-          - { shard: 2, label: 3/3 }
+        # With Mac, four full-suite jobs stay within the hosted macOS limit.
+        include: ${{ fromJSON(inputs.ios-tests && '[{"shard":0,"label":"focused"}]' || '[{"shard":0,"label":"1/3"},{"shard":1,"label":"2/3"},{"shard":2,"label":"3/3"}]') }}
     runs-on: macos-26
     timeout-minutes: 120
     env:
@@ -312,7 +316,7 @@ jobs:
       # The iPhone runner has its own Host and one Simulator on a 7 GiB Mac.
       BEX_IOS_TEST_WORKERS: 1
       BEX_IOS_TEST_SHARD: ${{ matrix.shard }}
-      BEX_IOS_TEST_SHARDS: 3
+      BEX_IOS_TEST_SHARDS: ${{ inputs.ios-tests && 1 || 3 }}
       BEX_IOS_TEST_ROUNDS: ${{ inputs.ios-test-rounds || 1 }}
       # The builders validate Swift content/toolchain hashes before reuse.
       BEX_IOS_SWIFT_CACHE_PATHS: |
@@ -341,10 +345,17 @@ jobs:
           key: ios-swift-xcode-26.6-${{ hashFiles('flake.lock', 'Cargo.lock', 'crates/agent-core/src/**', 'crates/agent-protocol/src/**', 'crates/xtask/src/ios_markdown.rs', 'scripts/build-agent*.sh', 'apps/mobile/iosApp/**') }}
           restore-keys: ios-swift-xcode-26.6-
       - name: iPhone contracts and acceptance
+        env:
+          BEX_IOS_TESTS: ${{ inputs.ios-tests }}
         run: |
           set -o pipefail
           mkdir -p target/qa
-          nix develop . --command just quality swift 2>&1 | tee target/qa/quality.log
+          if [[ -n "$BEX_IOS_TESTS" ]]; then
+            read -r -a ios_tests <<< "$BEX_IOS_TESTS"
+            nix develop . --command just ios-e2e "${ios_tests[@]}" 2>&1 | tee target/qa/quality.log
+          else
+            nix develop . --command just quality swift 2>&1 | tee target/qa/quality.log
+          fi
       - name: Save iPhone Swift builds once for all shards
         if: ${{ !cancelled() && github.event_name != 'pull_request' && matrix.shard == 0 && steps.ios-cache.outputs.cache-primary-key != '' && steps.ios-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
@@ -361,6 +372,7 @@ jobs:
             target/qa/Bex-*
           retention-days: 7
   windows:
+    if: ${{ !inputs.ios-tests }}
     needs: toolchain
     permissions:
       contents: write # Attach the verified Windows package to a published release.
