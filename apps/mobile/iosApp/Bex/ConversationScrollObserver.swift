@@ -6,6 +6,8 @@ struct ConversationScrollObserver: UIViewRepresentable {
     let controller: Coordinator
     let loadingHistory: Bool
     let followingLatest: Bool
+    let rowCount: Int
+    let hasMoreHistory: Bool
     let onScrollToTop: () -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -22,7 +24,8 @@ struct ConversationScrollObserver: UIViewRepresentable {
     func updateUIView(_ view: ObserverView, context: Context) {
         context.coordinator.onScrollToTop = onScrollToTop
         context.coordinator.attach(to: view)
-        context.coordinator.update(loadingHistory: loadingHistory, followingLatest: followingLatest)
+        context.coordinator.update(loadingHistory: loadingHistory, followingLatest: followingLatest,
+                                   rowCount: rowCount, hasMoreHistory: hasMoreHistory)
     }
 
     static func dismantleUIView(_: ObserverView, coordinator: Coordinator) {
@@ -40,41 +43,53 @@ struct ConversationScrollObserver: UIViewRepresentable {
         }
     }
 
+    private struct ReadingPosition {
+        var offset: CGPoint
+        let height: CGFloat
+        let rowCount: Int
+        let hasMoreHistory: Bool
+        var ready = false
+    }
+
     final class Coordinator: NSObject, UIScrollViewDelegate {
         var onScrollToTop: () -> Void = {}
         weak var scrollView: UIScrollView?
         weak var original: UIScrollViewDelegate?
 
-        private var historyAnchor: (offset: CGPoint, height: CGFloat)?
-        private var loadingHistory = false
-        private var followingLatest = true
+        private var historyAnchor: ReadingPosition?
+        private var contentSizeObservation: NSKeyValueObservation?
 
-        func captureReadingPosition() {
+        func captureReadingPosition(rowCount: Int, hasMoreHistory: Bool) {
             guard let scrollView else { return }
-            historyAnchor = (scrollView.contentOffset, scrollView.contentSize.height)
+            historyAnchor = ReadingPosition(offset: scrollView.contentOffset, height: scrollView.contentSize.height,
+                                            rowCount: rowCount, hasMoreHistory: hasMoreHistory)
         }
 
         func cancelHistoryRestoration() {
             historyAnchor = nil
         }
 
-        func update(loadingHistory: Bool, followingLatest: Bool) {
-            self.loadingHistory = loadingHistory
-            self.followingLatest = followingLatest
+        func update(loadingHistory: Bool, followingLatest: Bool, rowCount: Int, hasMoreHistory: Bool) {
             if followingLatest {
                 cancelHistoryRestoration()
+            } else if !loadingHistory, var anchor = historyAnchor {
+                guard rowCount != anchor.rowCount || hasMoreHistory != anchor.hasMoreHistory else {
+                    cancelHistoryRestoration()
+                    return
+                }
+                anchor.ready = true
+                historyAnchor = anchor
+                restoreReadingPosition()
             }
-            guard !loadingHistory, historyAnchor != nil else { return }
-            // SwiftUI has published the page before UIKit lays out its new height.
-            DispatchQueue.main.async { [weak self] in
-                guard let self, !self.loadingHistory, !self.followingLatest,
-                      let anchor = historyAnchor, let scrollView else { return }
-                historyAnchor = nil
-                scrollView.layoutIfNeeded()
-                let offset = CGPoint(x: anchor.offset.x,
-                                     y: anchor.offset.y + scrollView.contentSize.height - anchor.height)
-                scrollView.setContentOffset(offset, animated: false)
-            }
+        }
+
+        private func restoreReadingPosition() {
+            guard let anchor = historyAnchor, anchor.ready, let scrollView,
+                  scrollView.contentSize.height != anchor.height else { return }
+            historyAnchor = nil
+            let offset = CGPoint(x: anchor.offset.x,
+                                 y: anchor.offset.y + scrollView.contentSize.height - anchor.height)
+            scrollView.setContentOffset(offset, animated: false)
         }
 
         func attach(to view: UIView) {
@@ -84,6 +99,10 @@ struct ConversationScrollObserver: UIViewRepresentable {
                     if scrollView !== scroll {
                         detach()
                         scrollView = scroll
+                        // SwiftUI can publish a completed page before UIKit lays it out.
+                        contentSizeObservation = scroll.observe(\.contentSize) { [weak self] _, _ in
+                            self?.restoreReadingPosition()
+                        }
                     }
                     if scroll.delegate !== self {
                         original = scroll.delegate
@@ -97,6 +116,7 @@ struct ConversationScrollObserver: UIViewRepresentable {
 
         func detach() {
             cancelHistoryRestoration()
+            contentSizeObservation = nil
             if scrollView?.delegate === self {
                 scrollView?.delegate = original
             }

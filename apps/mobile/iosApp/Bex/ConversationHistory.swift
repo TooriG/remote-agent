@@ -4,11 +4,11 @@ import UIKit
 
 /// History and row presentation
 extension ThreadScreen {
-    func historyControl(_ control: HistoryControl, session: SessionRef) -> some View {
+    func historyControl(_ control: HistoryControl, session: SessionRef, rowCount: Int) -> some View {
         VStack(spacing: 6) {
             if control.hasMore {
                 Button {
-                    scrollController.captureReadingPosition()
+                    scrollController.captureReadingPosition(rowCount: rowCount, hasMoreHistory: control.hasMore)
                     isFollowingLatest = false
                     model.loadOlderHistory(session)
                 } label: {

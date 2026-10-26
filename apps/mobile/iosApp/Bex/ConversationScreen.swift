@@ -123,7 +123,7 @@ struct ThreadScreen: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
                         if let session = thread.id, let history {
-                            historyControl(history, session: session)
+                            historyControl(history, session: session, rowCount: thread.rows.count)
                         }
                         ForEach(rows) { row in
                             conversationRow(row)
@@ -141,7 +141,9 @@ struct ThreadScreen: View {
                     .padding(.vertical, 6)
                     .background(ConversationScrollObserver(controller: scrollController,
                                                            loadingHistory: history?.loading ?? false,
-                                                           followingLatest: isFollowingLatest) {
+                                                           followingLatest: isFollowingLatest,
+                                                           rowCount: thread.rows.count,
+                                                           hasMoreHistory: history?.hasMore ?? false) {
                             followLatest.wrappedValue = false
                         })
                 }
