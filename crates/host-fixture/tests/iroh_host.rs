@@ -75,17 +75,18 @@ async fn open_session(
     (serde_json::to_value(opened).unwrap(), updates)
 }
 async fn next_change(events: &mut agent_transport::framing::Reader, kind: &str) -> Value {
-    loop {
-        let change: agent_protocol::session::SessionChange =
-            events.read().await.unwrap().expect("subscription closed");
-        let value = serde_json::to_value(change).unwrap();
-        let (name, fields) = value.as_object().unwrap().iter().next().unwrap();
-        if name == kind {
-            let mut fields = fields.clone();
-            fields["type"] = name.clone().into();
-            return fields;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let change: agent_protocol::session::SessionChange =
+                events.read().await.unwrap().expect("subscription closed");
+            let value = serde_json::to_value(change).unwrap();
+            if value["type"] == kind {
+                return value;
+            }
         }
-    }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("subscription did not produce {kind} within its deadline"))
 }
 async fn completed_turn(events: &mut agent_transport::framing::Reader) -> Value {
     loop {
