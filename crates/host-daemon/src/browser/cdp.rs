@@ -351,7 +351,7 @@ impl Chrome {
     }
     pub async fn history(&mut self, session: &str) -> Result<(bool, bool), String> {
         let result = self
-            .call(Some(session), "Page.getNavigationHistory", json!({}))
+            .read_page(session, "Page.getNavigationHistory", json!({}))
             .await?;
         let index = result["currentIndex"].as_u64().unwrap_or(0) as usize;
         Ok((
@@ -448,22 +448,13 @@ impl Chrome {
     pub async fn screenshot(&mut self, session: &str) -> Result<Vec<u8>, String> {
         self.call(Some(session), "Page.bringToFront", json!({}))
             .await?;
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        let frame = loop {
-            let result = self
-                .call(
-                    Some(session),
-                    "Page.captureScreenshot",
-                    json!({"format":"jpeg","quality":65,"captureBeyondViewport":false}),
-                )
-                .await;
-            if result.is_ok() || self.broken || tokio::time::Instant::now() >= deadline {
-                break result?;
-            }
-            // Navigation can briefly leave no active page to capture. Retry
-            // only the frame capture, never the user's navigation or input.
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        };
+        let frame = self
+            .read_page(
+                session,
+                "Page.captureScreenshot",
+                json!({"format":"jpeg","quality":65,"captureBeyondViewport":false}),
+            )
+            .await?;
         let data = frame["data"]
             .as_str()
             .filter(|s| s.len() <= 4 * 1024 * 1024)
@@ -471,6 +462,23 @@ impl Chrome {
         STANDARD
             .decode(data)
             .map_err(|_| "ブラウザ画像を読み取れません。".into())
+    }
+    async fn read_page(
+        &mut self,
+        session: &str,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, String> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let result = self.call(Some(session), method, params.clone()).await;
+            if result.is_ok() || self.broken || tokio::time::Instant::now() >= deadline {
+                return result;
+            }
+            // A navigation can briefly leave no active page for history or
+            // capture. Retry only reads, never navigation or user input.
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
     async fn evaluate(&mut self, session: &str, expression: &str) -> Result<Value, String> {
         let result = self.call(Some(session), "Runtime.evaluate", json!({"expression":expression,"returnByValue":true,"awaitPromise":true,"timeout":3000})).await?;
@@ -734,7 +742,7 @@ impl Chrome {
             }
             BrowserAction::Back | BrowserAction::Forward => {
                 let history = self
-                    .call(Some(session), "Page.getNavigationHistory", json!({}))
+                    .read_page(session, "Page.getNavigationHistory", json!({}))
                     .await?;
                 let offset = if matches!(action, BrowserAction::Back) {
                     -1
@@ -807,6 +815,7 @@ mod tests {
     use super::*;
 
     async fn fixture(
+        failure_method: &'static str,
         failures: usize,
         disconnect: bool,
     ) -> (
@@ -823,7 +832,7 @@ mod tests {
                 .await
                 .unwrap();
             let mut methods = Vec::new();
-            let mut captures = 0;
+            let mut attempts = 0;
             loop {
                 let message = tokio::select! {
                     Some(event) = injected.recv() => { socket.send(Message::Text(event.to_string().into())).await.unwrap(); continue; }
@@ -838,20 +847,28 @@ mod tests {
                 let request: Value = serde_json::from_str(&text).unwrap();
                 let method = request["method"].as_str().unwrap();
                 methods.push(method.to_owned());
-                let mut response = json!({"id":request["id"],"result":{}});
-                if method == "Page.captureScreenshot" {
-                    captures += 1;
+                let failure = if method == failure_method {
+                    attempts += 1;
                     if disconnect {
                         break;
                     }
-                    response = if captures <= failures {
-                        json!({"id":request["id"],"error":{"code":-32000,"message":"Not attached to an active page"}})
-                    } else {
-                        json!({"id":request["id"],"result":{"data":"/9j/2Q=="}})
+                    attempts <= failures
+                } else {
+                    false
+                };
+                let response = if failure {
+                    json!({"id":request["id"],"error":{"code":-32000,"message":"Not attached to an active page"}})
+                } else {
+                    let result = match method {
+                        "Page.captureScreenshot" => json!({"data":"/9j/2Q=="}),
+                        "Page.getNavigationHistory" => {
+                            json!({"currentIndex":2,"entries":[{"id":11},{"id":12},{"id":13}]})
+                        }
+                        "Target.getTargets" => json!({"targetInfos":[]}),
+                        _ => json!({}),
                     };
-                } else if method == "Target.getTargets" {
-                    response = json!({"id":request["id"],"result":{"targetInfos":[]}});
-                }
+                    json!({"id":request["id"],"result":result})
+                };
                 socket
                     .send(Message::Text(response.to_string().into()))
                     .await
@@ -887,7 +904,7 @@ mod tests {
 
     #[tokio::test]
     async fn closed_targets_release_frames_dialogs_and_element_references() {
-        let (mut chrome, server, _) = fixture(0, false).await;
+        let (mut chrome, server, _) = fixture("Page.captureScreenshot", 0, false).await;
         chrome.sessions.insert("closed".into(), "page".into());
         chrome
             .refs
@@ -908,7 +925,7 @@ mod tests {
 
     #[tokio::test]
     async fn streamed_frames_replace_idle_cache_without_polling_screenshots() {
-        let (mut chrome, server, events) = fixture(0, false).await;
+        let (mut chrome, server, events) = fixture("Page.captureScreenshot", 0, false).await;
         assert_eq!(
             chrome.latest_image("page").await.unwrap(),
             [0xff, 0xd8, 0xff, 0xd9]
@@ -963,8 +980,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn history_waits_for_an_active_page_without_replaying_navigation() {
+        for action in [
+            None,
+            Some(BrowserAction::Back),
+            Some(BrowserAction::Forward),
+        ] {
+            let (mut chrome, server, _) = fixture("Page.getNavigationHistory", 3, false).await;
+            chrome
+                .action(
+                    "page",
+                    &BrowserAction::Navigate {
+                        url: "https://example.invalid/".into(),
+                    },
+                )
+                .await
+                .unwrap();
+            if let Some(action) = &action {
+                chrome.action("page", action).await.unwrap();
+            } else {
+                assert_eq!(chrome.history("page").await.unwrap(), (true, false));
+            }
+            chrome.shutdown().await;
+            let methods = server.await.unwrap();
+            assert_eq!(
+                methods
+                    .iter()
+                    .filter(|method| *method == "Page.navigate")
+                    .count(),
+                1,
+                "history retries must not replay the navigation"
+            );
+            assert_eq!(
+                methods
+                    .iter()
+                    .filter(|method| *method == "Page.getNavigationHistory")
+                    .count(),
+                4
+            );
+            assert_eq!(
+                methods
+                    .iter()
+                    .filter(|method| *method == "Page.navigateToHistoryEntry")
+                    .count(),
+                usize::from(matches!(action, Some(BrowserAction::Back))),
+                "back should navigate once; forward at the last entry should do nothing"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn screenshot_waits_for_a_frame_without_replaying_navigation() {
-        let (mut chrome, server, _) = fixture(3, false).await;
+        let (mut chrome, server, _) = fixture("Page.captureScreenshot", 3, false).await;
         chrome
             .action(
                 "page",
@@ -999,7 +1066,7 @@ mod tests {
 
     #[tokio::test]
     async fn screenshot_retries_end_without_discarding_a_healthy_transport() {
-        let (mut chrome, server, _) = fixture(usize::MAX, false).await;
+        let (mut chrome, server, _) = fixture("Page.captureScreenshot", usize::MAX, false).await;
         let result = tokio::time::timeout(Duration::from_secs(15), chrome.screenshot("page"))
             .await
             .expect("frame retries must be bounded");
@@ -1021,7 +1088,7 @@ mod tests {
 
     #[tokio::test]
     async fn screenshot_does_not_retry_a_disconnected_transport() {
-        let (mut chrome, server, _) = fixture(0, true).await;
+        let (mut chrome, server, _) = fixture("Page.captureScreenshot", 0, true).await;
         assert!(chrome.screenshot("page").await.is_err());
         assert!(chrome.broken);
         chrome.shutdown().await;
