@@ -26,8 +26,10 @@ mv "$output/notarized.zip" "$zip"
 (cd "$output" && shasum -a 256 bex-macOS-arm64.zip > bex-macOS-arm64.zip.sha256)
 archive="$output/Bex.xcarchive"
 auth=(-authenticationKeyPath "$BEX_ASC_PRIVATE_KEY_FILE" -authenticationKeyID "$BEX_ASC_KEY_ID" -authenticationKeyIssuerID "$BEX_ASC_ISSUER_ID")
+node scripts/apple-provisioning.mjs
+# Scope distribution settings to device targets; Swift package build plugins run on macOS.
 just ios-archive "$archive" "$output/DerivedData" "${auth[@]}" \
-    "CURRENT_PROJECT_VERSION=$BEX_BUILD_NUMBER" 'CODE_SIGN_IDENTITY=Apple Distribution' \
+    "CURRENT_PROJECT_VERSION=$BEX_BUILD_NUMBER" -xcconfig "$output/signing.xcconfig" \
     "OTHER_CODE_SIGN_FLAGS=--keychain $BEX_CODE_SIGN_KEYCHAIN"
 app="$archive/Products/Applications/Bex.app"
 codesign --verify --deep --strict "$app"
@@ -37,18 +39,10 @@ codesign --verify --deep --strict "$app"
 for destination in export upload; do
     if [[ $destination == upload ]]; then touch "$output/upload-start"; fi
     options="$output/export-$destination.plist"
-    cat > "$options" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-<key>method</key><string>app-store-connect</string>
-<key>destination</key><string>$destination</string>
-<key>teamID</key><string>K65K9J8686</string>
-<key>signingStyle</key><string>automatic</string>
-<key>manageAppVersionAndBuildNumber</key><false/>
-<key>uploadSymbols</key><true/>
-</dict></plist>
-PLIST
+    jq --arg destination "$destination" '{method:"app-store-connect",destination:$destination,
+        teamID:"K65K9J8686",signingStyle:"manual",signingCertificate:"Apple Distribution",
+        provisioningProfiles:.profiles,manageAppVersionAndBuildNumber:false,uploadSymbols:true}' \
+        "$output/provisioning.json" | plutil -convert xml1 -o "$options" -
     xcodebuild -exportArchive -archivePath "$archive" -exportPath "$output/$destination" \
         -exportOptionsPlist "$options" -allowProvisioningUpdates "${auth[@]}" \
         "OTHER_CODE_SIGN_FLAGS=--keychain $BEX_CODE_SIGN_KEYCHAIN"
