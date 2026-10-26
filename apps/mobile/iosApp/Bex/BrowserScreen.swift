@@ -39,6 +39,8 @@ struct WorkspaceBrowserScreen: View {
                             Button(tab.url == "about:blank" ? "新しいタブ" : (tab.title.isEmpty ? tab.url : tab.title)) {
                                 send(.selectTab(id: tab.id))
                             }.lineLimit(1)
+                                .accessibilityIdentifier(tab.id == frame?
+                                    .tabId ? "browser.title" : "browser.tab.\(tab.id)")
                             Button { send(.closeTab(id: tab.id)) } label: { Image(systemName: "xmark").font(.caption2) }
                                 .accessibilityLabel("タブを閉じる")
                         }
@@ -79,7 +81,9 @@ struct WorkspaceBrowserScreen: View {
                     .accessibilityIdentifier("browser.control")
                 Menu {
                     Button("デスクトップ · 1280 × 800") { send(.resize(width: 1280, height: 800)) }
+                        .disabled(!acceptsInput)
                     Button("モバイル · 390 × 844") { send(.resize(width: 390, height: 844)) }
+                        .disabled(!acceptsInput)
                     Button("URL をコピー") { UIPasteboard.general.string = currentTab?.url }
                 } label: { Image(systemName: "ellipsis") }.disabled(frame == nil)
             }.padding(.horizontal, 12).padding(.vertical, 10)
@@ -222,12 +226,7 @@ private struct RemoteBrowserCanvas: UIViewRepresentable {
     }
 
     func updateUIView(_ view: BrowserCanvasView, context _: Context) {
-        view.page.image = image
-        if view.page.bounds.size != image.size {
-            view.page.frame = CGRect(origin: .zero, size: image.size)
-            view.contentSize = image.size
-            view.setNeedsLayout()
-        }
+        view.display(image)
         view.send = acceptsInput ? send : nil
     }
 }
@@ -257,6 +256,18 @@ private final class BrowserCanvasView: UIScrollView, UIScrollViewDelegate {
     @available(*, unavailable)
     required init?(coder _: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    func display(_ image: UIImage) {
+        let changedSize = page.image?.size != image.size
+        page.image = image
+        guard changedSize else { return }
+        minimumZoomScale = 1
+        setZoomScale(1, animated: false)
+        page.frame = CGRect(origin: .zero, size: image.size)
+        contentSize = image.size
+        previousSize = .zero
+        setNeedsLayout()
     }
 
     override func layoutSubviews() {
@@ -291,6 +302,6 @@ private final class BrowserCanvasView: UIScrollView, UIScrollViewDelegate {
         let point = gesture.location(in: page)
         let delta = gesture.translation(in: page)
         send?(.scroll(x: max(0, min(page.bounds.maxX - 1, point.x)), y: max(0, min(page.bounds.maxY - 1, point.y)),
-                      deltaX: -delta.x, deltaY: -delta.y))
+                      deltaX: max(-4096, min(4096, -delta.x)), deltaY: max(-4096, min(4096, -delta.y))))
     }
 }
