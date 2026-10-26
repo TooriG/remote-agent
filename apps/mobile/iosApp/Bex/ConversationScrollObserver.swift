@@ -15,18 +15,23 @@ final class ConversationScrollObserver: NSObject, UIScrollViewDelegate {
         var loadedPage: HistoryPage?
     }
 
+    private struct RenderedPage {
+        let page: HistoryPage
+        let height: CGFloat
+        let offset: CGPoint
+    }
+
     var onScrollToTop: () -> Void = {}
     private weak var scrollView: UIScrollView?
     private weak var original: UIScrollViewDelegate?
     private var historyAnchor: ReadingPosition?
-    private var renderedPage: (page: HistoryPage, height: CGFloat)?
+    private var renderedPage: RenderedPage?
 
-    func captureReadingPosition(turnCount: UInt64, hasMoreHistory: Bool) -> UUID? {
-        guard let scrollView else { return nil }
+    func captureReadingPosition() -> UUID? {
+        guard let renderedPage else { return nil }
         let id = UUID()
-        historyAnchor = ReadingPosition(id: id, offset: scrollView.contentOffset,
-                                        height: scrollView.contentSize.height,
-                                        page: HistoryPage(turnCount: turnCount, hasMore: hasMoreHistory))
+        historyAnchor = ReadingPosition(id: id, offset: renderedPage.offset,
+                                        height: renderedPage.height, page: renderedPage.page)
         return id
     }
 
@@ -46,8 +51,14 @@ final class ConversationScrollObserver: NSObject, UIScrollViewDelegate {
         return restoredReadingPosition()
     }
 
-    func historyDidLayout(turnCount: UInt64, hasMoreHistory: Bool, contentHeight: CGFloat) -> CGPoint? {
-        renderedPage = (HistoryPage(turnCount: turnCount, hasMore: hasMoreHistory), contentHeight)
+    func historyDidLayout(turnCount: UInt64, hasMoreHistory: Bool,
+                          contentHeight: CGFloat, contentOffset: CGPoint) -> CGPoint? {
+        let page = HistoryPage(turnCount: turnCount, hasMore: hasMoreHistory)
+        renderedPage = RenderedPage(page: page, height: contentHeight, offset: contentOffset)
+        if var anchor = historyAnchor, page == anchor.page, contentHeight == anchor.height {
+            anchor.offset = contentOffset
+            historyAnchor = anchor
+        }
         return restoredReadingPosition()
     }
 
@@ -57,8 +68,8 @@ final class ConversationScrollObserver: NSObject, UIScrollViewDelegate {
         guard let anchor = historyAnchor, let page = anchor.loadedPage,
               let renderedPage, page == renderedPage.page else { return nil }
         historyAnchor = nil
-        // SwiftUI publishes geometry before the native content size necessarily catches up.
-        // The screen applies this point through its existing ScrollPosition binding.
+        // Both heights and the offset belong to SwiftUI's geometry. Native content sizes
+        // can include alignment space, and are not interchangeable for short histories.
         return CGPoint(x: anchor.offset.x, y: anchor.offset.y + renderedPage.height - anchor.height)
     }
 
@@ -74,8 +85,6 @@ final class ConversationScrollObserver: NSObject, UIScrollViewDelegate {
     }
 
     func detach() {
-        cancelHistoryRestoration()
-        renderedPage = nil
         if scrollView?.delegate === self {
             scrollView?.delegate = original
         }
@@ -89,14 +98,6 @@ final class ConversationScrollObserver: NSObject, UIScrollViewDelegate {
 
     override func forwardingTarget(for _: Selector!) -> Any? {
         original
-    }
-
-    func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        if var anchor = historyAnchor, scrollView.contentSize.height == anchor.height {
-            anchor.offset = scrollView.contentOffset
-            historyAnchor = anchor
-        }
-        original?.scrollViewDidScroll?(scrollView)
     }
 
     func scrollViewShouldScrollToTop(_ scrollView: UIScrollView) -> Bool {

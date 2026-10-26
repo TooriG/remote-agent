@@ -29,6 +29,7 @@ struct ThreadScreen: View {
         chatContent
             .onDisappear {
                 scrollController.onScrollToTop = {}
+                scrollController.cancelHistoryRestoration()
                 scrollController.detach()
                 visibleLatest = nil
                 dictation.cancel()
@@ -133,7 +134,7 @@ struct ThreadScreen: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
                         if let session = thread.id, let history {
-                            historyControl(history, session: session, turnCount: turnCount)
+                            historyControl(history, session: session)
                         }
                         ForEach(rows) { row in
                             conversationRow(row)
@@ -163,15 +164,19 @@ struct ThreadScreen: View {
                     ConversationScrollLayout(contentHeight: geometry.contentSize.height,
                                              containerHeight: geometry.containerSize.height,
                                              insets: geometry.contentInsets,
+                                             offset: geometry.contentOffset,
                                              turnCount: turnCount,
                                              hasMoreHistory: hasMoreHistory)
-                } action: { _, layout in
+                } action: { previous, layout in
                     if let point = scrollController.historyDidLayout(turnCount: layout.turnCount,
                                                                      hasMoreHistory: layout.hasMoreHistory,
-                                                                     contentHeight: layout.contentHeight) {
+                                                                     contentHeight: layout.contentHeight,
+                                                                     contentOffset: layout.offset) {
                         scrollPosition.scrollTo(point: point)
                     }
-                    if isFollowingLatest {
+                    if isFollowingLatest,
+                       previous.contentHeight != layout.contentHeight ||
+                       previous.containerHeight != layout.containerHeight || previous.insets != layout.insets {
                         scrollPosition.scrollTo(edge: .bottom)
                     }
                 }
@@ -254,11 +259,12 @@ struct ThreadScreen: View {
     }
 }
 
-/// Offset-only changes are user scrolling or an in-flight animation, not a new layout.
+/// Observe position without publishing it as view state; follow the tail only when layout changes.
 private struct ConversationScrollLayout: Equatable {
     let contentHeight: CGFloat
     let containerHeight: CGFloat
     let insets: EdgeInsets
+    let offset: CGPoint
     let turnCount: UInt64
     let hasMoreHistory: Bool
 }
