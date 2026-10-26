@@ -21,3 +21,9 @@ threads-required = "num-test-threads"
 [[profile.default.overrides]]
 filter = 'test(=claude_accounts_login_switch_resume_cancel_and_logout_without_codex)'
 threads-required = "num-test-threads"
+
+# The disconnected-draft contract must observe the closed transport within two
+# seconds. Preserve that deadline without competing process fixtures.
+[[profile.default.overrides]]
+filter = 'test(=disconnected_store_keeps_editing_and_persisting_drafts)'
+threads-required = "num-test-threads"
