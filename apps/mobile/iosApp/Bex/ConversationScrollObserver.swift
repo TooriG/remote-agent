@@ -45,6 +45,7 @@ struct ConversationScrollObserver: UIViewRepresentable {
         weak var scrollView: UIScrollView?
         weak var original: UIScrollViewDelegate?
 
+        private var contentSizeObservation: NSKeyValueObservation?
         private var historyAnchor: (offset: CGPoint, height: CGFloat)?
         private var loadingHistory = false
         private var followingLatest = true
@@ -64,13 +65,19 @@ struct ConversationScrollObserver: UIViewRepresentable {
             if followingLatest {
                 cancelHistoryRestoration()
             }
+            restoreReadingPosition()
+        }
+
+        private func restoreReadingPosition() {
             guard !loadingHistory, historyAnchor != nil else { return }
-            // SwiftUI has published the page before UIKit lays out its new height.
+            // Loading may finish before SwiftUI lays out the inserted rows.
+            // Keep the anchor until UIKit publishes their new content height.
             DispatchQueue.main.async { [weak self] in
                 guard let self, !self.loadingHistory, !self.followingLatest,
-                      let anchor = historyAnchor, let scrollView else { return }
-                historyAnchor = nil
+                      let scrollView else { return }
                 scrollView.layoutIfNeeded()
+                guard let anchor = historyAnchor, scrollView.contentSize.height != anchor.height else { return }
+                historyAnchor = nil
                 let offset = CGPoint(x: anchor.offset.x,
                                      y: anchor.offset.y + scrollView.contentSize.height - anchor.height)
                 scrollView.setContentOffset(offset, animated: false)
@@ -84,6 +91,9 @@ struct ConversationScrollObserver: UIViewRepresentable {
                     if scrollView !== scroll {
                         detach()
                         scrollView = scroll
+                        contentSizeObservation = scroll.observe(\.contentSize) { [weak self] _, _ in
+                            self?.restoreReadingPosition()
+                        }
                     }
                     if scroll.delegate !== self {
                         original = scroll.delegate
@@ -96,6 +106,7 @@ struct ConversationScrollObserver: UIViewRepresentable {
         }
 
         func detach() {
+            contentSizeObservation = nil
             cancelHistoryRestoration()
             if scrollView?.delegate === self {
                 scrollView?.delegate = original
