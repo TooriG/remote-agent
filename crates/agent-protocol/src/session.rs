@@ -107,7 +107,11 @@ pub enum UpdateError {
 
 /// A small change to the current conversation, never a persistent event log.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum SessionChange {
     Submission {
         id: crate::ids::ClientInputId,
@@ -158,6 +162,8 @@ pub enum SessionChange {
         turn_id: crate::ids::TurnId,
         error: ExecutionError,
     },
+    #[serde(other)]
+    Unsupported,
 }
 
 /// Host delivery evidence for an input whose execution is still owned by the Host.
@@ -213,6 +219,7 @@ impl SessionChange {
     pub fn apply_timeline(&self, mut next: Timeline) -> (Timeline, Result<(), UpdateError>) {
         let result = (|| {
             match self {
+                Self::Unsupported => return Ok(()),
                 Self::Submission { id, delivery } => {
                     next.submissions.insert(id.clone(), delivery.clone());
                     return Ok(());
@@ -252,7 +259,8 @@ impl SessionChange {
                 | Self::Submission { .. }
                 | Self::Request { .. }
                 | Self::RequestDelivery { .. }
-                | Self::ResolveRequest { .. } => unreachable!(),
+                | Self::ResolveRequest { .. }
+                | Self::Unsupported => unreachable!(),
             };
             if turn_id.is_empty() {
                 return Err(UpdateError::InvalidTurnId);
@@ -417,7 +425,8 @@ impl SessionChange {
                 | Self::Turn { .. }
                 | Self::Request { .. }
                 | Self::RequestDelivery { .. }
-                | Self::ResolveRequest { .. } => unreachable!(),
+                | Self::ResolveRequest { .. }
+                | Self::Unsupported => unreachable!(),
             }
             Ok(())
         })();
@@ -594,7 +603,7 @@ pub struct SessionUpdate {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct Capabilities {
     pub additional_input: bool,
     pub fork: bool,

@@ -203,7 +203,7 @@ fn pending_submission_reconciles_both_reply_and_echo_orders() {
         let mut finished = pending.clone();
         for (index, echo) in [echo_first, !echo_first].into_iter().enumerate() {
             if echo {
-                finished = fixture_change(&finished, json!({"session":{"provider":"codex","id":"thread"},"change":{"item":{"turnId":"turn","item":{"id":"native","status":"unknown","clientInputId":"client","body":{"inline":{"body":{"userMessage":{"text":null,"content":[]}}}}}}}})).0;
+                finished = fixture_change(&finished, json!({"session":{"provider":"codex","id":"thread"},"change":{"type":"item","turnId":"turn","item":{"id":"native","status":"unknown","clientInputId":"client","body":{"inline":{"body":{"userMessage":{"text":null,"content":[]}}}}}}})).0;
             } else {
                 op::SendSubmission {
                     thread_id: SessionRef {
@@ -421,7 +421,7 @@ fn delta_copies_only_the_changed_path_and_snapshot_round_trips() {
     );
     let (next, _) = fixture_change(
         &state,
-        json!({"session":{"provider":"codex","id":"thread"},"change":{"text":{"turnId":"live","itemId":"changed","delta":" after","field":"assistantText"}}}),
+        json!({"session":{"provider":"codex","id":"thread"},"change":{"type":"text","turnId":"live","itemId":"changed","delta":" after","field":"assistantText"}}),
     );
     assert!(Arc::ptr_eq(
         &state.conversations[&SessionRef {
@@ -677,7 +677,7 @@ fn file_change_delta_appends_to_output_without_inventing_a_diff() {
         let previous = initial(serde_json::from_value(json!({"id":{"provider":"codex","id":"thread"},"turns":[{"id":"turn","items":[{"id":"file","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"fileChange":{"changes":[],"output":output}}}}}],"status":"unknown"}]})).unwrap());
         let (next, _) = fixture_change(
             &previous,
-            json!({"session":{"provider":"codex","id":"thread"},"change":{"text":{"turnId":"turn","itemId":"file","delta":"tail","field":"fileOutput"}}}),
+            json!({"session":{"provider":"codex","id":"thread"},"change":{"type":"text","turnId":"turn","itemId":"file","delta":"tail","field":"fileOutput"}}),
         );
         assert_eq!(next.error, None);
         let item = &next.conversations[&SessionRef {
@@ -733,7 +733,7 @@ fn leaving_conversation_retains_draft_and_marks_later_completion_unread() {
     assert!(effects.is_empty());
     let (completed, _) = fixture_change(
         &listed,
-        json!({"session":{"provider":"codex","id":"thread"},"change":{"turn":{"turn":{"id":"turn","status":"completed","items":[]},"completed":true}}}),
+        json!({"session":{"provider":"codex","id":"thread"},"change":{"type":"turn","turn":{"id":"turn","status":"completed","items":[]},"completed":true}}),
     );
     assert!(completed.activity.unread.contains(&SessionRef {
         provider: ProviderKind::Codex,

@@ -35,7 +35,6 @@ pub struct HostStatus {
     pub name: String,
     pub devices: Vec<String>,
     #[serde(default)]
-    #[serde(with = "crate::protocol::json")]
     pub provider_errors: Option<Map<String, Value>>,
 }
 
@@ -177,11 +176,20 @@ pub fn defer_items(items: &mut [Arc<Item>], max_inline_bytes: usize) {
 }
 
 fn fits_inline(value: &impl Serialize, limit: usize) -> bool {
-    postcard::serialize_with_flavor::<_, postcard::ser_flavors::Size, usize>(
-        value,
-        Default::default(),
-    )
-    .is_ok_and(|size| size <= limit)
+    struct Budget(usize);
+    impl std::io::Write for Budget {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self
+                .0
+                .checked_sub(bytes.len())
+                .ok_or_else(|| std::io::Error::other("inline item exceeds its byte budget"))?;
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    crate::protocol::encode_into(Budget(limit), value).is_ok()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -209,7 +217,6 @@ pub struct ThreadList {
     /// Project pages included in this response, with their own lookahead result.
     pub project_pages: BTreeMap<String, ListPage>,
     #[serde(default)]
-    #[serde(with = "crate::protocol::json")]
     pub provider_errors: Option<Map<String, Value>>,
 }
 
@@ -386,6 +393,17 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
     use serde_json::json;
+
+    #[test]
+    fn inline_budget_matches_the_actual_named_frame_at_the_boundary() {
+        let item: Item = serde_json::from_value(json!({
+                "id":"item", "body":{"inline":{"body":{"assistantText":{"text":"名前と本文","phase":"final"}}}}
+            })).unwrap();
+        let bytes = crate::protocol::encode(&item).unwrap();
+        assert!(fits_inline(&item, bytes.len()));
+        assert!(!fits_inline(&item, bytes.len() - 1));
+        assert!(!fits_inline(&item, 0));
+    }
 
     proptest! {
         #[test]

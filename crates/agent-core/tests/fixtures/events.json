@@ -39,38 +39,37 @@
           "id": "thread"
         },
         "change": {
+          "type": "turn",
           "turn": {
-            "turn": {
-              "id": "t",
-              "status": "completed",
-              "items": [
-                {
-                  "id": "b",
-                  "status": "unknown",
-                  "clientInputId": null,
-                  "body": {
-                    "inline": {
-                      "body": {
-                        "custom": {
-                          "provider": "codex",
-                          "kind": "futureTool",
-                          "value": {
-                            "id": "b",
-                            "type": "futureTool",
-                            "opaque": {
-                              "retained": true
-                            }
+            "id": "t",
+            "status": "completed",
+            "items": [
+              {
+                "id": "b",
+                "status": "unknown",
+                "clientInputId": null,
+                "body": {
+                  "inline": {
+                    "body": {
+                      "custom": {
+                        "provider": "codex",
+                        "kind": "futureTool",
+                        "value": {
+                          "id": "b",
+                          "type": "futureTool",
+                          "opaque": {
+                            "retained": true
                           }
                         }
                       }
                     }
                   }
                 }
-              ],
-              "future": "new"
-            },
-            "completed": true
-          }
+              }
+            ],
+            "future": "new"
+          },
+          "completed": true
         }
       }
     ],
@@ -167,59 +166,58 @@
           "id": "thread"
         },
         "change": {
+          "type": "turn",
           "turn": {
-            "turn": {
-              "id": "t",
-              "status": "completed",
-              "items": [
-                {
-                  "id": "b",
-                  "status": "unknown",
-                  "clientInputId": null,
-                  "body": {
-                    "inline": {
-                      "body": {
-                        "custom": {
-                          "provider": "codex",
-                          "kind": "futureTool",
-                          "value": {
-                            "id": "b",
-                            "type": "futureTool",
-                            "opaque": {
-                              "retained": true
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-                },
-                {
-                  "id": "b",
-                  "status": "unknown",
-                  "clientInputId": null,
-                  "body": {
-                    "inline": {
-                      "body": {
-                        "custom": {
-                          "provider": "codex",
-                          "kind": "futureTool",
-                          "value": {
-                            "id": "b",
-                            "type": "futureTool",
-                            "opaque": {
-                              "retained": true
-                            }
+            "id": "t",
+            "status": "completed",
+            "items": [
+              {
+                "id": "b",
+                "status": "unknown",
+                "clientInputId": null,
+                "body": {
+                  "inline": {
+                    "body": {
+                      "custom": {
+                        "provider": "codex",
+                        "kind": "futureTool",
+                        "value": {
+                          "id": "b",
+                          "type": "futureTool",
+                          "opaque": {
+                            "retained": true
                           }
                         }
                       }
                     }
                   }
                 }
-              ]
-            },
-            "completed": true
-          }
+              },
+              {
+                "id": "b",
+                "status": "unknown",
+                "clientInputId": null,
+                "body": {
+                  "inline": {
+                    "body": {
+                      "custom": {
+                        "provider": "codex",
+                        "kind": "futureTool",
+                        "value": {
+                          "id": "b",
+                          "type": "futureTool",
+                          "opaque": {
+                            "retained": true
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "completed": true
         }
       }
     ],
@@ -317,16 +315,15 @@
           "id": "thread"
         },
         "change": {
+          "type": "turn",
           "turn": {
-            "turn": {
-              "id": "t",
-              "status": "running",
-              "items": [],
-              "startedAt": null,
-              "durationMs": null
-            },
-            "completed": false
-          }
+            "id": "t",
+            "status": "running",
+            "items": [],
+            "startedAt": null,
+            "durationMs": null
+          },
+          "completed": false
         }
       }
     ],
@@ -412,14 +409,13 @@
           "id": "thread"
         },
         "change": {
+          "type": "turn",
           "turn": {
-            "turn": {
-              "id": "t",
-              "status": "completed",
-              "items": []
-            },
-            "completed": true
-          }
+            "id": "t",
+            "status": "completed",
+            "items": []
+          },
+          "completed": true
         }
       }
     ],
@@ -500,37 +496,36 @@
           "id": "thread"
         },
         "change": {
+          "type": "turn",
           "turn": {
-            "turn": {
-              "id": "t",
-              "status": "completed",
-              "items": [
-                {
-                  "id": "b",
-                  "status": "unknown",
-                  "clientInputId": null,
-                  "body": {
-                    "inline": {
-                      "body": {
-                        "custom": {
-                          "provider": "codex",
-                          "kind": "futureTool",
-                          "value": {
-                            "id": "b",
-                            "type": "futureTool",
-                            "opaque": {
-                              "retained": true
-                            }
+            "id": "t",
+            "status": "completed",
+            "items": [
+              {
+                "id": "b",
+                "status": "unknown",
+                "clientInputId": null,
+                "body": {
+                  "inline": {
+                    "body": {
+                      "custom": {
+                        "provider": "codex",
+                        "kind": "futureTool",
+                        "value": {
+                          "id": "b",
+                          "type": "futureTool",
+                          "opaque": {
+                            "retained": true
                           }
                         }
                       }
                     }
                   }
                 }
-              ]
-            },
-            "completed": true
-          }
+              }
+            ]
+          },
+          "completed": true
         }
       }
     ],
@@ -611,14 +606,13 @@
           "id": "thread"
         },
         "change": {
+          "type": "turn",
           "turn": {
-            "turn": {
-              "id": "t",
-              "status": "completed",
-              "items": []
-            },
-            "completed": true
-          }
+            "id": "t",
+            "status": "completed",
+            "items": []
+          },
+          "completed": true
         }
       },
       {
@@ -628,12 +622,11 @@
           "id": "thread"
         },
         "change": {
-          "text": {
-            "turnId": "t",
-            "itemId": "a",
-            "delta": " tail",
-            "field": "assistantText"
-          }
+          "type": "text",
+          "turnId": "t",
+          "itemId": "a",
+          "delta": " tail",
+          "field": "assistantText"
         }
       }
     ],
@@ -735,14 +728,13 @@
           "id": "thread"
         },
         "change": {
+          "type": "turn",
           "turn": {
-            "turn": {
-              "id": "t",
-              "status": "completed",
-              "items": []
-            },
-            "completed": true
-          }
+            "id": "t",
+            "status": "completed",
+            "items": []
+          },
+          "completed": true
         }
       }
     ],

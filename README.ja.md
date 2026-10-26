@@ -2,7 +2,9 @@
 
 [English](README.md) | [日本語](README.ja.md)
 
-bexは、信頼できるコンピューター上のCodexとClaude Codeを、Macアプリ、iPhoneアプリ、Androidアプリ、またはヘッドレスCLIから操作するアプリです。Rust製のHostデーモンがエージェントのプロセスを管理します。すべてのクライアントは認証済みのirohストリームで共通のPostcard RPC型を使い、同じRustの`Store`へ操作を送ります。動作変更は[CHANGELOG.md](CHANGELOG.md)を参照してください。
+bexは、信頼できるコンピューター上のCodexとClaude Codeを、Macアプリ、iPhoneアプリ、Androidアプリ、またはヘッドレスCLIから操作するアプリです。Rust製のHostデーモンがエージェントのプロセスを管理します。すべてのクライアントは認証済みのirohストリームで共通のMessagePack RPC型を使い、同じRustの`Store`へ操作を送ります。動作変更は[CHANGELOG.md](CHANGELOG.md)を参照してください。
+
+通信に互換性のあるHostとクライアントは、別々のタイミングで更新できます。従来の位置依存の通信形式から切り替える際は、一度だけ両側の更新が必要です。
 
 irohは公開リリースを使い、netwatch 0.19.3は[UDPの再バインド回復](https://github.com/n0-computer/net-tools/pull/235)を含むフォークのコミットに固定しています。UDPの再バインド失敗時は、非同期I/Oを終了せず、100ミリ秒から5秒までの指数バックオフで再試行します。ソケットを明示的に閉じると回復処理を中止します。修正が含まれる上流リリースを採用したら、このパッチを削除します。
 

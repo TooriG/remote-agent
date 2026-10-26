@@ -158,7 +158,6 @@ pub struct ModelPage {
     pub data: Vec<crate::models::Model>,
     pub next_cursor: Option<String>,
     #[serde(default)]
-    #[serde(with = "crate::protocol::json")]
     pub provider_errors: Option<Map<String, Value>>,
 }
 

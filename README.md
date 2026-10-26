@@ -2,7 +2,9 @@
 
 [English](README.md) | [日本語](README.ja.md)
 
-bex controls Codex and Claude Code on a trusted computer from a Mac app, an iPhone app, an Android app, or a headless CLI. A Rust Host daemon owns the agent processes; every client connects over authenticated iroh streams using shared Postcard RPC types and dispatches intents to the same Rust `Store`. Behavior changes are recorded in [CHANGELOG.md](CHANGELOG.md).
+bex controls Codex and Claude Code on a trusted computer from a Mac app, an iPhone app, an Android app, or a headless CLI. A Rust Host daemon owns the agent processes; every client connects over authenticated iroh streams using shared MessagePack RPC types and dispatches intents to the same Rust `Store`. Behavior changes are recorded in [CHANGELOG.md](CHANGELOG.md).
+
+Compatible Host and client releases can update independently. Updating from the older positional protocol requires updating both sides once.
 
 The workspace pins netwatch 0.19.3 to a fork commit containing [UDP rebind recovery](https://github.com/n0-computer/net-tools/pull/235), while iroh uses its published release. Failed UDP rebinds retry with exponential backoff from 100 ms to 5 s without terminating asynchronous I/O; explicitly closing a socket cancels recovery. Remove the patch when adopting an upstream release containing the fix.
 

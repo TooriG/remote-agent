@@ -23,13 +23,21 @@ macro_rules! contracts {
         }
         $($(contracts!(@$clone $params, $variant $(, $validate)?);)?)*
         #[derive(Debug, Clone, Serialize, Deserialize)]
-        pub enum Call { $($variant($params)),* }
+        #[serde(tag = "method")]
+        pub enum Call {
+            $(#[serde(rename = $method)] $variant($params)),*,
+            #[serde(other)]
+            Unsupported,
+        }
         impl Call {
             pub fn method(&self) -> &str {
-                match self { $(Self::$variant(_) => $method),* }
+                match self { $(Self::$variant(_) => $method),*, Self::Unsupported => "unsupported" }
             }
             pub fn params_json(&self) -> Result<Value, serde_json::Error> {
-                match self { $(Self::$variant(params) => serde_json::to_value(params)),* }
+                match self {
+                    $(Self::$variant(params) => serde_json::to_value(params)),*,
+                    Self::Unsupported => Ok(Value::Null),
+                }
             }
         }
         pub fn from_json(method: &str, params: Value) -> io::Result<Call> {

@@ -49,7 +49,6 @@ pub enum RequestBody {
     ToolExecution {
         tool: String,
         namespace: Option<String>,
-        #[serde(with = "crate::protocol::json")]
         arguments: Value,
     },
 }
@@ -185,10 +184,7 @@ pub enum QuestionAnswer {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ElicitationAnswer {
-    Accept {
-        #[serde(with = "crate::protocol::json")]
-        values: Value,
-    },
+    Accept { values: Value },
     Decline,
     Cancel,
 }
