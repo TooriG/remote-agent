@@ -245,36 +245,59 @@ impl Desktop {
         if !self.sidebar {
             header = header.pl_0().child(sidebar_header(false, cx));
         }
-        header = header.child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .text_sm()
-                .text_ellipsis()
-                .child(title),
-        );
-        header.child(
-            Self::icon_button(
-                "panel-toggle",
-                if panel_open {
-                    IconName::PanelRightClose
-                } else {
-                    IconName::PanelRightOpen
-                },
-                "右パネルを切り替え",
-                cx,
-                |s, window, cx| {
-                    let key = s.panel_scope();
-                    let open = !s.panels.get(&key).open;
-                    s.panels.set_open(key.clone(), open);
-                    if open && s.panels.get(&key).active.is_none() {
-                        s.panel_focus.focus(window, cx);
-                    }
-                },
+        header
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_sm()
+                    .text_ellipsis()
+                    .child(title),
             )
-            .debug_selector(|| "panel-toggle".into())
-            .selected(panel_open),
+            .when(!panel_open, |header| {
+                header.child(Self::panel_toggle(false, cx))
+            })
+    }
+
+    fn panel_toggle(open: bool, cx: &Context<Self>) -> Button {
+        Self::icon_button(
+            "panel-toggle",
+            IconName::PanelRight,
+            "右パネルを切り替え",
+            cx,
+            move |view, window, cx| {
+                let key = view.panel_scope();
+                view.panels.set_open(key.clone(), !open);
+                if !open && view.panels.get(&key).active.is_none() {
+                    view.panel_focus.focus(window, cx);
+                }
+            },
         )
+        .debug_selector(|| "panel-toggle".into())
+        .selected(open)
+    }
+
+    fn conversation_main(&mut self, show_workspace: bool, cx: &mut Context<Self>) -> AnyElement {
+        let content = h_flex()
+            .flex_1()
+            .min_h_0()
+            .items_stretch()
+            .child(self.chat(cx))
+            .when(show_workspace, |content| {
+                content.child(
+                    div()
+                        .w(px(300.))
+                        .flex_shrink_0()
+                        .child(self.workspace_card(cx)),
+                )
+            });
+        v_flex()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .child(self.conversation_header(cx))
+            .child(content)
+            .into_any_element()
     }
 
     fn conversation_content(&mut self, width: Pixels, cx: &mut Context<Self>) -> AnyElement {
@@ -299,7 +322,7 @@ impl Desktop {
                     "chat-workbench-bottom-split:{:?}",
                     self.panel_scope()
                 )))
-                .child(resizable_panel().child(self.chat(cx)))
+                .child(resizable_panel().child(self.conversation_main(false, cx)))
                 .child(resizable_panel().size(px(360.)).child(right))
                 .into_any_element()
             } else if wide && panel_layout == PanelLayout::Right {
@@ -310,7 +333,7 @@ impl Desktop {
                 .child(
                     resizable_panel()
                         .size_range(px(360.)..px(2400.))
-                        .child(self.chat(cx)),
+                        .child(self.conversation_main(false, cx)),
                 )
                 .child(
                     resizable_panel()
@@ -323,19 +346,7 @@ impl Desktop {
                 right
             }
         } else {
-            h_flex()
-                .size_full()
-                .items_stretch()
-                .child(self.chat(cx))
-                .when(width >= px(1280.), |v| {
-                    v.child(
-                        div()
-                            .w(px(300.))
-                            .flex_shrink_0()
-                            .child(self.workspace_card(cx)),
-                    )
-                })
-                .into_any_element()
+            self.conversation_main(width >= px(1280.), cx)
         };
         v_flex()
             .flex_1()

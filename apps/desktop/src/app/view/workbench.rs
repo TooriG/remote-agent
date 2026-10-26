@@ -474,42 +474,21 @@ impl Desktop {
                     Self::icon_button(
                         "panel-bottom",
                         IconName::PanelBottom,
-                        "下に配置",
+                        "下・右の配置を切り替え",
                         cx,
-                        |view, _, _| {
-                            view.panels
-                                .set_layout(view.panel_scope(), PanelLayout::Bottom)
+                        move |view, _, _| {
+                            let layout = if layout == PanelLayout::Bottom {
+                                PanelLayout::Right
+                            } else {
+                                PanelLayout::Bottom
+                            };
+                            view.panels.set_layout(view.panel_scope(), layout);
                         },
                     )
                     .debug_selector(|| "panel-bottom".into())
                     .selected(layout == PanelLayout::Bottom),
                 )
-                .child(
-                    Self::icon_button(
-                        "panel-right",
-                        IconName::PanelRight,
-                        "右に配置",
-                        cx,
-                        |view, _, _| {
-                            view.panels
-                                .set_layout(view.panel_scope(), PanelLayout::Right)
-                        },
-                    )
-                    .debug_selector(|| "panel-right".into())
-                    .selected(layout == PanelLayout::Right),
-                )
-            })
-            .when(standalone, |bar| {
-                bar.child(
-                    Self::icon_button(
-                        "panel-close",
-                        IconName::Close,
-                        "パネルを閉じる",
-                        cx,
-                        |view, _, _| view.panels.set_open(view.panel_scope(), false),
-                    )
-                    .debug_selector(|| "panel-close".into()),
-                )
+                .child(Self::panel_toggle(true, cx))
             })
             .when(self.side_chat_mode, |bar| {
                 bar.child(
@@ -734,12 +713,23 @@ mod tests {
         let chat = window.debug_bounds("conversation-chat").unwrap();
         let title = window.debug_bounds("conversation-header").unwrap();
         let tools = window.debug_bounds("workbench-header").unwrap();
-        assert_eq!(title.top(), chat.top());
-        assert_eq!(tools.top(), chat.top());
+        assert_eq!(title.bottom(), chat.top());
+        assert_eq!(tools.top(), title.top());
         assert_eq!(tools.size.height, title.size.height);
         assert!(title.right() <= chat.right());
         assert!(tools.left() >= chat.right());
-        assert!(window.debug_bounds("panel-close").is_none());
+        let toggle = window.debug_bounds("panel-toggle").unwrap();
+        assert!(toggle.left() >= tools.left() && toggle.right() <= tools.right());
+        assert!(toggle.left() > window.debug_bounds("panel-bottom").unwrap().right());
+        window.simulate_click(toggle.center(), Modifiers::default());
+        window.run_until_parked();
+        assert!(window.debug_bounds("workbench-header").is_none());
+        let title = window.debug_bounds("conversation-header").unwrap();
+        assert_eq!(title.right(), tools.right());
+        let toggle = window.debug_bounds("panel-toggle").unwrap();
+        assert!(toggle.left() >= title.left() && toggle.right() <= title.right());
+        window.simulate_click(toggle.center(), Modifiers::default());
+        window.run_until_parked();
         assert!(
             window.debug_bounds("panel-add").unwrap().center().x
                 < window.debug_bounds("surface-launcher").unwrap().center().x,
@@ -762,7 +752,7 @@ mod tests {
         let chat = window.debug_bounds("conversation-chat").unwrap();
         let title = window.debug_bounds("conversation-header").unwrap();
         let tools = window.debug_bounds("workbench-header").unwrap();
-        assert_eq!(title.top(), chat.top());
+        assert_eq!(title.bottom(), chat.top());
         assert!(tools.top() >= chat.bottom());
         let diff_menu = window.debug_bounds("diff-file-navigation").unwrap();
         assert!(
@@ -793,6 +783,14 @@ mod tests {
         });
         window.run_until_parked();
         assert!(window.debug_bounds("diff-file-navigation").is_some());
+        let bottom = window.debug_bounds("panel-bottom").unwrap().center();
+        window.simulate_click(bottom, Modifiers::default());
+        window.run_until_parked();
+        let chat = window.debug_bounds("conversation-chat").unwrap();
+        let title = window.debug_bounds("conversation-header").unwrap();
+        let tools = window.debug_bounds("workbench-header").unwrap();
+        assert_eq!(tools.top(), title.top());
+        assert!(tools.left() >= chat.right());
         let expand = window.debug_bounds("panel-expand").unwrap().center();
         window.simulate_click(expand, Modifiers::default());
         window.run_until_parked();
@@ -802,8 +800,18 @@ mod tests {
             window.debug_bounds("workbench-header").unwrap().top(),
             px(0.)
         );
-        let right = window.debug_bounds("panel-right").unwrap().center();
-        window.simulate_click(right, Modifiers::default());
+        let toggle = window.debug_bounds("panel-toggle").unwrap().center();
+        window.simulate_click(toggle, Modifiers::default());
+        window.run_until_parked();
+        assert!(window.debug_bounds("workbench-header").is_none());
+        assert!(window.debug_bounds("conversation-header").is_some());
+        let toggle = window.debug_bounds("panel-toggle").unwrap().center();
+        window.simulate_click(toggle, Modifiers::default());
+        window.run_until_parked();
+        assert!(window.debug_bounds("conversation-header").is_none());
+        assert!(window.debug_bounds("diff-file-navigation").is_some());
+        let restore = window.debug_bounds("panel-expand").unwrap().center();
+        window.simulate_click(restore, Modifiers::default());
         window.run_until_parked();
         assert!(window.debug_bounds("conversation-chat").is_some());
         let close = window
@@ -833,15 +841,15 @@ mod tests {
         let tools = window.debug_bounds("workbench-header").unwrap();
         let sidebar = window.debug_bounds("expand-sidebar").unwrap();
         assert!(sidebar.left() >= tools.left() && sidebar.right() <= tools.right());
-        let right = window.debug_bounds("panel-right").unwrap().center();
-        window.simulate_click(right, Modifiers::default());
+        let restore = window.debug_bounds("panel-expand").unwrap().center();
+        window.simulate_click(restore, Modifiers::default());
         window.simulate_resize(size(px(900.), px(900.)));
         window.run_until_parked();
         assert!(window.debug_bounds("conversation-header").is_none());
         let tools = window.debug_bounds("workbench-header").unwrap();
         let sidebar = window.debug_bounds("expand-sidebar").unwrap();
         assert!(sidebar.left() >= tools.left() && sidebar.right() <= tools.right());
-        let close = window.debug_bounds("panel-close").unwrap().center();
+        let close = window.debug_bounds("panel-toggle").unwrap().center();
         window.simulate_click(close, Modifiers::default());
         window.run_until_parked();
         assert!(window.debug_bounds("conversation-header").is_some());
