@@ -114,7 +114,7 @@
         });
         if (!asset) continue;
         const target = DL[platform];
-        target.url = asset.browser_download_url;
+        target.url = new URL(asset.browser_download_url).href;
         target.ready = true;
         target.source = false;
         target.file = { ja: description, en: description };
