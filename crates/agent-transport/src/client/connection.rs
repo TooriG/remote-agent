@@ -365,6 +365,119 @@ mod tests {
     use crate::transport::{Endpoint, Identity, IncomingRequest, Relays, Trust};
 
     #[tokio::test]
+    async fn unreadable_parameters_and_new_events_leave_the_connection_usable() {
+        tokio::time::timeout(Duration::from_secs(15), async {
+            let host = Endpoint::bind(Identity::generate(), Relays::Loopback)
+                .await
+                .unwrap();
+            let client = Endpoint::bind(Identity::generate(), Relays::Loopback)
+                .await
+                .unwrap();
+            let trust = Trust {
+                allowed: [client.node_id()].into(),
+                ..Default::default()
+            };
+            let ticket = host.ticket();
+            let (session, incoming) = tokio::join!(client.connect(&ticket), host.accept());
+            let session = session.unwrap();
+            let incoming = incoming.unwrap().unwrap().authorize(&trust).unwrap();
+            let (peer, events) = tokio::join!(
+                session.open_peer(Duration::from_secs(3), 4),
+                incoming.accept_peer()
+            );
+            let (peer, mut updates) = peer.unwrap();
+            let mut events = events.unwrap();
+            let serving = tokio::spawn(async move {
+                framing::write(
+                    &mut events,
+                    serde_json::json!({"method":"host/future/event","data":[1,true]}),
+                )
+                .await
+                .unwrap();
+                framing::write(
+                    &mut events,
+                    protocol::Notification::Exited {
+                        handle: "terminal".into(),
+                        code: 42,
+                    },
+                )
+                .await
+                .unwrap();
+                let IncomingRequest::Call(mut request) = incoming.accept_request().await.unwrap()
+                else {
+                    panic!("expected valid call after rejected parameters")
+                };
+                assert!(matches!(request.call, Call::HostName(_)));
+                framing::write(
+                    &mut request.send,
+                    Response::Success {
+                        result: "still connected",
+                    },
+                )
+                .await
+                .unwrap();
+                request.send.finish().unwrap();
+                assert!(matches!(
+                    incoming.accept_request().await.unwrap(),
+                    IncomingRequest::Close
+                ));
+            });
+            for frame in [
+                None,
+                Some(vec![0]),
+                Some(
+                    protocol::encode(
+                        serde_json::json!({"method":"host/model/list","limit":"invalid"}),
+                    )
+                    .unwrap(),
+                ),
+            ] {
+                let (mut send, recv) = peer.connection.open_bi().await.unwrap();
+                send.write_all(&[CALL]).await.unwrap();
+                if let Some(frame) = frame {
+                    framing::write_frame(&mut send, &frame).await.unwrap();
+                }
+                send.finish().unwrap();
+                let reply: Response<()> = framing::Reader::new(recv).read().await.unwrap().unwrap();
+                let Response::Failure { error } = reply else {
+                    panic!("expected a parameter error")
+                };
+                assert_eq!(error.code, "invalid_params");
+                assert_eq!(error.delivery, agent_protocol::error::Delivery::NotSent);
+            }
+            assert_eq!(
+                peer.request::<String>(&Call::HostName(crate::models::Empty {}))
+                    .await
+                    .unwrap(),
+                "still connected"
+            );
+            assert!(matches!(
+                updates
+                    .read::<protocol::Notification>()
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                protocol::Notification::Unsupported
+            ));
+            assert!(matches!(
+                updates
+                    .read::<protocol::Notification>()
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                protocol::Notification::Exited { code: 42, .. }
+            ));
+            peer.close().await;
+            serving.await.unwrap();
+            session.close();
+            client.close().await;
+            host.close().await;
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
     async fn reconnect_uploads_previous_capture_and_only_then_removes_it() {
         use crate::diagnostics::{ConnectionPerformance, connection::Trace};
         tokio::time::timeout(Duration::from_secs(45), async {

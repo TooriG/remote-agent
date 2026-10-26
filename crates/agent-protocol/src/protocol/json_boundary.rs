@@ -3,8 +3,11 @@ pub use super::requests::{
     fixture_reply as reply, from_json as call, provider_response as response,
 };
 use super::*;
-pub fn notification(method: &str, params: Value) -> Result<Notification, serde_json::Error> {
-    serde_json::from_value(serde_json::json!({method:params}))
+pub fn notification(method: &str, mut params: Value) -> Result<Notification, serde_json::Error> {
+    if let Value::Object(fields) = &mut params {
+        fields.insert("method".into(), method.into());
+    }
+    serde_json::from_value(params)
 }
 
 pub(super) fn typed_response<T: DeserializeOwned + Into<Body>>(

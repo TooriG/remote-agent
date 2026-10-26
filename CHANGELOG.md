@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Allow compatible Host and client releases to update independently using named MessagePack RPC records. Keep connections alive after unsupported operations or unreadable request parameters, ignore new event kinds, and retain binary attachments. Updating from the positional protocol requires updating both Host and clients once.
+
 - Add first-run selection and import of existing Codex and Claude Code projects, with skipping, retry, partial results and a Settings entry for later imports. Register folders without copying native history or changing session IDs. Show provider-specific setup errors and retry controls; disable user hooks and automatic MCP/IDE connections during Claude capability probes.
 
 - Fix Windows desktop startup stack overflow and restore the native draggable title bar. Removing an image attachment no longer opens its gallery.

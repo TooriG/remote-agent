@@ -768,12 +768,12 @@ async fn read_response_precedes_following_delta_until_subscription_ends() {
     let (store, mut reader, writer) = setup(snapshot()).await;
     let server = tokio::spawn(async move {
         let request = read(&mut reader).await;
-        writer.notify(json!({"method":"fixture/session/change","session":{"provider":"codex","id":"thread"},"change":{"text":{"turnId":"turn","itemId":"item","delta":" obsolete","field":"assistantText"}}})).await.unwrap();
+        writer.notify(json!({"method":"fixture/session/change","session":{"provider":"codex","id":"thread"},"change":{"type":"text","turnId":"turn","itemId":"item","delta":" obsolete","field":"assistantText"}})).await.unwrap();
         writer
             .reply(&request, json!({"result":{"thread":thread("base")}}))
             .await
             .unwrap();
-        writer.notify(json!({"method":"fixture/session/change","session":{"provider":"codex","id":"thread"},"change":{"text":{"turnId":"turn","itemId":"item","delta":" tail","field":"assistantText"}}})).await.unwrap();
+        writer.notify(json!({"method":"fixture/session/change","session":{"provider":"codex","id":"thread"},"change":{"type":"text","turnId":"turn","itemId":"item","delta":" tail","field":"assistantText"}})).await.unwrap();
         writer.finish_updates().await;
         (writer, reader)
     });
@@ -1061,7 +1061,7 @@ async fn new_conversation_moves_draft_to_pending_before_creation_reply() {
         request["params"]["input"][0]["text"]["text"],
         "first message"
     );
-    writer.notify(json!({"method":"fixture/session/change","session":{"provider":"codex","id":"created"},"change":{"item":{"turnId":"turn","item":{"id":"native","status":"unknown","clientInputId":"client","body":{"inline":{"body":{"userMessage":{"text":null,"content":[{"text":{"text":"first message"}}]}}}}}}}})).await.unwrap();
+    writer.notify(json!({"method":"fixture/session/change","session":{"provider":"codex","id":"created"},"change":{"type":"item","turnId":"turn","item":{"id":"native","status":"unknown","clientInputId":"client","body":{"inline":{"body":{"userMessage":{"text":null,"content":[{"text":{"text":"first message"}}]}}}}}}})).await.unwrap();
     writer
         .reply(&request, json!({ "result":{"turn":{"id":"turn"}}}))
         .await
@@ -1550,7 +1550,7 @@ async fn new_chat_dictation_preserves_text_and_images_for_draft_and_direct_send(
             .reply(&submit, json!({"result":{"turnId":"turn"}}))
             .await
             .unwrap();
-        writer.notify(json!({"method":"fixture/session/change","session":{"provider":"codex","id":"created"},"change":{"turn":{"turn":{"id":"turn","status":"completed","items":[{"id":"native","status":"unknown","clientInputId":"dictation","body":{"inline":{"body":{"userMessage":{"text":null,"content":[]}}}}},{"id":"answer","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"done","phase":"final"}}}}}]},"completed":true}}})).await.unwrap();
+        writer.notify(json!({"method":"fixture/session/change","session":{"provider":"codex","id":"created"},"change":{"type":"turn","turn":{"id":"turn","status":"completed","items":[{"id":"native","status":"unknown","clientInputId":"dictation","body":{"inline":{"body":{"userMessage":{"text":null,"content":[]}}}}},{"id":"answer","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"done","phase":"final"}}}}}]},"completed":true}})).await.unwrap();
         assert!(matches!(sending.await.unwrap(), Outcome::Submitted { .. }));
         wait_for(&store, |snapshot| {
             snapshot.conversations[&SessionRef {
@@ -2062,7 +2062,7 @@ async fn a_stale_catalogue_does_not_queue_a_completed_thread() {
     );
     initial.threads = Some(Arc::new(serde_json::from_value(json!({"data":[{"id":{"provider":"codex","id":"thread"},"cwd":"/fixture","status":"running"}],"projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,})).unwrap()));
     let (store, mut reader, mut writer) = setup(initial).await;
-    writer.notify(json!({"method":"fixture/session/change","session":{"provider":"codex","id":"thread"},"change":{"turn":{"turn":{"id":"completed","status":"completed"},"completed":true}}})).await.unwrap();
+    writer.notify(json!({"method":"fixture/session/change","session":{"provider":"codex","id":"thread"},"change":{"type":"turn","turn":{"id":"completed","status":"completed"},"completed":true}})).await.unwrap();
     wait_for(&store, |snapshot| {
         snapshot.activity.active.get(&SessionRef {
             provider: ProviderKind::Codex,
@@ -2170,7 +2170,7 @@ async fn gallery_history_reads_do_not_block_conversation_notifications() {
         let request = read(&mut reader).await;
         assert_eq!(request["method"], "host/session/open");
         writer.reply(&request, json!({"result":{"thread":{"id":{"provider":"codex","id":"gallery"},"turns":[{"id":"image-turn","items":[{"id":"image","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"imageGeneration":{"savedPath":"/image.png","data":null,"revisedPrompt":null}}}}}],"status":"unknown"}]}}})).await.unwrap();
-        writer.notify(json!({"method":"fixture/session/change","session":{"provider":"codex","id":"thread"},"change":{"text":{"turnId":"turn","itemId":"item","delta":" continued","field":"assistantText"}}})).await.unwrap();
+        writer.notify(json!({"method":"fixture/session/change","session":{"provider":"codex","id":"thread"},"change":{"type":"text","turnId":"turn","itemId":"item","delta":" continued","field":"assistantText"}})).await.unwrap();
         (reader, writer)
     });
     let result = store
@@ -2601,7 +2601,7 @@ async fn fork_opens_the_returned_thread_and_keeps_later_deltas() {
                     .await
                     .unwrap();
             }
-            writer.notify(json!({"method":"fixture/session/change","session":{"provider":"codex","id":"forked"},"change":{"text":{"turnId":"copy","itemId":"reply","delta":" later","field":"assistantText"}}})).await.unwrap();
+            writer.notify(json!({"method":"fixture/session/change","session":{"provider":"codex","id":"forked"},"change":{"type":"text","turnId":"copy","itemId":"reply","delta":" later","field":"assistantText"}})).await.unwrap();
         }
         assert_eq!(
             fork.await.unwrap(),

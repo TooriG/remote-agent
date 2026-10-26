@@ -8,6 +8,7 @@ pub const THREAD_IN_USE_MESSAGE: &str = "この会話はPCのCodexで使用中�
 pub enum Delivery {
     NotSent,
     #[default]
+    #[serde(other)]
     Unknown,
 }
 impl Delivery {

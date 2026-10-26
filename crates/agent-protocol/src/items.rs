@@ -30,6 +30,7 @@ pub enum AssistantPhase {
     Commentary,
     Final,
     #[default]
+    #[serde(other)]
     Unknown,
 }
 
@@ -72,11 +73,8 @@ pub enum ItemBody {
         namespace: Option<String>,
         resource_uri: Option<String>,
         plugin_id: Option<String>,
-        #[serde(with = "crate::protocol::json")]
         arguments: Value,
-        #[serde(with = "crate::protocol::json")]
         result: Option<Value>,
-        #[serde(with = "crate::protocol::json")]
         error: Option<Value>,
         content: Vec<ToolContent>,
         success: Option<bool>,
@@ -101,7 +99,6 @@ pub enum ItemBody {
         receivers: Vec<SessionRef>,
         states: Vec<SubagentState>,
         agent_id: Option<String>,
-        #[serde(with = "crate::protocol::json")]
         result: Option<Value>,
     },
     ImageGeneration {
@@ -140,14 +137,12 @@ pub enum ItemBody {
     },
     Attachment {
         kind: AttachmentKind,
-        #[serde(with = "crate::protocol::json")]
         content: Value,
     },
     Sleep {},
     Custom {
         provider: ProviderKind,
         kind: String,
-        #[serde(with = "crate::protocol::json")]
         value: Value,
     },
 }

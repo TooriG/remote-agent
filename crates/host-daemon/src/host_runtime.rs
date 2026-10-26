@@ -434,3 +434,98 @@ fn now() -> u64 {
         .unwrap_or_default()
         .as_secs()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_protocol::{
+        error::{Delivery, PeerError},
+        models::Empty,
+    };
+    use agent_transport::transport::Relays;
+    use serde_json::Value;
+
+    #[tokio::test]
+    async fn an_unsupported_operation_does_not_disconnect_an_authenticated_client() {
+        tokio::time::timeout(Duration::from_secs(15), async {
+            let directory = tempfile::tempdir().unwrap();
+            let credentials = Arc::new(
+                HostCredentials::load(
+                    Arc::new(crate::FileKeyStore(directory.path().join("identity.keys"))),
+                    directory.path().to_owned(),
+                )
+                .await
+                .unwrap(),
+            );
+            let host = Endpoint::bind(credentials.host_identity().await, Relays::Loopback)
+                .await
+                .unwrap();
+            let client = Endpoint::bind(credentials.local_identity().await, Relays::Loopback)
+                .await
+                .unwrap();
+            let service = HostRpcService::new(
+                std::iter::empty::<crate::adapters::Backend>(),
+                crate::ProjectStore::new(directory.path().join("projects.json")),
+            );
+            let runtime = Arc::new(
+                HostRuntime::new(
+                    service,
+                    host.clone(),
+                    credentials.clone(),
+                    "compatibility-host".into(),
+                    Duration::from_secs(60),
+                )
+                .await,
+            );
+            let ticket = host.ticket();
+            let (session, incoming) = tokio::join!(client.connect(&ticket), host.accept());
+            let session = session.unwrap();
+            let incoming = incoming
+                .unwrap()
+                .unwrap()
+                .authorize(&credentials.record.lock().await.trust)
+                .unwrap();
+            let (peer, events) = tokio::join!(
+                session.open_peer(Duration::from_secs(3), 4),
+                incoming.accept_peer()
+            );
+            let (peer, _updates) = peer.unwrap();
+            let events = events.unwrap();
+            let serving = tokio::spawn(async move {
+                runtime
+                    .serve_connection(&incoming, events, CancellationToken::new())
+                    .await
+            });
+            assert_eq!(
+                peer.request::<String>(&Call::HostName(Empty {}))
+                    .await
+                    .unwrap(),
+                "compatibility-host"
+            );
+            // The receiver has no registered method named "Unsupported".
+            let error = peer.request::<Empty>(&Call::Unsupported).await.unwrap_err();
+            let PeerError::Remote {
+                error, delivery, ..
+            } = error
+            else {
+                panic!("expected a remote operation error")
+            };
+            assert_eq!(delivery, Delivery::NotSent);
+            let error: Value = serde_json::from_str(&error).unwrap();
+            assert_eq!(error["code"], "method_not_found");
+            assert_eq!(
+                peer.request::<String>(&Call::HostName(Empty {}))
+                    .await
+                    .unwrap(),
+                "compatibility-host"
+            );
+            peer.close().await;
+            serving.await.unwrap().unwrap();
+            session.close();
+            client.close().await;
+            host.close().await;
+        })
+        .await
+        .unwrap();
+    }
+}

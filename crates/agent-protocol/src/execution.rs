@@ -9,6 +9,7 @@ pub enum TurnStatus {
     Failed,
     Interrupted,
     #[default]
+    #[serde(other)]
     Unknown,
 }
 
@@ -21,6 +22,7 @@ pub enum ItemStatus {
     Declined,
     Interrupted,
     #[default]
+    #[serde(other)]
     Unknown,
 }
 impl TurnStatus {
@@ -63,7 +65,7 @@ pub enum ErrorCategory {
     Rollback,
     InputUnavailable,
     Internal,
-    Provider(#[serde(with = "crate::protocol::json")] serde_json::Value),
+    Provider(serde_json::Value),
     #[default]
     Other,
 }
@@ -92,5 +94,6 @@ pub enum SessionStatus {
     Idle,
     Unavailable,
     #[default]
+    #[serde(other)]
     Unknown,
 }

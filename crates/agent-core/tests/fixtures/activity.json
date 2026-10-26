@@ -10,13 +10,12 @@
           "id": "a"
         },
         "change": {
+          "type": "turn",
           "turn": {
-            "turn": {
-              "id": "turn",
-              "status": "running"
-            },
-            "completed": false
-          }
+            "id": "turn",
+            "status": "running"
+          },
+          "completed": false
         }
       },
       {
@@ -26,13 +25,12 @@
           "id": "a"
         },
         "change": {
+          "type": "turn",
           "turn": {
-            "turn": {
-              "id": "turn",
-              "status": "completed"
-            },
-            "completed": true
-          }
+            "id": "turn",
+            "status": "completed"
+          },
+          "completed": true
         }
       }
     ],
@@ -50,13 +48,12 @@
           "id": "a"
         },
         "change": {
+          "type": "turn",
           "turn": {
-            "turn": {
-              "id": "turn",
-              "status": "completed"
-            },
-            "completed": true
-          }
+            "id": "turn",
+            "status": "completed"
+          },
+          "completed": true
         }
       }
     ],
@@ -74,13 +71,12 @@
           "id": "a"
         },
         "change": {
+          "type": "turn",
           "turn": {
-            "turn": {
-              "id": "turn",
-              "status": "failed"
-            },
-            "completed": true
-          }
+            "id": "turn",
+            "status": "failed"
+          },
+          "completed": true
         }
       }
     ],
@@ -98,13 +94,12 @@
           "id": "a"
         },
         "change": {
+          "type": "turn",
           "turn": {
-            "turn": {
-              "id": "turn",
-              "status": "interrupted"
-            },
-            "completed": true
-          }
+            "id": "turn",
+            "status": "interrupted"
+          },
+          "completed": true
         }
       }
     ],
@@ -122,13 +117,12 @@
           "id": "a"
         },
         "change": {
+          "type": "turn",
           "turn": {
-            "turn": {
-              "id": "turn",
-              "status": "completed"
-            },
-            "completed": true
-          }
+            "id": "turn",
+            "status": "completed"
+          },
+          "completed": true
         }
       },
       {
@@ -138,9 +132,8 @@
           "id": "a"
         },
         "change": {
-          "status": {
-            "status": "running"
-          }
+          "type": "status",
+          "status": "running"
         }
       }
     ],
@@ -158,13 +151,12 @@
           "id": "a"
         },
         "change": {
+          "type": "turn",
           "turn": {
-            "turn": {
-              "id": "turn",
-              "status": "completed"
-            },
-            "completed": true
-          }
+            "id": "turn",
+            "status": "completed"
+          },
+          "completed": true
         }
       },
       {
@@ -174,9 +166,8 @@
           "id": "a"
         },
         "change": {
-          "status": {
-            "status": "idle"
-          }
+          "type": "status",
+          "status": "idle"
         }
       }
     ],

@@ -26,10 +26,9 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tracing::Instrument;
 use uuid::Uuid;
 
-// Bump when shared Postcard types change incompatibly; enum indices and field
-// positions are part of the wire format, even when decoding still succeeds.
-// Version 12 separates model settings and typed credential operations.
-const ALPN: &[u8] = b"remote-agent/streams/14";
+// Versions describe the framing/codec, not application releases or RPC additions.
+// Named records and methods evolve under agent_protocol::protocol's contract.
+const ALPN: &[u8] = b"bex/messagepack/1";
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
     #[error("iroh transport failed: {0}")]
@@ -375,39 +374,59 @@ impl Session {
     /// Hand each accepted stream directly to the resource owner.
     pub async fn accept_request(&self) -> Result<IncomingRequest, TransportError> {
         use crate::client::{BLOB, CALL, CLOSE};
-        let (mut send, mut recv) = self.connection.accept_bi().await.map_err(connection)?;
-        let accepted_at = std::time::Instant::now();
-        let mut kind = [0u8; 1];
-        recv.read_exact(&mut kind).await.map_err(connection)?;
-        match kind[0] {
-            BLOB => Ok(IncomingRequest::Blob(Stream {
-                send,
-                recv,
-                _session: self.clone(),
-                shutdown: None,
-            })),
-            CALL => {
-                let call = crate::framing::Reader::new(recv)
-                    .read::<crate::protocol::Call>()
-                    .await
-                    .map_err(connection)?
-                    .ok_or_else(|| connection("request stream ended before its request"))?;
-                if matches!(call, crate::protocol::Call::SessionScope(_)) {
-                    self._endpoint.1.activate();
+        loop {
+            let (mut send, mut recv) = self.connection.accept_bi().await.map_err(connection)?;
+            let accepted_at = std::time::Instant::now();
+            let mut kind = [0u8; 1];
+            recv.read_exact(&mut kind).await.map_err(connection)?;
+            match kind[0] {
+                BLOB => {
+                    return Ok(IncomingRequest::Blob(Stream {
+                        send,
+                        recv,
+                        _session: self.clone(),
+                        shutdown: None,
+                    }));
                 }
-                Ok(IncomingRequest::Call(HostRequest {
-                    call,
-                    send,
-                    accepted_at,
-                    decoded_at: std::time::Instant::now(),
-                }))
+                CALL => {
+                    let call = match crate::framing::Reader::new(recv)
+                        .read::<crate::protocol::Call>()
+                        .await
+                    {
+                        Ok(Some(call)) => call,
+                        // A newer peer may send parameters this Host cannot read.
+                        // Only this request failed, and no operation was executed.
+                        Ok(None) | Err(_) => {
+                            let response = crate::protocol::Response::<()>::Failure {
+                                error: agent_protocol::error::RpcFailure {
+                                    code: "invalid_params".into(),
+                                    message: "このHostは操作のパラメーターを読み取れません。PC側のBEXを更新してください。".into(),
+                                    delivery: agent_protocol::error::Delivery::NotSent,
+                                    execution: None,
+                                },
+                            };
+                            let _ = crate::framing::write(&mut send, response).await;
+                            let _ = send.finish();
+                            continue;
+                        }
+                    };
+                    if matches!(call, crate::protocol::Call::SessionScope(_)) {
+                        self._endpoint.1.activate();
+                    }
+                    return Ok(IncomingRequest::Call(HostRequest {
+                        call,
+                        send,
+                        accepted_at,
+                        decoded_at: std::time::Instant::now(),
+                    }));
+                }
+                CLOSE => {
+                    send.write_all(&[0]).await.map_err(connection)?;
+                    send.finish().map_err(connection)?;
+                    return Ok(IncomingRequest::Close);
+                }
+                _ => return Err(connection("unknown stream kind")),
             }
-            CLOSE => {
-                send.write_all(&[0]).await.map_err(connection)?;
-                send.finish().map_err(connection)?;
-                Ok(IncomingRequest::Close)
-            }
-            _ => Err(connection("unknown stream kind")),
         }
     }
     pub async fn open_peer(
@@ -486,7 +505,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn current_peers_connect_but_pre_reasoning_protocol_is_rejected() {
+    async fn named_protocol_connects_but_positional_protocol_is_rejected() {
         tokio::time::timeout(Duration::from_secs(10), async {
             let host = Endpoint::bind(Identity::generate(), Relays::Loopback)
                 .await
@@ -500,17 +519,16 @@ mod tests {
             assert!(accepted.unwrap().is_ok());
             connected.close();
 
-            // A v12 peer looks up decoration roots on the Host. Reject at TLS
-            // negotiation, before any request can be decoded as another type.
+            // Positional frames cannot be interpreted as named records.
             let legacy = iroh::Endpoint::builder(presets::N0)
-                .alpns(vec![b"remote-agent/streams/12".to_vec()])
+                .alpns(vec![b"remote-agent/streams/14".to_vec()])
                 .relay_mode(RelayMode::Disabled)
                 .clear_address_lookup()
                 .bind()
                 .await
                 .unwrap();
             let (connected, accepted) = tokio::join!(
-                legacy.connect(host.0.addr(), b"remote-agent/streams/12"),
+                legacy.connect(host.0.addr(), b"remote-agent/streams/14"),
                 host.accept()
             );
             assert!(connected.is_err());
