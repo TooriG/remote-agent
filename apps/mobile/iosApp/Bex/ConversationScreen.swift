@@ -140,10 +140,7 @@ struct ThreadScreen: View {
                     .padding(.horizontal, 16)
                     .padding(.vertical, 6)
                     .background(ConversationScrollObserver(controller: scrollController,
-                                                           loadingHistory: history?.loading ?? false,
-                                                           followingLatest: isFollowingLatest,
-                                                           rowCount: thread.rows.count,
-                                                           hasMoreHistory: history?.hasMore ?? false) {
+                                                           followingLatest: isFollowingLatest) {
                             followLatest.wrappedValue = false
                         })
                 }
@@ -175,6 +172,7 @@ struct ThreadScreen: View {
                 }.onEnded { gesture in
                     if gesture.translation.height < -abs(gesture.translation.width),
                        visibleLatest == latestBoundary {
+                        scrollController.cancelHistoryRestoration()
                         isFollowingLatest = true
                         scrollPosition.scrollTo(edge: .bottom)
                     }
@@ -182,6 +180,7 @@ struct ThreadScreen: View {
                 .overlay(alignment: .bottom) {
                     if visibleLatest != latestBoundary, !rows.isEmpty {
                         Button {
+                            scrollController.cancelHistoryRestoration()
                             isFollowingLatest = true
                             withAnimation { scrollPosition.scrollTo(edge: .bottom) }
                         } label: {

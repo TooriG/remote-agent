@@ -8,9 +8,12 @@ extension ThreadScreen {
         VStack(spacing: 6) {
             if control.hasMore {
                 Button {
-                    scrollController.captureReadingPosition(rowCount: rowCount, hasMoreHistory: control.hasMore)
+                    let controller = scrollController
+                    let request = controller.captureReadingPosition(rowCount: rowCount, hasMoreHistory: control.hasMore)
                     isFollowingLatest = false
-                    model.loadOlderHistory(session)
+                    model.loadOlderHistory(session) { succeeded, rows, hasMore in
+                        controller.historyLoaded(request, succeeded: succeeded, rowCount: rows, hasMoreHistory: hasMore)
+                    }
                 } label: {
                     HStack(spacing: 12) {
                         Rectangle().frame(height: 1).foregroundStyle(Color(UIColor.separator))

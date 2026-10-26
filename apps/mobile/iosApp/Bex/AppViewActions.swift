@@ -137,10 +137,17 @@ extension BexAppViewModel {
         showThreadList()
     }
 
-    func loadOlderHistory(_ id: SessionRef) {
+    func loadOlderHistory(
+        _ id: SessionRef,
+        completion: @escaping (_ succeeded: Bool, _ rowCount: Int, _ hasMore: Bool) -> Void
+    ) {
         guard selectedThreadId == id else { return }
         notice = nil
-        perform(.readOlder(threadId: id))
+        perform(.readOlder(threadId: id)) { [weak self] result in
+            guard let self else { return }
+            completion((try? result.get()) != nil, snapshot.conversation(id: id)?.rows.count ?? 0,
+                       snapshot.historyControl(session: id)?.hasMore ?? false)
+        }
     }
 
     func send() {

@@ -9,10 +9,42 @@ struct ConversationScrollTests {
         }
     }
 
-    @MainActor static func nextMainQueueTurn() async {
+    static let scenarios = [
+        (early: false, native: false, cancel: false, height: 1100.0, rows: 2, more: true,
+         message: "Prepending must preserve the visible marker position"),
+        (early: false, native: true, cancel: false, height: 1100.0, rows: 2, more: true,
+         message: "Native offset correction must not be applied twice"),
+        (early: true, native: false, cancel: false, height: 1100.0, rows: 2, more: true,
+         message: "History completion before layout must retain the reading position"),
+        (early: false, native: false, cancel: false, height: -40.0, rows: 1, more: false,
+         message: "Removing the last page control must preserve the visible message"),
+        (early: false, native: false, cancel: true, height: 1100.0, rows: 2, more: true,
+         message: "Navigation must cancel a pending restoration")
+    ]
+
+    @MainActor static func flushMainQueue() async {
         await withCheckedContinuation { continuation in
             DispatchQueue.main.async { continuation.resume() }
         }
+    }
+
+    @MainActor static func checkCanceledLoads(_ controller: ConversationScrollObserver.Coordinator,
+                                              scroll: UIScrollView) {
+        for succeeded in [false, true] {
+            let request = controller.captureReadingPosition(rowCount: 1, hasMoreHistory: true)
+            controller.historyLoaded(request, succeeded: succeeded, rowCount: succeeded ? 1 : 2, hasMoreHistory: true)
+            let prior = scroll.contentOffset
+            scroll.contentSize.height += 500
+            check(scroll.contentOffset == prior, "Failed and empty pages must not anchor later stream updates")
+        }
+        let obsolete = controller.captureReadingPosition(rowCount: 1, hasMoreHistory: true)
+        let current = controller.captureReadingPosition(rowCount: 1, hasMoreHistory: true)
+        controller.historyLoaded(obsolete, succeeded: true, rowCount: 2, hasMoreHistory: true)
+        let prior = scroll.contentOffset
+        scroll.contentSize.height += 500
+        check(scroll.contentOffset == prior, "A superseded load must not restore a new request's reading position")
+        controller.historyLoaded(current, succeeded: true, rowCount: 2, hasMoreHistory: true)
+        check(scroll.contentOffset.y == prior.y + 500, "The current request must still restore after an old completion")
     }
 
     @MainActor static func main() async {
@@ -22,50 +54,48 @@ struct ConversationScrollTests {
         root.addSubview(scroll)
         let marker = UIView(frame: CGRect(x: 0, y: 250, width: 320, height: 40))
         scroll.addSubview(marker)
-        let observer = UIView(frame: .zero)
-        scroll.addSubview(observer)
         let controller = ConversationScrollObserver.Coordinator()
-        controller.attach(to: observer)
-        controller.update(loadingHistory: false, followingLatest: false, rowCount: 1, hasMoreHistory: true)
+        controller.attach(to: marker)
         scroll.contentOffset.y = 200
         let readingY = marker.convert(marker.bounds, to: root).minY
-        controller.captureReadingPosition(rowCount: 1, hasMoreHistory: true)
-        controller.update(loadingHistory: true, followingLatest: false, rowCount: 1, hasMoreHistory: true)
-        // Model completion can reach SwiftUI before the native layout changes.
-        controller.update(loadingHistory: false, followingLatest: false, rowCount: 2, hasMoreHistory: false)
-        await nextMainQueueTurn()
-        marker.frame.origin.y += 1100
-        scroll.contentSize.height += 1100
-        await nextMainQueueTurn()
-        check(abs(marker.convert(marker.bounds, to: root).minY - readingY) < 0.1,
-              "Prepending must preserve the visible marker position")
-
-        controller.captureReadingPosition(rowCount: 2, hasMoreHistory: false)
-        controller.update(loadingHistory: true, followingLatest: false, rowCount: 2, hasMoreHistory: false)
-        marker.frame.origin.y += 500
-        scroll.contentSize.height += 500
-        scroll.contentOffset.y += 500
-        controller.update(loadingHistory: false, followingLatest: false, rowCount: 3, hasMoreHistory: false)
-        await nextMainQueueTurn()
-        check(abs(marker.convert(marker.bounds, to: root).minY - readingY) < 0.1,
-              "Native offset correction must not be applied twice")
-
-        controller.captureReadingPosition(rowCount: 3, hasMoreHistory: false)
-        controller.update(loadingHistory: true, followingLatest: false, rowCount: 3, hasMoreHistory: false)
-        controller.cancelHistoryRestoration()
-        let afterNavigation = scroll.contentOffset
-        scroll.contentSize.height += 500
-        controller.update(loadingHistory: false, followingLatest: false, rowCount: 4, hasMoreHistory: false)
-        await nextMainQueueTurn()
-        check(scroll.contentOffset == afterNavigation, "Navigation must cancel a pending restoration")
-        controller.captureReadingPosition(rowCount: 4, hasMoreHistory: false)
-        controller.update(loadingHistory: true, followingLatest: false, rowCount: 4, hasMoreHistory: false)
-        controller.update(loadingHistory: false, followingLatest: false, rowCount: 4, hasMoreHistory: false)
-        let afterFailedPage = scroll.contentOffset
-        controller.update(loadingHistory: false, followingLatest: false, rowCount: 5, hasMoreHistory: false)
-        scroll.contentSize.height += 500
-        check(scroll.contentOffset == afterFailedPage, "A failed or empty page must not anchor later stream updates")
+        for scenario in scenarios {
+            let request = controller.captureReadingPosition(rowCount: 1, hasMoreHistory: true)
+            await flushMainQueue() // Unrelated idle updates must not consume the capture.
+            if scenario.early {
+                controller.historyLoaded(
+                    request,
+                    succeeded: true,
+                    rowCount: scenario.rows,
+                    hasMoreHistory: scenario.more
+                )
+                await flushMainQueue()
+            }
+            if scenario.cancel {
+                controller.cancelHistoryRestoration()
+            }
+            let priorOffset = scroll.contentOffset
+            marker.frame.origin.y += scenario.height
+            scroll.contentSize.height += scenario.height
+            if scenario.native {
+                scroll.contentOffset.y += scenario.height
+            }
+            if !scenario.early {
+                controller.historyLoaded(
+                    request,
+                    succeeded: true,
+                    rowCount: scenario.rows,
+                    hasMoreHistory: scenario.more
+                )
+            }
+            await flushMainQueue()
+            if scenario.cancel {
+                check(scroll.contentOffset == priorOffset, scenario.message)
+            } else {
+                check(abs(marker.convert(marker.bounds, to: root).minY - readingY) < 0.1, scenario.message)
+            }
+        }
+        checkCanceledLoads(controller, scroll: scroll)
         controller.detach()
-        print("Native scroll tests passed: deferred layout, native correction, navigation cancellation, failed page")
+        print("Native scroll tests passed: layout order, correction, cancellation, empty pages, superseded loads")
     }
 }

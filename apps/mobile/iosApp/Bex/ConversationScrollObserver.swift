@@ -4,10 +4,7 @@ import UIKit
 /// Own the native scroll view's status-bar navigation and history insertion offset.
 struct ConversationScrollObserver: UIViewRepresentable {
     let controller: Coordinator
-    let loadingHistory: Bool
     let followingLatest: Bool
-    let rowCount: Int
-    let hasMoreHistory: Bool
     let onScrollToTop: () -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -24,8 +21,9 @@ struct ConversationScrollObserver: UIViewRepresentable {
     func updateUIView(_ view: ObserverView, context: Context) {
         context.coordinator.onScrollToTop = onScrollToTop
         context.coordinator.attach(to: view)
-        context.coordinator.update(loadingHistory: loadingHistory, followingLatest: followingLatest,
-                                   rowCount: rowCount, hasMoreHistory: hasMoreHistory)
+        if followingLatest {
+            context.coordinator.cancelHistoryRestoration()
+        }
     }
 
     static func dismantleUIView(_: ObserverView, coordinator: Coordinator) {
@@ -44,6 +42,7 @@ struct ConversationScrollObserver: UIViewRepresentable {
     }
 
     private struct ReadingPosition {
+        let id: UUID
         var offset: CGPoint
         let height: CGFloat
         let rowCount: Int
@@ -55,32 +54,31 @@ struct ConversationScrollObserver: UIViewRepresentable {
         var onScrollToTop: () -> Void = {}
         weak var scrollView: UIScrollView?
         weak var original: UIScrollViewDelegate?
-
         private var historyAnchor: ReadingPosition?
         private var contentSizeObservation: NSKeyValueObservation?
 
-        func captureReadingPosition(rowCount: Int, hasMoreHistory: Bool) {
-            guard let scrollView else { return }
-            historyAnchor = ReadingPosition(offset: scrollView.contentOffset, height: scrollView.contentSize.height,
+        func captureReadingPosition(rowCount: Int, hasMoreHistory: Bool) -> UUID? {
+            guard let scrollView else { return nil }
+            let id = UUID()
+            historyAnchor = ReadingPosition(id: id, offset: scrollView.contentOffset,
+                                            height: scrollView.contentSize.height,
                                             rowCount: rowCount, hasMoreHistory: hasMoreHistory)
+            return id
         }
 
         func cancelHistoryRestoration() {
             historyAnchor = nil
         }
 
-        func update(loadingHistory: Bool, followingLatest: Bool, rowCount: Int, hasMoreHistory: Bool) {
-            if followingLatest {
+        func historyLoaded(_ id: UUID?, succeeded: Bool, rowCount: Int, hasMoreHistory: Bool) {
+            guard let id, var anchor = historyAnchor, anchor.id == id else { return }
+            guard succeeded, rowCount != anchor.rowCount || hasMoreHistory != anchor.hasMoreHistory else {
                 cancelHistoryRestoration()
-            } else if !loadingHistory, var anchor = historyAnchor {
-                guard rowCount != anchor.rowCount || hasMoreHistory != anchor.hasMoreHistory else {
-                    cancelHistoryRestoration()
-                    return
-                }
-                anchor.ready = true
-                historyAnchor = anchor
-                restoreReadingPosition()
+                return
             }
+            anchor.ready = true
+            historyAnchor = anchor
+            restoreReadingPosition()
         }
 
         private func restoreReadingPosition() {
@@ -99,7 +97,7 @@ struct ConversationScrollObserver: UIViewRepresentable {
                     if scrollView !== scroll {
                         detach()
                         scrollView = scroll
-                        // SwiftUI can publish a completed page before UIKit lays it out.
+                        // The operation can finish before SwiftUI lays out its new rows.
                         contentSizeObservation = scroll.observe(\.contentSize) { [weak self] _, _ in
                             self?.restoreReadingPosition()
                         }
