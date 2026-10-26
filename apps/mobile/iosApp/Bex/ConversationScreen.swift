@@ -166,7 +166,9 @@ struct ThreadScreen: View {
                     if let point = scrollController.historyDidLayout(turnCount: layout.turnCount,
                                                                      hasMoreHistory: layout.hasMoreHistory,
                                                                      contentHeight: layout.contentHeight,
-                                                                     contentOffset: layout.offset) {
+                                                                     contentOffset: layout.offset,
+                                                                     scrollOrigin: CGPoint(x: layout.insets.leading,
+                                                                                           y: layout.insets.top)) {
                         scrollPosition.scrollTo(point: point)
                     }
                     if isFollowingLatest,

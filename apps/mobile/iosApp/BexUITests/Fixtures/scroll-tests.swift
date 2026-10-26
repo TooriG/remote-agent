@@ -11,7 +11,9 @@ struct ConversationScrollTests {
 
     @MainActor static func apply(_ point: CGPoint?, to scroll: UIScrollView) {
         if let point {
-            scroll.setContentOffset(point, animated: false)
+            // ScrollPosition applies its point relative to the inset content origin.
+            let insets = scroll.adjustedContentInset
+            scroll.setContentOffset(CGPoint(x: point.x - insets.left, y: point.y - insets.top), animated: false)
         }
     }
 
@@ -20,7 +22,9 @@ struct ConversationScrollTests {
                                   turns: UInt64, more: Bool) {
         apply(controller.historyDidLayout(turnCount: turns, hasMoreHistory: more,
                                           contentHeight: scroll.contentSize.height,
-                                          contentOffset: scroll.contentOffset), to: scroll)
+                                          contentOffset: scroll.contentOffset,
+                                          scrollOrigin: CGPoint(x: scroll.adjustedContentInset.left,
+                                                                y: scroll.adjustedContentInset.top)), to: scroll)
     }
 
     static let scenarios = [
@@ -124,10 +128,10 @@ struct ConversationScrollTests {
 
     @MainActor static func checkDelayedNativeGeometry(_ controller: ConversationScrollObserver,
                                                       scroll: UIScrollView) {
-        // A short SwiftUI scroll view can add native alignment space below its content.
-        let baselineHeight = scroll.contentSize.height - 116
+        let baselineHeight = scroll.contentSize.height
         apply(controller.historyDidLayout(turnCount: 1, hasMoreHistory: true,
-                                          contentHeight: baselineHeight, contentOffset: scroll.contentOffset),
+                                          contentHeight: baselineHeight, contentOffset: scroll.contentOffset,
+                                          scrollOrigin: .zero),
               to: scroll)
         let request = controller.captureReadingPosition()
         apply(controller.historyLoaded(request, succeeded: true, turnCount: 2, hasMoreHistory: false), to: scroll)
@@ -137,10 +141,11 @@ struct ConversationScrollTests {
             turnCount: 2,
             hasMoreHistory: false,
             contentHeight: height,
-            contentOffset: scroll.contentOffset
+            contentOffset: scroll.contentOffset,
+            scrollOrigin: .zero
         )
         check(restored == CGPoint(x: prior.x, y: prior.y + 1100),
-              "Both measurements must use SwiftUI geometry, excluding native alignment space")
+              "Use the published geometry before the native content size updates")
         check(scroll.contentOffset == prior, "Only the screen may apply the returned reading position")
     }
 
@@ -156,6 +161,29 @@ struct ConversationScrollTests {
         render(controller, scroll: scroll, turns: 2, more: true)
         check(scroll.contentOffset.y == readingOffset + 500,
               "Keep the user's scrolling while the history request is pending")
+    }
+
+    @MainActor static func checkChangingViewportInsets() {
+        let root = UIView(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        let scroll = UIScrollView(frame: root.bounds)
+        root.addSubview(scroll)
+        scroll.contentSize = CGSize(width: 402, height: 433)
+        scroll.contentInset = UIEdgeInsets(top: 257, left: 20, bottom: 184, right: 0)
+        scroll.contentOffset = CGPoint(x: -20, y: -257)
+        let marker = UIView(frame: CGRect(x: 50, y: 300, width: 100, height: 40))
+        scroll.addSubview(marker)
+        let controller = ConversationScrollObserver()
+        render(controller, scroll: scroll, turns: 5, more: true)
+        let request = controller.captureReadingPosition()
+        let readingPosition = marker.convert(marker.bounds, to: root).origin
+        apply(controller.historyLoaded(request, succeeded: true, turnCount: 10, hasMoreHistory: false), to: scroll)
+        marker.frame.origin.y += 1080
+        scroll.contentSize.height += 1080
+        scroll.contentInset = UIEdgeInsets(top: 116, left: 40, bottom: 184, right: 0)
+        render(controller, scroll: scroll, turns: 10, more: false)
+        let restored = marker.convert(marker.bounds, to: root).origin
+        check(abs(restored.x - readingPosition.x) < 0.1 && abs(restored.y - readingPosition.y) < 0.1,
+              "Use the completed page's insets when converting geometry into a ScrollPosition point")
     }
 
     @MainActor static func main() {
@@ -174,6 +202,7 @@ struct ConversationScrollTests {
         checkDelayedNativeGeometry(controller, scroll: scroll)
         checkScrollingDuringLoad(controller, scroll: scroll)
         checkCanceledLoads(controller, scroll: scroll)
+        checkChangingViewportInsets()
         controller.detach()
         print("Native history scroll tests passed")
     }

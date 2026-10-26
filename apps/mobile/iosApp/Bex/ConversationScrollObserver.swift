@@ -19,6 +19,7 @@ final class ConversationScrollObserver: NSObject, UIScrollViewDelegate {
         let page: HistoryPage
         let height: CGFloat
         let offset: CGPoint
+        let scrollOrigin: CGPoint
     }
 
     var onScrollToTop: () -> Void = {}
@@ -52,9 +53,14 @@ final class ConversationScrollObserver: NSObject, UIScrollViewDelegate {
     }
 
     func historyDidLayout(turnCount: UInt64, hasMoreHistory: Bool,
-                          contentHeight: CGFloat, contentOffset: CGPoint) -> CGPoint? {
+                          contentHeight: CGFloat, contentOffset: CGPoint, scrollOrigin: CGPoint) -> CGPoint? {
         let page = HistoryPage(turnCount: turnCount, hasMore: hasMoreHistory)
-        renderedPage = RenderedPage(page: page, height: contentHeight, offset: contentOffset)
+        renderedPage = RenderedPage(
+            page: page,
+            height: contentHeight,
+            offset: contentOffset,
+            scrollOrigin: scrollOrigin
+        )
         if var anchor = historyAnchor, page == anchor.page, contentHeight == anchor.height {
             anchor.offset = contentOffset
             historyAnchor = anchor
@@ -68,9 +74,10 @@ final class ConversationScrollObserver: NSObject, UIScrollViewDelegate {
         guard let anchor = historyAnchor, let page = anchor.loadedPage,
               let renderedPage, page == renderedPage.page else { return nil }
         historyAnchor = nil
-        // Both heights and the offset belong to SwiftUI's geometry. Native content sizes
-        // can include alignment space, and are not interchangeable for short histories.
-        return CGPoint(x: anchor.offset.x, y: anchor.offset.y + renderedPage.height - anchor.height)
+        // Geometry offsets include viewport insets; ScrollPosition points start after them.
+        // Use the completed layout's origin because short-content alignment can change it.
+        return CGPoint(x: anchor.offset.x + renderedPage.scrollOrigin.x,
+                       y: anchor.offset.y + renderedPage.height - anchor.height + renderedPage.scrollOrigin.y)
     }
 
     func attach(to scroll: UIScrollView) {
