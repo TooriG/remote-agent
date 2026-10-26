@@ -6,6 +6,7 @@ extern crate self as agent_core;
 
 #[cfg(feature = "browser-import")]
 pub mod browser_import;
+pub mod browser_view;
 pub mod client;
 pub mod composer;
 pub mod panels;

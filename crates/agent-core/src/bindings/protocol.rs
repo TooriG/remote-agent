@@ -182,17 +182,56 @@ struct BrowserRequest {
     pub thread_id: SessionRef,
     pub tab_id: String,
     pub image_id: String,
+    pub client_id: String,
+    pub generation: u64,
     pub action: BrowserAction,
 }
 #[uniffi::remote(Enum)]
 enum BrowserAction {
     Read,
+    TakeControl,
+    ReleaseControl,
+    OpenTab {
+        url: String,
+    },
+    CloseTab {
+        id: String,
+    },
+    Resize {
+        width: u32,
+        height: u32,
+    },
     Navigate {
         url: String,
     },
     Click {
         x: f64,
         y: f64,
+    },
+    Hover {
+        x: f64,
+        y: f64,
+    },
+    Drag {
+        x: f64,
+        y: f64,
+        to_x: f64,
+        to_y: f64,
+    },
+    Snapshot,
+    Evaluate {
+        expression: String,
+    },
+    ClickElement {
+        selector: String,
+    },
+    Fill {
+        selector: String,
+        text: String,
+    },
+    SelectOption {
+        selector: String,
+        value: String,
     },
     Scroll {
         x: f64,
@@ -228,6 +267,11 @@ enum BrowserKey {
     ArrowLeft,
     ArrowRight,
     SelectAll,
+    Delete,
+    Home,
+    End,
+    PageUp,
+    PageDown,
 }
 #[uniffi::remote(Record)]
 struct BrowserTab {
@@ -240,16 +284,28 @@ struct BrowserDialog {
     pub message: String,
     pub prompt: bool,
 }
+#[uniffi::remote(Enum)]
+enum BrowserController {
+    Agent,
+    You,
+    AnotherViewer,
+}
 #[uniffi::remote(Record)]
 struct BrowserFrame {
     pub tabs: Vec<BrowserTab>,
     pub tab_id: String,
     pub width: u32,
     pub height: u32,
-
     pub image: Vec<u8>,
     pub image_id: String,
     pub dialog: Option<BrowserDialog>,
+    pub controller: BrowserController,
+    pub generation: u64,
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
+    pub loading: bool,
+    pub page_text: String,
+    pub value: String,
 }
 #[uniffi::remote(Enum)]
 enum InvocationKind {

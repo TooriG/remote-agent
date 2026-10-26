@@ -4,6 +4,20 @@ use serde::{Deserialize, Serialize};
 pub const MAX_IMPORT_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_BOOKMARKS: usize = 20_000;
 
+/// Passwords stay scoped to one HTTPS origin, including its port. Never broaden to a parent domain.
+pub fn password_origin(input: &str) -> Result<String, String> {
+    let url = url::Url::parse(input).map_err(|_| "ログイン先の URL が不正です。")?;
+    if url.scheme() != "https"
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || input.chars().any(char::is_control)
+    {
+        return Err("パスワードは HTTPS のサイトでのみ利用できます。".into());
+    }
+    Ok(url.origin().ascii_serialization())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BrowserBookmark {
     pub name: String,
@@ -102,6 +116,37 @@ pub fn merge_bookmarks(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn password_scopes_never_expand_beyond_an_https_origin() {
+        assert_eq!(
+            password_origin("https://Example.test:8443/login?x=1").unwrap(),
+            "https://example.test:8443"
+        );
+        assert_eq!(
+            password_origin("https://example.test:443/login").unwrap(),
+            "https://example.test"
+        );
+        for input in [
+            "http://example.test",
+            "https://user:pass@example.test",
+            "https://user@example.test",
+            "https://:pass@example.test",
+            "file:///private",
+            "https://example.test\n.attacker.test",
+            "data:text/html,test",
+        ] {
+            assert!(password_origin(input).is_err());
+        }
+        assert_ne!(
+            password_origin("https://example.test").unwrap(),
+            password_origin("https://example.test.attacker.test").unwrap()
+        );
+        assert_ne!(
+            password_origin("https://example.test").unwrap(),
+            password_origin("https://sub.example.test").unwrap()
+        );
+    }
+
     #[test]
     fn bookmarks_include_nested_web_links_and_exclude_executable_urls() {
         let bookmarks = parse_chrome_bookmarks(br#"{"roots":{"bookmark_bar":{"type":"folder","children":[{"type":"url","name":"Safe","url":"https://example.test/a"},{"type":"folder","children":[{"type":"url","name":"Local","url":"http://localhost:8888/"},{"type":"url","name":"Bad","url":"javascript:alert(1)"},{"type":"url","url":"file:///C:/private"},{"type":"url","url":"https://user:pass@example.test"}]}]}}}"#).unwrap();

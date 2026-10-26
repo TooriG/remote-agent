@@ -1,3 +1,4 @@
+use super::ActionOutput;
 use agent_protocol::browser::{BrowserAction, BrowserDialog, BrowserKey, HEIGHT, WIDTH};
 use async_tungstenite::{WebSocketStream, tokio::ConnectStream, tungstenite::Message};
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -8,9 +9,11 @@ use std::{
     collections::HashMap,
     path::Path,
     process::Stdio,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 use tokio::process::Child;
+use zeroize::Zeroizing;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -23,16 +26,118 @@ pub(super) struct Target {
     pub kind: String,
 }
 
+struct CachedFrame {
+    image: Vec<u8>,
+    width: u32,
+    height: u32,
+}
+
+#[derive(Default)]
+struct Events {
+    dialogs: HashMap<String, BrowserDialog>,
+    frames: HashMap<String, CachedFrame>,
+    streaming: HashMap<String, Instant>,
+    loading: HashMap<String, bool>,
+    navigation: HashMap<String, u64>,
+}
+struct Command {
+    request: Value,
+    reply: tokio::sync::oneshot::Sender<Value>,
+}
+
 pub(super) struct Chrome {
     child: Child,
-    socket: WebSocketStream<ConnectStream>,
+    commands: tokio::sync::mpsc::Sender<Command>,
+    events: Arc<Mutex<Events>>,
+    transport: tokio::task::JoinHandle<()>,
     next_id: u64,
     sessions: HashMap<String, String>,
-    dialogs: HashMap<String, BrowserDialog>,
+    sizes: HashMap<String, (u32, u32)>,
+    refs: HashMap<String, (u64, HashMap<String, i64>)>,
     pub broken: bool,
 }
 
+impl Drop for Chrome {
+    fn drop(&mut self) {
+        self.transport.abort();
+    }
+}
+
 impl Chrome {
+    fn connected(child: Child, mut socket: WebSocketStream<ConnectStream>) -> Self {
+        let (commands, mut incoming) = tokio::sync::mpsc::channel::<Command>(16);
+        let events = Arc::new(Mutex::new(Events::default()));
+        let updates = events.clone();
+        let transport = tokio::spawn(async move {
+            let mut pending: HashMap<u64, tokio::sync::oneshot::Sender<Value>> = HashMap::new();
+            let mut cleanup = tokio::time::interval(Duration::from_secs(1));
+            loop {
+                tokio::select! {
+                    _ = cleanup.tick() => {
+                        pending.retain(|_, reply| !reply.is_closed());
+                        let expired: Vec<_> = {
+                            let mut events = updates.lock().unwrap();
+                            let expired: Vec<_> = events.streaming.iter().filter(|(_, seen)| seen.elapsed() >= Duration::from_secs(3)).map(|(session,_)| session.clone()).collect();
+                            for session in &expired { events.streaming.remove(session); events.frames.remove(session); }
+                            expired
+                        };
+                        for session in expired {
+                            let request = json!({"id":0,"sessionId":session,"method":"Page.stopScreencast","params":{}});
+                            if socket.send(Message::Text(request.to_string().into())).await.is_err() { return; }
+                        }
+                    }
+                    command = incoming.recv() => {
+                        let Some(command) = command else { break; };
+                        if command.reply.is_closed() { continue; }
+                        let id = command.request["id"].as_u64().unwrap();
+                        if socket.send(Message::Text(command.request.to_string().into())).await.is_err() { break; }
+                        pending.insert(id, command.reply);
+                    }
+                    message = socket.next() => {
+                        let Some(Ok(message)) = message else { break; };
+                        let Message::Text(text) = message else { if matches!(message, Message::Close(_)) { break; } continue; };
+                        let Ok(value) = serde_json::from_str::<Value>(&text) else { break; };
+                        if let Some(id) = value["id"].as_u64() {
+                            if let Some(reply) = pending.remove(&id) { let _ = reply.send(value); }
+                            continue;
+                        }
+                        let Some(session) = value["sessionId"].as_str() else { continue; };
+                        let params = &value["params"];
+                        let acknowledgement = {
+                            let mut events = updates.lock().unwrap();
+                            match value["method"].as_str() {
+                                Some("Page.javascriptDialogOpening") => { events.dialogs.insert(session.into(), BrowserDialog { message: params["message"].as_str().unwrap_or_default().chars().take(4096).collect(), prompt: params["type"] == "prompt" }); }
+                                Some("Page.javascriptDialogClosed") => { events.dialogs.remove(session); }
+                                Some("Page.frameStartedLoading") => { events.loading.insert(session.into(), true); }
+                                Some("Page.frameStoppedLoading") => { events.loading.insert(session.into(), false); }
+                                Some("Page.frameNavigated") if params["frame"]["parentId"].is_null() => { *events.navigation.entry(session.into()).or_default() += 1; }
+                                Some("Page.screencastFrame") => {
+                                    if let Some(data) = params["data"].as_str().filter(|data| data.len() <= 4 * 1024 * 1024)
+                                        && events.streaming.contains_key(session)
+                                        && let Ok(image) = STANDARD.decode(data) { events.frames.insert(session.into(), CachedFrame { image, width:params["metadata"]["deviceWidth"].as_f64().unwrap_or(0.) as u32, height:params["metadata"]["deviceHeight"].as_f64().unwrap_or(0.) as u32 }); }
+                                }
+                                _ => (),
+                            }
+                            (value["method"] == "Page.screencastFrame").then(|| json!({"id":0,"sessionId":session,"method":"Page.screencastFrameAck","params":{"sessionId":params["sessionId"]}}))
+                        };
+                        if let Some(ack) = acknowledgement && socket.send(Message::Text(ack.to_string().into())).await.is_err() { break; }
+                    }
+                }
+            }
+        });
+        Self {
+            child,
+            commands,
+            events,
+            transport,
+            next_id: 0,
+            sessions: HashMap::new(),
+            sizes: HashMap::new(),
+            refs: HashMap::new(),
+            broken: false,
+        }
+    }
+
     pub async fn launch(profile: &Path, executable: &Path) -> Result<Self, String> {
         crate::platform::create_state_directory(profile).map_err(|e| e.to_string())?;
         let port_file = profile.join("DevToolsActivePort");
@@ -54,7 +159,7 @@ impl Chrome {
                 "--no-default-browser-check",
                 "--no-startup-window",
                 "--disable-background-networking",
-                "--window-size=1024,768",
+                "--window-size=1280,800",
             ])
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
@@ -93,14 +198,7 @@ impl Chrome {
             Ok(socket) => {
                 tracing::info!(target: "bex", operation = "browser.launch",
                     message = %format_args!("Chrome connected after {} ms", started.elapsed().as_millis()));
-                Ok(Self {
-                    child,
-                    socket,
-                    next_id: 0,
-                    sessions: HashMap::new(),
-                    dialogs: HashMap::new(),
-                    broken: false,
-                })
+                Ok(Self::connected(child, socket))
             }
             Err(error) => {
                 tracing::warn!(target: "bex", operation = "browser.launch",
@@ -141,41 +239,12 @@ impl Chrome {
         }
         let started = Instant::now();
         let result = tokio::time::timeout(Duration::from_secs(5), async {
-            self.socket
-                .send(Message::Text(request.to_string().into()))
+            let (reply, received) = tokio::sync::oneshot::channel();
+            self.commands
+                .send(Command { request, reply })
                 .await
                 .map_err(|_| ())?;
-            while let Some(message) = self.socket.next().await {
-                let message = message.map_err(|_| ())?;
-                if let Message::Text(text) = message {
-                    let value: Value = serde_json::from_str(&text).map_err(|_| ())?;
-                    if value["method"] == "Page.javascriptDialogOpening" {
-                        if let Some(session) = value["sessionId"].as_str() {
-                            self.dialogs.insert(
-                                session.into(),
-                                BrowserDialog {
-                                    message: value["params"]["message"]
-                                        .as_str()
-                                        .unwrap_or_default()
-                                        .chars()
-                                        .take(4096)
-                                        .collect(),
-                                    prompt: value["params"]["type"] == "prompt",
-                                },
-                            );
-                        }
-                    } else if value["method"] == "Page.javascriptDialogClosed" {
-                        if let Some(session) = value["sessionId"].as_str() {
-                            self.dialogs.remove(session);
-                        }
-                    } else if value["id"] == id {
-                        return Ok(value);
-                    }
-                } else if matches!(message, Message::Close(_)) {
-                    return Err(());
-                }
-            }
-            Err(())
+            received.await.map_err(|_| ())
         })
         .await;
         match result {
@@ -204,17 +273,93 @@ impl Chrome {
     }
 
     pub async fn targets(&mut self) -> Result<Vec<Target>, String> {
-        serde_json::from_value(
+        let targets: Vec<Target> = serde_json::from_value(
             self.call(None, "Target.getTargets", json!({})).await?["targetInfos"].clone(),
         )
-        .map_err(|_| "ブラウザのタブ一覧を取得できません。".into())
+        .map_err(|_| "ブラウザのタブ一覧を取得できません。".to_owned())?;
+        let removed: Vec<_> = self
+            .sessions
+            .keys()
+            .filter(|id| !targets.iter().any(|target| &target.target_id == *id))
+            .cloned()
+            .collect();
+        for target in removed {
+            self.forget_target(&target);
+        }
+        Ok(targets)
     }
-    pub async fn create(&mut self) -> Result<String, String> {
-        self.call(None, "Target.createTarget", json!({"url":"about:blank"}))
-            .await?["targetId"]
+    pub async fn create_context(&mut self) -> Result<String, String> {
+        self.call(
+            None,
+            "Target.createBrowserContext",
+            json!({"disposeOnDetach":true}),
+        )
+        .await?["browserContextId"]
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| "ブラウザのプロファイルを作成できません。".into())
+    }
+    pub async fn create(&mut self, context: &str) -> Result<String, String> {
+        self.call(
+            None,
+            "Target.createTarget",
+            json!({"url":"about:blank", "browserContextId":context}),
+        )
+        .await?["targetId"]
             .as_str()
             .map(str::to_owned)
             .ok_or_else(|| "ブラウザのタブを作成できません。".into())
+    }
+    pub async fn close_tab(&mut self, target: &str) -> Result<(), String> {
+        self.call(None, "Target.closeTarget", json!({"targetId":target}))
+            .await?;
+        self.forget_target(target);
+        Ok(())
+    }
+    fn forget_target(&mut self, target: &str) {
+        if let Some(session) = self.sessions.remove(target) {
+            let mut events = self.events.lock().unwrap();
+            events.dialogs.remove(&session);
+            events.frames.remove(&session);
+            events.streaming.remove(&session);
+            events.loading.remove(&session);
+            events.navigation.remove(&session);
+            self.sizes.remove(&session);
+            self.refs.remove(&session);
+        }
+    }
+
+    pub fn navigation(&self, target: &str) -> u64 {
+        self.sessions
+            .get(target)
+            .and_then(|session| self.events.lock().unwrap().navigation.get(session).copied())
+            .unwrap_or(0)
+    }
+    pub async fn resize(&mut self, session: &str, width: u32, height: u32) -> Result<(), String> {
+        if self.sizes.get(session) == Some(&(width, height)) {
+            return Ok(());
+        }
+        self.call(
+            Some(session),
+            "Emulation.setDeviceMetricsOverride",
+            json!({"width":width,"height":height,"deviceScaleFactor":1,"mobile":false}),
+        )
+        .await?;
+        self.events.lock().unwrap().frames.remove(session);
+        self.sizes.insert(session.into(), (width, height));
+        Ok(())
+    }
+    pub async fn history(&mut self, session: &str) -> Result<(bool, bool), String> {
+        let result = self
+            .call(Some(session), "Page.getNavigationHistory", json!({}))
+            .await?;
+        let index = result["currentIndex"].as_u64().unwrap_or(0) as usize;
+        Ok((
+            index > 0,
+            result["entries"]
+                .as_array()
+                .is_some_and(|entries| index + 1 < entries.len()),
+        ))
     }
     pub async fn attach(&mut self, target: &str) -> Result<String, String> {
         if let Some(session) = self.sessions.get(target) {
@@ -232,17 +377,73 @@ impl Chrome {
             .ok_or("ブラウザのタブに接続できません。")?
             .to_owned();
         self.call(Some(&session), "Page.enable", json!({})).await?;
-        self.call(
-            Some(&session),
-            "Emulation.setDeviceMetricsOverride",
-            json!({"width":WIDTH,"height":HEIGHT,"deviceScaleFactor":1,"mobile":false}),
-        )
-        .await?;
+        self.resize(&session, WIDTH, HEIGHT).await?;
         self.sessions.insert(target.into(), session.clone());
         Ok(session)
     }
     pub fn dialog(&self, session: &str) -> Option<BrowserDialog> {
-        self.dialogs.get(session).cloned()
+        self.events.lock().unwrap().dialogs.get(session).cloned()
+    }
+    pub fn loading(&self, session: &str) -> bool {
+        self.events
+            .lock()
+            .unwrap()
+            .loading
+            .get(session)
+            .copied()
+            .unwrap_or(false)
+    }
+    pub fn invalidate_refs(&mut self, targets: &[String]) {
+        for target in targets {
+            if let Some(session) = self.sessions.get(target) {
+                self.refs.remove(session);
+            }
+        }
+    }
+    pub async fn latest_image(&mut self, session: &str) -> Result<Vec<u8>, String> {
+        let start = self
+            .events
+            .lock()
+            .unwrap()
+            .streaming
+            .insert(session.into(), Instant::now())
+            .is_none();
+        if start
+            && let Err(error) = self
+                .call(
+                    Some(session),
+                    "Page.startScreencast",
+                    json!({"format":"jpeg","quality":70,"everyNthFrame":1}),
+                )
+                .await
+        {
+            self.events.lock().unwrap().streaming.remove(session);
+            return Err(error);
+        }
+        let size = self.sizes.get(session).copied().unwrap_or((WIDTH, HEIGHT));
+        if let Some(image) = self.cached_image(session) {
+            return Ok(image);
+        }
+        let image = self.screenshot(session).await?;
+        self.events.lock().unwrap().frames.insert(
+            session.into(),
+            CachedFrame {
+                image: image.clone(),
+                width: size.0,
+                height: size.1,
+            },
+        );
+        Ok(image)
+    }
+    pub fn cached_image(&self, session: &str) -> Option<Vec<u8>> {
+        let size = self.sizes.get(session).copied().unwrap_or((WIDTH, HEIGHT));
+        self.events
+            .lock()
+            .unwrap()
+            .frames
+            .get(session)
+            .filter(|frame| (frame.width, frame.height) == size)
+            .map(|frame| frame.image.clone())
     }
     pub async fn screenshot(&mut self, session: &str) -> Result<Vec<u8>, String> {
         self.call(Some(session), "Page.bringToFront", json!({}))
@@ -271,26 +472,226 @@ impl Chrome {
             .decode(data)
             .map_err(|_| "ブラウザ画像を読み取れません。".into())
     }
-    pub async fn action(&mut self, session: &str, action: &BrowserAction) -> Result<(), String> {
+    async fn evaluate(&mut self, session: &str, expression: &str) -> Result<Value, String> {
+        let result = self.call(Some(session), "Runtime.evaluate", json!({"expression":expression,"returnByValue":true,"awaitPromise":true,"timeout":3000})).await?;
+        if result.get("exceptionDetails").is_some() {
+            return Err(
+                "ページ内のスクリプトを完了できません。要素とページの状態を確認してください。"
+                    .into(),
+            );
+        }
+        Ok(result["result"]["value"].clone())
+    }
+    async fn element(
+        &mut self,
+        session: &str,
+        selector: &str,
+        function: &str,
+        arguments: Value,
+    ) -> Result<Value, String> {
+        let object = if selector.starts_with("ref=") {
+            let id = self
+                .refs
+                .get(session)
+                .filter(|(generation, _)| {
+                    *generation
+                        == self
+                            .events
+                            .lock()
+                            .unwrap()
+                            .navigation
+                            .get(session)
+                            .copied()
+                            .unwrap_or(0)
+                })
+                .and_then(|(_, refs)| refs.get(selector))
+                .ok_or("要素参照が失効しました。新しい snapshot を取得してください。")?;
+            self.call(
+                Some(session),
+                "DOM.resolveNode",
+                json!({"backendNodeId":id}),
+            )
+            .await?["object"]["objectId"]
+                .as_str()
+                .map(str::to_owned)
+                .ok_or("要素が見つかりません。")?
+        } else {
+            let expression = format!(
+                "(() => {{ const nodes = document.querySelectorAll({}); if (nodes.length !== 1) throw new Error('Expected exactly one element'); return nodes[0]; }})()",
+                serde_json::to_string(selector).unwrap()
+            );
+            let result = self
+                .call(
+                    Some(session),
+                    "Runtime.evaluate",
+                    json!({"expression":expression}),
+                )
+                .await?;
+            if result.get("exceptionDetails").is_some() {
+                return Err("セレクターは1つの要素に一致する必要があります。".into());
+            }
+            result["result"]["objectId"]
+                .as_str()
+                .map(str::to_owned)
+                .ok_or("要素が見つかりません。")?
+        };
+        let result = self.call(Some(session), "Runtime.callFunctionOn", json!({"objectId":object,"functionDeclaration":function,"arguments":arguments,"returnByValue":true,"userGesture":true})).await;
+        let _ = self
+            .call(
+                Some(session),
+                "Runtime.releaseObject",
+                json!({"objectId":object}),
+            )
+            .await;
+        let result = result?;
+        if result.get("exceptionDetails").is_some() {
+            return Err("この要素を操作できません。ページを確認してください。".into());
+        }
+        Ok(result["result"]["value"].clone())
+    }
+
+    async fn mouse_click(&mut self, session: &str, x: f64, y: f64) -> Result<(), String> {
+        for kind in ["mousePressed", "mouseReleased"] {
+            self.call(
+                Some(session),
+                "Input.dispatchMouseEvent",
+                json!({"type":kind,"x":x,"y":y,"button":"left","clickCount":1}),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+    async fn snapshot(&mut self, session: &str) -> Result<String, String> {
+        let navigation = self
+            .events
+            .lock()
+            .unwrap()
+            .navigation
+            .get(session)
+            .copied()
+            .unwrap_or(0);
+        let protected = self.evaluate(session, r#"(() => { const values=[]; const visit=root=>{ for(const e of root.querySelectorAll('*')) { if((e.tagName==='INPUT'&&e.type==='password') || (getComputedStyle(e).webkitTextSecurity && getComputedStyle(e).webkitTextSecurity!=='none')) { const value=e.value??e.textContent??''; if(value.length>16384)throw new Error('Protected field too long'); if(value)values.push(value); } if(e.shadowRoot)visit(e.shadowRoot); if(e.tagName==='IFRAME'){try{if(e.contentDocument)visit(e.contentDocument);}catch{}} } }; visit(document); return values; })()"#).await?;
+        let secrets: Vec<_> = protected
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(|value| Zeroizing::new(value.to_owned()))
+            .collect();
+        let result = self
+            .call(Some(session), "Accessibility.getFullAXTree", json!({}))
+            .await?;
+        let generation = uuid::Uuid::new_v4();
+        let mut refs = HashMap::new();
+        let mut nodes = Vec::new();
+        let mut bytes = 0;
+        if let Some(tree) = result["nodes"].as_array() {
+            for node in tree {
+                if node["ignored"] == true {
+                    continue;
+                }
+                let mut item = json!({"role":node["role"]["value"],"name":node["name"]["value"],"value":node["value"]["value"],"properties":node["properties"]});
+                item = redact(item, &secrets);
+                if let Some(id) = node["backendDOMNodeId"].as_i64() {
+                    let reference = format!("ref={generation}-{id}");
+                    refs.insert(reference.clone(), id);
+                    item["ref"] = reference.into();
+                }
+                bytes += item.to_string().len();
+                if bytes > 20 * 1024 {
+                    nodes.push(json!({"truncated":true}));
+                    break;
+                }
+                nodes.push(item);
+            }
+        }
+        if navigation
+            != self
+                .events
+                .lock()
+                .unwrap()
+                .navigation
+                .get(session)
+                .copied()
+                .unwrap_or(0)
+        {
+            return Err("ページが移動しました。新しい snapshot を取得してください。".into());
+        }
+        self.refs.insert(session.into(), (navigation, refs));
+        Ok(serde_json::to_string(&nodes).unwrap())
+    }
+    pub async fn action(
+        &mut self,
+        session: &str,
+        action: &BrowserAction,
+    ) -> Result<ActionOutput, String> {
+        if matches!(action, BrowserAction::Snapshot) && self.dialog(session).is_some() {
+            return Ok(ActionOutput::default());
+        }
         self.call(Some(session), "Page.bringToFront", json!({}))
             .await?;
         let (method, params) = match action {
+            BrowserAction::Snapshot => {
+                return Ok(ActionOutput {
+                    page_text: self.snapshot(session).await?,
+                    ..Default::default()
+                });
+            }
+            BrowserAction::Evaluate { expression } => {
+                let value = self.evaluate(session, expression).await?.to_string();
+                if value.len() > 128 * 1024 {
+                    return Err("結果が大きすぎます。取得する範囲を絞ってください。".into());
+                }
+                return Ok(ActionOutput {
+                    value,
+                    ..Default::default()
+                });
+            }
+            BrowserAction::ClickElement { selector } => {
+                let point = self.element(session, selector, "function(){if(this.disabled)throw new Error('Disabled');this.scrollIntoView({block:'center',inline:'center'});let view=this.ownerDocument.defaultView;const r=this.getBoundingClientRect(),l=Math.max(0,r.left),t=Math.max(0,r.top),right=Math.min(view.innerWidth,r.right),bottom=Math.min(view.innerHeight,r.bottom);if(l>=right||t>=bottom||view.getComputedStyle(this).visibility==='hidden')throw new Error('Not visible');let x=(l+right)/2,y=(t+bottom)/2;const root=this.getRootNode(),hit=root.elementFromPoint(x,y);if(hit!==this&&!this.contains(hit))throw new Error('Covered');while(view!==view.top){const f=view.frameElement;if(!f)throw new Error('Frame unavailable');const b=f.getBoundingClientRect();x=b.left+(f.clientLeft+x)*b.width/f.offsetWidth;y=b.top+(f.clientTop+y)*b.height/f.offsetHeight;view=view.parent;}return{x,y};}", json!([])).await?;
+                let (Some(x), Some(y)) = (point["x"].as_f64(), point["y"].as_f64()) else {
+                    return Err("要素の位置を取得できません。".into());
+                };
+                let (width, height) = self.sizes.get(session).copied().unwrap_or((WIDTH, HEIGHT));
+                if !(0.0..f64::from(width)).contains(&x) || !(0.0..f64::from(height)).contains(&y) {
+                    return Err("要素が表示範囲外です。".into());
+                }
+                self.mouse_click(session, x, y).await?;
+                return Ok(ActionOutput::default());
+            }
+            BrowserAction::Fill { selector, text } => {
+                self.element(session, selector, "function(text){if(this.disabled || this.readOnly) throw new Error('Not editable'); this.focus(); if(this.isContentEditable){ this.textContent=text; } else { const prototype=this.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype; const setter=Object.getOwnPropertyDescriptor(prototype,'value').set; setter.call(this,text); } this.dispatchEvent(new Event('input',{bubbles:true})); this.dispatchEvent(new Event('change',{bubbles:true}));}", json!([{"value":text}])).await?;
+                return Ok(ActionOutput::default());
+            }
+            BrowserAction::SelectOption { selector, value } => {
+                self.element(session, selector, "function(value){if(this.tagName!=='SELECT'||this.disabled)throw new Error('Not a select'); const options=[...this.options].filter(o=>o.value===value||o.label===value); if(options.length!==1)throw new Error('Ambiguous option'); this.value=options[0].value;this.dispatchEvent(new Event('input',{bubbles:true}));this.dispatchEvent(new Event('change',{bubbles:true}));}", json!([{"value":value}])).await?;
+                return Ok(ActionOutput::default());
+            }
+            BrowserAction::Hover { x, y } => (
+                "Input.dispatchMouseEvent",
+                json!({"type":"mouseMoved","x":x,"y":y}),
+            ),
+            BrowserAction::Drag { x, y, to_x, to_y } => {
+                self.call(Some(session), "Input.dispatchMouseEvent", json!({"type":"mousePressed","x":x,"y":y,"button":"left","buttons":1,"clickCount":1})).await?;
+                self.call(
+                    Some(session),
+                    "Input.dispatchMouseEvent",
+                    json!({"type":"mouseMoved","x":to_x,"y":to_y,"button":"left","buttons":1}),
+                )
+                .await?;
+                (
+                    "Input.dispatchMouseEvent",
+                    json!({"type":"mouseReleased","x":to_x,"y":to_y,"button":"left","buttons":0,"clickCount":1}),
+                )
+            }
             BrowserAction::Navigate { url } => (
                 "Page.navigate",
                 json!({"url":agent_protocol::browser::browser_url(url)?}),
             ),
             BrowserAction::Reload => ("Page.reload", json!({})),
             BrowserAction::Click { x, y } => {
-                self.call(
-                    Some(session),
-                    "Input.dispatchMouseEvent",
-                    json!({"type":"mousePressed","x":x,"y":y,"button":"left","clickCount":1}),
-                )
-                .await?;
-                (
-                    "Input.dispatchMouseEvent",
-                    json!({"type":"mouseReleased","x":x,"y":y,"button":"left","clickCount":1}),
-                )
+                self.mouse_click(session, *x, *y).await?;
+                return Ok(ActionOutput::default());
             }
             BrowserAction::Scroll {
                 x,
@@ -315,6 +716,11 @@ impl Chrome {
                     BrowserKey::SelectAll => {
                         ("a", 65, if cfg!(target_os = "macos") { 4 } else { 2 })
                     }
+                    BrowserKey::Delete => ("Delete", 46, 0),
+                    BrowserKey::Home => ("Home", 36, 0),
+                    BrowserKey::End => ("End", 35, 0),
+                    BrowserKey::PageUp => ("PageUp", 33, 0),
+                    BrowserKey::PageDown => ("PageDown", 34, 0),
                 };
                 let mut params = json!({"type":"keyDown","key":name,"windowsVirtualKeyCode":code,"modifiers":modifiers});
                 if matches!(key, BrowserKey::Enter) {
@@ -340,7 +746,7 @@ impl Chrome {
                     .ok()
                     .and_then(|i| history["entries"].get(i))
                 else {
-                    return Ok(());
+                    return Ok(ActionOutput::default());
                 };
                 (
                     "Page.navigateToHistoryEntry",
@@ -351,7 +757,7 @@ impl Chrome {
                 "Page.handleJavaScriptDialog",
                 json!({"accept":accept,"promptText":text}),
             ),
-            _ => return Ok(()),
+            _ => return Ok(ActionOutput::default()),
         };
         let result = self.call(Some(session), method, params).await?;
         if method == "Page.navigate" && result.get("errorText").is_some() {
@@ -359,7 +765,40 @@ impl Chrome {
                 "ページを開けません。URLとMacのネットワーク接続を確認してください。".into(),
             );
         }
-        Ok(())
+        if matches!(
+            action,
+            BrowserAction::Navigate { .. }
+                | BrowserAction::Back
+                | BrowserAction::Forward
+                | BrowserAction::Reload
+        ) {
+            self.refs.remove(session);
+        }
+        Ok(ActionOutput::default())
+    }
+}
+
+fn redact(value: Value, secrets: &[Zeroizing<String>]) -> Value {
+    match value {
+        Value::String(mut value) => {
+            for secret in secrets {
+                value = value.replace(&**secret, "••••");
+            }
+            Value::String(value)
+        }
+        Value::Array(values) => Value::Array(
+            values
+                .into_iter()
+                .map(|value| redact(value, secrets))
+                .collect(),
+        ),
+        Value::Object(values) => Value::Object(
+            values
+                .into_iter()
+                .map(|(key, value)| (key, redact(value, secrets)))
+                .collect(),
+        ),
+        value => value,
     }
 }
 
@@ -370,9 +809,14 @@ mod tests {
     async fn fixture(
         failures: usize,
         disconnect: bool,
-    ) -> (Chrome, tokio::task::JoinHandle<Vec<String>>) {
+    ) -> (
+        Chrome,
+        tokio::task::JoinHandle<Vec<String>>,
+        tokio::sync::mpsc::UnboundedSender<Value>,
+    ) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
+        let (events, mut injected) = tokio::sync::mpsc::unbounded_channel::<Value>();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let mut socket = async_tungstenite::tokio::accept_async(stream)
@@ -380,7 +824,14 @@ mod tests {
                 .unwrap();
             let mut methods = Vec::new();
             let mut captures = 0;
-            while let Some(message) = socket.next().await {
+            loop {
+                let message = tokio::select! {
+                    Some(event) = injected.recv() => { socket.send(Message::Text(event.to_string().into())).await.unwrap(); continue; }
+                    message = socket.next() => message,
+                };
+                let Some(message) = message else {
+                    break;
+                };
                 let Message::Text(text) = message.unwrap() else {
                     break;
                 };
@@ -398,6 +849,8 @@ mod tests {
                     } else {
                         json!({"id":request["id"],"result":{"data":"/9j/2Q=="}})
                     };
+                } else if method == "Target.getTargets" {
+                    response = json!({"id":request["id"],"result":{"targetInfos":[]}});
                 }
                 socket
                     .send(Message::Text(response.to_string().into()))
@@ -420,22 +873,98 @@ mod tests {
             .kill_on_drop(true)
             .spawn()
             .unwrap();
-        (
-            Chrome {
-                child,
-                socket,
-                next_id: 0,
-                sessions: HashMap::new(),
-                dialogs: HashMap::new(),
-                broken: false,
-            },
-            server,
-        )
+        (Chrome::connected(child, socket), server, events)
+    }
+
+    #[test]
+    fn snapshots_redact_protected_text_in_nested_accessibility_values() {
+        let value =
+            json!({"name":"label synthetic-value","properties":[{"value":"synthetic-value"}]});
+        let result = redact(value, &[Zeroizing::new("synthetic-value".into())]);
+        assert!(!result.to_string().contains("synthetic-value"));
+        assert_eq!(result["name"], "label ••••");
+    }
+
+    #[tokio::test]
+    async fn closed_targets_release_frames_dialogs_and_element_references() {
+        let (mut chrome, server, _) = fixture(0, false).await;
+        chrome.sessions.insert("closed".into(), "page".into());
+        chrome
+            .refs
+            .insert("page".into(), (0, HashMap::from([("ref=old".into(), 1)])));
+        chrome.latest_image("page").await.unwrap();
+        assert!(chrome.cached_image("page").is_some());
+        assert!(chrome.targets().await.unwrap().is_empty());
+        assert!(chrome.cached_image("page").is_none());
+        assert!(
+            chrome
+                .element("page", "ref=old", "function(){}", json!([]))
+                .await
+                .is_err()
+        );
+        chrome.shutdown().await;
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn streamed_frames_replace_idle_cache_without_polling_screenshots() {
+        let (mut chrome, server, events) = fixture(0, false).await;
+        assert_eq!(
+            chrome.latest_image("page").await.unwrap(),
+            [0xff, 0xd8, 0xff, 0xd9]
+        );
+        events.send(json!({"sessionId":"page","method":"Page.screencastFrame","params":{"sessionId":7,"data":"/9j/2QAB","metadata":{"deviceWidth":WIDTH,"deviceHeight":HEIGHT}}})).unwrap();
+        let latest = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let image = chrome.latest_image("page").await.unwrap();
+                if image.len() == 6 {
+                    break image;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(latest, [0xff, 0xd8, 0xff, 0xd9, 0, 1]);
+        events.send(json!({"sessionId":"page","method":"Page.javascriptDialogOpening","params":{"message":"fixture dialog","type":"alert"}})).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while chrome.dialog("page").is_none() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            chrome
+                .action("page", &BrowserAction::Snapshot)
+                .await
+                .unwrap()
+                .page_text
+                .is_empty()
+        );
+        chrome.shutdown().await;
+        let methods = server.await.unwrap();
+        assert_eq!(
+            methods
+                .iter()
+                .filter(|method| *method == "Page.captureScreenshot")
+                .count(),
+            1
+        );
+        assert!(
+            methods
+                .iter()
+                .any(|method| method == "Page.screencastFrameAck")
+        );
+        assert!(
+            !methods.iter().any(|method| method == "Runtime.evaluate"),
+            "inspection must not block on page scripts behind a modal dialog"
+        );
     }
 
     #[tokio::test]
     async fn screenshot_waits_for_a_frame_without_replaying_navigation() {
-        let (mut chrome, server) = fixture(3, false).await;
+        let (mut chrome, server, _) = fixture(3, false).await;
         chrome
             .action(
                 "page",
@@ -470,7 +999,7 @@ mod tests {
 
     #[tokio::test]
     async fn screenshot_retries_end_without_discarding_a_healthy_transport() {
-        let (mut chrome, server) = fixture(usize::MAX, false).await;
+        let (mut chrome, server, _) = fixture(usize::MAX, false).await;
         let result = tokio::time::timeout(Duration::from_secs(15), chrome.screenshot("page"))
             .await
             .expect("frame retries must be bounded");
@@ -492,7 +1021,7 @@ mod tests {
 
     #[tokio::test]
     async fn screenshot_does_not_retry_a_disconnected_transport() {
-        let (mut chrome, server) = fixture(0, true).await;
+        let (mut chrome, server, _) = fixture(0, true).await;
         assert!(chrome.screenshot("page").await.is_err());
         assert!(chrome.broken);
         chrome.shutdown().await;

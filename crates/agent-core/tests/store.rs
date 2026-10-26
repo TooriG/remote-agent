@@ -339,6 +339,8 @@ async fn browser_frames_are_ephemeral_and_pending_reads_end_with_the_connection(
         },
         tab_id: String::new(),
         image_id: String::new(),
+        client_id: "test-viewer".into(),
+        generation: 0,
         action: BrowserAction::Read,
     };
     let received = tokio::spawn({

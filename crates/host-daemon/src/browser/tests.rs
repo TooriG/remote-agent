@@ -28,11 +28,73 @@ fn input_requires_the_displayed_tab_but_reads_and_selection_can_refresh_it() {
     }
 }
 
+#[test]
+fn handoff_excludes_other_viewers_agents_and_stale_input() {
+    let action = BrowserAction::Type {
+        text: "input".into(),
+    };
+    assert!(validate_control("1:phone", 2, "1:phone", 2, &action).is_ok());
+    for (client, generation) in [("1:phone", 1), ("2:phone", 2), ("", 2)] {
+        assert!(validate_control("1:phone", 2, client, generation, &action).is_err());
+    }
+    assert!(validate_control("", 2, "", 2, &action).is_ok());
+    assert!(validate_control("", 2, "1:phone", 2, &action).is_err());
+    for action in [
+        BrowserAction::Read,
+        BrowserAction::Snapshot,
+        BrowserAction::TakeControl,
+    ] {
+        assert!(validate_control("1:phone", 2, "2:phone", 0, &action).is_ok());
+    }
+    let now = Instant::now();
+    let mut page = Page::new("context".into());
+    page.controller = "1:phone".into();
+    page.generation = 2;
+    page.lease = now + Duration::from_secs(15);
+    assert!(!page.expire_control(now + Duration::from_secs(14)));
+    assert_eq!(page.controller, "1:phone");
+    assert_eq!(page.generation, 2);
+    assert!(page.expire_control(now + Duration::from_secs(15)));
+    assert!(page.controller.is_empty());
+    assert_eq!(page.generation, 3);
+    assert!(!page.expire_control(now + Duration::from_secs(16)));
+    assert_eq!(page.generation, 3);
+}
+
+#[test]
+fn coordinates_follow_the_current_viewport() {
+    for action in [
+        BrowserAction::Click { x: 389., y: 843. },
+        BrowserAction::Drag {
+            x: 0.,
+            y: 0.,
+            to_x: 389.,
+            to_y: 843.,
+        },
+    ] {
+        assert!(validate_point(390, 844, &action).is_ok());
+    }
+    for action in [
+        BrowserAction::Click { x: 390., y: 0. },
+        BrowserAction::Hover { x: 0., y: 844. },
+        BrowserAction::Drag {
+            x: 0.,
+            y: 0.,
+            to_x: 390.,
+            to_y: 0.,
+        },
+    ] {
+        assert!(validate_point(390, 844, &action).is_err());
+    }
+}
+
 fn request(thread: &SessionRef, frame: &BrowserFrame, action: BrowserAction) -> BrowserRequest {
     BrowserRequest {
         thread_id: thread.clone(),
         tab_id: frame.tab_id.clone(),
         image_id: frame.image_id.clone(),
+        client_id: "phone".into(),
+        generation: frame.generation,
         action,
     }
 }
@@ -77,13 +139,17 @@ async fn shared_browser_live() {
     let thread_b = SessionRef::new(ProviderKind::Codex, "thread-b".into()).unwrap();
     let scope_a = thread_a.to_string();
     let scope_b = thread_b.to_string();
-    let mut initial = browser
+    browser
         .agent(
             &scope_a,
             BrowserAction::Navigate {
                 url: format!("http://{address}/"),
             },
         )
+        .await
+        .unwrap();
+    let mut initial = browser
+        .agent(&scope_a, BrowserAction::Snapshot)
         .await
         .unwrap();
     assert!(initial.image.starts_with(&[0xff, 0xd8]));
@@ -93,66 +159,124 @@ async fn shared_browser_live() {
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         initial = browser
-            .request(&request(&thread_a, &initial, BrowserAction::Read))
+            .request(1, &request(&thread_a, &initial, BrowserAction::Read))
             .await
             .unwrap();
     }
     assert!(initial.tabs.iter().any(|tab| tab.title == "Fixture"));
-    browser
-        .request(&request(
-            &thread_a,
-            &initial,
-            BrowserAction::Click { x: 100.0, y: 40.0 },
-        ))
+    let controlled = browser
+        .request(1, &request(&thread_a, &initial, BrowserAction::TakeControl))
         .await
         .unwrap();
-    let phone_input = request(
-        &thread_a,
-        &initial,
-        BrowserAction::Type {
-            text: "日本語 input".into(),
-        },
+    assert_eq!(controlled.controller, BrowserController::You);
+    assert!(
+        browser
+            .request(
+                1,
+                &request(
+                    &thread_a,
+                    &initial,
+                    BrowserAction::Click { x: 100., y: 40. }
+                )
+            )
+            .await
+            .is_err(),
+        "handoff invalidates input from the previous control generation"
     );
-    let (agent, phone) = tokio::join!(
-        browser.agent(
-            &scope_a,
-            BrowserAction::Type {
-                text: "AI input".into()
-            }
-        ),
-        browser.request(&phone_input),
-    );
-    agent.unwrap();
-    phone.unwrap();
+    browser
+        .request(
+            1,
+            &request(
+                &thread_a,
+                &controlled,
+                BrowserAction::Click { x: 100., y: 40. },
+            ),
+        )
+        .await
+        .unwrap();
     let typed = browser
-        .request(&request(&thread_a, &initial, BrowserAction::Read))
+        .request(
+            1,
+            &request(
+                &thread_a,
+                &controlled,
+                BrowserAction::Type {
+                    text: "日本語 input".into(),
+                },
+            ),
+        )
         .await
         .unwrap();
     assert!(
-        typed.tabs.iter().any(|tab| matches!(
-            tab.title.as_str(),
-            "日本語 inputAI input" | "AI input日本語 input"
-        )),
-        "both overlapping phone and agent inputs must execute: {:?}",
-        typed.tabs
+        browser
+            .agent(
+                &scope_a,
+                BrowserAction::Type {
+                    text: "AI input".into()
+                }
+            )
+            .await
+            .is_err()
     );
-    let observed = browser.agent(&scope_a, BrowserAction::Read).await.unwrap();
+    let observed = browser
+        .agent(&scope_a, BrowserAction::Snapshot)
+        .await
+        .unwrap();
     assert_eq!(
         observed.tabs, typed.tabs,
-        "agent reads remain available after phone input"
+        "inspection remains available during human control"
+    );
+    let other_viewer = browser
+        .request(2, &request(&thread_a, &controlled, BrowserAction::Read))
+        .await
+        .unwrap();
+    assert_eq!(other_viewer.controller, BrowserController::AnotherViewer);
+    assert!(
+        browser
+            .request(
+                2,
+                &request(
+                    &thread_a,
+                    &controlled,
+                    BrowserAction::Type {
+                        text: "other".into()
+                    }
+                )
+            )
+            .await
+            .is_err(),
+        "the viewer id cannot impersonate another authenticated connection"
     );
     browser
-        .request(&request(
-            &thread_a,
-            &initial,
-            BrowserAction::Click { x: 100.0, y: 110.0 },
-        ))
+        .request(
+            1,
+            &request(&thread_a, &controlled, BrowserAction::ReleaseControl),
+        )
+        .await
+        .unwrap();
+    browser
+        .agent(
+            &scope_a,
+            BrowserAction::Fill {
+                selector: "input".into(),
+                text: "AI input".into(),
+            },
+        )
+        .await
+        .unwrap();
+    browser
+        .agent(
+            &scope_a,
+            BrowserAction::ClickElement {
+                selector: "button".into(),
+            },
+        )
         .await
         .unwrap();
     let mut popup = typed;
     for _ in 0..20 {
         popup = browser
-            .request(&request(&thread_a, &popup, BrowserAction::Read))
+            .request(1, &request(&thread_a, &popup, BrowserAction::Read))
             .await
             .unwrap();
         if popup.tabs.len() == 2 {
@@ -164,19 +288,26 @@ async fn shared_browser_live() {
     assert_ne!(popup.tab_id, initial.tab_id);
     assert!(
         browser
-            .request(&request(
-                &thread_a,
-                &initial,
-                BrowserAction::Click { x: 20.0, y: 20.0 }
-            ))
+            .request(
+                1,
+                &request(
+                    &thread_a,
+                    &initial,
+                    BrowserAction::Click { x: 20.0, y: 20.0 }
+                )
+            )
             .await
             .is_err(),
         "stale tab input must fail"
     );
-    let other = browser.agent(&scope_b, BrowserAction::Read).await.unwrap();
+    let status = browser.agent(&scope_b, BrowserAction::Read).await.unwrap();
+    let other = browser
+        .request(1, &request(&thread_b, &status, BrowserAction::Read))
+        .await
+        .unwrap();
     assert_eq!(other.tabs.len(), 1);
     let unchanged = browser
-        .request(&request(&thread_b, &other, BrowserAction::Read))
+        .request(1, &request(&thread_b, &other, BrowserAction::Read))
         .await
         .unwrap();
     assert!(
@@ -194,36 +325,26 @@ async fn shared_browser_live() {
             .await
             .is_err()
     );
-    browser.shutdown().await;
-    drop(browser);
-    let browser = Browser::start(profile).await.unwrap();
     browser
         .agent(
-            &scope_a,
+            &scope_b,
             BrowserAction::Navigate {
                 url: format!("http://{address}/verify"),
             },
         )
         .await
         .unwrap();
-    let mut restored = BrowserFrame::default();
+    let mut isolated = BrowserFrame::default();
     for _ in 0..20 {
-        restored = browser.agent(&scope_a, BrowserAction::Read).await.unwrap();
-        if restored
-            .tabs
-            .iter()
-            .any(|tab| tab.title.contains("persisted stored"))
-        {
+        isolated = browser.agent(&scope_b, BrowserAction::Read).await.unwrap();
+        if isolated.tabs.iter().any(|tab| tab.title.ends_with("null")) {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     assert!(
-        restored
-            .tabs
-            .iter()
-            .any(|tab| tab.title.contains("persisted stored")),
-        "cookies and local storage survive browser restart"
+        isolated.tabs.iter().any(|tab| tab.title.trim() == "null"),
+        "agent conversations must not share cookies or local storage"
     );
     browser.shutdown().await;
     server.abort();

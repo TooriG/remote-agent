@@ -35,7 +35,7 @@ async fn stdio_browser_tool_is_typed_and_does_not_expose_generic_execution() {
         (
             3,
             "tools/call",
-            json!({"name":"bex_browser","arguments":{"action":"evaluate","expression":"1+1"}}),
+            json!({"name":"execute_host_command","arguments":{"command":"echo forbidden"}}),
         ),
     ] {
         input
@@ -54,15 +54,22 @@ async fn stdio_browser_tool_is_typed_and_does_not_expose_generic_execution() {
         match id {
             1 => assert_eq!(response["result"]["protocolVersion"], "2025-06-18"),
             2 => {
-                assert_eq!(response["result"]["tools"].as_array().unwrap().len(), 1);
-                let tool = &response["result"]["tools"][0];
-                assert_eq!(tool["name"], "bex_browser");
+                let tools = response["result"]["tools"].as_array().unwrap();
+                for name in [
+                    "preview_snapshot",
+                    "preview_open",
+                    "preview_click",
+                    "preview_type",
+                    "preview_evaluate",
+                    "preview_resize",
+                    "preview_close",
+                ] {
+                    assert!(tools.iter().any(|tool| tool["name"] == name));
+                }
                 assert!(
-                    !tool["inputSchema"]["properties"]["action"]["enum"]
-                        .as_array()
-                        .unwrap()
+                    !tools
                         .iter()
-                        .any(|action| action == "wait_for_user")
+                        .any(|tool| tool["name"] == "execute_host_command")
                 );
             }
             _ => assert_eq!(response["result"]["isError"], true),
@@ -120,7 +127,7 @@ async fn installed_codex_exposes_the_same_browser_as_the_phone() {
         found = status["data"].as_array().is_some_and(|servers| {
             servers
                 .iter()
-                .any(|s| s["name"] == "bex_browser" && s["tools"].get("bex_browser").is_some())
+                .any(|s| s["name"] == "bex_browser" && s["tools"].get("preview_snapshot").is_some())
         });
         if found {
             break;
@@ -131,18 +138,23 @@ async fn installed_codex_exposes_the_same_browser_as_the_phone() {
         found,
         "Codex must discover the conversation-scoped MCP tool"
     );
-    let result=server.request::<_,Value>("mcpServer/tool/call",&json!({"threadId":thread,"server":"bex_browser","tool":"bex_browser","arguments":{"action":"screenshot"}})).await.unwrap().outcome.unwrap();
+    let result=server.request::<_,Value>("mcpServer/tool/call",&json!({"threadId":thread,"server":"bex_browser","tool":"preview_snapshot","arguments":{}})).await.unwrap().outcome.unwrap();
     assert!(
         result.to_string().contains("image/jpeg"),
         "Codex receives the Host screenshot"
     );
     let phone = browser
-        .request(&agent_protocol::browser::BrowserRequest {
-            thread_id: session,
-            tab_id: String::new(),
-            image_id: String::new(),
-            action: agent_protocol::browser::BrowserAction::Read,
-        })
+        .request(
+            1,
+            &agent_protocol::browser::BrowserRequest {
+                thread_id: session,
+                tab_id: String::new(),
+                image_id: String::new(),
+                client_id: "test-viewer".into(),
+                generation: 0,
+                action: agent_protocol::browser::BrowserAction::Read,
+            },
+        )
         .await
         .unwrap();
     assert_eq!(phone.tabs.len(), 1, "phone and Codex must share one tab");
@@ -181,7 +193,7 @@ async fn cancelled_mcp_call_keeps_the_bridge_responsive() {
         .unwrap()
         .unwrap();
     assert!(serde_json::from_str::<Value>(&initialized).unwrap()["result"].is_object());
-    input.write_line(&json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"bex_browser","arguments":{"action":"screenshot"}}}).to_string()).await.unwrap();
+    input.write_line(&json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"preview_status","arguments":{}}}).to_string()).await.unwrap();
     let (connection, _) = tokio::time::timeout(Duration::from_secs(3), listener.accept())
         .await
         .unwrap()
@@ -213,7 +225,7 @@ async fn cancelled_mcp_call_keeps_the_bridge_responsive() {
             .is_none(),
         "cancellation must close the in-flight Host bridge connection"
     );
-    input.write_line(&json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"bex_browser","arguments":{"action":"screenshot"}}}).to_string()).await.unwrap();
+    input.write_line(&json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"preview_status","arguments":{}}}).to_string()).await.unwrap();
     let (connection, _) = tokio::time::timeout(Duration::from_secs(3), listener.accept())
         .await
         .unwrap()
