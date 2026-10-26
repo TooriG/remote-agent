@@ -606,10 +606,6 @@ impl Desktop {
                     Some(SurfaceResource::Pending { .. }) => {
                         div().p_4().child("ブラウザを起動中…").into_any_element()
                     }
-                    #[cfg(target_os = "windows")]
-                    Some(SurfaceResource::Starting { .. }) => {
-                        div().p_4().child("ブラウザを起動中…").into_any_element()
-                    }
                     None => div()
                         .p_4()
                         .child("機能を開けませんでした。「＋」から再試行してください。")
