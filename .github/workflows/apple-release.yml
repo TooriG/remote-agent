@@ -6,9 +6,6 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
-concurrency:
-  group: apple-release
-  cancel-in-progress: false
 jobs:
   release:
     if: >-
@@ -18,6 +15,10 @@ jobs:
        github.event.workflow_run.head_repository.full_name == github.repository &&
        github.event.workflow_run.conclusion == 'success') ||
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    # Skipped PR and failed-build notifications must not replace a queued release.
+    concurrency:
+      group: apple-release
+      cancel-in-progress: false
     runs-on: macos-26
     timeout-minutes: 150
     permissions:
