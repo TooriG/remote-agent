@@ -1192,18 +1192,6 @@ impl Desktop {
             .cloned()
             .map(|session| op::OperationKey::History { session })
     }
-    fn history_loading(&self) -> bool {
-        self.history_key()
-            .is_some_and(|key| self.snapshot.operation_running(key))
-    }
-    fn history_error(&self) -> Option<String> {
-        self.history_key()
-            .and_then(|key| self.snapshot.operation_error(key))
-    }
-    fn has_older_history(&self) -> bool {
-        self.thread()
-            .is_some_and(|thread| thread.history_has_more == Some(true))
-    }
     fn user_items(&self) -> impl Iterator<Item = &Arc<Item>> {
         self.thread()
             .and_then(|thread| thread.turns.as_deref())
@@ -1226,14 +1214,19 @@ impl Desktop {
             )
         });
         let mut rows = conversation_rows(&self.rendered);
-        let has_more = self.has_older_history();
-        let error = self.history_error();
+        let has_more = self
+            .thread()
+            .is_some_and(|thread| thread.history_has_more == Some(true));
+        let history_key = self.history_key();
+        let error = history_key
+            .as_ref()
+            .and_then(|key| self.snapshot.operation_error(key.clone()));
         if has_more || error.is_some() {
             rows.insert(
                 0,
                 ConversationRow::History {
                     has_more,
-                    loading: self.history_loading(),
+                    loading: history_key.is_some_and(|key| self.snapshot.operation_running(key)),
                     error,
                 },
             );
