@@ -332,7 +332,7 @@ impl Desktop {
         }
         editor.p_4().into_any_element()
     }
-    pub(super) fn workbench(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn workbench(&mut self, standalone: bool, cx: &mut Context<Self>) -> AnyElement {
         let panel = self.panels.get(&self.panel_scope());
         let layout = panel.layout;
         let active = panel.active;
@@ -429,10 +429,14 @@ impl Desktop {
                 });
             });
         let toolbar = h_flex()
-            .h_10()
+            .debug_selector(|| "workbench-header".into())
+            .h(px(crate::WINDOW_HEADER_HEIGHT))
             .px_2()
             .gap_1()
             .flex_shrink_0()
+            .when(standalone && !self.sidebar, |bar| {
+                bar.pl_0().child(sidebar_header(false, cx))
+            })
             .child(
                 h_flex()
                     .id("surface-tabs")
@@ -493,6 +497,18 @@ impl Desktop {
                     )
                     .debug_selector(|| "panel-right".into())
                     .selected(layout == PanelLayout::Right),
+                )
+            })
+            .when(standalone, |bar| {
+                bar.child(
+                    Self::icon_button(
+                        "panel-close",
+                        IconName::Close,
+                        "パネルを閉じる",
+                        cx,
+                        |view, _, _| view.panels.set_open(view.panel_scope(), false),
+                    )
+                    .debug_selector(|| "panel-close".into()),
                 )
             })
             .when(self.side_chat_mode, |bar| {
@@ -715,6 +731,15 @@ mod tests {
         window.simulate_resize(size(px(1600.), px(900.)));
         window.run_until_parked();
         assert!(window.debug_bounds("surface-launcher").is_some());
+        let chat = window.debug_bounds("conversation-chat").unwrap();
+        let title = window.debug_bounds("conversation-header").unwrap();
+        let tools = window.debug_bounds("workbench-header").unwrap();
+        assert_eq!(title.top(), chat.top());
+        assert_eq!(tools.top(), chat.top());
+        assert_eq!(tools.size.height, title.size.height);
+        assert!(title.right() <= chat.right());
+        assert!(tools.left() >= chat.right());
+        assert!(window.debug_bounds("panel-close").is_none());
         assert!(
             window.debug_bounds("panel-add").unwrap().center().x
                 < window.debug_bounds("surface-launcher").unwrap().center().x,
@@ -735,6 +760,10 @@ mod tests {
         window.simulate_click(bottom, Modifiers::default());
         window.run_until_parked();
         let chat = window.debug_bounds("conversation-chat").unwrap();
+        let title = window.debug_bounds("conversation-header").unwrap();
+        let tools = window.debug_bounds("workbench-header").unwrap();
+        assert_eq!(title.top(), chat.top());
+        assert!(tools.top() >= chat.bottom());
         let diff_menu = window.debug_bounds("diff-file-navigation").unwrap();
         assert!(
             diff_menu.top() >= chat.bottom(),
@@ -768,6 +797,11 @@ mod tests {
         window.simulate_click(expand, Modifiers::default());
         window.run_until_parked();
         assert!(window.debug_bounds("conversation-chat").is_none());
+        assert!(window.debug_bounds("conversation-header").is_none());
+        assert_eq!(
+            window.debug_bounds("workbench-header").unwrap().top(),
+            px(0.)
+        );
         let right = window.debug_bounds("panel-right").unwrap().center();
         window.simulate_click(right, Modifiers::default());
         window.run_until_parked();
@@ -786,5 +820,35 @@ mod tests {
         window.simulate_click(close, Modifiers::default());
         window.run_until_parked();
         assert!(window.debug_bounds("surface-launcher").is_some());
+        let collapse = window.debug_bounds("collapse-sidebar").unwrap().center();
+        window.simulate_click(collapse, Modifiers::default());
+        window.run_until_parked();
+        let title = window.debug_bounds("conversation-header").unwrap();
+        let sidebar = window.debug_bounds("expand-sidebar").unwrap();
+        assert!(sidebar.left() >= title.left() && sidebar.right() <= title.right());
+        let expand = window.debug_bounds("panel-expand").unwrap().center();
+        window.simulate_click(expand, Modifiers::default());
+        window.run_until_parked();
+        assert!(window.debug_bounds("conversation-header").is_none());
+        let tools = window.debug_bounds("workbench-header").unwrap();
+        let sidebar = window.debug_bounds("expand-sidebar").unwrap();
+        assert!(sidebar.left() >= tools.left() && sidebar.right() <= tools.right());
+        let right = window.debug_bounds("panel-right").unwrap().center();
+        window.simulate_click(right, Modifiers::default());
+        window.simulate_resize(size(px(900.), px(900.)));
+        window.run_until_parked();
+        assert!(window.debug_bounds("conversation-header").is_none());
+        let tools = window.debug_bounds("workbench-header").unwrap();
+        let sidebar = window.debug_bounds("expand-sidebar").unwrap();
+        assert!(sidebar.left() >= tools.left() && sidebar.right() <= tools.right());
+        let close = window.debug_bounds("panel-close").unwrap().center();
+        window.simulate_click(close, Modifiers::default());
+        window.run_until_parked();
+        assert!(window.debug_bounds("conversation-header").is_some());
+        assert!(window.debug_bounds("workbench-header").is_none());
+        let sidebar = window.debug_bounds("expand-sidebar").unwrap().center();
+        window.simulate_click(sidebar, Modifiers::default());
+        window.run_until_parked();
+        assert!(window.debug_bounds("desktop-sidebar-shell").is_some());
     }
 }

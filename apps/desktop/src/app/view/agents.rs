@@ -144,8 +144,11 @@ mod tests {
         window.simulate_resize(size(px(1600.), px(900.)));
         window.run_until_parked();
         assert!(window.debug_bounds("agents-panel").is_none());
-        let toggle = window.debug_bounds("agents-toggle").unwrap().center();
+        let toggle = window.debug_bounds("panel-toggle").unwrap().center();
         window.simulate_click(toggle, Modifiers::default());
+        window.run_until_parked();
+        let agents = window.debug_bounds("surface-5").unwrap().center();
+        window.simulate_click(agents, Modifiers::default());
         window.run_until_parked();
         let agents = window.debug_bounds("agents-panel").unwrap();
         let chat = window.debug_bounds("conversation-chat").unwrap();

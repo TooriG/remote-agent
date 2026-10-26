@@ -218,12 +218,8 @@ impl Render for Desktop {
 }
 
 impl Desktop {
-    fn conversation_content(&mut self, width: Pixels, cx: &mut Context<Self>) -> AnyElement {
-        let panel = self.panels.get(&self.panel_scope());
-        let panel_open = panel.open;
-        let panel_kind = panel.kind();
-        let panel_layout = panel.layout;
-        let wide = width >= px(1080.);
+    fn conversation_header(&self, cx: &Context<Self>) -> Div {
+        let panel_open = self.panels.get(&self.panel_scope()).open;
         let title = self
             .thread()
             .and_then(|thread| thread.name.as_deref())
@@ -241,6 +237,7 @@ impl Desktop {
             .unwrap_or("新しいチャット")
             .to_owned();
         let mut header = h_flex()
+            .debug_selector(|| "conversation-header".into())
             .h(px(crate::WINDOW_HEADER_HEIGHT))
             .flex_shrink_0()
             .px_4()
@@ -256,20 +253,7 @@ impl Desktop {
                 .text_ellipsis()
                 .child(title),
         );
-        header = header.child(
-            Self::icon_button(
-                "agents-toggle",
-                IconName::Network,
-                "エージェント",
-                cx,
-                |s, _, _| {
-                    s.panels.open(s.panel_scope(), Panel::Agents, None);
-                },
-            )
-            .debug_selector(|| "agents-toggle".into())
-            .selected(panel_open && panel_kind == Panel::Agents),
-        );
-        header = header.child(
+        header.child(
             Self::icon_button(
                 "panel-toggle",
                 if panel_open {
@@ -290,15 +274,26 @@ impl Desktop {
             )
             .debug_selector(|| "panel-toggle".into())
             .selected(panel_open),
-        );
+        )
+    }
+
+    fn conversation_content(&mut self, width: Pixels, cx: &mut Context<Self>) -> AnyElement {
+        let panel = self.panels.get(&self.panel_scope());
+        let panel_open = panel.open;
+        let panel_layout = panel.layout;
+        let wide = width >= px(1080.);
         let content = if self.side_chat_mode {
             if panel_open {
-                self.workbench(cx)
+                self.workbench(false, cx)
             } else {
                 self.chat(cx)
             }
         } else if panel_open {
-            let right = self.workbench(cx);
+            let right = self.workbench(
+                panel_layout == PanelLayout::Expanded
+                    || (panel_layout == PanelLayout::Right && !wide),
+                cx,
+            );
             if panel_layout == PanelLayout::Bottom {
                 v_resizable(SharedString::from(format!(
                     "chat-workbench-bottom-split:{:?}",
@@ -346,7 +341,6 @@ impl Desktop {
             .flex_1()
             .min_w_0()
             .h_full()
-            .when(!self.side_chat_mode, |v| v.child(header))
             .when(!self.error.is_empty(), |body| {
                 body.child(
                     h_flex()

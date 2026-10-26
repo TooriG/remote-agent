@@ -273,7 +273,10 @@ impl Desktop {
             .debug_selector(|| "conversation-chat".into())
             .flex_1()
             .min_w_0()
-            .h_full();
+            .h_full()
+            .when(!self.side_chat_mode, |body| {
+                body.child(self.conversation_header(cx))
+            });
         if let Some(notice) = self
             .thread()
             .and_then(|thread| agent_protocol::session::input_unavailable_reason(thread))
