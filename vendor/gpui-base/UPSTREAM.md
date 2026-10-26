@@ -1,0 +1,1 @@
+Vendored from crates.io `gpui-base-0.6.0` (longbridge/gpui-kit commit `94a313a72a2513aee2780240cd322d552b2395f0`, `crates/base`). List item content keeps its intrinsic flex basis so shrink-to-fit message bubbles include the text width. The desktop conversation rendering tests cover this regression. Compare against this release when updating.

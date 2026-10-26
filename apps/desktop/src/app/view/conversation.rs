@@ -765,17 +765,18 @@ impl Desktop {
                 .map(|file| file.path.as_str()),
             cx,
         );
-        h_flex()
+        v_flex()
             .w_full()
-            .justify_end()
+            .min_w_0()
+            .items_end()
+            .gap_2()
             .my_4()
+            .child(body)
             .child(
-                v_flex().min_w_0().gap_2().child(body).child(
-                    div()
-                        .text_sm()
-                        .text_color(rgb(appearance::MUTED))
-                        .child(pending.delivery_label()),
-                ),
+                div()
+                    .text_sm()
+                    .text_color(rgb(appearance::MUTED))
+                    .child(pending.delivery_label()),
             )
             .into_any_element()
     }
@@ -802,6 +803,7 @@ impl Desktop {
             })
             .collect();
         v_flex()
+            .w_full()
             .min_w_0()
             .max_w(px(560.))
             .items_end()
@@ -812,7 +814,7 @@ impl Desktop {
                         .justify_end()
                         .gap_2()
                         .flex_wrap()
-                        .max_w(px(560.))
+                        .max_w_full()
                         .children(images),
                 )
             })
@@ -1162,50 +1164,49 @@ fn user_message_row(
         });
     let copy_text = text.to_owned();
     let group = SharedString::from(format!("user-message-{id}"));
-    h_flex().w_full().justify_end().my_4().child(
-        v_flex()
-            .min_w_0()
-            .max_w_full()
-            .group(group.clone())
-            .items_end()
-            .gap_1()
-            .child(body.w_full())
-            .child(
-                h_flex()
-                    .debug_selector(|| "user-message-actions".into())
-                    .invisible()
-                    .group_hover(group, |style| style.visible())
-                    .children(time.map(|time| {
-                        div()
-                            .text_xs()
-                            .text_color(rgb(appearance::MUTED))
-                            .mr_2()
-                            .child(time)
-                    }))
-                    .child(
-                        Button::new(format!("copy-{id}"))
-                            .debug_selector(|| "user-message-copy".into())
-                            .icon(IconName::Copy)
-                            .small()
-                            .ghost()
-                            .tooltip("発言をコピー")
-                            .accessibility_label("発言をコピー")
-                            .disabled(copy_text.is_empty())
-                            .on_click(move |_, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()));
-                            }),
-                    )
-                    .child(
-                        edit.icon(Icon::default().path("bex/pencil.svg"))
-                            .small()
-                            .ghost()
-                            .debug_selector(|| "user-message-edit".into())
-                            .tooltip("入力欄で編集")
-                            .accessibility_label("入力欄で編集")
-                            .disabled(text.is_empty()),
-                    ),
-            ),
-    )
+    v_flex()
+        .w_full()
+        .min_w_0()
+        .group(group.clone())
+        .items_end()
+        .gap_1()
+        .my_4()
+        .child(body)
+        .child(
+            h_flex()
+                .debug_selector(|| "user-message-actions".into())
+                .invisible()
+                .group_hover(group, |style| style.visible())
+                .children(time.map(|time| {
+                    div()
+                        .text_xs()
+                        .text_color(rgb(appearance::MUTED))
+                        .mr_2()
+                        .child(time)
+                }))
+                .child(
+                    Button::new(format!("copy-{id}"))
+                        .debug_selector(|| "user-message-copy".into())
+                        .icon(IconName::Copy)
+                        .small()
+                        .ghost()
+                        .tooltip("発言をコピー")
+                        .accessibility_label("発言をコピー")
+                        .disabled(copy_text.is_empty())
+                        .on_click(move |_, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()));
+                        }),
+                )
+                .child(
+                    edit.icon(Icon::default().path("bex/pencil.svg"))
+                        .small()
+                        .ghost()
+                        .debug_selector(|| "user-message-edit".into())
+                        .tooltip("入力欄で編集")
+                        .accessibility_label("入力欄で編集")
+                        .disabled(text.is_empty()),
+                ),
+        )
 }
 
 #[cfg(test)]
@@ -1611,6 +1612,97 @@ mod rendering_tests {
             "expanded diff must occupy space in the rendered conversation"
         );
     }
+    fn user_message_fixture(
+        text: &str,
+        image: Option<&str>,
+        pending: bool,
+    ) -> (Snapshot, agent_protocol::models::Thread) {
+        let message = image.map_or_else(
+            || serde_json::json!({"text":text,"content":[]}),
+            |source| serde_json::json!({"text":null,"content":[{"text":{"text":text}},{"image":{"source":source}}]}),
+        );
+        let items = if pending {
+            serde_json::json!([])
+        } else {
+            serde_json::json!([{"id":"user","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"userMessage":message}}}}])
+        };
+        let mut snapshot = Snapshot::default();
+        if pending {
+            Arc::make_mut(&mut snapshot.pending_submissions).insert(
+                "pending".into(),
+                Arc::new(agent_core::state::PendingSubmission {
+                    sequence: 0,
+                    draft_key: agent_protocol::session::SessionRef {
+                        provider: agent_protocol::session::ProviderKind::Codex,
+                        id: "fixture".into(),
+                    }
+                    .into(),
+                    draft: Arc::new(agent_core::state::Draft {
+                        text: text.into(),
+                        attachments: image
+                            .map(|source| agent_core::state::Attachment {
+                                path: source.into(),
+                                name: "image.png".into(),
+                                is_image: true,
+                            })
+                            .into_iter()
+                            .collect(),
+                        ..Default::default()
+                    }),
+                    turn_id: Some("turn".into()),
+                    after_item_id: None,
+                    accepted: true,
+                    delivery_unknown: false,
+                }),
+            );
+        }
+        let source = serde_json::from_value(serde_json::json!({
+            "id":{"provider":"codex","id":"fixture"},
+            "turns":[{"id":"turn","status":"completed","items":items}]
+        }))
+        .unwrap();
+        (snapshot, source)
+    }
+
+    #[gpui::test]
+    fn user_messages_keep_readable_widths(cx: &mut TestAppContext) {
+        let _runtime = init(cx);
+        for pending in [false, true] {
+            let long = "The development Host inherits `$SHELL` from its environment. \
+                長い発言も会話の幅に合わせて折り返し、箇条書きの本文をすべて読めるようにする。";
+            for text in ["おｋ".to_owned(), long.to_owned(), format!("- {long}")] {
+                let short = text == "おｋ";
+                let (snapshot, source) = user_message_fixture(&text, None, pending);
+                let (view, window) = cx.add_window_view(|window, cx| {
+                    ConversationView::new(snapshot, source, window, cx)
+                });
+                for viewport_width in [780_f32, 360.] {
+                    window.simulate_resize(size(px(viewport_width), px(600.)));
+                    window.run_until_parked();
+                    view.update(window, |_, cx| cx.notify());
+                    window.run_until_parked();
+                    let bubble = window.debug_bounds("user-message-bubble").unwrap();
+                    if short {
+                        assert!(bubble.size.width < px(120.), "short message: {bubble:?}");
+                    } else {
+                        assert!(
+                            bubble.size.width >= px((viewport_width - 48.).min(560.)),
+                            "long message must use the available width (pending={pending}): {bubble:?}"
+                        );
+                    }
+                    assert!(
+                        bubble.size.height < px(240.),
+                        "message must wrap into readable lines: {bubble:?}"
+                    );
+                    assert!(
+                        bubble.left() >= px(0.) && bubble.right() <= px(viewport_width),
+                        "message overflows the conversation (pending={pending}, viewport={viewport_width}): {bubble:?}"
+                    );
+                }
+            }
+        }
+    }
+
     #[gpui::test]
     fn chat_images_stay_inside_the_bubble_at_different_window_sizes(cx: &mut TestAppContext) {
         let _runtime = init(cx);
@@ -1619,42 +1711,8 @@ mod rendering_tests {
                 let image = Arc::new(RenderImage::new(vec![image::Frame::new(
                     image::RgbaImage::new(width, height),
                 )]));
-                let items = if pending {
-                    serde_json::json!([])
-                } else {
-                    serde_json::json!([{"id":"user","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"userMessage":{"text":null,"content":[{"text":{"text":"caption"}},{"image":{"source":"/fixture/image.png"}}]}}}}}])
-                };
-                let mut snapshot = Snapshot::default();
-                if pending {
-                    Arc::make_mut(&mut snapshot.pending_submissions).insert(
-                        "pending".into(),
-                        Arc::new(agent_core::state::PendingSubmission {
-                            sequence: 0,
-                            draft_key: agent_protocol::session::SessionRef {
-                                provider: agent_protocol::session::ProviderKind::Codex,
-                                id: "fixture".into(),
-                            }
-                            .into(),
-                            draft: Arc::new(agent_core::state::Draft {
-                                text: "caption".into(),
-                                attachments: vec![agent_core::state::Attachment {
-                                    path: "/fixture/image.png".into(),
-                                    name: "image.png".into(),
-                                    is_image: true,
-                                }],
-                                ..Default::default()
-                            }),
-                            turn_id: Some("turn".into()),
-                            after_item_id: None,
-                            accepted: true,
-                            delivery_unknown: false,
-                        }),
-                    );
-                }
-                let source = serde_json::from_value(serde_json::json!({
-                    "id":{"provider":"codex","id":"fixture"}, "turns":[{"id":"turn", "status":"completed", "items":items}]
-                }))
-                .unwrap();
+                let (snapshot, source) =
+                    user_message_fixture("caption", Some("/fixture/image.png"), pending);
                 let (view, window) = cx.add_window_view(|window, cx| {
                     let view = ConversationView::new(snapshot, source, window, cx);
                     view.desktop.update(cx, |desktop, _| {

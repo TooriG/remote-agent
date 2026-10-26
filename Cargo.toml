@@ -50,3 +50,4 @@ netwatch = { git = "https://github.com/ttizze/net-tools", rev = "1d54cca14f47ebf
 alacritty_terminal = { path = "vendor/alacritty_terminal" }
 vte = { path = "vendor/vte" }
 gpui-pre-windows = { path = "vendor/gpui_windows" }
+gpui-base = { path = "vendor/gpui-base" }

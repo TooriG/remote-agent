@@ -103,7 +103,7 @@ fn user_message_bubble() -> Div {
         .debug_selector(|| "user-message-bubble".into())
         .gap_3()
         .min_w_0()
-        .max_w(px(560.))
+        .max_w_full()
         .p_4()
         .rounded(px(18.))
         .bg(rgb(appearance::RAISED))
