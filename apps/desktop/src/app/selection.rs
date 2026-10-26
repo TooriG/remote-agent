@@ -1,7 +1,7 @@
 use gpui_kit::{
-    App, Context, DismissEvent, Entity, EventEmitter, Focusable, InteractiveElement, IntoElement,
-    MouseButton, ParentElement, Pixels, Point, Render, SharedString, Styled, Subscription, Window,
-    anchored,
+    App, AppContext, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels, Point, Render,
+    SharedString, Styled, Subscription, Window, anchored,
     base::TextSelection,
     canvas,
     component::{
@@ -23,6 +23,7 @@ pub(super) enum SelectionAction {
 }
 
 pub(super) struct ConversationSelection {
+    focus_handle: FocusHandle,
     selected: Option<(Point<Pixels>, String)>,
     pending: Option<Point<Pixels>>,
     allow_side_chat: bool,
@@ -33,8 +34,9 @@ pub(super) struct ConversationSelection {
 impl EventEmitter<SelectionAction> for ConversationSelection {}
 
 impl ConversationSelection {
-    pub(super) fn new(allow_side_chat: bool) -> Self {
+    pub(super) fn new(allow_side_chat: bool, cx: &mut App) -> Self {
         Self {
+            focus_handle: cx.focus_handle(),
             selected: None,
             pending: None,
             allow_side_chat,
@@ -94,12 +96,26 @@ impl ConversationSelection {
         cx.notify();
     }
 
-    pub(super) fn wrap(entity: &Entity<Self>, content: impl IntoElement) -> impl IntoElement {
+    pub(super) fn wrap(
+        entity: &Entity<Self>,
+        content: impl IntoElement,
+        cx: &App,
+    ) -> impl IntoElement {
         let owner = entity.clone();
         let context_owner = entity.clone();
         let close_owner = entity.clone();
         div()
             .id("conversation-selection")
+            .key_context("TextView")
+            .track_focus(&entity.read(cx).focus_handle)
+            .on_action(|_: &gpui_kit::base::input::Copy, window, cx| {
+                let text = TextSelection::selected_text(window, cx);
+                if text.is_empty() {
+                    cx.propagate();
+                } else {
+                    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text));
+                }
+            })
             .relative()
             .flex_1()
             .min_h_0()
@@ -142,6 +158,11 @@ impl Render for ConversationSelection {
                     window.defer(cx, move |window, cx| {
                         let text = TextSelection::selected_text(window, cx);
                         owner.update(cx, |view, cx| {
+                            if !text.is_empty() {
+                                // Virtualized TextViews may be recreated while the selection
+                                // toolbar updates. Keep keyboard copy on a stable focus owner.
+                                view.focus_handle.focus(window, cx);
+                            }
                             view.selected = (!text.is_empty()).then_some((position, text));
                             cx.notify();
                         });
@@ -288,7 +309,7 @@ mod tests {
 
     struct Chat(Entity<ConversationSelection>, gpui::ListState);
     impl Render for Chat {
-        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             let selection = self.0.clone();
             div()
                 .size_full()
@@ -354,13 +375,14 @@ mod tests {
                     })
                     .flex_1()
                     .min_h_0(),
+                    cx,
                 ))
         }
     }
 
     fn setup(cx: &mut TestAppContext) -> (Entity<ConversationSelection>, &mut VisualTestContext) {
         cx.update(crate::appearance::init);
-        let selection = cx.new(|_| ConversationSelection::new(true));
+        let selection = cx.new(|cx| ConversationSelection::new(true, cx));
         let entity = selection.clone();
         let (_, window) = cx.add_window_view(|window, cx| {
             let chat = cx.new(|_| {
@@ -428,6 +450,50 @@ mod tests {
                 cx.read_from_clipboard().unwrap().text().unwrap(),
                 "Alpha Bravo\n"
             )
+        });
+    }
+
+    #[gpui::test]
+    fn keyboard_copy_preserves_the_exact_selected_text(cx: &mut TestAppContext) {
+        let (selection, cx) = setup(cx);
+        select_first_paragraph(cx);
+        cx.update(|window, cx| {
+            assert!(selection.read(cx).focus_handle.is_focused(window));
+            // Toolbar and streamed conversation updates must not drop copy focus.
+            selection.update(cx, |_, cx| cx.notify());
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string("previous clipboard".into()));
+        });
+        #[cfg(target_os = "macos")]
+        cx.simulate_keystrokes("cmd-c");
+        #[cfg(not(target_os = "macos"))]
+        cx.simulate_keystrokes("ctrl-c");
+        cx.update(|_, cx| {
+            assert_eq!(
+                cx.read_from_clipboard().unwrap().text().unwrap(),
+                "Alpha Bravo\n"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn keyboard_copy_without_selection_keeps_the_clipboard(cx: &mut TestAppContext) {
+        let (selection, cx) = setup(cx);
+        cx.update(|window, cx| {
+            selection.read(cx).focus_handle.clone().focus(window, cx);
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string("keep clipboard".into()));
+        });
+        #[cfg(target_os = "macos")]
+        cx.simulate_keystrokes("cmd-c");
+        #[cfg(not(target_os = "macos"))]
+        cx.simulate_keystrokes("ctrl-c");
+        cx.update(|_, cx| {
+            assert_eq!(
+                cx.read_from_clipboard().unwrap().text().unwrap(),
+                "keep clipboard"
+            );
         });
     }
 

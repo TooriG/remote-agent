@@ -245,6 +245,7 @@ impl Desktop {
                 .child(selection::ConversationSelection::wrap(
                     &self.selection,
                     history,
+                    cx,
                 ))
                 .child(self.conversation_navigation(cx));
             if !self.list.is_following_tail() {

@@ -341,7 +341,7 @@ impl Desktop {
             InputState::new(window, cx).placeholder("接続先 Host 上の絶対パス（空欄で既定）")
         });
         let hosts = (!side_chat_mode).then(|| cx.new(|cx| Hosts::new(window, cx)));
-        let selection = cx.new(|_| selection::ConversationSelection::new(!side_chat_mode));
+        let selection = cx.new(|cx| selection::ConversationSelection::new(!side_chat_mode, cx));
         let mut subscriptions = vec![
             cx.subscribe_in(
                 &selection,
