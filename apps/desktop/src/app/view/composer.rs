@@ -601,7 +601,7 @@ mod attachment_tests {
                     cx,
                 )
             });
-            desktop.update(cx, |view, _| {
+            desktop.update(cx, |view, cx| {
                 let key = view.draft_key().clone();
                 draft_key = Some(key.clone());
                 Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).drafts).insert(
@@ -619,6 +619,7 @@ mod attachment_tests {
                 view.images.insert(
                     view.image_key(&source, false),
                     ImageState {
+                        focus: cx.focus_handle(),
                         source: Arc::new(source.clone()),
                         path: Some(source.clone().into()),
                         error: None,
