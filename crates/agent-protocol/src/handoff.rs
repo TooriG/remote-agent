@@ -73,7 +73,8 @@ pub enum Role {
 
 impl Message {
     pub fn from_turn(turn: &Turn) -> Vec<Self> {
-        turn.items
+        let mut messages: Vec<_> = turn
+            .items
             .iter()
             .flatten()
             .filter_map(|item| {
@@ -124,7 +125,15 @@ impl Message {
                     ),
                 })
             })
-            .collect()
+            .collect();
+        if let Some(error) = &turn.error {
+            messages.push(Self {
+                role: Role::Assistant,
+                text: format!("Previous turn failed: {}", error.message),
+                source: format!("turn={}, status={:?}", turn.id, turn.status),
+            });
+        }
+        messages
     }
 
     fn render(&self) -> String {
@@ -239,6 +248,21 @@ pub fn select(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn failed_turns_retain_the_error_even_without_message_items() {
+        let messages = Message::from_turn(&Turn {
+            id: "failed".into(),
+            status: crate::execution::TurnStatus::Failed,
+            error: Some(crate::execution::ExecutionError {
+                message: "connection reset".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, Role::Assistant);
+        assert!(messages[0].text.contains("connection reset"));
+    }
     #[test]
     fn retrieval_pages_long_unicode_text_without_losing_boundaries() {
         let text = "日本語🦀".repeat(1700);

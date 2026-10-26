@@ -185,7 +185,12 @@ private fun ConversationContent(
 ) {
     val timestampMs = row.timestampMs
     when (val content = row.content) {
-        is ConversationRowContent.ProviderHandoff -> Text(content.text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        is ConversationRowContent.ProviderHandoff ->
+            Text(
+                content.text,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         is ConversationRowContent.User -> ThreadMessageCard(content.item, true, cwd, perform, timestampMs)
         is ConversationRowContent.Response ->
             ThreadMessageCard(

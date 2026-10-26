@@ -152,7 +152,18 @@ impl HostRpcService {
                     turn.items_summary = false;
                 }
                 for item in turn.items.iter_mut().flatten() {
-                    if item.is_deferred() {
+                    // Handoffs deliberately omit reasoning and native tool
+                    // state. Their deferred bodies need not be recovered.
+                    if item.is_deferred()
+                        && matches!(
+                            item.body(),
+                            agent_protocol::items::ItemBody::UserMessage { .. }
+                                | agent_protocol::items::ItemBody::AssistantText { .. }
+                                | agent_protocol::items::ItemBody::CommandExecution { .. }
+                                | agent_protocol::items::ItemBody::FileChange { .. }
+                                | agent_protocol::items::ItemBody::Plan { .. }
+                        )
+                    {
                         let output = agent
                             .read_item(&op::ReadItem {
                                 thread_id: session.clone(),

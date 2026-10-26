@@ -790,12 +790,7 @@ fn select_thread(snapshot: &mut Snapshot, id: crate::session::SessionRef, cwd: S
             previous.model.as_ref(),
             previous.effort.as_deref(),
             previous.service_tier.as_deref(),
-            Some(
-                snapshot
-                    .thread_metadata(&id)
-                    .and_then(|thread| thread.active_provider)
-                    .unwrap_or(id.provider),
-            ),
+            snapshot.draft_provider(&key, previous.model.as_ref()),
             &snapshot.models,
             &snapshot.model_errors,
             snapshot.allows_custom_codex_models(),
@@ -1231,6 +1226,35 @@ mod tests {
             (10..21).map(|n| n.to_string()).collect::<Vec<_>>()
         );
         assert_eq!(updated.history_cursor.as_deref(), Some("10"));
+    }
+
+    #[test]
+    fn navigating_back_keeps_an_unsent_provider_change() {
+        let id = SessionRef {
+            provider: ProviderKind::Codex,
+            id: "existing".into(),
+        };
+        let key = DraftKey::from(id.clone());
+        let mut snapshot = Snapshot {
+            models: Arc::new(serde_json::from_value(serde_json::json!([
+                {"id":"gpt","model":{"provider":"codex","id":"gpt"},"displayName":"GPT","isDefault":true},
+                {"id":"sonnet","model":{"provider":"claude","id":"sonnet"},"displayName":"Claude","isDefault":true}
+            ])).unwrap()),
+            ..Default::default()
+        };
+        let model = snapshot.models[1].model.clone();
+        Arc::make_mut(&mut snapshot.drafts).insert(
+            key.clone(),
+            Arc::new(Draft {
+                model: Some(model.clone()),
+                text: "continue with Claude".into(),
+                ..Default::default()
+            }),
+        );
+        select_thread(&mut snapshot, id.clone(), "/workspace".into());
+        assert_eq!(snapshot.drafts[&key].model.as_ref(), Some(&model));
+        assert_eq!(snapshot.drafts[&key].text, "continue with Claude");
+        assert_eq!(snapshot.navigation.thread_id.as_ref(), Some(&id));
     }
 
     #[test]

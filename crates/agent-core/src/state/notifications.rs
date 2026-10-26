@@ -566,7 +566,9 @@ mod tests {
         ]
         .into_iter()
         .map(|(id, expected)| (session(id), expected))
-        .chain([(cross_provider, 0)])
+        // After a handoff the public parent retains its original provider,
+        // while a native child belongs to the active provider.
+        .chain([(cross_provider, 1)])
         {
             let (_, effects) = notification(
                 &state,
