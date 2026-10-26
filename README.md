@@ -2,7 +2,7 @@
 
 [English](README.md) | [日本語](README.ja.md)
 
-bex controls Codex and Claude Code on a trusted computer from a Mac app, an iPhone app, an Android app, or a headless CLI. A Rust Host daemon owns the agent processes; every client connects over authenticated iroh streams using shared Postcard RPC types and dispatches intents to the same Rust `Store`. Terminology is in [CONTEXT.md](CONTEXT.md); design decisions are in [docs/adr](docs/adr); behavior changes are in [CHANGELOG.md](CHANGELOG.md).
+bex controls Codex and Claude Code on a trusted computer from a Mac app, an iPhone app, an Android app, or a headless CLI. A Rust Host daemon owns the agent processes; every client connects over authenticated iroh streams using shared Postcard RPC types and dispatches intents to the same Rust `Store`. Behavior changes are recorded in [CHANGELOG.md](CHANGELOG.md).
 
 The workspace pins netwatch 0.19.3 to a fork commit containing [UDP rebind recovery](https://github.com/n0-computer/net-tools/pull/235), while iroh uses its published release. Failed UDP rebinds retry with exponential backoff from 100 ms to 5 s without terminating asynchronous I/O; explicitly closing a socket cancels recovery. Remove the patch when adopting an upstream release containing the fix.
 
@@ -25,25 +25,6 @@ Sources: [Apple security releases](https://support.apple.com/en-ca/100100), [And
 Android 8–16 do not request the Android 17-only local-network permission. Android 17 asks for nearby-device access before opening a LAN connection. Denial retains the permission screen with retry and Settings actions; users can also continue over the Internet (a LAN-only Host still needs permission). Returning from Settings with permission granted opens the app. The Internet choice survives activity recreation; a new launch checks permission again. Saved hosts and drafts remain in the existing repository.
 
 When a new major becomes generally available, verify the vendor release, update these baselines together, remove obsolete compatibility paths, and run client acceptance tests before claiming support. Do not promote a beta/RC because an SDK or runner happens to include it. This policy does not select a Markdown rendering library.
-
-## Layout
-
-| Path | Role |
-| --- | --- |
-| `crates/` | Shared Rust state, protocol, transport, Host, bindings, CLI and test tooling. Responsibility and dependency rules are in [AGENTS.md](AGENTS.md). |
-| `apps/desktop` | GPUI desktop app with a native Alacritty terminal. |
-| `apps/mobile` | iOS (SwiftUI, `iosApp/`) and Android (Compose, `src/`) over the UniFFI Store. |
-
-[ADR 0005](docs/adr/0005-rust-store-and-one-iroh-client-path.md) explains the shared
-Store and transport decision. The device storage contract lives beside its
-[codec](crates/agent-core/src/persistence.rs).
-
-[Session runtime](docs/SESSION_RUNTIME.md) describes execution and delivery
-ownership. Feature guides cover [sidebar projects](docs/DESKTOP_PROJECTS.md),
-[terminals](docs/NATIVE_TERMINAL.md), and the [shared browser](docs/REMOTE_BROWSER.md).
-[Focused test audits](docs/TEST_MAINTENANCE.md) and
-[connection diagnostics](docs/qa/IOS_CONNECTION_PERFORMANCE.md) document specialized
-verification; routine commands are in [justfile](justfile).
 
 ## Run the Host
 
@@ -127,6 +108,8 @@ open apps/mobile/iosApp/Bex.xcodeproj
 scripts/dev-env.sh ./gradlew :apps:mobile:assembleDebug
 ```
 
+The separate iOS development app has its own [distribution procedure](docs/qa/IOS_DEV_RELEASE.md).
+
 Rerun the iOS library build after changing Rust sources. Desktop drafts and logs use `BEX_STATE_DIR`; Host discovery may select a different credential directory. An isolated desktop requires both `BEX_ISOLATED_HOST=1` and `BEX_STATE_DIR`; use a separate Codex home or fixture executable as well so tests cannot read personal provider state.
 
 Use `scripts/dev-env.sh just check -p agent-core` for quick Rust feedback without
@@ -140,6 +123,17 @@ development Host before rebuilding; closing its window does not stop it. Avoid
 running the same conversation on both Hosts at once.
 
 ## Conversation controls
+
+Use a project's `…` menu to pin, rename, group, archive or hide it. Drag project
+headings to reorder them and chat rows onto a project to change their sidebar
+placement. These device preferences preserve the conversation's execution directory
+and files.
+
+On iPhone, open the workspace from the conversation's grid button; its tabs select
+terminal, browser or files. Closing the terminal view or disconnecting retains its
+shell; choose **終了** to end it. Host restart ends shells. The browser shares the
+conversation's Host-owned pages with the agent; its login profile survives Host
+restart, while open tabs need not.
 
 On Mac and iPhone, select assistant text to quote it into the draft or ask about it in a side chat. Closing an iPhone side chat restores the original conversation and draft. Mac also supports right-click Copy and Google Search, and own-message hover actions for copying or returning text to the composer. Command activity starts collapsed while running and after reopening; explicit expansion is preserved.
 
@@ -161,7 +155,7 @@ Use an APNs ES256 `.p8` authentication key with permission for this bundle ID. K
 
 Each phone registers its activity update token through the authenticated Host connection. The Host sends APNs updates directly, retains registrations after phone disconnection, replaces rotated tokens and removes registrations on device revocation, activity completion, invalid tokens or the eight-hour activity limit. APNs can update activities already started by the app; it does not start activities remotely. Running activities receive low-priority heartbeats every minute; confirmation and final results use immediate delivery. If updates stop, the activity shows **更新待ち** after two minutes. Without APNs, background content becomes stale after 30 seconds or immediately on disconnection. Actual delivery requires matching signing entitlements, APNs environment and Apple credentials.
 
-Mac and iPhone place borderless Fast, model name and reasoning-strength controls immediately before microphone and send. The model name opens a picker with separate agent and account rows and a searchable catalog. The account row shows reported weekly quota; open it to switch accounts or enter account management for add/login/confirmed sign-out. Settings reaches the same management view. Account changes refresh the catalog while preserving supported model settings, conversation text and attachments. The Host owns authentication and the per-provider account selection shared by connected clients. Current adapters support Codex and Claude; Pi and third-party connection adapters are not yet available. For Claude, open the login page and paste the returned authorization code into bex.
+Mac and iPhone place borderless Fast, model name and reasoning-strength controls immediately before microphone and send. The model name opens a picker with separate agent and account rows and a searchable catalog. The account row shows reported weekly quota; open it to switch accounts or enter account management for add/login/confirmed sign-out. Settings reaches the same management view. Account changes refresh the catalog while preserving supported model settings, conversation text and attachments. The Host owns authentication and the per-provider account selection shared by connected clients. Available agents and models come from the selected Host. For Claude, open the login page and paste the returned authorization code into bex.
 
 ### Claude Code
 
@@ -173,7 +167,7 @@ The Host runs the unmodified CLI with streaming JSON input/output and its own pe
 
 Text, PNG/JPEG/GIF/WebP images, file references, tool approvals, user questions, interruption and subsequent turns use the same Store and authenticated transport as Codex. Working-directory selection and automatic worktree settings apply to both. Claude's native transcript is the only persistent conversation source. The Host reads its configured native directory (`--claude-home`, `CLAUDE_CONFIG_DIR`, or `~/.claude`) without launching inference and never writes bex conversation records. Disconnecting a client leaves execution running; reconnecting opens the current snapshot, including currently valid unanswered requests, without replaying events.
 
-Create a new conversation to switch between Codex and Claude. Claude currently accepts subsequent input after the active turn completes or is interrupted; the composer explains this limit and retains the draft during a running turn. Claude-to-Codex delegation and Claude forks/side chats are not implemented. Codex startup failure or exit does not stop the Host, Claude turns, pairing, files, or workspace selection. The Host owns PTYs independently of Codex, scopes each handle to its connection, and cleans them up on disconnect or shutdown. Dictation and Codex account operations still require Codex. Worktree deletion is blocked while Codex conversation activity cannot be checked. The CLI integration has been exercised with Claude Code 2.1.266.
+Create a new conversation to switch between Codex and Claude. Claude currently accepts subsequent input after the active turn completes or is interrupted; the composer explains this limit and retains the draft during a running turn. Claude-to-Codex delegation and Claude forks/side chats are not implemented. Codex startup failure or exit does not stop the Host, Claude turns, pairing, files, or workspace selection. The Host owns PTYs independently of Codex and retains device-owned shells across client disconnections. Dictation and Codex account operations still require Codex. Worktree deletion is blocked while Codex conversation activity cannot be checked. The CLI integration has been exercised with Claude Code 2.1.266.
 
 Mac conversation file links open the Host's parent directory and file editor in the Files panel, retaining unsaved file drafts and revision checks. Side Chat displays files and diffs in its own panel with a return-to-chat control, preserving the conversation draft.
 
@@ -253,6 +247,7 @@ Use `scripts/dev-env.sh kache stats --last-build` to inspect reuse or
 `scripts/dev-env.sh kache explain` to investigate misses. Cache policy lives in
 [.kache.toml](.kache.toml); CI uses its own Cargo caches.
 
+Inspect connection timing with `scripts/dev-env.sh cargo xtask connection-diagnostics`.
 Use `scripts/dev-env.sh just --list` to discover focused checks and
 `BEX_IOS_TEST_WORKERS=1`–`10` to select native iOS acceptance concurrency.
 The acceptance runner serializes batches across worktrees and retains its

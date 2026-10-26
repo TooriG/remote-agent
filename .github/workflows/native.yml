@@ -66,7 +66,7 @@ jobs:
             # Unknown paths verify every client.
             case "$path" in
               docs/PRIVACY.md) area=all ;;
-              docs/* | AGENTS.md | CHANGELOG.md | CONTEXT.md | README.md | README.ja.md | SECURITY.md) area=docs ;;
+              docs/* | AGENTS.md | CHANGELOG.md | README.md | README.ja.md | SECURITY.md) area=docs ;;
               apps/mobile/src/* | apps/mobile/build.gradle.kts | build.gradle.kts | settings.gradle.kts | \
                 gradle.properties | gradle/* | gradlew | gradlew.bat | detekt.yml | scripts/android-e2e.sh) area=android ;;
               apps/mobile/iosApp/* | .swiftformat | .swiftlint.yml | scripts/ios-e2e.sh | \

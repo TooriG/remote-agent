@@ -124,16 +124,20 @@ pub enum ConnectionPhase {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionEvent {
     pub sequence: u64,
+    /// Microseconds on this trace's monotonic clock; never subtract across devices.
     pub at_us: u64,
     pub phase: ConnectionPhase,
     /// Connection or relay dial identifier, never a peer identity.
     pub group: u64,
     pub stream: u64,
+    /// Phase-specific: request/encoding/RTT/pulse durations are microseconds;
+    /// send/read phases report bytes, and packet/loss statistics are cumulative.
     pub value: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ConnectionTimeline {
+    /// Wall-clock capture start for ordering recovered captures, not interval timing.
     pub started_at_ms: u64,
     pub id: u64,
     pub dropped: u64,

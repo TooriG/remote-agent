@@ -1,4 +1,7 @@
 //! Native request and answer conversion used only by provider adapters.
+//! Choice IDs map back to native values here; labels never authorize an answer.
+//! Default choices belong to each provider's native contract. Unknown requests
+//! remain unanswerable even when unknown history items have a display fallback.
 use agent_protocol::{ids::RequestId, requests::*, session::RequestDelivery};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};

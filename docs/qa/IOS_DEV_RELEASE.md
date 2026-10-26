@@ -37,3 +37,6 @@ test group state (`IN_BETA_TESTING`). Processing success alone is insufficient.
 The app uses the same encryption as BEX. Apply its existing export-exemption
 setting to the dev build in App Store Connect. Build the development Host from
 the same revision. Never use the ordinary BEX record for dev releases.
+
+For public BEX releases, distribution targets the US, Japan and China, excluding
+France. Verify territories and encryption declarations in App Store Connect.

@@ -2,7 +2,7 @@
 
 [English](README.md) | [日本語](README.ja.md)
 
-bexは、信頼できるコンピューター上のCodexとClaude Codeを、Macアプリ、iPhoneアプリ、Androidアプリ、またはヘッドレスCLIから操作するアプリです。Rust製のHostデーモンがエージェントのプロセスを管理します。すべてのクライアントは認証済みのirohストリームで共通のPostcard RPC型を使い、同じRustの`Store`へ操作を送ります。用語は[CONTEXT.md](CONTEXT.md)、設計判断は[docs/adr](docs/adr)、動作変更は[CHANGELOG.md](CHANGELOG.md)を参照してください。
+bexは、信頼できるコンピューター上のCodexとClaude Codeを、Macアプリ、iPhoneアプリ、Androidアプリ、またはヘッドレスCLIから操作するアプリです。Rust製のHostデーモンがエージェントのプロセスを管理します。すべてのクライアントは認証済みのirohストリームで共通のPostcard RPC型を使い、同じRustの`Store`へ操作を送ります。動作変更は[CHANGELOG.md](CHANGELOG.md)を参照してください。
 
 irohは公開リリースを使い、netwatch 0.19.3は[UDPの再バインド回復](https://github.com/n0-computer/net-tools/pull/235)を含むフォークのコミットに固定しています。UDPの再バインド失敗時は、非同期I/Oを終了せず、100ミリ秒から5秒までの指数バックオフで再試行します。ソケットを明示的に閉じると回復処理を中止します。修正が含まれる上流リリースを採用したら、このパッチを削除します。
 
@@ -25,19 +25,6 @@ Linux（CIの基準はUbuntu 24.04）とAndroid（最小はAndroid 8.0・API 26�
 Android 8〜16ではAndroid 17専用のローカルネットワーク許可を要求しません。Android 17では、LAN接続を開く前に付近のデバイスへのアクセス許可を求めます。拒否した場合は再試行・設定ボタンを備えた許可画面に留まり、インターネット経由でも続行できます（LAN専用Hostには許可が必要です）。設定から許可を与えて戻るとアプリが開きます。インターネット経由の選択はActivityの再生成後も保持し、新規起動では許可を再確認します。保存済みHostと下書きは既存の保存領域に残ります。
 
 新しいメジャーが一般提供されたら、提供元の公開を確認し、これらの基準をまとめて更新して、古い互換処理を削除します。対応を宣言する前にクライアントの受け入れテストを実行してください。SDKやCIランナーに含まれるだけのベータ・RCを採用してはいけません。この方針はMarkdown描画ライブラリの選択とは独立しています。
-
-## ディレクトリ構成
-
-| パス | 役割 |
-| --- | --- |
-| `crates/` | 共通のRust状態管理、プロトコル、通信、Host、バインディング、CLI、テスト用ツール。[AGENTS.md](AGENTS.md)に責務と依存方向を記載。 |
-| `apps/desktop` | GPUI製デスクトップアプリと、Alacrittyのネイティブターミナル。 |
-| `apps/mobile` | UniFFI Storeを使うiOS（SwiftUI、`iosApp/`）とAndroid（Compose、`src/`）。 |
-
-Storeと通信を共有する設計の理由は[ADR 0005](docs/adr/0005-rust-store-and-one-iroh-client-path.md)、端末保存の契約は[codecのモジュール説明](crates/agent-core/src/persistence.rs)を参照してください。
-
-実行と配送の所有権は[Session runtime](docs/SESSION_RUNTIME.md)に記載しています。機能ごとの説明は[サイドバーのプロジェクト](docs/DESKTOP_PROJECTS.md)、[ターミナル](docs/NATIVE_TERMINAL.md)、[共有ブラウザー](docs/REMOTE_BROWSER.md)を参照してください。
-[重点的なテスト監査](docs/TEST_MAINTENANCE.md)と[接続診断](docs/qa/IOS_CONNECTION_PERFORMANCE.md)には専用の手順を記載し、通常の開発コマンドは[justfile](justfile)で管理します。
 
 ## Hostの起動
 
@@ -121,6 +108,8 @@ open apps/mobile/iosApp/Bex.xcodeproj
 scripts/dev-env.sh ./gradlew :apps:mobile:assembleDebug
 ```
 
+別アプリとして配布するiOS開発版は、[配布手順](docs/qa/IOS_DEV_RELEASE.md)を参照してください。
+
 Rustのソースを変更したら、iOS用ライブラリも再ビルドしてください。デスクトップの下書きとログは`BEX_STATE_DIR`を使いますが、Host探索で別の認証情報ディレクトリを選ぶことがあります。デスクトップを隔離するには`BEX_ISOLATED_HOST=1`と`BEX_STATE_DIR`の両方が必要です。個人のプロバイダー状態をテストが読み込まないよう、別のCodexホームかフィクスチャ実行ファイルも使ってください。
 
 編集中は`scripts/dev-env.sh just check -p agent-core`で、実行ファイルを生成せずにRustを確認できます。`-p`には変更したクレートを指定してください。
@@ -129,9 +118,13 @@ Rustのソースを変更したら、iOS用ライブラリも再ビルドして�
 
 ## 会話の操作
 
+プロジェクトの`…`メニューから、ピン留め、表示名・セクションの変更、アーカイブ、非表示を操作できます。プロジェクト見出しをドラッグして並べ替え、チャットをプロジェクトへドロップして一覧上の配置を変更できます。端末ごとの表示設定であり、会話の実行ディレクトリやファイルは変更しません。
+
+iPhoneでは会話のグリッドボタンから作業画面を開き、ターミナル・ブラウザー・ファイルのタブを選びます。ターミナル画面を閉じたり接続を切ったりしてもシェルは残り、「終了」で終了できます。Hostの再起動ではシェルが終了します。ブラウザーは会話のエージェントと同じHost上のページを操作し、ログイン用プロファイルはHost再起動後も保持しますが、開いていたタブの復元は保証しません。
+
 Mac・iPhoneでは、アシスタントの文章を選択して下書きに引用したり、サイドチャットで質問したりできます。iPhoneのサイドチャットを閉じると、元の会話と下書きへ戻ります。Macには右クリックのコピー・Google検索、自分のメッセージのホバーによるコピー・入力欄への戻しもあります。コマンドの実行内容は実行中・再表示後とも最初は折り畳み、明示的に展開した状態は保持します。
 
-Mac・iPhoneでは、枠のないFast、モデル名、推論強度の操作をマイク・送信の直前に置きます。モデル名を押すと、エージェント・アカウントの行と、検索できるモデル一覧を開きます。アカウント行は報告された週次使用枠を表示し、切り替えや、追加・ログイン・確認付きサインアウトの管理画面へ進めます。設定からも同じ管理画面に入れます。アカウント変更では、対応するモデル設定、本文、添付を保持したまま一覧を更新します。認証とプロバイダーごとのアカウント選択はHostが所有し、接続済みクライアントで共有します。現在はCodex・Claudeに対応し、Pi・第三者の接続アダプターは未対応です。Claudeではログインページを開き、返された認証コードをBexへ貼り付けます。
+Mac・iPhoneでは、枠のないFast、モデル名、推論強度の操作をマイク・送信の直前に置きます。モデル名を押すと、エージェント・アカウントの行と、検索できるモデル一覧を開きます。アカウント行は報告された週次使用枠を表示し、切り替えや、追加・ログイン・確認付きサインアウトの管理画面へ進めます。設定からも同じ管理画面に入れます。アカウント変更では、対応するモデル設定、本文、添付を保持したまま一覧を更新します。認証とプロバイダーごとのアカウント選択はHostが所有し、接続済みクライアントで共有します。利用可能なエージェントとモデルは接続先Hostが報告するものを使います。Claudeではログインページを開き、返された認証コードをBexへ貼り付けます。
 
 ### Claude Code
 
@@ -143,7 +136,7 @@ Hostは変更していないCLIを、ストリーミングJSON入出力と独自
 
 テキスト、PNG・JPEG・GIF・WebP画像、ファイル参照、ツール承認、ユーザーへの質問、中断、後続ターンは、Codexと同じStore・認証済み接続を使います。作業ディレクトリ選択と自動ワークツリー設定も共通です。永続的な会話の唯一の保存元はClaudeのネイティブ記録です。Hostは`--claude-home`、`CLAUDE_CONFIG_DIR`、または`~/.claude`を推論実行なしで読み、Bex独自の会話記録は書きません。クライアントを切断しても実行は続き、再接続ではイベントを再送せず、現在有効な未回答の要求を含む最新の状態を開きます。
 
-CodexとClaudeの切り替えには新しい会話を作成します。Claudeへの後続入力は、現在のターンの完了・中断後に送れます。実行中は入力欄でこの制限を示し、下書きを保持します。ClaudeからCodexへの委任、Claudeのフォーク・サイドチャットは未実装です。Codexの起動失敗・終了でも、Host、Claudeの実行、ペアリング、ファイル、作業場所の選択は停止しません。HostはCodexと独立してPTYを所有し、接続ごとに制限し、切断・停止時に片付けます。音声入力とCodexアカウント操作にはCodexが必要です。Codexの会話活動を確認できない場合はワークツリー削除を禁止します。CLI連携はClaude Code 2.1.266で検証しています。
+CodexとClaudeの切り替えには新しい会話を作成します。Claudeへの後続入力は、現在のターンの完了・中断後に送れます。実行中は入力欄でこの制限を示し、下書きを保持します。ClaudeからCodexへの委任、Claudeのフォーク・サイドチャットは未実装です。Codexの起動失敗・終了でも、Host、Claudeの実行、ペアリング、ファイル、作業場所の選択は停止しません。HostはCodexと独立してPTYを所有し、端末に属するシェルはクライアントの切断後も保持します。音声入力とCodexアカウント操作にはCodexが必要です。Codexの会話活動を確認できない場合はワークツリー削除を禁止します。CLI連携はClaude Code 2.1.266で検証しています。
 
 Macで会話内のファイルリンクを開くと、FilesパネルにHost上の親ディレクトリとエディターを表示し、未保存の編集とリビジョン確認を保持します。Side Chatは独自パネルでファイル・差分を表示し、下書きを保ったまま会話へ戻れます。
 
@@ -209,7 +202,7 @@ Claudeの契約テストは`scripts/dev-env.sh cargo test --locked -p host-fixtu
 
 Nixシェルは固定したKacheでワークツリー間のビルド結果を再利用します。`KACHE_CACHE_DIR`でキャッシュ先を指定でき、`bex.buildRoot`設定時の既定値は`<buildRoot>/.kache`です。`scripts/dev-env.sh kache stats --last-build`で再利用、`scripts/dev-env.sh kache explain`でミスの原因を確認できます。キャッシュの方針は[.kache.toml](.kache.toml)で管理し、CIは独自のCargoキャッシュを使います。
 
-対象を絞った検証コマンドは`scripts/dev-env.sh just --list`で確認できます。iOSの受け入れ検証は`BEX_IOS_TEST_WORKERS=1`〜`10`で並列数を指定できます。ランナーはワークツリー間で実行を直列化し、結果を`target/qa`へ残します。ビルドキャッシュの詳細は[scripts/dev-env.sh](scripts/dev-env.sh)と各ネイティブランナーで管理します。`agent-ffi/bindgen`機能はバインディング生成時にだけ有効にしてください。
+接続時間は`scripts/dev-env.sh cargo xtask connection-diagnostics`で解析できます。対象を絞った検証コマンドは`scripts/dev-env.sh just --list`で確認できます。iOSの受け入れ検証は`BEX_IOS_TEST_WORKERS=1`〜`10`で並列数を指定できます。ランナーはワークツリー間で実行を直列化し、結果を`target/qa`へ残します。ビルドキャッシュの詳細は[scripts/dev-env.sh](scripts/dev-env.sh)と各ネイティブランナーで管理します。`agent-ffi/bindgen`機能はバインディング生成時にだけ有効にしてください。
 
 新規ワークツリーのビルド出力を外付けディスクへ置くには、マウント済みディスクにディレクトリを作り、`git config --local bex.buildRoot /absolute/path/to/builds`を設定します。このローカル設定は全ワークツリーで共有します。`scripts/dev-env.sh`は新しい`target`を外付け上の専用ディレクトリへのシンボリックリンクにし、Cargo・Xcode・生成バインディング・キャッシュの既存パスを維持します。既存`target`は移動しません。移す場合は使用していない間に移動して元の場所をリンクへ置き換えてください。指定ディレクトリは事前に存在する必要があり、ディスク取り外しなどで利用できなければコマンドは失敗します。`git config --local --unset bex.buildRoot`で設定を削除すると、その後の新規ワークツリーはローカル出力へ戻ります。
 

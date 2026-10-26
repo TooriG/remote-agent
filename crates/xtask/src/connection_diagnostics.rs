@@ -1,4 +1,9 @@
 //! Correlate bounded captures without inventing missing timing observations.
+//! Match trace, attempt, connection and QUIC stream before comparing intervals.
+//! Missing boundaries remain unknown, never zero. Residual time after Host work
+//! includes client scheduling and transport; it cannot identify relay latency.
+//! RuntimePulse delays do not identify a blocking thread, and UI publication is
+//! not GPU presentation. ReadWake-to-poll is application wakeup, not kernel receipt.
 use crate::Result;
 use serde_json::{Map, Value, json};
 use std::{
