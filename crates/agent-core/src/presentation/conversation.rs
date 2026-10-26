@@ -1677,6 +1677,18 @@ pub fn history_notice(thread: &models::Thread) -> Option<String> {
     use crate::session::HistoryReadKind;
     let state = thread.history_read_state.as_ref()?;
     let heading = match state.kind {
+        // Older pages are loaded on demand. A usable continuation is normal,
+        // while missing history or reported read issues still need a notice.
+        HistoryReadKind::Partial
+            if state.issues.is_empty()
+                && thread.history_has_more == Some(true)
+                && thread
+                    .history_cursor
+                    .as_ref()
+                    .is_some_and(|cursor| !cursor.is_empty()) =>
+        {
+            return None;
+        }
         HistoryReadKind::Partial => "履歴の一部を表示しています。",
         HistoryReadKind::Incomplete => "履歴の一部を読み取れませんでした。",
         HistoryReadKind::Unavailable => {
@@ -1696,4 +1708,75 @@ pub fn history_notice(thread: &models::Thread) -> Option<String> {
     } else {
         format!("{heading}\n{issues}")
     })
+}
+
+#[cfg(test)]
+mod history_notice_tests {
+    use super::*;
+    use crate::session::{HistoryPage, HistoryReadKind, HistoryReadState};
+
+    #[test]
+    fn normal_pagination_has_no_warning_before_or_after_loading_the_remaining_history() {
+        let mut thread = models::Thread::default();
+        HistoryPage {
+            turns: Vec::new(),
+            next_cursor: Some("older-page".into()),
+        }
+        .prepend_to(&mut thread);
+        assert_eq!(history_notice(&thread), None);
+        HistoryPage {
+            turns: Vec::new(),
+            next_cursor: None,
+        }
+        .prepend_to(&mut thread);
+        assert_eq!(history_notice(&thread), None);
+    }
+
+    #[rstest::rstest]
+    #[case(None, None)]
+    #[case(None, Some(""))]
+    #[case(None, Some("older-page"))]
+    #[case(Some(false), None)]
+    #[case(Some(false), Some(""))]
+    #[case(Some(false), Some("older-page"))]
+    #[case(Some(true), None)]
+    #[case(Some(true), Some(""))]
+    fn a_partial_read_without_a_usable_continuation_keeps_its_notice(
+        #[case] more: Option<bool>,
+        #[case] cursor: Option<&str>,
+    ) {
+        let thread = models::Thread {
+            history_has_more: more,
+            history_cursor: cursor.map(str::to_owned),
+            history_read_state: Some(HistoryReadState::new(HistoryReadKind::Partial, Vec::new())),
+            ..Default::default()
+        };
+        assert_eq!(
+            history_notice(&thread).as_deref(),
+            Some("履歴の一部を表示しています。")
+        );
+    }
+
+    #[rstest::rstest]
+    #[case(HistoryReadKind::Partial, "履歴の一部を表示しています。")]
+    #[case(HistoryReadKind::Incomplete, "履歴の一部を読み取れませんでした。")]
+    #[case(
+        HistoryReadKind::Unavailable,
+        "履歴を取得できません。保存済みの表示は最新とは限りません。"
+    )]
+    fn read_failures_remain_visible_even_when_older_pages_exist(
+        #[case] kind: HistoryReadKind,
+        #[case] heading: &str,
+    ) {
+        let thread = models::Thread {
+            history_has_more: Some(true),
+            history_cursor: Some("older-page".into()),
+            history_read_state: Some(HistoryReadState::new(kind, vec!["read issue".into()])),
+            ..Default::default()
+        };
+        assert_eq!(
+            history_notice(&thread),
+            Some(format!("{heading}\nread issue"))
+        );
+    }
 }

@@ -195,16 +195,6 @@ impl Render for Desktop {
         if self.import_projects || (self.onboarding && self.tab == Tab::Chat) {
             return self.onboarding_view(window, cx);
         }
-        if composer_visible
-            && self.has_older_history()
-            && !self.history_loading()
-            && self.history_error().is_none()
-        {
-            let entity = cx.entity().downgrade();
-            window.on_next_frame(move |_, cx| {
-                let _ = entity.update(cx, |view, cx| view.load_visible_history(cx));
-            });
-        }
         let main = if self.project_editor.is_some() {
             self.project_editor_view(cx)
         } else {

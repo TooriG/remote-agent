@@ -166,6 +166,11 @@ struct MarkdownContent {
 }
 #[derive(Clone)]
 enum ConversationRow {
+    History {
+        has_more: bool,
+        loading: bool,
+        error: Option<String>,
+    },
     Turn(Arc<agent_core::presentation::conversation::RenderedTurn>),
     Pending(String, Arc<PendingSubmission>),
     Request(Box<agent_core::presentation::conversation::Request>),
@@ -173,6 +178,7 @@ enum ConversationRow {
 impl ConversationRow {
     fn same_identity(&self, other: &Self) -> bool {
         match (self, other) {
+            (Self::History { .. }, Self::History { .. }) => true,
             (Self::Turn(a), Self::Turn(b)) => a.source.id == b.source.id,
             (Self::Pending(a, _), Self::Pending(b, _)) => a == b,
             (Self::Request(a), Self::Request(b)) => a.id == b.id,
@@ -181,6 +187,18 @@ impl ConversationRow {
     }
     fn unchanged(&self, other: &Self) -> bool {
         match (self, other) {
+            (
+                Self::History {
+                    has_more: a,
+                    loading: x,
+                    error: e,
+                },
+                Self::History {
+                    has_more: b,
+                    loading: y,
+                    error: f,
+                },
+            ) => a == b && x == y && e == f,
             (Self::Turn(a), Self::Turn(b)) => Arc::ptr_eq(a, b),
             (Self::Pending(a, x), Self::Pending(b, y)) => a == b && Arc::ptr_eq(x, y),
             (Self::Request(a), Self::Request(b)) => a == b,
@@ -1052,6 +1070,9 @@ impl Desktop {
         }
         if navigated
             || conversations_changed
+            || self.history_key().is_some_and(|key| {
+                previous.operations.get(&key) != self.snapshot.operations.get(&key)
+            })
             || !Arc::ptr_eq(
                 &previous.pending_submissions,
                 &self.snapshot.pending_submissions,
@@ -1204,7 +1225,19 @@ impl Desktop {
                 &self.rendered,
             )
         });
-        let rows = conversation_rows(&self.rendered);
+        let mut rows = conversation_rows(&self.rendered);
+        let has_more = self.has_older_history();
+        let error = self.history_error();
+        if has_more || error.is_some() {
+            rows.insert(
+                0,
+                ConversationRow::History {
+                    has_more,
+                    loading: self.history_loading(),
+                    error,
+                },
+            );
+        }
         if reset {
             self.list.reset(rows.len());
             self.list.scroll_to_end();
@@ -1224,6 +1257,18 @@ impl Desktop {
             .take_while(|(a, b)| a.same_identity(b))
             .count();
         let anchor = self.list.logical_scroll_top();
+        // The history control is a list header in T3. Anchor to the first
+        // conversation row when older rows are inserted while that header is visible.
+        let history_anchor = (anchor.item_ix == 0
+            && matches!(old.first(), Some(ConversationRow::History { .. }))
+            && suffix == old.len() - 1)
+            .then(|| {
+                self.list.bounds_for_item(1).map(|bounds| ListOffset {
+                    item_ix: rows.len() - suffix,
+                    offset_in_item: self.list.viewport_bounds().top() - bounds.top(),
+                })
+            })
+            .flatten();
         let preserve = old
             .get(anchor.item_ix)
             .zip(rows.get(anchor.item_ix))
@@ -1262,6 +1307,9 @@ impl Desktop {
             }
         }
         self.rows = rows;
+        if let Some(anchor) = history_anchor {
+            self.list.scroll_to(anchor);
+        }
         if let Some((id, old_height)) = preserve {
             let generation = self.snapshot.epoch;
             let owner = cx.entity().downgrade();
@@ -1308,27 +1356,6 @@ impl Desktop {
         self.cancel_recording();
         self.dispatch(Intent::ReadThread(op::ReadThread::open(id)));
         self.composer.read(cx).focus_handle(cx).focus(window, cx);
-    }
-    fn load_visible_history(&mut self, cx: &mut Context<Self>) {
-        let viewport = self.list.viewport_bounds();
-        let oldest_visible = viewport.size.height > px(0.)
-            && (self.rows.is_empty()
-                || self.list.bounds_for_item(0).is_some_and(|bounds| {
-                    bounds.top() >= viewport.top() - viewport.size.height * 0.6
-                        && bounds.top() <= viewport.bottom()
-                }));
-        if agent_core::presentation::conversation::should_load_history(
-            self.has_older_history(),
-            self.history_loading() || self.history_error().is_some(),
-            oldest_visible,
-            self.list.is_scrolled_to_end() != Some(false),
-            self.list.is_following_tail(),
-        ) {
-            self.dispatch(Intent::ReadOlder {
-                thread_id: self.selected().expect("selected conversation").clone(),
-            });
-            cx.notify();
-        }
     }
     fn detail(&mut self, turn_id: TurnId, item_id: ItemId) {
         let Some(thread_id) = self.selected().cloned() else {
