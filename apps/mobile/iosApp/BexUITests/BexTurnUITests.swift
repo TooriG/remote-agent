@@ -255,8 +255,12 @@ extension BexLaunchUITests {
         XCTAssertTrue(fullPaste.waitForExistence(timeout: 5)); fullPaste.tap()
         let fullText = expectation(for: NSPredicate(format: "value == %@", text), evaluatedWith: composer)
         wait(for: [fullText], timeout: 5)
-        composer.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: text.count))
-        XCTAssertEqual(composer.value as? String, composer.placeholderValue)
+        composer.press(forDuration: 1.2)
+        let selectAll = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == 'Select All' OR label == 'すべてを選択'")).firstMatch
+        XCTAssertTrue(selectAll.waitForExistence(timeout: 5)); selectAll.tap()
+        composer.typeText(XCUIKeyboardKey.delete.rawValue)
+        waitForDraftText(composer, text: composer.placeholderValue ?? "")
         waitForStableFrame(sent)
         sent.press(forDuration: 1.2)
         let select = app.buttons["テキストを選択"]
