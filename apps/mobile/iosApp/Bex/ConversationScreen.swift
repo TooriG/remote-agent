@@ -1,6 +1,7 @@
 import AgentCore
 import PhotosUI
 import SwiftUI
+import SwiftUIIntrospect
 import UniformTypeIdentifiers
 
 struct ThreadScreen: View {
@@ -17,7 +18,7 @@ struct ThreadScreen: View {
     @State var preparingMedia = false
     @State var showingModelSettings = false
     @State var isFollowingLatest = true
-    @State var scrollController = ConversationScrollObserver.Coordinator()
+    @State var scrollController = ConversationScrollObserver()
     @State private var scrollPosition = ScrollPosition(idType: String.self, edge: .bottom)
     @State var visibleLatest: LatestBoundary?
     @State var expandedItemIds = Set<String>()
@@ -27,8 +28,15 @@ struct ThreadScreen: View {
     var body: some View {
         chatContent
             .onDisappear {
+                scrollController.onScrollToTop = {}
+                scrollController.detach()
                 visibleLatest = nil
                 dictation.cancel()
+            }
+            .onChange(of: isFollowingLatest) { _, following in
+                if following {
+                    scrollController.cancelHistoryRestoration()
+                }
             }
             .onChange(of: conversation?.id) {
                 expandedItemIds.removeAll()
@@ -139,10 +147,10 @@ struct ThreadScreen: View {
                     .scrollTargetLayout()
                     .padding(.horizontal, 16)
                     .padding(.vertical, 6)
-                    .background(ConversationScrollObserver(controller: scrollController,
-                                                           followingLatest: isFollowingLatest) {
-                            followLatest.wrappedValue = false
-                        })
+                }
+                .introspect(.scrollView, on: .iOS(.v26...)) { scroll in
+                    scrollController.onScrollToTop = { followLatest.wrappedValue = false }
+                    scrollController.attach(to: scroll)
                 }
                 // Measure loaded rows; native text views draw only within the viewport.
                 .scrollPosition($scrollPosition, anchor: .bottom)

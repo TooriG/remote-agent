@@ -28,7 +28,7 @@ struct ConversationScrollTests {
         }
     }
 
-    @MainActor static func checkCanceledLoads(_ controller: ConversationScrollObserver.Coordinator,
+    @MainActor static func checkCanceledLoads(_ controller: ConversationScrollObserver,
                                               scroll: UIScrollView) {
         for succeeded in [false, true] {
             let request = controller.captureReadingPosition(turnCount: 1, hasMoreHistory: true)
@@ -54,12 +54,13 @@ struct ConversationScrollTests {
         root.addSubview(scroll)
         let marker = UIView(frame: CGRect(x: 0, y: 250, width: 320, height: 40))
         scroll.addSubview(marker)
-        let controller = ConversationScrollObserver.Coordinator()
-        controller.attach(to: marker)
+        let controller = ConversationScrollObserver()
+        controller.attach(to: scroll)
         scroll.contentOffset.y = 200
         let readingY = marker.convert(marker.bounds, to: root).minY
         for scenario in scenarios {
             let request = controller.captureReadingPosition(turnCount: 1, hasMoreHistory: true)
+            controller.attach(to: scroll) // Repeated introspection must not discard the capture.
             await flushMainQueue() // Unrelated idle updates must not consume the capture.
             if scenario.early {
                 controller.historyLoaded(
