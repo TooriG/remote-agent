@@ -162,7 +162,9 @@ impl Connection {
         let endpoint = Endpoint::bind(identity, Relays::Disabled).await?;
         let opened: crate::Result<_> = async {
             let session = endpoint.connect(ticket).await?;
-            let (peer, events) = session.open_peer(Duration::from_secs(10), 128).await?;
+            // The fixture RPC budget includes cold provider startup on Windows;
+            // latency contracts impose their own shorter operation bounds.
+            let (peer, events) = session.open_peer(Duration::from_secs(30), 128).await?;
             Ok((session, peer, events))
         }
         .await;
