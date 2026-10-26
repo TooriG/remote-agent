@@ -98,6 +98,8 @@ pub struct ActivityExpansion {
     pub status: String,
     pub expanded: bool,
 }
+/// A manual choice belongs to this group's current status; a transition restores
+/// the core default rather than expanding neighboring or newly hydrated work.
 #[cfg_attr(feature = "bindings", uniffi::export)]
 pub fn activity_is_expanded(
     activity: &ActivityPresentation,

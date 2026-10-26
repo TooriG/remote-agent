@@ -1630,6 +1630,8 @@ mod tests {
         store.close().await.unwrap();
     }
     #[test]
+    // Reading store.snapshot() after a receipt cannot prove subscribers were
+    // notified. Keep publication coverage independent of operation behavior.
     fn every_snapshot_field_notifies_subscribers_independently() {
         type Change = fn(&mut Snapshot);
         let changes: &[(&str, Change)] = &[

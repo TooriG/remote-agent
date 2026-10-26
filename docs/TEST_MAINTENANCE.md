@@ -1,385 +1,50 @@
-# Test maintenance
+# Test audits
 
-Tests should protect observable behavior and failure recovery through the owning
-implementation. Keep protocol, persistence, navigation, authorization, and
-concurrency boundaries even when their final values resemble another test.
-Avoid testing a fixture's own behavior, third-party serialization, private ID
-formatting, or a second implementation of the production UI.
+Routine verification policy is in [AGENTS.md](../AGENTS.md); commands are defined
+in [justfile](../justfile), and CI coverage in
+[native.yml](../.github/workflows/native.yml). The audits below are explicit,
+focused checks, separate from ordinary unit tests.
 
-## Verification policy
+## Mutation testing
 
-- Keep proptest in ordinary `cargo test` and the existing quality checks. Add
-  properties where combinations of inputs or operations matter, using independent
-  expected behavior; retain focused examples and integration tests.
-- Use cargo-mutants for focused audits when changing branch-heavy parsing,
-  boundary decisions, or state transitions, or when confidence in their tests is
-  low. Restrict mutations to the affected production code and run the relevant
-  tests. Inspect survivors and strengthen useful assertions rather than pursuing
-  a score. It is not a mandatory whole-workspace or every-commit check.
-- Reserve Kani for small, important pure functions whose invariants and input
-  bounds can be stated precisely. Rerun existing proofs when their implementation
-  or harness changes. For new proofs, also check that representative broken
-  implementations fail. Record bounds and timeouts, and keep execution separate
-  from the normal quality loop.
+Run `scripts/dev-env.sh just mutants-diff` to audit the production diff parser in
+an isolated copy. Extra arguments go to cargo-mutants, for example `--list` or
+`--re quoted_path`. To audit another component, restrict mutations to its
+production code and select the tests that exercise it.
 
-## Test libraries
+Read `target/mutation-diff/mutants.out/missed.txt` and the corresponding diffs
+and logs. Distinguish equivalent mutations from missing assertions; strengthen
+assertions that protect observable behavior. Report timeouts and unbuildable
+mutants separately from assertion failures. Do not accept changed expectations
+to make a mutant pass.
 
-`agent-core` uses `rstest` for input matrices: use named `#[case]` entries for
-selected combinations and `#[values]` only when every combination is intended.
-Keep the original assertions; each case runs independently and can be filtered
-with `cargo test`. Use ordinary functions for setup that does not need fixtures.
+Ordinary proptest runs retain random input generation; the audit fixes its seed
+for reproducibility. Commit regression seeds only for failures of unmutated
+production code, never for deliberately broken mutants.
 
-Use `insta` JSON snapshots for structured expected output. Review the
-expected values in the adjacent `snapshots/*.snap` files; preserve explicit
-behavioral assertions alongside snapshots. Run `scripts/dev-env.sh cargo test --locked --features agent-core/bindings -p agent-protocol -p agent-transport -p agent-core`
-to verify them. A snapshot mismatch is a failure, not permission to accept changed
-behavior; update expectations only after reviewing the product contract.
+## Bounded proofs
 
-Use `proptest` for properties over generated inputs, with expected results derived
-from the specification rather than a copy of the implementation. The diff tests
-generate edit scripts to check line numbers, row kinds, and text across files and
-hunks, and encode UTF-8 paths as octal bytes to check navigation decoding. Keep
-the real Git fixtures as an independent check of Git's output conventions.
-Proptests run in the existing `cargo test` quality checks. Commit regression seeds
-under `crates/agent-core/proptest-regressions/` when an unmutated implementation
-fails, and add a focused regression case when it clarifies the bug.
+Run `nix develop .#kani --command just kani-diff`. The dedicated shell pins Kani,
+CBMC and the matching Rust toolchain without changing the global toolchain.
 
-## Diff mutation audit
+The harnesses in
+[proofs.rs](../crates/agent-core/src/presentation/diff/proofs.rs) call the
+production decoder and state their input and unwind bounds beside the assertions.
+Keep unwinding assertions enabled. Each harness has a 120-second timeout;
+timeouts are failures, not proofs. Results go to `target/kani-diff/results.json`.
+These finite domains do not prove arbitrary-length decoding, the whole diff
+parser or asynchronous application behavior. Retain example, real Git and
+property tests for those boundaries.
 
-Run `nix develop .#native --command just mutants-diff` to audit
-`crates/agent-core/src/presentation/diff.rs`. The `default` and `native` shells include
-`cargo-mutants`, pinned through `flake.lock`. The command mutates an isolated
-copy, runs the diff module's tests, and writes reports to
-`target/mutation-diff/mutants.out/`. It fixes the proptest seed for reproducible
-comparisons; ordinary test runs retain random input generation. Extra arguments
-go to cargo-mutants, for example `just mutants-diff --list` or
-`just mutants-diff --re quoted_path`.
+## Real-time QUIC soak
 
-Read `missed.txt` and the corresponding diffs/logs before adding tests. Preserve
-observable contracts, distinguish equivalent mutations from missing assertions,
-and report timeouts and unbuildable mutants separately from assertion failures.
-Do not copy regression seeds generated by deliberately broken mutants into the
-repository. Mutation testing is an explicit audit, separate from normal CI.
-The bounded Kani checks below are separate from the mutation score.
+Dispatch Native clients manually, or explicitly run:
 
-The September 25, 2026 pilot used cargo-mutants 27.1.0 on macOS ARM64, with two
-workers and a 60-second test timeout. Production code and the set of 69 mutations
-were unchanged between runs:
+```sh
+scripts/dev-env.sh cargo test --locked -p host-fixture --test iroh_host \
+  passive_client_can_approve_after_five_minutes_without_reconnecting -- --ignored
+```
 
-| Diff tests | Caught | Missed | Unbuildable | Timed out |
-| --- | ---: | ---: | ---: | ---: |
-| Original 3 tests | 57 | 7 | 2 | 3 |
-| Expanded 11 tests | 63 | 0 | 2 | 4 |
-
-All seven previously missed mutations now fail tests: treating the no-newline
-marker as a context row, reading past an unterminated quoted path, and removing
-the `\a`, `\b`, `\v`, `\f`, or `\r` escape cases. The timeout mutations change
-`quoted_path` index advancement into subtraction or multiplication. One formerly
-caught mutation (`i += 1` to `i -= 1` at the loop end) additionally loops on the
-new invalid-UTF-8 octal fixture, moving it into the timeout category. The two
-unbuildable mutations require nonexistent `Default` implementations for row/file
-types. These categories are not counted as assertion-based catches; the audit
-command exits with code 3 because timeouts remain. Unmutated diff tests, all 101
-core tests with bindings, formatting, and core Clippy passed.
-
-## Bounded Kani checks
-
-Run `nix develop .#kani --command just kani-diff`. The dedicated shell supplies
-Kani 0.68.0, CBMC, and its matching Rust nightly (2026-08-21), with release hashes
-and the toolchain pinned in `tools/kani/package.nix` and `flake.lock`. It does not
-install or change a global rustup toolchain. The `goto-cc` wrapper uses Nix's C
-compiler explicitly. This setup was exercised on macOS ARM64.
-
-`crates/agent-core/src/presentation/diff/proofs.rs` calls the production
-`quoted_path` function directly, without substituting its implementation or
-dependencies. It is compiled only by Kani, and is outside the source-file filter
-used by the ordinary diff mutation audit. The `cfg(kani)` lint declaration keeps
-normal builds aware of this conditional code without suppressing other cfg typos.
-
-The proof domains are deliberately finite:
-
-| Harness | Input domain and assertions | Unwind bound |
-| --- | --- | ---: |
-| `bounded_quoted_paths_are_safe` | Every valid UTF-8 input of 0–4 bytes: no panic/invalid memory access, decoded length is bounded by the consumed input, and the remainder is an exact suffix. Cover goals check reachability of both accepted and rejected inputs. | 5 |
-| `octal_escape_matches_one_byte` | All 512 three-digit octal escapes: 0–127 decode to that byte; 128–255 alone are invalid UTF-8, and 256–511 exceed a byte, so both ranges are rejected. | 7 |
-| `named_escapes_decode_and_preserve_suffix` | All nine named/quote/backslash escapes decode to the specified byte and preserve the trailing tab and `x`. | 4 |
-
-Unwinding assertions remain enabled: an insufficient bound fails verification.
-Each harness has a 120-second timeout; timeouts are failures, not proofs. Results
-are written to `target/kani-diff/results.json`. This does not prove arbitrary
-length paths, all diff parsing, asynchronous behavior, or the application as a
-whole. Retain the unit, real Git, and property tests for those broader behaviors.
-The initial 0–8-byte general harness timed out at 120 seconds; that larger domain
-is not claimed as verified. The six-byte three-digit octal forms are covered by
-their separate, complete 512-value harness.
-
-On September 26, 2026, all three harnesses passed (about 49 seconds total verification
-time), with both reachability goals satisfied. In an isolated copy, changing
-`\a` from byte 7 to 8 failed the named-escape assertion; changing the octal radix
-from 8 to 7 failed the byte-value and rejection assertions. Concrete playback
-reported inputs 29 (`\035`) and 146 (`\222`) for the latter. Changing the decoder
-loop's `<` to `<=` also failed with an out-of-bounds access on a lone opening
-quote. These were deliberate implementation mutations, not changes to the proof
-expectations. The unmutated
-implementation needed no behavior change. Ordinary core tests (101), Clippy,
-formatting, and the unchanged 69-mutation inventory were also checked.
-
-## September 2026 audit
-
-The audit reviewed 320 test definitions, the JSON corpora, standalone WebView
-harness, and runners. The following changes replace redundant checks while
-preserving the listed acceptance boundaries. A-number references identify the
-55 recommendations in the original review.
-
-| Recommendations | Replacement or retained boundary |
-| --- | --- |
-| A01–A06 | Require `experimentalApi` in the fixture's real initialize handshake; exercise typed project membership directly; remove four test-side/equivalent operation cases and duplicate model round trips; keep one opaque-field/null/absence wire case. |
-| A07–A14 | Remove JSONL/library semantics, duplicated message classification, ID exhaustion, and mock transfer round trips. Keep protocol validation, escaped/duplicate IDs, cancellation plus unknown/late replies, write-before-close, and real Host transfer/session authorization. |
-| A15–A20 | Assert terminal process shutdown in its stream lifecycle; assert Git statuses and counts against real files; consolidate missing state and Unix logging recovery; remove upstream-fork mock self-validation and fixture size assertions. The portable log-destination failure test remains on non-Unix systems. |
-| A21 | Merge distinct proxy ID and unknown-field assertions into the request resolution lifecycle. Keep notification byte preservation and replay after the original session disappears as separate short boundary tests. |
-| A23–A26 | Run overlapping account listing/login and late fork replies through Store; reuse all three draft reconciliation cases with actual JSONL replies; consolidate immediate dispatch, discarded receipts, and reverse receipt polling in an offline Store. |
-| A27–A33 | Remove equivalent silence, restored-cache, invalid scalar, and command-status combinations. Preserve current/stale navigation, empty/whitespace input, nullable targets, rendered order and stable identity. Merge catalog refresh with reordered options. Keep focused source-order tests; remove only their metadata-serialization self-check. |
-| A34–A35 | Share executable resolution setup across precedence/fallback/missing phases; combine stale-ticket/restart identity and simultaneous/sequential Host exclusion without changing their filesystem boundaries. |
-| A36 | Check request-timeout policy with virtual time. Run passive replay/approval completion on real iroh in the normal suite. Preserve the real 301-second QUIC soak as an ignored test selected by the manual Native clients workflow. |
-| A39–A40 | Keep one malformed transcription response, whitespace silence, and two audio chunks plus a sample-aligned tail. Exercise both start methods, missing/empty/blank cwd, saved settings, real worktrees, and membership after restart without their full equivalent cross product. |
-| A41–A44 | Keep desktop-specific Unicode emphasis, rendered expansion, native quote events, and independent search URL checks. Render production conversation images instead of a hand-built test bubble. The latter exposed narrow-window overflow, now covered at both window widths. |
-| A45–A50 | Remove the idle launch test; shorten direct side-chat preparation while retaining complete retry/submission/reopen coverage; combine full/partial copy, accepted input/stop/interrupted expansion, foreground/project disclosure, and draft-preserving back navigation with cancelled edge gestures. |
-| A51–A54 | Use 16 projects, chats, and titles for 5 → 15 → 16 pagination boundaries and independent expansion. Keep oldest-row opening and expansion after return. Move image saving to the gallery test and include it in maintained runners. Remove fixture metrics; retain older-history loading/scroll position. Combine physical navigation with explicit pairing; physical execution still requires separate authorization. |
-| A55 | Seed existing WebView cookies without asserting a pinned Wry bug. Keep actual import, HTTP authentication, attributes, and persistence checks. |
-
-Three conditional recommendations remain unchanged:
-
-- **A22:** the independent Snapshot-field publication check is the only direct
-  guard for omissions from the publication comparator. Reading a correct
-  `store.snapshot()` after a receipt does not prove that native subscribers
-  were notified. Replacing this small deterministic test with another list of
-  operations would add setup while losing that independence.
-- **A37:** the 128-reconnect regression remains. Reducing repetitions does not
-  deterministically exercise cancellation of an in-flight accept during prior
-  session cleanup. A test-only imitation of the select loop would not test the
-  production loop.
-- **A38:** the 80-connection admission regression remains. A 17-connection test
-  cannot catch the former shared 64-slot exhaustion. Transport establishment
-  alone also does not prove that each connection holds an admission permit.
-
-A24's late fork is now checked through Store. Its small durable-upload/remote-
-pairing state check is retained: replacing it requires controlled completion
-across real transfer and pairing boundaries. Reintroducing a second fake
-transfer server just to delete that check would reverse A14.
-
-## Execution
-
-- Native clients CI owns automated verification; commits do not queue local QA.
-  Run all local unit tests with `scripts/dev-env.sh just unit-tests`,
-  then integrate into main
-  without requiring a PR or waiting for CI. Pushing main runs full CI;
-  fix failures on main.
-  Manual workflow dispatch remains available for focused audits and the soak.
-  Require successful CI checks for the current commit and a clean working tree
-  before claiming full verification. Manual check commands remain for
-  debugging. Apple CI uses four Apple Silicon `macos-26` runners with Xcode 26.6.
-  Main and manual runs may use all four Apple slots. Optional PR Apple jobs share
-  one repository-wide concurrency queue, retaining up to 100 pending checks
-  without cancellation so several PRs cannot occupy every Apple slot together.
-  Dependabot checks one ecosystem per day from Monday through Saturday at
-  04:00 Japan time, with one open version-update PR per ecosystem, rather than
-  opening every ecosystem's updates together during working hours.
-  It selects the image's preinstalled Xcode directly.
-  The Mac runner uses `nix develop . --command just quality rust` for Rust
-  contracts, Mac Browser E2E and the Host-owned Chrome live case
-  (`browser::tests::shared_browser_live`: navigation, clicks, concurrent phone
-  and agent input, popups and persistence). Three iPhone runners use
-  `nix develop . --command just quality swift` for Swift checks and acceptance.
-  Linux and Windows run the same library, binary and integration assertions
-  with Nix-pinned cargo-nextest, allowing independent test binaries to run
-  together; documentation examples remain a separate Cargo check. Their
-  executable builds use the same native-bindings features as the tests so
-  Cargo does not rebuild the common crates under a second feature set.
-  Independent contract tests use sixteen test processes on Linux and Windows
-  to overlap waits for their isolated Hosts and network replies. Mac integration
-  assertions use six test processes within the Apple runner's memory budget.
-  The oversized-history transfer case reserves all test slots while it runs,
-  retaining its real request deadlines without competing with other Hosts for
-  CPU and memory. Mac's WebKit persistence harness supports headless test listing.
-  Mac CI adds its integration targets to `just unit-tests` so library, binary,
-  integration and WebKit assertions share one nextest build and dependency
-  feature graph. Without explicit targets, `just unit-tests` remains headless
-  and runs only the library and binary unit tests.
-  Its local HTTP server handles each connection independently, with the same
-  three-second read deadline, so closed or idle WebKit preconnections cannot
-  terminate the server or block navigation. Native authentication and reopened
-  process persistence assertions remain unchanged.
-  The stalled item-transfer regression advances the Store's production deadline
-  with virtual time while its real QUIC connection runs on a separate clock;
-  an interrupt still completes while the transfer is blocked. The merged
-  worktree regression runs the real Host cleanup every 100 ms with real Git,
-  agents and PTYs. Production Host cleanup retains its 60-second interval.
-  The conversation-creation case selects immediate fixture completion because
-  it checks completed output; scenarios that inspect running turns retain their
-  artificial streaming delay. Acceptance deadlines stay unchanged.
-  Linux, Windows and Android use four
-  Cargo build jobs; Apple runners retain two.
-  They partition the same maintained test list with `BEX_IOS_TEST_SHARDS=3`
-  and zero-based `BEX_IOS_TEST_SHARD` values 0 through 2. Each runs one isolated
-  Simulator/Host pair; an omitted shard setting selects the complete list.
-  The maintained list interleaves long and short tests based on CI durations
-  so equal test counts do not leave one runner with all the slow cases.
-  Swift formatting, linting and headless Markdown checks run on shard zero;
-  all three shards run their selected Simulator acceptance tests.
-  With the Mac job, the four Apple jobs stay within the hosted macOS
-  concurrency limit, so none waits for another to finish. Dispatching Native clients with
-  `ios-test-rounds` above one repeats every iPhone runner's tests on fresh
-  Simulator/Host pairs (`BEX_IOS_TEST_ROUNDS`) and prints per-test failure
-  counts, to measure flaky cases without retrying them in normal runs.
-  A fresh Simulator starts about 270 processes; on the 7 GiB CI Mac their
-  first-boot work compressed about 7 GiB of memory and delayed Host replies by
-  10-20 seconds. After boot, each isolated Simulator boots out the system
-  services Bex and its tests do not use (widgets, mail, maps, watch, health,
-  Siri, Spotlight and stores) with one `launchctl bootout`, which halves its
-  processes.
-  The Simulator app, package dependencies and UI test runner build only arm64,
-  matching the supported Apple Silicon test host rather than also compiling
-  unused x86_64 test products.
-  The manual `iPhone driver comparison` workflow measures the maintained native
-  navigation/pairing XCTest case and its Maestro flow on separate fresh
-  Simulator/Host pairs. `just ios-maestro` selects only that comparison flow;
-  normal acceptance retains all 32 XCTest cases. The workflow's `driver` input
-  selects both drivers or one driver for focused
-  retries without repeating an unchanged baseline.
-  Each pair receives its own loopback driver port, passed to the CLI and flow
-  scripts together, so scripts reach the driver selected for their Simulator.
-  The navigation case dismisses the Simulator's one-time Apple Intelligence
-  notification when present before exercising the unchanged sheet-dismissal
-  gesture and absence assertions; that banner can cover the gesture's origin.
-  Model-picker dismissal begins inside its native sheet rather than above its
-  accessibility frame. Text-copy gestures wait for the message frame to settle
-  after scrolling; native menus, clipboard contents and selected-text assertions
-  remain unchanged.
-  Model-default navigation waits for the task menu and its Settings item to
-  settle before tapping, then waits for the Models destination. Long-history
-  scrolling observes only the latest-visible boundary; `ScrollPosition` follows
-  the measured viewport while following latest. Loaded rows have measured heights
-  and native text drawing stays within the viewport, avoiding lazy-stack estimates
-  and timed programmatic scrolling retries.
-  History paging, detached reading, latest navigation and reopen assertions
-  remain unchanged.
-  The shared connection fixture confirms that a previous client has terminated
-  before launching the next client, retaining the initial readiness deadline.
-  Maestro 2.11.0 and Java 21 are
-  pinned through `nix run .#maestro`, with no hosted Maestro service. The bundled
-  XCTest source is patched to remove input-text logging, including SecureField
-  invitations. Its explicit workspace configuration includes the complete
-  hierarchy across modal transitions. Reports
-  require the exact selected flow names, successful status and no skipped or
-  failed cases. Compare UI durations after subtracting each pair's setup;
-  the second run reuses build products and does not provide a cold-build comparison.
-  Each runner has separate processes,
-  memory and logs.
-  Mac and iPhone Rust dependency caches are separate;
-  only shard zero saves each Apple cache. PR runs restore existing caches without
-  saving branch-specific copies; main and manual runs populate caches so duplicate
-  PR outputs do not evict shared builds. All iPhone shards restore the Swift bindings,
-  headless Markdown build and Xcode DerivedData cache, with one shard saving
-  it even when acceptance fails. Builders check the current source/toolchain
-  hashes before reusing Swift outputs, and still rebuild and exercise current
-  Rust code. Hosted CI creates each disposable Simulator directly from the
-  runtime, avoiding a template migration followed by a second worker boot.
-  Simulator fixtures follow the selected tests: only photo-picker tests seed
-  photos and video, only the image-saving test grants Photos add permission, and
-  only the file-upload test writes its document fixture. Preparation logs name
-  boot, media import, installation and permission operations and their failures.
-  UI fixture Hosts use the production diagnostic log; iPhone bundles retain it.
-  Xcode collects verbose diagnostics on test failure in the retained result bundle.
-  During CI acceptance, the owning worker records process memory when its app
-  first launches. If XCTest stops writing progress for 30 seconds, it takes one
-  three-second stack sample per app process before XCTest can terminate it.
-  Sampling matches that worker's Simulator path, and retains sampler failures.
-  Logs and Xcode result bundles are
-  retained for seven days, including failures. Linux, Windows and Android run
-  alongside this job, including Android emulator acceptance on Ubuntu with KVM.
-  Android restores Gradle dependencies and build-cache outputs through the
-  action's open-source GitHub cache provider, with read-only caching on PRs.
-  Gradle retains the pinned wrapper and runs with four workers and its build
-  cache enabled. Configuration-cache entries are not uploaded without an
-  encryption key. These checks require no paid runner or caching account.
-- `scripts/dev-env.sh just unit-tests` runs every Rust workspace library
-  and binary test with native bindings, runs the standalone agent-peer CLI
-  assertions with Cargo, and runs headless Swift Markdown tests on macOS. Nix-pinned
-  cargo-nextest runs Rust tests across crates in parallel while the headless
-  Swift tests run concurrently; both results are awaited and failures retained.
-  It starts no client,
-  Simulator or emulator and reuses build caches. Android currently has no JVM
-  unit tests; instrumentation acceptance remains in CI. The environment wrapper
-  shares a fixed, garbage-collection-rooted Nix environment across worktrees,
-  keyed by the flake, lockfile, Kache package definition and platform; cached
-  runs do not enter Nix.
-  Cargo indexes, locks and build outputs remain worktree-local. Locked dependency
-  sources and archives are seeded from existing caches with copy-on-write on
-  APFS or reflinks where supported, preserving timestamps. Tests recompile
-  changed code and reuse unchanged artifacts; they do not build, install or
-  restart the dev app. Keep unit tests close to the implementation they verify.
-  Enable the UniFFI CLI feature only when generating bindings, so an empty CLI
-  test harness cannot replace the native library with test dependency features.
-- `scripts/dev-env.sh just quality rust` checks formatting, workspace
-  Clippy, core library tests including the UniFFI bindings, and desktop rendering/input tests.
-  It also verifies the Nix agent-peer package, runs `just unit-tests` and the
-  selected CLI, Host integration and native
-  runner tests, sharing one feature configuration and dependency build.
-  The Rust `xtask` tests exercise build cleanup with real Cargo locks, active
-  processes, symlinks and Git worktrees; native runner tests retain configuration,
-  result-count and process-lifetime checks. These replace the Python test suite.
-  Proptests remain ordinary tests; failures do not stop the rest of the suite.
-  The Native clients CI also enables `agent-core/bindings` to run the native
-  connection and foreground recovery regressions.
-- `scripts/dev-env.sh just macos-e2e` exercises the production Browser view
-  and WebKit through encrypted fixture cookie import, denied-access recovery,
-  authenticated HTTP, HttpOnly protection and persistence across fresh native
-  processes. Both `quality rust` and the default Apple quality suite include it
-  on macOS. It owns disposable storage and uses no personal browser credentials.
-- `scripts/dev-env.sh cargo test --locked --features agent-core/bindings -p agent-protocol -p agent-transport -p agent-core -p codex-app-server
-  -p host-daemon -p host-fixture` covers the integration tests omitted by the
-  selected quality targets.
-- `scripts/dev-env.sh just conversation-ui` runs the maintained native
-  conversation contracts on one fresh isolated Simulator/Host pair.
-  Each pair owns its history, failure controls and app storage.
-  Set `BEX_IOS_TEST_WORKERS=1` for a serial audit, or 2–10 for parallel runs.
-  On persistent development machines, an initialized, app-free Simulator template
-  is kept shut down for this repository and runtime. Each worker clones it into
-  its own disposable device, then installs the current app and fixtures.
-  Initial OS migration runs only when
-  preparing the template; test devices and Hosts are still removed after each run.
-  The runner retains Xcode derived data under the Cargo target's
-  `qa/ios-derived-data`, always builds the current revision, and holds a
-  repository-wide lock through cleanup. Manual runs in
-  different worktrees or Cargo targets cannot overlap iOS acceptance batches.
-  Unchanged bindings preserve their timestamps; the compiled Swift bindings
-  are reused only with matching sources, SDK, compiler and Rust runner.
-  Per-worker logs, result bundles and a timing summary remain under `qa/Bex-*`.
-  `just ios-e2e`
-  also covers pagination, foreground refresh, files, dictation, and images.
-  Missing or skipped requested tests fail the runner.
-- Run the retained real-time soak explicitly with
-  `cargo test --locked -p host-fixture --test iroh_host
-  passive_client_can_approve_after_five_minutes_without_reconnecting -- --ignored`,
-  or dispatch the Native clients workflow. A virtual clock is not a QUIC soak.
-
-The full Git/worktree/submission matrices, unseen/cached restored history,
-actual dictation duration, and authorization/revocation boundaries remain.
-
-Integration with the independent-provider Host changes also updates the fatal
-startup logging fixture: a missing Codex executable is recoverable, so corrupt
-isolated trust state now supplies the fatal error. Both process exits, distinct
-process IDs, startup records, and persisted error messages remain asserted.
-Isolated iroh submission fixtures that omit account management select their
-explicit Codex catalog model before submitting. Automatic selection still
-requires an authenticated provider; offline recovery, failed creation, sidebar
-refresh, worktree preservation and history assertions remain unchanged.
-The iPhone conversation helper likewise selects the explicit fixture model.
-The scope-inheritance case selects it as the independent new-chat model before
-changing provider presets, so its reasoning/speed and existing-draft assertions
-do not depend on automatic authentication or an earlier test's model choice.
-
-The Android 17 integration exposed Compose's transitive Espresso 3.5.0 dependency
-calling the removed `InputManager.getInstance` API before Markdown assertions
-could run. An explicit Espresso 3.7.0 test dependency uses the upstream fix;
-the native Markdown cases and their assertions remain unchanged.
+A virtual clock does not establish that a real connection survives inactivity.
+Native acceptance results must include every requested test with no failures or
+skips; build success alone does not verify interactions.

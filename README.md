@@ -2,7 +2,7 @@
 
 [English](README.md) | [日本語](README.ja.md)
 
-bex controls Codex and Claude Code on a trusted computer from a Mac app, an iPhone app, an Android app, or a headless CLI. A Rust Host daemon owns the agent processes; every client connects to it over iroh with the same JSONL RPC peer and dispatches intents to the same Rust `Store`. Terminology is in [CONTEXT.md](CONTEXT.md); design decisions are in [docs/adr](docs/adr); behavior changes are in [CHANGELOG.md](CHANGELOG.md).
+bex controls Codex and Claude Code on a trusted computer from a Mac app, an iPhone app, an Android app, or a headless CLI. A Rust Host daemon owns the agent processes; every client connects over authenticated iroh streams using shared Postcard RPC types and dispatches intents to the same Rust `Store`. Terminology is in [CONTEXT.md](CONTEXT.md); design decisions are in [docs/adr](docs/adr); behavior changes are in [CHANGELOG.md](CHANGELOG.md).
 
 The workspace pins netwatch 0.19.3 to a fork commit containing [UDP rebind recovery](https://github.com/n0-computer/net-tools/pull/235), while iroh uses its published release. Failed UDP rebinds retry with exponential backoff from 100 ms to 5 s without terminating asynchronous I/O; explicitly closing a socket cancels recovery. Remove the patch when adopting an upstream release containing the fix.
 
@@ -30,21 +30,20 @@ When a new major becomes generally available, verify the vendor release, update 
 
 | Path | Role |
 | --- | --- |
-| `crates/agent-core` | Models, typed RPC operations, `Snapshot`, the `Store`, conversation presentation, iroh transport, diagnostics. The single state owner for every client. |
-| `crates/agent-ffi` | UniFFI bindings for `agent-core`, consumed by Swift and Kotlin. |
-| `crates/host-daemon` | The Host: pairing, authorization, Host RPC routing, Codex and Claude Code session runtime, worktrees, dictation, file/terminal access. |
-| `crates/codex-app-server` | Codex App Server transport. |
-| `crates/bex-process` | Shared process supervisor and PTY backend, independent of providers. |
-| `crates/agent-cli` | Headless client for scripts and integration tests. |
-| `crates/host-fixture` | Deterministic Codex and Claude subprocess fixtures and isolated iroh Host for tests. |
-| `crates/xtask` | Native acceptance runners, build cleanup and connection diagnostics. |
-| `apps/desktop` | Mac app (GPUI), with a native Alacritty terminal. |
+| `crates/` | Shared Rust state, protocol, transport, Host, bindings, CLI and test tooling. Responsibility and dependency rules are in [AGENTS.md](AGENTS.md). |
+| `apps/desktop` | GPUI desktop app with a native Alacritty terminal. |
 | `apps/mobile` | iOS (SwiftUI, `iosApp/`) and Android (Compose, `src/`) over the UniFFI Store. |
 
-Clients render immutable `Snapshot` values and never re-derive presentation: `agent-core::presentation` produces `RenderedConversation` rows for GPUI directly and for mobile through the bindings. Add logic to core, not to a client. See [ADR 0005](docs/adr/0005-rust-store-and-one-iroh-client-path.md).
-Device storage uses the explicit [client state storage contract](docs/CLIENT_STATE_STORAGE.md).
+[ADR 0005](docs/adr/0005-rust-store-and-one-iroh-client-path.md) explains the shared
+Store and transport decision. The device storage contract lives beside its
+[codec](crates/agent-core/src/persistence.rs).
 
-The session architecture, limits, local data and verification matrix are documented in [Session runtime](docs/SESSION_RUNTIME.md).
+[Session runtime](docs/SESSION_RUNTIME.md) describes execution and delivery
+ownership. Feature guides cover [sidebar projects](docs/DESKTOP_PROJECTS.md),
+[terminals](docs/NATIVE_TERMINAL.md), and the [shared browser](docs/REMOTE_BROWSER.md).
+[Focused test audits](docs/TEST_MAINTENANCE.md) and
+[connection diagnostics](docs/qa/IOS_CONNECTION_PERFORMANCE.md) document specialized
+verification; routine commands are in [justfile](justfile).
 
 ## Run the Host
 
@@ -110,7 +109,7 @@ To remove a saved PC on iPhone, open **タスク一覧 → PC一覧 → 接続�
 
 ## Windows downloads
 
-Windows 11 users can run a prebuilt ZIP without installing Rust. See
+Windows 11 users can install the prebuilt EXE without installing Rust. See
 [Windows installation and build instructions](docs/WINDOWS.md) for prerequisites,
 release downloads, verified CI development artifacts, and source builds.
 
@@ -142,7 +141,7 @@ running the same conversation on both Hosts at once.
 
 ## Conversation controls
 
-On Mac and iPhone, select assistant text to quote it into the draft or ask about it in a side chat. Closing an iPhone side chat restores the original conversation and draft. Mac also supports right-click Copy and Google Search, and own-message hover actions for copying or returning text to the composer. Command activity starts collapsed while running and after reopening; explicit expansion is preserved. See the [conversation display contract](docs/DESKTOP_CONVERSATION_DISPLAY_CONTRACT.md).
+On Mac and iPhone, select assistant text to quote it into the draft or ask about it in a side chat. Closing an iPhone side chat restores the original conversation and draft. Mac also supports right-click Copy and Google Search, and own-message hover actions for copying or returning text to the composer. Command activity starts collapsed while running and after reopening; explicit expansion is preserved.
 
 iPhone starts one Live Activity for the selected PC's ongoing tasks. The collapsed Dynamic Island shows one status icon per task, split across its two sides; up to twelve icons fit, with additional tasks represented by a count badge. The Lock Screen and expanded island show running and awaiting-confirmation counts. Tapping opens that PC's task list. The activity ends only after every task finishes and remains on the Lock Screen for one minute. Switching PCs dismisses the previous PC's activity. Live Activities must be enabled in iOS Settings.
 
@@ -241,17 +240,25 @@ scripts/dev-env.sh just quality [apple|rust|kotlin|swift]  # default: Mac Host/d
 
 Claude contracts run with `scripts/dev-env.sh cargo test --locked -p host-fixture --test claude`. Build the companion supervisor first (see above). The tests use a deterministic external CLI boundary with real Store, iroh, Host routing, native transcript files and isolated Git/filesystem state. An anonymized transcript from Claude Code 2.1.266 also exercises native format compatibility. The opt-in `live_claude_subscription_completes_and_resumes_through_store_and_host` test uses the real authenticated CLI; set `BEX_LIVE_CLAUDE_PROGRAM` to its absolute path and run that test with `-- --ignored --exact` to verify subscription inference, resumption across a Host restart, interruption and successful input after interruption.
 
-Run all local unit tests with `scripts/dev-env.sh just unit-tests`, then integrate directly into main without requiring a PR or waiting for CI. Native clients GitHub Actions runs on pushes to main, optional PRs and manual workflow dispatch. Each run verifies Linux and Windows, plus Android, Mac and iPhone acceptance when their files changed since the last successful main run; unknown paths and manual dispatch verify all clients. Main pushes queue instead of cancelling. Fix CI failures on main. Force pushes and deletion are blocked for everyone, including administrators. Require successful CI for the current commit and a clean working tree before claiming full verification. Commits do not launch local background checks. Unit tests and manual debugging commands remain available locally. Linux CI uses GitHub-hosted Ubuntu 24.04 runners and the `nix develop .#native` shell. Toolchain lookup runs on the same Ubuntu baseline, and Windows consumes the Rust version from the pinned flake. Lint thresholds are the tools' defaults with no baselines; rule exceptions need review.
-
-Android CI runs on GitHub-hosted Ubuntu 24.04 with the pinned Nix SDK. It runs Kotlin checks and unit tests, builds app and instrumentation APKs, and runs emulator acceptance with KVM. Apple CI runs the same default `just quality` suite as local verification on one `macos-26` Apple Silicon runner with Xcode 26.6. After shared Rust and Swift checks, the native Mac Browser E2E and iPhone conversation acceptance run concurrently; iPhone tests use two isolated Simulator/Host pairs. Cargo and Xcode derived data are cached, and logs and Xcode result bundles are retained for seven days, including failed runs. Linux, Windows, Android, Mac and iPhone verification runs in Native clients CI. `just android-e2e` and `just quality kotlin` remain available for focused Android debugging.
+Development and integration policy is in [AGENTS.md](AGENTS.md). Native clients
+CI owns platform acceptance; its triggers, job selection, caches and runners are
+configured in [native.yml](.github/workflows/native.yml).
 
 Development and test builds keep filename/line-number backtraces without full variable debug information. Use `CARGO_PROFILE_DEV_DEBUG=full` when a debugger needs variables. Quality checks disable Rust incremental compilation; Kache manages incremental state for normal local builds.
 
-The `default` and `native` Nix shells enable the pinned Kache compiler wrapper for local Rust compilation. Its content-addressed store reuses eligible compilations across worktrees while Cargo indexes, locks and build outputs remain separate. On Linux and macOS it also caches eligible Rust executables and build-script runs; rapidly changing crates can use Kache's adaptive incremental policy. The project's `.kache.toml` disables compile-before-key so shared cache hits are looked up before waiting for compiler slots; cache misses still use Kache's scheduler and memory-pressure protection. Run `scripts/dev-env.sh kache stats --last-build` to inspect reuse, or `scripts/dev-env.sh kache explain` to investigate misses. Set `KACHE_CACHE_DIR` to override the shared store. When `bex.buildRoot` is configured, the Nix shells and `scripts/dev-env.sh` default the store to `<buildRoot>/.kache` so outputs on that volume can use copy-on-write restores. Otherwise the shells use `~/Library/Caches/kache` on macOS or `~/.cache/kache` on Linux. CI retains its existing Cargo cache; the shells do not enable the wrapper when `CI` is set.
+The Nix shells use the pinned Kache compiler wrapper to share eligible build
+results across worktrees. Set `KACHE_CACHE_DIR` to select a cache location;
+when `bex.buildRoot` is configured the default is `<buildRoot>/.kache`.
+Use `scripts/dev-env.sh kache stats --last-build` to inspect reuse or
+`scripts/dev-env.sh kache explain` to investigate misses. Cache policy lives in
+[.kache.toml](.kache.toml); CI uses its own Cargo caches.
 
-`just unit-tests` runs all Rust workspace library and binary tests with native bindings enabled, the standalone agent-peer CLI assertions with Cargo, and the headless Swift Markdown tests on macOS. Rust tests use the Nix-pinned cargo-nextest runner to execute across crates in parallel; Swift tests run concurrently, and the command waits for both results and collects failures. Android currently has no JVM unit tests; its instrumentation tests run in CI. CI runs the same command before integration and E2E checks, using the same Rust feature configuration to share dependency builds, and also verifies the Nix agent-peer package. The supervisor is built before tests start. Enable the `agent-ffi/bindgen` CLI feature only for binding generation; it contains no unit assertions, and enabling it in workspace tests needlessly replaces the native library with a different dependency configuration. Build cleanup, connection diagnostics and native test runners are Rust commands in `cargo xtask`. On macOS, the Nix shells select the operating system's `lsof` for kernel process inspection; Linux uses Nix's `lsof`. Swift Markdown tests reuse a compiled build only when sources, bindings, compiler, SDK and runner match; every invocation still runs the assertions against the current Rust library. iOS UI checks use one isolated Simulator/Host pair and clone an initialized empty Simulator template; set `BEX_IOS_TEST_WORKERS=1`–`10` to control concurrency. A repository-wide lock serializes iOS checks across worktrees and Cargo targets.
-
-`scripts/dev-env.sh` reuses a fixed Nix environment across worktrees when `flake.nix`, `flake.lock`, the Kache and portable Node package definitions and the platform match; cached runs do not invoke Nix. Its shared profile protects the pinned tools from garbage collection. Cargo indexes, locks and `target` belong to each worktree; tests and dev builds within that worktree use the same Cargo cache and outputs. Only locked dependency sources and archives are seeded from existing caches, using APFS copy-on-write or reflinks where available to share their bytes. Changed test/code sources still require compilation; unchanged outputs are reused. Tests build their required helpers and bindings, while dev app builds, installation and restarts happen when applying changes to dev.
+Use `scripts/dev-env.sh just --list` to discover focused checks and
+`BEX_IOS_TEST_WORKERS=1`–`10` to select native iOS acceptance concurrency.
+The acceptance runner serializes batches across worktrees and retains its
+results under `target/qa`. Build-cache implementation details live in
+[scripts/dev-env.sh](scripts/dev-env.sh) and the native runners. Enable the
+`agent-ffi/bindgen` feature only when generating bindings.
 
 To place new worktrees' build outputs on an external disk, create a directory on
 the mounted disk and set `git config --local bex.buildRoot /absolute/path/to/builds`.
@@ -264,21 +271,21 @@ when it is unavailable, including when the disk is unplugged. Remove the setting
 with `git config --local --unset bex.buildRoot` to use local targets for new
 worktrees again.
 
-Every completed `just quality` run prunes inactive Cargo outputs across registered worktrees. Profiles last modified more than 3 days ago are removed; otherwise the oldest profiles are removed until inactive outputs total at most 32 GiB. Run `scripts/dev-env.sh just clean-builds --dry-run` to inspect the JSON plan, or omit `--dry-run` to apply it. Cleanup resolves each worktree's `target` link, including external build storage, and scans tagged Cargo caches there and directly beneath it. Nested links remain untouched. Shared profiles count once, and activity in any owning worktree protects them.
-
-Cleanup holds Cargo's build/artifact locks and preserves their inodes. Running binaries, active worktree processes and locked builds are excluded from the idle budget. This is a post-check retention policy, not a hard disk quota: active builds can temporarily exceed it. Only recognized Cargo `debug`/`release` output directories are disposable; keep application backups and verification records outside those directories. Bundled apps, `target/qa` results, summaries and source files are retained. Rebuilding a cleaned profile regenerates its outputs.
-
-`crates/host-fixture::test_support` shares isolated Host startup, connections and shutdown. `bex-ui-fixture DIRECTORY CODEX PORT_FILE [STREAM_DELAY_MS]` runs the Host and loopback pairing controls together with credentials in memory; Codex remains a subprocess to exercise the stdio boundary. `ios-e2e` removes this process and its fresh Simulator after the run, and retains Xcode derived data and results under `target/qa`. Failed, skipped or missing tests fail the command. `android-e2e` similarly owns a fresh emulator and Host, first verifies permission denial/retry and real LAN traffic, then runs the Markdown, Store persistence and model recovery tests against the shipped JNI library and fixture Host. It retains logs and permission screenshots under `target/qa` and rejects missing or failed tests.
+`just quality` prunes inactive build outputs. Preview the plan with
+`scripts/dev-env.sh just clean-builds --dry-run`; the owning
+[cleanup implementation](crates/xtask/src/build_cleanup.rs) defines retention and
+protects active builds. Keep backups and verification records outside Cargo's
+`debug` and `release` directories.
 
 Simulator and fixture runs do not verify physical devices, production Keychain access, camera, or real Codex accounts.
-
-On Unix, isolated Host fixtures raise their process file-descriptor soft limit to at least 4096 before opening endpoints, including direct `cargo test` runs. Higher limits and the hard limit are preserved; an insufficient hard limit fails startup explicitly. This covers the full 80-client admission test.
 
 ## GitHub maintenance
 
 The [main ruleset](.github/main-ruleset.json) records the protection applied on GitHub. Direct pushes are allowed. Optional PRs use merge commits to preserve the ancestry used by bex's merged-worktree cleanup; squash and rebase merging are disabled.
 
-[Dependabot](.github/dependabot.yml) checks Cargo (workspace and agent-peer), Gradle, Xcode Swift packages, npm, both Nix flakes and GitHub Actions every Monday at 09:00 JST. Minor and patch updates are grouped per ecosystem; major updates remain separate. Nix inputs are grouped together. Version updates wait seven days after release; security updates are not delayed by that cooldown. Update PRs run the same native verification as other changes; maintainers review them and merge after CI succeeds. Auto-merge is disabled. Merged remote branches are deleted automatically.
+[Dependabot](.github/dependabot.yml) defines update ecosystems, schedules,
+groups and cooldowns. Review dependency changes and their native CI results
+before merging.
 
 For Lucide updates, run the commands in the [visualization runtime README](crates/host-daemon/src/visualize/README.md), update its version/source/checksum, and commit the generated bundle and license alongside the npm manifest and lockfile. CI regenerates these assets and rejects a stale bundle. Vendored Rust/Android source and the explicitly pinned netwatch recovery patch need a manual upstream review; a bot PR does not replace that review.
 

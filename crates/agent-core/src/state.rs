@@ -1431,6 +1431,9 @@ fn upsert_item(
     next
 }
 
+// Publish sent content immediately as pending input. Later receipts and echoes
+// must not clear newer draft edits. Restore definite failures alongside newer
+// input; keep unknown delivery visible and ordered without automatic resubmission.
 fn submission(
     previous: &Snapshot,
     thread_id: Option<crate::session::SessionRef>,

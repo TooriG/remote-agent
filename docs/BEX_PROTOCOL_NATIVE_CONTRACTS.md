@@ -1,8 +1,9 @@
 # BEX プロトコルと native 契約の照合
 
 確認日：2026-09-30。対象 HEAD：`f32e5100` と、この作業ツリーの実装差分。
-設計の判断は [`BEX_PROTOCOL_DESIGN.md`](BEX_PROTOCOL_DESIGN.md) を参照する。
-native の照合根拠と、実装後の検証範囲を記録する。認証済み native CLI での推論実行とは区別する。
+ここでは確認日時点の外部仕様と、その変換で保持すべき情報を記録する。
+現行の所有権・配送の方針は [`SESSION_RUNTIME.md`](SESSION_RUNTIME.md)、実装の検証は各 adapter のテストを参照する。
+この記録は、現在の native バージョンへの対応や認証済み CLI での推論成功を保証するものではない。
 
 ## 1. 確認に使ったもの
 
@@ -96,12 +97,12 @@ SDK 資料上は複数選択を配列でも返せる。現行 adapter の comma 
 BEX 内の回答は選択肢の列を維持する。
 
 現在使っていない権限提案の「記憶」を公開する場合は、元の提案と destination を保存して
-選択肢から戻す。今回の中立化だけで新たに有効化した扱いにはしない。
+選択肢から戻す。型を共通化しただけで新たに有効化した扱いにはしない。
 
 Worker は elicitation を中立要求へ写し、未対応 dialog は native の cancelled を返す。
 未知の制御入力を汎用の利用者回答へ流さない。
 initialize 応答に未解決要求が含まれる接続方式を将来利用する場合は、
-同じ発行元/request_id の再通知と合わせて一回だけ登録する。今回の fresh process 起動と同一視しない。
+同じ発行元/request_id の再通知と合わせて一回だけ登録する。fresh process 起動と同一視しない。
 
 ## 4. Item のフィールド写像
 
@@ -171,11 +172,10 @@ notLoaded は adapter の resume 判断で必要だが、通信切断や履歴�
 part の通知順に依存せず、native の添字を保持する。0〜4095 の sparse index は空の part を用意し、
 それ以上は typed error とする。Host は不正な差分を診断に残し、最後の正常な状態と全購読を保持する。
 遅延本文への差分では購読を維持し、進行中の本文取得だけを無効化して同じ item を再取得する。
-前案の単一 Reasoning フィールドでは、この区別が消えるため修正した。
 
 ## 6. エラーと再試行の写像
 
-表示契約は原案の八分類より細かい。現在の説明を保つため、中立型にも個別の分類を残す。
+異なる原因を区別して説明できるよう、中立型にも個別の分類を保持する。
 
 | native の根拠 | BEX の分類・証拠 |
 | --- | --- |
@@ -235,128 +235,3 @@ Codex は同じ値を clientUserMessageId に渡す。
 Host に新しい永続対応 DB を作らず、クライアントに残る pending の ID と履歴で照合できるようにする。
 履歴に一致がないことだけでは未送信を証明できないため、その場合は Unknown のままにする。
 native start/steer/queue は Host 私有操作とし、公開する SubmissionReceipt の TurnId と入力 ID を分ける。
-
-## 8. fixture と native の差
-
-fixture は表示・操作の回帰を検証する材料であり、native の現行 schema そのものではない。
-今回の移行では次を修正した。
-
-- command の custom decision と permission の fileSystem/network.enabled を native 契約に合わせた。
-  BEX の typed Answer のテストと、native 回答の境界テストを分けた。
-- iOS・Android・desktop は五種類の RequestBody を扱い、未分類要求への Raw 回答を削除した。
-  JSON 編集は intrinsically open な form 値・tool result に限り、core で型付き Answer を生成・検証する。
-- reasoning の contentIndex/summaryIndex を保持し、不正な差分では最後の正常な状態と購読を保持する。
-- Claude の未知 block を Custom に保持し、FileChange の提案・実行結果を区別した。
-- Claude の native uuid と ClientInputId を揃え、live overlay なしの履歴取得と Host 再起動後の照合を検証した。
-- Swift/Kotlin の保存・一覧・会話テストを、構造化 SessionRef と ItemContent に移した。
-
-表示の受け入れ条件は変更していない。fixture の schema 修正によって UI の振る舞いを緩めない。
-
-## 9. 実装後の検証範囲
-
-Nix のプロジェクト環境で次を実行した。通常テストに proptest を含む。
-
-```sh
-cargo test --locked --no-fail-fast \
-  -p agent-protocol -p agent-transport -p agent-core -p host-daemon \
-  -p host-fixture -p bex-desktop -p agent-cli -p codex-app-server \
-  --features agent-core/bindings
-cargo clippy --locked --workspace --all-targets --features agent-core/bindings -- --no-deps -D warnings
-cargo fmt --all --check
-```
-
-全体テストは成功した。主な内訳は core の unit 103、Store 47、desktop 38、Host の unit 92、
-Claude 境界 16、Codex account 3、iroh Host 境界 34。外部サービス・認証を必要とする ignored は実行していない。
-最後の整理後も Host/fixture の再実行は成功した。追加した履歴エラーの回帰を含め、iroh Host 境界は 35 passed、1 ignored。
-core の要求索引を削除した追加リファクタリング後も、core・Store・desktop・Host・fixture・CLI の
-通常・結合テストを再実行し、全て成功した。要求の表示・回答・切断・復元の受け入れ条件は維持した。
-
-検証には以下を含む。
-
-- 同じ native ID を持つ provider の会話・下書き・購読・モデル選択の分離、構造化保存・復元。
-- typed Answer の variant/ChoiceId/schema、二端末 claim、Session 対象 elicitation、発行元 ID の再利用。
-- Sent/Unknown と送信タスク cancellation。native エラーの delivery 値を未送信の証拠にしないこと。
-- indexed reasoning delta、不正差分からの再取得、拒否状態、Claude の提案と実行結果、未知 block の保持。
-- native 操作を Host 内に閉じた Submit、追加送信、resume、入力 echo、再起動後の履歴照合。
-- 汎用 provider 呼出しの拒否、共通入力の native 変換、typed RpcFailure。
-- 明示的な「最初の入力がまだない」エラーだけを空の履歴へ写し、他の失敗・取得不能と区別すること。
-
-focused cargo-mutants の結果：
-
-| 対象 | caught | missed | unviable | timeout |
-| --- | ---: | ---: | ---: | ---: |
-| SessionRef::validate | 7 | 0 | 0 | 0 |
-| typed Answer / form / native 回答境界 | 47 | 0 | 2 | 0 |
-| reasoning append_part / Host submission_target | 8 | 0 | 1 | 0 |
-| native の空履歴判定と owner の分岐 | 7 | 0 | 0 | 0 |
-| repeated-turn の履歴展開（補足監査） | 1 | 0 | 0 | 0 |
-
-native 履歴のエラー分類は、純粋な関数だけを選んだ監査で owner 経路のテスト不足が見つかった。
-Host を通る回帰テストを追加し、結果に使われない私有 Thread の ID を除去した。
-追加の owner 経路監査では、判定関数と history の guard の七 mutation を全て検出した。
-ツールが選んだ八 mutation のうち一つは対象外の repeated-turn の hydration だった。
-[struct field の削除が regex filter を無視する既知の問題](https://github.com/sourcefrog/cargo-mutants/issues/632) に該当し、
-その一件を既存の repeated-turn 履歴回帰で別途監査し、1 caught、0 missed を確認した。
-最初の実行結果は 7 caught、1 missed として保持する。補足監査を合わせ、選ばれた八 mutation は全て検出した。
-
-Host・desktop・CLI、Swift/iOS、Kotlin/Android のビルドは成功した。
-Swift の format/lint と Kotlin の format/detekt も成功した。
-iOS は Codex の会話・承認・再接続・追加送信・履歴・モデル・account/fork の十二 UI ケースと、
-Codex が利用できない状態での Claude 単独・モデル変更・履歴復元の一ケースを検証した。
-承認ボタンの accessibility ID 重複を修正した後の再実行を含め、十三ケースは全て成功した。
-Android API 37 の隔離エミュレータで、ネットワーク許可・保存・再接続・Markdown・会話移動・一覧・
-可視化・端末操作の十一ケースが全て成功した。
-一覧の表示キーを Android の保存可能な値へ変換し、同じ native ID の Codex/Claude 会話を
-独立に表示・選択できることも検証した。操作と保存は構造化 SessionRef を使う。
-
-認証済み Codex/Claude CLI による実際の推論、physical device、公開 relay の soak は今回実行していない。
-稼働中の Host は再起動せず、UI 検証にはこの作業ツリーからビルドした隔離 fixture を使った。
-「全 native 機能の実行が検証済み」という意味ではない。
-
-
-## 10. レビュー後の回帰確認
-
-遅延本文の Text/ReasoningPart は会話の購読を維持し、進行中の本文転送だけを無効化する。
-実際の Store・バイナリ転送で、コマンド出力差分、同じ item の取得の合流、古い本文の破棄、
-同じ item の再取得と転送タイムアウト中の制御操作を確認した。
-不正な差分は Host の全接続を切断せず、最後の正常な item と購読を保持する。
-
-Claude は確定 block を native message ID・本文の種類・内容で照合する。
-後続 block の開始後に届く確定本文と、同じ種類の複数 block を検証した。
-API retry は放棄された実行中の text/thinking を除去し、確定済みの本文を保持する。
-モデル未指定の会話作成は CLI の model catalog を起動せず、backend の default を使う。
-存在しない CLI を指定した Host の結合テストでも作成が成功した。
-
-回答配送の owner に native enqueue と write receipt の判定を集約し、一度しか使われない中継関数を除去した。
-不正 native ID、閉じた Claude 入力、Codex の取得不能・停止は Awaiting を保持し、NotSent を返す。
-queue 枠の待機中の取消しも Awaiting に戻す。enqueue 後の取消しは Unknown、write 成功後は Sent を保持する。
-購読のない elicitation の解決時には、既存の cleanup が直ちに実行状態を解放することも確認した。
-
-core の新規チャットは一覧と別の local draft を持つ。空の作業ディレクトリでも一覧への遷移扱いにならず、
-同じ場所で開いた workspace と下書きを保持する。
-利用側は core の navigation が返すキーを使う。dispatch の二重 SessionRef 検証、不要な model のコピー、
-配送エラー変換の重複も除去した。表示の受け入れ条件は変更していない。
-
-レビュー後の focused cargo-mutants の結果：
-
-| 対象 | caught | missed | unviable | timeout |
-| --- | ---: | ---: | ---: | ---: |
-| sparse reasoning append_part | 5 | 0 | 0 | 0 |
-| Host submission_target / Claude block 照合（初回） | 11 | 3 | 1 | 0 |
-| Claude 内容照合（補足監査） | 6 | 0 | 0 | 0 |
-
-初回の三 survivor は text/thinking の内容照合 arm の削除と、thinking の等値比較の反転だった。
-同じ種類の複数 block と確定済み block の再通知を追加し、三件を含む六 mutation が失敗することを確認した。
-unviable は Default を持たない SubmissionTarget に Ok(Default::default()) を返す変異であり、
-assertion による検出には数えない。隔離された Host 監査では隣接 supervisor binary を必要とする terminal
-テストを除外した。通常の Host テストでは supervisor をビルドして実行し、terminal のテストも成功した。
-
-通常の protocol/core テストには proptest を含む。core の state 27 件、Store 46 件と別途実行した
-120 秒の実転送テスト、Host service 10 件、Claude の unit test 4 件、Claude の結合テスト 17 件、
-iroh Host の結合テスト 35 件が成功し、影響する全 target の Clippy も成功した。
-
-
-カタログ entry の ID と送信用 ModelRef の ID は native 側で別の値を持てるため、両方を保持する。
-ページ統合は (provider, catalog ID) で更新し、別 provider の同じ catalog ID と、同じ送信用 model の
-別 alias entry を取りこぼさない。実際の Store の二ページ取得で三 entry の保持と更新を検証した。
-表示側は core の provider ごとの結果を使うため、独自の重複排除や ID の推測を追加しない。

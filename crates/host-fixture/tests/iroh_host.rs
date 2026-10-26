@@ -575,6 +575,8 @@ async fn reconnecting_during_session_cleanup_keeps_host_requests_available() {
             .open_peer(Duration::from_secs(10), 16)
             .await
             .unwrap();
+        // Repetition exercises accept cancellation during prior-session cleanup;
+        // a sequential reconnect or an imitation of the accept loop misses it.
         for attempt in 0..128 {
             assert_eq!(
                 peer.request::<models::ThreadList>(&agent_protocol::protocol::Call::ListSessions(
@@ -2152,6 +2154,7 @@ async fn unpaired_connections_cannot_exhaust_authorized_session_slots() {
         let directory = tempfile::tempdir().unwrap();
         let fixture = start_host(directory.path()).await;
         let mut strangers = Vec::new();
+        // Exceed the former shared 64-slot limit while keeping connections alive.
         for _ in 0..80 {
             let endpoint = Endpoint::bind(Identity::generate(), Relays::Disabled)
                 .await

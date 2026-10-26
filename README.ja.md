@@ -2,13 +2,13 @@
 
 [English](README.md) | [日本語](README.ja.md)
 
-bexは、信頼できるコンピューター上のCodexとClaude Codeを、Macアプリ、iPhoneアプリ、Androidアプリ、またはヘッドレスCLIから操作するアプリです。Rust製のHostデーモンがエージェントのプロセスを管理します。すべてのクライアントはiroh経由で同じJSONL RPCに接続し、同じRustの`Store`へ操作を送ります。用語は[CONTEXT.md](CONTEXT.md)、設計判断は[docs/adr](docs/adr)、動作変更は[CHANGELOG.md](CHANGELOG.md)を参照してください。
+bexは、信頼できるコンピューター上のCodexとClaude Codeを、Macアプリ、iPhoneアプリ、Androidアプリ、またはヘッドレスCLIから操作するアプリです。Rust製のHostデーモンがエージェントのプロセスを管理します。すべてのクライアントは認証済みのirohストリームで共通のPostcard RPC型を使い、同じRustの`Store`へ操作を送ります。用語は[CONTEXT.md](CONTEXT.md)、設計判断は[docs/adr](docs/adr)、動作変更は[CHANGELOG.md](CHANGELOG.md)を参照してください。
 
 irohは公開リリースを使い、netwatch 0.19.3は[UDPの再バインド回復](https://github.com/n0-computer/net-tools/pull/235)を含むフォークのコミットに固定しています。UDPの再バインド失敗時は、非同期I/Oを終了せず、100ミリ秒から5秒までの指数バックオフで再試行します。ソケットを明示的に閉じると回復処理を中止します。修正が含まれる上流リリースを採用したら、このパッチを削除します。
 
 ## 対応OS
 
-Linux（CIの基準はUbuntu 24.04）を除き、BEXは一般提供されている最新のOSメジャーバージョンと、その安定版のマイナー・パッチリリースのみをサポートします。ベータ、RC、旧メジャー、将来のメジャーは対象外です。Apple・Androidの最小配置バージョンで旧OSへのインストールを防ぎますが、新しいOSを実行時に強制停止する上限チェックはありません。
+Linux（CIの基準はUbuntu 24.04）とAndroid（最小はAndroid 8.0・API 26）を除き、BEXは一般提供されている最新のOSメジャーバージョンと、その安定版のマイナー・パッチリリースのみをサポートします。この最新メジャー方針では、ベータ、RC、旧メジャー、将来のメジャーは対象外です。Apple・Androidの最小配置バージョンで旧OSへのインストールを防ぎますが、新しいOSを実行時に強制停止する上限チェックはありません。
 
 **2026-09-13**に確認した基準:
 
@@ -16,13 +16,13 @@ Linux（CIの基準はUbuntu 24.04）を除き、BEXは一般提供されてい�
 | --- | --- | --- |
 | iPhone / iPad | iOS / iPadOS 26 | 安定版Xcode 26。アプリ、UIテスト、Rust・Swiftバインディングの配置先は26.0。iOS 26 Simulatorを使用 |
 | macOSのデスクトップ・Host・CLI | macOS Tahoe 26 | Rustの配置先、アプリ・ヘルパーバンドルの最小OS、Swiftヘルパーの対象は26.0 |
-| Android | Android 17（API 37） | 最小・コンパイル・対象SDKは37。Nixのビルド・テストSDKも37 |
+| Android | Android 8.0以降（API 26以降） | 最小SDKは26、コンパイル・対象SDKは37。Nixのビルド・テストSDKも37 |
 | Windowsのデスクトップ・Host・CLI | Windows 11、Windows Server 2025 | `windows-2025` CIでServer 2025上のビルド・テストを実行。Windows 11のUI受け入れテストは別途必要 |
 | Linuxのデスクトップ・Host・CLI | Ubuntu 24.04をCI基準に使用 | GitHubホストの`ubuntu-24.04`と、固定した`nix develop .#native`環境 |
 
 出典: [Appleのセキュリティリリース](https://support.apple.com/en-ca/100100)、[Android 17の公開](https://android-developers.googleblog.com/2026/06/Android-17.html)、[API 37のSDK設定](https://developer.android.com/about/versions/17/setup-sdk)、[Windowsクライアントのリリース](https://learn.microsoft.com/en-us/windows/release-health/windows11-release-information)、[Windows Serverのリリース](https://learn.microsoft.com/en-us/windows/release-health/windows-server-release-info)。Windowsの25H2・26H1などの機能更新は、新しいOSメジャーとは扱いません。
 
-Android 17では、LAN接続を開く前に付近のデバイスへのアクセス許可を求めます。拒否した場合は再試行・設定ボタンを備えた許可画面に留まり、インターネット経由でも続行できます（LAN専用Hostには許可が必要です）。設定から許可を与えて戻るとアプリが開きます。インターネット経由の選択はActivityの再生成後も保持し、新規起動では許可を再確認します。保存済みHostと下書きは既存の保存領域に残ります。
+Android 8〜16ではAndroid 17専用のローカルネットワーク許可を要求しません。Android 17では、LAN接続を開く前に付近のデバイスへのアクセス許可を求めます。拒否した場合は再試行・設定ボタンを備えた許可画面に留まり、インターネット経由でも続行できます（LAN専用Hostには許可が必要です）。設定から許可を与えて戻るとアプリが開きます。インターネット経由の選択はActivityの再生成後も保持し、新規起動では許可を再確認します。保存済みHostと下書きは既存の保存領域に残ります。
 
 新しいメジャーが一般提供されたら、提供元の公開を確認し、これらの基準をまとめて更新して、古い互換処理を削除します。対応を宣言する前にクライアントの受け入れテストを実行してください。SDKやCIランナーに含まれるだけのベータ・RCを採用してはいけません。この方針はMarkdown描画ライブラリの選択とは独立しています。
 
@@ -30,21 +30,14 @@ Android 17では、LAN接続を開く前に付近のデバイスへのアクセ�
 
 | パス | 役割 |
 | --- | --- |
-| `crates/agent-core` | モデル、型付きRPC操作、`Snapshot`、`Store`、会話表示、iroh接続、診断。全クライアントの状態を所有 |
-| `crates/agent-ffi` | Swift・Kotlinが使う`agent-core`のUniFFIバインディング |
-| `crates/host-daemon` | ペアリング、認可、Host RPC、Codex・Claude Codeの実行、ワークツリー、音声入力、ファイル・ターミナル操作 |
-| `crates/codex-app-server` | Codex App Serverとの通信 |
-| `crates/bex-process` | プロバイダーに依存しないプロセス監視とPTYバックエンド |
-| `crates/agent-cli` | スクリプト・結合テスト用のヘッドレスクライアント |
-| `crates/host-fixture` | 決定的に動作するCodex・Claudeの子プロセスと、テスト用の隔離iroh Host |
-| `crates/xtask` | ネイティブ受け入れテスト、ビルド出力の整理、接続診断 |
-| `apps/desktop` | GPUI製のMacアプリ。Alacrittyのネイティブターミナルを搭載 |
-| `apps/mobile` | UniFFI Storeを使うiOS（SwiftUI、`iosApp/`）とAndroid（Compose、`src/`） |
+| `crates/` | 共通のRust状態管理、プロトコル、通信、Host、バインディング、CLI、テスト用ツール。[AGENTS.md](AGENTS.md)に責務と依存方向を記載。 |
+| `apps/desktop` | GPUI製デスクトップアプリと、Alacrittyのネイティブターミナル。 |
+| `apps/mobile` | UniFFI Storeを使うiOS（SwiftUI、`iosApp/`）とAndroid（Compose、`src/`）。 |
 
-クライアントは不変の`Snapshot`を描画し、表示内容を再計算しません。`agent-core::presentation`が生成する`RenderedConversation`の行を、GPUIは直接、モバイルはバインディング経由で使います。新しいロジックはクライアントではなくcoreに追加してください。[ADR 0005](docs/adr/0005-rust-store-and-one-iroh-client-path.md)を参照してください。
-端末への保存は[クライアント状態の保存契約](docs/CLIENT_STATE_STORAGE.md)に従います。
+Storeと通信を共有する設計の理由は[ADR 0005](docs/adr/0005-rust-store-and-one-iroh-client-path.md)、端末保存の契約は[codecのモジュール説明](crates/agent-core/src/persistence.rs)を参照してください。
 
-セッション構造、制限、ローカルデータ、検証項目は[Session runtime](docs/SESSION_RUNTIME.md)に記載しています。
+実行と配送の所有権は[Session runtime](docs/SESSION_RUNTIME.md)に記載しています。機能ごとの説明は[サイドバーのプロジェクト](docs/DESKTOP_PROJECTS.md)、[ターミナル](docs/NATIVE_TERMINAL.md)、[共有ブラウザー](docs/REMOTE_BROWSER.md)を参照してください。
+[重点的なテスト監査](docs/TEST_MAINTENANCE.md)と[接続診断](docs/qa/IOS_CONNECTION_PERFORMANCE.md)には専用の手順を記載し、通常の開発コマンドは[justfile](justfile)で管理します。
 
 ## Hostの起動
 
@@ -110,7 +103,7 @@ iPhoneから保存済みPCを削除するには、**タスク一覧 → PC一覧
 
 ## Windows版の利用
 
-Windows 11では、ビルド済みZIPを使えばRustのインストールは不要です。
+Windows 11では、ビルド済みEXEインストーラーを使えばRustのインストールは不要です。
 必要なランタイム、リリース配布、検証済みCI開発版、ソースビルドの手順は
 [Windows版の利用手順](docs/WINDOWS.md)を参照してください。
 
@@ -124,7 +117,7 @@ scripts/dev-env.sh just build-desktop-macos && open target/release/bex.app
 scripts/dev-env.sh scripts/build-agent-ios.sh simulator
 open apps/mobile/iosApp/Bex.xcodeproj
 
-# Android 17（API 37）
+# Android 8.0以降（ビルドSDKは37）
 scripts/dev-env.sh ./gradlew :apps:mobile:assembleDebug
 ```
 
@@ -136,7 +129,7 @@ Rustのソースを変更したら、iOS用ライブラリも再ビルドして�
 
 ## 会話の操作
 
-Mac・iPhoneでは、アシスタントの文章を選択して下書きに引用したり、サイドチャットで質問したりできます。iPhoneのサイドチャットを閉じると、元の会話と下書きへ戻ります。Macには右クリックのコピー・Google検索、自分のメッセージのホバーによるコピー・入力欄への戻しもあります。コマンドの実行内容は実行中・再表示後とも最初は折り畳み、明示的に展開した状態は保持します。[会話表示の契約](docs/DESKTOP_CONVERSATION_DISPLAY_CONTRACT.md)を参照してください。
+Mac・iPhoneでは、アシスタントの文章を選択して下書きに引用したり、サイドチャットで質問したりできます。iPhoneのサイドチャットを閉じると、元の会話と下書きへ戻ります。Macには右クリックのコピー・Google検索、自分のメッセージのホバーによるコピー・入力欄への戻しもあります。コマンドの実行内容は実行中・再表示後とも最初は折り畳み、明示的に展開した状態は保持します。
 
 Mac・iPhoneでは、枠のないFast、モデル名、推論強度の操作をマイク・送信の直前に置きます。モデル名を押すと、エージェント・アカウントの行と、検索できるモデル一覧を開きます。アカウント行は報告された週次使用枠を表示し、切り替えや、追加・ログイン・確認付きサインアウトの管理画面へ進めます。設定からも同じ管理画面に入れます。アカウント変更では、対応するモデル設定、本文、添付を保持したまま一覧を更新します。認証とプロバイダーごとのアカウント選択はHostが所有し、接続済みクライアントで共有します。現在はCodex・Claudeに対応し、Pi・第三者の接続アダプターは未対応です。Claudeではログインページを開き、返された認証コードをBexへ貼り付けます。
 
@@ -210,35 +203,25 @@ scripts/dev-env.sh just quality [apple|rust|kotlin|swift]  # 既定はMac Host�
 
 Claudeの契約テストは`scripts/dev-env.sh cargo test --locked -p host-fixture --test claude`です。先に監視用実行ファイルをビルドしてください。決定的に動作する外部CLI境界と、実際のStore・iroh・Hostルーティング・ネイティブ会話ファイル・隔離Git環境を使います。Claude Code 2.1.266の匿名化した記録でもネイティブ形式との互換性を確認します。任意実行の`live_claude_subscription_completes_and_resumes_through_store_and_host`は実際の認証済みCLIを使います。`BEX_LIVE_CLAUDE_PROGRAM`に絶対パスを設定し、`-- --ignored --exact`を付けて実行すると、サブスクリプションでの推論、Host再起動後の再開、中断、中断後の入力を確認できます。
 
-`scripts/dev-env.sh just unit-tests`で全ローカルユニットテストを実行してから、PR作成やCI完了待ちを必須にせず、mainへ直接統合します。Native clients GitHub Actionsはmainへのpush、任意のPR、手動実行で全検証を行い、CIの失敗はmain上で修正します。force push・main削除は管理者を含め全員に禁止します。検証完了を報告するには、対象コミットのCI成功と、変更のない作業ツリーが必要です。コミットでローカルのバックグラウンド検証は起動しません。ユニットテストと手動の調査コマンドはローカルで使えます。Linux CIはGitHubホストのUbuntu 24.04と`nix develop .#native`を使い、同じ基準でツールチェーンを取得します。Windowsも固定したflakeのRustバージョンを使います。Lintはベースラインなしの既定基準で、ルールの例外にはレビューが必要です。
-
-Android CIは、固定したNix SDKとUbuntu 24.04でKotlinのチェック・ユニットテスト、アプリ・計装テストAPKのビルド、KVMを使ったエミュレーター受け入れテストを行います。Apple CIはXcode 26.6の`macos-26` Apple Siliconランナーで、ローカルと同じ既定の`just quality`を実行します。共通Rust・Swiftチェックの後、Mac Browser E2EとiPhoneの会話テストを並行実行し、iPhoneは2組の隔離Simulator・Hostを使います。CargoとXcodeのderived dataをキャッシュし、失敗時を含めログとXcode結果バンドルを7日間保持します。Linux・Windows・Android・Mac・iPhoneの検証はNative clients CIで実行します。Androidの調査には`just android-e2e`・`just quality kotlin`も使えます。
+開発・統合の方針は[AGENTS.md](AGENTS.md)を参照してください。プラットフォームの受け入れ検証はNative clients CIが担当し、起動条件、対象選択、キャッシュ、ランナーは[native.yml](.github/workflows/native.yml)で管理します。
 
 開発・テストビルドは、全変数のデバッグ情報を含めず、ファイル名・行番号付きバックトレースを保持します。デバッガーで変数が必要なら`CARGO_PROFILE_DEV_DEBUG=full`を指定してください。品質チェックではRustのインクリメンタルコンパイルを無効にし、通常のローカルビルドのインクリメンタル状態はKacheが管理します。
 
-`default`・`native`のNixシェルは、バージョンを固定したKacheをローカルRustビルドのラッパーとして使います。内容に基づく共有キャッシュで、Cargoのインデックス・ロック・ビルド出力を分離したままワークツリー間で対応するコンパイル結果を再利用します。Linux・macOSでは対応するRust実行ファイルやビルドスクリプトの実行結果もキャッシュし、頻繁に変わるクレートでは適応型インクリメンタル処理を使えます。プロジェクトの`.kache.toml`でcompile-before-keyを無効にし、コンパイル枠を待つ前に共有キャッシュを検索します。キャッシュにない成果物にはKacheのスケジューラーとメモリ圧迫時の保護が適用されます。`scripts/dev-env.sh kache stats --last-build`で再利用を確認し、`scripts/dev-env.sh kache explain`でミスの原因を調べられます。`KACHE_CACHE_DIR`で共有キャッシュの保存場所を指定できます。`bex.buildRoot`が設定されている場合、Nixシェルと`scripts/dev-env.sh`は既定で`<buildRoot>/.kache`を使い、同じディスク上の出力をcopy-on-writeで復元できるようにします。それ以外ではmacOSの`~/Library/Caches/kache`、Linuxの`~/.cache/kache`を使います。`CI`が設定された環境ではこのラッパーを使わず、既存のCargoキャッシュを使います。
+Nixシェルは固定したKacheでワークツリー間のビルド結果を再利用します。`KACHE_CACHE_DIR`でキャッシュ先を指定でき、`bex.buildRoot`設定時の既定値は`<buildRoot>/.kache`です。`scripts/dev-env.sh kache stats --last-build`で再利用、`scripts/dev-env.sh kache explain`でミスの原因を確認できます。キャッシュの方針は[.kache.toml](.kache.toml)で管理し、CIは独自のCargoキャッシュを使います。
 
-`just unit-tests`は、ネイティブバインディングを有効にしたRustワークスペースのライブラリ・バイナリテスト、単独agent-peerのCargoテスト、macOSのヘッドレスSwift Markdownテストを実行します。RustはNix固定のcargo-nextestでクレートをまたいで並行実行し、Swiftも並行で進めます。両方の結果を待って失敗を集計します。Androidには現在JVMユニットテストがなく、計装テストはCIで実行します。CIも結合・E2E確認の前に同じコマンド・Rust機能構成を使い、Nixのagent-peerパッケージも確認します。監視用実行ファイルはテスト前にビルドします。`agent-ffi/bindgen`はバインディング生成時だけ有効にしてください。ユニットテストはなく、ワークスペーステストに含めると不要な依存構成でネイティブライブラリを置き換えます。整理・接続診断・ネイティブテストはRustの`cargo xtask`で管理します。macOSのプロセス調査はOS付属の`lsof`、LinuxはNix版を使います。Swift Markdownテストは、ソース・バインディング・コンパイラー・SDK・ランナーが一致するときのみビルドを再利用し、毎回現在のRustライブラリへアサーションを実行します。iOS UIテストは初期化済みの空Simulatorを複製して隔離Hostと組み合わせ、`BEX_IOS_TEST_WORKERS=1`–`10`で並行数を指定できます。リポジトリ共通ロックで、ワークツリー・Cargo出力をまたぐiOS確認を直列化します。
-
-`scripts/dev-env.sh`は`flake.nix`・`flake.lock`・Kacheと同梱Nodeのパッケージ定義・プラットフォームが同じなら、ワークツリー間で固定Nix環境を再利用します。キャッシュ利用時はNixを起動せず、共有プロファイルで固定ツールをGCから保護します。Cargoのインデックス・ロック・`target`はワークツリーごとに持ち、同じワークツリーのテスト・開発は同じキャッシュ・出力を使います。固定済みの依存ソースとアーカイブだけを既存キャッシュからコピーし、可能ならAPFSのcopy-on-write・reflinkで容量を共有します。変更済みソースは再コンパイルし、未変更の出力は再利用します。テストは必要なヘルパー・バインディングをビルドし、開発アプリのビルド・インストール・再起動は開発環境へ適用するときに行います。
+対象を絞った検証コマンドは`scripts/dev-env.sh just --list`で確認できます。iOSの受け入れ検証は`BEX_IOS_TEST_WORKERS=1`〜`10`で並列数を指定できます。ランナーはワークツリー間で実行を直列化し、結果を`target/qa`へ残します。ビルドキャッシュの詳細は[scripts/dev-env.sh](scripts/dev-env.sh)と各ネイティブランナーで管理します。`agent-ffi/bindgen`機能はバインディング生成時にだけ有効にしてください。
 
 新規ワークツリーのビルド出力を外付けディスクへ置くには、マウント済みディスクにディレクトリを作り、`git config --local bex.buildRoot /absolute/path/to/builds`を設定します。このローカル設定は全ワークツリーで共有します。`scripts/dev-env.sh`は新しい`target`を外付け上の専用ディレクトリへのシンボリックリンクにし、Cargo・Xcode・生成バインディング・キャッシュの既存パスを維持します。既存`target`は移動しません。移す場合は使用していない間に移動して元の場所をリンクへ置き換えてください。指定ディレクトリは事前に存在する必要があり、ディスク取り外しなどで利用できなければコマンドは失敗します。`git config --local --unset bex.buildRoot`で設定を削除すると、その後の新規ワークツリーはローカル出力へ戻ります。
 
-完了した`just quality`は毎回、登録済みワークツリーの未使用Cargo出力を整理します。3日以上更新のないプロファイルを削除し、残りも未使用出力が合計32 GiB以下になるまで古い順に削除します。`scripts/dev-env.sh just clean-builds --dry-run`でJSONの計画を確認し、`--dry-run`なしで適用できます。各ワークツリーの`target`リンクを解決し、外付けビルド領域を含め、その場所と直下にあるタグ付きCargoキャッシュを調べます。内部のリンクは追いません。同じプロファイルは一度だけ集計し、参照するワークツリーのどれかが使用中なら保護します。
-
-整理はCargoのビルド・成果物ロックを保持し、ロックのinodeを維持します。稼働中バイナリ、使用中ワークツリー、ロック中ビルドは未使用容量に含めません。検証後の保持方針なので、使用中ビルドは一時的に容量を超えることがあります。削除できるのは認識済みのCargo `debug`・`release`出力のみです。バックアップ・検証記録はその外へ保存してください。アプリバンドル、`target/qa`、要約、ソースは保持し、整理したプロファイルは再ビルドで復元します。
-
-`crates/host-fixture::test_support`は隔離Hostの起動・接続・停止を共有します。`bex-ui-fixture DIRECTORY CODEX PORT_FILE [STREAM_DELAY_MS]`は認証情報をメモリーに保持してHostとループバックのペアリングを動かし、Codexは標準入出力の境界を検証する子プロセスとして残します。`ios-e2e`は終了時にこのプロセスと新しいSimulatorを削除し、Xcodeのderived data・結果を`target/qa`へ残します。失敗・スキップ・テスト欠落はコマンドを失敗させます。`android-e2e`も新規エミュレーターとHostを管理し、許可拒否・再試行・実LAN通信を先に確認してから、出荷するJNIライブラリとフィクスチャHostでMarkdown・Store永続化・モデル復帰を検証します。ログと許可画面の画像を`target/qa`へ残し、欠落・失敗を拒否します。
+`just quality`は未使用のビルド出力を整理します。`scripts/dev-env.sh just clean-builds --dry-run`で計画を確認でき、保持条件と使用中ビルドの保護は[整理処理](crates/xtask/src/build_cleanup.rs)で定義しています。バックアップや検証記録はCargoの`debug`・`release`ディレクトリの外へ保存してください。
 
 Simulator・フィクスチャの実行では、実機、本番キーチェーン、カメラ、実際のCodexアカウントは検証できません。
-
-Unixの隔離Hostフィクスチャは、直接の`cargo test`でも、接続開始前にファイル記述子のソフト上限を最低4096へ引き上げます。より高い上限とハード上限は保持し、ハード上限が不足していれば起動を明示的に失敗させます。80クライアントの受け入れテストにも対応します。
 
 ## GitHubの保守
 
 [mainのルールセット](.github/main-ruleset.json)に、GitHubへ適用する保護設定を記録しています。mainへの直接pushを許可します。任意のPRでは、Bexのマージ済みワークツリー整理でコミットの祖先関係を保つため、マージコミットを使い、squash・rebaseによるマージは無効にしています。
 
-[Dependabot](.github/dependabot.yml)は毎週月曜09:00（日本時間）に、Cargo（ワークスペース・agent-peer）、Gradle、XcodeのSwiftパッケージ、npm、2つのNix flake、GitHub Actionsを確認します。マイナー・パッチ更新はエコシステムごとにまとめ、メジャー更新は個別PRにします。Nixの入力はまとめます。通常のバージョン更新は公開から7日待ち、セキュリティ更新にはこの待機を適用しません。更新PRも通常の変更と同じネイティブ検証を実行し、保守担当者が確認してCI成功後に統合します。自動マージは無効です。統合済みのリモートブランチは自動削除します。
+[Dependabot](.github/dependabot.yml)で更新対象、スケジュール、グループ、待機期間を管理します。依存関係の変更とネイティブCIの結果を確認してから統合してください。
 
 Lucideの更新は[可視化ランタイムのREADME](crates/host-daemon/src/visualize/README.md)のコマンドで生成し、同READMEのバージョン・取得元・チェックサムも更新してください。npmのmanifest・lockfileと一緒に、生成したバンドル・ライセンスをコミットします。CIは再生成して古いバンドルを検出します。リポジトリ内へ取り込んだRust・Androidソースと、固定したnetwatchの回復パッチは、上流の変更を手動で確認する必要があります。
 

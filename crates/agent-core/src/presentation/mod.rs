@@ -1,6 +1,12 @@
 //! Conversation display policy shared by native desktop and mobile clients.
 //! Grouping borrows item metadata; body formatting runs only for changed items
 //! or explicit expansion. Native views own rendering and local expansion state.
+//!
+//! Work starts collapsed for live, failed, interrupted and reopened turns.
+//! Streaming and deferred-detail hydration must not expand it. Keep commentary,
+//! final responses, pending requests and errors visible outside collapsed work;
+//! reported file changes remain inside it. Native clients consume core row order
+//! and identities instead of independently guessing finality or grouping.
 
 pub mod agents;
 pub mod connections;
@@ -516,6 +522,8 @@ mod presentation_tests {
             })
             .collect()
     }
+    // Product choice: live work stays closed too. Changing the expected value
+    // to match an implementation change previously concealed a UI regression.
     #[rstest::rstest]
     #[case::live("running", "running")]
     #[case::live_completed_command("running", "completed")]
