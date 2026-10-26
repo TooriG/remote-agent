@@ -1,0 +1,96 @@
+name: Apple release
+on:
+  workflow_run:
+    workflows: [Native clients]
+    types: [completed]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: apple-release
+  cancel-in-progress: false
+  queue: max
+jobs:
+  release:
+    if: >-
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       github.event.workflow_run.conclusion == 'success') ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    runs-on: macos-26
+    timeout-minutes: 150
+    permissions:
+      actions: read
+      contents: write
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      BEX_RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      BEX_DISTRIBUTION_SIGNING: '1'
+      BEX_TESTFLIGHT_GROUP: BEX External
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.BEX_RELEASE_SHA }}
+          persist-credentials: false
+      - name: Require successful Native clients for this exact main commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$BEX_RELEASE_SHA"
+          verified=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow native.yml --branch main \
+            --event push --commit "$BEX_RELEASE_SHA" --status success --limit 1 --json headSha --jq '.[0].headSha // ""')
+          test "$verified" = "$BEX_RELEASE_SHA"
+          test -d "$DEVELOPER_DIR"
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
+      - name: Initialize pinned tooling before loading signing secrets
+        run: scripts/dev-env.sh true
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          cmd-format: nix develop . --command {0}
+          key: apple-release-xcode-26.6-${{ hashFiles('flake.lock') }}
+          cache-on-failure: true
+      - name: Prepare dedicated non-interactive signing keychain
+        env:
+          BEX_SIGNING_KEYCHAIN_BASE64: ${{ secrets.BEX_SIGNING_KEYCHAIN_BASE64 }}
+          BEX_SIGNING_KEYCHAIN_PASSWORD: ${{ secrets.BEX_SIGNING_KEYCHAIN_PASSWORD }}
+          BEX_ASC_PRIVATE_KEY: ${{ secrets.BEX_ASC_PRIVATE_KEY }}
+          BEX_ASC_KEY_ID: ${{ secrets.BEX_ASC_KEY_ID }}
+          BEX_ASC_ISSUER_ID: ${{ secrets.BEX_ASC_ISSUER_ID }}
+        run: scripts/dev-env.sh node scripts/apple-signing.mjs prepare
+      - name: Allocate one new build number for Mac and iPhone
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEX_ASC_KEY_ID: ${{ secrets.BEX_ASC_KEY_ID }}
+          BEX_ASC_ISSUER_ID: ${{ secrets.BEX_ASC_ISSUER_ID }}
+        run: |
+          mkdir -p target/apple-release
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName > target/apple-release/releases.json
+          scripts/dev-env.sh node scripts/apple-release.mjs plan
+      - name: Build, notarize, archive and upload the verified revision
+        env:
+          BEX_ASC_KEY_ID: ${{ secrets.BEX_ASC_KEY_ID }}
+          BEX_ASC_ISSUER_ID: ${{ secrets.BEX_ASC_ISSUER_ID }}
+        run: scripts/dev-env.sh bash scripts/release-apple.sh
+      - name: Verify Apple processing and distribute to TestFlight
+        env:
+          BEX_ASC_KEY_ID: ${{ secrets.BEX_ASC_KEY_ID }}
+          BEX_ASC_ISSUER_ID: ${{ secrets.BEX_ASC_ISSUER_ID }}
+        run: scripts/dev-env.sh node scripts/apple-release.mjs verify
+      - name: Publish the notarized Mac download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          printf 'Mac and TestFlight build %s.\n\nSource commit: %s\n\nNative clients verification: https://github.com/%s/actions/runs/%s\n' \
+            "$BEX_BUILD_NUMBER" "$BEX_RELEASE_SHA" "$GITHUB_REPOSITORY" \
+            "${{ github.event.workflow_run.id || github.run_id }}" > target/apple-release/release-notes.txt
+          gh release create "$BEX_RELEASE_TAG" target/apple-release/bex-macOS-arm64.zip \
+            target/apple-release/bex-macOS-arm64.zip.sha256 --repo "$GITHUB_REPOSITORY" \
+            --target "$BEX_RELEASE_SHA" --title "BEX ${BEX_BUILD_NUMBER}" \
+            --notes-file target/apple-release/release-notes.txt
+      - name: Remove signing credentials
+        if: always()
+        run: scripts/dev-env.sh node scripts/apple-signing.mjs cleanup
