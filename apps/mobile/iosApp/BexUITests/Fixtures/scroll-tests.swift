@@ -142,8 +142,6 @@ struct ConversationScrollTests {
         check(restored == CGPoint(x: prior.x, y: prior.y + 1100),
               "Both measurements must use SwiftUI geometry, excluding native alignment space")
         check(scroll.contentOffset == prior, "Only the screen may apply the returned reading position")
-        scroll.contentSize.height = height
-        apply(restored, to: scroll)
     }
 
     @MainActor static func checkScrollingDuringLoad(_ controller: ConversationScrollObserver,

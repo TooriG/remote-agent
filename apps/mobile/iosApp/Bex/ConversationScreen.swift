@@ -34,11 +34,6 @@ struct ThreadScreen: View {
                 visibleLatest = nil
                 dictation.cancel()
             }
-            .onChange(of: isFollowingLatest) { _, following in
-                if following {
-                    scrollController.cancelHistoryRestoration()
-                }
-            }
             .onChange(of: conversation?.id) {
                 expandedItemIds.removeAll()
                 activityExpansionOverrides.removeAll()
