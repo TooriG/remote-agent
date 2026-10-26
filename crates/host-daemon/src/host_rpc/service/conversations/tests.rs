@@ -531,7 +531,10 @@ async fn round_trip_reuses_native_sessions_transfers_only_missing_history_and_re
     .await
     .unwrap();
     let b_input = b.inputs.lock().unwrap()[0].clone();
-    assert_eq!(*a.released.lock().unwrap(), [root.id.clone()]);
+    assert_eq!(
+        a.released.lock().unwrap().as_slice(),
+        std::slice::from_ref(&root.id)
+    );
     let op::Input::Text { text } = &b_input.input[0] else {
         panic!()
     };
@@ -737,13 +740,14 @@ async fn refused_inline_handoff_is_retryable_and_unknown_turn_delivery_is_not_re
     )
     .await
     .unwrap();
-    let inputs = b.inputs.lock().unwrap();
-    let op::Input::Text { text } = &inputs[0].input[0] else {
-        panic!()
-    };
-    assert!(text.contains("Original constraint"));
-    assert!(text.contains("A new source requirement"));
-    drop(inputs);
+    {
+        let inputs = b.inputs.lock().unwrap();
+        let op::Input::Text { text } = &inputs[0].input[0] else {
+            panic!()
+        };
+        assert!(text.contains("Original constraint"));
+        assert!(text.contains("A new source requirement"));
+    }
     a.fail_submit.store(2, Ordering::SeqCst);
     assert_eq!(
         send(
@@ -935,18 +939,19 @@ async fn a_running_source_blocks_switching_and_a_failed_resume_gets_full_context
     .await
     .unwrap();
     assert_eq!(a.next.load(Ordering::SeqCst), 2);
-    let injections = a.injected.lock().unwrap();
-    assert_ne!(injections[0].0, root.id);
-    assert_eq!(
-        injections[0]
-            .1
-            .messages
-            .iter()
-            .map(|message| message.text.as_str())
-            .collect::<Vec<_>>(),
-        ["Original constraint", "answer a1", "Review", "answer b1"]
-    );
-    drop(injections);
+    {
+        let injections = a.injected.lock().unwrap();
+        assert_ne!(injections[0].0, root.id);
+        assert_eq!(
+            injections[0]
+                .1
+                .messages
+                .iter()
+                .map(|message| message.text.as_str())
+                .collect::<Vec<_>>(),
+            ["Original constraint", "answer a1", "Review", "answer b1"]
+        );
+    }
     let visible = history(&host, client.id(), &root).await;
     let ids = visible
         .thread
@@ -1014,13 +1019,14 @@ async fn long_history_is_transferred_beyond_the_visible_page_and_older_pages_kee
     )
     .await
     .unwrap();
-    let inputs = b.inputs.lock().unwrap();
-    let op::Input::Text { text } = &inputs[0].input[0] else {
-        panic!()
-    };
-    assert!(text.contains("Original requirement outside the first native page"));
-    assert!(text.contains("request 149"));
-    drop(inputs);
+    {
+        let inputs = b.inputs.lock().unwrap();
+        let op::Input::Text { text } = &inputs[0].input[0] else {
+            panic!()
+        };
+        assert!(text.contains("Original requirement outside the first native page"));
+        assert!(text.contains("request 149"));
+    }
     let opened: agent_protocol::session::OpenedSession = call(
         &host,
         client.id(),

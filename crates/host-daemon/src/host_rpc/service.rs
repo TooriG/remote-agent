@@ -527,16 +527,14 @@ impl HostRpcService {
             let result = self.switch_provider(target, input).await;
             if result.is_err()
                 && let Some(mut current) = self.inner.conversations.get(target)?
+                && current.active == *active
+                && current
+                    .segments
+                    .last()
+                    .is_some_and(|segment| segment.end.is_some())
             {
-                if current.active == *active
-                    && current
-                        .segments
-                        .last()
-                        .is_some_and(|segment| segment.end.is_some())
-                {
-                    current.restore_source(active.clone());
-                    self.inner.conversations.save(current)?;
-                }
+                current.restore_source(active.clone());
+                self.inner.conversations.save(current)?;
             }
             return result;
         }
@@ -1656,24 +1654,22 @@ impl HostRpcService {
                         .iter()
                         .position(|(candidate, _)| *candidate == provider)
                     && let Ok(page) = &mut first_pages[index]
-                {
-                    if !page
+                    && !page
                         .data
                         .iter()
                         .any(|summary| summary.thread.id == response.thread.id)
-                    {
-                        page.data.push(super::agent::SessionSummary {
-                            branch: response.thread.git_branch.clone(),
-                            thread: response.thread,
-                        });
-                        page.data.sort_by(|left, right| {
-                            right
-                                .thread
-                                .updated_at
-                                .unwrap_or_default()
-                                .total_cmp(&left.thread.updated_at.unwrap_or_default())
-                        });
-                    }
+                {
+                    page.data.push(super::agent::SessionSummary {
+                        branch: response.thread.git_branch.clone(),
+                        thread: response.thread,
+                    });
+                    page.data.sort_by(|left, right| {
+                        right
+                            .thread
+                            .updated_at
+                            .unwrap_or_default()
+                            .total_cmp(&left.thread.updated_at.unwrap_or_default())
+                    });
                 }
             }
         }

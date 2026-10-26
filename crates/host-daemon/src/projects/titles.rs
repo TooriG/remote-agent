@@ -284,6 +284,7 @@ pub(crate) fn summary(mut thread: Thread) -> Thread {
     Thread {
         list_revision: thread.list_revision,
         id: thread.id,
+        active_provider: thread.active_provider,
         parent_id: thread.parent_id,
         name: thread.name,
         cwd: thread.cwd,
@@ -320,6 +321,7 @@ mod tests {
     #[test]
     fn list_metadata_contains_the_short_title_without_conversation_payloads() {
         let mut native = thread("task", None);
+        native.active_provider = Some(agent_protocol::session::ProviderKind::Claude);
         native.history_cursor = Some("private history cursor".into());
         native.history_has_more = Some(true);
         native.history_limit = Some(25);
@@ -339,6 +341,10 @@ mod tests {
             }),
         );
         let metadata = summary(native);
+        assert_eq!(
+            metadata.active_provider,
+            Some(agent_protocol::session::ProviderKind::Claude)
+        );
         assert_eq!(metadata.name.as_deref(), Some("First line"));
         assert!(metadata.turns.is_none() && metadata.preview.is_none());
         assert!(metadata.requests.is_empty() && metadata.submissions.is_empty());

@@ -8,6 +8,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import dev.remoteagent.core.Attachment
 import dev.remoteagent.core.Intent
+import dev.remoteagent.core.ProviderKind
 import dev.remoteagent.core.Snapshot
 import java.io.IOException
 import org.json.JSONArray
@@ -20,7 +21,7 @@ class ComposerControlsTest {
     @get:Rule val compose = createComposeRule()
 
     @Test
-    fun existingConversationKeepsItsProviderAndDispatchesModelAndEffortChoices() {
+    fun existingConversationOffersProviderSwitchingAndDispatchesSettingsChoices() {
         val identity = JSONObject("""{"provider":"codex","id":"fixture"}""")
         val key = JSONObject().put("Session", JSONObject().put("session", identity))
         val state =
@@ -53,11 +54,13 @@ class ComposerControlsTest {
             val intents = mutableListOf<Intent>()
             compose.setContent { MaterialTheme { ModelPickerButton(snapshot, { intent, _ -> intents.add(intent) }) } }
             compose.onNodeWithTag("model.settings").performClick()
-            compose.onNodeWithText("Other Provider").assertDoesNotExist()
+            compose.onNodeWithText("次の送信時に選んだAIへ履歴を引き継ぎます。").assertIsDisplayed()
+            compose.onNodeWithText("Other Provider").performClick()
             compose.onNodeWithText("GPT-6.1").performClick()
             compose.onNodeWithText("高").performClick()
             compose.runOnIdle {
                 assertTrue(intents.any { it is Intent.LoadModels })
+                assertTrue(intents.any { it is Intent.SelectModel && it.model.provider == ProviderKind.CLAUDE })
                 assertTrue(intents.any { it is Intent.SelectModel && it.model.id == "gpt-6.1-sol" })
                 assertTrue(intents.any { it is Intent.SelectEffort })
             }

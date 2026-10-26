@@ -196,10 +196,11 @@ impl Conversation {
             // A refused submission may have been retried with the same input
             // identity and newer context. Strip only the exact delivered packet.
             let prefix = inline_context(&handoff.context);
-            if let Some(value) = text {
-                if let Some(rest) = value.strip_prefix(&prefix) {
-                    *value = rest.into();
-                }
+            if let Some(rest) = text
+                .as_deref()
+                .and_then(|value| value.strip_prefix(&prefix))
+            {
+                *text = (!rest.is_empty()).then(|| rest.to_owned());
             }
             if let Some(MessagePart::Text { text }) = content.first_mut() {
                 if let Some(rest) = text.strip_prefix(&prefix) {
@@ -234,14 +235,12 @@ impl Conversation {
             sender: Some(sender),
             ..
         } = body
-        {
-            if self
+            && self
                 .bindings
                 .iter()
                 .any(|binding| binding.session == *sender)
-            {
-                *sender = self.id.clone();
-            }
+        {
+            *sender = self.id.clone();
         }
     }
 }
@@ -435,7 +434,7 @@ impl Conversations {
                 if session != row.active {
                     return Ok(None);
                 }
-                namespace_change(&row, &session, &mut change, supports_fork);
+                namespace_change(row, &session, &mut change, supports_fork);
                 AgentChange::Session {
                     session: row.id.clone(),
                     change,
@@ -714,6 +713,25 @@ mod tests {
         row.strip_context(&row.id, &mut item);
         assert!(
             matches!(item.body(), ItemBody::UserMessage { text: Some(text), .. } if text == "\n\nkeep spacing")
+        );
+        let prefix = inline_context(&row.handoffs[0].context);
+        let mut separate = Item::new(
+            "same-input".into(),
+            agent_protocol::execution::ItemStatus::Completed,
+            ItemBody::UserMessage {
+                text: Some(prefix.clone()),
+                content: vec![
+                    MessagePart::Text { text: prefix },
+                    MessagePart::Text {
+                        text: "\n\nkeep spacing".into(),
+                    },
+                ],
+            },
+        );
+        row.strip_context(&row.id, &mut separate);
+        assert!(
+            matches!(separate.body(), ItemBody::UserMessage { text: None, content }
+            if content == &[MessagePart::Text { text: "\n\nkeep spacing".into() }])
         );
     }
 }

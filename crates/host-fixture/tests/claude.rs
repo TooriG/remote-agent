@@ -701,7 +701,7 @@ async fn claude_approval_snapshot_after_disconnect_denial_is_effective_and_inter
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn provider_selection_cannot_redirect_an_existing_conversation() {
+async fn provider_switch_preserves_conversation_identity_history_and_workspace() {
     tokio::time::timeout(Duration::from_secs(30), async {
         let root = tempfile::tempdir().unwrap();
         let fixture = host(root.path(), Arc::new(Memory::default()), fixture_program()).await;
@@ -723,7 +723,9 @@ async fn provider_selection_cannot_redirect_an_existing_conversation() {
             (claude_model, codex_model),
         ] {
             store
-                .dispatch(Intent::NewChat { cwd: String::new() })
+                .dispatch(Intent::NewChat {
+                    cwd: root.path().to_string_lossy().into_owned(),
+                })
                 .await
                 .unwrap();
             let key = store.snapshot().navigation.draft_key.clone();
@@ -740,57 +742,55 @@ async fn provider_selection_cannot_redirect_an_existing_conversation() {
                 &format!("{}-start", original.id),
             )
             .await;
-            completed(&store, &id, 1, "completed").await;
+            let original_snapshot = completed(&store, &id, 1, "completed").await;
+            let cwd = original_snapshot.navigation.cwd.clone();
 
-            store
-                .dispatch(Intent::SelectModel {
-                    thread_id: id.clone().into(),
-                    model: other.clone(),
-                })
-                .await
-                .unwrap();
-            draft(&store, "keep this input").await;
-            assert!(
+            let mut expected = vec!["original provider"];
+            for (step, model, text) in [
+                ("handoff", &other, "keep this input"),
+                ("return", &original, "continue with original provider"),
+            ] {
                 store
-                    .dispatch(Intent::Submit {
-                        thread_id: Some(id.clone()),
-                        client_user_message_id: format!("{}-mismatch", original.id).into(),
+                    .dispatch(Intent::SelectModel {
+                        thread_id: id.clone().into(),
+                        model: model.clone(),
                     })
                     .await
-                    .is_err()
-            );
-            let snapshot = store.snapshot();
-            assert_eq!(
-                snapshot
-                    .navigation
-                    .thread_id
-                    .as_ref()
-                    .map(|session| session.id.as_str()),
-                Some(id.id.as_str())
-            );
-            assert_eq!(
-                snapshot.drafts[&agent_core::state::DraftKey::from(&id)].text,
-                "keep this input"
-            );
-            assert!(snapshot.error.as_ref().unwrap().contains("新しい会話"));
-            assert!(snapshot.pending_submissions.is_empty());
-            assert_eq!(snapshot.conversations[&id].turns.as_ref().unwrap().len(), 1);
-
-            store
-                .dispatch(Intent::SelectModel {
-                    thread_id: id.clone().into(),
-                    model: original.clone(),
+                    .unwrap();
+                assert_eq!(
+                    send(&store, text, &format!("{}-{step}", original.id)).await,
+                    id
+                );
+                expected.push(text);
+                completed(&store, &id, expected.len(), "completed").await;
+                let snapshot = until(&store, |snapshot| {
+                    snapshot.conversations[&id].active_provider == Some(model.provider)
                 })
-                .await
-                .unwrap();
-            send(
-                &store,
-                "continue with original provider",
-                &format!("{}-retry", original.id),
-            )
-            .await;
-            let snapshot = completed(&store, &id, 2, "completed").await;
-            assert!(snapshot.error.is_none());
+                .await;
+                assert_eq!(snapshot.navigation.thread_id.as_ref(), Some(&id));
+                assert_eq!(snapshot.navigation.cwd, cwd);
+                assert!(
+                    snapshot.drafts[&agent_core::state::DraftKey::from(&id)]
+                        .text
+                        .is_empty()
+                );
+                assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
+                assert!(snapshot.pending_submissions.is_empty());
+                let messages: Vec<_> = snapshot.conversations[&id]
+                    .turns
+                    .iter()
+                    .flatten()
+                    .flat_map(|turn| turn.items.iter().flatten())
+                    .filter(|item| {
+                        matches!(
+                            item.body(),
+                            agent_protocol::items::ItemBody::UserMessage { .. }
+                        )
+                    })
+                    .filter_map(|item| agent_core::presentation::body::item_body(item).text)
+                    .collect();
+                assert_eq!(messages, expected);
+            }
         }
         store.close().await.unwrap();
         endpoint.close().await;

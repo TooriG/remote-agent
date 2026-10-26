@@ -492,6 +492,13 @@ pub(super) async fn run(home: PathBuf, config: Config) -> Result<()> {
                         turns: if params["excludeTurns"] == true { &[] } else { &thread.turns } } })?;
                     threads.insert(thread_id, Rc::new(RefCell::new(thread)));
                 }
+                "thread/unsubscribe" => {
+                    let Some(thread) = threads.get(params["threadId"].as_str().unwrap_or("")) else {
+                        context.error(id, -32602, "thread not found")?; continue;
+                    };
+                    thread.borrow_mut().metadata.insert("status".into(), json!({"type":"notLoaded"}));
+                    context.respond(id, &json!({}))?;
+                }
                 "turn/start" => {
                     let thread_id = params["threadId"].as_str().unwrap_or("");
                     let prompt = params["input"][0]["text"].as_str().unwrap_or("");
@@ -599,6 +606,9 @@ pub(super) async fn run(home: PathBuf, config: Config) -> Result<()> {
                     let Some(thread) = threads.get(params["threadId"].as_str().unwrap_or("")) else {
                         context.error(id, -32602, "thread not found")?; continue;
                     };
+                    if method == "thread/resume" && thread.borrow().metadata["status"]["type"] == "notLoaded" {
+                        thread.borrow_mut().metadata.insert("status".into(), json!({"type":"idle"}));
+                    }
                     let stored_thread = thread.borrow();
                     let overridden = stored_thread.metadata.get("readCwd").map(|cwd| {
                         let mut metadata = stored_thread.metadata.clone();
