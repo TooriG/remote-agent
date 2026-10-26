@@ -16,10 +16,9 @@ struct ThreadScreen: View {
     @State var showingCamera = false
     @State var preparingMedia = false
     @State var showingModelSettings = false
-    @State var isVisible = false
     @State var isFollowingLatest = true
     @State private var scrollPosition = ScrollPosition(idType: String.self, edge: .bottom)
-    @State var visibleHistoryBoundaries = Set<HistoryBoundary>()
+    @State var visibleLatest: LatestBoundary?
     @State var expandedItemIds = Set<String>()
     @State var activityExpansionOverrides = [String: ActivityExpansion]()
     @FocusState var composerFocused: Bool
@@ -27,14 +26,13 @@ struct ThreadScreen: View {
     var body: some View {
         chatContent
             .onDisappear {
-                isVisible = false
-                visibleHistoryBoundaries.removeAll()
+                visibleLatest = nil
                 dictation.cancel()
             }
             .onChange(of: conversation?.id) {
                 expandedItemIds.removeAll()
                 activityExpansionOverrides.removeAll()
-                visibleHistoryBoundaries.removeAll()
+                visibleLatest = nil
                 isFollowingLatest = true
                 scrollPosition.scrollTo(edge: .bottom)
             }
@@ -81,11 +79,9 @@ struct ThreadScreen: View {
             }
             .sheet(isPresented: $showingModelSettings) { ModelSettingsSheet(model: model) }
             .onAppear {
-                isVisible = true
                 if model.isNewThread {
                     composerFocused = true
                 }
-                loadVisibleHistory()
             }
             .onChange(of: model.isNewThread) {
                 if $0 {
@@ -112,35 +108,27 @@ struct ThreadScreen: View {
     }
 
     private var chatContent: some View {
-        VStack(spacing: 0) {
-            if let notice = model.notice {
+        let history = conversation?.id.flatMap { model.snapshot.historyControl(session: $0) }
+        return VStack(spacing: 0) {
+            if let notice = model.notice, notice != history?.error {
                 BexNotice(text: notice).padding(.horizontal).padding(.top, 8)
             }
             if let thread = conversation {
                 let rows = conversationRows(thread.rows, expansion: activityExpansionOverrides)
                 let lastRowId = rows.last?.id
-                let threadId = thread.id
-                let firstRowId = thread.rows.first?.id
+                let latestBoundary = lastRowId.map { LatestBoundary(threadId: thread.id, rowId: $0) }
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
+                        if let session = thread.id, let history {
+                            historyControl(history, session: session)
+                        }
                         ForEach(rows) { row in
                             conversationRow(row)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .id(row.id)
-                                .overlay(alignment: .top) {
-                                    if row.id == rows.first?.id, let firstRowId {
-                                        historyBoundaryMarker(
-                                            .oldest(threadId: threadId, rowId: firstRowId),
-                                            height: 1
-                                        )
-                                    }
-                                }
                                 .overlay(alignment: .bottom) {
-                                    if row.id == lastRowId {
-                                        historyBoundaryMarker(
-                                            .latest(threadId: threadId, rowId: row.id),
-                                            height: 80
-                                        )
+                                    if row.id == lastRowId, let latestBoundary {
+                                        latestBoundaryMarker(latestBoundary)
                                     }
                                 }
                         }
@@ -177,16 +165,15 @@ struct ThreadScreen: View {
                     guard isFollowingLatest,
                           abs(gesture.translation.height) > abs(gesture.translation.width) else { return }
                     isFollowingLatest = false
-                    loadVisibleHistory()
                 }.onEnded { gesture in
                     if gesture.translation.height < -abs(gesture.translation.width),
-                       historyBoundaryVisibility.latest {
+                       visibleLatest == latestBoundary {
                         isFollowingLatest = true
                         scrollPosition.scrollTo(edge: .bottom)
                     }
                 })
                 .overlay(alignment: .bottom) {
-                    if !historyBoundaryVisibility.latest, !rows.isEmpty {
+                    if visibleLatest != latestBoundary, !rows.isEmpty {
                         Button {
                             isFollowingLatest = true
                             withAnimation { scrollPosition.scrollTo(edge: .bottom) }
@@ -200,11 +187,6 @@ struct ThreadScreen: View {
                         .accessibilityLabel("最新のメッセージへ")
                         .accessibilityIdentifier("task.latest")
                         .padding(.bottom, 6)
-                    }
-                }
-                .onChange(of: model.loadingHistory) {
-                    if !$0 {
-                        loadVisibleHistory()
                     }
                 }
             } else if model.isNewThread {

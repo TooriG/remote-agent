@@ -115,7 +115,7 @@ conversation-ui:
         testSimulatorShowsAcceptedAdditionalInputBeforeCodexProcessesIt \
         testSimulatorKeepsFailedWorkCollapsedWithVisibleTerminalError \
         testSimulatorRetriesAFailedTaskOpenWithoutLosingItsDraft \
-        testSimulatorFillsInitialHistoryViewportWithoutScrolling
+        testSimulatorLoadsEarlierHistoryOnTapAndRetriesFailedPage
 
 # Exercise the real iroh Host through the headless client.
 iroh-e2e:

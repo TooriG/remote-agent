@@ -72,7 +72,7 @@ pub(super) fn persisted(thread: &Thread) -> Option<Thread> {
     if long_history {
         if id == "fixture-viewport-history" {
             // Four activity-only turns leave the initial summary shorter than
-            // the viewport. Older summary pages must load automatically.
+            // the viewport, so the manual history control is initially visible.
             for turn in &turns[5..9] {
                 let item_id = format!("{}-work", turn.borrow()["id"].as_str().unwrap());
                 turn.borrow_mut()["items"] = json!([{"id":item_id,
@@ -156,6 +156,11 @@ pub(super) fn page(
     let descending = params["sortDirection"] == "desc";
     if method == "thread/turns/list" {
         context.trace(method, params.clone())?;
+        let failure = context.home.join("fail-next-history-page");
+        if params["cursor"].is_string() && failure.exists() {
+            std::fs::remove_file(failure)?;
+            return context.error(id, -32603, "fixture older history page failed");
+        }
         if let Some(response) = thread.metadata.get("fixtureHistoryResponse") {
             return context.respond(id, response);
         }

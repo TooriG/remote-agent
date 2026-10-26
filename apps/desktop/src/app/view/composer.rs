@@ -4,16 +4,10 @@ use gpui_kit::component::button::ButtonCustomVariant;
 impl Desktop {
     fn history_control(
         &self,
-        has_more: bool,
-        loading: bool,
-        error: Option<String>,
+        control: agent_core::presentation::conversation::HistoryControl,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let label = if loading {
-            "以前のターンを読み込み中…"
-        } else {
-            "以前のターンを読み込む"
-        };
+        let label: SharedString = control.load_label.into();
         h_flex()
             .w_full()
             .justify_center()
@@ -24,15 +18,15 @@ impl Desktop {
                     .w_full()
                     .max_w(px(CHAT_WIDTH))
                     .gap_1p5()
-                    .when(has_more, |body| {
+                    .when(control.has_more, |body| {
                         body.child(
                             Button::new("conversation-history-load")
                                 .debug_selector(|| "conversation-history-load".into())
-                                .accessibility_label(label)
+                                .accessibility_label(label.clone())
                                 .small()
                                 .ghost()
                                 .w_full()
-                                .disabled(loading)
+                                .disabled(control.loading)
                                 .child(
                                     h_flex()
                                         .w_full()
@@ -57,14 +51,14 @@ impl Desktop {
                                 })),
                         )
                     })
-                    .when_some(error, |body, error| {
+                    .when_some(control.error, |body, error| {
                         body.child(
                             div()
                                 .debug_selector(|| "conversation-history-error".into())
                                 .text_xs()
                                 .text_center()
                                 .text_color(rgb(appearance::MUTED))
-                                .child(error_message(&error)),
+                                .child(error),
                         )
                     }),
             )
@@ -250,11 +244,7 @@ impl Desktop {
         let history = list(self.list.clone(), move |index, _, cx| {
             entity
                 .update(cx, |view, cx| match view.rows.get(index).cloned() {
-                    Some(ConversationRow::History {
-                        has_more,
-                        loading,
-                        error,
-                    }) => view.history_control(has_more, loading, error, cx),
+                    Some(ConversationRow::History(control)) => view.history_control(control, cx),
                     Some(ConversationRow::Turn(turn)) => {
                         let session = view
                             .rendered

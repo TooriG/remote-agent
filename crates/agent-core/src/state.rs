@@ -525,6 +525,9 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             }
         }
         Intent::ReadOlder { thread_id } => {
+            if previous.operation_running(op::OperationKey::History { session: thread_id.clone() }) {
+                return (next, Vec::new());
+            }
             if let Some(cursor) = previous.conversations.get(&thread_id).and_then(|thread| thread.history_cursor.clone()) {
                 return prepare(previous, next, op::ReadHistory { session: thread_id, cursor, include_activity: false });
             }
@@ -1795,3 +1798,76 @@ impl Snapshot {
 #[cfg(test)]
 #[path = "state/model_defaults_tests.rs"]
 mod model_defaults_tests;
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+    use crate::session::SessionRef;
+    use operations::{OperationKey, OperationPhase, OperationState};
+
+    #[test]
+    fn older_history_deduplicates_only_a_running_request_for_the_same_session() {
+        let session =
+            SessionRef::new(crate::session::ProviderKind::Codex, "history".into()).unwrap();
+        let other = SessionRef::new(crate::session::ProviderKind::Codex, "other".into()).unwrap();
+        for cursor in [None, Some("older".to_owned())] {
+            for (owner, phase, blocked) in [
+                (session.clone(), OperationPhase::Running, true),
+                (other.clone(), OperationPhase::Running, false),
+                (
+                    session.clone(),
+                    OperationPhase::Failed {
+                        message: "retry".into(),
+                    },
+                    false,
+                ),
+            ] {
+                let snapshot = Snapshot {
+                    connected: true,
+                    conversations: Arc::new(
+                        [(
+                            session.clone(),
+                            Arc::new(Thread {
+                                id: Some(session.clone()),
+                                history_cursor: cursor.clone(),
+                                history_has_more: Some(true),
+                                ..Default::default()
+                            }),
+                        )]
+                        .into(),
+                    ),
+                    operations: Arc::new(
+                        [(
+                            OperationKey::History { session: owner },
+                            OperationState {
+                                generation: 1,
+                                phase,
+                            },
+                        )]
+                        .into(),
+                    ),
+                    ..Default::default()
+                };
+                let (next, effects) = reduce(
+                    &snapshot,
+                    Event::Intent(Intent::ReadOlder {
+                        thread_id: session.clone(),
+                    }),
+                );
+                if blocked {
+                    assert_eq!(next, snapshot);
+                    assert!(
+                        effects.is_empty(),
+                        "A pending page cannot be requested twice"
+                    );
+                } else {
+                    assert_eq!(
+                        effects.len(),
+                        1,
+                        "A failed request must be retryable independently of other sessions"
+                    );
+                }
+            }
+        }
+    }
+}

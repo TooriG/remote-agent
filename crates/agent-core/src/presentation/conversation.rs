@@ -1672,6 +1672,144 @@ mod progress_tests {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "bindings", derive(uniffi::Record))]
+pub struct HistoryControl {
+    pub has_more: bool,
+    pub loading: bool,
+    pub load_label: String,
+    pub error: Option<String>,
+}
+
+#[cfg_attr(feature = "bindings", uniffi::export)]
+impl Snapshot {
+    pub fn history_control(&self, session: crate::session::SessionRef) -> Option<HistoryControl> {
+        let has_more = self
+            .conversations
+            .get(&session)
+            .is_some_and(|thread| thread.history_has_more == Some(true));
+        let key = crate::state::operations::OperationKey::History { session };
+        let error = self
+            .operation_error(key.clone())
+            .map(|message| super::error::error_message(&message));
+        if !has_more && error.is_none() {
+            return None;
+        }
+        let loading = self.operation_running(key);
+        Some(HistoryControl {
+            has_more,
+            loading,
+            load_label: if loading {
+                "以前のターンを読み込み中…"
+            } else {
+                "以前のターンを読み込む"
+            }
+            .into(),
+            error,
+        })
+    }
+}
+
+#[cfg(test)]
+mod history_control_tests {
+    use super::*;
+    use crate::{
+        session::{ProviderKind, SessionRef},
+        state::operations::{OperationKey, OperationPhase, OperationState},
+    };
+
+    #[test]
+    fn history_control_tracks_its_own_page_request_and_retry() {
+        let session = SessionRef::new(ProviderKind::Codex, "history".into()).unwrap();
+        let other = SessionRef::new(ProviderKind::Codex, "other".into()).unwrap();
+        let mut snapshot = Snapshot::default();
+        assert_eq!(snapshot.history_control(session.clone()), None);
+        Arc::make_mut(&mut snapshot.conversations).insert(
+            session.clone(),
+            Arc::new(models::Thread {
+                history_has_more: Some(true),
+                ..Default::default()
+            }),
+        );
+        let idle = HistoryControl {
+            has_more: true,
+            loading: false,
+            load_label: "以前のターンを読み込む".into(),
+            error: None,
+        };
+        assert_eq!(
+            snapshot.history_control(session.clone()),
+            Some(idle.clone())
+        );
+        let key = OperationKey::History {
+            session: session.clone(),
+        };
+        for (phase, expected) in [
+            (OperationPhase::Running, HistoryControl {
+                loading: true,
+                load_label: "以前のターンを読み込み中…".into(),
+                ..idle.clone()
+            }),
+            (OperationPhase::Failed {
+                message: r#"remote RPC error: {"code":"provider_failed","message":"Older page unavailable"}"#.into(),
+            }, HistoryControl {
+                error: Some("Older page unavailable".into()),
+                ..idle.clone()
+            }),
+            (OperationPhase::Running, HistoryControl {
+                loading: true,
+                load_label: "以前のターンを読み込み中…".into(),
+                ..idle.clone()
+            }),
+        ] {
+            Arc::make_mut(&mut snapshot.operations).insert(key.clone(), OperationState {
+                generation: 1,
+                phase,
+            });
+            assert_eq!(snapshot.history_control(session.clone()), Some(expected));
+            assert_eq!(snapshot.history_control(other.clone()), None);
+        }
+        Arc::make_mut(&mut snapshot.operations).clear();
+        assert_eq!(snapshot.history_control(session), Some(idle));
+    }
+
+    #[rstest::rstest]
+    #[case(None)]
+    #[case(Some(false))]
+    fn no_continuation_hides_the_button_but_preserves_a_read_failure(#[case] more: Option<bool>) {
+        let session = SessionRef::new(ProviderKind::Codex, "history".into()).unwrap();
+        let mut snapshot = Snapshot::default();
+        Arc::make_mut(&mut snapshot.conversations).insert(
+            session.clone(),
+            Arc::new(models::Thread {
+                history_has_more: more,
+                ..Default::default()
+            }),
+        );
+        assert_eq!(snapshot.history_control(session.clone()), None);
+        Arc::make_mut(&mut snapshot.operations).insert(
+            OperationKey::History {
+                session: session.clone(),
+            },
+            OperationState {
+                generation: 1,
+                phase: OperationPhase::Failed {
+                    message: "History unavailable".into(),
+                },
+            },
+        );
+        assert_eq!(
+            snapshot.history_control(session),
+            Some(HistoryControl {
+                has_more: false,
+                loading: false,
+                load_label: "以前のターンを読み込む".into(),
+                error: Some("History unavailable".into()),
+            })
+        );
+    }
+}
+
 /// Shared read-state wording; native views only render this projection.
 pub fn history_notice(thread: &models::Thread) -> Option<String> {
     use crate::session::HistoryReadKind;

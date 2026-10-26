@@ -22,10 +22,6 @@ extension BexAppViewModel {
         snapshot.operationRunning(key: .sessionList)
     }
 
-    var loadingHistory: Bool {
-        selectedThreadId.map { snapshot.operationRunning(key: .history(session: $0)) } ?? false
-    }
-
     var interruptingTurnId: String? {
         guard let session = selectedThreadId,
               let turn = snapshot.conversation(id: session)?.activeTurnId() else { return nil }
@@ -149,8 +145,9 @@ extension BexAppViewModel {
         showThreadList()
     }
 
-    func loadOlderHistory() {
-        guard !loadingHistory, let id = selectedThreadId else { return }
+    func loadOlderHistory(_ id: SessionRef) {
+        guard selectedThreadId == id else { return }
+        notice = nil
         perform(.readOlder(threadId: id))
     }
 

@@ -70,6 +70,7 @@ if [[ $# == 0 ]]; then
         testSimulatorRendersMarkdownTableAndReopensIt \
         testSimulatorKeepsDraftDuringLongMarkdownStreamAndReopensFinalText \
         testSimulatorOpensLongInterruptedHistoryAtLatestMessage \
+        testSimulatorLoadsEarlierHistoryOnTapAndRetriesFailedPage \
         testSimulatorReopensRunningLongHistoryWithoutBlankViewport \
         testSimulatorKeepsSmallOlderScrollDuringLiveUpdate \
         testSimulatorShowsAcceptedAdditionalInputBeforeCodexProcessesIt \

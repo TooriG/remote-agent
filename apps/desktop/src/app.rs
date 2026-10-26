@@ -166,11 +166,7 @@ struct MarkdownContent {
 }
 #[derive(Clone)]
 enum ConversationRow {
-    History {
-        has_more: bool,
-        loading: bool,
-        error: Option<String>,
-    },
+    History(agent_core::presentation::conversation::HistoryControl),
     Turn(Arc<agent_core::presentation::conversation::RenderedTurn>),
     Pending(String, Arc<PendingSubmission>),
     Request(Box<agent_core::presentation::conversation::Request>),
@@ -178,7 +174,7 @@ enum ConversationRow {
 impl ConversationRow {
     fn same_identity(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::History { .. }, Self::History { .. }) => true,
+            (Self::History(_), Self::History(_)) => true,
             (Self::Turn(a), Self::Turn(b)) => a.source.id == b.source.id,
             (Self::Pending(a, _), Self::Pending(b, _)) => a == b,
             (Self::Request(a), Self::Request(b)) => a.id == b.id,
@@ -187,18 +183,7 @@ impl ConversationRow {
     }
     fn unchanged(&self, other: &Self) -> bool {
         match (self, other) {
-            (
-                Self::History {
-                    has_more: a,
-                    loading: x,
-                    error: e,
-                },
-                Self::History {
-                    has_more: b,
-                    loading: y,
-                    error: f,
-                },
-            ) => a == b && x == y && e == f,
+            (Self::History(a), Self::History(b)) => a == b,
             (Self::Turn(a), Self::Turn(b)) => Arc::ptr_eq(a, b),
             (Self::Pending(a, x), Self::Pending(b, y)) => a == b && Arc::ptr_eq(x, y),
             (Self::Request(a), Self::Request(b)) => a == b,
@@ -1214,22 +1199,12 @@ impl Desktop {
             )
         });
         let mut rows = conversation_rows(&self.rendered);
-        let has_more = self
-            .thread()
-            .is_some_and(|thread| thread.history_has_more == Some(true));
-        let history_key = self.history_key();
-        let error = history_key
-            .as_ref()
-            .and_then(|key| self.snapshot.operation_error(key.clone()));
-        if has_more || error.is_some() {
-            rows.insert(
-                0,
-                ConversationRow::History {
-                    has_more,
-                    loading: history_key.is_some_and(|key| self.snapshot.operation_running(key)),
-                    error,
-                },
-            );
+        if let Some(control) = self
+            .selected()
+            .cloned()
+            .and_then(|session| self.snapshot.history_control(session))
+        {
+            rows.insert(0, ConversationRow::History(control));
         }
         if reset {
             self.list.reset(rows.len());
@@ -1253,7 +1228,7 @@ impl Desktop {
         // The history control is a list header in T3. Anchor to the first
         // conversation row when older rows are inserted while that header is visible.
         let history_anchor = (anchor.item_ix == 0
-            && matches!(old.first(), Some(ConversationRow::History { .. }))
+            && matches!(old.first(), Some(ConversationRow::History(_)))
             && suffix == old.len() - 1)
             .then(|| {
                 self.list.bounds_for_item(1).map(|bounds| ListOffset {
