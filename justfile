@@ -25,6 +25,7 @@ unit-tests *targets:
     CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$PWD/target}" cargo test --locked --no-fail-fast --manifest-path tools/agent-peer/Cargo.toml || failed=1
     if [[ $(uname -s) == Darwin ]]; then
         cargo xtask ios-markdown || failed=1
+        bash scripts/test-ios-scroll.sh || failed=1
     fi
     wait "$rust_pid" || failed=1
     exit "$failed"

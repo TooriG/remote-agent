@@ -17,6 +17,7 @@ struct ThreadScreen: View {
     @State var preparingMedia = false
     @State var showingModelSettings = false
     @State var isFollowingLatest = true
+    @State var scrollController = ConversationScrollObserver.Coordinator()
     @State private var scrollPosition = ScrollPosition(idType: String.self, edge: .bottom)
     @State var visibleLatest: LatestBoundary?
     @State var expandedItemIds = Set<String>()
@@ -33,6 +34,7 @@ struct ThreadScreen: View {
                 expandedItemIds.removeAll()
                 activityExpansionOverrides.removeAll()
                 visibleLatest = nil
+                scrollController.cancelHistoryRestoration()
                 isFollowingLatest = true
                 scrollPosition.scrollTo(edge: .bottom)
             }
@@ -109,6 +111,7 @@ struct ThreadScreen: View {
 
     private var chatContent: some View {
         let history = conversation?.id.flatMap { model.snapshot.historyControl(session: $0) }
+        let followLatest = $isFollowingLatest
         return VStack(spacing: 0) {
             if let notice = model.notice, notice != history?.error {
                 BexNotice(text: notice).padding(.horizontal).padding(.top, 8)
@@ -136,9 +139,11 @@ struct ThreadScreen: View {
                     .scrollTargetLayout()
                     .padding(.horizontal, 16)
                     .padding(.vertical, 6)
-                    .background(ConversationScrollToTop {
-                        isFollowingLatest = false
-                    })
+                    .background(ConversationScrollObserver(controller: scrollController,
+                                                           loadingHistory: history?.loading ?? false,
+                                                           followingLatest: isFollowingLatest) {
+                            followLatest.wrappedValue = false
+                        })
                 }
                 // Measure loaded rows; native text views draw only within the viewport.
                 .scrollPosition($scrollPosition, anchor: .bottom)
@@ -152,7 +157,7 @@ struct ThreadScreen: View {
                     }
                 }
                 .defaultScrollAnchor(.bottom, for: .alignment)
-                // Tail updates preserve a detached reader; prepends retain native offset correction.
+                // Tail updates preserve a detached reader.
                 .transaction(value: lastRowId) { transaction in
                     if !isFollowingLatest {
                         transaction.scrollContentOffsetAdjustmentBehavior = .disabled
@@ -215,6 +220,7 @@ struct ThreadScreen: View {
             ToolbarItem(placement: .principal) {
                 if !isSideChat, !model.isNewThread {
                     Button {
+                        scrollController.cancelHistoryRestoration()
                         isFollowingLatest = false
                         withAnimation { scrollPosition.scrollTo(edge: .top) }
                     } label: {

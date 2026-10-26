@@ -6,6 +6,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C0DE00000000000000000701 /* ConversationScrollObserver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000702 /* ConversationScrollObserver.swift */; };
 		C0DE00000000000000000601 /* ConversationTextLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000602 /* ConversationTextLayout.swift */; };
 		C0DE0000000000000000029A /* BexModelScopeUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000039A /* BexModelScopeUITests.swift */; };
 		C0DE00000000000000000401 /* AgentSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000402; };
@@ -70,6 +71,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		C0DE00000000000000000702 /* ConversationScrollObserver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationScrollObserver.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000602 /* ConversationTextLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationTextLayout.swift; sourceTree = "<group>"; };
 		C0DE0000000000000000039A /* BexModelScopeUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BexModelScopeUITests.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000402 /* AgentSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSettings.swift; sourceTree = "<group>"; };
@@ -188,6 +190,7 @@
 				8550A6EE10FA45896134CE4D /* ConversationComposer.swift */,
 				4134613DBAED1B9229F23DE5 /* ConversationMediaImport.swift */,
 				109E523F621AEB123226918A /* ConversationHistory.swift */,
+				C0DE00000000000000000702 /* ConversationScrollObserver.swift */,
 				2036041A039EEBAA78D55844 /* AppPresentationData.swift */,
 				1DBDDA3779489C57B929936E /* AppViewModel.swift */,
 				C0DE00000000000000000004 /* ConversationPresentation.swift */,
@@ -366,6 +369,7 @@
 				D9577A51AE685A04BA449953 /* ConversationComposer.swift in Sources */,
 				110EFBD84D6039D2705F2B1F /* ConversationMediaImport.swift in Sources */,
 				556D7396D1777928A463D2DF /* ConversationHistory.swift in Sources */,
+				C0DE00000000000000000701 /* ConversationScrollObserver.swift in Sources */,
 				B5EDE65C803E4BD5CE028DE5 /* AppPresentationData.swift in Sources */,
 				FD93084AF1873DEF927C9EDC /* AppViewModel.swift in Sources */,
 				C0DE00000000000000000104 /* ConversationPresentation.swift in Sources */,
