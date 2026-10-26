@@ -2,6 +2,11 @@
 # Share fixed tooling and dependency bytes; keep mutable Cargo state local.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# print-dev-env emits Bash 4+ syntax. macOS launchd and clean runners can
+# enter through the system's Bash 3, so use the pinned shell before sourcing it.
+if (( BASH_VERSINFO[0] < 4 )); then
+    exec nix develop . --no-update-lock-file --command bash "$PWD/scripts/dev-env.sh" "$@"
+fi
 bex_root=$PWD
 bex_build_root=$(git config --path --get bex.buildRoot || true)
 if [[ -n $bex_build_root ]]; then
