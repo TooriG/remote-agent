@@ -333,8 +333,8 @@ mod tests {
                 let router = SessionRouter::new();
                 let connection = router.open_session();
                 terminals.start(router, connection.id(), "jobs".into(), directory.path().to_string_lossy().into_owned(), TerminalSize {rows:24, cols:80}).await.unwrap();
-                // Linux validation runs this Host with SHELL=/bin/sh (dash).
-                // Disable interactive history expansion for Bash and Zsh on macOS.
+                // Disable interactive history expansion for Bash and Zsh;
+                // POSIX shells can run the job PID commands unchanged.
                 let command = "[ -z \"${BASH_VERSION-}\" ] || set +H\n[ -z \"${ZSH_VERSION-}\" ] || unsetopt BANG_HIST\nsleep 120 & first=$!; sleep 120 & printf '%s %s %s\\n' \"$$\" \"$first\" \"$!\" > owned-pids; wait\n";
                 terminals.request(connection.id(), &agent_protocol::protocol::Call::WriteTerminal(agent_protocol::operations::TerminalWrite { process_handle: "jobs".into(), data: command.as_bytes().to_vec() })).await.unwrap();
                 let pids = loop {

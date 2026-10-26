@@ -87,15 +87,24 @@
             systemImageTypes = [ "google_apis" ];
             abiVersions = [ (if pkgs.stdenv.hostPlatform.isAarch64 then "arm64-v8a" else "x86_64") ];
           }).androidsdk;
+          mkDevShell = attrs: pkgs.mkShell (attrs // {
+            packages = [ pkgs.zsh ] ++ (attrs.packages or [ ]);
+            shellHook = (attrs.shellHook or "") + ''
+              # Nix initializes its build environment with Bash. Child processes
+              # and interactive development sessions should use the pinned Zsh.
+              export SHELL="${pkgs.zsh}/bin/zsh"
+              case $- in *i*) exec "$SHELL" ;; esac
+            '';
+          });
         in
         {
-          kani = pkgs.mkShell {
+          kani = mkDevShell {
             packages = with pkgs; [
               (callPackage ./tools/kani/package.nix { })
               rustToolchain just git clang pkg-config
             ];
           };
-          native = pkgs.mkShell {
+          native = mkDevShell {
             BEX_NODE_RUNTIME = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "${nodeRuntime}";
             RUST_TOOLCHAIN_VERSION = rustToolchain.version;
             NEXTEST_VERSION = pkgs.cargo-nextest.version;
@@ -112,13 +121,13 @@
               export PATH="/usr/sbin:$PATH"
             '';
           };
-          android-test = pkgs.mkShell {
+          android-test = mkDevShell {
             packages = [ androidTestSdk pkgs.jdk21 rustToolchain pkgs.coreutils ];
             JAVA_HOME = pkgs.jdk21.home;
             ANDROID_HOME = "${androidTestSdk}/libexec/android-sdk";
             ANDROID_SDK_ROOT = "${androidTestSdk}/libexec/android-sdk";
           };
-          default = pkgs.mkShell ({
+          default = mkDevShell ({
             BEX_NODE_RUNTIME = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "${nodeRuntime}";
             packages = with pkgs; [
               just
