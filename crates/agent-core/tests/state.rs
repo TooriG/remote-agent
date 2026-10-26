@@ -633,10 +633,7 @@ fn changing_workspace_clears_content_and_preserves_file_drafts() {
             };
             assert!(Arc::ptr_eq(&previous.file_drafts, &next.file_drafts));
             assert!(next.workspace.settings.is_some());
-            if cwd == "/old" {
-                assert!(Arc::ptr_eq(&previous.workspace, &next.workspace));
-                continue;
-            }
+            // A different conversation owns its selections even in the same directory.
             assert!(
                 next.workspace.file.is_none(),
                 "old file remains after navigation"
@@ -1499,7 +1496,7 @@ fn empty_directory_chat_keeps_its_draft_separate_from_the_list() {
         &previous,
         Event::Intent(op::Intent::NewChat { cwd: String::new() }),
     );
-    assert_eq!(opened.workspace.directory, previous.workspace.directory);
+    assert!(opened.workspace.directory.is_none());
     let key = opened.navigation.draft_key.clone();
     assert_ne!(key, Snapshot::default().navigation.draft_key);
     let (edited, _) = reduce(
