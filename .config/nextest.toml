@@ -4,6 +4,12 @@
 filter = 'test(=oversized_session_opens_repeatedly_and_downloads_lossless_items_without_reconnecting)'
 threads-required = "num-test-threads"
 
+# Resume must finish within 500 ms while history is held. Run its Host startup
+# without competing provider processes and keep the actual latency assertion.
+[[profile.default.overrides]]
+filter = 'test(=opening_a_task_uses_cached_history_while_the_host_read_is_pending)'
+threads-required = "num-test-threads"
+
 # Conformance cases own both provider processes; conversation cases also use
 # four Tokio workers. Preserve RPC deadlines without competing Host startups.
 [[profile.default.overrides]]
