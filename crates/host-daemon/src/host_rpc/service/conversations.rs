@@ -9,6 +9,30 @@ use agent_protocol::{
 mod tests;
 
 impl HostRpcService {
+    pub(super) async fn read_handoff_history(
+        &self,
+        params: &agent_protocol::handoff::ReadHistory,
+    ) -> Result<agent_protocol::handoff::Page, Failure> {
+        let history = if let Some(row) = self.inner.conversations.get(&params.session)? {
+            self.conversation_history(&row, true).await?
+        } else {
+            self.native_history(&params.session, true).await?
+        };
+        let messages = history
+            .thread
+            .turns
+            .iter()
+            .flatten()
+            .flat_map(|turn| agent_protocol::handoff::Message::from_turn(turn))
+            .collect::<Vec<_>>();
+        Ok(agent_protocol::handoff::page(
+            &messages,
+            params.offset,
+            params.limit,
+            params.text_offset,
+        ))
+    }
+
     pub(super) async fn fork_conversation(
         &self,
         row: &Conversation,
