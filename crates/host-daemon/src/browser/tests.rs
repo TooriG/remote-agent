@@ -252,15 +252,29 @@ async fn shared_browser_live() {
         "stale tab input must fail"
     );
     let status = browser.agent(&scope_b, BrowserAction::Read).await.unwrap();
-    let other = browser
+    let mut other = browser
         .request(&request(&thread_b, &status, BrowserAction::Read))
         .await
         .unwrap();
     assert_eq!(other.tabs.len(), 1);
-    let unchanged = browser
-        .request(&request(&thread_b, &other, BrowserAction::Read))
-        .await
-        .unwrap();
+    // The initial screenshot can be replaced by a screencast frame encoded at
+    // a different JPEG quality. Only an identical image ID suppresses its bytes.
+    let unchanged = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let current = browser
+                .request(&request(&thread_b, &other, BrowserAction::Read))
+                .await
+                .unwrap();
+            if current.image_id == other.image_id {
+                break current;
+            }
+            assert!(!current.image.is_empty(), "new images must be delivered");
+            other = current;
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the idle blank page must settle on an unchanged image");
     assert!(
         unchanged.image.is_empty(),
         "unchanged images must not consume network bandwidth"
