@@ -26,7 +26,7 @@ try {
     if (developerIds.length !== 1 || !identities.includes('Apple Distribution:') || !identities.includes('(K65K9J8686)')) throw new Error('BEX distribution signing identities are missing or ambiguous.');
     const keyPath = join(root, 'AuthKey.p8');
     writeFileSync(keyPath, process.env.AGENT_ASC_PRIVATE_KEY, { mode: 0o600 });
-    appendFileSync(process.env.GITHUB_ENV, `AGENT_CODE_SIGN_KEYCHAIN=${chain}\nBEX_CODE_SIGN_IDENTITY=${developerIds[0][1]}\nBEX_ASC_PRIVATE_KEY_FILE=${keyPath}\n`);
+    appendFileSync(process.env.GITHUB_ENV, `AGENT_CODE_SIGN_KEYCHAIN=${chain}\nAGENT_CODE_SIGN_IDENTITY=${developerIds[0][1]}\nAGENT_ASC_PRIVATE_KEY_FILE=${keyPath}\n`);
   } else if (process.argv[2] === 'cleanup') {
     let previous;
     try { previous = JSON.parse(readFileSync(join(root, 'previous.json'), 'utf8')); } catch { previous = null; }

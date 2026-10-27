@@ -20,4 +20,4 @@ keystore="$RUNNER_TEMP/agent-preview.p12"
 trap 'rm -f "$keystore"' ERR
 printf '%s' "$AGENT_ANDROID_PREVIEW_KEYSTORE_BASE64" | base64 --decode > "$keystore"
 test -s "$keystore"
-printf 'AGENT_ANDROID_PREVIEW_KEYSTORE=%s\nBEX_ANDROID_VERSION_CODE=%s\n' "$keystore" "$version" >> "$GITHUB_ENV"
+printf 'AGENT_ANDROID_PREVIEW_KEYSTORE=%s\nAGENT_ANDROID_VERSION_CODE=%s\n' "$keystore" "$version" >> "$GITHUB_ENV"
