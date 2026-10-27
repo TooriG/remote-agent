@@ -21,20 +21,20 @@ struct AssistantSelectableText: UIViewRepresentable {
         Coordinator(self)
     }
 
-    func makeUIView(context: Context) -> ConversationTextContainer {
-        let view = ConversationTextContainer()
-        view.textView.delegate = context.coordinator
-        view.textView.accessibilityIdentifier = identifier
+    func makeUIView(context: Context) -> ConversationTextView {
+        let view = ConversationTextView()
+        view.delegate = context.coordinator
+        view.accessibilityIdentifier = identifier
         view.update(blocks: blocks, dark: colorScheme == .dark, sizeCategory: sizeCategory)
         return view
     }
 
-    func updateUIView(_ view: ConversationTextContainer, context: Context) {
+    func updateUIView(_ view: ConversationTextView, context: Context) {
         context.coordinator.parent = self
         view.update(blocks: blocks, dark: colorScheme == .dark, sizeCategory: sizeCategory)
     }
 
-    func sizeThatFits(_ proposal: ProposedViewSize, uiView: ConversationTextContainer, context _: Context) -> CGSize? {
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: ConversationTextView, context _: Context) -> CGSize? {
         uiView.measure(width: proposal.width)
     }
 
