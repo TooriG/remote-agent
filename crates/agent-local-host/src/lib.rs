@@ -33,7 +33,8 @@ pub fn load_local_identity(directory: &Path) -> Result<Identity> {
     Ok(Identity::from_bytes(bytes[32..].try_into().unwrap()))
 }
 
-/// The Node runtime inside the Mac application bundle that contains `executable`.
+/// The Mac runtime has its own background-only identity instead of inheriting
+/// the desktop app's foreground identity when npm or an MCP tool uses it.
 pub fn bundled_node_path(executable: &Path) -> Option<PathBuf> {
     let directory = executable.parent()?;
     directory.ends_with("Contents/MacOS").then(|| {
