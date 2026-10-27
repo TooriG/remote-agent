@@ -17,6 +17,14 @@ fn option(args: &[String], name: &str) -> Option<String> {
     })
 }
 
+fn write_json_line(writer: &mut impl Write, value: &Value) -> io::Result<()> {
+    // Native history is read concurrently. Formatting directly into a File
+    // exposes pieces of a JSON record before its terminating newline.
+    let mut row = serde_json::to_vec(value).map_err(io::Error::other)?;
+    row.push(b'\n');
+    writer.write_all(&row)
+}
+
 fn native(mut value: Value) {
     if value["type"] == "system" && value["subtype"] == "task_notification" {
         let Some(tool) = value["tool_use_id"].as_str() else {
@@ -82,7 +90,7 @@ fn native(mut value: Value) {
         .append(true)
         .open(path)
         .unwrap();
-    writeln!(file, "{value}").unwrap();
+    write_json_line(&mut file, &value).unwrap();
 }
 
 fn session_state(session: &str, state: &str) -> Value {
@@ -184,7 +192,7 @@ fn main() {
             .unwrap();
         let config_home = std::env::var("CLAUDE_CONFIG_DIR").unwrap();
         let credentials_home = std::env::var("CLAUDE_SECURESTORAGE_CONFIG_DIR").unwrap();
-        writeln!(trace, "{}", json!({
+        write_json_line(&mut trace, &json!({
             "configHome": config_home,
             "credentialsHome": credentials_home,
             "skill": fs::read_to_string(Path::new(&config_home).join("skills/account-test/SKILL.md")).ok(),
@@ -321,7 +329,7 @@ fn main() {
                     .unwrap();
                 let written = trace.metadata().unwrap().len() > 0;
                 for input in &inputs[if written { inputs.len() - 1 } else { 0 }..] {
-                    writeln!(trace, "{input}").unwrap();
+                    write_json_line(&mut trace, input).unwrap();
                 }
                 emit(json!({"type":"system","subtype":"init","session_id":session}));
                 output(session_state(&session, "running"));
@@ -518,5 +526,61 @@ fn auth(args: &[String]) {
             let _ = fs::remove_file(file);
         }
         _ => panic!("unexpected auth command"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct ObservedWrites(Vec<Vec<u8>>);
+
+    impl Write for ObservedWrites {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0.push(bytes.to_vec());
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn json_line_readers_only_observe_complete_records() {
+        for value in [
+            json!({"text": "quoted \"text\"\n日本語"}),
+            json!(null),
+            json!([true, 12]),
+        ] {
+            let mut writer = ObservedWrites::default();
+            write_json_line(&mut writer, &value).unwrap();
+            assert_eq!(
+                writer.0.len(),
+                1,
+                "a native-history reader can run between file writes"
+            );
+            assert!(writer.0[0].ends_with(b"\n"));
+            assert_eq!(
+                serde_json::from_slice::<Value>(&writer.0[0]).unwrap(),
+                value
+            );
+        }
+    }
+
+    #[test]
+    fn json_line_write_errors_are_not_reported_as_persisted() {
+        struct Unavailable;
+        impl Write for Unavailable {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::Error::from(io::ErrorKind::BrokenPipe))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let error = write_json_line(&mut Unavailable, &json!({"text": "hello"})).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
     }
 }
