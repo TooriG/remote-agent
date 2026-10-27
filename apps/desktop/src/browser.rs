@@ -36,6 +36,7 @@ pub(crate) struct Browser {
     visible: bool,
     covered: bool,
     personal_mode: bool,
+    follow_size: bool,
     personal: Option<Entity<personal::Browser>>,
     focus: FocusHandle,
     bounds: Bounds<Pixels>,
@@ -156,6 +157,7 @@ impl Browser {
                 visible: false,
                 covered: false,
                 personal_mode,
+                follow_size: true,
                 personal: None,
                 focus,
                 bounds: Bounds::default(),
@@ -177,7 +179,19 @@ impl Browser {
         let store = self.store.clone()?;
         self.thread.as_ref()?;
         let request = self.pending.pop_front().or_else(|| {
-            (self.visible && !self.personal_mode).then(|| self.request(BrowserAction::Read))
+            (self.visible && !self.personal_mode).then(|| {
+                let fit = if self.follow_size && self.owns_control() {
+                    agent_core::browser_view::fit_action(
+                        f64::from(self.bounds.size.width / px(1.)),
+                        f64::from(self.bounds.size.height / px(1.)),
+                        self.frame.width,
+                        self.frame.height,
+                    )
+                } else {
+                    None
+                };
+                self.request(fit.unwrap_or(BrowserAction::Read))
+            })
         })?;
         Some((self.runtime.clone(), store, request))
     }
@@ -202,6 +216,9 @@ impl Browser {
 
     fn send(&mut self, action: BrowserAction, cx: &mut Context<Self>) {
         if self.thread.is_some() && self.pending.len() < 64 {
+            if matches!(action, BrowserAction::Resize { .. }) {
+                self.follow_size = false;
+            }
             self.pending.push_back(self.request(action));
         }
         cx.notify();
@@ -293,6 +310,7 @@ impl Browser {
             .dropdown_menu(move |menu, _, _| {
                 let new_tab = owner.clone();
                 let close_tab = owner.clone();
+                let fit = owner.clone();
                 let desktop = owner.clone();
                 let mobile = owner.clone();
                 let tab_id = tab_id.clone();
@@ -317,6 +335,16 @@ impl Browser {
                     },
                 ))
                 .separator()
+                .item(
+                    PopupMenuItem::new("パネルに合わせる（自動）")
+                        .disabled(!owns)
+                        .on_click(move |_, _, cx| {
+                            let _ = fit.update(cx, |view, cx| {
+                                view.follow_size = true;
+                                cx.notify();
+                            });
+                        }),
+                )
                 .item(
                     PopupMenuItem::new("デスクトップ · 1280 × 800")
                         .disabled(!owns)
@@ -764,7 +792,8 @@ impl Render for Browser {
                                     .iter()
                                     .any(|tab| tab.id == active && tab.url != "about:blank")
                             }) {
-                                body.child(img(image).size_full().object_fit(ObjectFit::Contain))
+                                // The viewport owns layout; intrinsic image dimensions must not size it.
+                                body.child(img(image).absolute().top_0().left_0().size_full().object_fit(ObjectFit::Contain))
                             } else {
                                 body.child(
                                     v_flex()
@@ -813,6 +842,8 @@ impl Render for Browser {
                                 },
                             )
                             .absolute()
+                            .top_0()
+                            .left_0()
                             .size_full(),
                         ),
                 )

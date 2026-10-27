@@ -17,6 +17,8 @@ struct WorkspaceBrowserScreen: View {
     @FocusState private var addressFocused: Bool
     @State private var showKeyboard = false
     @State private var dialogText = ""
+    @State private var viewportSize = CGSize.zero
+    @State private var followSize = true
 
     private var ownsControl: Bool {
         frame?.controller == .you
@@ -80,6 +82,7 @@ struct WorkspaceBrowserScreen: View {
                     }
                     .disabled(!acceptsInput)
                     Divider()
+                    Button("画面に合わせる（自動）") { followSize = true }.disabled(!acceptsInput)
                     Button("デスクトップ · 1280 × 800") { send(.resize(width: 1280, height: 800)) }
                         .disabled(!acceptsInput)
                     Button("モバイル · 390 × 844") { send(.resize(width: 390, height: 844)) }
@@ -123,6 +126,10 @@ struct WorkspaceBrowserScreen: View {
                     ProgressView("Host のブラウザに接続中…")
                 }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(GeometryReader { geometry in
+                    Color.clear.onAppear { viewportSize = geometry.size }
+                        .onChange(of: geometry.size) { _, size in viewportSize = size }
+                })
             Divider().opacity(0.6)
             HStack {
                 Label(
@@ -160,7 +167,13 @@ struct WorkspaceBrowserScreen: View {
         .task(id: scenePhase == .active) {
             guard scenePhase == .active else { return }
             while !Task.isCancelled {
-                let request = commands.isEmpty ? request(.read) : commands.removeFirst()
+                let fit = followSize && ownsControl ? browserFitAction(
+                    width: viewportSize.width,
+                    height: viewportSize.height,
+                    currentWidth: frame?.width ?? 0,
+                    currentHeight: frame?.height ?? 0
+                ) : nil
+                let request = commands.isEmpty ? request(fit ?? .read) : commands.removeFirst()
                 await perform(request)
                 do { try await Task.sleep(for: .milliseconds(connectionError == nil ? 150 : 1500)) } catch { return }
             }
@@ -191,6 +204,9 @@ struct WorkspaceBrowserScreen: View {
     private func send(_ action: BrowserAction) {
         guard commands.count < 64 else { return }
         error = nil
+        if case .resize = action {
+            followSize = false
+        }
         commands.append(request(action))
     }
 

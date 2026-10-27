@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 
 pub const WIDTH: u32 = 1280;
 pub const HEIGHT: u32 = 800;
+pub const MIN_WIDTH: u32 = 320;
+pub const MIN_HEIGHT: u32 = 240;
 pub const MAX_WIDTH: u32 = 7680;
 pub const MAX_HEIGHT: u32 = 4320;
 
@@ -107,7 +109,8 @@ impl BrowserAction {
             Self::Click { x, y } | Self::Hover { x, y } => point(*x, *y),
             Self::Drag { x, y, to_x, to_y } => point(*x, *y) && point(*to_x, *to_y),
             Self::Resize { width, height } => {
-                (320..=MAX_WIDTH).contains(width) && (240..=MAX_HEIGHT).contains(height)
+                (MIN_WIDTH..=MAX_WIDTH).contains(width)
+                    && (MIN_HEIGHT..=MAX_HEIGHT).contains(height)
             }
             Self::Evaluate { expression } => {
                 !expression.trim().is_empty() && expression.len() <= 16 * 1024

@@ -37,6 +37,16 @@ pub fn browser_address_url(input: String) -> Result<String, AgentError> {
     crate::browser_view::address_url(&input).map_err(error)
 }
 
+#[uniffi::export]
+pub fn browser_fit_action(
+    width: f64,
+    height: f64,
+    current_width: u32,
+    current_height: u32,
+) -> Option<crate::browser::BrowserAction> {
+    crate::browser_view::fit_action(width, height, current_width, current_height)
+}
+
 #[derive(uniffi::Record)]
 pub struct Connection {
     pub ticket: String,

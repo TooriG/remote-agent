@@ -33,6 +33,8 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -48,6 +50,7 @@ import dev.remoteagent.core.BrowserFrame
 import dev.remoteagent.core.BrowserKey
 import dev.remoteagent.core.BrowserRequest
 import dev.remoteagent.core.SessionRef
+import dev.remoteagent.core.browserFitAction
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -88,20 +91,45 @@ private class BrowserSession(private val thread: SessionRef) {
         private set
 
     var error by mutableStateOf<String?>(null)
+    private var followSize = true
+    private var viewportWidth = 0.0
+    private var viewportHeight = 0.0
+
+    fun fitViewport() {
+        followSize = true
+    }
+
+    fun setViewport(width: Double, height: Double) {
+        viewportWidth = width
+        viewportHeight = height
+    }
 
     private fun request(action: BrowserAction) =
         BrowserRequest(thread, frame?.tabId ?: "", frame?.imageId ?: "", client, frame?.generation ?: 0uL, action)
 
     fun send(action: BrowserAction) {
-        if (commands.size < BROWSER_QUEUE_LIMIT) commands.addLast(request(action))
+        if (commands.size < BROWSER_QUEUE_LIMIT) {
+            if (action is BrowserAction.Resize) followSize = false
+            commands.addLast(request(action))
+        }
+    }
+
+    private fun nextRequest(): BrowserRequest {
+        commands.removeFirstOrNull()?.let {
+            return it
+        }
+        val fit =
+            if (followSize && frame?.controller == BrowserController.YOU)
+                browserFitAction(viewportWidth, viewportHeight, frame?.width ?: 0u, frame?.height ?: 0u)
+            else null
+        return request(fit ?: BrowserAction.Read)
     }
 
     suspend fun run(profile: String?, browser: suspend (String?, BrowserRequest) -> BrowserFrame) {
         try {
             while (kotlinx.coroutines.currentCoroutineContext().isActive) {
                 try {
-                    val next = commands.removeFirstOrNull() ?: request(BrowserAction.Read)
-                    val result = browser(profile, next)
+                    val result = browser(profile, nextRequest())
                     image = decodeBrowserImage(result.image) ?: image
                     frame = result
                     error = null
@@ -162,6 +190,7 @@ private fun BrowserPane(
     val frame = session.frame
     val owns = frame?.controller == BrowserController.YOU
     val tab = frame?.tabs?.firstOrNull { it.id == frame.tabId }
+    val density = LocalDensity.current.density
     Column {
         Row(
             Modifier.fillMaxWidth().height(44.dp).padding(horizontal = 8.dp),
@@ -172,13 +201,28 @@ private fun BrowserPane(
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
         if ((frame?.tabs?.size ?: 0) > 1) BrowserTabs(frame?.tabs.orEmpty(), owns, session::send)
-        BrowserToolbar(tab, owns, frame?.canGoBack == true, frame?.canGoForward == true, session::send) {
+        BrowserToolbar(
+            tab,
+            owns,
+            frame?.canGoBack == true,
+            frame?.canGoForward == true,
+            session::send,
+            session::fitViewport,
+        ) {
             session.error = it
         }
         session.error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp)) }
         frame?.dialog?.let { BrowserDialogView(it, owns, session::send) }
         val blank = tab?.url == "about:blank"
-        BrowserImage(session.image?.takeUnless { blank }, frame != null, owns, session::send, Modifier.weight(1f))
+        BrowserImage(
+            session.image?.takeUnless { blank },
+            frame != null,
+            owns,
+            session::send,
+            Modifier.weight(1f).onSizeChanged { size ->
+                session.setViewport((size.width / density).toDouble(), (size.height / density).toDouble())
+            },
+        )
         BrowserControlBar(frame?.controller, session::send)
         if (owns) BrowserTextInput(session::send)
     }

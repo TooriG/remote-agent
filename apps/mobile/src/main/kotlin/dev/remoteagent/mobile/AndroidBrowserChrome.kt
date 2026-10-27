@@ -87,6 +87,7 @@ internal fun BrowserToolbar(
     canGoBack: Boolean,
     canGoForward: Boolean,
     send: (BrowserAction) -> Unit,
+    fit: () -> Unit,
     failed: (String?) -> Unit,
 ) {
     val url = tab?.url?.takeUnless { it == "about:blank" } ?: ""
@@ -139,13 +140,19 @@ internal fun BrowserToolbar(
                 }
             },
         )
-        BrowserMenu(tab?.id, owns, open, send)
+        BrowserMenu(tab?.id, owns, open, send, fit)
     }
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
 }
 
 @Composable
-private fun BrowserMenu(tabId: String?, owns: Boolean, open: () -> Unit, send: (BrowserAction) -> Unit) {
+private fun BrowserMenu(
+    tabId: String?,
+    owns: Boolean,
+    open: () -> Unit,
+    send: (BrowserAction) -> Unit,
+    fit: () -> Unit,
+) {
     var menuOpen by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(40.dp)) {
@@ -177,6 +184,14 @@ private fun BrowserMenu(tabId: String?, owns: Boolean, open: () -> Unit, send: (
                 enabled = owns,
             )
             HorizontalDivider()
+            DropdownMenuItem(
+                text = { Text("画面に合わせる（自動）") },
+                onClick = {
+                    menuOpen = false
+                    fit()
+                },
+                enabled = owns,
+            )
             DropdownMenuItem(
                 text = { Text("デスクトップ · 1280 × 800") },
                 onClick = {
