@@ -1,7 +1,6 @@
 mod account_usage;
 mod apns;
 pub mod browser;
-mod claude;
 mod dictation;
 mod git;
 mod host_identity;

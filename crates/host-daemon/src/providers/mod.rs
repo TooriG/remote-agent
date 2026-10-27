@@ -1,9 +1,10 @@
 //! Native provider boundary. Providers translate their protocols into these
 //! values; the Host owns routing, conversations and client-facing state.
+pub(crate) mod claude;
 pub mod codex;
 pub mod deepseek;
 pub(crate) mod requests;
-pub use crate::claude::Claude;
+pub use claude::Claude;
 
 use crate::dictation::Dictation;
 use agent_protocol::session::ProviderKind;

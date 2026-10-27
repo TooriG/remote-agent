@@ -267,10 +267,10 @@ pub(crate) fn codex(id: RequestId, method: &str, params: &Value) -> Result<Adapt
 pub(crate) fn claude(
     id: RequestId,
     turn_id: &agent_protocol::ids::TurnId,
-    params: &crate::claude::SdkRequest,
+    params: &crate::providers::claude::SdkRequest,
 ) -> Result<AdaptedRequest, String> {
     let (target, body, answers) = match params {
-        crate::claude::SdkRequest::Tool {
+        crate::providers::claude::SdkRequest::Tool {
             tool_name,
             input,
             tool_use_id,
@@ -313,7 +313,7 @@ pub(crate) fn claude(
                 )
             }
         }
-        crate::claude::SdkRequest::Elicitation {
+        crate::providers::claude::SdkRequest::Elicitation {
             server_name,
             message,
             mode,
@@ -1029,7 +1029,7 @@ mod tests {
             let adapted = claude(
                 "request".into(),
                 &"turn".into(),
-                &crate::claude::SdkRequest::Tool {
+                &crate::providers::claude::SdkRequest::Tool {
                     tool_name: tool_name.into(),
                     input: input.clone(),
                     tool_use_id: Some("tool".into()),
@@ -1081,7 +1081,7 @@ mod tests {
         let adapted = claude(
             "public-request".into(),
             &"turn".into(),
-            &crate::claude::SdkRequest::Tool {
+            &crate::providers::claude::SdkRequest::Tool {
                 tool_name: "AskUserQuestion".into(),
                 input: input.clone(),
                 tool_use_id: None,
@@ -1116,7 +1116,7 @@ mod tests {
             claude(
                 "request".into(),
                 &"turn".into(),
-                &crate::claude::SdkRequest::Tool {
+                &crate::providers::claude::SdkRequest::Tool {
                     tool_name: "AskUserQuestion".into(),
                     input: json!({"questions":[{"question":"same"},{"question":"same"}]}),
                     tool_use_id: None
@@ -1145,7 +1145,7 @@ mod tests {
         let sdk = claude(
             "sdk-request".into(),
             &"turn".into(),
-            &crate::claude::SdkRequest::Elicitation {
+            &crate::providers::claude::SdkRequest::Elicitation {
                 server_name: "mcp".into(),
                 message: String::new(),
                 mode: None,
@@ -1194,7 +1194,7 @@ mod tests {
         let url = claude(
             "request".into(),
             &"turn".into(),
-            &crate::claude::SdkRequest::Elicitation {
+            &crate::providers::claude::SdkRequest::Elicitation {
                 server_name: "mcp".into(),
                 message: String::new(),
                 mode: Some("url".into()),

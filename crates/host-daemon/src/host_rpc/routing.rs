@@ -1867,7 +1867,7 @@ mod tests {
         let adapted = crate::providers::requests::claude(
             "request".into(),
             &"turn".into(),
-            &crate::claude::SdkRequest::Elicitation {
+            &crate::providers::claude::SdkRequest::Elicitation {
                 server_name: String::new(),
                 message: String::new(),
                 mode: None,
@@ -1879,7 +1879,7 @@ mod tests {
         router
             .request(
                 target.clone(),
-                crate::claude::request_origin(
+                crate::providers::claude::request_origin(
                     instance,
                     json!("native-request"),
                     input,
@@ -2502,7 +2502,7 @@ fn identical_native_request_ids_keep_their_source_instance() {
             crate::providers::requests::claude(
                 uuid::Uuid::new_v4().to_string().into(),
                 &"turn".into(),
-                &crate::claude::SdkRequest::Tool {
+                &crate::providers::claude::SdkRequest::Tool {
                     tool_name: "Bash".into(),
                     tool_use_id: Some("tool".into()),
                     input: serde_json::json!({"command":"pwd"}),
@@ -2515,7 +2515,12 @@ fn identical_native_request_ids_keep_their_source_instance() {
         let origin = if provider == ProviderKind::Codex {
             crate::providers::unavailable_origin(instance, native.clone(), Default::default())
         } else {
-            crate::claude::request_origin(instance, native.clone(), input.clone(), adapted.answers)
+            crate::providers::claude::request_origin(
+                instance,
+                native.clone(),
+                input.clone(),
+                adapted.answers,
+            )
         };
         router
             .request(target.clone(), origin, adapted.request)

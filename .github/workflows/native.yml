@@ -101,10 +101,10 @@ jobs:
           nix develop .#native --command npm --prefix crates/host-daemon/src/visualize ci --ignore-scripts --no-audit
           nix develop .#native --command npm --prefix crates/host-daemon/src/visualize run vendor
           git diff --exit-code -- crates/host-daemon/src/visualize
-          nix develop .#native --command npm --prefix crates/host-daemon/src/claude/sdk ci --ignore-scripts --no-audit --no-fund
-          nix develop .#native --command npm --prefix crates/host-daemon/src/claude/sdk run vendor
-          nix develop .#native --command npm --prefix crates/host-daemon/src/claude/sdk test
-          git diff --exit-code -- crates/host-daemon/src/claude/sdk/bridge.bundle.mjs crates/host-daemon/src/claude/sdk/SDK-LICENSE.md
+          nix develop .#native --command npm --prefix crates/host-daemon/src/providers/claude/sdk ci --ignore-scripts --no-audit --no-fund
+          nix develop .#native --command npm --prefix crates/host-daemon/src/providers/claude/sdk run vendor
+          nix develop .#native --command npm --prefix crates/host-daemon/src/providers/claude/sdk test
+          git diff --exit-code -- crates/host-daemon/src/providers/claude/sdk/bridge.bundle.mjs crates/host-daemon/src/providers/claude/sdk/SDK-LICENSE.md
   toolchain:
     if: ${{ !inputs.ios-tests }}
     runs-on: ubuntu-24.04

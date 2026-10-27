@@ -674,7 +674,7 @@ mod tests {
     use agent_protocol::items::*;
     use serde_json::json;
     const ID: &str = "12345678-1234-4234-8234-123456789abc";
-    const NATIVE: &str = include_str!("../../tests/fixtures/claude-2.1.266.jsonl");
+    const NATIVE: &str = include_str!("../../../tests/fixtures/claude-2.1.266.jsonl");
     fn fixture(bytes: &str) -> (tempfile::TempDir, PathBuf) {
         let root = tempfile::tempdir().unwrap();
         let project = root.path().join("projects").join("an-actual-storage-name");

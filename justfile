@@ -17,8 +17,8 @@ unit-tests *targets:
     node --test scripts/apple-*.test.mjs || failed=1
     node --test apps/desktop/src/browser/password-fill.test.cjs || failed=1
     pwsh -NoLogo -NoProfile -NonInteractive -File tools/windows-fxc/update.test.ps1 || failed=1
-    npm --prefix crates/host-daemon/src/claude/sdk ci --ignore-scripts --no-audit --no-fund || failed=1
-    npm --prefix crates/host-daemon/src/claude/sdk test || failed=1
+    npm --prefix crates/host-daemon/src/providers/claude/sdk ci --ignore-scripts --no-audit --no-fund || failed=1
+    npm --prefix crates/host-daemon/src/providers/claude/sdk test || failed=1
     node scripts/install-claude-sdk.mjs "${CARGO_TARGET_DIR:-target}/debug" || failed=1
     cargo build --locked -p bex-process --bin bex-provider-supervisor || failed=1
     cargo nextest run --locked --no-fail-fast --workspace --lib --bins --features agent-core/bindings "$@" &

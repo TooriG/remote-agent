@@ -2483,7 +2483,7 @@ mod tests {
             let adapted = crate::providers::requests::claude(
                 uuid::Uuid::new_v4().to_string().into(),
                 &"unrelated".into(),
-                &crate::claude::SdkRequest::Elicitation {
+                &crate::providers::claude::SdkRequest::Elicitation {
                     server_name: "server".into(),
                     message: String::new(),
                     mode: None,
@@ -2496,7 +2496,7 @@ mod tests {
             router
                 .request(
                     target.clone(),
-                    crate::claude::request_origin(
+                    crate::providers::claude::request_origin(
                         instance,
                         serde_json::json!(native),
                         input.clone(),
@@ -2520,8 +2520,8 @@ mod tests {
             if native == "cancelled" {
                 assert!(
                     input
-                        .try_send(crate::claude::Command {
-                            value: crate::claude::SdkInput::Interrupt {
+                        .try_send(crate::providers::claude::Command {
+                            value: crate::providers::claude::SdkInput::Interrupt {
                                 request_id: "unused".into()
                             },
                             user: None,
@@ -2550,7 +2550,7 @@ mod tests {
                 assert!(command.delivered.is_some());
             } else {
                 assert!(
-                    matches!(command.value, crate::claude::SdkInput::Answer { request_id, .. } if request_id == native)
+                    matches!(command.value, crate::providers::claude::SdkInput::Answer { request_id, .. } if request_id == native)
                 );
                 command.delivered.unwrap().send(Ok(())).unwrap();
                 operation.await.unwrap();
@@ -2607,7 +2607,7 @@ mod tests {
             let (input, mut receiver) = tokio::sync::mpsc::channel(1);
             let stopped = tokio_util::sync::CancellationToken::new();
             let adapted = if claude {
-                crate::providers::requests::claude("request".into(), &"turn".into(), &crate::claude::SdkRequest::Elicitation { server_name: String::new(), message: String::new(), mode: None, url: None, requested_schema: Some(serde_json::json!({"type":"object","properties":{}})) })
+                crate::providers::requests::claude("request".into(), &"turn".into(), &crate::providers::claude::SdkRequest::Elicitation { server_name: String::new(), message: String::new(), mode: None, url: None, requested_schema: Some(serde_json::json!({"type":"object","properties":{}})) })
             } else {
                 crate::providers::requests::codex("request".into(),"mcpServer/elicitation/request",&serde_json::json!({"mode":"form","requestedSchema":{"type":"object","properties":{}}}))
             }.unwrap();
@@ -2619,7 +2619,12 @@ mod tests {
                 serde_json::json!("native-request")
             };
             let origin = if claude {
-                crate::claude::request_origin(instance, native_id.clone(), input, adapted.answers)
+                crate::providers::claude::request_origin(
+                    instance,
+                    native_id.clone(),
+                    input,
+                    adapted.answers,
+                )
             } else {
                 crate::providers::unavailable_origin(instance, native_id.clone(), stopped.clone())
             };
@@ -3076,7 +3081,7 @@ mod tests {
     #[tokio::test]
     async fn enabling_host_owned_harness_keeps_the_existing_draft_namespace() {
         let root = tempfile::tempdir().unwrap();
-        let claude = crate::claude::Claude::load(
+        let claude = crate::providers::claude::Claude::load(
             "claude".into(),
             root.path().join("accounts"),
             Some(root.path().join("native")),
@@ -3095,7 +3100,7 @@ mod tests {
             .await
             .unwrap()
             .initial;
-        let claude = crate::claude::Claude::load(
+        let claude = crate::providers::claude::Claude::load(
             "claude".into(),
             root.path().join("accounts"),
             Some(root.path().join("native")),
