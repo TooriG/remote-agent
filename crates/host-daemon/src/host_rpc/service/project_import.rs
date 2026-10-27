@@ -12,7 +12,9 @@ impl HostRpcService {
         let projects = self.project_snapshot().await?;
         let deadline = tokio::time::Instant::now() + SESSION_LIST_TIMEOUT;
         let sources = futures_util::future::join_all(
-            self.agents()
+            self.inner
+                .providers
+                .all()
                 .into_iter()
                 .filter(|(provider, _)| {
                     matches!(provider, ProviderKind::Codex | ProviderKind::Claude)
@@ -52,7 +54,7 @@ impl HostRpcService {
         )
         .await;
         let mut scan = ProjectScan::default();
-        for (provider, error) in &self.inner.startup_errors {
+        for (provider, error) in self.inner.providers.startup_errors() {
             if matches!(provider, ProviderKind::Codex | ProviderKind::Claude) {
                 scan.warnings
                     .insert(provider.key().into(), error.to_string());
@@ -313,7 +315,7 @@ mod tests {
         let scan = service.scan_projects().await.unwrap();
         assert!(scan.projects[0].registered);
         // Import only registers folders. Native titles and IDs remain readable without a CLI.
-        let agent = &service.agents()[0].1;
+        let agent = &service.inner.providers.all()[0].1;
         let page = Agent::list(agent.as_ref(), "", None, SessionListScope::Roots, 100)
             .await
             .unwrap();

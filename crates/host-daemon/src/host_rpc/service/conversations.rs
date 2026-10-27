@@ -22,7 +22,7 @@ impl HostRpcService {
                 "The fork source is outside this conversation.",
             ));
         }
-        let agent = self.agent(native.provider)?;
+        let agent = self.inner.providers.get(native.provider)?;
         if !agent.capabilities().fork {
             return Err(Failure::new(
                 "unsupported_operation",
@@ -103,7 +103,7 @@ impl HostRpcService {
         session: &SessionRef,
         hydrate: bool,
     ) -> Result<ThreadResponse, Failure> {
-        let agent = self.agent(session.provider)?;
+        let agent = self.inner.providers.get(session.provider)?;
         let mut response = agent.open(&session.id, 100, true).await?;
         if response
             .thread
@@ -202,7 +202,9 @@ impl HostRpcService {
         let mut response = if let Some(response) = native.get(&row.active) {
             response.clone()
         } else {
-            self.agent(row.active.provider)?
+            self.inner
+                .providers
+                .get(row.active.provider)?
                 .open(&row.active.id, 1, false)
                 .await?
         };
@@ -217,7 +219,12 @@ impl HostRpcService {
                     "Native history was shortened. Saved conversation boundaries are unavailable.",
                 )
             })?;
-            let supports_fork = self.agent(segment.session.provider)?.capabilities().fork;
+            let supports_fork = self
+                .inner
+                .providers
+                .get(segment.session.provider)?
+                .capabilities()
+                .fork;
             turns.extend(slice.iter().map(|turn| {
                 let mut turn = row.turn(&segment.session, (**turn).clone());
                 turn.supports_fork = Some(supports_fork);
@@ -226,11 +233,17 @@ impl HostRpcService {
         }
         row.describe(&mut response.thread);
         response.thread.turns = Some(turns);
-        let capabilities = self.agent(row.active.provider)?.capabilities();
+        let capabilities = self
+            .inner
+            .providers
+            .get(row.active.provider)?
+            .capabilities();
         response.thread.capabilities = Some(agent_protocol::session::Capabilities {
             rename: true,
             fork: row.segments.iter().any(|segment| {
-                self.agent(segment.session.provider)
+                self.inner
+                    .providers
+                    .get(segment.session.provider)
                     .is_ok_and(|agent| agent.capabilities().fork)
             }),
             ..capabilities
@@ -323,7 +336,7 @@ impl HostRpcService {
                 "サブエージェントのAIは切り替えられません。親の会話から指示してください。",
             ));
         }
-        let source_agent = self.agent(active.provider)?;
+        let source_agent = self.inner.providers.get(active.provider)?;
         let deadline = tokio::time::Instant::now() + SESSION_LIST_TIMEOUT;
         let children = session_pages(
             source_agent.as_ref(),
@@ -356,7 +369,7 @@ impl HostRpcService {
                 ));
             }
         }
-        let agent = self.agent(selected.provider)?;
+        let agent = self.inner.providers.get(selected.provider)?;
         agent.validate_create()?;
         let mut row = previous.unwrap_or(Conversation::new(&source.thread)?);
         row.seal(source.thread.turns.as_ref().map_or(0, Vec::len))?;
@@ -555,7 +568,9 @@ impl HostRpcService {
     ) -> Result<ThreadResponse, Failure> {
         // Reuse the exact workspace; creating a second worktree would sever the
         // relationship between the transferred conversation and its files.
-        self.agent(model.provider)?
+        self.inner
+            .providers
+            .get(model.provider)?
             .create(
                 &row.cwd,
                 Some(&model.id),

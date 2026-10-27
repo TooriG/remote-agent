@@ -10,9 +10,7 @@ use agent_protocol::models::ThreadResponse;
 use crate::providers::Backend;
 use agent_protocol::protocol::{Body, Call, Response};
 
-use crate::providers::{
-    Agent, Failure, Identity, SessionListScope, read_session_page, session_pages,
-};
+use crate::providers::{Agent, Failure, SessionListScope, read_session_page, session_pages};
 use futures_util::{StreamExt, TryStreamExt};
 use std::collections::HashMap;
 
@@ -22,9 +20,6 @@ use crate::ProjectStore;
 const SESSION_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 mod conversations;
 mod project_import;
-// Finish discovery before the client's request deadline, even when a native
-// provider is still initializing. Healthy providers must remain usable.
-const MODEL_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 #[derive(Clone)]
 pub struct HostRpcService {
@@ -33,8 +28,7 @@ pub struct HostRpcService {
 
 struct ServiceInner {
     browser: OnceLock<Arc<crate::browser::Browser>>,
-    agents: HashMap<ProviderKind, Arc<dyn Agent>>,
-    startup_errors: HashMap<ProviderKind, Failure>,
+    providers: crate::providers::Registry,
     projects: ProjectStore,
     router: SessionRouter,
     event_pumps: std::sync::Once,
@@ -53,8 +47,9 @@ impl HostRpcService {
         &self,
     ) -> Result<agent_protocol::live_activity::TaskActivityState, Failure> {
         let revision = self.inner.router.task_activity_revision();
-        let agents = self.agents();
-        let has_sources = !agents.is_empty() || !self.inner.startup_errors.is_empty();
+        let agents = self.inner.providers.all();
+        let has_sources =
+            !agents.is_empty() || !self.inner.providers.startup_errors().next().is_none();
         let listings =
             futures_util::future::join_all(agents.into_iter().map(|(_, agent)| async move {
                 tokio::time::timeout(
@@ -75,7 +70,7 @@ impl HostRpcService {
             .await;
         let mut native = Vec::new();
         let mut successful = false;
-        let mut complete = self.inner.startup_errors.is_empty();
+        let mut complete = self.inner.providers.startup_errors().next().is_none();
         for result in listings {
             if let Ok(Ok(pages)) = result {
                 let fresh = pages
@@ -121,22 +116,7 @@ impl HostRpcService {
         let files = crate::workspace_files::WorkspaceFiles::new(
             projects.path().with_file_name("bex-attachments"),
         );
-        let mut agents = HashMap::new();
-        let mut startup_errors = HashMap::new();
-        let mut dictation = crate::dictation::Dictation::default();
-        for backend in backends {
-            match backend.agent {
-                Ok(agent) => {
-                    agents.insert(backend.provider, agent);
-                }
-                Err(error) => {
-                    startup_errors.insert(backend.provider, error);
-                }
-            }
-            if let Some(backend) = backend.dictation {
-                dictation = backend;
-            }
-        }
+        let (providers, dictation) = crate::providers::Registry::new(backends);
         Self {
             inner: Arc::new(ServiceInner {
                 history_scope: OnceLock::new(),
@@ -144,8 +124,7 @@ impl HostRpcService {
                     projects.path().with_file_name("bex-conversations.json"),
                 ),
                 browser: OnceLock::new(),
-                agents,
-                startup_errors,
+                providers,
                 dictation,
                 worktrees: crate::worktrees::Worktrees::new(projects.path()),
                 worktree_access: tokio::sync::RwLock::new(()),
@@ -159,56 +138,9 @@ impl HostRpcService {
         }
     }
 
-    fn agent(&self, provider: ProviderKind) -> Result<Arc<dyn Agent>, Failure> {
-        self.inner.agents.get(&provider).cloned().ok_or_else(|| {
-            self.inner
-                .startup_errors
-                .get(&provider)
-                .cloned()
-                .unwrap_or_else(|| {
-                    Failure::new(
-                        "provider_unavailable",
-                        format!("{provider:?} is unavailable"),
-                    )
-                })
-        })
-    }
-
-    fn agents(&self) -> Vec<(ProviderKind, Arc<dyn Agent>)> {
-        let mut agents: Vec<_> = self
-            .inner
-            .agents
-            .iter()
-            .map(|(p, a)| (*p, a.clone()))
-            .collect();
-        agents.sort_by_key(|(p, _)| *p);
-        agents
-    }
     async fn account_request(&self, request: Call) -> Result<Body, Failure> {
         if matches!(request, Call::ListAccounts(_)) {
-            let mut combined = op::Accounts {
-                accounts: Vec::new(),
-                selected: HashMap::new(),
-                error: None,
-            };
-            let mut errors = self
-                .inner
-                .startup_errors
-                .values()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>();
-            for (_, agent) in self.agents() {
-                match Identity::list(agent.as_ref()).await {
-                    Ok(accounts) => {
-                        combined.accounts.extend(accounts.accounts);
-                        combined.selected.extend(accounts.selected);
-                        errors.extend(accounts.error);
-                    }
-                    Err(error) => errors.push(error.to_string()),
-                }
-            }
-            combined.error = (!errors.is_empty()).then(|| errors.join("\n"));
-            return Ok(combined.into());
+            return Ok(self.inner.providers.accounts().await.into());
         }
         use crate::providers::{AccountCommand as Command, AccountReply};
         let (provider, command) = match request {
@@ -226,12 +158,14 @@ impl HostRpcService {
             ),
             _ => return Err(Failure::new("invalid_params", "not an account request")),
         };
-        Ok(match self.agent(provider)?.account(command).await? {
-            AccountReply::Selection(value) => value.into(),
-            AccountReply::Login(value) => value.into(),
-            AccountReply::Status(value) => value.into(),
-            AccountReply::Complete => agent_protocol::models::Empty {}.into(),
-        })
+        Ok(
+            match self.inner.providers.get(provider)?.account(command).await? {
+                AccountReply::Selection(value) => value.into(),
+                AccountReply::Login(value) => value.into(),
+                AccountReply::Status(value) => value.into(),
+                AccountReply::Complete => agent_protocol::models::Empty {}.into(),
+            },
+        )
     }
 
     pub async fn enable_browser(&self, profile: std::path::PathBuf) -> Result<(), String> {
@@ -259,9 +193,7 @@ impl HostRpcService {
             browser.shutdown().await;
         }
         self.inner.terminals.shutdown().await;
-        for (_, agent) in self.agents() {
-            agent.shutdown().await;
-        }
+        self.inner.providers.shutdown().await;
     }
 
     pub(crate) fn revoke_device(&self, principal: &str) {
@@ -288,34 +220,13 @@ impl HostRpcService {
     }
 
     pub(crate) fn data_recipients(&self) -> (Vec<String>, Option<String>) {
-        let ai = self
-            .agents()
-            .into_iter()
-            .filter(|(_, a)| a.availability().is_ok())
-            .map(|(_, agent)| agent.data_recipient().into())
-            .collect();
-        (ai, self.inner.dictation.data_recipient())
+        (
+            self.inner.providers.data_recipients(),
+            self.inner.dictation.data_recipient(),
+        )
     }
     pub(crate) fn provider_errors(&self) -> serde_json::Value {
-        let mut errors: serde_json::Map<_, _> = self
-            .agents()
-            .into_iter()
-            .filter_map(|(p, a)| {
-                a.availability().err().map(|e| {
-                    (
-                        p.key().to_owned(),
-                        serde_json::to_value(e).expect("failure serializes"),
-                    )
-                })
-            })
-            .collect();
-        errors.extend(self.inner.startup_errors.iter().map(|(provider, error)| {
-            (
-                provider.key().to_owned(),
-                serde_json::to_value(error).expect("failure serializes"),
-            )
-        }));
-        serde_json::Value::Object(errors)
+        self.inner.providers.errors()
     }
 
     pub fn start(&self) {
@@ -510,7 +421,7 @@ impl HostRpcService {
                 "The model must belong to the target provider.",
             ));
         }
-        let agent = self.agent(target.provider)?;
+        let agent = self.inner.providers.get(target.provider)?;
         agent.availability()?;
         let state = agent.state(&target.id).await?;
         let mut response = state.response;
@@ -564,9 +475,10 @@ impl HostRpcService {
                 .await
                 .map_err(|e| Failure::new("worktree_creation_failed", e))?
         {
-            for (_, adapter) in self.agents() {
-                adapter.discard_workspace_processes(&directory).await?;
-            }
+            self.inner
+                .providers
+                .discard_workspace_processes(&directory)
+                .await?;
             reload = true;
         }
         let receipt = agent
@@ -647,7 +559,7 @@ impl HostRpcService {
             let target = params.session.clone();
             let row = self.inner.conversations.get(&target)?;
             let native = row.as_ref().map_or(&target, |row| &row.active);
-            let agent = self.agent(native.provider)?;
+            let agent = self.inner.providers.get(native.provider)?;
             let limit = params.limit;
             let read = self
                 .inner
@@ -739,7 +651,9 @@ impl HostRpcService {
                 ));
             }
             let mut output = self
-                .agent(source.provider)?
+                .inner
+                .providers
+                .get(source.provider)?
                 .read_item(&op::ReadItem {
                     thread_id: source.clone(),
                     turn_id: turn.into(),
@@ -749,7 +663,11 @@ impl HostRpcService {
             row.item(&source, &mut output.item);
             output
         } else {
-            self.agent(target.provider)?.read_item(params).await?
+            self.inner
+                .providers
+                .get(target.provider)?
+                .read_item(params)
+                .await?
         };
         let bytes = agent_protocol::protocol::encode(&response.item).expect("item serializes");
         if bytes.len() > agent_protocol::models::MAX_INLINE_ITEM_BYTES {
@@ -797,7 +715,7 @@ impl HostRpcService {
         if let Some(target) = target_session {
             let row = self.inner.conversations.get(target)?;
             let native = row.as_ref().map_or(target, |row| &row.active);
-            let capabilities = self.agent(native.provider)?.capabilities();
+            let capabilities = self.inner.providers.get(native.provider)?.capabilities();
             if matches!(request, Call::ForkSession(_)) && row.is_none() && !capabilities.fork
                 || matches!(request, Call::RenameSession(_))
                     && row.is_none()
@@ -881,7 +799,9 @@ impl HostRpcService {
                         ));
                     }
                     let mut items = self
-                        .agent(source.provider)?
+                        .inner
+                        .providers
+                        .get(source.provider)?
                         .read_turn_items(&source.id, &turn.into())
                         .await?;
                     for item in &mut items {
@@ -889,7 +809,9 @@ impl HostRpcService {
                     }
                     items
                 } else {
-                    self.agent(params.session.provider)?
+                    self.inner
+                        .providers
+                        .get(params.session.provider)?
                         .read_turn_items(&params.session.id, &params.turn_id)
                         .await?
                 };
@@ -903,7 +825,9 @@ impl HostRpcService {
                 let mut page = if let Some(row) = self.inner.conversations.get(&params.session)? {
                     self.read_conversation_page(&row, &params.cursor).await?
                 } else {
-                    self.agent(params.session.provider)?
+                    self.inner
+                        .providers
+                        .get(params.session.provider)?
                         .read_history(&params.session.id, &params.cursor, params.include_activity)
                         .await?
                 };
@@ -922,53 +846,30 @@ impl HostRpcService {
             }
             Call::ReadPermissionSettings(params) => {
                 let _guard = self.inner.permission_settings_access.lock().await;
-                self.agent(params.provider)?
+                self.inner
+                    .providers
+                    .get(params.provider)?
                     .read_permissions()
                     .await?
                     .into()
             }
             Call::UpdatePermissionSettings(params) => {
                 let _guard = self.inner.permission_settings_access.lock().await;
-                self.agent(params.provider)?
+                self.inner
+                    .providers
+                    .get(params.provider)?
                     .update_permissions(params.mode, &params.version)
                     .await?
                     .into()
             }
-            Call::ComposerCatalog(params) => {
-                let cwd = params.cwd.as_str();
-                let results = futures_util::future::join_all(
-                    self.agents()
-                        .into_iter()
-                        .map(|(_, agent)| async move { agent.catalog(cwd).await }),
-                )
-                .await;
-                let mut catalog = agent_protocol::composer::ComposerCatalog {
-                    cwd: params.cwd.clone(),
-                    ..Default::default()
-                };
-                for (provider, error) in self.inner.startup_errors.iter() {
-                    catalog.errors.insert(*provider, vec![error.to_string()]);
-                }
-                for result in results {
-                    catalog.candidates.extend(result.candidates);
-                    catalog.errors.extend(result.errors);
-                }
-                catalog.candidates.sort_by(|a, b| {
-                    a.invocation
-                        .name
-                        .to_lowercase()
-                        .cmp(&b.invocation.name.to_lowercase())
-                        .then(a.invocation.path.cmp(&b.invocation.path))
-                        .then(a.invocation.provider.cmp(&b.invocation.provider))
-                });
-                catalog
-                    .candidates
-                    .dedup_by(|a, b| a.invocation == b.invocation);
-                catalog.into()
-            }
-            Call::ReadAccountUsage(params) => {
-                self.agent(params.provider)?.usage(&params.id).await?.into()
-            }
+            Call::ComposerCatalog(params) => self.inner.providers.catalog(&params.cwd).await.into(),
+            Call::ReadAccountUsage(params) => self
+                .inner
+                .providers
+                .get(params.provider)?
+                .usage(&params.id)
+                .await?
+                .into(),
             Call::ListAccounts(_)
             | Call::SelectAccount(_)
             | Call::LogoutAccount(_)
@@ -978,88 +879,34 @@ impl HostRpcService {
             | Call::CancelAccountLogin(_) => self.account_request(request.clone()).await?,
 
             Call::CodexCli(params) => self
-                .agent(ProviderKind::Codex)?
+                .inner
+                .providers
+                .get(ProviderKind::Codex)?
                 .codex_cli(params.update)
                 .await?
                 .into(),
             Call::ReadModelSettings(params) => self
-                .agent(params.model.provider)?
+                .inner
+                .providers
+                .get(params.model.provider)?
                 .model_settings(&params.model.id)
                 .await?
                 .into(),
             Call::ReadDshCredentials(_) => self
-                .agent(ProviderKind::DeepSeek)?
+                .inner
+                .providers
+                .get(ProviderKind::DeepSeek)?
                 .dsh_credentials()
                 .await?
                 .into(),
             Call::UpdateDshCredential(update) => self
-                .agent(ProviderKind::DeepSeek)?
+                .inner
+                .providers
+                .get(ProviderKind::DeepSeek)?
                 .update_dsh_credential(update.clone())
                 .await?
                 .into(),
-            Call::ListModels(params) => {
-                let cursors: std::collections::BTreeMap<ProviderKind, Option<String>> = params
-                    .cursor
-                    .as_deref()
-                    .map(serde_json::from_str)
-                    .transpose()?
-                    .unwrap_or_else(|| {
-                        self.agents()
-                            .into_iter()
-                            .map(|(provider, _)| provider)
-                            .chain(self.inner.startup_errors.keys().copied())
-                            .map(|provider| (provider, None))
-                            .collect()
-                    });
-                let mut page = op::ModelPage {
-                    data: Vec::new(),
-                    next_cursor: None,
-                    provider_errors: None,
-                };
-                let mut next = std::collections::BTreeMap::new();
-                let listings = futures_util::future::join_all(cursors.into_iter().map(
-                    |(provider, cursor)| async move {
-                        let result = match self.agent(provider) {
-                            Ok(agent) => tokio::time::timeout(
-                                MODEL_LIST_TIMEOUT,
-                                agent.models(&op::ListModels {
-                                    cursor,
-                                    limit: params.limit,
-                                }),
-                            )
-                            .await
-                            .unwrap_or_else(|_| {
-                                Err(Failure::new(
-                                    "provider_timeout",
-                                    "モデル一覧の取得がタイムアウトしました。もう一度お試しください。",
-                                ))
-                            }),
-                            Err(error) => Err(error),
-                        };
-                        (provider, result)
-                    },
-                ))
-                .await;
-                for (provider, result) in listings {
-                    match result {
-                        Ok(result) => {
-                            page.data.extend(result.data);
-                            if let Some(cursor) = result.next_cursor {
-                                next.insert(provider, Some(cursor));
-                            }
-                        }
-                        Err(error) => {
-                            page.provider_errors
-                                .get_or_insert_default()
-                                .insert(provider.key().to_owned(), serde_json::to_value(error)?);
-                        }
-                    }
-                }
-                if !next.is_empty() {
-                    page.next_cursor = Some(serde_json::to_string(&next)?);
-                }
-                page.into()
-            }
+            Call::ListModels(params) => self.inner.providers.models(params).await?.into(),
 
             Call::RequestSession(params) => (self
                 .inner
@@ -1071,11 +918,7 @@ impl HostRpcService {
             .into(),
             Call::SessionScope(_) => {
                 let started = std::time::Instant::now();
-                let scope =
-                    provider_storage_scope(self.agents().into_iter().filter_map(|(p, a)| {
-                        a.history_scope_directory()
-                            .map(|path| (p, canonical_storage_path(path)))
-                    }))?;
+                let scope = self.inner.providers.storage_scope()?;
                 tracing::info!(target: "bex", operation = "host.connection.scope",
                     message = %format_args!("elapsed_ms={}", started.elapsed().as_millis()));
                 scope.into()
@@ -1135,7 +978,7 @@ impl HostRpcService {
             Call::ListAgents(params) => {
                 let row = self.inner.conversations.get(&params.thread_id)?;
                 let native = row.as_ref().map_or(&params.thread_id, |row| &row.active);
-                let agent = self.agent(native.provider)?;
+                let agent = self.inner.providers.get(native.provider)?;
                 let deadline = tokio::time::Instant::now() + SESSION_LIST_TIMEOUT;
                 let mut threads = session_pages(
                     agent.as_ref(),
@@ -1256,7 +1099,7 @@ impl HostRpcService {
                         .await
                         .map(Into::into);
                 }
-                let agent = self.agent(target.provider)?;
+                let agent = self.inner.providers.get(target.provider)?;
                 self.start_thread(agent.as_ref(), |browser| {
                     agent.fork(&target.id, &params.last_turn_id, browser)
                 })
@@ -1279,7 +1122,9 @@ impl HostRpcService {
                 } else {
                     params.turn_id.clone()
                 };
-                self.agent(native.provider)?
+                self.inner
+                    .providers
+                    .get(native.provider)?
                     .interrupt(&native.id, &turn)
                     .await?
                     .into()
@@ -1299,7 +1144,9 @@ impl HostRpcService {
                     return Ok(agent_protocol::models::Empty {}.into());
                 }
                 let result = self
-                    .agent(target.provider)?
+                    .inner
+                    .providers
+                    .get(target.provider)?
                     .rename(&target.id, &params.name)
                     .await?;
                 result.into()
@@ -1328,14 +1175,14 @@ impl HostRpcService {
         if worktrees.is_empty() {
             return Ok(worktrees);
         }
-        for error in self.inner.startup_errors.values() {
+        for (_, error) in self.inner.providers.startup_errors() {
             for worktree in &mut worktrees {
                 worktree.blocked_reason =
                     Some(format!("稼働状況を確認できないため削除できません: {error}"));
             }
         }
         let mut threads = Vec::new();
-        for (_, agent) in self.agents() {
+        for (_, agent) in self.inner.providers.all() {
             let pages = session_pages(
                 agent.as_ref(),
                 "",
@@ -1370,7 +1217,9 @@ impl HostRpcService {
                 continue;
             }
             let response = self
-                .agent(target.provider)?
+                .inner
+                .providers
+                .get(target.provider)?
                 .state(&target.id)
                 .await?
                 .response;
@@ -1417,7 +1266,9 @@ impl HostRpcService {
             // Resolve provider-specific uncertainty once per matching session,
             // reusing the history scan instead of rereading it for every tree.
             let idle_warning = if !active && let Some(id) = &thread.id {
-                self.agent(id.provider)?
+                self.inner
+                    .providers
+                    .get(id.provider)?
                     .workspace_idle_warning(&id.id)
                     .await
             } else {
@@ -1533,7 +1384,7 @@ impl HostRpcService {
         query: crate::projects::titles::TitleQuery<'_>,
     ) -> Result<agent_protocol::models::ThreadList, Failure> {
         let revision = self.inner.router.list_revision();
-        let agents = self.agents();
+        let agents = self.inner.providers.all();
         // One title walk supplies each requested quota plus lookahead.
         let (first_page_size, later_page_size) = match query {
             crate::projects::titles::TitleQuery::Root {
@@ -1587,7 +1438,9 @@ impl HostRpcService {
             let found =
                 futures_util::future::join_all(targets.into_iter().map(|target| async move {
                     let response = tokio::time::timeout_at(deadline, async {
-                        self.agent(target.provider)?
+                        self.inner
+                            .providers
+                            .get(target.provider)?
                             .open(&target.id, 1, false)
                             .await
                     })
@@ -1799,7 +1652,7 @@ impl HostRpcService {
                 "model must name a model of the requested provider",
             ));
         }
-        let agent = self.agent(provider)?;
+        let agent = self.inner.providers.get(provider)?;
         agent.validate_create()?;
         // A missing selection must not inherit the App Server's checkout.
         // Keep the real cwd on the thread; project enrichment identifies
@@ -1890,7 +1743,7 @@ impl HostRpcService {
                 });
             }
 
-            for (_, agent) in self.agents() {
+            for (_, agent) in self.inner.providers.all() {
                 if let Some(mut events) = agent.event_stream() {
                     let supports_fork = agent.capabilities().fork;
                     let router = self.inner.router.clone();
@@ -1965,36 +1818,6 @@ fn invalid_message(error: impl std::fmt::Display) -> String {
 
 // Serialize the sorted map directly: a JSON Value's object ordering can vary
 // with serde_json features unified by unrelated client dependencies.
-fn provider_storage_scope(
-    areas: impl IntoIterator<Item = (ProviderKind, std::path::PathBuf)>,
-) -> Result<String, serde_json::Error> {
-    let areas: std::collections::BTreeMap<_, _> = areas
-        .into_iter()
-        .map(|(provider, path)| (provider.key().to_owned(), path))
-        .collect();
-    let bytes = serde_json::to_vec(&areas)?;
-    let digest = ring::digest::digest(&ring::digest::SHA256, &bytes);
-    Ok(digest
-        .as_ref()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect())
-}
-
-// Resolve existing ancestors too: a newly created native directory must not
-// change a scope merely because /var is a symlink to /private/var on macOS.
-fn canonical_storage_path(path: &std::path::Path) -> std::path::PathBuf {
-    if let Ok(path) = dunce::canonicalize(path) {
-        return path;
-    }
-    match (path.parent(), path.file_name()) {
-        (Some(parent), Some(name)) if !parent.as_os_str().is_empty() => {
-            canonical_storage_path(parent).join(name)
-        }
-        _ => std::env::current_dir().unwrap_or_default().join(path),
-    }
-}
-
 // Every session-scoped operation provides its target here. Submission IDs
 // additionally identify the operations whose delivery must be tracked.
 fn session_target(request: &Call) -> (Option<&agent_protocol::session::SessionRef>, Option<&str>) {
@@ -2381,8 +2204,6 @@ mod tests {
             [receipt].iter()
         ));
     }
-
-    use agent_protocol::session::ProviderKind;
 
     #[tokio::test]
     async fn successful_configuration_clears_the_provider_startup_error() {
@@ -3066,18 +2887,6 @@ mod tests {
         assert!(!reply.contains("Fixture user input"));
     }
 
-    #[test]
-    fn storage_scope_has_a_fixed_encoding() {
-        let areas = [
-            (ProviderKind::Codex, "/fixtures/codex".into()),
-            (ProviderKind::Claude, "/fixtures/claude".into()),
-        ];
-        assert_eq!(
-            super::provider_storage_scope(areas).unwrap(),
-            "8170d6192a00957e1b3b4a3da16963137015f8d36f1efaa8b8b347090f78476b",
-        );
-    }
-
     #[tokio::test]
     async fn enabling_host_owned_harness_keeps_the_existing_draft_namespace() {
         let root = tempfile::tempdir().unwrap();
@@ -3125,63 +2934,5 @@ mod tests {
             before, after,
             "Adding Harness must not archive existing drafts or navigation"
         );
-    }
-
-    proptest::proptest! {
-        #[test]
-        fn storage_scope_ignores_input_order_but_tracks_provider_paths(
-            codex in "[a-zA-Z0-9/_ .あ界é-]{1,64}",
-            claude in "[a-zA-Z0-9/_ .あ界é-]{1,64}",
-        ) {
-            let codex = std::path::PathBuf::from(codex);
-            let claude = std::path::PathBuf::from(claude);
-            let original = super::provider_storage_scope([
-                (ProviderKind::Codex, codex.clone()),
-                (ProviderKind::Claude, claude.clone()),
-            ]).unwrap();
-            proptest::prop_assert_eq!(&original, &super::provider_storage_scope([
-                (ProviderKind::Claude, claude.clone()),
-                (ProviderKind::Codex, codex.clone()),
-            ]).unwrap());
-            for areas in [
-                [(ProviderKind::Codex, codex.join("different")), (ProviderKind::Claude, claude.clone())],
-                [(ProviderKind::Codex, codex.clone()), (ProviderKind::Claude, claude.join("different"))],
-            ] {
-                proptest::prop_assert_ne!(&original, &super::provider_storage_scope(areas).unwrap());
-            }
-            proptest::prop_assert_ne!(&original, &super::provider_storage_scope([
-                (ProviderKind::Codex, codex),
-            ]).unwrap());
-        }
-    }
-
-    #[test]
-    fn creating_native_storage_does_not_change_its_identity() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("native").join("projects");
-        let before = super::canonical_storage_path(&path);
-        std::fs::create_dir_all(&path).unwrap();
-        let scope = super::provider_storage_scope([(ProviderKind::Codex, before)]).unwrap();
-        assert_eq!(
-            scope,
-            super::provider_storage_scope([(
-                ProviderKind::Codex,
-                super::canonical_storage_path(&path)
-            ),])
-            .unwrap()
-        );
-        #[cfg(unix)]
-        {
-            let alias = root.path().join("alias");
-            std::os::unix::fs::symlink(root.path(), &alias).unwrap();
-            assert_eq!(
-                scope,
-                super::provider_storage_scope([(
-                    ProviderKind::Codex,
-                    super::canonical_storage_path(&alias.join("native/projects"))
-                ),])
-                .unwrap()
-            );
-        }
     }
 }

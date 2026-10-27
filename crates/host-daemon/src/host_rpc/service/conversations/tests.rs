@@ -1,6 +1,6 @@
 use super::*;
 use crate::providers::{
-    AccountCommand, AccountReply, AgentChange, AgentEvent, SessionPage, SessionSummary,
+    AccountCommand, AccountReply, AgentChange, AgentEvent, Identity, SessionPage, SessionSummary,
     SubmissionState, emit,
 };
 use agent_protocol::{

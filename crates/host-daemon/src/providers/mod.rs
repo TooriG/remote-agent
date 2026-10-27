@@ -3,8 +3,10 @@
 pub(crate) mod claude;
 pub mod codex;
 pub mod deepseek;
+mod registry;
 pub(crate) mod requests;
 pub use claude::Claude;
+pub(crate) use registry::Registry;
 
 use crate::dictation::Dictation;
 use agent_protocol::session::ProviderKind;
