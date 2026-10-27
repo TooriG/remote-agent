@@ -72,8 +72,6 @@ struct WorkspaceBrowserScreen: View {
                     .textFieldStyle(.plain).focused($addressFocused).submitLabel(.go).onSubmit(open)
                     .disabled(!acceptsInput).accessibilityIdentifier("browser.address")
                 Menu {
-                    Button("URL を開く", action: open).disabled(!acceptsInput)
-                        .accessibilityIdentifier("browser.open")
                     Button("新しいタブ") { send(.openTab(url: "about:blank")) }.disabled(!acceptsInput)
                     Button("タブを閉じる") {
                         if let currentTab {

@@ -94,12 +94,6 @@ internal fun BrowserToolbar(
     var address by remember { mutableStateOf("") }
     var focused by remember { mutableStateOf(false) }
     LaunchedEffect(url, focused) { if (!focused) address = url }
-    val open = {
-        runCatching { browserAddressUrl(address) }
-            .onSuccess { send(BrowserAction.Navigate(it)) }
-            .onFailure { failed(it.message) }
-        Unit
-    }
     Row(
         Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -131,7 +125,14 @@ internal fun BrowserToolbar(
                 MaterialTheme.typography.bodySmall.copy(fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface),
             cursorBrush = SolidColor(MaterialTheme.colorScheme.onSurface),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
-            keyboardActions = KeyboardActions(onGo = { open() }),
+            keyboardActions =
+                KeyboardActions(
+                    onGo = {
+                        runCatching { browserAddressUrl(address) }
+                            .onSuccess { send(BrowserAction.Navigate(it)) }
+                            .onFailure { failed(it.message) }
+                    }
+                ),
             decorationBox = { input ->
                 Box {
                     if (address.isEmpty())
@@ -140,33 +141,19 @@ internal fun BrowserToolbar(
                 }
             },
         )
-        BrowserMenu(tab?.id, owns, open, send, fit)
+        BrowserMenu(tab?.id, owns, send, fit)
     }
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
 }
 
 @Composable
-private fun BrowserMenu(
-    tabId: String?,
-    owns: Boolean,
-    open: () -> Unit,
-    send: (BrowserAction) -> Unit,
-    fit: () -> Unit,
-) {
+private fun BrowserMenu(tabId: String?, owns: Boolean, send: (BrowserAction) -> Unit, fit: () -> Unit) {
     var menuOpen by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(40.dp)) {
             Icon(painterResource(R.drawable.ic_more), "ブラウザのメニュー", Modifier.size(16.dp))
         }
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-            DropdownMenuItem(
-                text = { Text("URL を開く") },
-                onClick = {
-                    menuOpen = false
-                    open()
-                },
-                enabled = owns,
-            )
             DropdownMenuItem(
                 text = { Text("新しいタブ") },
                 onClick = {
