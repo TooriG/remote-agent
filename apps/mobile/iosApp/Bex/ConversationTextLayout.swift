@@ -1,42 +1,47 @@
 import SwiftUI
 import UIKit
 
-/// Preserve one native selection range without allocating a document-sized backing store.
-/// SwiftUI owns the full document height; UIKit draws only the visible part of it.
-final class ConversationTextContainer: UIView {
-    let textView = ConversationTextView(usingTextLayoutManager: false)
-    private var blocks: [ConversationMarkdownContent.Block] = []
-    private var dark = false
-    private var sizeCategory: ContentSizeCategory?
+/// One native text view keeps a single selection range across a whole message.
+/// Like T3, it is as tall as the message and never scrolls itself: the conversation owns scrolling,
+/// and UIKit tiles drawing to the visible part of a long message.
+final class ConversationTextView: UITextView {
+    static let quote = NSAttributedString.Key("bex.quote")
+    static let rule = NSAttributedString.Key("bex.rule")
+
     private struct TextLayout {
         let text: NSAttributedString
         let size: CGSize
     }
 
+    private var blocks: [ConversationMarkdownContent.Block] = []
+    private var dark = false
+    private var sizeCategory: ContentSizeCategory?
     private var layouts: [TextLayout] = []
     private var idealWidth: CGFloat?
     private var displayedText: NSAttributedString?
-    private var observedScrollViews: [ObjectIdentifier] = []
-    private var observations: [NSKeyValueObservation] = []
+    /// UITextView does not retain storage that it did not create.
+    private let storage = NSTextStorage()
 
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        textView.scrollsToTop = false
-        textView.isEditable = false
-        textView.isSelectable = true
-        // The conversation owns scrolling; this offset only maps its viewport into the text.
-        textView.isScrollEnabled = false
-        textView.backgroundColor = .clear
-        textView.contentInsetAdjustmentBehavior = .never
-        textView.textContainerInset = .zero
-        textView.textContainer.lineFragmentPadding = 0
-        textView.textContainer.widthTracksTextView = false
-        textView.linkTextAttributes = [
+    init() {
+        // Decorations draw with the text, so they share its tiles instead of a message-sized backing store.
+        let layoutManager = DecoratingLayoutManager()
+        storage.addLayoutManager(layoutManager)
+        let container = NSTextContainer(size: CGSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        container.widthTracksTextView = true
+        container.lineFragmentPadding = 0
+        layoutManager.addTextContainer(container)
+        super.init(frame: .zero, textContainer: container)
+        isScrollEnabled = false
+        scrollsToTop = false
+        isEditable = false
+        isSelectable = true
+        backgroundColor = .clear
+        contentInsetAdjustmentBehavior = .never
+        textContainerInset = .zero
+        linkTextAttributes = [
             .foregroundColor: UIColor.systemBlue,
             .underlineStyle: NSUnderlineStyle.single.rawValue
         ]
-        clipsToBounds = true
-        addSubview(textView)
     }
 
     @available(*, unavailable)
@@ -88,77 +93,18 @@ final class ConversationTextContainer: UIView {
         return result
     }
 
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        observeScrollViews()
-        setNeedsLayout()
-    }
-
     override func layoutSubviews() {
-        super.layoutSubviews()
-        observeScrollViews()
-        updateViewport()
-    }
-
-    private func ancestorScrollViews() -> [UIScrollView] {
-        var result: [UIScrollView] = []
-        var ancestor = superview
-        while let view = ancestor {
-            if let scroll = view as? UIScrollView {
-                result.append(scroll)
+        if bounds.width > 0 {
+            let text = layout(width: bounds.width).text
+            if displayedText !== text {
+                setContent(text)
+                displayedText = text
             }
-            ancestor = view.superview
         }
-        return result
+        super.layoutSubviews()
     }
 
-    private func observeScrollViews() {
-        let views = window == nil ? [] : ancestorScrollViews()
-        let identities = views.map(ObjectIdentifier.init)
-        guard identities != observedScrollViews else { return }
-        observations.removeAll()
-        observedScrollViews = identities
-        observations = views.flatMap { scroll in
-            [scroll.observe(\.contentOffset, options: [.new]) { [weak self] _, _ in self?.updateViewport() },
-             scroll.observe(\.bounds, options: [.new]) { [weak self] _, _ in self?.updateViewport() }]
-        }
-    }
-
-    private func updateViewport() {
-        guard bounds.width > 0, bounds.height > 0, window != nil else { return }
-        var viewport = bounds
-        for scroll in ancestorScrollViews() {
-            // Include a small margin so ordinary scrolling does not expose an empty tile.
-            let visible = convert(scroll.bounds, from: scroll)
-                .insetBy(dx: -scroll.bounds.width / 4, dy: -scroll.bounds.height / 4)
-            viewport = viewport.intersection(visible)
-        }
-        guard !viewport.isNull, !viewport.isEmpty else {
-            textView.isHidden = true
-            return
-        }
-        let content = layout(width: bounds.width)
-        if displayedText !== content.text {
-            textView.textContainer.size = CGSize(width: bounds.width, height: .greatestFiniteMagnitude)
-            textView.setContent(content.text)
-            displayedText = content.text
-        }
-        textView.isHidden = false
-        if textView.frame != viewport {
-            textView.frame = viewport
-        }
-        if textView.contentSize != content.size {
-            textView.contentSize = content.size
-        }
-        if textView.contentOffset != viewport.origin {
-            textView.contentOffset = viewport.origin
-        }
-    }
-}
-
-/// Decorations stay in the same native text view as selectable prose.
-final class ConversationTextView: UITextView {
-    func setContent(_ content: NSAttributedString) {
+    private func setContent(_ content: NSAttributedString) {
         let range = selectedRange
         let keepSelection = range.length > 0 && NSMaxRange(range) <= textStorage.length
             && NSMaxRange(range) <= content.length
@@ -170,28 +116,28 @@ final class ConversationTextView: UITextView {
         textStorage.setAttributedString(content)
         selectedRange = keepSelection ? range : NSRange(location: 0, length: 0)
     }
+}
 
-    static let quote = NSAttributedString.Key("bex.quote")
-    static let rule = NSAttributedString.Key("bex.rule")
-
-    override func draw(_ rect: CGRect) {
-        super.draw(rect)
-        let glyphs = layoutManager.glyphRange(forBoundingRect: bounds, in: textContainer)
-        let range = layoutManager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
-        for attribute in [Self.quote, Self.rule] {
-            textStorage.enumerateAttribute(attribute, in: range) { value, range, _ in
+/// Draws quote bars and rules beneath the glyphs of each drawn tile.
+private final class DecoratingLayoutManager: NSLayoutManager {
+    override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: CGPoint) {
+        super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
+        guard let textStorage, let container = textContainers.first else { return }
+        let characters = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
+        for attribute in [ConversationTextView.quote, ConversationTextView.rule] {
+            textStorage.enumerateAttribute(attribute, in: characters) { value, range, _ in
                 guard value as? Bool == true else { return }
-                let glyphs = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
-                let bounds = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
+                let glyphs = glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+                let bounds = boundingRect(forGlyphRange: glyphs, in: container)
                 let line = UIBezierPath()
-                if attribute == Self.quote {
-                    let lineX = max(1, bounds.minX - 10) + textContainerInset.left
-                    line.move(to: CGPoint(x: lineX, y: bounds.minY + textContainerInset.top))
-                    line.addLine(to: CGPoint(x: lineX, y: bounds.maxY + textContainerInset.top))
+                if attribute == ConversationTextView.quote {
+                    let lineX = max(1, bounds.minX - 10) + origin.x
+                    line.move(to: CGPoint(x: lineX, y: bounds.minY + origin.y))
+                    line.addLine(to: CGPoint(x: lineX, y: bounds.maxY + origin.y))
                     line.lineWidth = 2
                 } else {
-                    line.move(to: CGPoint(x: 0, y: bounds.midY + textContainerInset.top))
-                    line.addLine(to: CGPoint(x: self.bounds.width, y: bounds.midY + textContainerInset.top))
+                    line.move(to: CGPoint(x: origin.x, y: bounds.midY + origin.y))
+                    line.addLine(to: CGPoint(x: origin.x + container.size.width, y: bounds.midY + origin.y))
                     line.lineWidth = 0.5
                 }
                 UIColor.separator.setStroke()
