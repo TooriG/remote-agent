@@ -8,10 +8,11 @@ use agent_protocol::{
 };
 use gpui_kit::{
     component::{
-        Disableable, IconName, Selectable, Sizable,
+        Disableable, Icon, IconName, Sizable,
         button::{Button, ButtonVariants},
         h_flex,
         input::{Input, InputEvent, InputState},
+        menu::{DropdownMenu, PopupMenuItem},
         v_flex,
     },
     prelude::FluentBuilder,
@@ -216,6 +217,149 @@ impl Browser {
         }
     }
 
+    pub(crate) fn mode_menu(&self, cx: &Context<Self>) -> AnyElement {
+        let owner = cx.entity().downgrade();
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        let visibility = owner.clone();
+        Button::new("browser-mode")
+            .icon(if self.personal_mode {
+                IconName::User
+            } else {
+                IconName::Globe
+            })
+            .xsmall()
+            .ghost()
+            .dropdown_caret(true)
+            .accessibility_label(if self.personal_mode {
+                "個人用ブラウザ・モードを変更"
+            } else {
+                "AI と共有・モードを変更"
+            })
+            .dropdown_menu(move |menu, _, _| {
+                let shared = owner.clone();
+                let personal = owner.clone();
+                menu.item(PopupMenuItem::new("AI と共有").on_click(move |_, _, cx| {
+                    let _ = shared.update(cx, |view, cx| {
+                        view.personal_mode = false;
+                        if let Some(personal) = &view.personal {
+                            personal.update(cx, |view, cx| view.set_visible(false, cx));
+                        }
+                        cx.notify();
+                    });
+                }))
+                .item(PopupMenuItem::new("個人用").on_click(move |_, window, cx| {
+                    let _ = personal.update(cx, |view, cx| {
+                        if view.owns_control() {
+                            view.send(BrowserAction::ReleaseControl, cx);
+                        }
+                        view.personal_mode = true;
+                        view.start_personal(None, window, cx);
+                        if let Some(personal) = &view.personal {
+                            personal.update(cx, |view, cx| view.set_visible(true, cx));
+                        }
+                        cx.notify();
+                    });
+                }))
+            })
+            .map(|button| {
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                let button = button.on_open_change(move |open, _, cx| {
+                    let _ = visibility.update(cx, |view, cx| {
+                        if let Some(personal) = &view.personal {
+                            personal.update(cx, |view, cx| view.set_menu_open(*open, cx));
+                        }
+                    });
+                });
+                button
+            })
+            .into_any_element()
+    }
+
+    fn actions_menu(&self, cx: &Context<Self>) -> impl IntoElement {
+        let owner = cx.entity().downgrade();
+        let owns = self.owns_control();
+        let tab_id = self.frame.tab_id.clone();
+        let url = self
+            .frame
+            .tabs
+            .iter()
+            .find(|tab| tab.id == tab_id)
+            .map(|tab| tab.url.clone());
+        Button::new("browser-actions")
+            .icon(IconName::Ellipsis)
+            .xsmall()
+            .ghost()
+            .accessibility_label("ブラウザのメニュー")
+            .dropdown_menu(move |menu, _, _| {
+                let new_tab = owner.clone();
+                let close_tab = owner.clone();
+                let desktop = owner.clone();
+                let mobile = owner.clone();
+                let tab_id = tab_id.clone();
+                let url = url.clone();
+                menu.item(PopupMenuItem::new("新しいタブ").disabled(!owns).on_click(
+                    move |_, _, cx| {
+                        let _ = new_tab.update(cx, |view, cx| {
+                            view.send(
+                                BrowserAction::OpenTab {
+                                    url: "about:blank".into(),
+                                },
+                                cx,
+                            )
+                        });
+                    },
+                ))
+                .item(PopupMenuItem::new("タブを閉じる").disabled(!owns).on_click(
+                    move |_, _, cx| {
+                        let _ = close_tab.update(cx, |view, cx| {
+                            view.send(BrowserAction::CloseTab { id: tab_id.clone() }, cx)
+                        });
+                    },
+                ))
+                .separator()
+                .item(
+                    PopupMenuItem::new("デスクトップ · 1280 × 800")
+                        .disabled(!owns)
+                        .on_click(move |_, _, cx| {
+                            let _ = desktop.update(cx, |view, cx| {
+                                view.send(
+                                    BrowserAction::Resize {
+                                        width: 1280,
+                                        height: 800,
+                                    },
+                                    cx,
+                                )
+                            });
+                        }),
+                )
+                .item(
+                    PopupMenuItem::new("モバイル · 390 × 844")
+                        .disabled(!owns)
+                        .on_click(move |_, _, cx| {
+                            let _ = mobile.update(cx, |view, cx| {
+                                view.send(
+                                    BrowserAction::Resize {
+                                        width: 390,
+                                        height: 844,
+                                    },
+                                    cx,
+                                )
+                            });
+                        }),
+                )
+                .separator()
+                .item(
+                    PopupMenuItem::new("URL をコピー")
+                        .disabled(url.is_none())
+                        .on_click(move |_, _, cx| {
+                            if let Some(url) = &url {
+                                cx.write_to_clipboard(ClipboardItem::new_string(url.clone()));
+                            }
+                        }),
+                )
+            })
+    }
+
     pub(crate) fn title(&self, cx: &App) -> String {
         if self.personal_mode {
             return self
@@ -391,46 +535,6 @@ impl Render for Browser {
             .size_full()
             .min_h_0()
             .bg(rgb(appearance::BACKGROUND))
-            .child(
-                h_flex()
-                    .h_8()
-                    .px_2()
-                    .gap_1()
-                    .border_b_1()
-                    .border_color(rgb(appearance::BORDER))
-                    .child(
-                        Button::new("browser-shared")
-                            .label("AI と共有")
-                            .small()
-                            .ghost()
-                            .selected(!self.personal_mode)
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.personal_mode = false;
-                                if let Some(personal) = &view.personal {
-                                    personal.update(cx, |view, cx| view.set_visible(false, cx));
-                                }
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Button::new("browser-personal")
-                            .label("個人用")
-                            .small()
-                            .ghost()
-                            .selected(self.personal_mode)
-                            .on_click(cx.listener(|view, _, window, cx| {
-                                if view.owns_control() {
-                                    view.send(BrowserAction::ReleaseControl, cx);
-                                }
-                                view.personal_mode = true;
-                                view.start_personal(None, window, cx);
-                                if let Some(personal) = &view.personal {
-                                    personal.update(cx, |view, cx| view.set_visible(true, cx));
-                                }
-                                cx.notify();
-                            })),
-                    ),
-            )
             .map(|body| {
                 if self.personal_mode {
                     return body.child(
@@ -449,7 +553,7 @@ impl Render for Browser {
                             }),
                     );
                 }
-                body.child(
+                body.when(tabs.len() > 1, |body| body.child(
                     h_flex()
                         .id("browser-tabs")
                         .h_8()
@@ -512,18 +616,18 @@ impl Render for Browser {
                                     )
                                 })),
                         ),
-                )
+                ))
                 .child(
                     h_flex()
                         .h_10()
                         .px_2()
                         .gap_1()
                         .border_b_1()
-                        .border_color(rgb(appearance::BORDER))
+                        .border_color(rgb(0x202020))
                         .child(
                             Button::new("browser-back")
-                                .icon(IconName::ChevronLeft)
-                                .small()
+                                .icon(IconName::ArrowLeft)
+                                .xsmall()
                                 .ghost()
                                 .disabled(!owns || !self.frame.can_go_back)
                                 .accessibility_label("前のページ")
@@ -535,8 +639,8 @@ impl Render for Browser {
                         )
                         .child(
                             Button::new("browser-forward")
-                                .icon(IconName::ChevronRight)
-                                .small()
+                                .icon(IconName::ArrowRight)
+                                .xsmall()
                                 .ghost()
                                 .disabled(!owns || !self.frame.can_go_forward)
                                 .accessibility_label("次のページ")
@@ -547,7 +651,7 @@ impl Render for Browser {
                         .child(
                             Button::new("browser-reload")
                                 .icon(IconName::RotateCw)
-                                .small()
+                                .xsmall()
                                 .ghost()
                                 .disabled(!owns)
                                 .accessibility_label("再読み込み")
@@ -559,74 +663,12 @@ impl Render for Browser {
                             div().flex_1().min_w_0().child(
                                 Input::new(&self.address)
                                     .small()
+                                    .appearance(false)
                                     .disabled(!owns)
                                     .aria_label("ブラウザの URL"),
                             ),
                         )
-                        .child(
-                            Button::new("browser-go")
-                                .icon(IconName::ArrowRight)
-                                .small()
-                                .ghost()
-                                .disabled(!owns)
-                                .accessibility_label("URL を開く")
-                                .on_click(cx.listener(|view, _, _, cx| view.navigate(cx))),
-                        ),
-                )
-                .child(
-                    h_flex()
-                        .px_3()
-                        .py_1()
-                        .gap_2()
-                        .text_xs()
-                        .text_color(rgb(appearance::MUTED))
-                        .child(div().flex_1().child(if owns {
-                            "操作中 · あなた"
-                        } else if self.frame.controller == BrowserController::Agent {
-                            "AI が操作できます"
-                        } else {
-                            "別の端末が操作中"
-                        }))
-                        .child(
-                            Button::new("browser-control")
-                                .label(if owns {
-                                    "AI に操作を戻す"
-                                } else {
-                                    "操作権を取得"
-                                })
-                                .small()
-                                .ghost()
-                                .disabled(self.frame.tab_id.is_empty())
-                                .on_click(cx.listener(move |view, _, _, cx| {
-                                    view.send(
-                                        if owns {
-                                            BrowserAction::ReleaseControl
-                                        } else {
-                                            BrowserAction::TakeControl
-                                        },
-                                        cx,
-                                    )
-                                })),
-                        )
-                        .child(
-                            Button::new("browser-viewport")
-                                .label(if self.frame.width == 390 {
-                                    "デスクトップ"
-                                } else {
-                                    "モバイル"
-                                })
-                                .small()
-                                .ghost()
-                                .disabled(!owns)
-                                .on_click(cx.listener(|view, _, _, cx| {
-                                    let (width, height) = if view.frame.width == 390 {
-                                        (1280, 800)
-                                    } else {
-                                        (390, 844)
-                                    };
-                                    view.send(BrowserAction::Resize { width, height }, cx);
-                                })),
-                        ),
+                        .child(self.actions_menu(cx)),
                 )
                 .when_some(self.error.clone(), |body, error| {
                     body.child(div().px_3().py_2().text_sm().child(error))
@@ -726,17 +768,24 @@ impl Render for Browser {
                             } else {
                                 body.child(
                                     v_flex()
-                                        .size_full()
+                                        .w_full()
                                         .items_center()
-                                        .justify_center()
-                                        .gap_2()
-                                        .text_color(rgb(appearance::MUTED))
-                                        .child("ブラウザで確認する")
-                                        .child(div().text_sm().child(if self.thread.is_some() {
-                                            "URL を開くか、AI にブラウザ操作を依頼してください。"
-                                        } else {
-                                            "会話を始めると、AI と同じタブを利用できます。"
-                                        })),
+                                        .pt_12()
+                                        .px_6()
+                                        .gap_6()
+                                        .child(
+                                            div().size_9().flex().items_center().justify_center()
+                                                .rounded_md().border_1().border_color(rgb(appearance::BORDER))
+                                                .bg(rgb(appearance::RAISED)).mb_6()
+                                                .child(Icon::new(IconName::Globe).size(px(18.)).text_color(rgb(appearance::MUTED))),
+                                        )
+                                        .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).child("プレビューはまだありません"))
+                                        .child(div().max_w(px(384.)).text_sm().text_center()
+                                            .text_color(rgb(appearance::MUTED)).child(if self.thread.is_some() {
+                                                "上の欄に URL を入力するか、AI にブラウザ操作を依頼してください。"
+                                            } else {
+                                                "会話を始めると、AI と同じタブを利用できます。"
+                                            })),
                                 )
                             }
                         })
@@ -766,6 +815,44 @@ impl Render for Browser {
                             .absolute()
                             .size_full(),
                         ),
+                )
+                .child(
+                    h_flex()
+                        .px_2()
+                        .py_1()
+                        .gap_2()
+                        .border_t_1()
+                        .border_color(rgb(0x202020))
+                        .text_xs()
+                        .text_color(rgb(appearance::MUTED))
+                        .child(div().flex_1().child(if owns {
+                            "操作中 · あなた"
+                        } else if self.frame.controller == BrowserController::Agent {
+                            "AI が操作できます"
+                        } else {
+                            "別の端末が操作中"
+                        }))
+                        .child(
+                            Button::new("browser-control")
+                                .label(if owns {
+                                    "AI に操作を戻す"
+                                } else {
+                                    "操作権を取得"
+                                })
+                                .xsmall()
+                                .outline()
+                                .disabled(self.frame.tab_id.is_empty())
+                                .on_click(cx.listener(move |view, _, _, cx| {
+                                    view.send(
+                                        if owns {
+                                            BrowserAction::ReleaseControl
+                                        } else {
+                                            BrowserAction::TakeControl
+                                        },
+                                        cx,
+                                    )
+                                })),
+                        )
                 )
             })
     }

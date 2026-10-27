@@ -115,14 +115,15 @@ impl Browser {
         cx.notify();
     }
 
-    pub(super) fn windows_import_toolbar(&self, cx: &Context<Self>) -> impl IntoElement {
+    pub(super) fn windows_actions_menu(&self, cx: &Context<Self>) -> impl IntoElement {
         let owner = cx.entity().downgrade();
-        let import_owner = owner.clone();
         let visibility = owner.clone();
-        let bookmarks_owner = owner.clone();
-        h_flex().px_2().pb_2().gap_1()
-            .child(Button::new("browser-import").label("Chromeのブックマークを取り込む").small().ghost().disabled(self.importing).dropdown_caret(true)
-                .dropdown_menu(move |mut menu, _, _| {
+        Button::new("browser-actions")
+            .icon(IconName::Ellipsis).xsmall().ghost().disabled(self.importing)
+            .accessibility_label("個人用ブラウザのメニュー")
+            .dropdown_menu(move |menu, window, cx| {
+                let import_owner = owner.clone();
+                let mut menu = menu.submenu("Chrome のブックマークを取り込む", window, cx, move |mut menu, _, _| {
                     match chrome_profiles() {
                         Ok(profiles) => for (name, path) in profiles {
                             let owner = import_owner.clone();
@@ -139,23 +140,33 @@ impl Browser {
                         Err(error) => menu = menu.item(PopupMenuItem::new(error).disabled(true)),
                     }
                     menu.item(PopupMenuItem::new("Chromeのログイン状態の取り込みは非対応です").disabled(true))
-                }).on_open_change(move |open, _, cx| { let _ = visibility.update(cx, |browser, cx| { browser.profile_menu_open = *open; browser.set_visible(browser.visible, cx); cx.notify(); }); }))
-            .child(Button::new("browser-bookmarks").label("ブックマーク").small().ghost().dropdown_caret(true)
-                .dropdown_menu(move |mut menu, _, _| {
-                    match data_path().and_then(|path| load(&path)) {
-                        Ok(bookmarks) if !bookmarks.is_empty() => {
-                            for bookmark in bookmarks {
-                                let owner = bookmarks_owner.clone();
-                                menu = menu.item(PopupMenuItem::new(bookmark.name).on_click(move |_, window, cx| { let _ = owner.update(cx, |browser, cx| browser.open_url(&bookmark.url, window, cx)); }));
-                            }
-                            let owner = bookmarks_owner.clone();
-                            menu = menu.item(PopupMenuItem::new("取り込んだブックマークを削除").on_click(move |_, _, cx| { let _ = owner.update(cx, |browser, cx| browser.run_import(|| { update(&data_path()?, None)?; Ok("取り込んだブックマークを削除しました。".into()) }, cx)); }));
-                        },
-                        Ok(_) => menu = menu.item(PopupMenuItem::new("取り込んだブックマークはありません").disabled(true)),
-                        Err(error) => menu = menu.item(PopupMenuItem::new(error).disabled(true)),
-                    }
-                    menu
-                }).on_open_change(move |open, _, cx| { let _ = owner.update(cx, |browser, cx| { browser.profile_menu_open = *open; browser.set_visible(browser.visible, cx); cx.notify(); }); }))
+                }).separator();
+                match data_path().and_then(|path| load(&path)) {
+                    Ok(bookmarks) if !bookmarks.is_empty() => {
+                        for bookmark in bookmarks {
+                            let owner = owner.clone();
+                            menu = menu.item(PopupMenuItem::new(bookmark.name).on_click(move |_, window, cx| {
+                                let _ = owner.update(cx, |browser, cx| browser.open_url(&bookmark.url, window, cx));
+                            }));
+                        }
+                        let owner = owner.clone();
+                        menu = menu.separator().item(PopupMenuItem::new("取り込んだブックマークを削除").on_click(move |_, _, cx| {
+                            let _ = owner.update(cx, |browser, cx| browser.run_import(|| {
+                                update(&data_path()?, None)?;
+                                Ok("取り込んだブックマークを削除しました。".into())
+                            }, cx));
+                        }));
+                    },
+                    Ok(_) => menu = menu.item(PopupMenuItem::new("取り込んだブックマークはありません").disabled(true)),
+                    Err(error) => menu = menu.item(PopupMenuItem::new(error).disabled(true)),
+                }
+                menu
+            }).on_open_change(move |open, _, cx| {
+                let _ = visibility.update(cx, |browser, cx| {
+                    browser.set_menu_open(*open, cx);
+                    cx.notify();
+                });
+            })
     }
 }
 #[cfg(test)]

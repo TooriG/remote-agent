@@ -32,62 +32,62 @@ struct WorkspaceBrowserScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 4) {
-                    ForEach(frame?.tabs ?? [], id: \.id) { tab in
-                        HStack(spacing: 8) {
-                            Button(tab.url == "about:blank" ? "新しいタブ" : (tab.title.isEmpty ? tab.url : tab.title)) {
-                                send(.selectTab(id: tab.id))
-                            }.lineLimit(1)
-                                .accessibilityIdentifier(tab.id == frame?
-                                    .tabId ? "browser.title" : "browser.tab.\(tab.id)")
-                            Button { send(.closeTab(id: tab.id)) } label: { Image(systemName: "xmark").font(.caption2) }
+            if (frame?.tabs.count ?? 0) > 1 {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 4) {
+                        ForEach(frame?.tabs ?? [], id: \.id) { tab in
+                            HStack(spacing: 8) {
+                                Button(tab.url == "about:blank" ? "新しいタブ" : (tab.title.isEmpty ? tab.url : tab.title)) {
+                                    send(.selectTab(id: tab.id))
+                                }.lineLimit(1)
+                                    .accessibilityIdentifier(tab.id == frame?
+                                        .tabId ? "browser.title" : "browser.tab.\(tab.id)")
+                                Button { send(.closeTab(id: tab.id)) } label: {
+                                    Image(systemName: "xmark").font(.caption2)
+                                }
                                 .accessibilityLabel("タブを閉じる")
+                            }
+                            .font(.caption).padding(.horizontal, 10).padding(.vertical, 8)
+                            .background(
+                                tab.id == frame?.tabId ? Color.primary.opacity(0.08) : .clear,
+                                in: RoundedRectangle(cornerRadius: 8)
+                            )
                         }
-                        .font(.caption).padding(.horizontal, 10).padding(.vertical, 8)
-                        .background(
-                            tab.id == frame?.tabId ? Color.primary.opacity(0.08) : .clear,
-                            in: RoundedRectangle(cornerRadius: 8)
-                        )
-                    }
-                    Button { send(.openTab(url: "about:blank")) } label: { Image(systemName: "plus") }
-                        .padding(8).accessibilityLabel("新しいタブ")
-                }.disabled(!acceptsInput).padding(.horizontal, 8)
+                        Button { send(.openTab(url: "about:blank")) } label: { Image(systemName: "plus") }
+                            .padding(8).accessibilityLabel("新しいタブ")
+                    }.disabled(!acceptsInput).padding(.horizontal, 8)
+                }
             }
-            HStack(spacing: 12) {
-                Button { send(.back) } label: { Image(systemName: "chevron.left") }
+            HStack(spacing: 0) {
+                Button { send(.back) } label: { Image(systemName: "arrow.left").frame(width: 36, height: 44) }
                     .accessibilityLabel("前のページ").disabled(!acceptsInput || frame?.canGoBack != true)
-                Button { send(.forward) } label: { Image(systemName: "chevron.right") }
+                Button { send(.forward) } label: { Image(systemName: "arrow.right").frame(width: 36, height: 44) }
                     .accessibilityLabel("次のページ").disabled(!acceptsInput || frame?.canGoForward != true)
-                Button { send(.reload) } label: { Image(systemName: "arrow.clockwise") }
+                Button { send(.reload) } label: { Image(systemName: "arrow.clockwise").frame(width: 36, height: 44) }
                     .accessibilityLabel("再読み込み").disabled(!acceptsInput)
                 TextField("検索または URL", text: $address)
                     .keyboardType(.webSearch).textInputAutocapitalization(.never).disableAutocorrection(true)
                     .textFieldStyle(.plain).focused($addressFocused).submitLabel(.go).onSubmit(open)
                     .disabled(!acceptsInput).accessibilityIdentifier("browser.address")
-                Button(action: open) { Image(systemName: "arrow.right") }
-                    .disabled(!acceptsInput).accessibilityLabel("開く").accessibilityIdentifier("browser.open")
-            }.font(.subheadline).padding(12).background(.quaternary.opacity(0.25))
-            HStack {
-                Label(
-                    ownsControl ? "あなたが操作中" : (frame?.controller == .anotherViewer ? "別の端末が操作中" : "AI が操作できます"),
-                    systemImage: ownsControl ? "hand.point.up.left" : "sparkles"
-                )
-                .font(.caption).foregroundStyle(.secondary)
-                Spacer(minLength: 4)
-                Button(ownsControl ? "AI に操作を戻す" : "操作権を取得") {
-                    send(ownsControl ? .releaseControl : .takeControl)
-                }.font(.caption.weight(.medium)).disabled(frame == nil || connectionError != nil)
-                    .accessibilityIdentifier("browser.control")
                 Menu {
+                    Button("URL を開く", action: open).disabled(!acceptsInput)
+                        .accessibilityIdentifier("browser.open")
+                    Button("新しいタブ") { send(.openTab(url: "about:blank")) }.disabled(!acceptsInput)
+                    Button("タブを閉じる") {
+                        if let currentTab {
+                            send(.closeTab(id: currentTab.id))
+                        }
+                    }
+                    .disabled(!acceptsInput)
+                    Divider()
                     Button("デスクトップ · 1280 × 800") { send(.resize(width: 1280, height: 800)) }
                         .disabled(!acceptsInput)
                     Button("モバイル · 390 × 844") { send(.resize(width: 390, height: 844)) }
                         .disabled(!acceptsInput)
                     Button("URL をコピー") { UIPasteboard.general.string = currentTab?.url }
-                } label: { Image(systemName: "ellipsis") }.disabled(frame == nil)
-            }.padding(.horizontal, 12).padding(.vertical, 10)
-            Divider()
+                } label: { Image(systemName: "ellipsis").frame(width: 36, height: 44) }.disabled(frame == nil)
+            }.font(.system(size: 14)).foregroundStyle(.secondary).padding(.horizontal, 4)
+            Divider().opacity(0.6)
             if let message = error ?? connectionError {
                 BexNotice(text: message).padding(.horizontal)
             }
@@ -108,16 +108,34 @@ struct WorkspaceBrowserScreen: View {
                     RemoteBrowserCanvas(image: image, acceptsInput: acceptsInput, send: send)
                         .accessibilityIdentifier("browser.content")
                 } else if frame != nil {
-                    VStack(spacing: 12) {
-                        Image(systemName: "globe").font(.largeTitle)
-                        Text("ブラウザで確認する").font(.headline)
-                        Text("URL を開くか、AI にブラウザ操作を依頼してください。")
-                            .font(.subheadline).multilineTextAlignment(.center)
-                    }.foregroundStyle(.secondary).padding(24)
+                    VStack(spacing: 24) {
+                        Image(systemName: "globe").font(.system(size: 18))
+                            .foregroundStyle(.secondary).frame(width: 36, height: 36)
+                            .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 6))
+                            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.primary.opacity(0.12)))
+                            .padding(.bottom, 24)
+                        Text("プレビューはまだありません").font(.system(size: 20, weight: .semibold))
+                        Text("上の欄に URL を入力するか、AI にブラウザ操作を依頼してください。")
+                            .font(.system(size: 14)).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    }.frame(maxWidth: 384).padding(.horizontal, 24).padding(.top, 48)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 } else {
                     ProgressView("Host のブラウザに接続中…")
                 }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
+            Divider().opacity(0.6)
+            HStack {
+                Label(
+                    ownsControl ? "あなたが操作中" : (frame?.controller == .anotherViewer ? "別の端末が操作中" : "AI が操作できます"),
+                    systemImage: ownsControl ? "hand.point.up.left" : "sparkles"
+                )
+                .font(.caption).foregroundStyle(.secondary)
+                Spacer(minLength: 4)
+                Button(ownsControl ? "AI に操作を戻す" : "操作権を取得") {
+                    send(ownsControl ? .releaseControl : .takeControl)
+                }.font(.caption.weight(.medium)).disabled(frame == nil || connectionError != nil)
+                    .accessibilityIdentifier("browser.control")
+            }.padding(.horizontal, 12).padding(.vertical, 6)
             if ownsControl {
                 Divider()
                 HStack {

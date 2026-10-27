@@ -447,6 +447,15 @@ impl Desktop {
                     .children(tabs)
                     .child(add),
             )
+            .when_some(
+                active.and_then(|id| match self.surface_resources.get(&id) {
+                    Some(SurfaceResource::Browser { view, .. }) => {
+                        Some(view.update(cx, |view, cx| view.mode_menu(cx)))
+                    }
+                    _ => None,
+                }),
+                |bar, menu| bar.child(menu),
+            )
             .when(!self.side_chat_mode, |bar| {
                 bar.child(
                     Self::icon_button(

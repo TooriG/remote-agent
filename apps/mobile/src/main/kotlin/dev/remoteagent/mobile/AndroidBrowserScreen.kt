@@ -4,17 +4,17 @@ import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -29,11 +29,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -48,7 +48,6 @@ import dev.remoteagent.core.BrowserFrame
 import dev.remoteagent.core.BrowserKey
 import dev.remoteagent.core.BrowserRequest
 import dev.remoteagent.core.SessionRef
-import dev.remoteagent.core.browserAddressUrl
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -162,21 +161,25 @@ private fun BrowserPane(
     LaunchedEffect(thread, active) { if (active) session.run(profile, browser) }
     val frame = session.frame
     val owns = frame?.controller == BrowserController.YOU
+    val tab = frame?.tabs?.firstOrNull { it.id == frame.tabId }
     Column {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            TextButton(onClick = dismiss) { Text("閉じる") }
-            TextButton(
-                onClick = { session.send(if (owns) BrowserAction.ReleaseControl else BrowserAction.TakeControl) },
-                enabled = frame != null,
-            ) {
-                Text(if (owns) "AI に操作を戻す" else "操作権を取得")
-            }
+        Row(
+            Modifier.fillMaxWidth().height(44.dp).padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("ブラウザ", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+            IconButton(onClick = dismiss) { Icon(painterResource(R.drawable.ic_close), "閉じる", Modifier.size(16.dp)) }
         }
-        BrowserTabs(frame, owns, session::send)
-        BrowserToolbar(frame, owns, session::send) { session.error = it }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
+        if ((frame?.tabs?.size ?: 0) > 1) BrowserTabs(frame?.tabs.orEmpty(), owns, session::send)
+        BrowserToolbar(tab, owns, frame?.canGoBack == true, frame?.canGoForward == true, session::send) {
+            session.error = it
+        }
         session.error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp)) }
         frame?.dialog?.let { BrowserDialogView(it, owns, session::send) }
-        BrowserImage(session.image, owns, session::send, Modifier.weight(1f))
+        val blank = tab?.url == "about:blank"
+        BrowserImage(session.image?.takeUnless { blank }, frame != null, owns, session::send, Modifier.weight(1f))
+        BrowserControlBar(frame?.controller, session::send)
         if (owns) BrowserTextInput(session::send)
     }
 }
@@ -197,61 +200,15 @@ private fun BrowserDialogView(
 }
 
 @Composable
-private fun BrowserTabs(frame: BrowserFrame?, owns: Boolean, send: (BrowserAction) -> Unit) {
-    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-        frame?.tabs?.forEach { tab ->
-            TextButton(onClick = { send(BrowserAction.SelectTab(tab.id)) }, enabled = owns) {
-                Text(if (tab.url == "about:blank") "新しいタブ" else tab.title.ifEmpty { tab.url }, maxLines = 1)
-            }
-            TextButton(onClick = { send(BrowserAction.CloseTab(tab.id)) }, enabled = owns) { Text("×") }
-        }
-        TextButton(onClick = { send(BrowserAction.OpenTab("about:blank")) }, enabled = owns) { Text("＋") }
-    }
-}
-
-@Composable
-private fun BrowserToolbar(
-    frame: BrowserFrame?,
+private fun BrowserImage(
+    image: ImageBitmap?,
+    connected: Boolean,
     owns: Boolean,
     send: (BrowserAction) -> Unit,
-    failed: (String?) -> Unit,
+    modifier: Modifier,
 ) {
-    val url = frame?.tabs?.firstOrNull { it.id == frame.tabId }?.url?.takeUnless { it == "about:blank" } ?: ""
-    var address by remember { mutableStateOf("") }
-    var focused by remember { mutableStateOf(false) }
-    LaunchedEffect(url, focused) { if (!focused) address = url }
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        TextButton(onClick = { send(BrowserAction.Back) }, enabled = owns && frame?.canGoBack == true) { Text("‹") }
-        TextButton(onClick = { send(BrowserAction.Forward) }, enabled = owns && frame?.canGoForward == true) {
-            Text("›")
-        }
-        TextButton(onClick = { send(BrowserAction.Reload) }, enabled = owns) { Text("↻") }
-        OutlinedTextField(
-            address,
-            { address = it },
-            Modifier.weight(1f).onFocusChanged { focused = it.isFocused },
-            enabled = owns,
-            singleLine = true,
-            placeholder = { Text("検索または URL") },
-        )
-        TextButton(
-            onClick = {
-                runCatching { browserAddressUrl(address) }
-                    .onSuccess { send(BrowserAction.Navigate(it)) }
-                    .onFailure { failed(it.message) }
-            },
-            enabled = owns,
-        ) {
-            Text("開く")
-        }
-    }
-    HorizontalDivider()
-}
-
-@Composable
-private fun BrowserImage(image: ImageBitmap?, owns: Boolean, send: (BrowserAction) -> Unit, modifier: Modifier) {
     if (image == null) {
-        Box(modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { Text("AI と同じブラウザに接続中…") }
+        BrowserEmptyState(connected, modifier)
         return
     }
     Image(

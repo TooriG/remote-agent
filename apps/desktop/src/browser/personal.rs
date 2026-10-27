@@ -100,7 +100,7 @@ pub(crate) struct Browser {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     visible: bool,
     #[cfg(any(target_os = "macos", target_os = "windows"))]
-    profile_menu_open: bool,
+    menu_open: bool,
     #[cfg(target_os = "macos")]
     password_accounts: Option<Vec<String>>,
     _subscription: Subscription,
@@ -131,8 +131,8 @@ impl Browser {
             .with_document_title_changed_handler(move |value| {
                 let _ = title.try_send(Event::Title(value));
             })
-            .with_url("about:blank")
-            .with_background_color((24, 24, 24, 255))
+            .with_html(include_str!("empty.html"))
+            .with_background_color((8, 8, 8, 255))
             .with_focused(false)
             .with_accept_first_mouse(true)
             // A browsing page never receives the terminal's privileged IPC bridge.
@@ -215,7 +215,7 @@ impl Browser {
     ) -> Entity<Self> {
         let webview = cx.new(|cx| WebView::new(raw, window, cx));
         webview.update(cx, |view, _| view.hide());
-        let address = cx.new(|cx| InputState::new(window, cx).placeholder("URL を入力"));
+        let address = cx.new(|cx| InputState::new(window, cx).placeholder("検索または URL を入力"));
         cx.new(|cx: &mut Context<Self>| {
             let subscription = cx.subscribe_in(&address, window, |s, _, event, _, cx| {
                 if matches!(event, InputEvent::PressEnter { .. }) {
@@ -272,12 +272,17 @@ impl Browser {
                 #[cfg(any(target_os = "macos", target_os = "windows"))]
                 visible: true,
                 #[cfg(any(target_os = "macos", target_os = "windows"))]
-                profile_menu_open: false,
+                menu_open: false,
                 #[cfg(target_os = "macos")]
                 password_accounts: None,
                 _subscription: subscription,
             }
         })
+    }
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    pub(crate) fn set_menu_open(&mut self, open: bool, cx: &mut App) {
+        self.menu_open = open;
+        self.set_visible(self.visible, cx);
     }
     pub(crate) fn set_visible(&mut self, visible: bool, cx: &mut App) {
         #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -285,7 +290,7 @@ impl Browser {
             self.visible = visible;
         }
         #[cfg(any(target_os = "macos", target_os = "windows"))]
-        let visible = visible && !self.profile_menu_open;
+        let visible = visible && !self.menu_open;
         self.webview.update(cx, |view, _| {
             if view.visible() != visible {
                 if visible {
@@ -366,7 +371,7 @@ impl Browser {
     }
 
     #[cfg(target_os = "macos")]
-    fn cookie_import_button(&self, cx: &Context<Self>) -> impl IntoElement {
+    fn actions_menu(&self, cx: &Context<Self>) -> impl IntoElement {
         let owner = cx.entity().downgrade();
         let visibility = owner.clone();
         let sources: Vec<_> = self
@@ -375,53 +380,104 @@ impl Browser {
             .map(|source| (source.name, source.root.clone(), source.password))
             .collect();
         Button::new("import-browser-cookies")
-            .label(if self.importing { "取り込み中…" } else { "ブラウザから取り込む" })
-            .accessibility_label("ブラウザからCookieを取り込む")
-            .tooltip("Cookieを共通プロファイルに取り込み、すべての会話で使います。保存パスワードは対象外です。")
-            .small().ghost().disabled(self.importing).dropdown_caret(true)
+            .icon(IconName::Ellipsis)
+            .accessibility_label("個人用ブラウザのメニュー")
+            .xsmall()
+            .ghost()
+            .disabled(self.importing)
             .dropdown_menu(move |mut menu, window, cx| {
+                let passwords_owner = owner.clone();
+                menu = menu
+                    .item(
+                        PopupMenuItem::new("保存パスワード").on_click(move |_, _, cx| {
+                            let _ = passwords_owner.update(cx, |view, cx| view.show_passwords(cx));
+                        }),
+                    )
+                    .separator();
                 if sources.is_empty() {
-                    return menu.item(PopupMenuItem::new("対応ブラウザが見つかりません").disabled(true));
+                    return menu
+                        .item(PopupMenuItem::new("対応ブラウザが見つかりません").disabled(true));
                 }
                 for (name, root, password) in &sources {
                     let owner = owner.clone();
                     let profiles = chromium_profiles(root);
                     let password = *password;
-                    menu = menu.submenu(*name, window, cx, move |mut menu, window, cx| {
-                        match &profiles {
-                            Ok(profiles) => for (name, path) in profiles {
-                                let owner = owner.clone();
-                                let path = path.clone();
-                                menu = menu.submenu(name.clone(), window, cx, move |menu, _, _| {
-                                    let cookies_owner = owner.clone();
-                                    let cookie_path = path.clone();
-                                    let passwords_owner = owner.clone();
-                                    let password_path = path.clone();
-                                    menu.item(PopupMenuItem::new("ログイン状態（Cookie）").on_click(move |_, _, cx| {
-                                        let _ = cookies_owner.update(cx, |view, cx| view.import_cookies(cookie_path.clone(), password, cx));
-                                    })).item(PopupMenuItem::new("保存パスワード → Keychain").on_click(move |_, _, cx| {
-                                        let _ = passwords_owner.update(cx, |view, cx| view.import_passwords(password_path.clone(), password, cx));
-                                    }))
-                                });
-                            },
-                            Err(error) => {
-                                let owner = owner.clone();
-                                let error = error.clone();
-                                menu = menu.item(PopupMenuItem::new(error.clone()).on_click(move |_, _, cx| {
-                                    let _ = owner.update(cx, |view, cx| { view.error = error.clone(); cx.notify(); });
-                                }));
+                    menu = menu.submenu(
+                        format!("{name} から取り込む"),
+                        window,
+                        cx,
+                        move |mut menu, window, cx| {
+                            match &profiles {
+                                Ok(profiles) => {
+                                    for (name, path) in profiles {
+                                        let owner = owner.clone();
+                                        let path = path.clone();
+                                        menu = menu.submenu(
+                                            name.clone(),
+                                            window,
+                                            cx,
+                                            move |menu, _, _| {
+                                                let cookies_owner = owner.clone();
+                                                let cookie_path = path.clone();
+                                                let passwords_owner = owner.clone();
+                                                let password_path = path.clone();
+                                                menu.item(
+                                                    PopupMenuItem::new("ログイン状態（Cookie）")
+                                                        .on_click(move |_, _, cx| {
+                                                            let _ = cookies_owner.update(
+                                                                cx,
+                                                                |view, cx| {
+                                                                    view.import_cookies(
+                                                                        cookie_path.clone(),
+                                                                        password,
+                                                                        cx,
+                                                                    )
+                                                                },
+                                                            );
+                                                        }),
+                                                )
+                                                .item(
+                                                    PopupMenuItem::new("保存パスワード → Keychain")
+                                                        .on_click(move |_, _, cx| {
+                                                            let _ = passwords_owner.update(
+                                                                cx,
+                                                                |view, cx| {
+                                                                    view.import_passwords(
+                                                                        password_path.clone(),
+                                                                        password,
+                                                                        cx,
+                                                                    )
+                                                                },
+                                                            );
+                                                        }),
+                                                )
+                                            },
+                                        );
+                                    }
+                                }
+                                Err(error) => {
+                                    let owner = owner.clone();
+                                    let error = error.clone();
+                                    menu = menu.item(PopupMenuItem::new(error.clone()).on_click(
+                                        move |_, _, cx| {
+                                            let _ = owner.update(cx, |view, cx| {
+                                                view.error = error.clone();
+                                                cx.notify();
+                                            });
+                                        },
+                                    ));
+                                }
                             }
-                        }
-                        menu
-                    });
+                            menu
+                        },
+                    );
                 }
                 menu
             })
             .on_open_change(move |open, _, cx| {
                 let _ = visibility.update(cx, |s, cx| {
                     // Native WebViews sit above GPUI popovers; retain the panel's requested visibility.
-                    s.profile_menu_open = *open;
-                    s.set_visible(s.visible, cx);
+                    s.set_menu_open(*open, cx);
                     cx.notify();
                 });
             })
@@ -436,12 +492,15 @@ impl Render for Browser {
             .min_h_0()
             .child(
                 h_flex()
+                    .h_10()
                     .gap_1()
-                    .p_2()
+                    .px_2()
+                    .border_b_1()
+                    .border_color(rgb(0x202020))
                     .child(
                         Button::new("browser-back")
                             .icon(IconName::ArrowLeft)
-                            .small()
+                            .xsmall()
                             .ghost()
                             .tooltip("戻る")
                             .accessibility_label("戻る")
@@ -452,7 +511,7 @@ impl Render for Browser {
                     .child(
                         Button::new("browser-forward")
                             .icon(IconName::ArrowRight)
-                            .small()
+                            .xsmall()
                             .ghost()
                             .tooltip("進む")
                             .accessibility_label("進む")
@@ -467,7 +526,7 @@ impl Render for Browser {
                     .child(
                         Button::new("browser-reload")
                             .icon(IconName::RotateCw)
-                            .small()
+                            .xsmall()
                             .ghost()
                             .tooltip("再読み込み")
                             .accessibility_label("再読み込み")
@@ -479,38 +538,22 @@ impl Render for Browser {
                             })),
                     )
                     .child(
-                        Input::new(&self.address)
-                            .small()
-                            .aria_label("ブラウザの URL"),
+                        div().flex_1().min_w_0().child(
+                            Input::new(&self.address)
+                                .small()
+                                .appearance(false)
+                                .aria_label("ブラウザの URL"),
+                        ),
                     )
-                    .child(
-                        Button::new("browser-go")
-                            .icon(IconName::ArrowRight)
-                            .small()
-                            .ghost()
-                            .tooltip("URL を開く")
-                            .accessibility_label("URL を開く")
-                            .on_click(cx.listener(|s, _, _, cx| s.navigate(cx))),
-                    ),
+                    .map(|bar| {
+                        #[cfg(target_os = "macos")]
+                        let bar = bar.child(self.actions_menu(cx));
+                        #[cfg(target_os = "windows")]
+                        let bar = bar.child(self.windows_actions_menu(cx));
+                        bar
+                    }),
             )
             .map(|body| {
-                #[cfg(target_os = "windows")]
-                let body = body.child(self.windows_import_toolbar(cx));
-                #[cfg(target_os = "macos")]
-                let body = body.child(
-                    h_flex()
-                        .px_2()
-                        .pb_2()
-                        .gap_2()
-                        .child(self.cookie_import_button(cx))
-                        .child(
-                            Button::new("browser-passwords")
-                                .label("保存パスワード")
-                                .small()
-                                .ghost()
-                                .on_click(cx.listener(|view, _, _, cx| view.show_passwords(cx))),
-                        ),
-                );
                 #[cfg(target_os = "macos")]
                 let body = body.when_some(self.password_accounts.as_ref(), |body, accounts| {
                     body.child(
@@ -570,7 +613,7 @@ impl Render for Browser {
                         .child(self.error.clone()),
                 )
             })
-            .child(div().flex_1().min_h_0().pl_1().child(self.webview.clone()))
+            .child(div().flex_1().min_h_0().child(self.webview.clone()))
     }
 }
 
