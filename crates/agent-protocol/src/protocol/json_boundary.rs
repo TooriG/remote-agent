@@ -1,4 +1,4 @@
-//! Adapters for recorded JSON fixtures and external provider replies.
+//! JSON conversions for recorded fixtures and tests.
 pub use super::requests::{
     fixture_reply as reply, from_json as call, provider_response as response,
 };

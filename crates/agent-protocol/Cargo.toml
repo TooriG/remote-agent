@@ -15,5 +15,9 @@ thiserror.workspace = true
 url.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 
+[features]
+# JSON conversions for recorded fixtures and tests; production uses MessagePack records.
+test-support = []
+
 [dev-dependencies]
 proptest = "1.11"

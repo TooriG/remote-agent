@@ -35,6 +35,7 @@ mermaid-rs-renderer = { version = "=0.3.1", default-features = false, optional =
 base64.workspace = true
 
 [dev-dependencies]
+agent-protocol = { path = "../agent-protocol", features = ["test-support"] }
 ring.workspace = true
 tempfile = "3"
 insta = { version = "1.46", default-features = false, features = ["json"] }

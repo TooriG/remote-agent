@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use std::io;
 
+#[cfg(any(test, feature = "test-support"))]
 pub mod json_boundary;
 mod requests;
 pub use requests::{Call, contracts};

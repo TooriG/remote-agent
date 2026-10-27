@@ -33,6 +33,7 @@ macro_rules! contracts {
             pub fn method(&self) -> &str {
                 match self { $(Self::$variant(_) => $method),*, Self::Unsupported => "unsupported" }
             }
+            #[cfg(any(test, feature = "test-support"))]
             pub fn params_json(&self) -> Result<Value, serde_json::Error> {
                 match self {
                     $(Self::$variant(params) => serde_json::to_value(params)),*,
@@ -40,18 +41,21 @@ macro_rules! contracts {
                 }
             }
         }
+        #[cfg(any(test, feature = "test-support"))]
         pub fn from_json(method: &str, params: Value) -> io::Result<Call> {
             Ok(match method {
                 $($method => Call::$variant(serde_json::from_value(params).map_err(io::Error::other)?)),*,
                 _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("unregistered method: {method}"))),
             })
         }
+        #[cfg(any(test, feature = "test-support"))]
         pub fn provider_response(method: &str, line: &str) -> Result<Response, crate::message::RpcMessageError> {
             match method {
                 $($method => super::json_boundary::typed_response::<$result>(line)),*,
-                _ => Err(crate::message::RpcMessageError::InvalidCombination {reason:"unregistered BEX response"}),
+                _ => Err(crate::message::RpcMessageError::InvalidCombination {reason:"unregistered response"}),
             }
         }
+        #[cfg(any(test, feature = "test-support"))]
         pub fn fixture_reply(method: &str, bytes: &[u8]) -> io::Result<Value> {
             match method {
                 $($method => Ok(decode::<Response<$result>>(bytes)?.into_value())),*,
