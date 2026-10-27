@@ -75,7 +75,9 @@ export async function distributeBuild(request, appId, buildId, groupName, notes,
   if (submit) {
     await request('/v1/betaAppReviewSubmissions', { method: 'POST', data: { data: { type: 'betaAppReviewSubmissions', relationships: { build: { data: { type: 'builds', id: buildId } } } } } });
   }
-  await request(`/v1/betaGroups/${group.id}/relationships/builds`, { method: 'POST', data: { data: [{ type: 'builds', id: buildId }] } });
+  if (!group.attributes.hasAccessToAllBuilds) {
+    await request(`/v1/betaGroups/${group.id}/relationships/builds`, { method: 'POST', data: { data: [{ type: 'builds', id: buildId }] } });
+  }
   return submit ? 'Submitted for TestFlight beta review' : state;
 }
 

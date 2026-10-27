@@ -71,6 +71,24 @@ test('missing groups and rejected builds cannot be reported as distributed', asy
   await assert.rejects(distributeBuild(request, 'app', 'build', 'external', 'changes', 'ja'), /blocked/);
 });
 
+test('internal groups with automatic access do not need manual build assignment', async () => {
+  for (const automatic of [false, true]) {
+    const mutations = [];
+    const request = async (path, options = {}) => {
+      if (options.method) { mutations.push(path); return null; }
+      if (path.startsWith('/v1/betaGroups?')) return { data: [{ id: 'internal', attributes: {
+        name: 'BEX Internal', isInternalGroup: true, hasAccessToAllBuilds: automatic,
+      } }] };
+      if (path.endsWith('/betaBuildLocalizations')) return { data: [] };
+      return { data: { attributes: { internalBuildState: 'IN_BETA_TESTING' } } };
+    };
+    assert.equal(await distributeBuild(request, 'app', 'build', 'BEX Internal', 'Changes', 'ja'), 'IN_BETA_TESTING');
+    assert.ok(mutations.includes('/v1/betaBuildLocalizations'));
+    assert.equal(mutations.includes('/v1/betaGroups/internal/relationships/builds'), !automatic);
+    assert.ok(!mutations.includes('/v1/betaAppReviewSubmissions'));
+  }
+});
+
 
 test('Xcode receipts must identify one unambiguous delivery', () => {
   const a = '12345678-1234-1234-1234-123456789abc';
