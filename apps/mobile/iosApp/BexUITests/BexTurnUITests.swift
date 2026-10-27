@@ -170,13 +170,6 @@ extension BexLaunchUITests {
         waitForDraftText(app.textFields["task.message"], text: "Keep my original draft", timeout: 10)
     }
 
-    private func waitForDraftText(_ input: XCUIElement, text: String, timeout: TimeInterval = 15) {
-        let ready = expectation(
-            for: NSPredicate(format: "exists == true AND value == %@", text), evaluatedWith: input
-        )
-        wait(for: [ready], timeout: timeout)
-    }
-
     private func openAssistantSelectionSideChat(_ app: XCUIApplication) {
         let side = app.descendants(matching: .any)
             .matching(NSPredicate(format: "label == %@", "サイドチャットで質問")).firstMatch

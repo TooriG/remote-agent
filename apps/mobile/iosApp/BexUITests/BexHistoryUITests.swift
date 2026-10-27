@@ -211,12 +211,12 @@ extension BexLaunchUITests {
         XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 20))
         let message = app.descendants(matching: .any)["task.message"]
         message.tap(); message.typeText("Keep this draft")
-        XCTAssertEqual(message.value as? String, "Keep this draft")
+        waitForDraftText(message, text: "Keep this draft")
         app.navigationBars.buttons.element(boundBy: 0).tap()
         let row = prefixedElement(app, prefix: "tasks.row.codex:fixture-thread-")
         XCTAssertTrue(row.waitForExistence(timeout: 20)); row.tap()
         XCTAssertTrue(message.waitForExistence(timeout: 20))
-        XCTAssertEqual(message.value as? String, "Keep this draft")
+        waitForDraftText(message, text: "Keep this draft")
         let completed = app.textViews.matching(NSPredicate(format: "value CONTAINS %@", "MARKDOWN_STREAM_COMPLETE"))
             .firstMatch
         XCTAssertTrue(completed.waitForExistence(timeout: 30))
@@ -233,7 +233,7 @@ extension BexLaunchUITests {
         // Place the caret after the restored draft before appending.
         message.coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.5)).tap()
         message.typeText(" while reading")
-        XCTAssertEqual(message.value as? String, "Keep this draft while reading")
+        waitForDraftText(message, text: "Keep this draft while reading")
         let latest = app.buttons["task.latest"]
         XCTAssertTrue(latest.exists, "Editing must retain the older reading position")
         latest.tap()

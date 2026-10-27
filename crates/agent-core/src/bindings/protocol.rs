@@ -188,6 +188,20 @@ struct BrowserRequest {
 #[uniffi::remote(Enum)]
 enum BrowserAction {
     Read,
+    Credentials,
+    ImportCookies {
+        profile: String,
+    },
+    ImportPasswords {
+        profile: String,
+    },
+    FillPassword {
+        origin: String,
+        username: String,
+    },
+    DeletePasswords {
+        origin: String,
+    },
     OpenTab {
         url: String,
     },
@@ -283,6 +297,18 @@ struct BrowserDialog {
 }
 
 #[uniffi::remote(Record)]
+struct BrowserImportProfile {
+    pub id: String,
+    pub label: String,
+}
+#[uniffi::remote(Record)]
+struct BrowserCredentials {
+    pub profiles: Vec<BrowserImportProfile>,
+    pub origin: Option<String>,
+    pub accounts: Vec<String>,
+    pub password_error: Option<String>,
+}
+#[uniffi::remote(Record)]
 struct BrowserFrame {
     pub tabs: Vec<BrowserTab>,
     pub tab_id: String,
@@ -297,6 +323,7 @@ struct BrowserFrame {
     pub loading: bool,
     pub page_text: String,
     pub value: String,
+    pub credentials: Option<BrowserCredentials>,
 }
 #[uniffi::remote(Enum)]
 enum InvocationKind {

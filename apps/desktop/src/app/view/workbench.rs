@@ -345,7 +345,7 @@ impl Desktop {
             .map(|surface| {
                 let id = surface.id;
                 let title = match self.surface_resources.get(&id) {
-                    Some(SurfaceResource::Browser { view, .. }) => view.read(cx).title(cx),
+                    Some(SurfaceResource::Browser { view, .. }) => view.read(cx).title(),
                     _ => surface.path.as_ref().map_or_else(
                         || agent_core::panels::panel_title(surface.kind),
                         |path| file_name(path),
@@ -412,13 +412,6 @@ impl Desktop {
                     );
                 }
                 menu
-            })
-            .on_open_change(move |open, _, cx| {
-                let _ = owner.update(cx, |view, cx| {
-                    // Native browser views must sit behind the surface menu.
-                    view.panel_menu_open = *open;
-                    cx.notify();
-                });
             });
         let toolbar = h_flex()
             .debug_selector(|| "workbench-header".into())
@@ -438,15 +431,6 @@ impl Desktop {
                     .gap_1()
                     .children(tabs)
                     .child(add),
-            )
-            .when_some(
-                active.and_then(|id| match self.surface_resources.get(&id) {
-                    Some(SurfaceResource::Browser { view, .. }) => {
-                        Some(view.update(cx, |view, cx| view.mode_menu(cx)))
-                    }
-                    _ => None,
-                }),
-                |bar, menu| bar.child(menu),
             )
             .when(!self.side_chat_mode, |bar| {
                 bar.child(
@@ -610,9 +594,14 @@ impl Desktop {
                     Some(SurfaceResource::Terminal(view)) => view.clone().into_any_element(),
                     Some(SurfaceResource::Diff(view)) => view.clone().into_any_element(),
                     Some(SurfaceResource::Browser { view, .. }) => view.clone().into_any_element(),
-                    Some(SurfaceResource::Pending { .. }) => {
-                        div().p_4().child("ブラウザを起動中…").into_any_element()
-                    }
+                    Some(SurfaceResource::Pending { .. }) => div()
+                        .p_4()
+                        .child(if matches!(self.draft_key(), DraftKey::Session { .. }) {
+                            "ブラウザを起動中…"
+                        } else {
+                            "会話を始めると、AIと同じブラウザを利用できます。"
+                        })
+                        .into_any_element(),
                     None => div()
                         .p_4()
                         .child("機能を開けませんでした。「＋」から再試行してください。")

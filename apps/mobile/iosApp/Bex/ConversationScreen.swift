@@ -96,17 +96,16 @@ struct ThreadScreen: View {
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+                // Keep each control a native toolbar item with its own accessibility identity.
+                ToolbarItemGroup(placement: .navigationBarTrailing) {
                     if !isSideChat {
-                        HStack(spacing: 0) {
-                            Button { composerFocused = false; openTools?(nil) } label: {
-                                Image(systemName: "square.grid.2x2").frame(width: 44, height: 44)
-                            }
-                            .accessibilityLabel("ツールを開く")
-                            .accessibilityIdentifier("task.tools")
-                            if !model.isNewThread {
-                                conversationActions
-                            }
+                        Button { composerFocused = false; openTools?(nil) } label: {
+                            Image(systemName: "square.grid.2x2").frame(width: 44, height: 44)
+                        }
+                        .accessibilityLabel("ツールを開く")
+                        .accessibilityIdentifier("task.tools")
+                        if !model.isNewThread {
+                            conversationActions
                         }
                     }
                 }
@@ -296,7 +295,7 @@ extension ThreadScreen {
     }
 
     var conversationActions: some View {
-        HStack(spacing: 0) {
+        Group {
             Button { model.openNewThread(cwd: model.selectedDirectory) } label: {
                 Image(systemName: "square.and.pencil").font(.title2).frame(width: 44, height: 44)
             }.accessibilityLabel("新しい会話").accessibilityIdentifier("task.new")

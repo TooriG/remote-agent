@@ -1,5 +1,6 @@
 //! Owns isolated conversation contexts, shared tabs, and browser input.
 mod cdp;
+mod credentials;
 pub mod mcp;
 
 use agent_protocol::browser::{
@@ -47,6 +48,7 @@ enum Capture {
 struct ActionOutput {
     page_text: String,
     value: String,
+    credentials: Option<agent_protocol::browser::BrowserCredentials>,
 }
 
 pub struct Browser {
@@ -171,21 +173,44 @@ impl Browser {
     pub async fn request(&self, request: &BrowserRequest) -> Result<BrowserFrame, String> {
         request.validate()?;
         let thread = request.thread_id.to_string();
+        let prepared = if credentials::manages_credentials(&request.action) {
+            let origin = {
+                let mut state = self.state.lock().await;
+                self.ensure(&mut state, &thread).await?;
+                validate_request(&state, &thread, request)?;
+                let active = state.pages[&thread].active.clone();
+                let url = state
+                    .chrome
+                    .as_mut()
+                    .unwrap()
+                    .targets()
+                    .await?
+                    .into_iter()
+                    .find(|target| target.target_id == active)
+                    .map(|target| target.url)
+                    .unwrap_or_default();
+                let origin = agent_protocol::browser_import::password_origin(&url).ok();
+                if let BrowserAction::FillPassword {
+                    origin: expected, ..
+                }
+                | BrowserAction::DeletePasswords { origin: expected } = &request.action
+                {
+                    validate_password_origin(origin.as_deref(), expected)?;
+                }
+                origin
+            };
+            Some(credentials::prepare(request.action.clone(), origin).await?)
+        } else {
+            None
+        };
         let mut state = self.state.lock().await;
         self.ensure(&mut state, &thread).await?;
-        validate_tab(
-            &state.pages[&thread].active,
-            &request.tab_id,
-            &request.action,
-        )?;
-        let current_generation = state.pages[&thread].generation
-            + state
-                .chrome
-                .as_ref()
-                .unwrap()
-                .navigation(&state.pages[&thread].active);
-        validate_generation(current_generation, request.generation, &request.action)?;
-        let value = Self::action(&mut state, &thread, &request.action).await?;
+        validate_request(&state, &thread, request)?;
+        let value = if let Some(prepared) = prepared {
+            Self::credential_action(&mut state, &thread, prepared).await?
+        } else {
+            Self::action(&mut state, &thread, &request.action).await?
+        };
         let mut frame = Self::frame(
             &mut state,
             &thread,
@@ -209,6 +234,11 @@ impl Browser {
         action: BrowserAction,
     ) -> Result<BrowserFrame, String> {
         action.validate()?;
+        if credentials::manages_credentials(&action) {
+            return Err(
+                "ログイン状態と保存パスワードは、ブラウザのメニューから取り込んでください。".into(),
+            );
+        }
         let mut state = self.state.lock().await;
         let thread = state
             .aliases
@@ -228,6 +258,54 @@ impl Browser {
             value,
         )
         .await
+    }
+
+    async fn credential_action(
+        state: &mut State,
+        thread: &str,
+        prepared: credentials::Prepared,
+    ) -> Result<ActionOutput, String> {
+        #[cfg(not(any(target_os = "macos", test)))]
+        let _ = (state, thread);
+        let mut output = ActionOutput::default();
+        match prepared {
+            credentials::Prepared::Metadata(metadata) => output.credentials = Some(metadata),
+            #[cfg(target_os = "macos")]
+            credentials::Prepared::Notice(notice) => output.value = notice,
+            #[cfg(any(target_os = "macos", test))]
+            credentials::Prepared::Cookies { cookies, skipped } => {
+                if cookies.is_empty() {
+                    output.value =
+                        format!("取り込めるCookieがありません（期限切れなど{skipped}件を除外）。");
+                    return Ok(output);
+                }
+                let page = &state.pages[thread];
+                let chrome = state.chrome.as_mut().unwrap();
+                chrome.install_cookies(&page.context, &cookies).await?;
+                let session = chrome.attach(&page.active).await?;
+                chrome.action(&session, &BrowserAction::Reload).await?;
+                state.pages.get_mut(thread).unwrap().generation += 1;
+                output.value = format!(
+                    "Cookieを{}件取り込みました（期限切れなど{skipped}件を除外）。ログイン状態をサイトで確認してください。",
+                    cookies.len()
+                );
+            }
+            #[cfg(target_os = "macos")]
+            credentials::Prepared::Fill { origin, script } => {
+                let page = &state.pages[thread];
+                let chrome = state.chrome.as_mut().unwrap();
+                let session = chrome.attach(&page.active).await?;
+                // The script checks the origin again inside the document, after concurrent navigations.
+                if chrome.evaluate(&session, &script).await? != serde_json::Value::Bool(true) {
+                    return Err(format!(
+                        "{origin}の表示中のログインフォームで入力してください。"
+                    ));
+                }
+                output.value =
+                    "パスワードを入力しました。内容を確認してからログインしてください。".into();
+            }
+        }
+        Ok(output)
     }
 
     async fn action(
@@ -346,8 +424,24 @@ impl Browser {
             loading: chrome.loading(&session),
             page_text: output.page_text,
             value: output.value,
+            credentials: output.credentials,
         })
     }
+}
+
+fn validate_password_origin(current: Option<&str>, requested: &str) -> Result<(), String> {
+    if current == Some(requested) {
+        Ok(())
+    } else {
+        Err("表示中のログイン先が変わりました。もう一度一覧を開いてください。".into())
+    }
+}
+
+fn validate_request(state: &State, thread: &str, request: &BrowserRequest) -> Result<(), String> {
+    let page = &state.pages[thread];
+    validate_tab(&page.active, &request.tab_id, &request.action)?;
+    let generation = page.generation + state.chrome.as_ref().unwrap().navigation(&page.active);
+    validate_generation(generation, request.generation, &request.action)
 }
 
 fn validate_tab(active: &str, displayed: &str, action: &BrowserAction) -> Result<(), String> {

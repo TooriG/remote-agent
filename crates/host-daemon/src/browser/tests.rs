@@ -102,6 +102,15 @@ async fn shared_browser_live() {
                 let request = String::from_utf8_lossy(&bytes[..length]);
                 let body = if request.starts_with("GET /popup ") {
                     "<title>Popup</title>Popup"
+                } else if request.starts_with("GET /authenticated ") {
+                    if request.lines().any(|line| {
+                        line.to_ascii_lowercase().starts_with("cookie:")
+                            && line.contains("imported_session=fixture-login")
+                    }) {
+                        "<title>Logged in</title>"
+                    } else {
+                        "<title>Logged out</title>"
+                    }
                 } else if request.starts_with("GET /verify ") {
                     "<script>document.title=document.cookie+' '+localStorage.getItem('bex-fixture')</script>"
                 } else {
@@ -180,6 +189,10 @@ async fn shared_browser_live() {
         .unwrap();
     assert_eq!(observed.tab_id, typed.tab_id);
     assert_eq!(observed.tabs[0].title, "日本語 inputAI input");
+    assert!(
+        observed.page_text.contains("textbox"),
+        "snapshot includes the page's input controls"
+    );
     let other_viewer = browser
         .request(&request(&thread_a, &typed, BrowserAction::Read))
         .await
@@ -239,15 +252,29 @@ async fn shared_browser_live() {
         "stale tab input must fail"
     );
     let status = browser.agent(&scope_b, BrowserAction::Read).await.unwrap();
-    let other = browser
+    let mut other = browser
         .request(&request(&thread_b, &status, BrowserAction::Read))
         .await
         .unwrap();
     assert_eq!(other.tabs.len(), 1);
-    let unchanged = browser
-        .request(&request(&thread_b, &other, BrowserAction::Read))
-        .await
-        .unwrap();
+    // The initial screenshot can be replaced by a screencast frame encoded at
+    // a different JPEG quality. Only an identical image ID suppresses its bytes.
+    let unchanged = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let current = browser
+                .request(&request(&thread_b, &other, BrowserAction::Read))
+                .await
+                .unwrap();
+            if current.image_id == other.image_id {
+                break current;
+            }
+            assert!(!current.image.is_empty(), "new images must be delivered");
+            other = current;
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the idle blank page must settle on an unchanged image");
     assert!(
         unchanged.image.is_empty(),
         "unchanged images must not consume network bandwidth"
@@ -284,6 +311,142 @@ async fn shared_browser_live() {
         isolated.tabs.iter().any(|tab| tab.title.trim() == "null"),
         "agent conversations must not share cookies or local storage"
     );
+    {
+        let mut state = browser.state.lock().await;
+        Browser::credential_action(
+            &mut state,
+            &scope_a,
+            credentials::Prepared::Cookies {
+                cookies: vec![credentials::Cookie {
+                    domain: address.ip().to_string(),
+                    name: "imported_session".into(),
+                    value: zeroize::Zeroizing::new("fixture-login".into()),
+                    path: "/".into(),
+                    secure: false,
+                    http_only: true,
+                    same_site: 1,
+                    expires: None,
+                }],
+                skipped: 0,
+            },
+        )
+        .await
+        .unwrap();
+    }
+    for (scope, expected) in [(&scope_a, "Logged in"), (&scope_b, "Logged out")] {
+        browser
+            .agent(
+                scope,
+                BrowserAction::Navigate {
+                    url: format!("http://{address}/authenticated"),
+                },
+            )
+            .await
+            .unwrap();
+        let mut authenticated = BrowserFrame::default();
+        for _ in 0..40 {
+            authenticated = browser.agent(scope, BrowserAction::Read).await.unwrap();
+            if authenticated.tabs.iter().any(|tab| tab.title == expected) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(
+            authenticated.tabs.iter().any(|tab| tab.title == expected),
+            "imported authentication stays in its shared conversation"
+        );
+        let visible = browser
+            .agent(
+                scope,
+                BrowserAction::Evaluate {
+                    expression: "document.cookie".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&visible.value).unwrap();
+        let cookies = value.as_str().unwrap();
+        if scope == &scope_a {
+            assert!(cookies.contains("bex_fixture=persisted"));
+        } else {
+            assert!(cookies.is_empty());
+        }
+        assert!(
+            !cookies.contains("imported_session"),
+            "HttpOnly cookies stay unavailable to page scripts"
+        );
+    }
     browser.shutdown().await;
     server.abort();
+}
+
+#[tokio::test]
+async fn credential_import_and_vault_access_are_explicit_client_actions() {
+    let root = tempfile::tempdir().unwrap();
+    // Agent credential requests must fail before starting Chrome or the Unix MCP bridge.
+    let browser = Browser {
+        profile: root.path().join("profile"),
+        executable: "unused-browser".into(),
+        state: Default::default(),
+        stop: Default::default(),
+        bridge_directory: root,
+    };
+    for action in [
+        BrowserAction::Credentials,
+        BrowserAction::ImportCookies {
+            profile: "Chrome/Default".into(),
+        },
+        BrowserAction::ImportPasswords {
+            profile: "Chrome/Default".into(),
+        },
+        BrowserAction::FillPassword {
+            origin: "https://example.test".into(),
+            username: "fixture-user".into(),
+        },
+        BrowserAction::DeletePasswords {
+            origin: "https://example.test".into(),
+        },
+    ] {
+        assert!(validate_tab("new-tab", "old-tab", &action).is_err());
+        assert!(validate_generation(2, 1, &action).is_err());
+        assert!(validate_generation(2, 2, &action).is_ok());
+        let error = browser.agent("thread", action).await.err().unwrap();
+        assert!(error.contains("ブラウザのメニュー"));
+    }
+    let state = browser.state.lock().await;
+    assert!(state.chrome.is_none());
+    assert!(state.pages.is_empty());
+}
+
+#[tokio::test]
+async fn empty_cookie_import_does_not_reload_or_create_a_browser() {
+    let mut state = State::default();
+    let result = Browser::credential_action(
+        &mut state,
+        "not-opened",
+        credentials::Prepared::Cookies {
+            cookies: Vec::new(),
+            skipped: 3,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(result.value.contains("取り込めるCookieがありません"));
+    assert!(state.chrome.is_none());
+    assert!(state.pages.is_empty());
+}
+
+#[test]
+fn passwords_only_target_the_displayed_https_origin() {
+    let current = Some("https://example.test");
+    assert!(validate_password_origin(current, "https://example.test").is_ok());
+    assert!(validate_password_origin(None, "https://example.test").is_err());
+    for requested in [
+        "https://sub.example.test",
+        "https://example.test:8443",
+        "http://example.test",
+        "https://example.test.attacker.test",
+    ] {
+        assert!(validate_password_origin(current, requested).is_err());
+    }
 }

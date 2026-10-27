@@ -272,6 +272,41 @@ impl Chrome {
         }
     }
 
+    #[cfg(any(target_os = "macos", test))]
+    pub(super) async fn install_cookies(
+        &mut self,
+        context: &str,
+        cookies: &[super::credentials::Cookie],
+    ) -> Result<(), String> {
+        if cookies.is_empty() {
+            return Ok(());
+        }
+        let parameters: Vec<_> = cookies
+            .iter()
+            .map(super::credentials::Cookie::params)
+            .collect();
+        self.call(
+            None,
+            "Storage.setCookies",
+            json!({"browserContextId":context,"cookies":parameters}),
+        )
+        .await?;
+        let installed = self
+            .call(
+                None,
+                "Storage.getCookies",
+                json!({"browserContextId":context}),
+            )
+            .await?;
+        let verified = installed["cookies"]
+            .as_array()
+            .is_some_and(|installed| cookies_installed(&parameters, installed));
+        if !verified {
+            return Err("一部のCookieを元の属性で保存できませんでした。保存済みのCookieもあります。再試行してください。".into());
+        }
+        Ok(())
+    }
+
     pub async fn targets(&mut self) -> Result<Vec<Target>, String> {
         let targets: Vec<Target> = serde_json::from_value(
             self.call(None, "Target.getTargets", json!({})).await?["targetInfos"].clone(),
@@ -473,7 +508,11 @@ impl Chrome {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
-    async fn evaluate(&mut self, session: &str, expression: &str) -> Result<Value, String> {
+    pub(super) async fn evaluate(
+        &mut self,
+        session: &str,
+        expression: &str,
+    ) -> Result<Value, String> {
         let result = self.call(Some(session), "Runtime.evaluate", json!({"expression":expression,"returnByValue":true,"awaitPromise":true,"timeout":3000})).await?;
         if result.get("exceptionDetails").is_some() {
             return Err(
@@ -1094,5 +1133,74 @@ mod tests {
                 .count(),
             1
         );
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn cookies_installed(expected: &[Value], installed: &[Value]) -> bool {
+    expected.iter().all(|expected| {
+        installed.iter().any(|cookie| {
+            cookie["session"].as_bool() == Some(expected.get("expires").is_none())
+                && cookie.get("sameSite") == expected.get("sameSite")
+                && expected.as_object().unwrap().iter().all(|(key, value)| {
+                    if key == "expires" {
+                        cookie[key].as_f64() == value.as_f64()
+                    } else {
+                        &cookie[key] == value
+                    }
+                })
+        })
+    })
+}
+
+#[cfg(test)]
+mod cookie_tests {
+    use super::{cookies_installed, json};
+    #[test]
+    fn verifies_scope_secrecy_lifetime_and_each_cookie_after_install() {
+        let expected = json!({"domain":".example.test","name":"login","value":"fixture-login","path":"/account","httpOnly":true,"secure":true,"sameSite":"Lax","expires":1_800_000_000});
+        let mut installed = expected.clone();
+        installed["session"] = false.into();
+        assert!(cookies_installed(
+            std::slice::from_ref(&expected),
+            std::slice::from_ref(&installed)
+        ));
+        for (key, value) in [
+            ("domain", json!("example.test")),
+            ("name", json!("other")),
+            ("value", json!("other")),
+            ("path", json!("/")),
+            ("httpOnly", json!(false)),
+            ("secure", json!(false)),
+            ("sameSite", json!("Strict")),
+            ("expires", json!(1_800_000_001)),
+            ("session", json!(true)),
+        ] {
+            let mut changed = installed.clone();
+            changed[key] = value;
+            assert!(
+                !cookies_installed(std::slice::from_ref(&expected), &[changed]),
+                "changed {key}"
+            );
+        }
+        assert!(!cookies_installed(std::slice::from_ref(&expected), &[]));
+        let mut another = expected.clone();
+        another["name"] = json!("another");
+        assert!(!cookies_installed(
+            &[expected.clone(), another],
+            &[installed]
+        ));
+        let mut session = expected;
+        session.as_object_mut().unwrap().remove("expires");
+        session.as_object_mut().unwrap().remove("sameSite");
+        let mut installed = session.clone();
+        installed["session"] = true.into();
+        installed["expires"] = (-1).into();
+        assert!(cookies_installed(
+            std::slice::from_ref(&session),
+            std::slice::from_ref(&installed)
+        ));
+        installed["sameSite"] = json!("Strict");
+        assert!(!cookies_installed(&[session], &[installed]));
     }
 }

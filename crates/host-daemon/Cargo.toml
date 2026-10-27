@@ -32,7 +32,8 @@ tokio = { workspace = true, features = ["fs", "io-std", "net"] }
 async-tungstenite = { version = "0.35", default-features = false, features = ["handshake", "futures-03-sink", "tokio-rustls-platform-verifier"] }
 futures-io = "0.3"
 tokio-util.workspace = true
-zeroize.workspace = true
+zeroize = { workspace = true, features = ["serde"] }
+url.workspace = true
 tempfile = "3"
 scopeguard = "1.2"
 atomicwrites = "0.4.4"
@@ -50,3 +51,12 @@ agent-core = { path = "../agent-core" }
 # Match desktop builds even when CI tests only the headless packages. With both
 # backends enabled, cold dictation must select a provider before starting TLS.
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+pbkdf2 = "0.12"
+sha1 = "0.10"
+sha2 = "0.10"
+rusqlite = { version = "0.37", features = ["bundled"] }
+security-framework = "3"

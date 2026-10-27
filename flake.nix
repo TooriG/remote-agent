@@ -113,7 +113,7 @@
                 lsof
                 alsa-lib fontconfig freetype libxkbcommon wayland libGL vulkan-loader
                 libxcb libX11 libXcursor libXi libXrandr
-                openssl gtk3 webkitgtk_4_1 procps
+                openssl procps
               ];
             LD_LIBRARY_PATH = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux
               (pkgs.lib.makeLibraryPath [ pkgs.vulkan-loader pkgs.libGL pkgs.libxkbcommon pkgs.wayland ]);

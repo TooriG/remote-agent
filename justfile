@@ -15,7 +15,7 @@ unit-tests *targets:
     set -uo pipefail
     failed=0
     node --test scripts/apple-*.test.mjs || failed=1
-    node --test apps/desktop/src/browser/password-fill.test.cjs || failed=1
+    node --test crates/host-daemon/src/browser/password-fill.test.cjs || failed=1
     pwsh -NoLogo -NoProfile -NonInteractive -File tools/windows-fxc/update.test.ps1 || failed=1
     npm --prefix crates/host-daemon/src/providers/claude/sdk ci --ignore-scripts --no-audit --no-fund || failed=1
     npm --prefix crates/host-daemon/src/providers/claude/sdk test || failed=1
@@ -72,9 +72,9 @@ ios-archive archive-path derived-data-path *args:
 ios-markdown:
     cargo xtask ios-markdown
 
-# Exercise the production Mac Browser view and WebKit persistence in fresh processes.
+# Exercise the Host-owned browser with isolated native clients.
 macos-e2e:
-    cargo test --locked --features agent-core/bindings -p bex-desktop --test chrome_cookie_webview
+    cargo nextest run --locked -p host-daemon --lib --run-ignored only -E 'test(=browser::tests::shared_browser_live)'
 
 # Build and test Store recovery, Markdown and network permission on a fresh Android 17 emulator.
 android-e2e:
@@ -117,7 +117,9 @@ conversation-ui:
         testSimulatorShowsAcceptedAdditionalInputBeforeCodexProcessesIt \
         testSimulatorKeepsFailedWorkCollapsedWithVisibleTerminalError \
         testSimulatorRetriesAFailedTaskOpenWithoutLosingItsDraft \
-        testSimulatorLoadsEarlierHistoryOnTapAndRetriesFailedPage
+        testSimulatorLoadsEarlierHistoryOnTapAndRetriesFailedPage \
+        testSimulatorWorkbenchStartsEmptyAndOwnsOnlyOpenedTabs \
+        testSimulatorBrowserUsesOneSharedImportMenu
 
 # Exercise the real iroh Host through the headless client.
 iroh-e2e:

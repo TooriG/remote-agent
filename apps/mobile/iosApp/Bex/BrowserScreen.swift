@@ -10,6 +10,8 @@ struct WorkspaceBrowserScreen: View {
     @State private var image: UIImage?
     @State private var address = ""
     @State private var text = ""
+    @State private var credentials: BrowserCredentials?
+    @State private var notice: String?
     @State private var error: String?
     @State private var connectionError: String?
     @State private var commands: [BrowserRequest] = []
@@ -66,6 +68,9 @@ struct WorkspaceBrowserScreen: View {
                     .textFieldStyle(.plain).focused($addressFocused).submitLabel(.go).onSubmit(open)
                     .accessibilityIdentifier("browser.address")
                 Menu {
+                    Button("ログイン状態・保存パスワード") { send(.credentials) }
+                        .accessibilityIdentifier("browser.credentials")
+                    Divider()
                     Button("新しいタブ") { send(.openTab(url: "about:blank")) }
                     Button("タブを閉じる") {
                         if let currentTab {
@@ -88,9 +93,10 @@ struct WorkspaceBrowserScreen: View {
                     Button("URL をコピー") { UIPasteboard.general.string = currentTab?.url }
                     Button("文字入力") { showKeyboard.toggle() }
                 } label: { Image(systemName: "ellipsis").frame(width: 36, height: 44) }
+                    .accessibilityLabel("ブラウザのメニュー").accessibilityIdentifier("browser.menu")
             }.font(.system(size: 14)).foregroundStyle(.secondary).padding(.horizontal, 4).disabled(!acceptsInput)
             Divider().opacity(0.6)
-            if let message = error ?? connectionError {
+            if let message = error ?? connectionError ?? notice {
                 BexNotice(text: message).padding(.horizontal)
             }
             if let dialog = frame?.dialog {
@@ -148,6 +154,15 @@ struct WorkspaceBrowserScreen: View {
                 }.padding(.horizontal).padding(.bottom, 8)
             }
         }
+        .sheet(isPresented: Binding(get: { credentials != nil }, set: {
+            if !$0 {
+                credentials = nil
+            }
+        })) {
+            if let credentials {
+                BrowserCredentialsSheet(credentials: credentials, send: send) { self.credentials = nil }
+            }
+        }
         .task(id: scenePhase == .active) {
             guard scenePhase == .active else { return }
             while !Task.isCancelled {
@@ -177,6 +192,11 @@ struct WorkspaceBrowserScreen: View {
     private func send(_ action: BrowserAction) {
         guard commands.count < 64 else { return }
         error = nil
+        credentials = nil
+        switch action {
+        case .importCookies, .importPasswords: notice = "ブラウザデータを取り込み中… 接続先のMacでOSのアクセス確認が出たら許可してください。"
+        default: notice = nil
+        }
         commands.append(request(action))
     }
 
@@ -190,6 +210,12 @@ struct WorkspaceBrowserScreen: View {
             let result = try await store.browser(request: request)
             guard !Task.isCancelled, scenePhase == .active else { return }
             frame = result
+            if let metadata = result.credentials {
+                credentials = metadata
+            }
+            if !result.value.isEmpty {
+                notice = result.value
+            }
             if !result.image.isEmpty {
                 image = UIImage(data: result.image)
             }
@@ -209,6 +235,48 @@ struct WorkspaceBrowserScreen: View {
             } else {
                 self.error = message
             }
+        }
+    }
+}
+
+private struct BrowserCredentialsSheet: View {
+    let credentials: BrowserCredentials
+    let send: (BrowserAction) -> Void
+    let close: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("接続先のブラウザから取り込む") {
+                    if credentials.profiles.isEmpty {
+                        Text("取り込めるブラウザプロファイルがありません。")
+                    }
+                    ForEach(credentials.profiles, id: \.label) { profile in
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text(profile.label)
+                            Button("ログイン状態（Cookie）") { send(.importCookies(profile: profile.id)) }
+                            Button("保存パスワード → Keychain") { send(.importPasswords(profile: profile.id)) }
+                        }.disabled(profile.id.isEmpty).padding(.vertical, 4)
+                    }
+                }
+                if let origin = credentials.origin {
+                    Section("保存パスワード · \(origin)") {
+                        if credentials.accounts.isEmpty {
+                            Text(credentials.passwordError ?? "このサイトの保存パスワードはありません。")
+                        }
+                        ForEach(credentials.accounts, id: \.self) { username in
+                            Button(username.isEmpty ? "ユーザー名なし" : username) {
+                                send(.fillPassword(origin: origin, username: username))
+                            }
+                        }
+                        Button("このサイトの保存パスワードを削除", role: .destructive) {
+                            send(.deletePasswords(origin: origin))
+                        }.disabled(credentials.accounts.isEmpty)
+                    }
+                }
+            }
+            .navigationTitle("ブラウザデータ").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("閉じる", action: close) } }
         }
     }
 }

@@ -37,17 +37,9 @@ class NetworkPermissionTest {
             assertTrue(device.takeScreenshot(File(context.getExternalFilesDir(null), "network-permission.png")))
             assertTrue(permissionVisible)
             device.findObject(By.text("許可して接続")).click()
-            val deny = By.res("com.android.permissioncontroller", "permission_deny_button").enabled(true)
-            val denyVisible = device.wait(Until.hasObject(deny), 10_000)
-            if (!denyVisible) {
-                throw permissionFailure("Local-network permission denial dialog did not appear", activity.state, device)
+            if (!dismissPermissionDialog(device, "permission_deny_button")) {
+                throw permissionFailure("Permission dialog did not close after denying access", activity.state, device)
             }
-            device.waitForIdle()
-            device.findObject(deny).click()
-            assertTrue(
-                "Permission dialog must close after denying access",
-                device.wait(Until.gone(deny), 10_000),
-            )
             if (!device.wait(Until.hasObject(By.text("アプリの設定を開く")), 10_000)) {
                 throw permissionFailure("App settings did not appear after permission denial", activity.state, device)
             }
@@ -74,14 +66,9 @@ class NetworkPermissionTest {
         ActivityScenario.launch(MainActivity::class.java).use { activity ->
             assertTrue(device.wait(Until.hasObject(By.text("許可して接続")), 10_000))
             device.findObject(By.text("許可して接続")).click()
-            val allow = By.res("com.android.permissioncontroller", "permission_allow_button").enabled(true)
-            assertTrue(device.wait(Until.hasObject(allow), 10_000))
-            device.waitForIdle()
-            device.findObject(allow).click()
-            assertTrue(
-                "Permission dialog must close after allowing access",
-                device.wait(Until.gone(allow), 10_000),
-            )
+            if (!dismissPermissionDialog(device, "permission_allow_button")) {
+                throw permissionFailure("Permission dialog did not close after allowing access", activity.state, device)
+            }
             assertTrue(device.wait(Until.hasObject(By.text("PCとペアリング")), 10_000))
             assertEquals(
                 PackageManager.PERMISSION_GRANTED,
@@ -94,6 +81,19 @@ class NetworkPermissionTest {
             assertEquals("bex-os-network-ok", readLocalHost())
             assertTrue(device.takeScreenshot(File(context.getExternalFilesDir(null), "network-permission-granted.png")))
         }
+    }
+
+    private fun dismissPermissionDialog(device: UiDevice, resource: String): Boolean {
+        val button = By.res("com.android.permissioncontroller", resource)
+        if (!device.wait(Until.hasObject(button), 10_000)) return false
+        repeat(3) {
+            device.waitForIdle()
+            // Re-find the same system button if an injected tap leaves its dialog visible.
+            val current = device.findObject(button)
+            if (current?.isEnabled == true) current.click()
+            if (device.wait(Until.gone(button), 3_000)) return true
+        }
+        return false
     }
 
     private fun permissionFailure(message: String, activityState: Lifecycle.State, device: UiDevice): AssertionError {
