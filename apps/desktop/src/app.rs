@@ -52,7 +52,7 @@ enum OperationCompletion {
     Busy,
     Composer(u64),
     Editor(u64),
-    Item { generation: u64, turn_id: TurnId },
+    Item { generation: u64, item_id: ItemId },
     WorktreeSettings,
     Request(RequestId),
     Dictation(uuid::Uuid),
@@ -162,7 +162,11 @@ struct MarkdownContent {
 #[derive(Clone)]
 enum ConversationRow {
     History(agent_core::presentation::conversation::HistoryControl),
-    Turn(Arc<agent_core::presentation::conversation::RenderedTurn>),
+    Turn {
+        turn: Arc<agent_core::presentation::conversation::RenderedTurn>,
+        index: usize,
+        last: bool,
+    },
     Pending(String, Arc<PendingSubmission>),
     Request(Box<agent_core::presentation::conversation::Request>),
 }
@@ -170,7 +174,14 @@ impl ConversationRow {
     fn same_identity(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::History(_), Self::History(_)) => true,
-            (Self::Turn(a), Self::Turn(b)) => a.source.id == b.source.id,
+            (
+                Self::Turn {
+                    turn: a, index: ai, ..
+                },
+                Self::Turn {
+                    turn: b, index: bi, ..
+                },
+            ) => a.source.id == b.source.id && a.rows[*ai].id == b.rows[*bi].id,
             (Self::Pending(a, _), Self::Pending(b, _)) => a == b,
             (Self::Request(a), Self::Request(b)) => a.id == b.id,
             _ => false,
@@ -179,7 +190,68 @@ impl ConversationRow {
     fn unchanged(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::History(a), Self::History(b)) => a == b,
-            (Self::Turn(a), Self::Turn(b)) => Arc::ptr_eq(a, b),
+            (
+                Self::Turn {
+                    turn: a,
+                    index: ai,
+                    last: al,
+                },
+                Self::Turn {
+                    turn: b,
+                    index: bi,
+                    last: bl,
+                },
+            ) => {
+                let a_row = &a.rows[*ai];
+                let b_row = &b.rows[*bi];
+                if al != bl || a_row.timestamp_ms != b_row.timestamp_ms {
+                    return false;
+                }
+                match (&a_row.content, &b_row.content) {
+                    (
+                        ConversationRowContent::User { item: a },
+                        ConversationRowContent::User { item: b },
+                    )
+                    | (
+                        ConversationRowContent::Activity { item: a, .. },
+                        ConversationRowContent::Activity { item: b, .. },
+                    ) => Arc::ptr_eq(a, b),
+                    (
+                        ConversationRowContent::Response {
+                            item: a,
+                            fork_turn_id: af,
+                        },
+                        ConversationRowContent::Response {
+                            item: b,
+                            fork_turn_id: bf,
+                        },
+                    ) => Arc::ptr_eq(a, b) && af == bf,
+                    (
+                        ConversationRowContent::ActivityHeader { activity: x },
+                        ConversationRowContent::ActivityHeader { activity: y },
+                    ) => {
+                        x == y
+                            && (!x.is_in_progress || a.work_progress(true) == b.work_progress(true))
+                    }
+                    (
+                        ConversationRowContent::InProgress { .. },
+                        ConversationRowContent::InProgress { .. },
+                    ) => a.work_progress(false) == b.work_progress(false),
+                    (
+                        ConversationRowContent::ProviderHandoff { text: a },
+                        ConversationRowContent::ProviderHandoff { text: b },
+                    ) => a == b,
+                    (
+                        ConversationRowContent::PendingRequest { request: a },
+                        ConversationRowContent::PendingRequest { request: b },
+                    ) => a == b,
+                    (
+                        ConversationRowContent::Error { error: a },
+                        ConversationRowContent::Error { error: b },
+                    ) => a == b,
+                    _ => false,
+                }
+            }
             (Self::Pending(a, x), Self::Pending(b, y)) => a == b && Arc::ptr_eq(x, y),
             (Self::Request(a), Self::Request(b)) => a == b,
             _ => false,
@@ -293,7 +365,7 @@ impl Desktop {
                     .timer(std::time::Duration::from_secs(1))
                     .await;
                 if view
-                    .update(cx, |view, cx| {
+                    .update(cx, |view, _| {
                         if view.account_polling
                             && !view.account_busy
                             && view.snapshot.connected
@@ -310,10 +382,6 @@ impl Desktop {
                                 }),
                                 OperationCompletion::Account,
                             );
-                        }
-                        if let Some(id) = view.thread().and_then(|thread| thread.active_turn_id()) {
-                            view.remeasure_item(&id);
-                            cx.notify();
                         }
                     })
                     .is_err()
@@ -821,13 +889,13 @@ impl Desktop {
             }
             OperationCompletion::Item {
                 generation,
-                turn_id,
+                item_id,
             } => {
                 if self.snapshot.epoch != generation {
                     return;
                 }
                 self.accept_snapshot(window, cx);
-                self.remeasure_item(&turn_id);
+                self.remeasure_item(item_id.as_str());
                 return;
             }
             OperationCompletion::WorktreeSettings => {
@@ -1058,7 +1126,7 @@ impl Desktop {
                 &self.snapshot.pending_submissions,
             )
         {
-            self.sync_rows(navigated, window, cx);
+            self.sync_rows(navigated);
         }
         let user_items_changed = {
             let mut current = self.user_items();
@@ -1185,7 +1253,7 @@ impl Desktop {
                 )
             })
     }
-    fn sync_rows(&mut self, reset: bool, window: &mut Window, cx: &mut Context<Self>) {
+    fn sync_rows(&mut self, reset: bool) {
         self.rendered = self.snapshot.conversation_thread().map(|thread| {
             agent_core::presentation::conversation::project_conversation(
                 &self.snapshot,
@@ -1193,7 +1261,7 @@ impl Desktop {
                 &self.rendered,
             )
         });
-        let mut rows = conversation_rows(&self.rendered);
+        let mut rows = conversation_rows(&self.rendered, &self.expanded_work);
         if let Some(control) = self
             .selected()
             .cloned()
@@ -1219,42 +1287,44 @@ impl Desktop {
             .zip(rows[prefix..].iter().rev())
             .take_while(|(a, b)| a.same_identity(b))
             .count();
+        let structure_changed = prefix + suffix != old.len() || old.len() != rows.len();
         let anchor = self.list.logical_scroll_top();
-        // The history control is a list header in T3. Anchor to the first
-        // conversation row when older rows are inserted while that header is visible.
-        let history_anchor = (anchor.item_ix == 0
-            && matches!(old.first(), Some(ConversationRow::History(_)))
-            && suffix == old.len() - 1)
+        // Match T3's maintainVisibleContentPosition: retain a visible row by
+        // identity, even when a preceding history/work header is replaced.
+        let visible_anchor = (structure_changed && !self.list.is_following_tail())
             .then(|| {
-                self.list.bounds_for_item(1).map(|bounds| ListOffset {
-                    item_ix: rows.len() - suffix,
-                    offset_in_item: self.list.viewport_bounds().top() - bounds.top(),
-                })
+                let viewport = self.list.viewport_bounds();
+                for (index, row) in old.iter().enumerate().skip(anchor.item_ix) {
+                    let bounds = self.list.bounds_for_item(index)?;
+                    if bounds.top() >= viewport.bottom() {
+                        break;
+                    }
+                    match row {
+                        ConversationRow::History(_) => continue,
+                        ConversationRow::Turn { turn, index, .. }
+                            if matches!(
+                                turn.rows[*index].content,
+                                ConversationRowContent::ActivityHeader { .. }
+                                    | ConversationRowContent::InProgress { .. }
+                            ) =>
+                        {
+                            continue;
+                        }
+                        _ => (),
+                    }
+                    if bounds.bottom() > viewport.top()
+                        && let Some(item_ix) = rows.iter().position(|next| row.same_identity(next))
+                    {
+                        return Some(ListOffset {
+                            item_ix,
+                            offset_in_item: viewport.top() - bounds.top(),
+                        });
+                    }
+                }
+                None
             })
             .flatten();
-        let preserve = old
-            .get(anchor.item_ix)
-            .zip(rows.get(anchor.item_ix))
-            .filter(|(a, b)| a.same_identity(b) && !a.unchanged(b))
-            .and_then(|(a, b)| {
-                if let (ConversationRow::Turn(turn), ConversationRow::Turn(next)) = (a, b)
-                    && let Some(first) = turn.source.items.as_ref().and_then(|items| items.first())
-                    && next.source.items.as_ref().is_some_and(|items| {
-                        items
-                            .iter()
-                            .position(|item| item.id == first.id)
-                            .is_some_and(|index| index > 0)
-                    })
-                {
-                    Some((
-                        turn.source.id.clone(),
-                        self.list.bounds_for_item(anchor.item_ix)?.size.height,
-                    ))
-                } else {
-                    None
-                }
-            });
-        if prefix + suffix != old.len() || old.len() != rows.len() {
+        if structure_changed {
             self.list
                 .splice(prefix..old.len() - suffix, rows.len() - prefix - suffix);
         }
@@ -1270,19 +1340,8 @@ impl Desktop {
             }
         }
         self.rows = rows;
-        if let Some(anchor) = history_anchor {
+        if let Some(anchor) = visible_anchor {
             self.list.scroll_to(anchor);
-        }
-        if let Some((id, old_height)) = preserve {
-            let generation = self.snapshot.epoch;
-            let owner = cx.entity().downgrade();
-            window.on_next_frame(move |_, cx| { let _ = owner.update(cx, |view, cx| {
-                if view.snapshot.epoch == generation && !view.list.is_following_tail() && matches!(view.rows.get(anchor.item_ix), Some(ConversationRow::Turn(turn)) if turn.source.id == id)
-                    && let Some(bounds) = view.list.bounds_for_item(anchor.item_ix)
-                {
-                    view.list.scroll_to(ListOffset { item_ix: anchor.item_ix, offset_in_item: anchor.offset_in_item + bounds.size.height - old_height }); cx.notify();
-                }
-            }); });
         }
     }
     fn pause_tail(&self) {
@@ -1294,15 +1353,23 @@ impl Desktop {
     }
     fn remeasure_item(&self, id: &str) {
         for (index, row) in self.rows.iter().enumerate() {
-            if let ConversationRow::Turn(turn) = row
-                && (turn.source.id.as_str() == id
-                    || turn
-                        .source
-                        .items
-                        .as_deref()
-                        .unwrap_or_default()
-                        .iter()
-                        .any(|item| item.id.as_str() == id))
+            if let ConversationRow::Turn {
+                turn,
+                index: row_index,
+                ..
+            } = row
+                && match &turn.rows[*row_index].content {
+                    ConversationRowContent::User { item }
+                    | ConversationRowContent::Activity { item, .. }
+                    | ConversationRowContent::Response { item, .. } => {
+                        item.data
+                            .native_id
+                            .as_ref()
+                            .map_or(item.data.id.as_str(), |native| native.as_str())
+                            == id
+                    }
+                    _ => false,
+                }
             {
                 self.list.remeasure_items(index..index + 1);
             }
@@ -1346,12 +1413,12 @@ impl Desktop {
             return;
         }
         let generation = self.snapshot.epoch;
-        let turn_id = read.turn_id.clone();
+        let item_id = read.item_id.clone();
         self.perform(
             Intent::ReadItem(read),
             OperationCompletion::Item {
                 generation,
-                turn_id,
+                item_id,
             },
         );
     }
@@ -1940,10 +2007,38 @@ impl Desktop {
 }
 fn conversation_rows(
     rendered: &Option<Arc<agent_core::presentation::conversation::RenderedConversation>>,
+    expanded_work: &HashMap<String, agent_core::presentation::conversation::ActivityExpansion>,
 ) -> Vec<ConversationRow> {
     let mut rows = Vec::new();
     if let Some(rendered) = rendered {
-        rows.extend(rendered.turns.iter().cloned().map(ConversationRow::Turn));
+        // T3's timeline virtualizes messages and work rows, never an entire
+        // provider turn. A long-running turn must not mount its offscreen text.
+        for turn in &rendered.turns {
+            let start = rows.len();
+            let mut expanded = false;
+            for (index, row) in turn.rows.iter().enumerate() {
+                match &row.content {
+                    ConversationRowContent::ActivityHeader { activity } => {
+                        expanded = agent_core::presentation::conversation::activity_is_expanded(
+                            activity,
+                            expanded_work.get(&activity.id).cloned(),
+                        );
+                    }
+                    ConversationRowContent::Activity { .. } if !expanded => continue,
+                    _ => (),
+                }
+                rows.push(ConversationRow::Turn {
+                    turn: turn.clone(),
+                    index,
+                    last: false,
+                });
+            }
+            if rows.len() > start
+                && let Some(ConversationRow::Turn { last, .. }) = rows.last_mut()
+            {
+                *last = true;
+            }
+        }
         rows.extend(rendered.queued.iter().filter_map(|item| {
             if let agent_core::presentation::conversation::ItemSource::Pending(id, pending) =
                 &item.source
@@ -2096,8 +2191,8 @@ mod error_tests {
 #[cfg(test)]
 mod completion_tests {
     use super::{
-        Arc, Context, ConversationRow, Desktop, Mode, OperationCompletion, Outcome, Snapshot,
-        Thread, Update, Window, conversation_rows,
+        Arc, Context, ConversationRow, ConversationRowContent, Desktop, Mode, OperationCompletion,
+        Outcome, Snapshot, Thread, Update, Window, conversation_rows,
     };
     use gpui_kit as gpui;
     use gpui_kit::TestAppContext;
@@ -2240,18 +2335,41 @@ mod completion_tests {
                 &None,
             ),
         );
-        let rows = conversation_rows(&rendered);
-        let repeated = conversation_rows(&rendered);
-        assert_eq!(rows.len(), 3);
-        for (index, turn) in source.turns.as_ref().unwrap().iter().enumerate() {
-            let ConversationRow::Turn(row) = &rows[index] else {
-                panic!("missing turn")
-            };
-            assert!(Arc::ptr_eq(&row.source, turn));
+        let rows = conversation_rows(&rendered, &Default::default());
+        let repeated = conversation_rows(&rendered, &Default::default());
+        let messages: Vec<_> = rows
+            .iter()
+            .filter_map(|row| {
+                let ConversationRow::Turn { turn, index, .. } = row else {
+                    return None;
+                };
+                let ConversationRowContent::Response { item, .. } = &turn.rows[*index].content
+                else {
+                    return None;
+                };
+                Some((&turn.source, item.data.body.as_deref()))
+            })
+            .collect();
+        assert_eq!(messages.len(), 2);
+        for ((row, body), (turn, expected)) in messages.iter().zip(
+            source
+                .turns
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(["first answer", "second answer"]),
+        ) {
+            assert!(Arc::ptr_eq(row, turn));
+            assert_eq!(*body, Some(expected));
         }
-        assert!(
-            matches!(&rows[2], ConversationRow::Request(request) if request.id.as_str() == "global")
-        );
+        let requests: Vec<_> = rows
+            .iter()
+            .filter_map(|row| match row {
+                ConversationRow::Request(request) => Some(request.id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(requests, ["global"]);
         assert!(rows.iter().zip(&repeated).all(|(a, b)| a.unchanged(b)));
         assert_eq!(snapshot, before);
     }

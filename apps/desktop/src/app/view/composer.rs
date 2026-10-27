@@ -239,18 +239,18 @@ impl Desktop {
             })
             .into_any_element()
     }
-    pub(super) fn chat(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn conversation_list(&self, cx: &Context<Self>) -> List {
         let entity = cx.entity().downgrade();
-        let history = list(self.list.clone(), move |index, _, cx| {
+        list(self.list.clone(), move |index, window, cx| {
             entity
                 .update(cx, |view, cx| match view.rows.get(index).cloned() {
                     Some(ConversationRow::History(control)) => view.history_control(control, cx),
-                    Some(ConversationRow::Turn(turn)) => {
+                    Some(ConversationRow::Turn { turn, index, last }) => {
                         let session = view
                             .rendered
                             .as_ref()
                             .and_then(|conversation| conversation.source.id.clone());
-                        view.turn(session.as_ref(), &turn, cx)
+                        view.turn_row(session.as_ref(), &turn, index, last, window, cx)
                     }
                     Some(ConversationRow::Pending(id, pending)) => {
                         let row = view.pending_item(&id, &pending, cx);
@@ -268,7 +268,10 @@ impl Desktop {
                 .unwrap_or_else(|_| div().into_any_element())
         })
         .flex_1()
-        .min_h_0();
+        .min_h_0()
+    }
+    pub(super) fn chat(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let history = self.conversation_list(cx);
         let mut body = v_flex()
             .debug_selector(|| "conversation-chat".into())
             .flex_1()
@@ -666,7 +669,7 @@ mod composer_tests {
                     cx,
                 )
             });
-            desktop.update(cx, |view, cx| {
+            desktop.update(cx, |view, _| {
                 let snapshot = Arc::make_mut(&mut view.snapshot);
                 let navigation = Arc::make_mut(&mut snapshot.navigation);
                 navigation.thread_id = Some(session.clone());
@@ -685,7 +688,7 @@ mod composer_tests {
                         ..Default::default()
                     }),
                 );
-                view.sync_rows(true, window, cx);
+                view.sync_rows(true);
                 view.list.scroll_to(ListOffset::default());
             });
             handle = Some(desktop.clone());
@@ -704,7 +707,7 @@ mod composer_tests {
                 view.list.bounds_for_item(1).unwrap().top()
             })
         });
-        window.update(|window, cx| {
+        window.update(|_, cx| {
             desktop.update(cx, |view, cx| {
                 let thread = Arc::make_mut(
                     Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).conversations)
@@ -712,7 +715,7 @@ mod composer_tests {
                         .unwrap(),
                 );
                 thread.turns = Some(turns(0..8));
-                view.sync_rows(false, window, cx);
+                view.sync_rows(false);
                 cx.notify();
             })
         });
@@ -730,7 +733,7 @@ mod composer_tests {
             session: session.clone(),
         };
         let mut store_handle = None;
-        window.update(|window, cx| {
+        window.update(|_, cx| {
             desktop.update(cx, |view, cx| {
                 let store = runtime.block_on(async {
                     Arc::new(agent_core::store::Store::offline((*view.snapshot).clone()))
@@ -749,7 +752,7 @@ mod composer_tests {
                     receive.recv().await.unwrap().unwrap().unwrap()
                 }));
                 store_handle = Some(store);
-                view.sync_rows(false, window, cx);
+                view.sync_rows(false);
                 cx.notify();
             })
         });
@@ -800,7 +803,7 @@ mod composer_tests {
             window.debug_bounds("conversation-history-load").is_some(),
             "the same control remains available to retry"
         );
-        window.update(|window, cx| {
+        window.update(|_, cx| {
             desktop.update(cx, |view, cx| {
                 view.session.take();
                 let snapshot = Arc::make_mut(&mut view.snapshot);
@@ -812,7 +815,7 @@ mod composer_tests {
                 );
                 thread.history_has_more = Some(false);
                 thread.history_cursor = None;
-                view.sync_rows(false, window, cx);
+                view.sync_rows(false);
                 cx.notify();
             })
         });

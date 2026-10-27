@@ -470,7 +470,7 @@ impl Operation for ListSessions {
 pub use agent_protocol::operations::ReadItem;
 
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoadTurnItems {
     pub thread_id: crate::session::SessionRef,

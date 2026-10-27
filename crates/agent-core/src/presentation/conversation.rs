@@ -84,7 +84,7 @@ pub enum ConversationRowContent {
         turn_id: agent_protocol::ids::TurnId,
     },
 }
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ActivityPresentation {
     pub id: String,
@@ -135,17 +135,48 @@ impl RenderedTurn {
     }
 
     pub fn progress_label(&self, include_action: bool, now_seconds: f64) -> String {
-        let action = self.rows.iter().rev().find_map(|row| match &row.content {
-            ConversationRowContent::Activity { item, .. } if include_action => {
-                item.data.title.as_deref()
-            }
-            _ => None,
-        });
-        progress_label(&self.source, action, now_seconds)
+        self.work_progress(include_action).label(now_seconds)
+    }
+}
+
+#[derive(Clone, PartialEq)]
+pub struct WorkProgress {
+    started_at: Option<f64>,
+    action: Option<String>,
+}
+
+impl WorkProgress {
+    pub fn label(&self, now_seconds: f64) -> String {
+        let elapsed = self
+            .started_at
+            .map(|started| format!("{}秒 ", (now_seconds - started).max(0.) as u64))
+            .unwrap_or_default();
+        match self.action.as_deref().filter(|action| !action.is_empty()) {
+            Some(action) => format!("{elapsed}作業中 · {action}"),
+            None => format!("{elapsed}作業中…"),
+        }
     }
 }
 
 impl RenderedTurn {
+    pub fn work_progress(&self, include_action: bool) -> WorkProgress {
+        let action = if include_action {
+            self.rows.iter().rev().find_map(|row| match &row.content {
+                ConversationRowContent::Activity { item, .. } => item.data.title.as_deref(),
+                _ => None,
+            })
+        } else {
+            None
+        };
+        WorkProgress {
+            started_at: self.source.started_at.or_else(|| {
+                self.source
+                    .started_at_ms
+                    .map(|milliseconds| milliseconds as f64 / 1000.)
+            }),
+            action: action.map(str::to_owned),
+        }
+    }
     fn items(&self) -> impl Iterator<Item = &Arc<RenderedItem>> {
         self.rows.iter().filter_map(|row| match &row.content {
             ConversationRowContent::User { item }
@@ -156,7 +187,7 @@ impl RenderedTurn {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct TurnErrorPresentation {
     pub title: String,
@@ -1683,20 +1714,6 @@ mod tests {
     }
 }
 
-fn progress_label(turn: &models::Turn, action: Option<&str>, now_seconds: f64) -> String {
-    let started = turn.started_at.as_ref().copied().or_else(|| {
-        turn.started_at_ms
-            .map(|milliseconds| milliseconds as f64 / 1000.)
-    });
-    let elapsed = started
-        .map(|started| format!("{}秒 ", (now_seconds - started).max(0.) as u64))
-        .unwrap_or_default();
-    match action.filter(|action| !action.is_empty()) {
-        Some(action) => format!("{elapsed}作業中 · {action}"),
-        None => format!("{elapsed}作業中…"),
-    }
-}
-
 #[cfg(test)]
 mod progress_tests {
     use super::*;
@@ -1705,18 +1722,60 @@ mod progress_tests {
         for value in [
             serde_json::json!({"id":"t","startedAt":100.5}),
             serde_json::json!({"id":"t","startedAtMs":100500}),
+            serde_json::json!({"id":"t","startedAt":100.5,"startedAtMs":0}),
         ] {
-            let turn = serde_json::from_value(value).unwrap();
-            assert_eq!(
-                progress_label(&turn, Some("cargo test"), 108.5),
-                "8秒 作業中 · cargo test"
-            );
-            assert_eq!(progress_label(&turn, None, 110.5), "10秒 作業中…");
-            assert_eq!(progress_label(&turn, None, 99.), "0秒 作業中…");
+            let source = Arc::new(serde_json::from_value(value).unwrap());
+            let turn = RenderedTurn {
+                source,
+                pending: Default::default(),
+                requests: vec![],
+                rows: vec![],
+            };
+            let mut progress = turn.work_progress(false);
+            progress.action = Some("cargo test".into());
+            assert_eq!(progress.label(108.5), "8秒 作業中 · cargo test");
+            assert_eq!(turn.progress_label(false, 110.5), "10秒 作業中…");
+            assert_eq!(turn.progress_label(false, 99.), "0秒 作業中…");
         }
         assert_eq!(
-            progress_label(&models::Turn::default(), None, 100.),
+            WorkProgress {
+                started_at: None,
+                action: None
+            }
+            .label(100.),
             "作業中…"
+        );
+        assert_eq!(
+            WorkProgress {
+                started_at: None,
+                action: Some(String::new())
+            }
+            .label(100.),
+            "作業中…"
+        );
+    }
+
+    #[test]
+    fn progress_retains_only_the_latest_action_and_start_time() {
+        let source = Arc::new(serde_json::from_value(serde_json::json!({
+            "id":{"provider":"codex", "id":"fixture"},
+            "turns":[{"id":"turn", "status":"running", "startedAt":100.5, "items":[
+                {"id":"first", "body":{"inline":{"body":{"commandExecution":{"command":"first", "output":"", "exitCode":0}}}}},
+                {"id":"second", "status":"running", "body":{"inline":{"body":{"webSearch":{"query":"latest action"}}}}}
+            ]}]
+        })).unwrap());
+        let conversation = project_conversation(&Snapshot::default(), source, &None);
+        let turn = &conversation.turns[0];
+        assert_eq!(
+            turn.progress_label(true, 108.5),
+            "8秒 作業中 · Webを検索: latest action"
+        );
+        assert_eq!(turn.progress_label(false, 108.5), "8秒 作業中…");
+        let progress = turn.work_progress(true);
+        drop(conversation);
+        assert_eq!(
+            progress.label(110.5),
+            "10秒 作業中 · Webを検索: latest action"
         );
     }
 }

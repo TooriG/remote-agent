@@ -1,7 +1,61 @@
 use super::*;
 use agent_core::presentation::conversation::{
-    ActivityExpansion, ConversationRowContent, activity_is_expanded,
+    ActivityExpansion, ConversationRowContent, WorkProgress, activity_is_expanded,
 };
+
+struct WorkProgressView {
+    progress: WorkProgress,
+    _clock: Task<()>,
+}
+
+impl WorkProgressView {
+    fn view(id: &str, progress: WorkProgress, window: &mut Window, cx: &mut App) -> Entity<Self> {
+        // use_keyed_state observes its entity and notifies the parent view.
+        // Retain the clock without forwarding each tick to the conversation.
+        let view = window.with_global_id(
+            SharedString::from(format!("work-progress-{id}")).into(),
+            |id, window| {
+                window.with_element_state::<Entity<Self>, _>(id, |retained, _| {
+                    let view = retained.unwrap_or_else(|| {
+                        cx.new(|cx| Self {
+                            progress: progress.clone(),
+                            _clock: cx.spawn(async move |view, cx| {
+                                loop {
+                                    cx.background_executor()
+                                        .timer(std::time::Duration::from_secs(1))
+                                        .await;
+                                    if view.update(cx, |_, cx| cx.notify()).is_err() {
+                                        break;
+                                    }
+                                }
+                            }),
+                        })
+                    });
+                    (view.clone(), view)
+                })
+            },
+        );
+        view.update(cx, |view, cx| {
+            if view.progress != progress {
+                view.progress = progress;
+                cx.notify();
+            }
+        });
+        view
+    }
+    fn label(&self) -> String {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0., |duration| duration.as_secs_f64());
+        self.progress.label(now)
+    }
+}
+
+impl Render for WorkProgressView {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().child(self.label())
+    }
+}
 
 impl Desktop {
     pub(super) fn conversation_navigation(&self, cx: &Context<Self>) -> AnyElement {
@@ -10,15 +64,20 @@ impl Desktop {
             .iter()
             .enumerate()
             .filter_map(|(index, row)| {
-                let ConversationRow::Turn(turn) = row else {
+                let ConversationRow::Turn {
+                    turn,
+                    index: row_index,
+                    ..
+                } = row
+                else {
                     return None;
                 };
-                turn.rows.iter().find_map(|row| match &row.content {
+                match &turn.rows[*row_index].content {
                     ConversationRowContent::User { item } => {
                         item.data.body.as_ref().map(|text| (index, text, turn))
                     }
                     _ => None,
-                })
+                }
             })
             .collect();
         let count = entries.len().min(8);
@@ -208,7 +267,7 @@ impl Desktop {
                 .child(
                     self.button(format!("detail-{id}"), label, cx, move |s, _, _| {
                         s.detail(key.0.clone(), key.1.clone());
-                        s.remeasure_item(&key.0);
+                        s.remeasure_item(key.1.as_str());
                     }),
                 )
                 .into_any_element();
@@ -471,244 +530,278 @@ impl Desktop {
             }
         }
     }
-    pub(super) fn turn(
+    pub(super) fn turn_row(
         &mut self,
         session: Option<&SessionRef>,
         projected: &Arc<agent_core::presentation::conversation::RenderedTurn>,
+        index: usize,
+        last: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let turn = &projected.source;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0., |duration| duration.as_secs_f64());
         let mut body = v_flex().w_full().max_w(px(CHAT_WIDTH)).gap_4();
-        let mut expanded = false;
-        for row in &projected.rows {
-            match &row.content {
-                ConversationRowContent::User { item } => {
-                    body = body.child(self.projected_item(item, turn, cx));
-                }
-                ConversationRowContent::ActivityHeader { activity } => {
-                    let id = &activity.id;
-                    expanded = activity_is_expanded(activity, self.expanded_work.get(id).cloned());
-                    let label = if activity.is_in_progress {
-                        projected.progress_label(!expanded, now)
-                    } else {
-                        activity.activity_summary.clone()
-                    };
-                    let header = if activity.activity_can_collapse {
-                        let toggle = id.clone();
-                        let status = activity.status.clone();
-                        let turn_id = turn.id.clone();
-                        let load_items = activity.load_items.clone();
-                        self.button(
-                            format!("work-{id}"),
-                            format!("{label} {}", if expanded { "⌄" } else { "›" }),
-                            cx,
-                            move |view, _, _| {
-                                view.expanded_work.insert(
-                                    toggle.clone(),
-                                    ActivityExpansion {
-                                        status: status.clone(),
-                                        expanded: !expanded,
-                                    },
-                                );
-                                if !expanded && let Some(params) = &load_items {
-                                    view.dispatch(Intent::LoadTurnItems(params.clone()));
-                                }
-                                view.pause_tail();
-                                view.remeasure_item(&turn_id);
-                            },
-                        )
+        let row = &projected.rows[index];
+        match &row.content {
+            ConversationRowContent::User { item } => {
+                body = body.child(self.projected_item(item, turn, cx));
+            }
+            ConversationRowContent::ActivityHeader { activity } => {
+                let id = &activity.id;
+                let expanded = activity_is_expanded(activity, self.expanded_work.get(id).cloned());
+                let (label, content) = if activity.is_in_progress {
+                    let view = WorkProgressView::view(
+                        &row.id,
+                        projected.work_progress(!expanded),
+                        window,
+                        cx,
+                    );
+                    (view.read(cx).label(), view.into_any_element())
+                } else {
+                    let label = activity.activity_summary.clone();
+                    (label.clone(), div().child(label).into_any_element())
+                };
+                let header = if activity.activity_can_collapse {
+                    let toggle = id.clone();
+                    let status = activity.status.clone();
+                    let load_items = activity.load_items.clone();
+                    Button::new(format!("work-{id}"))
+                        .accessibility_label(format!(
+                            "{label} {}",
+                            if expanded { "⌄" } else { "›" }
+                        ))
+                        .small()
+                        .ghost()
+                        .child(div().flex_1().min_w_0().text_ellipsis().child(content))
+                        .child(if expanded { "⌄" } else { "›" })
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            view.expanded_work.insert(
+                                toggle.clone(),
+                                ActivityExpansion {
+                                    status: status.clone(),
+                                    expanded: !expanded,
+                                },
+                            );
+                            if !expanded && let Some(params) = &load_items {
+                                view.dispatch(Intent::LoadTurnItems(params.clone()));
+                            }
+                            view.pause_tail();
+                            view.sync_rows(false);
+                            cx.notify();
+                        }))
                         .text_color(rgb(appearance::MUTED))
                         .into_any_element()
-                    } else {
-                        div()
-                            .text_color(rgb(appearance::MUTED))
-                            .child(label.clone())
-                            .into_any_element()
-                    };
-                    let selector = format!("work-{id}");
-                    body = body.child(
-                        h_flex()
-                            .debug_selector(move || selector.clone())
-                            .gap_2()
-                            .child(header)
-                            .when(activity.is_in_progress, |row| {
-                                row.child(spinner::Spinner::new().small())
-                            }),
-                    );
-                }
-                ConversationRowContent::Activity { item, .. } => {
-                    if expanded {
-                        body = body.child(self.projected_item(item, turn, cx));
-                    }
-                }
-                ConversationRowContent::PendingRequest { request } => {
-                    body = body.child(self.request_card(request, cx));
-                }
-                ConversationRowContent::ProviderHandoff { text } => {
-                    body = body.child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(appearance::MUTED))
-                            .py_2()
-                            .child(text.clone()),
-                    );
-                }
-                ConversationRowContent::Error { error } => {
-                    let provider = turn.provider.or_else(|| session.map(|s| s.provider));
-                    body = body.child(
-                        v_flex().gap_2()
-                            .child(div().text_color(rgb(0xff8e86)).child(error.message.clone()))
-                            .when(error.is_usage_limit, |card| {
-                                card.child(
-                                    h_flex().gap_2().flex_wrap()
-                                        .child(self.button(format!("usage-settings-{}", turn.id), "使用量・リセット時刻", cx, move |s, _, _| {
-                                            s.open_settings();
-                                            s.model_provider = provider;
-                                            s.model_panel = ModelPanel::Manage;
-                                        }).small())
-                                        .when(provider == Some(agent_protocol::session::ProviderKind::Codex), |actions| {
-                                            actions.child(self.button(format!("usage-manage-{}", turn.id), "追加クレジット・上限を管理", cx, |s, _, cx| {
-                                                s.open_browser(s.panel_scope(), "https://chatgpt.com/settings/usage", cx);
-                                            }).small())
-                                        })
-                                )
-                            })
-                    );
-                }
-                ConversationRowContent::Response { item, fork_turn_id } => {
-                    body = body.child(self.projected_item(item, turn, cx));
-                    if item.data.kind == "agent" {
-                        let text = item.data.body.clone().expect("assistant message has text");
-                        body = body.child(
-                            h_flex()
-                                .gap_2()
-                                .children(
-                                    row.timestamp_ms
-                                        .and_then(|time| {
-                                            i64::try_from(time)
-                                                .ok()
-                                                .and_then(chrono::DateTime::from_timestamp_millis)
-                                        })
-                                        .map(|time| {
-                                            div()
-                                                .text_xs()
-                                                .text_color(rgb(appearance::MUTED))
-                                                .child(
-                                                    time.with_timezone(&chrono::Local)
-                                                        .format("%H:%M")
-                                                        .to_string(),
-                                                )
-                                        }),
-                                )
-                                .child(
-                                    Button::new(format!("copy-{}", item.data.id))
-                                        .icon(IconName::Copy)
-                                        .small()
-                                        .ghost()
-                                        .debug_selector(|| "response-copy".into())
-                                        .tooltip("回答をコピー")
-                                        .accessibility_label("回答をコピー")
-                                        .on_click(move |_, _, cx| {
-                                            cx.write_to_clipboard(ClipboardItem::new_string(
-                                                text.clone(),
-                                            ));
-                                        }),
-                                )
-                                .when_some(
-                                    session.cloned().zip(fork_turn_id.clone()),
-                                    |actions, (thread_id, turn_id)| {
-                                        let forking = self.snapshot.operation_running(
-                                            op::OperationKey::Fork {
-                                                session: thread_id.clone(),
-                                                turn: turn_id.clone(),
+                } else {
+                    div()
+                        .text_color(rgb(appearance::MUTED))
+                        .child(content)
+                        .into_any_element()
+                };
+                let selector = format!("work-{id}");
+                body = body.child(
+                    h_flex()
+                        .debug_selector(move || selector.clone())
+                        .gap_2()
+                        .child(header)
+                        .when(activity.is_in_progress, |row| {
+                            row.child(spinner::Spinner::new().small())
+                        }),
+                );
+            }
+            ConversationRowContent::Activity { item, .. } => {
+                body = body.child(self.projected_item(item, turn, cx));
+            }
+            ConversationRowContent::PendingRequest { request } => {
+                body = body.child(self.request_card(request, cx));
+            }
+            ConversationRowContent::ProviderHandoff { text } => {
+                body = body.child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(appearance::MUTED))
+                        .py_2()
+                        .child(text.clone()),
+                );
+            }
+            ConversationRowContent::Error { error } => {
+                let provider = turn.provider.or_else(|| session.map(|s| s.provider));
+                body = body.child(
+                    v_flex()
+                        .gap_2()
+                        .child(div().text_color(rgb(0xff8e86)).child(error.message.clone()))
+                        .when(error.is_usage_limit, |card| {
+                            card.child(
+                                h_flex()
+                                    .gap_2()
+                                    .flex_wrap()
+                                    .child(
+                                        self.button(
+                                            format!("usage-settings-{}", turn.id),
+                                            "使用量・リセット時刻",
+                                            cx,
+                                            move |s, _, _| {
+                                                s.open_settings();
+                                                s.model_provider = provider;
+                                                s.model_panel = ModelPanel::Manage;
                                             },
-                                        );
-                                        actions
-                                            .child(
-                                                Button::new(format!("fork-{}", item.data.id))
-                                                    .small()
-                                                    .ghost()
-                                                    .loading(forking)
-                                                    .tooltip(if forking {
-                                                        "分岐を作成中…"
-                                                    } else {
-                                                        "ここから会話を分岐"
-                                                    })
-                                                    .accessibility_label(if forking {
-                                                        "分岐を作成中…"
-                                                    } else {
-                                                        "ここから会話を分岐"
-                                                    })
-                                                    .on_click(cx.listener(
-                                                        move |view, _, window, cx| {
-                                                            if !view.snapshot.connected
-                                                                || view.busy > 0
-                                                            {
-                                                                return;
-                                                            }
-                                                            view.busy += 1;
-                                                            view.perform(
-                                                                Intent::ForkSession(
-                                                                    op::ForkSession::new(
-                                                                        thread_id.clone(),
-                                                                        turn_id.clone(),
-                                                                    ),
-                                                                ),
-                                                                OperationCompletion::Busy,
-                                                            );
-                                                            view.accept_snapshot(window, cx);
-                                                            view.list.remeasure();
-                                                            cx.notify();
-                                                        },
-                                                    ))
-                                                    .icon(Icon::default().path("bex/branch.svg"))
-                                                    .debug_selector(|| "response-fork".into())
-                                                    .disabled(
-                                                        !self.snapshot.connected
-                                                            || self.busy > 0
-                                                            || forking,
-                                                    ),
-                                            )
-                                            .when(forking, |actions| {
-                                                actions.child(
-                                                    h_flex()
-                                                        .gap_2()
-                                                        .text_xs()
-                                                        .text_color(rgb(appearance::MUTED))
-                                                        .child("分岐を作成中…")
-                                                        .debug_selector(|| {
-                                                            "response-fork-progress".into()
-                                                        }),
+                                        )
+                                        .small(),
+                                    )
+                                    .when(
+                                        provider
+                                            == Some(agent_protocol::session::ProviderKind::Codex),
+                                        |actions| {
+                                            actions.child(
+                                                self.button(
+                                                    format!("usage-manage-{}", turn.id),
+                                                    "追加クレジット・上限を管理",
+                                                    cx,
+                                                    |s, _, cx| {
+                                                        s.open_browser(
+                                                            s.panel_scope(),
+                                                            "https://chatgpt.com/settings/usage",
+                                                            cx,
+                                                        );
+                                                    },
                                                 )
-                                            })
-                                    },
-                                ),
-                        );
-                    }
-                }
-                ConversationRowContent::InProgress { .. } => {
+                                                .small(),
+                                            )
+                                        },
+                                    ),
+                            )
+                        }),
+                );
+            }
+            ConversationRowContent::Response { item, fork_turn_id } => {
+                body = body.child(self.projected_item(item, turn, cx));
+                if item.data.kind == "agent" {
+                    let text = item.data.body.clone().expect("assistant message has text");
                     body = body.child(
                         h_flex()
-                            .debug_selector(|| "conversation-in-progress".into())
                             .gap_2()
-                            .text_sm()
-                            .text_color(rgb(appearance::MUTED))
-                            .child(spinner::Spinner::new().small())
-                            .child(projected.progress_label(false, now)),
+                            .children(
+                                row.timestamp_ms
+                                    .and_then(|time| {
+                                        i64::try_from(time)
+                                            .ok()
+                                            .and_then(chrono::DateTime::from_timestamp_millis)
+                                    })
+                                    .map(|time| {
+                                        div().text_xs().text_color(rgb(appearance::MUTED)).child(
+                                            time.with_timezone(&chrono::Local)
+                                                .format("%H:%M")
+                                                .to_string(),
+                                        )
+                                    }),
+                            )
+                            .child(
+                                Button::new(format!("copy-{}", item.data.id))
+                                    .icon(IconName::Copy)
+                                    .small()
+                                    .ghost()
+                                    .debug_selector(|| "response-copy".into())
+                                    .tooltip("回答をコピー")
+                                    .accessibility_label("回答をコピー")
+                                    .on_click(move |_, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            text.clone(),
+                                        ));
+                                    }),
+                            )
+                            .when_some(
+                                session.cloned().zip(fork_turn_id.clone()),
+                                |actions, (thread_id, turn_id)| {
+                                    let forking =
+                                        self.snapshot.operation_running(op::OperationKey::Fork {
+                                            session: thread_id.clone(),
+                                            turn: turn_id.clone(),
+                                        });
+                                    actions
+                                        .child(
+                                            Button::new(format!("fork-{}", item.data.id))
+                                                .small()
+                                                .ghost()
+                                                .loading(forking)
+                                                .tooltip(if forking {
+                                                    "分岐を作成中…"
+                                                } else {
+                                                    "ここから会話を分岐"
+                                                })
+                                                .accessibility_label(if forking {
+                                                    "分岐を作成中…"
+                                                } else {
+                                                    "ここから会話を分岐"
+                                                })
+                                                .on_click(cx.listener(
+                                                    move |view, _, window, cx| {
+                                                        if !view.snapshot.connected || view.busy > 0
+                                                        {
+                                                            return;
+                                                        }
+                                                        view.busy += 1;
+                                                        view.perform(
+                                                            Intent::ForkSession(
+                                                                op::ForkSession::new(
+                                                                    thread_id.clone(),
+                                                                    turn_id.clone(),
+                                                                ),
+                                                            ),
+                                                            OperationCompletion::Busy,
+                                                        );
+                                                        view.accept_snapshot(window, cx);
+                                                        view.list.remeasure();
+                                                        cx.notify();
+                                                    },
+                                                ))
+                                                .icon(Icon::default().path("bex/branch.svg"))
+                                                .debug_selector(|| "response-fork".into())
+                                                .disabled(
+                                                    !self.snapshot.connected
+                                                        || self.busy > 0
+                                                        || forking,
+                                                ),
+                                        )
+                                        .when(forking, |actions| {
+                                            actions.child(
+                                                h_flex()
+                                                    .gap_2()
+                                                    .text_xs()
+                                                    .text_color(rgb(appearance::MUTED))
+                                                    .child("分岐を作成中…")
+                                                    .debug_selector(|| {
+                                                        "response-fork-progress".into()
+                                                    }),
+                                            )
+                                        })
+                                },
+                            ),
                     );
                 }
             }
+            ConversationRowContent::InProgress { .. } => {
+                body = body.child(
+                    h_flex()
+                        .debug_selector(|| "conversation-in-progress".into())
+                        .gap_2()
+                        .text_sm()
+                        .text_color(rgb(appearance::MUTED))
+                        .child(spinner::Spinner::new().small())
+                        .child(WorkProgressView::view(
+                            &row.id,
+                            projected.work_progress(false),
+                            window,
+                            cx,
+                        )),
+                );
+            }
         }
-        let selector = format!("conversation-turn-{}", turn.id);
+        let selector = format!("conversation-row-{}", row.id);
         h_flex()
             .debug_selector(move || selector.clone())
             .justify_center()
             .w_full()
             .px_6()
-            .pb_8()
+            .pb(px(if last { 32. } else { 16. }))
             .child(body)
             .into_any_element()
     }
@@ -1255,27 +1348,38 @@ mod tests {
 mod rendering_tests {
     use super::{Desktop, Mode, Snapshot};
     use crate::app::ImageState;
-    use agent_core::presentation::conversation::{RenderedConversation, project_conversation};
     use agent_core::state::operations as op;
     use gpui_kit as gpui;
     use gpui_kit::{
-        AppContext, Context, Entity, IntoElement, Render, RenderImage, TestAppContext, Window, px,
-        size,
+        AppContext, Context, Entity, IntoElement, ParentElement, Render, RenderImage, Styled,
+        TestAppContext, Window, px, size,
     };
     use std::sync::Arc;
 
+    struct ClockView {
+        progress: super::WorkProgress,
+        clock: Option<Entity<super::WorkProgressView>>,
+    }
+
+    impl Render for ClockView {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let clock = super::WorkProgressView::view("fixture", self.progress.clone(), window, cx);
+            self.clock = Some(clock.clone());
+            clock
+        }
+    }
+
     struct ConversationView {
         desktop: Entity<Desktop>,
-        conversation: Arc<RenderedConversation>,
     }
     impl Render for ConversationView {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             self.desktop.update(cx, |desktop, cx| {
-                desktop.turn(
-                    self.conversation.source.id.as_ref(),
-                    &self.conversation.turns[0],
-                    cx,
-                )
+                gpui_kit::div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .child(desktop.conversation_list(cx))
             })
         }
     }
@@ -1299,30 +1403,182 @@ mod rendering_tests {
 
     impl ConversationView {
         fn new(
-            snapshot: Snapshot,
+            mut snapshot: Snapshot,
             source: agent_protocol::models::Thread,
             window: &mut Window,
             cx: &mut Context<Self>,
         ) -> Self {
-            Self {
-                desktop: cx.new(|cx| {
-                    Desktop::new(
-                        Mode::SideChat {
-                            // Reject before reading preferences or connecting to a real Host.
-                            remote: Some(agent_protocol::models::RemoteHost {
-                                id: "fixture".into(),
-                                name: "fixture".into(),
-                                ticket: "invalid-fixture-ticket".into(),
-                            }),
-                            cwd: "/fixture".into(),
-                        },
-                        window,
-                        cx,
-                    )
-                }),
-                conversation: project_conversation(&snapshot, Arc::new(source), &None),
-            }
+            Arc::make_mut(&mut snapshot.navigation).thread_id = source.id.clone();
+            Arc::make_mut(&mut snapshot.conversations)
+                .insert(source.id.clone().unwrap(), Arc::new(source));
+            let desktop = cx.new(|cx| {
+                let mut desktop = Desktop::new(
+                    Mode::SideChat {
+                        // Reject before reading preferences or connecting to a real Host.
+                        remote: Some(agent_protocol::models::RemoteHost {
+                            id: "fixture".into(),
+                            name: "fixture".into(),
+                            ticket: "invalid-fixture-ticket".into(),
+                        }),
+                        cwd: "/fixture".into(),
+                    },
+                    window,
+                    cx,
+                );
+                desktop.snapshot = Arc::new(snapshot);
+                desktop.sync_rows(true);
+                desktop
+            });
+            Self { desktop }
         }
+    }
+
+    #[gpui::test]
+    fn elapsed_work_ticks_without_notifying_its_conversation(cx: &mut TestAppContext) {
+        use std::{cell::Cell, rc::Rc, time::Duration};
+        let _runtime = init(cx);
+        let source = serde_json::from_value(serde_json::json!({
+            "turns":[{"id":"running", "status":"running", "startedAt":100.}]
+        }))
+        .unwrap();
+        let conversation = agent_core::presentation::conversation::project_conversation(
+            &Snapshot::default(),
+            Arc::new(source),
+            &None,
+        );
+        let progress = conversation.turns[0].work_progress(false);
+        let (view, window) = cx.add_window_view(|_, _| ClockView {
+            progress,
+            clock: None,
+        });
+        window.run_until_parked();
+        let clock = view.read_with(window, |view, _| view.clock.clone().unwrap());
+        let parent_notifications = Rc::new(Cell::new(0));
+        let ticks = Rc::new(Cell::new(0));
+        let _subscriptions = window.update(|_, cx| {
+            let parents = parent_notifications.clone();
+            let ticks = ticks.clone();
+            (
+                cx.observe(&view, move |_, _| parents.set(parents.get() + 1)),
+                cx.observe(&clock, move |_, _| ticks.set(ticks.get() + 1)),
+            )
+        });
+        window.executor().advance_clock(Duration::from_secs(1));
+        window.run_until_parked();
+        assert!(ticks.get() > 0, "the visible elapsed label must update");
+        assert_eq!(
+            parent_notifications.get(),
+            0,
+            "a clock tick must not invalidate the conversation"
+        );
+    }
+
+    #[gpui::test]
+    fn a_long_single_turn_only_mounts_messages_near_the_viewport(cx: &mut TestAppContext) {
+        use std::{cell::Cell, rc::Rc, time::Duration};
+        let _runtime = init(cx);
+        let source = serde_json::from_value(serde_json::json!({
+            "id": {"provider":"codex", "id":"fixture"},
+            "turns": [{"id":"long-turn", "status":"running", "items":
+                (0..1000).map(|index| serde_json::json!({
+                    "id":format!("answer-{index}"),
+                    "body":{"inline":{"body":{"assistantText":{
+                        "text":format!("Update {index}\n\nA paragraph explaining the current work."),
+                        "phase":"final"
+                    }}}}
+                })).collect::<Vec<_>>()
+            }]
+        })).unwrap();
+        let (view, window) = cx.add_window_view(|window, cx| {
+            ConversationView::new(Snapshot::default(), source, window, cx)
+        });
+        window.simulate_resize(size(px(900.), px(650.)));
+        window.run_until_parked();
+        view.update(window, |view, cx| {
+            let desktop = view.desktop.read(cx);
+            assert!(desktop.rows.len() >= 1000);
+            assert!(desktop.markdown_cache.contains_key("answer-999"));
+            assert!(!desktop.markdown_cache.contains_key("answer-0"));
+            assert!(
+                desktop.markdown_cache.len() < 40,
+                "opening a turn must not parse its offscreen messages"
+            );
+        });
+        let notifications = Rc::new(Cell::new(0));
+        let _subscription = window.update(|_, cx| {
+            let count = notifications.clone();
+            let desktop = view.read(cx).desktop.clone();
+            cx.observe(&desktop, move |_, _| count.set(count.get() + 1))
+        });
+        window.executor().advance_clock(Duration::from_secs(1));
+        window.run_until_parked();
+        assert_eq!(
+            notifications.get(),
+            0,
+            "elapsed time must not notify Desktop or remeasure the whole active turn"
+        );
+        view.update(window, |view, cx| {
+            view.desktop.update(cx, |desktop, cx| {
+                desktop.list.scroll_to(gpui_kit::ListOffset::default());
+                cx.notify();
+            });
+        });
+        window.run_until_parked();
+        view.update(window, |view, cx| {
+            assert!(
+                view.desktop
+                    .read(cx)
+                    .markdown_cache
+                    .contains_key("answer-0")
+            );
+        });
+        let first_message = "conversation-row-history-item:long-turn:answer-0:occurrence:0";
+        let before = window.debug_bounds(first_message).unwrap().top();
+        view.update(window, |view, cx| {
+            view.desktop.update(cx, |desktop, cx| {
+                let session = desktop.selected().unwrap().clone();
+                let snapshot = Arc::make_mut(&mut desktop.snapshot);
+                let thread = Arc::make_mut(
+                    Arc::make_mut(&mut snapshot.conversations)
+                        .get_mut(&session)
+                        .unwrap(),
+                );
+                let items = Arc::make_mut(&mut thread.turns.as_mut().unwrap()[0])
+                    .items
+                    .as_mut()
+                    .unwrap();
+                items.insert(
+                    0,
+                    Arc::new(
+                        serde_json::from_value(serde_json::json!({
+                            "id":"older-answer", "body":{"inline":{"body":{"assistantText":{
+                                "text":"An earlier message from the same turn.", "phase":"final"
+                            }}}}
+                        }))
+                        .unwrap(),
+                    ),
+                );
+                items.push(Arc::new(
+                    serde_json::from_value(serde_json::json!({
+                        "id":"new-answer", "body":{"inline":{"body":{"assistantText":{
+                            "text":"A live update arriving with the history page.", "phase":"final"
+                        }}}}
+                    }))
+                    .unwrap(),
+                ));
+                desktop.sync_rows(false);
+                cx.notify();
+            })
+        });
+        window.run_until_parked();
+        view.update(window, |view, cx| {
+            let desktop = view.desktop.read(cx);
+            assert!(!desktop.list.is_following_tail());
+        });
+        assert!(
+            (window.debug_bounds(first_message).unwrap().top() - before).abs() < px(1.),
+            "prepending history while the same turn streams must preserve the visible message"
+        );
     }
 
     #[gpui::test]
@@ -1446,43 +1702,14 @@ mod rendering_tests {
         let (view, window) = cx.add_window_view(|window, cx| {
             let fixture =
                 cx.new(|cx| ConversationView::new(Snapshot::default(), source, window, cx));
-            let fixture = ConversationView {
-                desktop: fixture.read(cx).desktop.clone(),
-                conversation: fixture.read(cx).conversation.clone(),
-            };
-            fixture.desktop.update(cx, |desktop, _| {
-                let snapshot = std::sync::Arc::make_mut(&mut desktop.snapshot);
-                Arc::make_mut(&mut snapshot.navigation).thread_id =
-                    Some(agent_protocol::session::SessionRef {
-                        provider: agent_protocol::session::ProviderKind::Codex,
-                        id: "fixture".into(),
-                    });
-                std::sync::Arc::make_mut(&mut snapshot.conversations).insert(
-                    agent_protocol::session::SessionRef {
-                        provider: agent_protocol::session::ProviderKind::Codex,
-                        id: "fixture".into(),
-                    },
-                    fixture.conversation.source.clone(),
-                );
-                desktop.rendered = Some(fixture.conversation.clone());
-                desktop.rows = fixture
-                    .conversation
-                    .turns
-                    .iter()
-                    .cloned()
-                    .map(super::super::super::ConversationRow::Turn)
-                    .collect();
-                desktop.list.reset(desktop.rows.len());
-                desktop.list.set_follow_mode(gpui_kit::FollowMode::Tail);
-            });
-            ChatNavigationView(fixture.desktop)
+            ChatNavigationView(fixture.read(cx).desktop.clone())
         });
         window.simulate_resize(size(px(900.), px(650.)));
         window.run_until_parked();
         view.update(window, |_, cx| cx.notify());
         window.run_until_parked();
         assert!(window.debug_bounds("conversation-marker-0").is_some());
-        assert!(window.debug_bounds("conversation-marker-19").is_some());
+        assert!(window.debug_bounds("conversation-marker-38").is_some());
         assert!(
             window.debug_bounds("conversation-marker-1").is_none(),
             "Long histories must have at most eight evenly spaced markers"
@@ -1511,19 +1738,19 @@ mod rendering_tests {
             .size
             .width;
         let neighbor_width = window
-            .debug_bounds("conversation-marker-line-2")
+            .debug_bounds("conversation-marker-line-4")
             .unwrap()
             .size
             .width;
         let next_width = window
-            .debug_bounds("conversation-marker-line-5")
+            .debug_bounds("conversation-marker-line-10")
             .unwrap()
             .size
             .width;
         for selector in [
             "conversation-marker-line-0",
-            "conversation-marker-line-2",
-            "conversation-marker-line-5",
+            "conversation-marker-line-4",
+            "conversation-marker-line-10",
         ] {
             assert_eq!(
                 window.debug_bounds(selector).unwrap().left(),
@@ -1545,7 +1772,7 @@ mod rendering_tests {
         window.run_until_parked();
         assert_eq!(
             window
-                .debug_bounds("conversation-marker-line-2")
+                .debug_bounds("conversation-marker-line-4")
                 .unwrap()
                 .size
                 .width,
@@ -1562,7 +1789,9 @@ mod rendering_tests {
         window.simulate_click(latest.center(), gpui_kit::Modifiers::default());
         view.update(window, |_, cx| cx.notify());
         window.run_until_parked();
-        let last = window.debug_bounds("conversation-turn-turn-19").unwrap();
+        let last = window
+            .debug_bounds("conversation-row-history-item:turn-19:answer-19:occurrence:0")
+            .unwrap();
         view.update(window, |view, cx| {
             let desktop = view.0.read(cx);
             assert!(desktop.list.is_following_tail());
@@ -1574,7 +1803,7 @@ mod rendering_tests {
     #[gpui::test]
     fn file_changes_render_and_expand_in_the_desktop_view(cx: &mut TestAppContext) {
         let _runtime = init(cx);
-        let source = serde_json::from_value(serde_json::json!({"id":{"provider":"codex","id":"fixture"},"turns":[{"id":"turn","status":"completed","items":[{"id":"files","status":"completed","clientInputId":null,"body":{"inline":{"body":{"fileChange":{"changes":[{"path":"/fixture/a.txt","kind":{"update":{"movePath":null}},"diff":"@@ -1 +1 @@\n-old\n+new","proposal":null},{"path":"/fixture/b.txt","kind":"add","diff":"@@ -0,0 +1 @@\n+second","proposal":null}],"output":""}}}}}]}]}))
+        let source = serde_json::from_value(serde_json::json!({"id":{"provider":"codex","id":"fixture"},"turns":[{"id":"turn","status":"completed","items":[{"id":"files","status":"completed","clientInputId":"client-files","body":{"inline":{"body":{"fileChange":{"changes":[{"path":"/fixture/a.txt","kind":{"update":{"movePath":null}},"diff":"@@ -1 +1 @@\n-old\n+new","proposal":null},{"path":"/fixture/b.txt","kind":"add","diff":"@@ -0,0 +1 @@\n+second","proposal":null}],"output":""}}}}}]}]}))
         .unwrap();
         let (view, window) = cx.add_window_view(|window, cx| {
             ConversationView::new(Snapshot::default(), source, window, cx)
@@ -1597,7 +1826,8 @@ mod rendering_tests {
                 "file header must be visible"
             );
         }
-        let before = window.debug_bounds("change-files-1").unwrap().top();
+        let before = window.debug_bounds("change-files-1").unwrap().top()
+            - window.debug_bounds("change-files-0").unwrap().top();
         let bounds = window.debug_bounds("change-files-0").unwrap();
         window.simulate_click(
             gpui_kit::point(bounds.left() + px(20.), bounds.center().y),
@@ -1608,7 +1838,9 @@ mod rendering_tests {
         });
         window.run_until_parked();
         assert!(
-            window.debug_bounds("change-files-1").unwrap().top() > before,
+            window.debug_bounds("change-files-1").unwrap().top()
+                - window.debug_bounds("change-files-0").unwrap().top()
+                > before,
             "expanded diff must occupy space in the rendered conversation"
         );
     }
