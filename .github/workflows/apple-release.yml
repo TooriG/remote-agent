@@ -25,7 +25,7 @@ jobs:
       actions: read
       contents: write
     env:
-      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      BEX_XCODE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       CARGO_BUILD_JOBS: 2
       CARGO_INCREMENTAL: 0
       BEX_RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
@@ -44,7 +44,7 @@ jobs:
           verified=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow native.yml --branch main \
             --event push --commit "$BEX_RELEASE_SHA" --status success --limit 1 --json headSha --jq '.[0].headSha // ""')
           test "$verified" = "$BEX_RELEASE_SHA"
-          test -d "$DEVELOPER_DIR"
+          test -d "$BEX_XCODE_DEVELOPER_DIR"
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
       - name: Initialize pinned tooling before loading signing secrets
         run: scripts/dev-env.sh true
