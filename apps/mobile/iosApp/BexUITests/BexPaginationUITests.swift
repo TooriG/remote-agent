@@ -32,7 +32,10 @@ extension BexLaunchUITests {
         XCTAssertTrue(loadEarlier.isHittable)
         XCTAssertEqual(loadedItems(in: detail), initialItems,
                        "Scrolling reveals loaded history without fetching another page")
-        let anchor = app.descendants(matching: .any)["item.long-5-0"]
+        // SwiftUI can omit the outer group from AX after an insertion; measure its native text view.
+        let anchor = app.textViews.matching(NSPredicate(
+            format: "identifier == %@ AND value == %@", "message.user-text", "Review section 5, input 0."
+        )).firstMatch
         XCTAssertTrue(anchor.isHittable)
         waitForStableFrame(anchor)
         let readingPosition = anchor.frame.minY
