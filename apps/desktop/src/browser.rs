@@ -3,7 +3,7 @@ mod personal;
 use crate::{Runtime, appearance};
 use agent_core::store::Store;
 use agent_protocol::{
-    browser::{BrowserAction, BrowserController, BrowserFrame, BrowserKey, BrowserRequest},
+    browser::{BrowserAction, BrowserFrame, BrowserKey, BrowserRequest},
     session::SessionRef,
 };
 use gpui_kit::{
@@ -26,7 +26,6 @@ pub(crate) struct Browser {
     store: Option<Arc<Store>>,
     thread: Option<SessionRef>,
     runtime: Runtime,
-    client: String,
     frame: BrowserFrame,
     image: Option<Arc<RenderImage>>,
     address: Entity<InputState>,
@@ -36,7 +35,6 @@ pub(crate) struct Browser {
     visible: bool,
     covered: bool,
     personal_mode: bool,
-    follow_size: bool,
     personal: Option<Entity<personal::Browser>>,
     focus: FocusHandle,
     bounds: Bounds<Pixels>,
@@ -147,7 +145,6 @@ impl Browser {
                 store,
                 thread,
                 runtime,
-                client: uuid::Uuid::new_v4().to_string(),
                 frame: BrowserFrame::default(),
                 image: None,
                 address,
@@ -157,7 +154,6 @@ impl Browser {
                 visible: false,
                 covered: false,
                 personal_mode,
-                follow_size: true,
                 personal: None,
                 focus,
                 bounds: Bounds::default(),
@@ -179,19 +175,7 @@ impl Browser {
         let store = self.store.clone()?;
         self.thread.as_ref()?;
         let request = self.pending.pop_front().or_else(|| {
-            (self.visible && !self.personal_mode).then(|| {
-                let fit = if self.follow_size && self.owns_control() {
-                    agent_core::browser_view::fit_action(
-                        f64::from(self.bounds.size.width / px(1.)),
-                        f64::from(self.bounds.size.height / px(1.)),
-                        self.frame.width,
-                        self.frame.height,
-                    )
-                } else {
-                    None
-                };
-                self.request(fit.unwrap_or(BrowserAction::Read))
-            })
+            (self.visible && !self.personal_mode).then(|| self.request(BrowserAction::Read))
         })?;
         Some((self.runtime.clone(), store, request))
     }
@@ -202,7 +186,6 @@ impl Browser {
                 .thread
                 .clone()
                 .expect("a shared browser has a conversation"),
-            client_id: self.client.clone(),
             generation: self.frame.generation,
             tab_id: self.frame.tab_id.clone(),
             image_id: self.frame.image_id.clone(),
@@ -210,15 +193,8 @@ impl Browser {
         }
     }
 
-    fn owns_control(&self) -> bool {
-        self.frame.controller == BrowserController::You
-    }
-
     fn send(&mut self, action: BrowserAction, cx: &mut Context<Self>) {
-        if self.thread.is_some() && self.pending.len() < 64 {
-            if matches!(action, BrowserAction::Resize { .. }) {
-                self.follow_size = false;
-            }
+        if self.thread.is_some() && !self.frame.tab_id.is_empty() && self.pending.len() < 64 {
             self.pending.push_back(self.request(action));
         }
         cx.notify();
@@ -266,9 +242,6 @@ impl Browser {
                 }))
                 .item(PopupMenuItem::new("個人用").on_click(move |_, window, cx| {
                     let _ = personal.update(cx, |view, cx| {
-                        if view.owns_control() {
-                            view.send(BrowserAction::ReleaseControl, cx);
-                        }
                         view.personal_mode = true;
                         view.start_personal(None, window, cx);
                         if let Some(personal) = &view.personal {
@@ -294,7 +267,6 @@ impl Browser {
 
     fn actions_menu(&self, cx: &Context<Self>) -> impl IntoElement {
         let owner = cx.entity().downgrade();
-        let owns = self.owns_control();
         let tab_id = self.frame.tab_id.clone();
         let url = self
             .frame
@@ -307,6 +279,7 @@ impl Browser {
             .xsmall()
             .ghost()
             .accessibility_label("ブラウザのメニュー")
+            .disabled(self.frame.tab_id.is_empty())
             .dropdown_menu(move |menu, _, _| {
                 let new_tab = owner.clone();
                 let close_tab = owner.clone();
@@ -315,65 +288,63 @@ impl Browser {
                 let mobile = owner.clone();
                 let tab_id = tab_id.clone();
                 let url = url.clone();
-                menu.item(PopupMenuItem::new("新しいタブ").disabled(!owns).on_click(
-                    move |_, _, cx| {
-                        let _ = new_tab.update(cx, |view, cx| {
+                menu.item(PopupMenuItem::new("新しいタブ").on_click(move |_, _, cx| {
+                    let _ = new_tab.update(cx, |view, cx| {
+                        view.send(
+                            BrowserAction::OpenTab {
+                                url: "about:blank".into(),
+                            },
+                            cx,
+                        )
+                    });
+                }))
+                .item(
+                    PopupMenuItem::new("タブを閉じる").on_click(move |_, _, cx| {
+                        let _ = close_tab.update(cx, |view, cx| {
+                            view.send(BrowserAction::CloseTab { id: tab_id.clone() }, cx)
+                        });
+                    }),
+                )
+                .separator()
+                .item(
+                    PopupMenuItem::new("パネルに合わせる").on_click(move |_, _, cx| {
+                        let _ = fit.update(cx, |view, cx| {
+                            if let Some(action) = agent_core::browser_view::fit_action(
+                                f64::from(view.bounds.size.width / px(1.)),
+                                f64::from(view.bounds.size.height / px(1.)),
+                                view.frame.width,
+                                view.frame.height,
+                            ) {
+                                view.send(action, cx);
+                            }
+                        });
+                    }),
+                )
+                .item(
+                    PopupMenuItem::new("デスクトップ · 1280 × 800").on_click(move |_, _, cx| {
+                        let _ = desktop.update(cx, |view, cx| {
                             view.send(
-                                BrowserAction::OpenTab {
-                                    url: "about:blank".into(),
+                                BrowserAction::Resize {
+                                    width: 1280,
+                                    height: 800,
                                 },
                                 cx,
                             )
                         });
-                    },
-                ))
-                .item(PopupMenuItem::new("タブを閉じる").disabled(!owns).on_click(
-                    move |_, _, cx| {
-                        let _ = close_tab.update(cx, |view, cx| {
-                            view.send(BrowserAction::CloseTab { id: tab_id.clone() }, cx)
+                    }),
+                )
+                .item(
+                    PopupMenuItem::new("モバイル · 390 × 844").on_click(move |_, _, cx| {
+                        let _ = mobile.update(cx, |view, cx| {
+                            view.send(
+                                BrowserAction::Resize {
+                                    width: 390,
+                                    height: 844,
+                                },
+                                cx,
+                            )
                         });
-                    },
-                ))
-                .separator()
-                .item(
-                    PopupMenuItem::new("パネルに合わせる（自動）")
-                        .disabled(!owns)
-                        .on_click(move |_, _, cx| {
-                            let _ = fit.update(cx, |view, cx| {
-                                view.follow_size = true;
-                                cx.notify();
-                            });
-                        }),
-                )
-                .item(
-                    PopupMenuItem::new("デスクトップ · 1280 × 800")
-                        .disabled(!owns)
-                        .on_click(move |_, _, cx| {
-                            let _ = desktop.update(cx, |view, cx| {
-                                view.send(
-                                    BrowserAction::Resize {
-                                        width: 1280,
-                                        height: 800,
-                                    },
-                                    cx,
-                                )
-                            });
-                        }),
-                )
-                .item(
-                    PopupMenuItem::new("モバイル · 390 × 844")
-                        .disabled(!owns)
-                        .on_click(move |_, _, cx| {
-                            let _ = mobile.update(cx, |view, cx| {
-                                view.send(
-                                    BrowserAction::Resize {
-                                        width: 390,
-                                        height: 844,
-                                    },
-                                    cx,
-                                )
-                            });
-                        }),
+                    }),
                 )
                 .separator()
                 .item(
@@ -410,10 +381,6 @@ impl Browser {
     }
 
     pub(crate) fn set_visible(&mut self, visible: bool, covered: bool, cx: &mut App) {
-        if self.visible && !visible && self.owns_control() {
-            self.pending
-                .push_back(self.request(BrowserAction::ReleaseControl));
-        }
         self.visible = visible;
         self.covered = covered;
         if let Some(personal) = &self.personal {
@@ -500,9 +467,6 @@ impl Browser {
     }
 
     fn key(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.owns_control() {
-            return;
-        }
         let key = &event.keystroke;
         let action = match key.key.as_str() {
             "enter" => Some(BrowserKey::Enter),
@@ -533,29 +497,9 @@ impl Browser {
     }
 }
 
-impl Drop for Browser {
-    fn drop(&mut self) {
-        if self.owns_control()
-            && let (Some(store), Some(thread)) = (self.store.clone(), self.thread.clone())
-        {
-            let request = BrowserRequest {
-                thread_id: thread,
-                tab_id: self.frame.tab_id.clone(),
-                image_id: String::new(),
-                client_id: self.client.clone(),
-                generation: self.frame.generation,
-                action: BrowserAction::ReleaseControl,
-            };
-            self.runtime.handle.spawn(async move {
-                let _ = store.browser(request).await;
-            });
-        }
-    }
-}
-
 impl Render for Browser {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let owns = self.owns_control();
+        let enabled = !self.frame.tab_id.is_empty();
         let tabs = self.frame.tabs.clone();
         let active = self.frame.tab_id.clone();
         let entity = cx.entity();
@@ -606,7 +550,6 @@ impl Render for Browser {
                                         )
                                         .small()
                                         .ghost()
-                                        .disabled(!owns)
                                         .on_click(cx.listener(move |view, _, _, cx| {
                                             view.send(
                                                 BrowserAction::SelectTab { id: id.clone() },
@@ -621,7 +564,6 @@ impl Render for Browser {
                                     .icon(IconName::Close)
                                     .small()
                                     .ghost()
-                                    .disabled(!owns)
                                     .accessibility_label("タブを閉じる")
                                     .on_click(cx.listener(move |view, _, _, cx| {
                                         view.send(BrowserAction::CloseTab { id: close.clone() }, cx)
@@ -633,7 +575,6 @@ impl Render for Browser {
                                 .icon(IconName::Plus)
                                 .small()
                                 .ghost()
-                                .disabled(!owns)
                                 .accessibility_label("新しいタブ")
                                 .on_click(cx.listener(|view, _, _, cx| {
                                     view.send(
@@ -657,7 +598,7 @@ impl Render for Browser {
                                 .icon(IconName::ArrowLeft)
                                 .xsmall()
                                 .ghost()
-                                .disabled(!owns || !self.frame.can_go_back)
+                                .disabled(!self.frame.can_go_back)
                                 .accessibility_label("前のページ")
                                 .on_click(
                                     cx.listener(|view, _, _, cx| {
@@ -670,7 +611,7 @@ impl Render for Browser {
                                 .icon(IconName::ArrowRight)
                                 .xsmall()
                                 .ghost()
-                                .disabled(!owns || !self.frame.can_go_forward)
+                                .disabled(!self.frame.can_go_forward)
                                 .accessibility_label("次のページ")
                                 .on_click(cx.listener(|view, _, _, cx| {
                                     view.send(BrowserAction::Forward, cx)
@@ -681,7 +622,7 @@ impl Render for Browser {
                                 .icon(IconName::RotateCw)
                                 .xsmall()
                                 .ghost()
-                                .disabled(!owns)
+                                .disabled(!enabled)
                                 .accessibility_label("再読み込み")
                                 .on_click(cx.listener(|view, _, _, cx| {
                                     view.send(BrowserAction::Reload, cx)
@@ -692,7 +633,7 @@ impl Render for Browser {
                                 Input::new(&self.address)
                                     .small()
                                     .appearance(false)
-                                    .disabled(!owns)
+                                    .disabled(!enabled)
                                     .aria_label("ブラウザの URL"),
                             ),
                         )
@@ -717,7 +658,6 @@ impl Render for Browser {
                                         Button::new("browser-dialog-cancel")
                                             .label("キャンセル")
                                             .small()
-                                            .disabled(!owns)
                                             .on_click(cx.listener(|view, _, _, cx| {
                                                 view.send(
                                                     BrowserAction::Dialog {
@@ -732,7 +672,6 @@ impl Render for Browser {
                                         Button::new("browser-dialog-ok")
                                             .label("OK")
                                             .small()
-                                            .disabled(!owns)
                                             .on_click(cx.listener(|view, _, _, cx| {
                                                 let text =
                                                     view.dialog_input.read(cx).value().to_string();
@@ -758,16 +697,14 @@ impl Render for Browser {
                             MouseButton::Left,
                             cx.listener(|view, event: &MouseDownEvent, window, cx| {
                                 view.focus.focus(window, cx);
-                                if view.owns_control()
-                                    && let Some((x, y)) = view.page_point(event.position)
+                                if let Some((x, y)) = view.page_point(event.position)
                                 {
                                     view.send(BrowserAction::Click { x, y }, cx);
                                 }
                             }),
                         )
                         .on_scroll_wheel(cx.listener(|view, event: &ScrollWheelEvent, _, cx| {
-                            if view.owns_control()
-                                && let Some((x, y)) = view.page_point(event.position)
+                            if let Some((x, y)) = view.page_point(event.position)
                             {
                                 let delta = event.delta.pixel_delta(px(16.));
                                 view.send(
@@ -792,7 +729,7 @@ impl Render for Browser {
                                     .iter()
                                     .any(|tab| tab.id == active && tab.url != "about:blank")
                             }) {
-                                // The viewport owns layout; intrinsic image dimensions must not size it.
+                                // The viewport determines layout; intrinsic image dimensions must not size it.
                                 body.child(img(image).absolute().top_0().left_0().size_full().object_fit(ObjectFit::Contain))
                             } else {
                                 body.child(
@@ -827,16 +764,11 @@ impl Render for Browser {
                                     let entity = cx.entity();
                                     move |bounds, _, window, cx| {
                                         entity.update(cx, |view, cx| {
-                                            if view.owns_control() {
-                                                window.handle_input(
-                                                    &view.focus,
-                                                    ElementInputHandler::new(
-                                                        bounds,
-                                                        entity.clone(),
-                                                    ),
-                                                    cx,
-                                                );
-                                            }
+                                            window.handle_input(
+                                                &view.focus,
+                                                ElementInputHandler::new(bounds, entity.clone()),
+                                                cx,
+                                            );
                                         });
                                     }
                                 },
@@ -847,44 +779,7 @@ impl Render for Browser {
                             .size_full(),
                         ),
                 )
-                .child(
-                    h_flex()
-                        .px_2()
-                        .py_1()
-                        .gap_2()
-                        .border_t_1()
-                        .border_color(rgb(0x202020))
-                        .text_xs()
-                        .text_color(rgb(appearance::MUTED))
-                        .child(div().flex_1().child(if owns {
-                            "操作中 · あなた"
-                        } else if self.frame.controller == BrowserController::Agent {
-                            "AI が操作できます"
-                        } else {
-                            "別の端末が操作中"
-                        }))
-                        .child(
-                            Button::new("browser-control")
-                                .label(if owns {
-                                    "AI に操作を戻す"
-                                } else {
-                                    "操作権を取得"
-                                })
-                                .xsmall()
-                                .outline()
-                                .disabled(self.frame.tab_id.is_empty())
-                                .on_click(cx.listener(move |view, _, _, cx| {
-                                    view.send(
-                                        if owns {
-                                            BrowserAction::ReleaseControl
-                                        } else {
-                                            BrowserAction::TakeControl
-                                        },
-                                        cx,
-                                    )
-                                })),
-                        )
-                )
+
             })
     }
 }
@@ -931,9 +826,7 @@ impl EntityInputHandler for Browser {
     ) {
         self.composition.clear();
         self.composition_selection = 0..0;
-        if self.owns_control() {
-            self.send(BrowserAction::Type { text: text.into() }, cx);
-        }
+        self.send(BrowserAction::Type { text: text.into() }, cx);
     }
     fn replace_and_mark_text_in_range(
         &mut self,

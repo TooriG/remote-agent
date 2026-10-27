@@ -35,6 +35,9 @@ final class BexAppViewModel: ObservableObject {
     private var pending: [(Intent, (Result<Outcome, Error>) -> Void)] = []
     private var operations: [UUID: Task<Void, Never>] = [:]
     let liveActivities = TaskLiveActivities()
+    let panels = Panels()
+    let workbenchInstance = UUID()
+    var workbenchSideChats: [UInt64: SideChatRequest] = [:]
 
     init() {
         observeLiveActivityRequests()
@@ -292,6 +295,7 @@ extension BexAppViewModel {
             models = next.models()
         }
         let changed = !next.conversationUnchanged(other: snapshot)
+        migrateWorkbench(to: next)
         snapshot = next
         synchronizeLiveActivities(foreground: UIApplication.shared.applicationState == .active)
         if changed {

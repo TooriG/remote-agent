@@ -393,13 +393,6 @@ impl Chrome {
             .copied()
             .unwrap_or(false)
     }
-    pub fn invalidate_refs(&mut self, targets: &[String]) {
-        for target in targets {
-            if let Some(session) = self.sessions.get(target) {
-                self.refs.remove(session);
-            }
-        }
-    }
     pub async fn latest_image(&mut self, session: &str) -> Result<Vec<u8>, String> {
         let start = self
             .events

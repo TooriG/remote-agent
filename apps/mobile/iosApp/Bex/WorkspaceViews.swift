@@ -64,44 +64,15 @@ private struct WorkspaceNavigation: UIViewControllerRepresentable {
 struct WorkspaceScreen: View {
     @ObservedObject var model: BexAppViewModel
     let root: String
-    @Binding var showingDiff: Bool
     let close: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            Picker("表示", selection: $showingDiff) {
-                Text("変更済み").tag(true).accessibilityIdentifier("files.diff")
-                Text("すべてのファイル").tag(false).accessibilityIdentifier("files.all")
-            }
-            .pickerStyle(.segmented).padding(.horizontal).padding(.bottom)
-            Divider()
-            if showingDiff {
-                WorkspaceDiffScreen { complete in
-                    request(.reviewWorkspace(ReviewWorkspace(cwd: root))) { snapshot, result in
-                        if case let .failure(failure) = result {
-                            complete(.failure(failure))
-                        } else if let review = snapshot.review() {
-                            Task {
-                                let files = await Task.detached(priority: .userInitiated) { review.diffFiles() }.value
-                                complete(.success(files))
-                            }
-                        } else {
-                            complete(.failure(NSError(domain: "BexWorkspace", code: 1,
-                                                      userInfo: [
-                                                          NSLocalizedDescriptionKey: "差分を取得できませんでした。再試行してください。"
-                                                      ])))
-                        }
-                    }
-                }
-            } else {
-                WorkspaceNavigation(root: root) { directory, openDirectory in
-                    WorkspaceDirectoryScreen(snapshot: model.snapshot, directory: directory,
-                                             perform: request, fileDraft: fileDraft,
-                                             downloadFile: model.download,
-                                             aiEdit: { model.draft = "このファイルを編集してください: \($0)\n変更内容: " },
-                                             close: close, openDirectory: openDirectory)
-                }
-            }
+        WorkspaceNavigation(root: root) { directory, openDirectory in
+            WorkspaceDirectoryScreen(snapshot: model.snapshot, directory: directory,
+                                     perform: request, fileDraft: fileDraft,
+                                     downloadFile: model.download,
+                                     aiEdit: { model.draft = "このファイルを編集してください: \($0)\n変更内容: " },
+                                     close: close, openDirectory: openDirectory)
         }
         .background(Color(uiColor: .systemGroupedBackground))
         .onDisappear { model.perform(.reviewWorkspace(ReviewWorkspace(cwd: root))) }
@@ -241,8 +212,9 @@ private struct WorkspaceDirectoryScreen: View {
     }
 }
 
-private struct WorkspaceDiffScreen: View {
-    let load: (@escaping (Result<[WorkspaceDiffFile], Error>) -> Void) -> Void
+struct WorkspaceDiffScreen: View {
+    @ObservedObject var model: BexAppViewModel
+    let root: String
     @State private var files: [WorkspaceDiffFile] = []
     @State private var error: String?
     @State private var busy = true
@@ -274,11 +246,19 @@ private struct WorkspaceDiffScreen: View {
 
     private func loadDiff() {
         busy = true; error = nil
-        load { result in
-            busy = false
-            switch result {
-            case let .success(result): files = result
-            case let .failure(failure): error = failure.localizedDescription
+        model.requestSnapshot(.reviewWorkspace(ReviewWorkspace(cwd: root))) { snapshot, result in
+            model.notice = nil
+            if case let .failure(failure) = result {
+                busy = false
+                error = failure.localizedDescription
+            } else if let review = snapshot.review() {
+                Task {
+                    files = await Task.detached(priority: .userInitiated) { review.diffFiles() }.value
+                    busy = false
+                }
+            } else {
+                busy = false
+                error = "差分を取得できませんでした。再試行してください。"
             }
         }
     }
@@ -334,5 +314,41 @@ struct WorkspaceDiffCard: View {
         }
         .background(Color(uiColor: .systemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+struct WorkspaceAgentsScreen: View {
+    let agents: [AgentSummary]
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("エージェント").font(.headline)
+                if agents.isEmpty {
+                    Text("サブエージェントが起動するとここに表示されます。")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(agents, id: \.key) { agent in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            if agent.active {
+                                ProgressView().controlSize(.small)
+                            }
+                            Text(agent.title)
+                            Spacer()
+                            Text(agent.status).foregroundStyle(.secondary)
+                        }
+                        if let detail = agent.detail {
+                            Text(detail).foregroundStyle(.secondary)
+                        }
+                        if let model = agent.model {
+                            Text(model).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(12).background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                    .padding(.leading, CGFloat(agent.depth) * 16)
+                }
+            }.font(.subheadline).padding(16).frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }

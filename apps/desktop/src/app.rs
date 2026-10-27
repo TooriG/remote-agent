@@ -8,7 +8,7 @@ mod view;
 
 use crate::{Runtime, appearance, diff::DiffView, platform, store_session::StoreSession};
 use agent_core::{
-    panels::{Kind as Panel, Layout as PanelLayout, Panels, Scope as PanelScope},
+    panels::{PanelKind as Panel, PanelLayout, PanelScope, Panels},
     presentation::conversation::{ActivityExpansion, ConversationRowContent},
     state::{Attachment, Draft, DraftKey, Intent, ModelDefaultsScope, PendingSubmission, Snapshot},
     store::Outcome,
@@ -427,7 +427,7 @@ impl Desktop {
                         view.open_panel(Panel::SideChat, window, cx);
                         if let Some(SurfaceResource::SideChat(chat)) = view
                             .panels
-                            .get(&view.panel_scope())
+                            .get(view.panel_scope())
                             .active
                             .and_then(|id| view.surface_resources.get(&id))
                         {
@@ -441,7 +441,7 @@ impl Desktop {
                             view.open_panel(Panel::SideChat, window, cx);
                             if let Some(SurfaceResource::SideChat(chat)) = view
                                 .panels
-                                .get(&view.panel_scope())
+                                .get(view.panel_scope())
                                 .active
                                 .and_then(|id| view.surface_resources.get(&id))
                             {
@@ -1048,7 +1048,7 @@ impl Desktop {
                     draft: session.into(),
                     ..self.panel_scope()
                 };
-                self.panels.rekey(&before, after);
+                self.panels.rekey(before, after);
             }
         }
         let project_for_selected = |snapshot: &Snapshot| {
@@ -1186,7 +1186,7 @@ impl Desktop {
             session.save(self.snapshot.clone());
         }
         if navigated {
-            let panel = self.panels.get(&self.panel_scope());
+            let panel = self.panels.get(self.panel_scope());
             if panel.open
                 && matches!(panel.kind(), Panel::File | Panel::Files)
                 && let Some(id) = panel.active
@@ -1568,14 +1568,12 @@ impl Desktop {
         }
     }
     fn panel_scope(&self) -> PanelScope {
-        PanelScope {
-            host: self
-                .remote
+        self.snapshot.panel_scope(
+            self.remote
                 .as_ref()
                 .map_or_else(|| "local".into(), |host| host.id.clone()),
-            storage: self.snapshot.storage_scope.clone(),
-            draft: self.draft_key().clone(),
-        }
+            self.draft_key().clone(),
+        )
     }
     fn open_panel(&mut self, kind: Panel, window: &mut Window, cx: &mut Context<Self>) {
         let id = self.panels.open(self.panel_scope(), kind, None);
@@ -1614,7 +1612,7 @@ impl Desktop {
             &browser,
             window,
             move |view, _, event: &crate::browser::OpenTab, _, cx| {
-                if let Some(scope) = view.panels.scope(id).cloned() {
+                if let Some(scope) = view.panels.scope(id) {
                     view.open_browser(scope, &event.0, cx);
                 }
             },
@@ -1650,10 +1648,10 @@ impl Desktop {
     }
     fn activate_surface(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         let key = self.panel_scope();
-        if !self.panels.activate(&key, id) {
+        if !self.panels.activate(key.clone(), id) {
             return;
         }
-        let surface = self.panels.get(&key).selected().unwrap().clone();
+        let surface = self.panels.get(key).selected().unwrap().clone();
         match surface.kind {
             Panel::Browser => {
                 self.surface_resources
@@ -1711,10 +1709,10 @@ impl Desktop {
         cx.notify();
     }
     fn close_surface(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
-        if self.panels.scope(id) != Some(&self.panel_scope()) {
+        if self.panels.scope(id) != Some(self.panel_scope()) {
             return;
         }
-        self.panels.close(&self.panel_scope(), id);
+        self.panels.close(self.panel_scope(), id);
         match self.surface_resources.remove(&id) {
             Some(SurfaceResource::Browser { view, .. }) => {
                 view.update(cx, |view, cx| view.set_visible(false, false, cx));
@@ -1725,7 +1723,7 @@ impl Desktop {
             }
             _ => (),
         }
-        if let Some(next) = self.panels.get(&self.panel_scope()).active {
+        if let Some(next) = self.panels.get(self.panel_scope()).active {
             self.activate_surface(next, window, cx);
         } else {
             self.panel_focus.focus(window, cx);

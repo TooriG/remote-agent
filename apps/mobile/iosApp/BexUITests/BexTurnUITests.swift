@@ -144,9 +144,9 @@ extension BexLaunchUITests {
             sideMessage.tap()
             sideMessage.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.95)).tap()
             sideMessage.typeText("Keep my side draft")
-            app.buttons["workbench.terminal"].tap()
-            XCTAssertTrue(app.buttons["workbench.sideChat"].exists)
-            app.buttons["workbench.sideChat"].tap()
+            openWorkbenchTool(app, "terminal")
+            XCTAssertTrue(workbenchTab(app, "sideChat").exists)
+            openWorkbenchTool(app, "sideChat")
             waitForDraftText(sideMessage, text: "> Needle\n\nKeep my side draft")
             closeWorkbench(app)
             XCTAssertTrue(app.descendants(matching: .any)[originalID].waitForExistence(timeout: 15))
@@ -162,8 +162,7 @@ extension BexLaunchUITests {
 
     private func verifyEmptySideChatTab(_ app: XCUIApplication) {
         app.buttons["task.tools"].tap()
-        let tab = app.buttons["workbench.sideChat"]
-        XCTAssertTrue(tab.waitForExistence(timeout: 5)); tab.tap()
+        openWorkbenchTool(app, "sideChat")
         let input = app.textFields["task.message"]
         XCTAssertTrue(input.waitForExistence(timeout: 15))
         waitForDraftText(input, text: input.placeholderValue ?? "")
@@ -186,10 +185,9 @@ extension BexLaunchUITests {
             XCTAssertTrue(forward.waitForExistence(timeout: 5)); forward.tap()
         }
         XCTAssertTrue(side.waitForExistence(timeout: 5)); side.tap()
-        XCTAssertTrue(app.buttons["workbench.sideChat"].waitForExistence(timeout: 15), app.debugDescription)
-        XCTAssertTrue(app.buttons["workbench.terminal"].exists)
-        XCTAssertTrue(app.buttons["workbench.browser"].exists)
-        XCTAssertTrue(app.buttons["workbench.files"].exists)
+        XCTAssertTrue(workbenchTab(app, "sideChat").waitForExistence(timeout: 15), app.debugDescription)
+        XCTAssertTrue(app.buttons["workbench.add"].exists)
+        XCTAssertFalse(app.navigationBars.firstMatch.exists)
     }
 
     private func verifySideChatSubmissionAndRestore(

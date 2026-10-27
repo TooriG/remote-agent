@@ -122,7 +122,7 @@ extension ThreadScreen {
     var selectionActions: ConversationSelectionActions {
         let ask: ((String) -> Void)? = isSideChat ? nil : { text in
             model.askSelectionInSideChat(text)
-            openTools?(.sideChat, false)
+            openTools?(.sideChat)
         }
         return ConversationSelectionActions(addToChat: model.addSelectionToChat, askInSideChat: ask)
     }
@@ -146,7 +146,7 @@ struct ConversationSideChat: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear { request.activate(true, model: model) }
+        .onAppear { model.sideChatRequest = request; request.activate(true, model: model) }
         .onDisappear { request.activate(false, model: model) }
     }
 }

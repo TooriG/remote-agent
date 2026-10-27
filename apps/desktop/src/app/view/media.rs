@@ -856,7 +856,7 @@ mod file_panel_tests {
                     cx,
                 );
                 assert!(
-                    !view.panels.get(&view.panel_scope()).open,
+                    !view.panels.get(view.panel_scope()).open,
                     "installers must bypass the editor panel"
                 );
                 assert!(view.image_gallery.is_none());
@@ -867,8 +867,8 @@ mod file_panel_tests {
                     "text files must retain the editor route"
                 );
                 assert!(
-                    view.panels.get(&view.panel_scope()).open
-                        && view.panels.get(&view.panel_scope()).kind() == Panel::File
+                    view.panels.get(view.panel_scope()).open
+                        && view.panels.get(view.panel_scope()).kind() == Panel::File
                 );
             });
         });
@@ -920,18 +920,18 @@ mod file_panel_tests {
                 });
                 view.open_conversation_link("readme.txt:1", cx);
                 assert!(
-                    view.panels.get(&view.panel_scope()).open
-                        && view.panels.get(&view.panel_scope()).kind() == Panel::File
+                    view.panels.get(view.panel_scope()).open
+                        && view.panels.get(view.panel_scope()).kind() == Panel::File
                 );
                 #[cfg(target_os = "windows")]
                 {
                     view.click_conversation_link("https://example.com/first", true, cx);
                     assert!(
-                        view.panels.get(&view.panel_scope()).open
-                            && view.panels.get(&view.panel_scope()).kind() == Panel::Browser
+                        view.panels.get(view.panel_scope()).open
+                            && view.panels.get(view.panel_scope()).kind() == Panel::Browser
                     );
                     assert_eq!(
-                        view.panels.get(&view.panel_scope()).active.and_then(|id| {
+                        view.panels.get(view.panel_scope()).active.and_then(|id| {
                             match view.surface_resources.get(&id) {
                                 Some(SurfaceResource::Pending { url }) => url.as_deref(),
                                 _ => None,
@@ -941,7 +941,7 @@ mod file_panel_tests {
                     );
                     view.click_conversation_link("http://localhost:3000/next?q=1#detail", true, cx);
                     assert_eq!(
-                        view.panels.get(&view.panel_scope()).active.and_then(|id| {
+                        view.panels.get(view.panel_scope()).active.and_then(|id| {
                             match view.surface_resources.get(&id) {
                                 Some(SurfaceResource::Pending { url }) => url.as_deref(),
                                 _ => None,
@@ -950,7 +950,7 @@ mod file_panel_tests {
                         Some("http://localhost:3000/next?q=1#detail")
                     );
                     view.click_conversation_link("readme.txt:1", true, cx);
-                    assert!(view.panels.get(&view.panel_scope()).kind() == Panel::File);
+                    assert!(view.panels.get(view.panel_scope()).kind() == Panel::File);
                     assert_eq!(
                         view.composer.read(cx).value().as_ref(),
                         "Keep this side draft"
@@ -974,7 +974,7 @@ mod file_panel_tests {
                     view.composer.read(cx).value().as_ref(),
                     "Keep this side draft"
                 );
-                assert!(!view.panels.get(&view.panel_scope()).open);
+                assert!(!view.panels.get(view.panel_scope()).open);
                 view.open_review(None, cx);
                 cx.notify();
             })
@@ -992,7 +992,7 @@ mod file_panel_tests {
                     view.composer.read(cx).value().as_ref(),
                     "Keep this side draft"
                 );
-                assert!(!view.panels.get(&view.panel_scope()).open);
+                assert!(!view.panels.get(view.panel_scope()).open);
             })
         });
     }

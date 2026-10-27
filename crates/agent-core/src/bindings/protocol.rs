@@ -182,15 +182,12 @@ struct BrowserRequest {
     pub thread_id: SessionRef,
     pub tab_id: String,
     pub image_id: String,
-    pub client_id: String,
     pub generation: u64,
     pub action: BrowserAction,
 }
 #[uniffi::remote(Enum)]
 enum BrowserAction {
     Read,
-    TakeControl,
-    ReleaseControl,
     OpenTab {
         url: String,
     },
@@ -284,12 +281,7 @@ struct BrowserDialog {
     pub message: String,
     pub prompt: bool,
 }
-#[uniffi::remote(Enum)]
-enum BrowserController {
-    Agent,
-    You,
-    AnotherViewer,
-}
+
 #[uniffi::remote(Record)]
 struct BrowserFrame {
     pub tabs: Vec<BrowserTab>,
@@ -299,7 +291,6 @@ struct BrowserFrame {
     pub image: Vec<u8>,
     pub image_id: String,
     pub dialog: Option<BrowserDialog>,
-    pub controller: BrowserController,
     pub generation: u64,
     pub can_go_back: bool,
     pub can_go_forward: bool,

@@ -25,13 +25,28 @@ final class BexLaunchUITests: XCTestCase {
 
     func openFiles(_ app: XCUIApplication) {
         app.buttons["task.tools"].tap()
-        let files = app.buttons["workbench.files"]
-        XCTAssertTrue(files.waitForExistence(timeout: 5)); files.tap()
-        app.buttons["files.all"].tap()
+        openWorkbenchTool(app, "files")
+    }
+
+    func workbenchTab(_ app: XCUIApplication, _ kind: String) -> XCUIElement {
+        let tabs = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "workbench.tab.\(kind)."))
+        return tabs.element(boundBy: max(0, tabs.count - 1))
+    }
+
+    func openWorkbenchTool(_ app: XCUIApplication, _ kind: String) {
+        let tab = workbenchTab(app, kind)
+        if tab.exists {
+            tab.tap(); return
+        }
+        let tool = app.buttons["workbench.\(kind)"]
+        if !tool.exists {
+            app.buttons["workbench.add"].tap()
+        }
+        XCTAssertTrue(tool.waitForExistence(timeout: 5)); tool.tap()
     }
 
     func closeWorkbench(_ app: XCUIApplication) {
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.buttons["workbench.close"].tap()
         XCTAssertTrue(app.textFields["task.message"].waitForExistence(timeout: 5))
     }
 

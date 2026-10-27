@@ -1,17 +1,12 @@
-//! Owns isolated conversation contexts, shared tabs, and human/agent control.
+//! Owns isolated conversation contexts, shared tabs, and browser input.
 mod cdp;
 pub mod mcp;
 
 use agent_protocol::browser::{
-    BrowserAction, BrowserController, BrowserFrame, BrowserRequest, BrowserTab, HEIGHT, WIDTH,
+    BrowserAction, BrowserFrame, BrowserRequest, BrowserTab, HEIGHT, WIDTH,
 };
 use base64::Engine;
-use std::{
-    collections::HashMap,
-    path::PathBuf,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::sync::Mutex;
 
 struct Page {
@@ -20,9 +15,7 @@ struct Page {
     active: String,
     width: u32,
     height: u32,
-    controller: String,
     generation: u64,
-    lease: Instant,
 }
 impl Page {
     fn new(context: String) -> Self {
@@ -32,18 +25,7 @@ impl Page {
             active: String::new(),
             width: WIDTH,
             height: HEIGHT,
-            controller: String::new(),
             generation: 0,
-            lease: Instant::now(),
-        }
-    }
-    fn expire_control(&mut self, now: Instant) -> bool {
-        if !self.controller.is_empty() && now >= self.lease {
-            self.controller.clear();
-            self.generation += 1;
-            true
-        } else {
-            false
         }
     }
 }
@@ -153,9 +135,6 @@ impl Browser {
             state.pages.insert(thread.into(), Page::new(context));
         }
         let page = state.pages.get_mut(thread).unwrap();
-        if page.expire_control(Instant::now()) {
-            chrome.invalidate_refs(&page.tabs);
-        }
         let targets = chrome.targets().await?;
         // Include transitive popups only from this conversation's known targets.
         loop {
@@ -189,14 +168,9 @@ impl Browser {
         Ok(())
     }
 
-    pub async fn request(
-        &self,
-        session: u64,
-        request: &BrowserRequest,
-    ) -> Result<BrowserFrame, String> {
+    pub async fn request(&self, request: &BrowserRequest) -> Result<BrowserFrame, String> {
         request.validate()?;
         let thread = request.thread_id.to_string();
-        let client = format!("{session}:{}", request.client_id);
         let mut state = self.state.lock().await;
         self.ensure(&mut state, &thread).await?;
         validate_tab(
@@ -210,38 +184,7 @@ impl Browser {
                 .as_ref()
                 .unwrap()
                 .navigation(&state.pages[&thread].active);
-        let page = state.pages.get_mut(&thread).unwrap();
-        validate_control(
-            &page.controller,
-            current_generation,
-            &client,
-            request.generation,
-            &request.action,
-        )?;
-        match request.action {
-            BrowserAction::TakeControl => {
-                page.controller = client.clone();
-                page.generation += 1;
-            }
-            BrowserAction::ReleaseControl => {
-                page.controller.clear();
-                page.generation += 1;
-            }
-            _ => (),
-        }
-        if page.controller == client {
-            page.lease = Instant::now() + Duration::from_secs(15);
-        }
-        if matches!(
-            request.action,
-            BrowserAction::TakeControl | BrowserAction::ReleaseControl
-        ) {
-            let State { chrome, pages, .. } = &mut *state;
-            chrome
-                .as_mut()
-                .unwrap()
-                .invalidate_refs(&pages[&thread].tabs);
-        }
+        validate_generation(current_generation, request.generation, &request.action)?;
         let value = Self::action(&mut state, &thread, &request.action).await?;
         let mut frame = Self::frame(
             &mut state,
@@ -254,9 +197,6 @@ impl Browser {
             value,
         )
         .await?;
-        if state.pages[&thread].controller == client {
-            frame.controller = BrowserController::You;
-        }
         if frame.image_id == request.image_id {
             frame.image.clear();
         }
@@ -276,20 +216,6 @@ impl Browser {
             .cloned()
             .unwrap_or_else(|| thread.to_owned());
         self.ensure(&mut state, &thread).await?;
-        let page = &state.pages[&thread];
-        validate_control(
-            &page.controller,
-            page.generation,
-            "",
-            page.generation,
-            &action,
-        )?;
-        if matches!(
-            action,
-            BrowserAction::TakeControl | BrowserAction::ReleaseControl
-        ) {
-            return Err("Only the user can take or release browser control.".into());
-        }
         let value = Self::action(&mut state, &thread, &action).await?;
         Self::frame(
             &mut state,
@@ -317,10 +243,7 @@ impl Browser {
             page.active = id.clone();
             return Ok(ActionOutput::default());
         }
-        if matches!(
-            action,
-            BrowserAction::Read | BrowserAction::TakeControl | BrowserAction::ReleaseControl
-        ) {
+        if matches!(action, BrowserAction::Read) {
             return Ok(ActionOutput::default());
         }
         let chrome = state.chrome.as_mut().unwrap();
@@ -417,11 +340,6 @@ impl Browser {
             image,
             image_id,
             dialog: chrome.dialog(&session),
-            controller: if page.controller.is_empty() {
-                BrowserController::Agent
-            } else {
-                BrowserController::AnotherViewer
-            },
             generation: page.generation + chrome.navigation(&page.active),
             can_go_back,
             can_go_forward,
@@ -435,11 +353,7 @@ impl Browser {
 fn validate_tab(active: &str, displayed: &str, action: &BrowserAction) -> Result<(), String> {
     if !matches!(
         action,
-        BrowserAction::Read
-            | BrowserAction::Snapshot
-            | BrowserAction::SelectTab { .. }
-            | BrowserAction::TakeControl
-            | BrowserAction::ReleaseControl
+        BrowserAction::Read | BrowserAction::Snapshot | BrowserAction::SelectTab { .. }
     ) && active != displayed
     {
         return Err("表示中のタブが変わりました。最新の画面で再試行してください。".into());
@@ -447,21 +361,13 @@ fn validate_tab(active: &str, displayed: &str, action: &BrowserAction) -> Result
     Ok(())
 }
 
-fn validate_control(
-    controller: &str,
-    current_generation: u64,
-    client: &str,
-    generation: u64,
-    action: &BrowserAction,
-) -> Result<(), String> {
-    if matches!(
+fn validate_generation(current: u64, displayed: u64, action: &BrowserAction) -> Result<(), String> {
+    if !matches!(
         action,
-        BrowserAction::Read | BrowserAction::Snapshot | BrowserAction::TakeControl
-    ) {
-        return Ok(());
-    }
-    if controller != client || (!client.is_empty() && generation != current_generation) {
-        return Err(if client.is_empty() { "The user is controlling the browser. You may inspect it; wait until the user releases control before acting." } else { "操作権を取得してから操作してください。" }.into());
+        BrowserAction::Read | BrowserAction::Snapshot | BrowserAction::SelectTab { .. }
+    ) && current != displayed
+    {
+        return Err("表示中のページが変わりました。最新の画面で再試行してください。".into());
     }
     Ok(())
 }

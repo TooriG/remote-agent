@@ -1,18 +1,23 @@
 use super::*;
 
-const TOOLS: [(Panel, IconName, &str, &str); 6] = [
-    (Panel::Browser, IconName::Globe, "ブラウザ", "B"),
-    (Panel::Terminal, IconName::SquareTerminal, "ターミナル", "T"),
-    (Panel::Files, IconName::Folder, "ファイル", "F"),
-    (Panel::Diff, IconName::Replace, "差分", "D"),
-    (Panel::SideChat, IconName::Bot, "サイドチャット", "S"),
-    (Panel::Agents, IconName::Network, "エージェント", "A"),
-];
+fn panel_icon(kind: Panel) -> IconName {
+    match kind {
+        Panel::Browser => IconName::Globe,
+        Panel::Terminal => IconName::SquareTerminal,
+        Panel::Files | Panel::File => IconName::Folder,
+        Panel::Diff => IconName::Replace,
+        Panel::SideChat => IconName::Bot,
+        Panel::Agents => IconName::Network,
+        Panel::Home => IconName::Plus,
+    }
+}
 
 impl Desktop {
-    fn panel_available(&self, panel: Panel) -> bool {
-        matches!(panel, Panel::Browser | Panel::Agents)
-            || (self.snapshot.connected && !self.snapshot.navigation.cwd.is_empty())
+    fn panel_tools(&self) -> Vec<agent_core::panels::PanelTool> {
+        agent_core::panels::panel_tools(
+            self.snapshot.connected,
+            !self.snapshot.navigation.cwd.is_empty(),
+        )
     }
     pub(super) fn open_review(&mut self, path: Option<&str>, cx: &mut Context<Self>) {
         let id = self.panels.open(self.panel_scope(), Panel::Diff, None);
@@ -247,11 +252,8 @@ impl Desktop {
             .min_h_0()
             .min_w_0()
             .gap_2();
-        let selected = self
-            .panels
-            .get(&self.panel_scope())
-            .selected()
-            .and_then(|surface| surface.path.as_deref());
+        let panel = self.panels.get(self.panel_scope());
+        let selected = panel.selected().and_then(|surface| surface.path.as_deref());
         if let Some(file) = self
             .snapshot
             .workspace
@@ -333,7 +335,7 @@ impl Desktop {
         editor.p_4().into_any_element()
     }
     pub(super) fn workbench(&mut self, standalone: bool, cx: &mut Context<Self>) -> AnyElement {
-        let panel = self.panels.get(&self.panel_scope());
+        let panel = self.panels.get(self.panel_scope());
         let layout = panel.layout;
         let active = panel.active;
         let kind = panel.kind();
@@ -342,23 +344,12 @@ impl Desktop {
             .iter()
             .map(|surface| {
                 let id = surface.id;
-                let (_, icon, label, _) = TOOLS
-                    .iter()
-                    .find(|(kind, _, _, _)| {
-                        *kind
-                            == if surface.kind == Panel::File {
-                                Panel::Files
-                            } else {
-                                surface.kind
-                            }
-                    })
-                    .unwrap();
                 let title = match self.surface_resources.get(&id) {
                     Some(SurfaceResource::Browser { view, .. }) => view.read(cx).title(cx),
-                    _ => surface
-                        .path
-                        .as_ref()
-                        .map_or_else(|| label.to_string(), |path| file_name(path)),
+                    _ => surface.path.as_ref().map_or_else(
+                        || agent_core::panels::panel_title(surface.kind),
+                        |path| file_name(path),
+                    ),
                 };
                 h_flex()
                     .gap_1()
@@ -367,7 +358,7 @@ impl Desktop {
                     .child(
                         Button::new(("surface-tab", id as usize))
                             .label(title)
-                            .icon(icon.clone())
+                            .icon(panel_icon(surface.kind))
                             .small()
                             .ghost()
                             .selected(Some(id) == active)
@@ -404,18 +395,19 @@ impl Desktop {
             .tooltip("機能を開く")
             .accessibility_label("機能を開く")
             .dropdown_menu(move |mut menu, _, cx| {
-                for (panel, icon, label, _) in TOOLS {
-                    let enabled = menu_owner
-                        .upgrade()
-                        .is_some_and(|view| view.read(cx).panel_available(panel));
+                let tools = menu_owner
+                    .upgrade()
+                    .map(|view| view.read(cx).panel_tools())
+                    .unwrap_or_default();
+                for tool in tools {
                     let owner = menu_owner.clone();
                     menu = menu.item(
-                        PopupMenuItem::new(label)
-                            .icon(icon)
-                            .disabled(!enabled)
+                        PopupMenuItem::new(tool.label)
+                            .icon(panel_icon(tool.kind))
+                            .disabled(!tool.enabled)
                             .on_click(move |_, window, cx| {
-                                let _ =
-                                    owner.update(cx, |view, cx| view.open_panel(panel, window, cx));
+                                let _ = owner
+                                    .update(cx, |view, cx| view.open_panel(tool.kind, window, cx));
                             }),
                     );
                 }
@@ -469,11 +461,12 @@ impl Desktop {
                         cx,
                         |view, _, _| {
                             let key = view.panel_scope();
-                            let layout = if view.panels.get(&key).layout == PanelLayout::Expanded {
-                                PanelLayout::Right
-                            } else {
-                                PanelLayout::Expanded
-                            };
+                            let layout =
+                                if view.panels.get(key.clone()).layout == PanelLayout::Expanded {
+                                    PanelLayout::Right
+                                } else {
+                                    PanelLayout::Expanded
+                                };
                             view.panels.set_layout(key, layout);
                         },
                     )
@@ -518,14 +511,19 @@ impl Desktop {
                     .max_w(px(300.))
                     .gap_1()
                     .child(div().text_sm().mb_3().text_center().child("機能を開く"));
-                for (ix, (panel, icon, label, shortcut)) in TOOLS.iter().enumerate() {
-                    let panel = *panel;
+                for (ix, tool) in self.panel_tools().into_iter().enumerate() {
+                    let panel = tool.kind;
                     chooser = chooser.child(
-                        self.button(format!("tool-{ix}"), *label, cx, move |view, window, cx| {
-                            view.open_panel(panel, window, cx);
-                        })
+                        self.button(
+                            format!("tool-{ix}"),
+                            tool.label,
+                            cx,
+                            move |view, window, cx| {
+                                view.open_panel(panel, window, cx);
+                            },
+                        )
                         .debug_selector(move || format!("surface-{ix}"))
-                        .icon(icon.clone())
+                        .icon(panel_icon(panel))
                         .w_full()
                         .h_8()
                         .justify_start()
@@ -533,9 +531,9 @@ impl Desktop {
                             div()
                                 .text_xs()
                                 .text_color(rgb(appearance::MUTED))
-                                .child(*shortcut),
+                                .child(tool.shortcut),
                         )
-                        .disabled(!self.panel_available(panel)),
+                        .disabled(!tool.enabled),
                     );
                 }
                 v_flex()
@@ -553,14 +551,14 @@ impl Desktop {
                         {
                             return;
                         }
-                        let Some((kind, _, _, _)) = TOOLS.iter().find(|(_, _, _, shortcut)| {
-                            shortcut.eq_ignore_ascii_case(event.keystroke.key.as_str())
+                        let Some(tool) = view.panel_tools().into_iter().find(|tool| {
+                            tool.shortcut
+                                .eq_ignore_ascii_case(event.keystroke.key.as_str())
                         }) else {
                             return;
                         };
-                        let kind = *kind;
-                        if view.panel_available(kind) {
-                            view.open_panel(kind, window, cx);
+                        if tool.enabled {
+                            view.open_panel(tool.kind, window, cx);
                             cx.stop_propagation();
                         }
                     }))
@@ -747,7 +745,7 @@ mod tests {
         let (a, diff) = view.update(window, |view, cx| {
             let a = view.panel_scope();
             view.open_review(None, cx);
-            (a, view.panels.get(&view.panel_scope()).active.unwrap())
+            (a, view.panels.get(view.panel_scope()).active.unwrap())
         });
         window.run_until_parked();
         assert!(window.debug_bounds("diff-file-navigation").is_some());
@@ -765,14 +763,14 @@ mod tests {
             "bottom placement must put the surface below the chat"
         );
         view.update(window, |view, cx| {
-            assert_eq!(view.panels.get(&a).layout, PanelLayout::Bottom);
+            assert_eq!(view.panels.get(a.clone()).layout, PanelLayout::Bottom);
             let b = PanelScope {
                 draft: DraftKey::from("other-conversation"),
                 ..view.panel_scope()
             };
             Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).navigation).draft_key =
                 b.draft.clone();
-            assert!(!view.panels.get(&b).open);
+            assert!(!view.panels.get(b.clone()).open);
             view.panels.set_open(b, true);
             cx.notify();
         });
@@ -782,8 +780,8 @@ mod tests {
         view.update(window, |view, cx| {
             Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).navigation).draft_key =
                 a.draft.clone();
-            assert_eq!(view.panels.get(&a).active, Some(diff));
-            assert_eq!(view.panels.get(&a).surfaces.len(), 2);
+            assert_eq!(view.panels.get(a.clone()).active, Some(diff));
+            assert_eq!(view.panels.get(a.clone()).surfaces.len(), 2);
             cx.notify();
         });
         window.run_until_parked();

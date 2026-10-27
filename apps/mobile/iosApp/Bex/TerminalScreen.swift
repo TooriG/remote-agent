@@ -5,9 +5,7 @@ import SwiftUI
 struct TerminalScreen: View {
     @ObservedObject var model: BexAppViewModel
     let cwd: String
-    private var handle: String {
-        terminalHandle(cwd: cwd)
-    }
+    let handle: String
 
     var body: some View {
         VStack(spacing: 0) {

@@ -13,11 +13,43 @@ extension BexLaunchUITests {
         XCTAssertFalse(app.progressIndicators["terminal.loading"].exists)
     }
 
+    func testSimulatorWorkbenchStartsEmptyAndOwnsOnlyOpenedTabs() throws {
+        let app = try connectedSimulatorApp()
+        app.buttons["tasks.new.project.simulator-project"].tap()
+        app.buttons["task.tools"].tap()
+        let launcher = app.descendants(matching: .any)["workbench.launcher"]
+        XCTAssertTrue(launcher.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["workbench.add"].exists)
+        XCTAssertFalse(app.navigationBars.firstMatch.exists)
+        XCTAssertFalse(workbenchTab(app, "terminal").exists)
+        XCTAssertFalse(app.descendants(matching: .any)["terminal.screen"].exists)
+        openWorkbenchTool(app, "terminal")
+        assertTerminalReady(app)
+        let terminalTab = workbenchTab(app, "terminal")
+        XCTAssertTrue(terminalTab.exists)
+        XCTAssertFalse(launcher.exists)
+        openWorkbenchTool(app, "files")
+        XCTAssertTrue(app.buttons["file.hello.txt"].waitForExistence(timeout: 10))
+        XCTAssertTrue(terminalTab.exists)
+        let filesTab = workbenchTab(app, "files")
+        XCTAssertTrue(filesTab.exists)
+        let fileId = try XCTUnwrap(filesTab.identifier.split(separator: ".").last)
+        app.buttons["workbench.close.\(fileId)"].tap()
+        assertTerminalReady(app)
+        XCTAssertFalse(filesTab.exists)
+        let terminalId = try XCTUnwrap(terminalTab.identifier.split(separator: ".").last)
+        app.buttons["workbench.close.\(terminalId)"].tap()
+        XCTAssertTrue(launcher.waitForExistence(timeout: 5))
+        XCTAssertFalse(terminalTab.exists)
+        captureScreen(app, named: "Empty workbench with plus and centered launcher")
+        closeWorkbench(app)
+    }
+
     func testSimulatorNativeTerminalPastesMultilineText() throws {
         let app = try connectedSimulatorApp()
         app.buttons["tasks.new.project.simulator-project"].tap()
         app.buttons["task.tools"].tap()
-        app.buttons["workbench.terminal"].tap()
+        openWorkbenchTool(app, "terminal")
         assertTerminalReady(app)
         let terminal = app.descendants(matching: .any)["terminal.screen"]
         XCTAssertTrue(terminal.waitForExistence(timeout: 5))
@@ -40,7 +72,7 @@ extension BexLaunchUITests {
         let app = try connectedSimulatorApp()
         app.buttons["tasks.new.project.simulator-project"].tap()
         app.buttons["task.tools"].tap()
-        app.buttons["workbench.terminal"].tap()
+        openWorkbenchTool(app, "terminal")
         assertTerminalReady(app)
         let terminal = app.descendants(matching: .any)["terminal.screen"]
         XCTAssertTrue(terminal.waitForExistence(timeout: 5))
@@ -58,8 +90,7 @@ extension BexLaunchUITests {
         app.buttons["tasks.new.project.simulator-project"].tap()
         func openTerminal() {
             app.buttons["task.tools"].tap()
-            let action = app.buttons["workbench.terminal"]
-            XCTAssertTrue(action.waitForExistence(timeout: 10)); action.tap()
+            openWorkbenchTool(app, "terminal")
             assertTerminalReady(app)
         }
         let composer = app.textFields["task.message"]
@@ -69,6 +100,8 @@ extension BexLaunchUITests {
         let edge = app.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0))
             .withOffset(CGVector(dx: 0, dy: chat.frame.midY - app.frame.minY))
         edge.press(forDuration: 0.05, thenDragTo: edge.withOffset(CGVector(dx: -200, dy: 0)))
+        XCTAssertTrue(app.descendants(matching: .any)["workbench.launcher"].waitForExistence(timeout: 5))
+        openWorkbenchTool(app, "terminal")
         assertTerminalReady(app)
         let terminal = app.descendants(matching: .any)["terminal.screen"]
         XCTAssertTrue(terminal.waitForExistence(timeout: 5))
@@ -76,22 +109,22 @@ extension BexLaunchUITests {
         captureScreen(app, named: "Native terminal with keyboard")
         XCTAssertFalse(app.buttons["終了"].exists)
         XCTAssertFalse(app.buttons["terminal.close"].exists)
-        app.buttons["workbench.files"].tap()
+        openWorkbenchTool(app, "files")
         let file = app.buttons["file.hello.txt"]
         XCTAssertTrue(file.waitForExistence(timeout: 10))
         captureScreen(app, named: "Full-screen files")
         file.tap()
         XCTAssertTrue(app.textViews["file.editor"].waitForExistence(timeout: 10))
         app.buttons["file.close"].tap()
-        app.buttons["workbench.terminal"].tap()
+        openWorkbenchTool(app, "terminal")
         assertTerminalReady(app)
         XCTAssertEqual(terminal.frame.width, app.frame.width, accuracy: 2)
-        // Begin in the empty navigation-bar edge, outside the tabs and terminal gestures.
-        let back = app.navigationBars.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.005, dy: 0.5))
+        let back = app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: 1, dy: workbenchTab(app, "terminal").frame.midY - app.frame.minY))
         back.press(forDuration: 0.1, thenDragTo: back.withOffset(CGVector(dx: terminal.frame.width * 0.9, dy: 0)),
                    withVelocity: .fast, thenHoldForDuration: 0)
         XCTAssertTrue(app.buttons["task.tools"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["workbench.terminal"].exists)
+        XCTAssertFalse(workbenchTab(app, "terminal").exists)
         XCTAssertFalse(terminal.exists)
         XCTAssertEqual(composer.value as? String, "Keep my draft")
         openTerminal()
@@ -108,9 +141,7 @@ extension BexLaunchUITests {
         app.buttons["tasks.new.chat"].tap()
         app.buttons["task.tools"].tap()
         for page in ["terminal", "files"] {
-            app.buttons["workbench.\(page)"].tap()
-            XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "フォルダを選択すると"))
-                .firstMatch.waitForExistence(timeout: 5))
+            XCTAssertFalse(app.buttons["workbench.\(page)"].isEnabled)
         }
         closeWorkbench(app)
         XCTAssertFalse(app.staticTexts["notice"].exists)
@@ -125,14 +156,14 @@ extension BexLaunchUITests {
         let nested = app.buttons["file.nested"]
         XCTAssertTrue(nested.waitForExistence(timeout: 10))
         let pathField = app.textFields["絶対パス"]
-        let filter = app.buttons["すべてのファイル"]
-        XCTAssertLessThan(pathField.frame.minY - filter.frame.maxY, 40)
+        let tabs = workbenchTab(app, "files")
+        XCTAssertLessThan(pathField.frame.minY - tabs.frame.maxY, 40)
         XCTAssertLessThan(app.buttons["親ディレクトリ"].frame.minY - pathField.frame.maxY, 30)
         captureScreen(app, named: "Compact root directory layout")
         nested.tap()
         let child = app.buttons["file.child.txt"]
         XCTAssertTrue(child.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.buttons["workbench.files"].exists)
+        XCTAssertTrue(workbenchTab(app, "files").exists)
         captureScreen(app, named: "Native directory navigation")
         let navigationBar = app.navigationBars["nested"]
         XCTAssertTrue(navigationBar.waitForExistence(timeout: 5))
@@ -166,7 +197,7 @@ extension BexLaunchUITests {
             XCTAssertEqual(path.value as? String, root + "/nested")
             app.buttons["files.open-path"].tap()
             XCTAssertTrue(child.waitForExistence(timeout: 10))
-            XCTAssertTrue(app.buttons["workbench.files"].exists)
+            XCTAssertTrue(workbenchTab(app, "files").exists)
             app.navigationBars["nested"].buttons.element(boundBy: 0).tap()
             XCTAssertTrue(app.buttons["file.hello.txt"].waitForExistence(timeout: 10))
             XCTAssertFalse(child.exists)

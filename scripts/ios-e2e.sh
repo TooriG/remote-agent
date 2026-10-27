@@ -16,6 +16,7 @@ if [[ ${1:-} == --without-codex ]]; then
 fi
 if [[ $# == 0 ]]; then
     set -- \
+        testSimulatorWorkbenchStartsEmptyAndOwnsOnlyOpenedTabs \
         testSimulatorNativeTerminalRetainsShellAfterReopening \
         testSimulatorNativeTerminalPastesMultilineText \
         testSimulatorNativeTerminalDoesNotDuplicateQueryResponses \

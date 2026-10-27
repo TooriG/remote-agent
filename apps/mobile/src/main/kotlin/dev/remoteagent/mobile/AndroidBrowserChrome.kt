@@ -42,40 +42,19 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.remoteagent.core.BrowserAction
-import dev.remoteagent.core.BrowserController
 import dev.remoteagent.core.BrowserTab
 import dev.remoteagent.core.browserAddressUrl
 
 @Composable
-internal fun BrowserControlBar(controller: BrowserController?, send: (BrowserAction) -> Unit) {
-    val owns = controller == BrowserController.YOU
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
-    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            if (owns) "あなたが操作中" else if (controller == BrowserController.ANOTHER_VIEWER) "別の端末が操作中" else "AI が操作できます",
-            Modifier.weight(1f),
-            fontSize = 12.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        TextButton(
-            onClick = { send(if (owns) BrowserAction.ReleaseControl else BrowserAction.TakeControl) },
-            enabled = controller != null,
-        ) {
-            Text(if (owns) "AI に操作を戻す" else "操作権を取得", fontSize = 12.sp)
-        }
-    }
-}
-
-@Composable
-internal fun BrowserTabs(tabs: List<BrowserTab>, owns: Boolean, send: (BrowserAction) -> Unit) {
+internal fun BrowserTabs(tabs: List<BrowserTab>, send: (BrowserAction) -> Unit) {
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
         tabs.forEach { tab ->
-            TextButton(onClick = { send(BrowserAction.SelectTab(tab.id)) }, enabled = owns) {
+            TextButton(onClick = { send(BrowserAction.SelectTab(tab.id)) }) {
                 Text(if (tab.url == "about:blank") "新しいタブ" else tab.title.ifEmpty { tab.url }, maxLines = 1)
             }
-            TextButton(onClick = { send(BrowserAction.CloseTab(tab.id)) }, enabled = owns) { Text("×") }
+            TextButton(onClick = { send(BrowserAction.CloseTab(tab.id)) }) { Text("×") }
         }
-        TextButton(onClick = { send(BrowserAction.OpenTab("about:blank")) }, enabled = owns) { Text("＋") }
+        TextButton(onClick = { send(BrowserAction.OpenTab("about:blank")) }) { Text("＋") }
     }
 }
 
@@ -83,11 +62,12 @@ internal fun BrowserTabs(tabs: List<BrowserTab>, owns: Boolean, send: (BrowserAc
 @Suppress("LongParameterList")
 internal fun BrowserToolbar(
     tab: BrowserTab?,
-    owns: Boolean,
+    enabled: Boolean,
     canGoBack: Boolean,
     canGoForward: Boolean,
     send: (BrowserAction) -> Unit,
     fit: () -> Unit,
+    type: () -> Unit,
     failed: (String?) -> Unit,
 ) {
     val url = tab?.url?.takeUnless { it == "about:blank" } ?: ""
@@ -100,26 +80,26 @@ internal fun BrowserToolbar(
     ) {
         IconButton(
             onClick = { send(BrowserAction.Back) },
-            enabled = owns && canGoBack,
+            enabled = canGoBack,
             modifier = Modifier.size(40.dp),
         ) {
             Icon(painterResource(R.drawable.ic_arrow_left), "前のページ", Modifier.size(16.dp))
         }
         IconButton(
             onClick = { send(BrowserAction.Forward) },
-            enabled = owns && canGoForward,
+            enabled = canGoForward,
             modifier = Modifier.size(40.dp),
         ) {
             Icon(painterResource(R.drawable.ic_arrow_right), "次のページ", Modifier.size(16.dp))
         }
-        IconButton(onClick = { send(BrowserAction.Reload) }, enabled = owns, modifier = Modifier.size(40.dp)) {
+        IconButton(onClick = { send(BrowserAction.Reload) }, enabled = enabled, modifier = Modifier.size(40.dp)) {
             Icon(painterResource(R.drawable.ic_refresh), "再読み込み", Modifier.size(16.dp))
         }
         BasicTextField(
             address,
             { address = it },
             Modifier.weight(1f).onFocusChanged { focused = it.isFocused },
-            enabled = owns,
+            enabled = enabled,
             singleLine = true,
             textStyle =
                 MaterialTheme.typography.bodySmall.copy(fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface),
@@ -141,16 +121,22 @@ internal fun BrowserToolbar(
                 }
             },
         )
-        BrowserMenu(tab?.id, owns, send, fit)
+        BrowserMenu(tab?.id, enabled, send, fit, type)
     }
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
 }
 
 @Composable
-private fun BrowserMenu(tabId: String?, owns: Boolean, send: (BrowserAction) -> Unit, fit: () -> Unit) {
+private fun BrowserMenu(
+    tabId: String?,
+    enabled: Boolean,
+    send: (BrowserAction) -> Unit,
+    fit: () -> Unit,
+    type: () -> Unit,
+) {
     var menuOpen by remember { mutableStateOf(false) }
     Box {
-        IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(40.dp)) {
+        IconButton(onClick = { menuOpen = true }, enabled = enabled, modifier = Modifier.size(40.dp)) {
             Icon(painterResource(R.drawable.ic_more), "ブラウザのメニュー", Modifier.size(16.dp))
         }
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
@@ -160,7 +146,6 @@ private fun BrowserMenu(tabId: String?, owns: Boolean, send: (BrowserAction) -> 
                     menuOpen = false
                     send(BrowserAction.OpenTab("about:blank"))
                 },
-                enabled = owns,
             )
             DropdownMenuItem(
                 text = { Text("タブを閉じる") },
@@ -168,16 +153,18 @@ private fun BrowserMenu(tabId: String?, owns: Boolean, send: (BrowserAction) -> 
                     menuOpen = false
                     tabId?.let { send(BrowserAction.CloseTab(it)) }
                 },
-                enabled = owns,
+            )
+            DropdownMenuItem(
+                text = { Text("文字入力") },
+                onClick = { menuOpen = false; type() },
             )
             HorizontalDivider()
             DropdownMenuItem(
-                text = { Text("画面に合わせる（自動）") },
+                text = { Text("画面に合わせる") },
                 onClick = {
                     menuOpen = false
                     fit()
                 },
-                enabled = owns,
             )
             DropdownMenuItem(
                 text = { Text("デスクトップ · 1280 × 800") },
@@ -185,7 +172,6 @@ private fun BrowserMenu(tabId: String?, owns: Boolean, send: (BrowserAction) -> 
                     menuOpen = false
                     send(BrowserAction.Resize(1280u, 800u))
                 },
-                enabled = owns,
             )
             DropdownMenuItem(
                 text = { Text("モバイル · 390 × 844") },
@@ -193,7 +179,6 @@ private fun BrowserMenu(tabId: String?, owns: Boolean, send: (BrowserAction) -> 
                     menuOpen = false
                     send(BrowserAction.Resize(390u, 844u))
                 },
-                enabled = owns,
             )
         }
     }

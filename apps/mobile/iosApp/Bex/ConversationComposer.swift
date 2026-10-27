@@ -10,7 +10,7 @@ extension ThreadScreen {
         let attachments = model.snapshot.draft(key: model.coreDraftKey).attachments
         return VStack(spacing: 12) {
             if !isSideChat, !model.isNewThread, let review = model.snapshot.review(), review.fileCount() > 0 {
-                Button { openTools?(.files, true) } label: {
+                Button { openTools?(.diff) } label: {
                     HStack(spacing: 10) {
                         Text("\(review.fileCount())件のファイル")
                         Text("+\(review.additions())").foregroundColor(.green)

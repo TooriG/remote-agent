@@ -1,136 +1,223 @@
 import AgentCore
 import SwiftUI
-import UIKit
 
-/// Owns the transition from a conversation to its separate tool destination.
+/// Native navigation and resources; the core owns tabs, selection and the launcher catalog.
 struct ConversationDestination: View {
     @ObservedObject var model: BexAppViewModel
     @State private var showingTools = false
-    @State private var tab: WorkspaceTab = .terminal
-    @State private var showingDiff = false
 
     var body: some View {
-        GeometryReader { geometry in
-            ThreadScreen(model: model,
-                         conversation: model.isShowingSideChat ? model.sideChatRequest?.originalConversation : model
-                             .conversation,
-                         openTools: { tab, diff in
-                             if let tab {
-                                 self.tab = tab
-                             }
-                             showingDiff = diff
-                             showingTools = true
-                         })
-                         .simultaneousGesture(DragGesture(minimumDistance: 30).onEnded { value in
-                             guard value.startLocation.x >= geometry.size.width - 32,
-                                   value.translation.width < -60,
-                                   abs(value.translation.width) > abs(value.translation.height) * 1.5 else { return }
-                             showingTools = true
-                         })
-        }
-        .navigationDestination(isPresented: $showingTools) {
-            WorkspaceToolsScreen(model: model, tab: $tab, showingDiff: $showingDiff) {
-                showingTools = false
-            }
+        ThreadScreen(model: model,
+                     conversation: model.isShowingSideChat ? model.sideChatRequest?.originalConversation : model
+                         .conversation,
+                     openTools: { kind in
+                         if let kind {
+                             model.openWorkbench(kind)
+                         }
+                         showingTools = true
+                     })
+                     .navigationDestination(isPresented: $showingTools) {
+                         WorkspaceToolsScreen(model: model) { showingTools = false }
+                     }
+    }
+}
+
+extension PanelKind {
+    var icon: String {
+        switch self {
+        case .browser: "globe"
+        case .terminal: "terminal"
+        case .files, .file: "folder"
+        case .diff: "arrow.left.arrow.right"
+        case .sideChat: "bubble.left.and.bubble.right"
+        case .agents: "network"
+        case .home: "plus"
         }
     }
 }
 
-enum WorkspaceTab: String, CaseIterable {
-    case terminal, browser, files, sideChat
+extension BexAppViewModel {
+    func migrateWorkbench(to next: AgentCore.Snapshot) {
+        guard let session = next.submittedSession(draft: coreDraftKey) else { return }
+        let host = selectedProfileId ?? ""
+        panels.rekey(before: snapshot.panelScope(host: host, draft: coreDraftKey),
+                     after: next.panelScope(host: host, draft: .session(session: session)))
+    }
 
-    var icon: String {
-        switch self {
-        case .sideChat: "bubble.left.and.bubble.right"
-        case .terminal: "terminal"
-        case .files: "folder"
-        case .browser: "globe"
+    var workbenchScope: PanelScope {
+        let draft: DraftKey = if isShowingSideChat, let request = sideChatRequest {
+            .session(session: request.originalThreadId)
+        } else {
+            coreDraftKey
+        }
+        return snapshot.panelScope(host: selectedProfileId ?? "", draft: draft)
+    }
+
+    var workbench: PanelState {
+        panels.get(key: workbenchScope)
+    }
+
+    var workbenchTools: [PanelTool] {
+        panelTools(connected: isConnected, hasDirectory: !cwd.isEmpty)
+    }
+
+    func openWorkbench(_ kind: PanelKind) {
+        objectWillChange.send()
+        let scope = workbenchScope
+        let id = panels.open(key: scope, kind: kind, path: nil)
+        if kind == .sideChat, let host = selectedProfileId,
+           case let .session(original) = scope.draft {
+            let request: SideChatRequest = if let pending = sideChatRequest, pending.threadId == nil,
+                                              pending.host == host, pending.originalThreadId == original {
+                pending
+            } else {
+                SideChatRequest(text: "", host: host, originalThreadId: original,
+                                originalConversation: isShowingSideChat ? sideChatRequest?
+                                    .originalConversation : conversation,
+                                cwd: selectedDirectory)
+            }
+            workbenchSideChats[id] = request
         }
     }
 
-    var label: String {
-        switch self {
-        case .sideChat: "サイドチャット"
-        case .terminal: "ターミナル"
-        case .files: "ファイル"
-        case .browser: "ブラウザ"
+    func activateWorkbench(_ id: UInt64) {
+        objectWillChange.send()
+        _ = panels.activate(key: workbenchScope, id: id)
+    }
+
+    func closeWorkbench(_ surface: PanelSurface) {
+        objectWillChange.send()
+        panels.close(key: workbenchScope, id: surface.id)
+        if surface.kind == .terminal {
+            perform(.killTerminal(KillTerminal(handle: workbenchTerminalHandle(surface.id))))
         }
+        workbenchSideChats.removeValue(forKey: surface.id)
+    }
+
+    func workbenchTerminalHandle(_ id: UInt64) -> String {
+        "bex-terminal-\(workbenchInstance)-\(id)"
     }
 }
 
 private struct WorkspaceToolsScreen: View {
     @ObservedObject var model: BexAppViewModel
-    @Binding var tab: WorkspaceTab
-    @Binding var showingDiff: Bool
     let close: () -> Void
+
+    private var panel: PanelState {
+        model.workbench
+    }
+
+    private var selected: PanelSurface? {
+        panel.surfaces.first { $0.id == panel.active }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                ForEach(WorkspaceTab.allCases, id: \.self) { tab in
-                    Button { self.tab = tab } label: {
-                        Image(systemName: tab.icon)
-                            .font(.title3)
-                            .foregroundStyle(self.tab == tab ? .primary : .secondary)
-                            .frame(maxWidth: .infinity, minHeight: 44)
-                            .overlay(alignment: .bottom) {
-                                if self.tab == tab {
-                                    Rectangle().fill(.primary).frame(height: 2)
+            HStack(spacing: 0) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 4) {
+                        ForEach(panel.surfaces, id: \.id) { surface in
+                            HStack(spacing: 0) {
+                                Button { model.activateWorkbench(surface.id) } label: {
+                                    Label(panelTitle(kind: surface.kind), systemImage: surface.kind.icon)
+                                        .lineLimit(1).padding(.leading, 10).padding(.trailing, 6)
+                                        .frame(minHeight: 44)
                                 }
+                                .accessibilityIdentifier("workbench.tab.\(surface.kind).\(surface.id)")
+                                .accessibilityAddTraits(surface.id == panel.active ? [.isSelected] : [])
+                                Button { model.closeWorkbench(surface) } label: {
+                                    Image(systemName: "xmark").font(.caption2).frame(width: 36, height: 44)
+                                }
+                                .accessibilityLabel("タブを閉じる")
+                                .accessibilityIdentifier("workbench.close.\(surface.id)")
                             }
+                            .background(surface.id == panel.active ? Color.primary.opacity(0.08) : .clear,
+                                        in: RoundedRectangle(cornerRadius: 6))
+                        }
+                        Menu {
+                            ForEach(model.workbenchTools, id: \.key) { tool in
+                                toolButton(tool)
+                            }
+                        } label: {
+                            Image(systemName: "plus").frame(width: 44, height: 44)
+                        }
+                        .accessibilityLabel("機能を開く")
+                        .accessibilityIdentifier("workbench.add")
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(tab.label)
-                    .accessibilityIdentifier("workbench.\(tab.rawValue)")
-                    .accessibilityAddTraits(self.tab == tab ? [.isSelected] : [])
                 }
+                Button(action: close) {
+                    Image(systemName: "sidebar.right").frame(width: 44, height: 44)
+                }
+                .accessibilityLabel("会話に戻る")
+                .accessibilityIdentifier("workbench.close")
             }
-            Divider()
+            .font(.system(size: 14)).foregroundStyle(.secondary).buttonStyle(.plain)
+            Divider().opacity(0.6)
             Group {
-                if tab == .sideChat {
-                    if let request = model.sideChatRequest,
-                       request.host == model.selectedProfileId,
-                       request.originalThreadId == model.selectedThreadId || model.isShowingSideChat {
-                        ConversationSideChat(model: model, request: request)
-                            .id(request.id)
-                    } else {
-                        Text("会話を始めるとサイドチャットを利用できます。")
-                            .foregroundStyle(.secondary).padding()
-                    }
-                } else if tab == .browser {
-                    if let thread = model.isShowingSideChat ? model.sideChatRequest?.originalThreadId : model
-                        .selectedThreadId, let store = model.store {
-                        WorkspaceBrowserScreen(store: store, thread: thread)
-                            .id("\(model.selectedProfileId ?? "")/\(thread)/\(ObjectIdentifier(store))")
-                    } else {
-                        Text("会話を始めると、AIと同じブラウザを利用できます。")
-                            .foregroundStyle(.secondary).padding()
-                    }
-                } else if model.cwd.isEmpty {
-                    Text("フォルダを選択すると\(tab.label)を利用できます。")
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if tab == .terminal {
-                    TerminalScreen(model: model, cwd: model.cwd)
-                        .id(model.cwd)
+                if let selected {
+                    content(selected).id(selected.id)
                 } else {
-                    WorkspaceScreen(model: model, root: model.cwd, showingDiff: $showingDiff, close: close)
-                        .id(model.cwd)
+                    VStack(spacing: 4) {
+                        Text("機能を開く").font(.system(size: 14)).padding(.bottom, 12)
+                        ForEach(model.workbenchTools, id: \.key) { tool in
+                            toolButton(tool)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .frame(minHeight: 44)
+                        }
+                    }
+                    .buttonStyle(.plain).font(.system(size: 14))
+                    .frame(maxWidth: 300).padding(24)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("workbench.launcher")
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .onAppear { prepareSideChat() }
-        .onChange(of: tab) { _ in prepareSideChat() }
-        .navigationTitle("")
-        .navigationBarTitleDisplayMode(.inline)
+        .background(Color(uiColor: .systemBackground))
+        .simultaneousGesture(DragGesture(minimumDistance: 30).onEnded { value in
+            guard value.startLocation.x < 32, value.translation.width > 60,
+                  abs(value.translation.width) > abs(value.translation.height) * 1.5 else { return }
+            close()
+        })
+        .toolbar(.hidden, for: .navigationBar)
     }
 
-    private func prepareSideChat() {
-        guard tab == .sideChat else { return }
-        if model.sideChatRequest?.host != model.selectedProfileId ||
-            (model.sideChatRequest?.originalThreadId != model.selectedThreadId && !model.isShowingSideChat) {
-            model.askSelectionInSideChat("")
+    private func toolButton(_ tool: PanelTool) -> some View {
+        Button { model.openWorkbench(tool.kind) } label: {
+            Label(tool.label, systemImage: tool.kind.icon)
+        }
+        .disabled(!tool.enabled)
+        .accessibilityIdentifier("workbench.\(tool.key)")
+    }
+
+    @ViewBuilder
+    private func content(_ surface: PanelSurface) -> some View {
+        switch surface.kind {
+        case .sideChat:
+            if let request = model.workbenchSideChats[surface.id] {
+                ConversationSideChat(model: model, request: request)
+            } else {
+                Text("会話を始めるとサイドチャットを利用できます。")
+                    .foregroundStyle(.secondary).padding()
+            }
+        case .browser:
+            if case let .session(thread) = model.workbenchScope.draft, let store = model.store {
+                WorkspaceBrowserScreen(store: store, thread: thread)
+            } else {
+                Text("会話を始めると、AIと同じブラウザを利用できます。")
+                    .foregroundStyle(.secondary).padding()
+            }
+        case .terminal:
+            TerminalScreen(model: model, cwd: model.cwd, handle: model.workbenchTerminalHandle(surface.id))
+        case .files, .file:
+            WorkspaceScreen(model: model, root: model.cwd, close: close)
+        case .diff:
+            WorkspaceDiffScreen(model: model, root: model.cwd)
+        case .agents:
+            WorkspaceAgentsScreen(agents: model.snapshot.agentPanel())
+        case .home:
+            EmptyView()
         }
     }
 }

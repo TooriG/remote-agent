@@ -144,17 +144,13 @@ async fn installed_codex_exposes_the_same_browser_as_the_phone() {
         "Codex receives the Host screenshot"
     );
     let phone = browser
-        .request(
-            1,
-            &agent_protocol::browser::BrowserRequest {
-                thread_id: session,
-                tab_id: String::new(),
-                image_id: String::new(),
-                client_id: "test-viewer".into(),
-                generation: 0,
-                action: agent_protocol::browser::BrowserAction::Read,
-            },
-        )
+        .request(&agent_protocol::browser::BrowserRequest {
+            thread_id: session,
+            tab_id: String::new(),
+            image_id: String::new(),
+            generation: 0,
+            action: agent_protocol::browser::BrowserAction::Read,
+        })
         .await
         .unwrap();
     assert_eq!(phone.tabs.len(), 1, "phone and Codex must share one tab");

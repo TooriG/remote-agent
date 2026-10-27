@@ -131,7 +131,7 @@ fn conversation_file_path(source: &str, cwd: &str) -> Result<PathBuf, String> {
 
 impl Render for Desktop {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let panel = self.panels.get(&self.panel_scope());
+        let panel = self.panels.get(self.panel_scope());
         let panel_open = panel.open;
         let panel_kind = panel.kind();
         let panel_layout = panel.layout;
@@ -220,7 +220,7 @@ impl Render for Desktop {
 
 impl Desktop {
     fn conversation_header(&self, cx: &Context<Self>) -> Div {
-        let panel_open = self.panels.get(&self.panel_scope()).open;
+        let panel_open = self.panels.get(self.panel_scope()).open;
         let title = self
             .thread()
             .and_then(|thread| thread.name.as_deref())
@@ -269,7 +269,7 @@ impl Desktop {
             move |view, window, cx| {
                 let key = view.panel_scope();
                 view.panels.set_open(key.clone(), !open);
-                if !open && view.panels.get(&key).active.is_none() {
+                if !open && view.panels.get(key.clone()).active.is_none() {
                     view.panel_focus.focus(window, cx);
                 }
             },
@@ -302,7 +302,7 @@ impl Desktop {
     }
 
     fn conversation_content(&mut self, width: Pixels, cx: &mut Context<Self>) -> AnyElement {
-        let panel = self.panels.get(&self.panel_scope());
+        let panel = self.panels.get(self.panel_scope());
         let panel_open = panel.open;
         let panel_layout = panel.layout;
         let wide = width >= px(1080.);

@@ -158,7 +158,7 @@ mod tests {
         );
         let row_before = window.debug_bounds("agent-row").unwrap();
         view.update(window, |desktop, cx| {
-            assert!(desktop.panels.get(&desktop.panel_scope()).kind() == Panel::Agents);
+            assert!(desktop.panels.get(desktop.panel_scope()).kind() == Panel::Agents);
             assert_eq!(desktop.selected().unwrap().id, "parent");
             assert_eq!(desktop.draft().text, "Keep my draft");
             assert_eq!(desktop.snapshot.thread_list().unwrap().threads.len(), 1);

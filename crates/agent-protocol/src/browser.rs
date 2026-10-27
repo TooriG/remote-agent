@@ -13,7 +13,6 @@ pub struct BrowserRequest {
     pub thread_id: crate::session::SessionRef,
     pub tab_id: String,
     pub image_id: String,
-    pub client_id: String,
     pub generation: u64,
     pub action: BrowserAction,
 }
@@ -26,8 +25,6 @@ impl std::fmt::Debug for BrowserRequest {
 #[derive(Clone, Serialize, Deserialize)]
 pub enum BrowserAction {
     Read,
-    TakeControl,
-    ReleaseControl,
     OpenTab {
         url: String,
     },
@@ -176,14 +173,6 @@ pub struct BrowserDialog {
     pub prompt: bool,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
-pub enum BrowserController {
-    #[default]
-    Agent,
-    You,
-    AnotherViewer,
-}
-
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct BrowserFrame {
     pub tabs: Vec<BrowserTab>,
@@ -194,7 +183,6 @@ pub struct BrowserFrame {
     pub image: Vec<u8>,
     pub image_id: String,
     pub dialog: Option<BrowserDialog>,
-    pub controller: BrowserController,
     pub generation: u64,
     pub can_go_back: bool,
     pub can_go_forward: bool,
@@ -213,11 +201,7 @@ impl std::fmt::Debug for BrowserFrame {
 impl BrowserRequest {
     pub fn validate(&self) -> Result<(), String> {
         self.thread_id.validate()?;
-        if self.client_id.is_empty()
-            || self.client_id.len() > 128
-            || self.tab_id.len() > 256
-            || self.image_id.len() > 256
-        {
+        if self.tab_id.len() > 256 || self.image_id.len() > 256 {
             return Err("ブラウザ接続情報が不正です。".into());
         }
         self.action.validate()

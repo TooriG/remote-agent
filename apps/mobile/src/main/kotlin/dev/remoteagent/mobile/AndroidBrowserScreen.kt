@@ -45,20 +45,16 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.remoteagent.core.BrowserAction
-import dev.remoteagent.core.BrowserController
 import dev.remoteagent.core.BrowserFrame
 import dev.remoteagent.core.BrowserKey
 import dev.remoteagent.core.BrowserRequest
 import dev.remoteagent.core.SessionRef
 import dev.remoteagent.core.browserFitAction
-import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 
 @Composable
 internal fun BrowserLauncher(
@@ -77,12 +73,10 @@ internal fun BrowserLauncher(
 
 private const val BROWSER_POLL_MS = 150L
 private const val BROWSER_RETRY_MS = 1500L
-private const val BROWSER_RELEASE_MS = 1000L
 private const val BROWSER_QUEUE_LIMIT = 64
 private const val BROWSER_MAX_SCROLL = 4096f
 
 private class BrowserSession(private val thread: SessionRef) {
-    private val client = UUID.randomUUID().toString()
     private val commands = ArrayDeque<BrowserRequest>()
     var frame by mutableStateOf<BrowserFrame?>(null)
         private set
@@ -91,12 +85,11 @@ private class BrowserSession(private val thread: SessionRef) {
         private set
 
     var error by mutableStateOf<String?>(null)
-    private var followSize = true
     private var viewportWidth = 0.0
     private var viewportHeight = 0.0
 
     fun fitViewport() {
-        followSize = true
+        browserFitAction(viewportWidth, viewportHeight, frame?.width ?: 0u, frame?.height ?: 0u)?.let(::send)
     }
 
     fun setViewport(width: Double, height: Double) {
@@ -105,11 +98,10 @@ private class BrowserSession(private val thread: SessionRef) {
     }
 
     private fun request(action: BrowserAction) =
-        BrowserRequest(thread, frame?.tabId ?: "", frame?.imageId ?: "", client, frame?.generation ?: 0uL, action)
+        BrowserRequest(thread, frame?.tabId ?: "", frame?.imageId ?: "", frame?.generation ?: 0uL, action)
 
     fun send(action: BrowserAction) {
         if (commands.size < BROWSER_QUEUE_LIMIT) {
-            if (action is BrowserAction.Resize) followSize = false
             commands.addLast(request(action))
         }
     }
@@ -118,11 +110,7 @@ private class BrowserSession(private val thread: SessionRef) {
         commands.removeFirstOrNull()?.let {
             return it
         }
-        val fit =
-            if (followSize && frame?.controller == BrowserController.YOU)
-                browserFitAction(viewportWidth, viewportHeight, frame?.width ?: 0u, frame?.height ?: 0u)
-            else null
-        return request(fit ?: BrowserAction.Read)
+        return request(BrowserAction.Read)
     }
 
     suspend fun run(profile: String?, browser: suspend (String?, BrowserRequest) -> BrowserFrame) {
@@ -144,13 +132,7 @@ private class BrowserSession(private val thread: SessionRef) {
             }
         } finally {
             commands.clear()
-            if (frame?.controller == BrowserController.YOU) {
-                withContext(NonCancellable) {
-                    withTimeoutOrNull(BROWSER_RELEASE_MS) {
-                        runCatching { browser(profile, request(BrowserAction.ReleaseControl)) }
-                    }
-                }
-            }
+
         }
     }
 }
@@ -188,7 +170,8 @@ private fun BrowserPane(
     }
     LaunchedEffect(thread, active) { if (active) session.run(profile, browser) }
     val frame = session.frame
-    val owns = frame?.controller == BrowserController.YOU
+    val enabled = frame != null
+    var showKeyboard by remember { mutableStateOf(false) }
     val tab = frame?.tabs?.firstOrNull { it.id == frame.tabId }
     val density = LocalDensity.current.density
     Column {
@@ -200,46 +183,46 @@ private fun BrowserPane(
             IconButton(onClick = dismiss) { Icon(painterResource(R.drawable.ic_close), "閉じる", Modifier.size(16.dp)) }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
-        if ((frame?.tabs?.size ?: 0) > 1) BrowserTabs(frame?.tabs.orEmpty(), owns, session::send)
+        if ((frame?.tabs?.size ?: 0) > 1) BrowserTabs(frame?.tabs.orEmpty(), session::send)
         BrowserToolbar(
             tab,
-            owns,
+            enabled,
             frame?.canGoBack == true,
             frame?.canGoForward == true,
             session::send,
             session::fitViewport,
+            { showKeyboard = !showKeyboard },
         ) {
             session.error = it
         }
         session.error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp)) }
-        frame?.dialog?.let { BrowserDialogView(it, owns, session::send) }
+        frame?.dialog?.let { BrowserDialogView(it, enabled, session::send) }
         val blank = tab?.url == "about:blank"
         BrowserImage(
             session.image?.takeUnless { blank },
             frame != null,
-            owns,
+            enabled,
             session::send,
             Modifier.weight(1f).onSizeChanged { size ->
                 session.setViewport((size.width / density).toDouble(), (size.height / density).toDouble())
             },
         )
-        BrowserControlBar(frame?.controller, session::send)
-        if (owns) BrowserTextInput(session::send)
+        if (showKeyboard) BrowserTextInput(session::send)
     }
 }
 
 @Composable
 private fun BrowserDialogView(
     dialog: dev.remoteagent.core.BrowserDialog,
-    owns: Boolean,
+    enabled: Boolean,
     send: (BrowserAction) -> Unit,
 ) {
     var response by remember(dialog) { mutableStateOf("") }
     Text(dialog.message, Modifier.padding(12.dp))
     if (dialog.prompt) OutlinedTextField(response, { response = it }, Modifier.fillMaxWidth())
     Row {
-        TextButton(onClick = { send(BrowserAction.Dialog(false, "")) }, enabled = owns) { Text("キャンセル") }
-        TextButton(onClick = { send(BrowserAction.Dialog(true, response)) }, enabled = owns) { Text("OK") }
+        TextButton(onClick = { send(BrowserAction.Dialog(false, "")) }, enabled = enabled) { Text("キャンセル") }
+        TextButton(onClick = { send(BrowserAction.Dialog(true, response)) }, enabled = enabled) { Text("OK") }
     }
 }
 
@@ -247,7 +230,7 @@ private fun BrowserDialogView(
 private fun BrowserImage(
     image: ImageBitmap?,
     connected: Boolean,
-    owns: Boolean,
+    enabled: Boolean,
     send: (BrowserAction) -> Unit,
     modifier: Modifier,
 ) {
@@ -260,8 +243,8 @@ private fun BrowserImage(
         "Host の共有ブラウザ",
         modifier
             .fillMaxSize()
-            .pointerInput(owns, image.width, image.height) {
-                if (owns)
+            .pointerInput(enabled, image.width, image.height) {
+                if (enabled)
                     detectTapGestures { point ->
                         val scale = minOf(size.width.toFloat() / image.width, size.height.toFloat() / image.height)
                         val x = (point.x - (size.width - image.width * scale) / 2) / scale
@@ -270,10 +253,10 @@ private fun BrowserImage(
                             send(BrowserAction.Click(x.toDouble(), y.toDouble()))
                     }
             }
-            .pointerInput(owns, image.width, image.height) {
+            .pointerInput(enabled, image.width, image.height) {
                 var deltaX = 0f
                 var deltaY = 0f
-                if (owns)
+                if (enabled)
                     detectDragGestures(
                         onDragStart = {
                             deltaX = 0f

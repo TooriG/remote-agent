@@ -1,16 +1,21 @@
 //! Conversation-owned surface tabs. Native views own the resources addressed by ids.
-use crate::state::DraftKey;
-use std::collections::BTreeMap;
+use crate::state::{DraftKey, Snapshot};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
+};
 
+#[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Scope {
+pub struct PanelScope {
     pub host: String,
     pub storage: String,
     pub draft: DraftKey,
 }
 
+#[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Kind {
+pub enum PanelKind {
     Home,
     Browser,
     Terminal,
@@ -20,81 +25,151 @@ pub enum Kind {
     SideChat,
     Agents,
 }
+#[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum Layout {
+pub enum PanelLayout {
     #[default]
     Right,
     Bottom,
     Expanded,
 }
+#[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Surface {
+pub struct PanelSurface {
     pub id: u64,
-    pub kind: Kind,
+    pub kind: PanelKind,
     pub path: Option<String>,
 }
+#[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ThreadPanel {
+pub struct PanelState {
     pub open: bool,
-    pub layout: Layout,
-    pub surfaces: Vec<Surface>,
+    pub layout: PanelLayout,
+    pub surfaces: Vec<PanelSurface>,
     pub active: Option<u64>,
 }
-impl ThreadPanel {
-    pub fn selected(&self) -> Option<&Surface> {
+impl PanelState {
+    pub fn selected(&self) -> Option<&PanelSurface> {
         self.surfaces
             .iter()
             .find(|surface| Some(surface.id) == self.active)
     }
-    pub fn kind(&self) -> Kind {
-        self.selected().map_or(Kind::Home, |surface| surface.kind)
+    pub fn kind(&self) -> PanelKind {
+        self.selected()
+            .map_or(PanelKind::Home, |surface| surface.kind)
     }
 }
-static EMPTY: ThreadPanel = ThreadPanel {
-    open: false,
-    layout: Layout::Right,
-    surfaces: Vec::new(),
-    active: None,
-};
+#[cfg_attr(feature = "bindings", derive(uniffi::Record))]
+pub struct PanelTool {
+    pub kind: PanelKind,
+    pub key: String,
+    pub label: String,
+    pub shortcut: String,
+    pub enabled: bool,
+}
+
+#[cfg_attr(feature = "bindings", uniffi::export)]
+pub fn panel_tools(connected: bool, has_directory: bool) -> Vec<PanelTool> {
+    [
+        (PanelKind::Browser, "browser", "ブラウザ", "B"),
+        (PanelKind::Terminal, "terminal", "ターミナル", "T"),
+        (PanelKind::Files, "files", "ファイル", "F"),
+        (PanelKind::Diff, "diff", "差分", "D"),
+        (PanelKind::SideChat, "sideChat", "サイドチャット", "S"),
+        (PanelKind::Agents, "agents", "エージェント", "A"),
+    ]
+    .into_iter()
+    .map(|(kind, key, label, shortcut)| PanelTool {
+        kind,
+        key: key.into(),
+        label: label.into(),
+        shortcut: shortcut.into(),
+        enabled: matches!(kind, PanelKind::Browser | PanelKind::Agents)
+            || (connected && has_directory),
+    })
+    .collect()
+}
+
+#[cfg_attr(feature = "bindings", uniffi::export)]
+pub fn panel_title(kind: PanelKind) -> String {
+    panel_tools(false, false)
+        .into_iter()
+        .find(|tool| {
+            tool.kind
+                == if kind == PanelKind::File {
+                    PanelKind::Files
+                } else {
+                    kind
+                }
+        })
+        .map_or_else(|| "機能を開く".into(), |tool| tool.label)
+}
 
 #[derive(Debug, Default)]
-pub struct Panels {
-    threads: BTreeMap<Scope, ThreadPanel>,
+struct PanelCollection {
+    threads: BTreeMap<PanelScope, PanelState>,
     next_id: u64,
 }
+
+/// Owns conversation-scoped tab state for every native client. Views own resources.
+#[cfg_attr(feature = "bindings", derive(uniffi::Object))]
+#[derive(Debug, Default)]
+pub struct Panels {
+    state: Mutex<PanelCollection>,
+}
+
+#[cfg_attr(feature = "bindings", uniffi::export)]
 impl Panels {
-    pub fn get(&self, key: &Scope) -> &ThreadPanel {
-        self.threads.get(key).unwrap_or(&EMPTY)
+    #[cfg_attr(feature = "bindings", uniffi::constructor)]
+    pub fn new() -> Arc<Self> {
+        Arc::default()
     }
-    pub fn scope(&self, id: u64) -> Option<&Scope> {
-        self.threads
+
+    pub fn get(&self, key: PanelScope) -> PanelState {
+        self.state
+            .lock()
+            .unwrap()
+            .threads
+            .get(&key)
+            .cloned()
+            .unwrap_or_default()
+    }
+    pub fn scope(&self, id: u64) -> Option<PanelScope> {
+        self.state
+            .lock()
+            .unwrap()
+            .threads
             .iter()
             .find(|(_, panel)| panel.surfaces.iter().any(|s| s.id == id))
-            .map(|(key, _)| key)
+            .map(|(key, _)| key.clone())
     }
-    pub fn open(&mut self, key: Scope, kind: Kind, path: Option<String>) -> u64 {
-        let panel = self.threads.entry(key).or_default();
+    pub fn open(&self, key: PanelScope, kind: PanelKind, path: Option<String>) -> u64 {
+        let mut state = self.state.lock().unwrap();
+        let id = state.next_id;
+        let panel = state.threads.entry(key).or_default();
         panel.open = true;
-        if !matches!(kind, Kind::Browser | Kind::Terminal | Kind::SideChat)
-            && let Some(surface) = panel
-                .surfaces
-                .iter_mut()
-                .find(|s| s.kind == kind && (kind == Kind::Files || s.path == path))
+        if !matches!(
+            kind,
+            PanelKind::Browser | PanelKind::Terminal | PanelKind::SideChat
+        ) && let Some(surface) = panel
+            .surfaces
+            .iter_mut()
+            .find(|s| s.kind == kind && (kind == PanelKind::Files || s.path == path))
         {
-            if path.is_some() || kind != Kind::Files {
+            if path.is_some() || kind != PanelKind::Files {
                 surface.path = path;
             }
             panel.active = Some(surface.id);
             return surface.id;
         }
-        let id = self.next_id;
-        self.next_id += 1;
-        panel.surfaces.push(Surface { id, kind, path });
+        panel.surfaces.push(PanelSurface { id, kind, path });
         panel.active = Some(id);
+        state.next_id += 1;
         id
     }
-    pub fn activate(&mut self, key: &Scope, id: u64) -> bool {
-        let Some(panel) = self.threads.get_mut(key) else {
+    pub fn activate(&self, key: PanelScope, id: u64) -> bool {
+        let mut state = self.state.lock().unwrap();
+        let Some(panel) = state.threads.get_mut(&key) else {
             return false;
         };
         if !panel.surfaces.iter().any(|s| s.id == id) {
@@ -104,8 +179,9 @@ impl Panels {
         panel.open = true;
         true
     }
-    pub fn close(&mut self, key: &Scope, id: u64) {
-        let Some(panel) = self.threads.get_mut(key) else {
+    pub fn close(&self, key: PanelScope, id: u64) {
+        let mut state = self.state.lock().unwrap();
+        let Some(panel) = state.threads.get_mut(&key) else {
             return;
         };
         let Some(index) = panel.surfaces.iter().position(|s| s.id == id) else {
@@ -119,96 +195,177 @@ impl Panels {
                 .map(|s| s.id);
         }
     }
-    pub fn set_open(&mut self, key: Scope, open: bool) {
-        self.threads.entry(key).or_default().open = open;
+    pub fn set_open(&self, key: PanelScope, open: bool) {
+        self.state
+            .lock()
+            .unwrap()
+            .threads
+            .entry(key)
+            .or_default()
+            .open = open;
     }
-    pub fn set_layout(&mut self, key: Scope, layout: Layout) {
-        self.threads.entry(key).or_default().layout = layout;
+    pub fn set_layout(&self, key: PanelScope, layout: PanelLayout) {
+        self.state
+            .lock()
+            .unwrap()
+            .threads
+            .entry(key)
+            .or_default()
+            .layout = layout;
     }
-    pub fn rekey(&mut self, before: &Scope, after: Scope) {
-        if let Some(panel) = self.threads.remove(before) {
-            self.threads.insert(after, panel);
+    pub fn rekey(&self, before: PanelScope, after: PanelScope) {
+        let mut state = self.state.lock().unwrap();
+        if let Some(panel) = state.threads.remove(&before) {
+            state.threads.insert(after, panel);
         }
+    }
+}
+
+#[cfg_attr(feature = "bindings", uniffi::export)]
+impl Snapshot {
+    pub fn panel_scope(&self, host: String, draft: crate::state::DraftKey) -> PanelScope {
+        PanelScope {
+            host,
+            storage: self.storage_scope.clone(),
+            draft,
+        }
+    }
+    pub fn submitted_session(
+        &self,
+        draft: crate::state::DraftKey,
+    ) -> Option<crate::session::SessionRef> {
+        self.draft_sessions.get(&draft).cloned()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn scope(draft: impl Into<DraftKey>) -> Scope {
-        Scope {
+    fn scope(draft: impl Into<DraftKey>) -> PanelScope {
+        PanelScope {
             host: "host".into(),
             storage: "storage".into(),
             draft: draft.into(),
         }
     }
     #[test]
+    fn a_new_conversation_starts_at_the_launcher_without_starting_a_tool() {
+        let panels = Panels::default();
+        let key = scope("new");
+        panels.set_open(key.clone(), true);
+        let empty = panels.get(key.clone());
+        assert!(empty.open);
+        assert!(empty.surfaces.is_empty());
+        assert_eq!(empty.kind(), PanelKind::Home);
+        assert_eq!(empty.active, None);
+        let terminal = panels.open(key.clone(), PanelKind::Terminal, None);
+        assert!(
+            empty.surfaces.is_empty(),
+            "Reading state must return an immutable snapshot"
+        );
+        assert_eq!(panels.get(key).active, Some(terminal));
+    }
+
+    #[test]
+    fn the_launcher_and_add_menu_share_order_titles_shortcuts_and_availability() {
+        for connected in [false, true] {
+            for has_directory in [false, true] {
+                let tools = panel_tools(connected, has_directory);
+                assert_eq!(
+                    tools
+                        .iter()
+                        .map(|tool| tool.key.as_str())
+                        .collect::<Vec<_>>(),
+                    ["browser", "terminal", "files", "diff", "sideChat", "agents"]
+                );
+                assert_eq!(
+                    tools
+                        .iter()
+                        .map(|tool| tool.shortcut.as_str())
+                        .collect::<Vec<_>>(),
+                    ["B", "T", "F", "D", "S", "A"]
+                );
+                for tool in tools {
+                    let available = match tool.kind {
+                        PanelKind::Browser | PanelKind::Agents => true,
+                        _ => connected && has_directory,
+                    };
+                    assert_eq!(tool.enabled, available, "{}", tool.key);
+                    assert_eq!(panel_title(tool.kind), tool.label);
+                }
+            }
+        }
+        assert_eq!(panel_title(PanelKind::Home), "機能を開く");
+        assert_eq!(panel_title(PanelKind::File), "ファイル");
+    }
+
+    #[test]
     fn the_same_session_id_on_different_hosts_and_storage_scopes_has_independent_panels() {
-        let mut panels = Panels::default();
+        let panels = Panels::default();
         let a = scope("session");
-        let b = Scope {
+        let b = PanelScope {
             host: "other-host".into(),
             ..a.clone()
         };
-        let c = Scope {
+        let c = PanelScope {
             storage: "replacement-host-storage".into(),
             ..a.clone()
         };
-        let browser = panels.open(a.clone(), Kind::Browser, None);
-        assert!(panels.get(&b).surfaces.is_empty());
-        assert!(panels.get(&c).surfaces.is_empty());
-        panels.open(b.clone(), Kind::Terminal, None);
-        assert_eq!(panels.get(&a).active, Some(browser));
-        assert_ne!(panels.get(&a).active, panels.get(&b).active);
-        assert!(!panels.activate(&b, browser));
+        let browser = panels.open(a.clone(), PanelKind::Browser, None);
+        assert!(panels.get(b.clone()).surfaces.is_empty());
+        assert!(panels.get(c.clone()).surfaces.is_empty());
+        panels.open(b.clone(), PanelKind::Terminal, None);
+        assert_eq!(panels.get(a.clone()).active, Some(browser));
+        assert_ne!(panels.get(a.clone()).active, panels.get(b.clone()).active);
+        assert!(!panels.activate(b.clone(), browser));
     }
     #[test]
     fn explorer_navigation_reuses_its_surface_and_invalid_closes_leave_the_selection_alone() {
-        let mut panels = Panels::default();
+        let panels = Panels::default();
         let key = scope("a");
-        let directory = panels.open(key.clone(), Kind::Files, Some("/project".into()));
+        let directory = panels.open(key.clone(), PanelKind::Files, Some("/project".into()));
         assert_eq!(
-            panels.open(key.clone(), Kind::Files, Some("/project/src".into())),
+            panels.open(key.clone(), PanelKind::Files, Some("/project/src".into())),
             directory
         );
         assert_eq!(
-            panels.get(&key).selected().unwrap().path.as_deref(),
+            panels.get(key.clone()).selected().unwrap().path.as_deref(),
             Some("/project/src")
         );
-        assert_eq!(panels.open(key.clone(), Kind::Files, None), directory);
+        assert_eq!(panels.open(key.clone(), PanelKind::Files, None), directory);
         assert_eq!(
-            panels.get(&key).selected().unwrap().path.as_deref(),
+            panels.get(key.clone()).selected().unwrap().path.as_deref(),
             Some("/project/src")
         );
-        let browser = panels.open(key.clone(), Kind::Browser, None);
-        panels.close(&key, directory);
-        assert_eq!(panels.get(&key).active, Some(browser));
-        let before = panels.get(&key).clone();
-        panels.close(&key, u64::MAX);
-        panels.close(&scope("missing"), browser);
-        assert_eq!(panels.get(&key), &before);
-        assert!(!panels.activate(&scope("missing"), browser));
+        let browser = panels.open(key.clone(), PanelKind::Browser, None);
+        panels.close(key.clone(), directory);
+        assert_eq!(panels.get(key.clone()).active, Some(browser));
+        let before = panels.get(key.clone());
+        panels.close(key.clone(), u64::MAX);
+        panels.close(scope("missing"), browser);
+        assert_eq!(panels.get(key.clone()), before);
+        assert!(!panels.activate(scope("missing"), browser));
         assert_eq!(panels.scope(u64::MAX), None);
     }
 
     proptest::proptest! {
         #[test]
         fn changes_to_one_conversation_never_change_another(actions in proptest::collection::vec((0u8..5, 0u8..20), 0..100)) {
-            let mut panels = Panels::default();
+            let panels = Panels::default();
             let a = scope("a");
             let b = scope("b");
-            panels.open(b.clone(), Kind::Terminal, None);
-            let expected = panels.get(&b).clone();
+            panels.open(b.clone(), PanelKind::Terminal, None);
+            let expected = panels.get(b.clone());
             for (action, value) in actions {
                 match action {
-                    0 => { panels.open(a.clone(), Kind::Browser, None); }
+                    0 => { panels.open(a.clone(), PanelKind::Browser, None); }
                     1 => panels.set_open(a.clone(), value % 2 == 0),
-                    2 => panels.close(&a, u64::from(value)),
-                    3 => { panels.activate(&a, u64::from(value)); }
-                    _ => panels.set_layout(a.clone(), Layout::Expanded),
+                    2 => panels.close(a.clone(), u64::from(value)),
+                    3 => { panels.activate(a.clone(), u64::from(value)); }
+                    _ => panels.set_layout(a.clone(), PanelLayout::Expanded),
                 }
-                proptest::prop_assert_eq!(panels.get(&b), &expected);
-                let panel = panels.get(&a);
+                proptest::prop_assert_eq!(panels.get(b.clone()), expected.clone());
+                let panel = panels.get(a.clone());
                 proptest::prop_assert_eq!(panel.active.is_none(), panel.surfaces.is_empty());
                 if let Some(id) = panel.active { proptest::prop_assert!(panel.surfaces.iter().any(|s| s.id == id)); }
             }
@@ -216,60 +373,60 @@ mod tests {
     }
     #[test]
     fn conversations_keep_their_surfaces_selection_visibility_and_layout() {
-        let mut panels = Panels::default();
+        let panels = Panels::default();
         let a = scope("draft-a");
         let b = scope("draft-b");
-        let browser = panels.open(a.clone(), Kind::Browser, None);
-        let terminal = panels.open(a.clone(), Kind::Terminal, None);
-        panels.set_layout(a.clone(), Layout::Bottom);
+        let browser = panels.open(a.clone(), PanelKind::Browser, None);
+        let terminal = panels.open(a.clone(), PanelKind::Terminal, None);
+        panels.set_layout(a.clone(), PanelLayout::Bottom);
         panels.set_open(a.clone(), false);
-        let other = panels.open(b.clone(), Kind::SideChat, None);
-        assert_eq!(panels.get(&a).active, Some(terminal));
-        assert_eq!(panels.get(&a).layout, Layout::Bottom);
-        assert!(!panels.get(&a).open);
-        assert_eq!(panels.get(&b).active, Some(other));
-        assert!(!panels.activate(&b, browser));
-        assert_eq!(panels.get(&b).surfaces.len(), 1);
-        assert!(panels.activate(&a, browser));
-        assert!(panels.get(&a).open);
-        assert_eq!(panels.get(&a).surfaces.len(), 2);
+        let other = panels.open(b.clone(), PanelKind::SideChat, None);
+        assert_eq!(panels.get(a.clone()).active, Some(terminal));
+        assert_eq!(panels.get(a.clone()).layout, PanelLayout::Bottom);
+        assert!(!panels.get(a.clone()).open);
+        assert_eq!(panels.get(b.clone()).active, Some(other));
+        assert!(!panels.activate(b.clone(), browser));
+        assert_eq!(panels.get(b.clone()).surfaces.len(), 1);
+        assert!(panels.activate(a.clone(), browser));
+        assert!(panels.get(a.clone()).open);
+        assert_eq!(panels.get(a.clone()).surfaces.len(), 2);
     }
     #[test]
     fn closing_a_surface_selects_its_neighbor_and_last_close_keeps_the_launcher_open() {
-        let mut panels = Panels::default();
+        let panels = Panels::default();
         let key = scope("a");
-        let a = panels.open(key.clone(), Kind::Terminal, None);
-        let b = panels.open(key.clone(), Kind::Terminal, None);
-        let c = panels.open(key.clone(), Kind::Browser, None);
-        panels.activate(&key, b);
-        panels.close(&key, b);
-        assert_eq!(panels.get(&key).active, Some(c));
-        panels.close(&key, c);
-        assert_eq!(panels.get(&key).active, Some(a));
-        panels.close(&key, a);
-        assert!(panels.get(&key).open);
-        assert_eq!(panels.get(&key).kind(), Kind::Home);
+        let a = panels.open(key.clone(), PanelKind::Terminal, None);
+        let b = panels.open(key.clone(), PanelKind::Terminal, None);
+        let c = panels.open(key.clone(), PanelKind::Browser, None);
+        panels.activate(key.clone(), b);
+        panels.close(key.clone(), b);
+        assert_eq!(panels.get(key.clone()).active, Some(c));
+        panels.close(key.clone(), c);
+        assert_eq!(panels.get(key.clone()).active, Some(a));
+        panels.close(key.clone(), a);
+        assert!(panels.get(key.clone()).open);
+        assert_eq!(panels.get(key.clone()).kind(), PanelKind::Home);
     }
     #[test]
     fn files_deduplicate_by_path_and_submission_moves_the_entire_panel() {
-        let mut panels = Panels::default();
+        let panels = Panels::default();
         let draft = scope("local");
         let session = scope(crate::session::SessionRef {
             provider: crate::session::ProviderKind::Codex,
             id: "session".into(),
         });
-        let file = panels.open(draft.clone(), Kind::File, Some("/a".into()));
+        let file = panels.open(draft.clone(), PanelKind::File, Some("/a".into()));
         assert_eq!(
-            panels.open(draft.clone(), Kind::File, Some("/a".into())),
+            panels.open(draft.clone(), PanelKind::File, Some("/a".into())),
             file
         );
         assert_ne!(
-            panels.open(draft.clone(), Kind::File, Some("/b".into())),
+            panels.open(draft.clone(), PanelKind::File, Some("/b".into())),
             file
         );
-        panels.rekey(&draft, session.clone());
-        assert!(panels.get(&draft).surfaces.is_empty());
-        assert_eq!(panels.get(&session).surfaces.len(), 2);
-        assert_eq!(panels.scope(file), Some(&session));
+        panels.rekey(draft.clone(), session.clone());
+        assert!(panels.get(draft.clone()).surfaces.is_empty());
+        assert_eq!(panels.get(session.clone()).surfaces.len(), 2);
+        assert_eq!(panels.scope(file), Some(session.clone()));
     }
 }

@@ -12,20 +12,14 @@ struct WorkspaceBrowserScreen: View {
     @State private var text = ""
     @State private var error: String?
     @State private var connectionError: String?
-    @State private var clientId = UUID().uuidString
     @State private var commands: [BrowserRequest] = []
     @FocusState private var addressFocused: Bool
     @State private var showKeyboard = false
     @State private var dialogText = ""
     @State private var viewportSize = CGSize.zero
-    @State private var followSize = true
-
-    private var ownsControl: Bool {
-        frame?.controller == .you
-    }
 
     private var acceptsInput: Bool {
-        ownsControl && scenePhase == .active && connectionError == nil
+        frame != nil && scenePhase == .active && connectionError == nil
     }
 
     private var currentTab: BrowserTab? {
@@ -62,32 +56,39 @@ struct WorkspaceBrowserScreen: View {
             }
             HStack(spacing: 0) {
                 Button { send(.back) } label: { Image(systemName: "arrow.left").frame(width: 36, height: 44) }
-                    .accessibilityLabel("前のページ").disabled(!acceptsInput || frame?.canGoBack != true)
+                    .accessibilityLabel("前のページ").disabled(frame?.canGoBack != true)
                 Button { send(.forward) } label: { Image(systemName: "arrow.right").frame(width: 36, height: 44) }
-                    .accessibilityLabel("次のページ").disabled(!acceptsInput || frame?.canGoForward != true)
+                    .accessibilityLabel("次のページ").disabled(frame?.canGoForward != true)
                 Button { send(.reload) } label: { Image(systemName: "arrow.clockwise").frame(width: 36, height: 44) }
-                    .accessibilityLabel("再読み込み").disabled(!acceptsInput)
+                    .accessibilityLabel("再読み込み")
                 TextField("検索または URL", text: $address)
                     .keyboardType(.webSearch).textInputAutocapitalization(.never).disableAutocorrection(true)
                     .textFieldStyle(.plain).focused($addressFocused).submitLabel(.go).onSubmit(open)
-                    .disabled(!acceptsInput).accessibilityIdentifier("browser.address")
+                    .accessibilityIdentifier("browser.address")
                 Menu {
-                    Button("新しいタブ") { send(.openTab(url: "about:blank")) }.disabled(!acceptsInput)
+                    Button("新しいタブ") { send(.openTab(url: "about:blank")) }
                     Button("タブを閉じる") {
                         if let currentTab {
                             send(.closeTab(id: currentTab.id))
                         }
                     }
-                    .disabled(!acceptsInput)
+
                     Divider()
-                    Button("画面に合わせる（自動）") { followSize = true }.disabled(!acceptsInput)
+                    Button("画面に合わせる") {
+                        if let action = browserFitAction(width: viewportSize.width, height: viewportSize.height,
+                                                         currentWidth: frame?.width ?? 0,
+                                                         currentHeight: frame?.height ?? 0) {
+                            send(action)
+                        }
+                    }
                     Button("デスクトップ · 1280 × 800") { send(.resize(width: 1280, height: 800)) }
-                        .disabled(!acceptsInput)
+
                     Button("モバイル · 390 × 844") { send(.resize(width: 390, height: 844)) }
-                        .disabled(!acceptsInput)
+
                     Button("URL をコピー") { UIPasteboard.general.string = currentTab?.url }
-                } label: { Image(systemName: "ellipsis").frame(width: 36, height: 44) }.disabled(frame == nil)
-            }.font(.system(size: 14)).foregroundStyle(.secondary).padding(.horizontal, 4)
+                    Button("文字入力") { showKeyboard.toggle() }
+                } label: { Image(systemName: "ellipsis").frame(width: 36, height: 44) }
+            }.font(.system(size: 14)).foregroundStyle(.secondary).padding(.horizontal, 4).disabled(!acceptsInput)
             Divider().opacity(0.6)
             if let message = error ?? connectionError {
                 BexNotice(text: message).padding(.horizontal)
@@ -128,20 +129,7 @@ struct WorkspaceBrowserScreen: View {
                     Color.clear.onAppear { viewportSize = geometry.size }
                         .onChange(of: geometry.size) { _, size in viewportSize = size }
                 })
-            Divider().opacity(0.6)
-            HStack {
-                Label(
-                    ownsControl ? "あなたが操作中" : (frame?.controller == .anotherViewer ? "別の端末が操作中" : "AI が操作できます"),
-                    systemImage: ownsControl ? "hand.point.up.left" : "sparkles"
-                )
-                .font(.caption).foregroundStyle(.secondary)
-                Spacer(minLength: 4)
-                Button(ownsControl ? "AI に操作を戻す" : "操作権を取得") {
-                    send(ownsControl ? .releaseControl : .takeControl)
-                }.font(.caption.weight(.medium)).disabled(frame == nil || connectionError != nil)
-                    .accessibilityIdentifier("browser.control")
-            }.padding(.horizontal, 12).padding(.vertical, 6)
-            if ownsControl {
+            if showKeyboard {
                 Divider()
                 HStack {
                     Button { showKeyboard.toggle() } label: { Image(systemName: "keyboard") }.accessibilityLabel("文字入力")
@@ -151,37 +139,24 @@ struct WorkspaceBrowserScreen: View {
                         .accessibilityLabel("1文字削除")
                     Button("Enter") { send(.key(key: .enter)) }
                 }.padding(12).disabled(!acceptsInput)
-                if showKeyboard {
-                    HStack {
-                        SecureField("選択した欄に入力", text: $text)
-                            .textInputAutocapitalization(.never).disableAutocorrection(true)
-                            .textFieldStyle(.roundedBorder).onSubmit(insertText).accessibilityIdentifier("browser.text")
-                        Button("入力", action: insertText).disabled(text.isEmpty || !acceptsInput)
-                            .accessibilityIdentifier("browser.type")
-                    }.padding(.horizontal).padding(.bottom, 8)
-                }
+                HStack {
+                    SecureField("選択した欄に入力", text: $text)
+                        .textInputAutocapitalization(.never).disableAutocorrection(true)
+                        .textFieldStyle(.roundedBorder).onSubmit(insertText).accessibilityIdentifier("browser.text")
+                    Button("入力", action: insertText).disabled(text.isEmpty || !acceptsInput)
+                        .accessibilityIdentifier("browser.type")
+                }.padding(.horizontal).padding(.bottom, 8)
             }
         }
         .task(id: scenePhase == .active) {
             guard scenePhase == .active else { return }
             while !Task.isCancelled {
-                let fit = followSize && ownsControl ? browserFitAction(
-                    width: viewportSize.width,
-                    height: viewportSize.height,
-                    currentWidth: frame?.width ?? 0,
-                    currentHeight: frame?.height ?? 0
-                ) : nil
-                let request = commands.isEmpty ? request(fit ?? .read) : commands.removeFirst()
+                let request = commands.isEmpty ? request(.read) : commands.removeFirst()
                 await perform(request)
                 do { try await Task.sleep(for: .milliseconds(connectionError == nil ? 150 : 1500)) } catch { return }
             }
         }
-        .onChange(of: scenePhase) { phase in
-            if phase != .active {
-                releaseControl()
-            }
-        }
-        .onDisappear { commands.removeAll(); text = ""; releaseControl() }
+        .onDisappear { commands.removeAll(); text = "" }
     }
 
     private func open() {
@@ -202,22 +177,12 @@ struct WorkspaceBrowserScreen: View {
     private func send(_ action: BrowserAction) {
         guard commands.count < 64 else { return }
         error = nil
-        if case .resize = action {
-            followSize = false
-        }
         commands.append(request(action))
     }
 
     private func request(_ action: BrowserAction) -> BrowserRequest {
         BrowserRequest(threadId: thread, tabId: frame?.tabId ?? "", imageId: frame?.imageId ?? "",
-                       clientId: clientId, generation: frame?.generation ?? 0, action: action)
-    }
-
-    private func releaseControl() {
-        guard ownsControl, let frame else { return }
-        let request = BrowserRequest(threadId: thread, tabId: frame.tabId, imageId: "", clientId: clientId,
-                                     generation: frame.generation, action: .releaseControl)
-        Task { _ = try? await store.browser(request: request) }
+                       generation: frame?.generation ?? 0, action: action)
     }
 
     private func perform(_ request: BrowserRequest) async {

@@ -832,7 +832,7 @@ impl HostRpcService {
                 )
             })?;
             return browser
-                .request(session, params)
+                .request(params)
                 .await
                 .map(Into::into)
                 .map_err(|e| Failure::new("browser_failed", e));

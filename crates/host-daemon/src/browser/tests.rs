@@ -29,36 +29,20 @@ fn input_requires_the_displayed_tab_but_reads_and_selection_can_refresh_it() {
 }
 
 #[test]
-fn handoff_excludes_other_viewers_agents_and_stale_input() {
+fn input_requires_current_pages_but_reads_and_tab_selection_can_refresh() {
     let action = BrowserAction::Type {
         text: "input".into(),
     };
-    assert!(validate_control("1:phone", 2, "1:phone", 2, &action).is_ok());
-    for (client, generation) in [("1:phone", 1), ("2:phone", 2), ("", 2)] {
-        assert!(validate_control("1:phone", 2, client, generation, &action).is_err());
-    }
-    assert!(validate_control("", 2, "", 2, &action).is_ok());
-    assert!(validate_control("", 2, "1:phone", 2, &action).is_err());
+    assert!(validate_generation(2, 2, &action).is_ok());
+    assert!(validate_generation(2, 1, &action).is_err());
+    assert!(validate_generation(2, 3, &action).is_err());
     for action in [
         BrowserAction::Read,
         BrowserAction::Snapshot,
-        BrowserAction::TakeControl,
+        BrowserAction::SelectTab { id: "tab".into() },
     ] {
-        assert!(validate_control("1:phone", 2, "2:phone", 0, &action).is_ok());
+        assert!(validate_generation(2, 0, &action).is_ok());
     }
-    let now = Instant::now();
-    let mut page = Page::new("context".into());
-    page.controller = "1:phone".into();
-    page.generation = 2;
-    page.lease = now + Duration::from_secs(15);
-    assert!(!page.expire_control(now + Duration::from_secs(14)));
-    assert_eq!(page.controller, "1:phone");
-    assert_eq!(page.generation, 2);
-    assert!(page.expire_control(now + Duration::from_secs(15)));
-    assert!(page.controller.is_empty());
-    assert_eq!(page.generation, 3);
-    assert!(!page.expire_control(now + Duration::from_secs(16)));
-    assert_eq!(page.generation, 3);
 }
 
 #[test]
@@ -93,7 +77,6 @@ fn request(thread: &SessionRef, frame: &BrowserFrame, action: BrowserAction) -> 
         thread_id: thread.clone(),
         tab_id: frame.tab_id.clone(),
         image_id: frame.image_id.clone(),
-        client_id: "phone".into(),
         generation: frame.generation,
         action,
     }
@@ -159,99 +142,56 @@ async fn shared_browser_live() {
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         initial = browser
-            .request(1, &request(&thread_a, &initial, BrowserAction::Read))
+            .request(&request(&thread_a, &initial, BrowserAction::Read))
             .await
             .unwrap();
     }
     assert!(initial.tabs.iter().any(|tab| tab.title == "Fixture"));
-    let controlled = browser
-        .request(1, &request(&thread_a, &initial, BrowserAction::TakeControl))
-        .await
-        .unwrap();
-    assert_eq!(controlled.controller, BrowserController::You);
-    assert!(
-        browser
-            .request(
-                1,
-                &request(
-                    &thread_a,
-                    &initial,
-                    BrowserAction::Click { x: 100., y: 40. }
-                )
-            )
-            .await
-            .is_err(),
-        "handoff invalidates input from the previous control generation"
-    );
-    browser
-        .request(
-            1,
-            &request(
-                &thread_a,
-                &controlled,
-                BrowserAction::Click { x: 100., y: 40. },
-            ),
-        )
+    let clicked = browser
+        .request(&request(
+            &thread_a,
+            &initial,
+            BrowserAction::Click { x: 100., y: 40. },
+        ))
         .await
         .unwrap();
     let typed = browser
-        .request(
-            1,
-            &request(
-                &thread_a,
-                &controlled,
-                BrowserAction::Type {
-                    text: "日本語 input".into(),
-                },
-            ),
+        .request(&request(
+            &thread_a,
+            &clicked,
+            BrowserAction::Type {
+                text: "日本語 input".into(),
+            },
+        ))
+        .await
+        .unwrap();
+    browser
+        .agent(
+            &scope_a,
+            BrowserAction::Type {
+                text: "AI input".into(),
+            },
         )
         .await
         .unwrap();
-    assert!(
-        browser
-            .agent(
-                &scope_a,
-                BrowserAction::Type {
-                    text: "AI input".into()
-                }
-            )
-            .await
-            .is_err()
-    );
     let observed = browser
         .agent(&scope_a, BrowserAction::Snapshot)
         .await
         .unwrap();
-    assert_eq!(
-        observed.tabs, typed.tabs,
-        "inspection remains available during human control"
-    );
+    assert_eq!(observed.tabs, typed.tabs);
     let other_viewer = browser
-        .request(2, &request(&thread_a, &controlled, BrowserAction::Read))
+        .request(&request(&thread_a, &typed, BrowserAction::Read))
         .await
         .unwrap();
-    assert_eq!(other_viewer.controller, BrowserController::AnotherViewer);
-    assert!(
-        browser
-            .request(
-                2,
-                &request(
-                    &thread_a,
-                    &controlled,
-                    BrowserAction::Type {
-                        text: "other".into()
-                    }
-                )
-            )
-            .await
-            .is_err(),
-        "the viewer id cannot impersonate another authenticated connection"
-    );
+    assert_eq!(other_viewer.tabs, typed.tabs);
     browser
-        .request(
-            1,
-            &request(&thread_a, &controlled, BrowserAction::ReleaseControl),
-        )
+        .request(&request(
+            &thread_a,
+            &other_viewer,
+            BrowserAction::Type {
+                text: "other".into(),
+            },
+        ))
         .await
         .unwrap();
     browser
@@ -276,7 +216,7 @@ async fn shared_browser_live() {
     let mut popup = typed;
     for _ in 0..20 {
         popup = browser
-            .request(1, &request(&thread_a, &popup, BrowserAction::Read))
+            .request(&request(&thread_a, &popup, BrowserAction::Read))
             .await
             .unwrap();
         if popup.tabs.len() == 2 {
@@ -288,26 +228,23 @@ async fn shared_browser_live() {
     assert_ne!(popup.tab_id, initial.tab_id);
     assert!(
         browser
-            .request(
-                1,
-                &request(
-                    &thread_a,
-                    &initial,
-                    BrowserAction::Click { x: 20.0, y: 20.0 }
-                )
-            )
+            .request(&request(
+                &thread_a,
+                &initial,
+                BrowserAction::Click { x: 20.0, y: 20.0 }
+            ))
             .await
             .is_err(),
         "stale tab input must fail"
     );
     let status = browser.agent(&scope_b, BrowserAction::Read).await.unwrap();
     let other = browser
-        .request(1, &request(&thread_b, &status, BrowserAction::Read))
+        .request(&request(&thread_b, &status, BrowserAction::Read))
         .await
         .unwrap();
     assert_eq!(other.tabs.len(), 1);
     let unchanged = browser
-        .request(1, &request(&thread_b, &other, BrowserAction::Read))
+        .request(&request(&thread_b, &other, BrowserAction::Read))
         .await
         .unwrap();
     assert!(
