@@ -60,6 +60,7 @@ impl Render for WorkProgressView {
 impl Desktop {
     pub(super) fn conversation_navigation(&self, cx: &Context<Self>) -> AnyElement {
         let entries: Vec<_> = self
+            .timeline
             .rows
             .iter()
             .enumerate()
@@ -88,7 +89,7 @@ impl Desktop {
             .h_full()
             .w(px(56.))
             .justify_center();
-        let current = self.list.logical_scroll_top().item_ix;
+        let current = self.timeline.list.logical_scroll_top().item_ix;
         for position in 0..count {
             let sample = position * (entries.len() - 1) / count.saturating_sub(1).max(1);
             let (index, user, turn) = entries[sample];
@@ -97,7 +98,8 @@ impl Desktop {
                     || current < entries[(position + 1) * (entries.len() - 1) / (count - 1)].0);
             let user: String = user.chars().take(160).collect();
             let distance = self
-                .hovered_conversation_marker
+                .timeline
+                .hovered_marker
                 .map(|hovered| position.abs_diff(hovered));
             let width = match distance {
                 Some(0) => 28.,
@@ -116,8 +118,8 @@ impl Desktop {
                         .map(|text| text.chars().take(240).collect::<String>()),
                     _ => None,
                 });
-                let preview_width =
-                    (self.list.viewport_bounds().size.width - px(48.)).clamp(px(100.), px(300.));
+                let preview_width = (self.timeline.list.viewport_bounds().size.width - px(48.))
+                    .clamp(px(100.), px(300.));
                 v_flex()
                     .absolute()
                     .left(px(56.))
@@ -145,9 +147,9 @@ impl Desktop {
                     .id(marker_id.clone())
                     .on_hover(cx.listener(move |view, hovered, _, cx| {
                         if *hovered {
-                            view.hovered_conversation_marker = Some(position);
-                        } else if view.hovered_conversation_marker == Some(position) {
-                            view.hovered_conversation_marker = None;
+                            view.timeline.hovered_marker = Some(position);
+                        } else if view.timeline.hovered_marker == Some(position) {
+                            view.timeline.hovered_marker = None;
                         }
                         cx.notify();
                     }))
@@ -157,7 +159,7 @@ impl Desktop {
                             .text()
                             .small()
                             .on_click(cx.listener(move |view, _, _, cx| {
-                                view.list.scroll_to(ListOffset {
+                                view.timeline.list.scroll_to(ListOffset {
                                     item_ix: index,
                                     offset_in_item: px(0.),
                                 });
@@ -223,7 +225,7 @@ impl Desktop {
         let id = item.id.to_string();
         let title = projected.data.title.as_deref();
         let body_text = projected.data.body.as_deref();
-        let expanded = self.expanded_items.contains(&id);
+        let expanded = self.timeline.expanded_items.contains(&id);
         let deferred = projected.data.deferred;
         if expanded && deferred {
             let key = (
@@ -260,14 +262,14 @@ impl Desktop {
                     format!("⌄ {title}"),
                     cx,
                     move |s, _, _| {
-                        s.expanded_items.remove(&toggle);
-                        s.remeasure_item(&toggle);
+                        s.timeline.expanded_items.remove(&toggle);
+                        s.timeline.remeasure_item(&toggle);
                     },
                 ))
                 .child(
                     self.button(format!("detail-{id}"), label, cx, move |s, _, _| {
                         s.detail(key.0.clone(), key.1.clone());
-                        s.remeasure_item(key.1.as_str());
+                        s.timeline.remeasure_item(key.1.as_str());
                     }),
                 )
                 .into_any_element();
@@ -367,12 +369,12 @@ impl Desktop {
                         format!("{label} {}", if expanded { "⌄" } else { "›" }),
                         cx,
                         move |s, _, _| {
-                            toggle_set(&mut s.expanded_items, &toggle);
-                            if s.expanded_items.contains(&toggle) {
+                            toggle_set(&mut s.timeline.expanded_items, &toggle);
+                            if s.timeline.expanded_items.contains(&toggle) {
                                 s.detail(turn_id.clone(), toggle.clone().into());
                             }
-                            s.pause_tail();
-                            s.remeasure_item(&toggle);
+                            s.timeline.pause_tail();
+                            s.timeline.remeasure_item(&toggle);
                         },
                     )
                     .icon(IconName::SquareTerminal)
@@ -440,12 +442,12 @@ impl Desktop {
                             format!("{} {}", if expanded { "⌄" } else { "›" }, file_name(&path)),
                             cx,
                             move |s, _, _| {
-                                toggle_set(&mut s.expanded_items, &toggle);
-                                if s.expanded_items.contains(&toggle) {
+                                toggle_set(&mut s.timeline.expanded_items, &toggle);
+                                if s.timeline.expanded_items.contains(&toggle) {
                                     s.detail(turn_id.clone(), toggle.clone().into());
                                 }
-                                s.pause_tail();
-                                s.remeasure_item(&toggle);
+                                s.timeline.pause_tail();
+                                s.timeline.remeasure_item(&toggle);
                             },
                         ))
                         .child(self.button(
@@ -458,7 +460,7 @@ impl Desktop {
                     if expanded {
                         if let Some(diff) = &change.diff {
                             body = body.child(Self::diff(
-                                &mut self.diffs,
+                                &mut self.timeline.diffs,
                                 format!("diff-{id}-{i}"),
                                 diff,
                                 cx,
@@ -516,12 +518,12 @@ impl Desktop {
                         ),
                         cx,
                         move |s, _, _| {
-                            toggle_set(&mut s.expanded_items, &toggle);
-                            if s.expanded_items.contains(&toggle) {
+                            toggle_set(&mut s.timeline.expanded_items, &toggle);
+                            if s.timeline.expanded_items.contains(&toggle) {
                                 s.detail(turn_id.clone(), toggle.clone().into());
                             }
-                            s.pause_tail();
-                            s.remeasure_item(&toggle);
+                            s.timeline.pause_tail();
+                            s.timeline.remeasure_item(&toggle);
                         },
                     ))
                     .when(expanded, |body| {
@@ -553,7 +555,8 @@ impl Desktop {
             }
             ConversationRowContent::ActivityHeader { activity } => {
                 let id = &activity.id;
-                let expanded = activity_is_expanded(activity, self.expanded_work.get(id).cloned());
+                let expanded =
+                    activity_is_expanded(activity, self.timeline.expanded_work.get(id).cloned());
                 let (label, content) = if activity.is_in_progress {
                     let view = WorkProgressView::view(
                         &row.id,
@@ -580,7 +583,7 @@ impl Desktop {
                         .child(div().flex_1().min_w_0().text_ellipsis().child(content))
                         .child(if expanded { "⌄" } else { "›" })
                         .on_click(cx.listener(move |view, _, _, cx| {
-                            view.expanded_work.insert(
+                            view.timeline.expanded_work.insert(
                                 toggle.clone(),
                                 ActivityExpansion {
                                     status: status.clone(),
@@ -590,8 +593,8 @@ impl Desktop {
                             if !expanded && let Some(params) = &load_items {
                                 view.dispatch(Intent::LoadTurnItems(params.clone()));
                             }
-                            view.pause_tail();
-                            view.sync_rows(false);
+                            view.timeline.pause_tail();
+                            view.timeline.sync(&view.snapshot, false);
                             cx.notify();
                         }))
                         .text_color(rgb(appearance::MUTED))
@@ -754,7 +757,7 @@ impl Desktop {
                                                             OperationCompletion::Busy,
                                                         );
                                                         view.accept_snapshot(window, cx);
-                                                        view.list.remeasure();
+                                                        view.timeline.list.remeasure();
                                                         cx.notify();
                                                     },
                                                 ))
@@ -926,7 +929,7 @@ impl Desktop {
     ) -> AnyElement {
         use agent_protocol::requests::{Answer, ElicitationAnswer, ElicitationInput, RequestBody};
         let key = &request.id;
-        let Some(inputs) = self.requests.get(key) else {
+        let Some(inputs) = self.timeline.requests.get(key) else {
             return div().into_any_element();
         };
         let is_question = matches!(request.request_body, RequestBody::Question { .. });
@@ -1030,11 +1033,13 @@ impl Desktop {
                                 )
                                 .on_click(cx.listener(move |view, _, window, cx| {
                                     let Some(question) =
-                                        view.requests.get_mut(&request_key).and_then(|inputs| {
-                                            inputs.questions.iter_mut().find(|question| {
-                                                question.definition.id == question_id
-                                            })
-                                        })
+                                        view.timeline.requests.get_mut(&request_key).and_then(
+                                            |inputs| {
+                                                inputs.questions.iter_mut().find(|question| {
+                                                    question.definition.id == question_id
+                                                })
+                                            },
+                                        )
                                     else {
                                         return;
                                     };
@@ -1061,7 +1066,7 @@ impl Desktop {
                     "回答を送信",
                     cx,
                     move |view, _, cx| {
-                        let Some(inputs) = view.requests.get(&key) else {
+                        let Some(inputs) = view.timeline.requests.get(&key) else {
                             return;
                         };
                         let answers = inputs
@@ -1134,7 +1139,7 @@ impl Desktop {
                     "確認して送信",
                     cx,
                     move |view, _, cx| {
-                        let Some(inputs) = view.requests.get(&accept_key) else {
+                        let Some(inputs) = view.timeline.requests.get(&accept_key) else {
                             return;
                         };
                         match agent_core::presentation::conversation::answer_from_json(
@@ -1176,7 +1181,7 @@ impl Desktop {
                         "実行結果を送信",
                         cx,
                         move |view, _, cx| {
-                            let Some(inputs) = view.requests.get(&key) else {
+                            let Some(inputs) = view.timeline.requests.get(&key) else {
                                 return;
                             };
                             match agent_core::presentation::conversation::answer_from_json(
@@ -1203,11 +1208,12 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.requests
+        self.timeline
+            .requests
             .retain(|key, _| self.snapshot.request(key).is_some());
         for request in self.snapshot.requests() {
             let key = &request.id;
-            if self.requests.contains_key(key) {
+            if self.timeline.requests.contains_key(key) {
                 continue;
             }
             let questions = match &request.body {
@@ -1225,7 +1231,7 @@ impl Desktop {
                     .collect(),
                 _ => Vec::new(),
             };
-            self.requests.insert(
+            self.timeline.requests.insert(
                 key.clone(),
                 RequestInputs {
                     questions,
@@ -1431,7 +1437,7 @@ mod rendering_tests {
                     cx,
                 );
                 desktop.snapshot = Arc::new(snapshot);
-                desktop.sync_rows(true);
+                desktop.timeline.sync(&desktop.snapshot, true);
                 desktop
             });
             Self { desktop }
@@ -1501,11 +1507,11 @@ mod rendering_tests {
         window.run_until_parked();
         view.update(window, |view, cx| {
             let desktop = view.desktop.read(cx);
-            assert!(desktop.rows.len() >= 1000);
-            assert!(desktop.markdown_cache.contains_key("answer-999"));
-            assert!(!desktop.markdown_cache.contains_key("answer-0"));
+            assert!(desktop.timeline.rows.len() >= 1000);
+            assert!(desktop.timeline.markdown.contains_key("answer-999"));
+            assert!(!desktop.timeline.markdown.contains_key("answer-0"));
             assert!(
-                desktop.markdown_cache.len() < 40,
+                desktop.timeline.markdown.len() < 40,
                 "opening a turn must not parse its offscreen messages"
             );
         });
@@ -1524,7 +1530,10 @@ mod rendering_tests {
         );
         view.update(window, |view, cx| {
             view.desktop.update(cx, |desktop, cx| {
-                desktop.list.scroll_to(gpui_kit::ListOffset::default());
+                desktop
+                    .timeline
+                    .list
+                    .scroll_to(gpui_kit::ListOffset::default());
                 cx.notify();
             });
         });
@@ -1533,7 +1542,8 @@ mod rendering_tests {
             assert!(
                 view.desktop
                     .read(cx)
-                    .markdown_cache
+                    .timeline
+                    .markdown
                     .contains_key("answer-0")
             );
         });
@@ -1571,14 +1581,14 @@ mod rendering_tests {
                     }))
                     .unwrap(),
                 ));
-                desktop.sync_rows(false);
+                desktop.timeline.sync(&desktop.snapshot, false);
                 cx.notify();
             })
         });
         window.run_until_parked();
         view.update(window, |view, cx| {
             let desktop = view.desktop.read(cx);
-            assert!(!desktop.list.is_following_tail());
+            assert!(!desktop.timeline.list.is_following_tail());
         });
         assert!(
             (window.debug_bounds(first_message).unwrap().top() - before).abs() < px(1.),
@@ -1788,8 +1798,11 @@ mod rendering_tests {
         window.run_until_parked();
         let latest = window.debug_bounds("conversation-latest").unwrap();
         view.update(window, |view, cx| {
-            assert!(!view.0.read(cx).list.is_following_tail());
-            assert_eq!(view.0.read(cx).list.logical_scroll_top().item_ix, 0);
+            assert!(!view.0.read(cx).timeline.list.is_following_tail());
+            assert_eq!(
+                view.0.read(cx).timeline.list.logical_scroll_top().item_ix,
+                0
+            );
         });
         window.simulate_click(latest.center(), gpui_kit::Modifiers::default());
         view.update(window, |_, cx| cx.notify());
@@ -1799,8 +1812,10 @@ mod rendering_tests {
             .unwrap();
         view.update(window, |view, cx| {
             let desktop = view.0.read(cx);
-            assert!(desktop.list.is_following_tail());
-            assert!((last.bottom() - desktop.list.viewport_bounds().bottom()).abs() < px(1.));
+            assert!(desktop.timeline.list.is_following_tail());
+            assert!(
+                (last.bottom() - desktop.timeline.list.viewport_bounds().bottom()).abs() < px(1.)
+            );
         });
         assert!(window.debug_bounds("conversation-latest").is_none());
     }
@@ -1955,7 +1970,7 @@ mod rendering_tests {
                     view.desktop.update(cx, |desktop, _| {
                         let source = "/fixture/image.png".to_owned();
                         let key = desktop.image_key(&source, false);
-                        desktop.images.insert(
+                        desktop.timeline.images.insert(
                             key,
                             ImageState {
                                 source: Arc::new(source),

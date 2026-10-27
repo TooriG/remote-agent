@@ -44,7 +44,7 @@ impl Desktop {
                                 )
                                 .on_click(cx.listener(|view, _, _, cx| {
                                     if let Some(thread_id) = view.selected().cloned() {
-                                        view.pause_tail();
+                                        view.timeline.pause_tail();
                                         view.dispatch(Intent::ReadOlder { thread_id });
                                         cx.notify();
                                     }
@@ -241,29 +241,34 @@ impl Desktop {
     }
     pub(super) fn conversation_list(&self, cx: &Context<Self>) -> List {
         let entity = cx.entity().downgrade();
-        list(self.list.clone(), move |index, window, cx| {
+        list(self.timeline.list.clone(), move |index, window, cx| {
             entity
-                .update(cx, |view, cx| match view.rows.get(index).cloned() {
-                    Some(ConversationRow::History(control)) => view.history_control(control, cx),
-                    Some(ConversationRow::Turn { turn, index, last }) => {
-                        let session = view
-                            .rendered
-                            .as_ref()
-                            .and_then(|conversation| conversation.source.id.clone());
-                        view.turn_row(session.as_ref(), &turn, index, last, window, cx)
+                .update(cx, |view, cx| {
+                    match view.timeline.rows.get(index).cloned() {
+                        Some(ConversationRow::History(control)) => {
+                            view.history_control(control, cx)
+                        }
+                        Some(ConversationRow::Turn { turn, index, last }) => {
+                            let session = view
+                                .timeline
+                                .rendered
+                                .as_ref()
+                                .and_then(|conversation| conversation.source.id.clone());
+                            view.turn_row(session.as_ref(), &turn, index, last, window, cx)
+                        }
+                        Some(ConversationRow::Pending(id, pending)) => {
+                            let row = view.pending_item(&id, &pending, cx);
+                            h_flex()
+                                .justify_center()
+                                .w_full()
+                                .px_6()
+                                .pb_8()
+                                .child(v_flex().w_full().max_w(px(CHAT_WIDTH)).gap_4().child(row))
+                                .into_any_element()
+                        }
+                        Some(ConversationRow::Request(request)) => view.request_card(&request, cx),
+                        None => div().into_any_element(),
                     }
-                    Some(ConversationRow::Pending(id, pending)) => {
-                        let row = view.pending_item(&id, &pending, cx);
-                        h_flex()
-                            .justify_center()
-                            .w_full()
-                            .px_6()
-                            .pb_8()
-                            .child(v_flex().w_full().max_w(px(CHAT_WIDTH)).gap_4().child(row))
-                            .into_any_element()
-                    }
-                    Some(ConversationRow::Request(request)) => view.request_card(&request, cx),
-                    None => div().into_any_element(),
                 })
                 .unwrap_or_else(|_| div().into_any_element())
         })
@@ -289,7 +294,7 @@ impl Desktop {
         {
             body = body.child(div().px_4().py_2().text_sm().child(notice));
         }
-        if self.rendered.is_none() {
+        if self.timeline.rendered.is_none() {
             body = body.child(
                 v_flex()
                     .flex_1()
@@ -315,7 +320,7 @@ impl Desktop {
                     history,
                 ))
                 .child(self.conversation_navigation(cx));
-            if !self.list.is_following_tail() {
+            if !self.timeline.list.is_following_tail() {
                 viewport = viewport.child(
                     h_flex()
                         .absolute()
@@ -330,7 +335,7 @@ impl Desktop {
                                 "最新のメッセージへ",
                                 cx,
                                 |view, _, _| {
-                                    view.list.set_follow_mode(FollowMode::Tail);
+                                    view.timeline.list.set_follow_mode(FollowMode::Tail);
                                 },
                             )
                             .debug_selector(|| "conversation-latest".into())
@@ -689,8 +694,8 @@ mod composer_tests {
                         ..Default::default()
                     }),
                 );
-                view.sync_rows(true);
-                view.list.scroll_to(ListOffset::default());
+                view.timeline.sync(&view.snapshot, true);
+                view.timeline.list.scroll_to(ListOffset::default());
             });
             handle = Some(desktop.clone());
             ComposerView(desktop)
@@ -704,8 +709,8 @@ mod composer_tests {
         window.simulate_click(button.center(), Modifiers::default());
         let top = window.update(|_, cx| {
             desktop.update(cx, |view, _| {
-                assert!(!view.list.is_following_tail());
-                view.list.bounds_for_item(1).unwrap().top()
+                assert!(!view.timeline.list.is_following_tail());
+                view.timeline.list.bounds_for_item(1).unwrap().top()
             })
         });
         window.update(|_, cx| {
@@ -716,7 +721,7 @@ mod composer_tests {
                         .unwrap(),
                 );
                 thread.turns = Some(turns(0..8));
-                view.sync_rows(false);
+                view.timeline.sync(&view.snapshot, false);
                 cx.notify();
             })
         });
@@ -724,10 +729,10 @@ mod composer_tests {
         window.update(|_, cx| {
             desktop.update(cx, |view, _| {
                 assert!(
-                    (view.list.bounds_for_item(3).unwrap().top() - top).abs() < px(1.),
+                    (view.timeline.list.bounds_for_item(3).unwrap().top() - top).abs() < px(1.),
                     "prepending history must keep the old first answer at the same screen position"
                 );
-                view.list.scroll_to(ListOffset::default());
+                view.timeline.list.scroll_to(ListOffset::default());
             })
         });
         let key = op::OperationKey::History {
@@ -753,7 +758,7 @@ mod composer_tests {
                     receive.recv().await.unwrap().unwrap().unwrap()
                 }));
                 store_handle = Some(store);
-                view.sync_rows(false);
+                view.timeline.sync(&view.snapshot, false);
                 cx.notify();
             })
         });
@@ -816,7 +821,7 @@ mod composer_tests {
                 );
                 thread.history_has_more = Some(false);
                 thread.history_cursor = None;
-                view.sync_rows(false);
+                view.timeline.sync(&view.snapshot, false);
                 cx.notify();
             })
         });
@@ -879,7 +884,7 @@ mod composer_tests {
                         ..Default::default()
                     }),
                 );
-                view.images.insert(
+                view.timeline.images.insert(
                     view.image_key(&source, false),
                     ImageState {
                         source: Arc::new(source.clone()),
@@ -915,17 +920,18 @@ mod composer_tests {
         window.update(|_, cx| {
             desktop.update(cx, |view, _| {
                 assert!(
-                    view.image_gallery.is_some(),
+                    view.timeline.gallery.is_some(),
                     "the thumbnail still opens the gallery"
                 );
-                view.image_gallery = None;
+                view.timeline.gallery = None;
             })
         });
         window.simulate_mouse_move(bounds.center(), None, Modifiers::default());
         window.run_until_parked();
         let remove = window.debug_bounds("attachment-remove-0").unwrap().center();
         window.simulate_click(remove, Modifiers::default());
-        window.update(|_, cx| desktop.update(cx, |view, _| assert!(view.image_gallery.is_none())));
+        window
+            .update(|_, cx| desktop.update(cx, |view, _| assert!(view.timeline.gallery.is_none())));
         let snapshot = store_handle.unwrap().snapshot();
         let draft = &snapshot.drafts[&draft_key.unwrap()];
         assert!(draft.attachments.is_empty());

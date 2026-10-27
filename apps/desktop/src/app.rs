@@ -5,6 +5,7 @@ mod dictation;
 mod forms;
 mod hosts;
 mod selection;
+mod timeline;
 mod view;
 
 use crate::{Runtime, appearance, diff::DiffView, platform, store_session::StoreSession};
@@ -39,6 +40,9 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
     sync::Arc,
+};
+use timeline::{
+    ConversationRow, ImageGallery, ImageState, MarkdownContent, Question, RequestInputs, Timeline,
 };
 
 struct ProjectEditor {
@@ -116,149 +120,6 @@ pub(crate) enum Mode {
         cwd: String,
     },
 }
-struct Question {
-    definition: agent_protocol::requests::Question,
-    input: Entity<InputState>,
-    selected: HashSet<String>,
-}
-struct RequestInputs {
-    questions: Vec<Question>,
-    response: Entity<TextareaState>,
-    sent: bool,
-}
-struct ImageGallery {
-    zoom: f32,
-    id: uuid::Uuid,
-    entries: Vec<(Arc<String>, bool)>,
-    initial: (Arc<String>, bool),
-    selected: Option<usize>,
-    list: ListState,
-    loading: bool,
-    saving: bool,
-    saved: bool,
-    error: String,
-}
-impl ImageGallery {
-    fn current_image(&self) -> &(Arc<String>, bool) {
-        self.selected
-            .and_then(|index| self.entries.get(index))
-            .unwrap_or(&self.initial)
-    }
-}
-struct ImageState {
-    source: Arc<String>,
-    path: Option<ImageSource>,
-    error: Option<String>,
-}
-struct MarkdownContent {
-    source: SharedString,
-    rendered: SharedString,
-    images: Rc<[String]>,
-    code_headers: Arc<HashMap<usize, String>>,
-    diagrams: HashMap<String, Arc<RenderImage>>,
-    wrap_code: bool,
-    compact_tables: bool,
-}
-#[derive(Clone)]
-enum ConversationRow {
-    History(agent_core::presentation::conversation::HistoryControl),
-    Turn {
-        turn: Arc<agent_core::presentation::conversation::RenderedTurn>,
-        index: usize,
-        last: bool,
-    },
-    Pending(String, Arc<PendingSubmission>),
-    Request(Box<agent_core::presentation::conversation::Request>),
-}
-impl ConversationRow {
-    fn same_identity(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::History(_), Self::History(_)) => true,
-            (
-                Self::Turn {
-                    turn: a, index: ai, ..
-                },
-                Self::Turn {
-                    turn: b, index: bi, ..
-                },
-            ) => a.source.id == b.source.id && a.rows[*ai].id == b.rows[*bi].id,
-            (Self::Pending(a, _), Self::Pending(b, _)) => a == b,
-            (Self::Request(a), Self::Request(b)) => a.id == b.id,
-            _ => false,
-        }
-    }
-    fn unchanged(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::History(a), Self::History(b)) => a == b,
-            (
-                Self::Turn {
-                    turn: a,
-                    index: ai,
-                    last: al,
-                },
-                Self::Turn {
-                    turn: b,
-                    index: bi,
-                    last: bl,
-                },
-            ) => {
-                let a_row = &a.rows[*ai];
-                let b_row = &b.rows[*bi];
-                if al != bl || a_row.timestamp_ms != b_row.timestamp_ms {
-                    return false;
-                }
-                match (&a_row.content, &b_row.content) {
-                    (
-                        ConversationRowContent::User { item: a },
-                        ConversationRowContent::User { item: b },
-                    )
-                    | (
-                        ConversationRowContent::Activity { item: a, .. },
-                        ConversationRowContent::Activity { item: b, .. },
-                    ) => Arc::ptr_eq(a, b),
-                    (
-                        ConversationRowContent::Response {
-                            item: a,
-                            fork_turn_id: af,
-                        },
-                        ConversationRowContent::Response {
-                            item: b,
-                            fork_turn_id: bf,
-                        },
-                    ) => Arc::ptr_eq(a, b) && af == bf,
-                    (
-                        ConversationRowContent::ActivityHeader { activity: x },
-                        ConversationRowContent::ActivityHeader { activity: y },
-                    ) => {
-                        x == y
-                            && (!x.is_in_progress || a.work_progress(true) == b.work_progress(true))
-                    }
-                    (
-                        ConversationRowContent::InProgress { .. },
-                        ConversationRowContent::InProgress { .. },
-                    ) => a.work_progress(false) == b.work_progress(false),
-                    (
-                        ConversationRowContent::ProviderHandoff { text: a },
-                        ConversationRowContent::ProviderHandoff { text: b },
-                    ) => a == b,
-                    (
-                        ConversationRowContent::PendingRequest { request: a },
-                        ConversationRowContent::PendingRequest { request: b },
-                    ) => a == b,
-                    (
-                        ConversationRowContent::Error { error: a },
-                        ConversationRowContent::Error { error: b },
-                    ) => a == b,
-                    _ => false,
-                }
-            }
-            (Self::Pending(a, x), Self::Pending(b, y)) => a == b && Arc::ptr_eq(x, y),
-            (Self::Request(a), Self::Request(b)) => a == b,
-            _ => false,
-        }
-    }
-}
-
 /// Business state is owned by Store. Everything else here is a widget, render
 /// cache, pending UI effect, or immutable snapshot retained for display.
 pub(crate) struct Desktop {
@@ -287,8 +148,6 @@ pub(crate) struct Desktop {
     model_controls: forms::ModelControls,
     account: forms::AccountForm,
     worktrees: forms::WorktreeForm,
-    expanded_items: HashSet<String>,
-    expanded_work: HashMap<String, ActivityExpansion>,
     tab: Tab,
     settings_page: SettingsPage,
     sidebar: bool,
@@ -299,16 +158,7 @@ pub(crate) struct Desktop {
     review_expanded: bool,
     source_paths: Vec<String>,
     source_items: Vec<Arc<Item>>,
-    requests: HashMap<RequestId, RequestInputs>,
-    list: ListState,
-    hovered_conversation_marker: Option<usize>,
-    rows: Vec<ConversationRow>,
-    rendered: Option<Arc<agent_core::presentation::conversation::RenderedConversation>>,
-    diffs: HashMap<String, Entity<DiffView>>,
-    images: HashMap<String, ImageState>,
-    image_gallery: Option<ImageGallery>,
-    image_dir: tempfile::TempDir,
-    markdown_cache: HashMap<String, MarkdownContent>,
+    timeline: Timeline,
     _subscriptions: Vec<Subscription>,
 }
 impl Desktop {
@@ -498,8 +348,6 @@ impl Desktop {
                 }),
             );
         }
-        let list = ListState::new(0, ListAlignment::Bottom, px(600.));
-        list.set_follow_mode(FollowMode::Tail);
         let mut view = Self {
             session: None,
             snapshot: Arc::default(),
@@ -528,8 +376,6 @@ impl Desktop {
             model_controls,
             account,
             worktrees,
-            expanded_items: HashSet::new(),
-            expanded_work: HashMap::new(),
             tab: Tab::Chat,
             settings_page: SettingsPage::Agents,
             sidebar: true,
@@ -540,19 +386,7 @@ impl Desktop {
             review_expanded: false,
             source_paths: Vec::new(),
             source_items: Vec::new(),
-            requests: HashMap::new(),
-            list,
-            hovered_conversation_marker: None,
-            rows: Vec::new(),
-            rendered: None,
-            diffs: HashMap::new(),
-            images: HashMap::new(),
-            image_gallery: None,
-            image_dir: tempfile::Builder::new()
-                .prefix("bex-images-")
-                .tempdir()
-                .expect("image temporary directory"),
-            markdown_cache: HashMap::new(),
+            timeline: Timeline::new(),
             _subscriptions: subscriptions,
         };
         view.connect(None);
@@ -751,7 +585,7 @@ impl Desktop {
                 }
             }
             Update::Image { key, result } => {
-                if let Some(image) = self.images.get_mut(&key) {
+                if let Some(image) = self.timeline.images.get_mut(&key) {
                     match result {
                         Ok(path) => {
                             image.path = Some(if Path::new(&path).is_absolute() {
@@ -766,7 +600,7 @@ impl Desktop {
                         }
                     }
                 }
-                self.list.remeasure();
+                self.timeline.list.remeasure();
             }
         }
         cx.notify();
@@ -808,7 +642,7 @@ impl Desktop {
                     return;
                 }
                 self.accept_snapshot(window, cx);
-                self.remeasure_item(item_id.as_str());
+                self.timeline.remeasure_item(item_id.as_str());
                 return;
             }
             OperationCompletion::WorktreeSettings => {
@@ -829,12 +663,12 @@ impl Desktop {
             OperationCompletion::Request(key) => {
                 if let Err(error) = result {
                     self.set_error(error);
-                    if let Some(inputs) = self.requests.get_mut(&key) {
+                    if let Some(inputs) = self.timeline.requests.get_mut(&key) {
                         inputs.sent = false;
                     }
                 }
                 self.accept_snapshot(window, cx);
-                self.list.remeasure();
+                self.timeline.list.remeasure();
                 return;
             }
             OperationCompletion::Account => {
@@ -871,7 +705,8 @@ impl Desktop {
             }
             OperationCompletion::Gallery(id) => {
                 let Some(gallery) = self
-                    .image_gallery
+                    .timeline
+                    .gallery
                     .as_mut()
                     .filter(|gallery| gallery.id == id)
                 else {
@@ -988,9 +823,7 @@ impl Desktop {
                 .update(cx, |selection, cx| selection.clear(cx));
             self.cancel_recording();
             self.composer.text.pending = None;
-            self.rendered = None;
-            self.diffs.clear();
-            self.markdown_cache.clear();
+            self.timeline.forget_rendering();
         }
         let text = self.draft().text.clone();
         if let Some(value) = self.composer.text.adopt(&text) {
@@ -1032,7 +865,7 @@ impl Desktop {
                 &self.snapshot.pending_submissions,
             )
         {
-            self.sync_rows(navigated);
+            self.timeline.sync(&self.snapshot, navigated);
         }
         let user_items_changed = {
             let mut current = self.user_items();
@@ -1159,128 +992,6 @@ impl Desktop {
                 )
             })
     }
-    fn sync_rows(&mut self, reset: bool) {
-        self.rendered = self.snapshot.conversation_thread().map(|thread| {
-            agent_core::presentation::conversation::project_conversation(
-                &self.snapshot,
-                thread,
-                &self.rendered,
-            )
-        });
-        let mut rows = conversation_rows(&self.rendered, &self.expanded_work);
-        if let Some(control) = self
-            .selected()
-            .cloned()
-            .and_then(|session| self.snapshot.history_control(session))
-        {
-            rows.insert(0, ConversationRow::History(control));
-        }
-        if reset {
-            self.list.reset(rows.len());
-            self.list.scroll_to_end();
-            self.rows = rows;
-            return;
-        }
-        let old = &self.rows;
-        let prefix = old
-            .iter()
-            .zip(&rows)
-            .take_while(|(a, b)| a.same_identity(b))
-            .count();
-        let suffix = old[prefix..]
-            .iter()
-            .rev()
-            .zip(rows[prefix..].iter().rev())
-            .take_while(|(a, b)| a.same_identity(b))
-            .count();
-        let structure_changed = prefix + suffix != old.len() || old.len() != rows.len();
-        let anchor = self.list.logical_scroll_top();
-        // Match T3's maintainVisibleContentPosition: retain a visible row by
-        // identity, even when a preceding history/work header is replaced.
-        let visible_anchor = (structure_changed && !self.list.is_following_tail())
-            .then(|| {
-                let viewport = self.list.viewport_bounds();
-                for (index, row) in old.iter().enumerate().skip(anchor.item_ix) {
-                    let bounds = self.list.bounds_for_item(index)?;
-                    if bounds.top() >= viewport.bottom() {
-                        break;
-                    }
-                    match row {
-                        ConversationRow::History(_) => continue,
-                        ConversationRow::Turn { turn, index, .. }
-                            if matches!(
-                                turn.rows[*index].content,
-                                ConversationRowContent::ActivityHeader { .. }
-                                    | ConversationRowContent::InProgress { .. }
-                            ) =>
-                        {
-                            continue;
-                        }
-                        _ => (),
-                    }
-                    if bounds.bottom() > viewport.top()
-                        && let Some(item_ix) = rows.iter().position(|next| row.same_identity(next))
-                    {
-                        return Some(ListOffset {
-                            item_ix,
-                            offset_in_item: viewport.top() - bounds.top(),
-                        });
-                    }
-                }
-                None
-            })
-            .flatten();
-        if structure_changed {
-            self.list
-                .splice(prefix..old.len() - suffix, rows.len() - prefix - suffix);
-        }
-        for index in 0..prefix {
-            if !old[index].unchanged(&rows[index]) {
-                self.list.remeasure_items(index..index + 1);
-            }
-        }
-        for offset in 0..suffix {
-            let index = rows.len() - suffix + offset;
-            if !old[old.len() - suffix + offset].unchanged(&rows[index]) {
-                self.list.remeasure_items(index..index + 1);
-            }
-        }
-        self.rows = rows;
-        if let Some(anchor) = visible_anchor {
-            self.list.scroll_to(anchor);
-        }
-    }
-    fn pause_tail(&self) {
-        if self.list.logical_scroll_top().item_ix == self.list.item_count() {
-            self.list
-                .scroll_by(-self.list.viewport_bounds().size.height);
-        }
-        self.list.pause_following_tail();
-    }
-    fn remeasure_item(&self, id: &str) {
-        for (index, row) in self.rows.iter().enumerate() {
-            if let ConversationRow::Turn {
-                turn,
-                index: row_index,
-                ..
-            } = row
-                && match &turn.rows[*row_index].content {
-                    ConversationRowContent::User { item }
-                    | ConversationRowContent::Activity { item, .. }
-                    | ConversationRowContent::Response { item, .. } => {
-                        item.data
-                            .native_id
-                            .as_ref()
-                            .map_or(item.data.id.as_str(), |native| native.as_str())
-                            == id
-                    }
-                    _ => false,
-                }
-            {
-                self.list.remeasure_items(index..index + 1);
-            }
-        }
-    }
     fn new_chat(&mut self, cwd: String, window: &mut Window, cx: &mut Context<Self>) {
         self.tab = Tab::Chat;
         self.cancel_recording();
@@ -1372,14 +1083,7 @@ impl Desktop {
         self.worktrees.dirty = false;
         self.worktrees.saving = false;
         self.worktrees.save_pending = false;
-        self.images.clear();
-        self.image_gallery = None;
-        self.rows.clear();
-        self.list.reset(0);
-        self.rendered = None;
-        self.requests.clear();
-        self.diffs.clear();
-        self.markdown_cache.clear();
+        self.timeline.clear();
         let value = self.composer.text.replace("");
         self.composer
             .input
@@ -1853,7 +1557,7 @@ impl Desktop {
         );
     }
     fn respond(&mut self, id: RequestId, answer: Answer) {
-        if let Some(inputs) = self.requests.get_mut(&id) {
+        if let Some(inputs) = self.timeline.requests.get_mut(&id) {
             inputs.sent = true;
         }
         self.perform(
@@ -1865,65 +1569,6 @@ impl Desktop {
         );
     }
 }
-fn conversation_rows(
-    rendered: &Option<Arc<agent_core::presentation::conversation::RenderedConversation>>,
-    expanded_work: &HashMap<String, agent_core::presentation::conversation::ActivityExpansion>,
-) -> Vec<ConversationRow> {
-    let mut rows = Vec::new();
-    if let Some(rendered) = rendered {
-        // T3's timeline virtualizes messages and work rows, never an entire
-        // provider turn. A long-running turn must not mount its offscreen text.
-        for turn in &rendered.turns {
-            let start = rows.len();
-            let mut expanded = false;
-            for (index, row) in turn.rows.iter().enumerate() {
-                match &row.content {
-                    ConversationRowContent::ActivityHeader { activity } => {
-                        expanded = agent_core::presentation::conversation::activity_is_expanded(
-                            activity,
-                            expanded_work.get(&activity.id).cloned(),
-                        );
-                    }
-                    ConversationRowContent::Activity { .. } if !expanded => continue,
-                    _ => (),
-                }
-                rows.push(ConversationRow::Turn {
-                    turn: turn.clone(),
-                    index,
-                    last: false,
-                });
-            }
-            if rows.len() > start
-                && let Some(ConversationRow::Turn { last, .. }) = rows.last_mut()
-            {
-                *last = true;
-            }
-        }
-        rows.extend(rendered.queued.iter().filter_map(|item| {
-            if let agent_core::presentation::conversation::ItemSource::Pending(id, pending) =
-                &item.source
-            {
-                Some(ConversationRow::Pending(id.clone(), pending.clone()))
-            } else {
-                None
-            }
-        }));
-    }
-    rows.extend(
-        rendered
-            .iter()
-            .flat_map(|conversation| &conversation.request_rows)
-            .filter_map(|row| {
-                if let ConversationRowContent::PendingRequest { request } = &row.content {
-                    Some(ConversationRow::Request(request.clone()))
-                } else {
-                    None
-                }
-            }),
-    );
-    rows
-}
-
 fn toggle_set(set: &mut HashSet<String>, key: &str) {
     if !set.remove(key) {
         set.insert(key.into());
@@ -2050,10 +1695,7 @@ mod error_tests {
 
 #[cfg(test)]
 mod completion_tests {
-    use super::{
-        Arc, Context, ConversationRow, ConversationRowContent, Desktop, Mode, OperationCompletion,
-        Outcome, Snapshot, Thread, Update, Window, conversation_rows,
-    };
+    use super::{Arc, Context, Desktop, Mode, OperationCompletion, Outcome, Update, Window};
     use gpui_kit as gpui;
     use gpui_kit::TestAppContext;
 
@@ -2154,83 +1796,5 @@ mod completion_tests {
             assert_eq!(view.busy, 1);
         })
         .unwrap();
-    }
-
-    #[test]
-    fn row_projection_keeps_repeated_turns_and_scopes_requests_without_changing_input() {
-        let mut source: Arc<Thread> = Arc::new(serde_json::from_value(serde_json::json!({"id":{"provider":"codex","id":"selected"},"turns":[{"id":"repeated","items":[{"id":"first","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"first answer","phase":"unknown"}}}}}],"status":"unknown"},{"id":"repeated","items":[{"id":"second","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"second answer","phase":"unknown"}}}}}],"status":"unknown"}]})).unwrap());
-        let mut snapshot = Snapshot::default();
-        Arc::make_mut(&mut snapshot.navigation).thread_id =
-            Some(agent_protocol::session::SessionRef {
-                provider: agent_protocol::session::ProviderKind::Codex,
-                id: "selected".into(),
-            });
-        let request = Arc::new(agent_protocol::requests::Request {
-            id: "global".into(),
-            target: agent_protocol::requests::RequestTarget::Session,
-            delivery: agent_protocol::session::RequestDelivery::Awaiting,
-            body: agent_protocol::requests::RequestBody::Elicitation {
-                server: "fixture".into(),
-                message: "input".into(),
-                input: agent_protocol::requests::ElicitationInput::Form { fields: vec![] },
-            },
-        });
-        Arc::make_mut(&mut source)
-            .requests
-            .insert(request.id.clone(), request.clone());
-        let mut other = (*source).clone();
-        let request = Arc::make_mut(other.requests.get_mut("global").unwrap());
-        request.id = "other".into();
-        other.id = Some(agent_protocol::session::SessionRef {
-            provider: agent_protocol::session::ProviderKind::Codex,
-            id: "other".into(),
-        });
-        Arc::make_mut(&mut snapshot.conversations)
-            .insert(other.id.clone().unwrap(), Arc::new(other));
-        let before = snapshot.clone();
-        let rendered = Some(
-            agent_core::presentation::conversation::project_conversation(
-                &snapshot,
-                source.clone(),
-                &None,
-            ),
-        );
-        let rows = conversation_rows(&rendered, &Default::default());
-        let repeated = conversation_rows(&rendered, &Default::default());
-        let messages: Vec<_> = rows
-            .iter()
-            .filter_map(|row| {
-                let ConversationRow::Turn { turn, index, .. } = row else {
-                    return None;
-                };
-                let ConversationRowContent::Response { item, .. } = &turn.rows[*index].content
-                else {
-                    return None;
-                };
-                Some((&turn.source, item.data.body.as_deref()))
-            })
-            .collect();
-        assert_eq!(messages.len(), 2);
-        for ((row, body), (turn, expected)) in messages.iter().zip(
-            source
-                .turns
-                .as_ref()
-                .unwrap()
-                .iter()
-                .zip(["first answer", "second answer"]),
-        ) {
-            assert!(Arc::ptr_eq(row, turn));
-            assert_eq!(*body, Some(expected));
-        }
-        let requests: Vec<_> = rows
-            .iter()
-            .filter_map(|row| match row {
-                ConversationRow::Request(request) => Some(request.id.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(requests, ["global"]);
-        assert!(rows.iter().zip(&repeated).all(|(a, b)| a.unchanged(b)));
-        assert_eq!(snapshot, before);
     }
 }

@@ -137,7 +137,7 @@ impl Render for Desktop {
         let panel_layout = panel.layout;
         let active_surface = panel.active;
         let active = self.project_editor.is_none()
-            && self.image_gallery.is_none()
+            && self.timeline.gallery.is_none()
             && !self.onboarding
             && !self.import_projects
             && panel_open
@@ -149,7 +149,7 @@ impl Render for Desktop {
             self.dispatch(Intent::WatchAgents { thread_id });
         }
         let composer_visible = self.project_editor.is_none()
-            && self.image_gallery.is_none()
+            && self.timeline.gallery.is_none()
             && self.tab == Tab::Chat
             && (!panel_open
                 || (!self.side_chat_mode
@@ -195,7 +195,7 @@ impl Render for Desktop {
                 _ => (),
             }
         }
-        if self.image_gallery.is_some() {
+        if self.timeline.gallery.is_some() {
             let gallery = self.image_gallery_view(window, cx);
             return h_flex()
                 .size_full()

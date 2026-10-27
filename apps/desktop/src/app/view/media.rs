@@ -11,9 +11,9 @@ impl Desktop {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let key = self.image_key(source, encoded);
-        if !self.images.contains_key(&key) {
+        if !self.timeline.images.contains_key(&key) {
             let source = Arc::new(source.to_owned());
-            self.images.insert(
+            self.timeline.images.insert(
                 key.clone(),
                 ImageState {
                     source: source.clone(),
@@ -25,9 +25,10 @@ impl Desktop {
             let remote = self.remote.is_some();
             let store = self.session.as_ref().map(|session| session.store.clone());
             let destination = self
+                .timeline
                 .image_dir
                 .path()
-                .join(format!("image-{}", self.images.len()));
+                .join(format!("image-{}", self.timeline.images.len()));
             let returned = key.clone();
             self.effect(
                 async move {
@@ -79,7 +80,7 @@ impl Desktop {
                 },
             );
         }
-        let state = &self.images[&key];
+        let state = &self.timeline.images[&key];
         if let Some(path) = &state.path {
             let background = cx.theme().secondary;
             let id = SharedString::from(key.clone());
@@ -104,7 +105,8 @@ impl Desktop {
             let menu_source = source.clone();
             let owner = cx.entity().downgrade();
             let saving = self
-                .image_gallery
+                .timeline
+                .gallery
                 .as_ref()
                 .is_some_and(|gallery| gallery.saving);
             let image_menu = div()
@@ -164,7 +166,8 @@ impl Desktop {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if self
-            .markdown_cache
+            .timeline
+            .markdown
             .get(&id)
             .is_none_or(|cached| cached.source != source)
         {
@@ -177,12 +180,13 @@ impl Desktop {
                 &rendered,
             ));
             let (wrap_code, compact_tables) = self
-                .markdown_cache
+                .timeline
+                .markdown
                 .get(&id)
                 .map_or((false, false), |cached| {
                     (cached.wrap_code, cached.compact_tables)
                 });
-            self.markdown_cache.insert(
+            self.timeline.markdown.insert(
                 id.clone(),
                 MarkdownContent {
                     source,
@@ -195,7 +199,7 @@ impl Desktop {
                 },
             );
         }
-        let cached = &self.markdown_cache[&id];
+        let cached = &self.timeline.markdown[&id];
         let images = cached.images.clone();
         let view = cx.entity().downgrade();
         let wrap_code = cached.wrap_code;
@@ -281,11 +285,12 @@ impl Desktop {
                                 .ghost()
                                 .on_click(move |_, _, cx| {
                                     let _ = wrap_view.update(cx, |view, cx| {
-                                        if let Some(cached) = view.markdown_cache.get_mut(&code_key)
+                                        if let Some(cached) =
+                                            view.timeline.markdown.get_mut(&code_key)
                                         {
                                             cached.wrap_code = !cached.wrap_code;
                                         }
-                                        view.remeasure_item(&code_key);
+                                        view.timeline.remeasure_item(&code_key);
                                         cx.notify();
                                     });
                                 }),
@@ -323,11 +328,11 @@ impl Desktop {
                                 .on_click(move |_, _, cx| {
                                     let _ = table_view.update(cx, |view, cx| {
                                         if let Some(cached) =
-                                            view.markdown_cache.get_mut(&table_key)
+                                            view.timeline.markdown.get_mut(&table_key)
                                         {
                                             cached.compact_tables = !cached.compact_tables;
                                         }
-                                        view.remeasure_item(&table_key);
+                                        view.timeline.remeasure_item(&table_key);
                                         cx.notify();
                                     });
                                 }),
@@ -436,7 +441,7 @@ impl Desktop {
         cx: &mut Context<Self>,
     ) {
         let id = uuid::Uuid::new_v4();
-        self.image_gallery = Some(ImageGallery {
+        self.timeline.gallery = Some(ImageGallery {
             zoom: 1.,
             id,
             entries: Vec::new(),
@@ -460,7 +465,7 @@ impl Desktop {
     }
 
     pub(super) fn gallery_thumbnail(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
-        let Some(gallery) = &self.image_gallery else {
+        let Some(gallery) = &self.timeline.gallery else {
             return div().into_any_element();
         };
         let Some((source, encoded)) = gallery.entries.get(index).cloned() else {
@@ -477,7 +482,12 @@ impl Desktop {
             .p_2()
             .selected(selected)
             .on_click(cx.listener(move |s, _, _, cx| {
-                if let Some(gallery) = s.image_gallery.as_mut().filter(|gallery| !gallery.saving) {
+                if let Some(gallery) = s
+                    .timeline
+                    .gallery
+                    .as_mut()
+                    .filter(|gallery| !gallery.saving)
+                {
                     gallery.selected = Some(index);
                     gallery.zoom = 1.;
                     gallery.saved = false;
@@ -493,7 +503,7 @@ impl Desktop {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let gallery = self.image_gallery.as_ref().unwrap();
+        let gallery = self.timeline.gallery.as_ref().unwrap();
         let (source, encoded) = gallery.current_image().clone();
         let list_state = gallery.list.clone();
         let zoom = gallery.zoom;
@@ -514,6 +524,7 @@ impl Desktop {
         );
         let key = self.image_key(&source, encoded);
         let ready = self
+            .timeline
             .images
             .get(&key)
             .is_some_and(|image| image.path.is_some());
@@ -555,7 +566,7 @@ impl Desktop {
                             IconName::Close,
                             "閉じる",
                             cx,
-                            |s, _, _| s.image_gallery = None,
+                            |s, _, _| s.timeline.gallery = None,
                         )
                         .disabled(saving),
                     ),
@@ -591,7 +602,7 @@ impl Desktop {
                     .gap_3()
                     .child(
                         self.button("gallery-zoom-out", "−", cx, |s, _, _| {
-                            if let Some(gallery) = &mut s.image_gallery {
+                            if let Some(gallery) = &mut s.timeline.gallery {
                                 gallery.zoom = (gallery.zoom - 0.25).max(0.25);
                             }
                         })
@@ -604,7 +615,7 @@ impl Desktop {
                             format!("{:.0}%", zoom * 100.),
                             cx,
                             |s, _, _| {
-                                if let Some(gallery) = &mut s.image_gallery {
+                                if let Some(gallery) = &mut s.timeline.gallery {
                                     gallery.zoom = 1.;
                                 }
                             },
@@ -613,7 +624,7 @@ impl Desktop {
                     )
                     .child(
                         self.button("gallery-zoom-in", "+", cx, |s, _, _| {
-                            if let Some(gallery) = &mut s.image_gallery {
+                            if let Some(gallery) = &mut s.timeline.gallery {
                                 gallery.zoom = (gallery.zoom + 0.25).min(4.);
                             }
                         })
@@ -626,7 +637,8 @@ impl Desktop {
 
     pub(super) fn save_gallery_image(&mut self, cx: &mut Context<Self>) {
         let Some((source, encoded)) = self
-            .image_gallery
+            .timeline
+            .gallery
             .as_ref()
             .filter(|gallery| !gallery.saving)
             .map(|gallery| gallery.current_image().clone())
@@ -638,12 +650,15 @@ impl Desktop {
 
     fn save_image(&mut self, source: &str, encoded: bool, cx: &mut Context<Self>) {
         let key = self.image_key(source, encoded);
-        let Some(ImageSource::Resource(resource)) =
-            self.images.get(&key).and_then(|image| image.path.clone())
+        let Some(ImageSource::Resource(resource)) = self
+            .timeline
+            .images
+            .get(&key)
+            .and_then(|image| image.path.clone())
         else {
             return;
         };
-        let id = if let Some(gallery) = self.image_gallery.as_mut().filter(|gallery| {
+        let id = if let Some(gallery) = self.timeline.gallery.as_mut().filter(|gallery| {
             let current = gallery.current_image();
             current.0.as_str() == source && current.1 == encoded
         }) {
@@ -724,7 +739,7 @@ impl Desktop {
             }
             .await;
             let _ = view.update(cx, |s, cx| {
-                if let Some(gallery) = s.image_gallery.as_mut().filter(|gallery| Some(gallery.id) == id) {
+                if let Some(gallery) = s.timeline.gallery.as_mut().filter(|gallery| Some(gallery.id) == id) {
                     gallery.saving = false;
                     match result {
                         Ok(saved) => gallery.saved = saved,
@@ -831,7 +846,8 @@ mod file_panel_tests {
         window.update(|_, cx| {
             desktop.update(cx, |view, cx| {
                 let gallery = view
-                    .image_gallery
+                    .timeline
+                    .gallery
                     .as_ref()
                     .expect("file click must open the image gallery");
                 assert_eq!(gallery.current_image().0.as_str(), source);
@@ -843,13 +859,13 @@ mod file_panel_tests {
                     view.snapshot.workspace.file.is_none(),
                     "images must bypass the text editor"
                 );
-                view.image_gallery = None;
+                view.timeline.gallery = None;
                 view.open_conversation_link(&source, cx);
                 assert!(
-                    view.image_gallery.is_some(),
+                    view.timeline.gallery.is_some(),
                     "Markdown links use the same image viewer"
                 );
-                view.image_gallery = None;
+                view.timeline.gallery = None;
                 view.panels.set_open(view.panel_scope(), false);
                 view.open_conversation_link(
                     &directory
@@ -862,14 +878,14 @@ mod file_panel_tests {
                     !view.panels.get(view.panel_scope()).open,
                     "installers must bypass the editor panel"
                 );
-                assert!(view.image_gallery.is_none());
+                assert!(view.timeline.gallery.is_none());
                 assert_eq!(
                     view.composer.input.read(cx).value().as_ref(),
                     "Keep this draft"
                 );
                 view.open_file(directory.path().join("readme.txt"), cx);
                 assert!(
-                    view.image_gallery.is_none(),
+                    view.timeline.gallery.is_none(),
                     "text files must retain the editor route"
                 );
                 assert!(

@@ -14,8 +14,8 @@ impl Desktop {
         };
         let source_key = format!("mermaid-source-{message}-{}", diagram.source);
         let large_key = format!("mermaid-large-{message}-{}", diagram.source);
-        let source_visible = self.expanded_items.contains(&source_key);
-        let large = self.expanded_items.contains(&large_key);
+        let source_visible = self.timeline.expanded_items.contains(&source_key);
+        let large = self.timeline.expanded_items.contains(&large_key);
         let message = message.to_owned();
         let source_message = message.clone();
         let large_message = message.clone();
@@ -34,10 +34,10 @@ impl Desktop {
                     .small()
                     .ghost()
                     .on_click(cx.listener(move |view, _, _, cx| {
-                        if !view.expanded_items.remove(&source_key) {
-                            view.expanded_items.insert(source_key.clone());
+                        if !view.timeline.expanded_items.remove(&source_key) {
+                            view.timeline.expanded_items.insert(source_key.clone());
                         }
-                        view.remeasure_item(&source_message);
+                        view.timeline.remeasure_item(&source_message);
                         cx.notify();
                     })),
             )
@@ -47,10 +47,10 @@ impl Desktop {
                     .small()
                     .ghost()
                     .on_click(cx.listener(move |view, _, _, cx| {
-                        if !view.expanded_items.remove(&large_key) {
-                            view.expanded_items.insert(large_key.clone());
+                        if !view.timeline.expanded_items.remove(&large_key) {
+                            view.timeline.expanded_items.insert(large_key.clone());
                         }
-                        view.remeasure_item(&large_message);
+                        view.timeline.remeasure_item(&large_message);
                         cx.notify();
                     })),
             )
@@ -84,7 +84,7 @@ impl Desktop {
                 )
                 .into_any_element();
         }
-        let Some(cached) = self.markdown_cache.get_mut(&message) else {
+        let Some(cached) = self.timeline.markdown.get_mut(&message) else {
             return body.into_any_element();
         };
         if !cached.diagrams.contains_key(&diagram.source) {
