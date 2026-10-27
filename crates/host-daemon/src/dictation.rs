@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use crate::{adapters::codex::accounts::AuthToken, host_rpc::SessionId};
+use crate::{host_rpc::SessionId, providers::codex::accounts::AuthToken};
 use async_tungstenite::{
     WebSocketStream,
     tungstenite::{Message, client::IntoClientRequest, http::HeaderValue},
@@ -105,7 +105,7 @@ impl Dictation {
             .clone();
         let connection = async move {
             let AuthToken::ChatGpt(token) =
-                crate::adapters::codex::accounts::auth_token(&app_server, false).await?
+                crate::providers::codex::accounts::auth_token(&app_server, false).await?
             else {
                 // API-key transcription is a single HTTP file request. It has no
                 // idle WebSocket to prepare; keep that request at recording stop.
@@ -195,7 +195,7 @@ async fn transcribe_request(
     }
     // Re-read the selected account at stop. Never use the prepared socket after
     // an account switch or refreshed token. Credentials stay exclusively on Host.
-    let text = match crate::adapters::codex::accounts::auth_token(app_server, false).await? {
+    let text = match crate::providers::codex::accounts::auth_token(app_server, false).await? {
         AuthToken::ApiKey(key) => {
             drop(prepared);
             transcribe_recording(&key, RecordingService::OpenAi, pcm, API_TRANSCRIBE_URL).await?
@@ -367,7 +367,7 @@ async fn transcribe_recording(
                 .header("originator", "Codex Desktop")
                 .header("User-Agent", user_agent);
             // Claims select a header only; the service verifies the token.
-            if let Some(claims) = crate::adapters::codex::accounts::token_claims(token)
+            if let Some(claims) = crate::providers::codex::accounts::token_claims(token)
                 && let Some(account_id) =
                     claims["https://api.openai.com/auth"]["chatgpt_account_id"].as_str()
             {

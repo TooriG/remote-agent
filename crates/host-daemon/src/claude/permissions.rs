@@ -1,4 +1,4 @@
-use crate::host_rpc::service::Failure;
+use crate::providers::Failure;
 use agent_protocol::permissions::{PermissionMode, PermissionSettings};
 use serde_json::{Value, json};
 

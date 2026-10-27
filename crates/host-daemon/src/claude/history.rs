@@ -230,7 +230,7 @@ struct SummaryMetadata<'a> {
 }
 
 /// Extract metadata without loading complete tool output or message bodies.
-pub(super) fn summary(path: &Path) -> Result<crate::host_rpc::agent::SessionSummary> {
+pub(super) fn summary(path: &Path) -> Result<crate::providers::SessionSummary> {
     use std::io::{Read, Seek, SeekFrom};
     let mut file = fs::File::open(path)?;
     let metadata = file.metadata()?;
@@ -309,7 +309,7 @@ pub(super) fn summary(path: &Path) -> Result<crate::host_rpc::agent::SessionSumm
             thread.preview = input_text(&message["content"]);
         }
     }
-    Ok(crate::host_rpc::agent::SessionSummary { thread, branch })
+    Ok(crate::providers::SessionSummary { thread, branch })
 }
 
 fn input_text(content: &Value) -> Option<String> {

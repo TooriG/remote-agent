@@ -45,12 +45,9 @@ use tokio::sync::{Mutex as AsyncMutex, Semaphore, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::host_rpc::{
-    agent::{
-        Agent, AgentChange, AgentEvent, AnswerWrite, SessionListScope, SessionPage, SessionSummary,
-        SubmissionState, emit,
-    },
-    service::Failure,
+use crate::providers::{
+    Agent, AgentChange, AgentEvent, AnswerWrite, Failure, SessionListScope, SessionPage,
+    SessionSummary, SubmissionState, emit,
 };
 use futures_util::FutureExt;
 use process::Event as SdkEvent;
@@ -1045,7 +1042,7 @@ impl Worker {
     }
 
     async fn permission(&self, request_id: &str, request: &SdkRequest) -> Result<(), String> {
-        let adapted = crate::adapters::requests::claude(
+        let adapted = crate::providers::requests::claude(
             Uuid::new_v4().to_string().into(),
             &self.turn_id,
             request,
@@ -1528,12 +1525,15 @@ fn now() -> u64 {
 }
 
 #[async_trait::async_trait]
-impl crate::host_rpc::agent::Identity for Claude {
-    async fn list(&self) -> Result<op::Accounts, crate::host_rpc::service::Failure> {
-        let (accounts, selected) =
-            self.accounts.lock().await.list().await.map_err(|e| {
-                crate::host_rpc::service::Failure::new("account_operation_failed", e)
-            })?;
+impl crate::providers::Identity for Claude {
+    async fn list(&self) -> Result<op::Accounts, crate::providers::Failure> {
+        let (accounts, selected) = self
+            .accounts
+            .lock()
+            .await
+            .list()
+            .await
+            .map_err(|e| crate::providers::Failure::new("account_operation_failed", e))?;
         Ok(op::Accounts {
             accounts,
             selected: selected
@@ -1545,35 +1545,37 @@ impl crate::host_rpc::agent::Identity for Claude {
     }
     async fn account(
         &self,
-        command: crate::host_rpc::agent::AccountCommand,
-    ) -> Result<crate::host_rpc::agent::AccountReply, crate::host_rpc::service::Failure> {
+        command: crate::providers::AccountCommand,
+    ) -> Result<crate::providers::AccountReply, crate::providers::Failure> {
         self.accounts
             .lock()
             .await
             .request(command)
             .await
-            .map_err(|e| crate::host_rpc::service::Failure::new("account_operation_failed", e))
+            .map_err(|e| crate::providers::Failure::new("account_operation_failed", e))
     }
-    async fn usage(&self, id: &str) -> Result<op::AccountUsage, crate::host_rpc::service::Failure> {
-        let fetch =
-            self.accounts.lock().await.usage_request(id).map_err(|e| {
-                crate::host_rpc::service::Failure::new("account_operation_failed", e)
-            })?;
+    async fn usage(&self, id: &str) -> Result<op::AccountUsage, crate::providers::Failure> {
+        let fetch = self
+            .accounts
+            .lock()
+            .await
+            .usage_request(id)
+            .map_err(|e| crate::providers::Failure::new("account_operation_failed", e))?;
         Ok(fetch.await)
     }
 }
 
 struct RequestSource {
     input: tokio::sync::mpsc::Sender<Command>,
-    answers: crate::adapters::requests::NativeAnswers,
+    answers: crate::providers::requests::NativeAnswers,
 }
 pub(crate) fn request_origin(
     instance: uuid::Uuid,
     native_id: Value,
     input: tokio::sync::mpsc::Sender<Command>,
-    answers: crate::adapters::requests::NativeAnswers,
-) -> crate::host_rpc::requests::RequestOrigin {
-    crate::host_rpc::requests::RequestOrigin {
+    answers: crate::providers::requests::NativeAnswers,
+) -> crate::providers::RequestOrigin {
+    crate::providers::RequestOrigin {
         instance,
         native_id,
         provider: ProviderKind::Claude,
@@ -1581,7 +1583,7 @@ pub(crate) fn request_origin(
     }
 }
 #[async_trait::async_trait]
-impl crate::host_rpc::requests::AnswerSource for RequestSource {
+impl crate::providers::AnswerSource for RequestSource {
     fn is_alive(&self) -> bool {
         !self.input.is_closed()
     }
@@ -1638,8 +1640,8 @@ impl Agent for Claude {
     fn data_recipient(&self) -> &'static str {
         "Anthropic"
     }
-    fn running_input(&self) -> crate::host_rpc::submission::RunningInput {
-        crate::host_rpc::submission::RunningInput::Queue
+    fn running_input(&self) -> crate::providers::RunningInput {
+        crate::providers::RunningInput::Queue
     }
     fn capabilities(&self) -> agent_protocol::session::Capabilities {
         agent_protocol::session::Capabilities {
@@ -1778,11 +1780,11 @@ impl Agent for Claude {
     async fn submit(
         &self,
         input: &op::Submission,
-        route: crate::host_rpc::submission::SubmissionTarget<'_>,
+        route: crate::providers::SubmissionTarget<'_>,
         _reload: bool,
         browser: Option<Value>,
     ) -> Result<op::SubmissionReceipt, Failure> {
-        use crate::host_rpc::submission::SubmissionTarget;
+        use crate::providers::SubmissionTarget;
         let turn_id = match route {
             SubmissionTarget::Steer(_) => {
                 return Err(Failure::new(
@@ -2203,7 +2205,7 @@ mod execution_tests {
         let consumer = router.clone();
         tokio::spawn(async move {
             while let Some(event) = receiver.recv().await {
-                let result = event.change.apply(&consumer, &[]);
+                let result = consumer.apply(event.change, &[]);
                 if let Some(applied) = event.applied {
                     let _ = applied.send(result);
                 }

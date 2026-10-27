@@ -1,16 +1,138 @@
-//! Bex's native provider boundary.
-use super::{requests::RequestOrigin, routing::SessionRouter, service::Failure};
+//! Native provider boundary. Providers translate their protocols into these
+//! values; the Host owns routing, conversations and client-facing state.
+pub mod codex;
+pub mod deepseek;
+pub(crate) mod requests;
+pub use crate::claude::Claude;
+
+use crate::dictation::Dictation;
+use agent_protocol::session::ProviderKind;
 use agent_protocol::{
     composer::ComposerCatalog,
     ids::TurnId,
     models::{Empty, Item, Thread, ThreadResponse},
     operations as op,
     permissions::{PermissionMode, PermissionSettings},
+    requests::{Answer, RequestBody},
     session::{Capabilities, SessionRef},
 };
 use futures_util::{Stream, StreamExt, future::BoxFuture};
 use serde_json::Value;
 use std::{path::Path, sync::Arc};
+
+#[derive(Debug, Clone, serde::Serialize, thiserror::Error)]
+#[error("{message}")]
+pub(crate) struct Failure {
+    pub(crate) code: &'static str,
+    pub(crate) message: String,
+    pub(crate) delivery: agent_protocol::error::Delivery,
+    pub(crate) execution: Option<Box<agent_protocol::execution::ExecutionError>>,
+}
+impl From<Failure> for agent_protocol::error::RpcFailure {
+    fn from(error: Failure) -> Self {
+        Self {
+            code: error.code.into(),
+            message: error.message,
+            delivery: error.delivery,
+            execution: error.execution,
+        }
+    }
+}
+impl From<agent_transport::peer::RpcMessageError> for Failure {
+    fn from(error: agent_transport::peer::RpcMessageError) -> Self {
+        Self::new("invalid_params", error)
+    }
+}
+
+impl From<serde_json::Error> for Failure {
+    fn from(error: serde_json::Error) -> Self {
+        Self::new("invalid_params", error)
+    }
+}
+
+impl Failure {
+    pub(crate) fn before_submission(mut self) -> Self {
+        self.delivery = agent_protocol::error::Delivery::NotSent;
+        self
+    }
+    pub(crate) fn unknown(code: &'static str, error: impl std::fmt::Display) -> Self {
+        Self {
+            code,
+            message: format!("{error:#}"),
+            delivery: agent_protocol::error::Delivery::Unknown,
+            execution: None,
+        }
+    }
+    pub(crate) fn new(code: &'static str, error: impl std::fmt::Display) -> Self {
+        Self {
+            code,
+            message: format!("{error:#}"),
+            delivery: agent_protocol::error::Delivery::NotSent,
+            execution: None,
+        }
+    }
+}
+
+pub struct Backend {
+    pub(crate) provider: ProviderKind,
+    pub(crate) agent: Result<Arc<dyn Agent>, Failure>,
+    pub(crate) dictation: Option<Dictation>,
+}
+
+impl Backend {
+    pub fn unavailable(provider: ProviderKind, error: impl std::fmt::Display) -> Self {
+        Self {
+            provider,
+            agent: Err(Failure::new("provider_unavailable", error)),
+            dictation: None,
+        }
+    }
+}
+
+impl From<Claude> for Backend {
+    fn from(agent: Claude) -> Self {
+        Self {
+            provider: ProviderKind::Claude,
+            agent: Ok(Arc::new(agent)),
+            dictation: None,
+        }
+    }
+}
+
+/// The Host keeps normalized requests and source identity. The adapter owns
+/// answer mappings and the resource to which an answer can be written.
+#[async_trait::async_trait]
+pub(crate) trait AnswerSource: Send + Sync {
+    fn is_alive(&self) -> bool;
+    async fn prepare(
+        &self,
+        native_id: &Value,
+        body: &RequestBody,
+        answer: &Answer,
+    ) -> Result<AnswerWrite, Failure>;
+}
+#[derive(Clone)]
+pub(crate) struct RequestOrigin {
+    pub instance: uuid::Uuid,
+    pub native_id: Value,
+    pub provider: ProviderKind,
+    pub source: Arc<dyn AnswerSource>,
+}
+
+/// The Host chooses the input route after reading native state and overlaying
+/// its live execution; providers execute it. Client caches never choose a route.
+#[derive(Debug, PartialEq)]
+pub(crate) enum SubmissionTarget<'a> {
+    Steer(&'a str),
+    Queue,
+    Start { cwd: &'a str },
+}
+/// How a provider accepts additional input while a turn is running.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum RunningInput {
+    SteerOrQueue,
+    Queue,
+}
 
 pub(crate) struct SessionSummary {
     pub thread: Thread,
@@ -88,7 +210,7 @@ pub(crate) fn session_pages<'a>(
     .fuse()
 }
 
-pub(super) async fn read_session_page(
+pub(crate) async fn read_session_page(
     read: impl Future<Output = Result<SessionPage, Failure>>,
     deadline: tokio::time::Instant,
 ) -> Result<SessionPage, Failure> {
@@ -174,7 +296,7 @@ pub(crate) trait Agent: Identity {
         ))
     }
     fn data_recipient(&self) -> &'static str;
-    fn running_input(&self) -> super::submission::RunningInput;
+    fn running_input(&self) -> RunningInput;
     fn capabilities(&self) -> Capabilities;
     fn availability(&self) -> Result<(), Failure>;
     /// Reject creation before the Host creates a workspace. Some adapters can
@@ -230,7 +352,7 @@ pub(crate) trait Agent: Identity {
     async fn submit(
         &self,
         input: &op::Submission,
-        route: super::submission::SubmissionTarget<'_>,
+        route: SubmissionTarget<'_>,
         reload: bool,
         browser: Option<Value>,
     ) -> Result<op::SubmissionReceipt, Failure>;
@@ -301,35 +423,35 @@ pub(crate) struct AgentEvent {
     pub change: AgentChange,
     pub applied: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
 }
-impl AgentChange {
-    pub fn apply(
-        self,
-        router: &SessionRouter,
-        bindings: &[(SessionRef, agent_protocol::session::ProviderKind)],
-    ) -> Result<(), String> {
-        match self {
-            Self::TaskParent { session, parent } => router.task_parent(session, parent),
-            Self::Session { session, change } => router.session_change(&session, change),
-            Self::Request {
-                session,
-                origin,
-                request,
-            } => return router.request(session, origin, request),
-            Self::Resolved {
-                instance,
-                native_id,
-            } => router.resolve_native_request(instance, &native_id),
-            Self::SourceClosed(instance) => router.close_request_source(instance),
-            Self::Renamed { session, name } => {
-                router.broadcast(agent_protocol::protocol::Notification::SessionRenamed {
-                    session,
-                    name,
-                    revision: 0,
-                })
-            }
-            Self::Stopped { provider, reason } => router.fail_provider(provider, &reason, bindings),
+#[cfg(test)]
+pub(crate) fn unavailable_origin(
+    instance: uuid::Uuid,
+    native_id: Value,
+    stopped: tokio_util::sync::CancellationToken,
+) -> RequestOrigin {
+    struct UnavailableSource(tokio_util::sync::CancellationToken);
+    #[async_trait::async_trait]
+    impl AnswerSource for UnavailableSource {
+        fn is_alive(&self) -> bool {
+            !self.0.is_cancelled()
         }
-        Ok(())
+        async fn prepare(
+            &self,
+            _: &Value,
+            _: &RequestBody,
+            _: &Answer,
+        ) -> Result<AnswerWrite, Failure> {
+            Err(Failure::new(
+                "answer_not_sent",
+                "request source has changed",
+            ))
+        }
+    }
+    RequestOrigin {
+        instance,
+        native_id,
+        provider: agent_protocol::session::ProviderKind::Codex,
+        source: std::sync::Arc::new(UnavailableSource(stopped)),
     }
 }
 pub(crate) async fn emit(
@@ -449,7 +571,7 @@ mod tests {
         }
     }
 
-    async fn two_session_history() -> (tempfile::TempDir, crate::adapters::Claude, Vec<String>) {
+    async fn two_session_history() -> (tempfile::TempDir, Claude, Vec<String>) {
         let root = tempfile::tempdir().unwrap();
         let native = root.path().join("native");
         let transcripts = native.join("projects/shared");
@@ -462,7 +584,7 @@ mod tests {
             std::fs::write(transcripts.join(format!("{id}.jsonl")), format!("{user}\n")).unwrap();
         }
         expected.sort();
-        let agent = crate::adapters::Claude::load(
+        let agent = Claude::load(
             root.path().join("missing-cli"),
             root.path().join("state"),
             Some(native),

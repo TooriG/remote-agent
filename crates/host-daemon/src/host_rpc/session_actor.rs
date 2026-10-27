@@ -5,7 +5,7 @@ use agent_protocol::models::Thread;
 pub(super) struct SessionActor {
     pub(super) timeline: agent_protocol::session::Timeline,
     pub(super) request_origins:
-        std::collections::BTreeMap<agent_protocol::ids::RequestId, super::requests::RequestOrigin>,
+        std::collections::BTreeMap<agent_protocol::ids::RequestId, crate::providers::RequestOrigin>,
     pub(super) leases: usize,
     pub(super) submission_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
     pub(super) subscriptions: std::collections::HashMap<

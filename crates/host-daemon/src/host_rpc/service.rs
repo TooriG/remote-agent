@@ -7,12 +7,12 @@ use agent_protocol::models::Thread;
 
 use agent_protocol::models::ThreadResponse;
 
-use crate::adapters::Backend;
+use crate::providers::Backend;
 use agent_protocol::protocol::{Body, Call, Response};
-use agent_transport::peer::RpcMessageError;
-use serde::Serialize;
 
-use super::agent::{Agent, Identity, SessionListScope, read_session_page, session_pages};
+use crate::providers::{
+    Agent, Failure, Identity, SessionListScope, read_session_page, session_pages,
+};
 use futures_util::{StreamExt, TryStreamExt};
 use std::collections::HashMap;
 
@@ -25,59 +25,6 @@ mod project_import;
 // Finish discovery before the client's request deadline, even when a native
 // provider is still initializing. Healthy providers must remain usable.
 const MODEL_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
-
-#[derive(Debug, Clone, Serialize, thiserror::Error)]
-#[error("{message}")]
-pub(crate) struct Failure {
-    pub(crate) code: &'static str,
-    pub(crate) message: String,
-    pub(crate) delivery: agent_protocol::error::Delivery,
-    pub(crate) execution: Option<Box<agent_protocol::execution::ExecutionError>>,
-}
-impl From<Failure> for agent_protocol::error::RpcFailure {
-    fn from(error: Failure) -> Self {
-        Self {
-            code: error.code.into(),
-            message: error.message,
-            delivery: error.delivery,
-            execution: error.execution,
-        }
-    }
-}
-impl From<RpcMessageError> for Failure {
-    fn from(error: RpcMessageError) -> Self {
-        Self::new("invalid_params", error)
-    }
-}
-
-impl From<serde_json::Error> for Failure {
-    fn from(error: serde_json::Error) -> Self {
-        Self::new("invalid_params", error)
-    }
-}
-
-impl Failure {
-    pub(crate) fn before_submission(mut self) -> Self {
-        self.delivery = agent_protocol::error::Delivery::NotSent;
-        self
-    }
-    pub(crate) fn unknown(code: &'static str, error: impl std::fmt::Display) -> Self {
-        Self {
-            code,
-            message: format!("{error:#}"),
-            delivery: agent_protocol::error::Delivery::Unknown,
-            execution: None,
-        }
-    }
-    pub(crate) fn new(code: &'static str, error: impl std::fmt::Display) -> Self {
-        Self {
-            code,
-            message: format!("{error:#}"),
-            delivery: agent_protocol::error::Delivery::NotSent,
-            execution: None,
-        }
-    }
-}
 
 #[derive(Clone)]
 pub struct HostRpcService {
@@ -263,7 +210,7 @@ impl HostRpcService {
             combined.error = (!errors.is_empty()).then(|| errors.join("\n"));
             return Ok(combined.into());
         }
-        use super::agent::{AccountCommand as Command, AccountReply};
+        use crate::providers::{AccountCommand as Command, AccountReply};
         let (provider, command) = match request {
             Call::StartAccountLogin(p) => (p.provider, Command::StartLogin),
             Call::SelectAccount(p) => (p.provider, Command::Select { id: p.id }),
@@ -609,7 +556,7 @@ impl HostRpcService {
         )
         .map_err(|e| Failure::new("submission_unavailable", e))?;
         let mut reload = state.needs_reload;
-        if let super::submission::SubmissionTarget::Start { cwd } = route
+        if let crate::providers::SubmissionTarget::Start { cwd } = route
             && let Some(directory) = self
                 .inner
                 .worktrees
@@ -1659,7 +1606,7 @@ impl HostRpcService {
                         .iter()
                         .any(|summary| summary.thread.id == response.thread.id)
                 {
-                    page.data.push(super::agent::SessionSummary {
+                    page.data.push(crate::providers::SessionSummary {
                         branch: response.thread.git_branch.clone(),
                         thread: response.thread,
                     });
@@ -1955,7 +1902,7 @@ impl HostRpcService {
                             };
                             let bindings = if matches!(
                                 event.change,
-                                super::agent::AgentChange::Stopped { .. }
+                                crate::providers::AgentChange::Stopped { .. }
                             ) {
                                 inner.conversations.active_bindings()
                             } else {
@@ -1970,7 +1917,7 @@ impl HostRpcService {
                                 })
                                 .map_err(|error| error.to_string())
                                 .and_then(|(bindings, event)| {
-                                    event.map_or(Ok(()), |event| event.apply(&router, &bindings))
+                                    event.map_or(Ok(()), |event| router.apply(event, &bindings))
                                 });
                             if let Some(applied) = event.applied {
                                 let _ = applied.send(result);
@@ -2126,7 +2073,7 @@ mod tests {
             let user = serde_json::json!({"type":"user","sessionId":id,"cwd":cwd,"message":{"content":"hello"}});
             std::fs::write(transcripts.join(format!("{id}.jsonl")), format!("{user}\n")).unwrap();
         }
-        let agent = crate::adapters::Claude::load(
+        let agent = crate::providers::Claude::load(
             root.path().join("missing-cli"),
             root.path().join("state"),
             Some(native),
@@ -2172,7 +2119,7 @@ mod tests {
         let state = root.join("bex-worktrees.json");
         std::fs::write(state.with_file_name("bex-projects.json"), "{").unwrap();
         let service = HostRpcService::new(
-            [crate::adapters::codex::Codex::new(Err("provider is offline".into())).into()],
+            [crate::providers::codex::Codex::new(Err("provider is offline".into())).into()],
             ProjectStore::new(state),
         );
         let params = op::ReadListDecorations {
@@ -2218,7 +2165,7 @@ mod tests {
             expected.push(id.to_string());
         }
         std::fs::write(native.join(".claude.json"), "{").unwrap();
-        let claude = crate::adapters::Claude::load(
+        let claude = crate::providers::Claude::load(
             root.path().join("missing-cli"),
             root.path().join("state"),
             Some(native.clone()),
@@ -2329,7 +2276,7 @@ mod tests {
         };
         let directory = tempfile::tempdir().unwrap();
         let service = HostRpcService::new(
-            [crate::adapters::codex::Codex::new(Err("provider is offline".into())).into()],
+            [crate::providers::codex::Codex::new(Err("provider is offline".into())).into()],
             ProjectStore::new(directory.path().join("projects.json")),
         );
         let connection = service.open_session();
@@ -2448,7 +2395,7 @@ mod tests {
         let program = root.path().join("native-cli.exe");
         std::fs::write(&program, []).unwrap();
         let configure = || {
-            crate::adapters::Claude::load(
+            crate::providers::Claude::load(
                 program.clone(),
                 directory.clone(),
                 Some(root.path().join("native")),
@@ -2505,7 +2452,7 @@ mod tests {
         };
         use futures_util::FutureExt;
         let root = tempfile::tempdir().unwrap();
-        let claude = crate::adapters::Claude::load(
+        let claude = crate::providers::Claude::load(
             root.path().join("unused-cli"),
             root.path().join("claude"),
             Some(root.path().join("native")),
@@ -2533,7 +2480,7 @@ mod tests {
             thread.requests.get(id).map(|request| request.delivery)
         };
         for native in ["cancelled", "interrupted", "written"] {
-            let adapted = crate::adapters::requests::claude(
+            let adapted = crate::providers::requests::claude(
                 uuid::Uuid::new_v4().to_string().into(),
                 &"unrelated".into(),
                 &crate::claude::SdkRequest::Elicitation {
@@ -2639,7 +2586,7 @@ mod tests {
                 ProviderKind::Codex
             };
             let backend = if claude {
-                crate::adapters::Claude::load(
+                crate::providers::Claude::load(
                     root.path().join("unused-cli"),
                     root.path().join("claude"),
                     Some(root.path().join("native")),
@@ -2660,9 +2607,9 @@ mod tests {
             let (input, mut receiver) = tokio::sync::mpsc::channel(1);
             let stopped = tokio_util::sync::CancellationToken::new();
             let adapted = if claude {
-                crate::adapters::requests::claude("request".into(), &"turn".into(), &crate::claude::SdkRequest::Elicitation { server_name: String::new(), message: String::new(), mode: None, url: None, requested_schema: Some(serde_json::json!({"type":"object","properties":{}})) })
+                crate::providers::requests::claude("request".into(), &"turn".into(), &crate::claude::SdkRequest::Elicitation { server_name: String::new(), message: String::new(), mode: None, url: None, requested_schema: Some(serde_json::json!({"type":"object","properties":{}})) })
             } else {
-                crate::adapters::requests::codex("request".into(),"mcpServer/elicitation/request",&serde_json::json!({"mode":"form","requestedSchema":{"type":"object","properties":{}}}))
+                crate::providers::requests::codex("request".into(),"mcpServer/elicitation/request",&serde_json::json!({"mode":"form","requestedSchema":{"type":"object","properties":{}}}))
             }.unwrap();
             let id = adapted.request.id.clone();
             let instance = uuid::Uuid::new_v4();
@@ -2674,11 +2621,7 @@ mod tests {
             let origin = if claude {
                 crate::claude::request_origin(instance, native_id.clone(), input, adapted.answers)
             } else {
-                super::super::requests::unavailable_origin(
-                    instance,
-                    native_id.clone(),
-                    stopped.clone(),
-                )
+                crate::providers::unavailable_origin(instance, native_id.clone(), stopped.clone())
             };
             service
                 .inner
@@ -2754,7 +2697,7 @@ mod tests {
     async fn provider_capabilities_are_checked_before_provider_availability() {
         use super::*;
         let root = tempfile::tempdir().unwrap();
-        let claude = crate::adapters::Claude::load(
+        let claude = crate::providers::Claude::load(
             root.path().join("missing-claude"),
             root.path().join("claude"),
             Some(root.path().join("native")),
@@ -2829,7 +2772,7 @@ mod tests {
         for workspace in &workspaces {
             projects.register(workspace).await.unwrap();
         }
-        let claude = crate::adapters::Claude::load(
+        let claude = crate::providers::Claude::load(
             root.path().join("does-not-exist"),
             root.path().join("state"),
             Some(native),
@@ -2974,7 +2917,7 @@ mod tests {
         let native = root.path().join("native");
         let project = native.join("projects/example");
         std::fs::create_dir_all(&project).unwrap();
-        let claude = crate::adapters::Claude::load(
+        let claude = crate::providers::Claude::load(
             root.path().join("unused-cli"),
             root.path().join("state"),
             Some(native),
@@ -3070,7 +3013,7 @@ mod tests {
             include_str!("../../tests/fixtures/claude-2.1.266.jsonl"),
         )
         .unwrap();
-        let claude = crate::adapters::Claude::load(
+        let claude = crate::providers::Claude::load(
             root.path().join("does-not-exist"),
             root.path().join("state"),
             Some(native),
@@ -3160,7 +3103,7 @@ mod tests {
         .await
         .unwrap();
         let harness =
-            crate::adapters::deepseek::DeepSeek::load("dsh".into(), root.path().join("harness"))
+            crate::providers::deepseek::DeepSeek::load("dsh".into(), root.path().join("harness"))
                 .await
                 .unwrap();
         let service = super::HostRpcService::new(

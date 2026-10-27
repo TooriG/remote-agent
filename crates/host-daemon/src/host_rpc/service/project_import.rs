@@ -264,7 +264,7 @@ mod tests {
             let user = serde_json::json!({"type":"user","sessionId":id,"cwd":cwd,"message":{"content":"native conversation"}});
             std::fs::write(transcripts.join(format!("{id}.jsonl")), format!("{user}\n")).unwrap();
         }
-        let agent = crate::adapters::Claude::load(
+        let agent = crate::providers::Claude::load(
             root.path().join("missing-cli"),
             root.path().join("state"),
             Some(native),

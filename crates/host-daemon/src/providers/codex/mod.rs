@@ -8,7 +8,7 @@ pub(crate) mod native;
 mod permissions;
 mod usage;
 
-use crate::host_rpc::service::Failure;
+use crate::providers::Failure;
 use agent_protocol::{
     models::{Item, ThreadResponse},
     operations as op,
@@ -41,7 +41,7 @@ struct ThreadListParams<'a> {
     pub cursor: Option<String>,
 }
 
-use crate::host_rpc::agent::{
+use crate::providers::{
     Agent, AgentChange, AgentEvent, AnswerWrite, Identity, SessionListScope, SessionPage,
     SessionSummary, SubmissionState, emit,
 };
@@ -74,7 +74,7 @@ fn unmaterialized_history(code: Option<&str>, message: &str, thread_id: &str) ->
 
 pub struct Codex {
     cli: cli::Updater,
-    accounts: Arc<tokio::sync::Mutex<Option<crate::adapters::codex::accounts::Accounts>>>,
+    accounts: Arc<tokio::sync::Mutex<Option<crate::providers::codex::accounts::Accounts>>>,
     list_access: tokio::sync::Semaphore,
     restoration_error: tokio::sync::watch::Sender<Option<String>>,
     directory: PathBuf,
@@ -143,7 +143,7 @@ impl Codex {
         directory: PathBuf,
         config: codex_app_server::AppServerConfig,
     ) -> Result<(), String> {
-        let accounts = crate::adapters::codex::accounts::Accounts::load(
+        let accounts = crate::providers::codex::accounts::Accounts::load(
             directory,
             config,
             self.server().map_err(|error| error.to_string())?,
@@ -518,16 +518,16 @@ struct NativeRequest {
 struct RequestSource {
     process: Arc<CodexAppServer>,
     stopped: tokio_util::sync::CancellationToken,
-    answers: crate::adapters::requests::NativeAnswers,
+    answers: crate::providers::requests::NativeAnswers,
 }
 pub(crate) fn request_origin(
     instance: uuid::Uuid,
     native_id: Value,
     stopped: tokio_util::sync::CancellationToken,
     process: Arc<CodexAppServer>,
-    answers: crate::adapters::requests::NativeAnswers,
-) -> crate::host_rpc::requests::RequestOrigin {
-    crate::host_rpc::requests::RequestOrigin {
+    answers: crate::providers::requests::NativeAnswers,
+) -> crate::providers::RequestOrigin {
+    crate::providers::RequestOrigin {
         instance,
         native_id,
         provider: ProviderKind::Codex,
@@ -539,7 +539,7 @@ pub(crate) fn request_origin(
     }
 }
 #[async_trait::async_trait]
-impl crate::host_rpc::requests::AnswerSource for RequestSource {
+impl crate::providers::AnswerSource for RequestSource {
     fn is_alive(&self) -> bool {
         !self.stopped.is_cancelled()
     }
@@ -580,7 +580,7 @@ fn request_change(
         .ok_or("request session ID is missing")?
         .to_owned();
     let session = SessionRef::new(ProviderKind::Codex, id).map_err(str::to_owned)?;
-    let adapted = crate::adapters::requests::codex(
+    let adapted = crate::providers::requests::codex(
         uuid::Uuid::new_v4().to_string().into(),
         &native.method,
         &params,
@@ -607,8 +607,8 @@ impl Identity for Codex {
     }
     async fn account(
         &self,
-        command: crate::host_rpc::agent::AccountCommand,
-    ) -> Result<crate::host_rpc::agent::AccountReply, Failure> {
+        command: crate::providers::AccountCommand,
+    ) -> Result<crate::providers::AccountReply, Failure> {
         let mut accounts = self.accounts.lock().await;
         accounts
             .as_mut()
@@ -638,8 +638,8 @@ impl Agent for Codex {
     fn data_recipient(&self) -> &'static str {
         "OpenAI"
     }
-    fn running_input(&self) -> crate::host_rpc::submission::RunningInput {
-        crate::host_rpc::submission::RunningInput::SteerOrQueue
+    fn running_input(&self) -> crate::providers::RunningInput {
+        crate::providers::RunningInput::SteerOrQueue
     }
     fn capabilities(&self) -> agent_protocol::session::Capabilities {
         agent_protocol::session::Capabilities {
@@ -926,11 +926,11 @@ impl Agent for Codex {
     async fn submit(
         &self,
         input: &op::Submission,
-        route: crate::host_rpc::submission::SubmissionTarget<'_>,
+        route: crate::providers::SubmissionTarget<'_>,
         reload: bool,
         browser: Option<Value>,
     ) -> Result<op::SubmissionReceipt, Failure> {
-        use crate::host_rpc::submission::SubmissionTarget;
+        use crate::providers::SubmissionTarget;
         let mut params = serde_json::json!({
             "threadId": input.thread_id.id,
             "clientUserMessageId": input.client_user_message_id,
@@ -1303,7 +1303,7 @@ mod tests {
                 super::event_change(uuid::Uuid::nil(), &super::RpcMessage::parse(&line).unwrap())
                     .unwrap()
             {
-                change.apply(&router, &[]).unwrap();
+                router.apply(change, &[]).unwrap();
             }
             assert!(connection.recv().now_or_never().is_none());
         }

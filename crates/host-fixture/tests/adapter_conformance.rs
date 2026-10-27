@@ -287,12 +287,12 @@ async fn setup_catalog_isolates_stalled_native_providers(
             .await
             .unwrap(),
     );
-    let codex = host_daemon::adapters::codex::Codex::new(Ok(server.clone()));
+    let codex = host_daemon::providers::codex::Codex::new(Ok(server.clone()));
     codex
         .enable_accounts(root.join("accounts"), config)
         .await
         .unwrap();
-    let claude = host_daemon::adapters::Claude::load(
+    let claude = host_daemon::providers::Claude::load(
         Path::new(env!("CARGO_BIN_EXE_bex-claude-fixture")).to_owned(),
         root.join("claude"),
         Some(claude_home.clone()),

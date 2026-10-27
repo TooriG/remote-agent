@@ -1,19 +1,7 @@
 //! Host input-routing decisions. Clients submit intent without choosing native operations.
+use crate::providers::{RunningInput, SubmissionTarget};
 use agent_protocol::models::SessionStatus;
 
-/// Pure execution decision used by the Host after reading native state and
-/// overlaying its live execution. Client caches never choose an input route.
-#[derive(Debug, PartialEq)]
-pub(crate) enum SubmissionTarget<'a> {
-    Steer(&'a str),
-    Queue,
-    Start { cwd: &'a str },
-}
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum RunningInput {
-    SteerOrQueue,
-    Queue,
-}
 pub(super) fn submission_target<'a>(
     status: SessionStatus,
     running_turn: Option<&'a str>,

@@ -464,7 +464,7 @@ mod tests {
                 .await
                 .unwrap();
             let service = HostRpcService::new(
-                std::iter::empty::<crate::adapters::Backend>(),
+                std::iter::empty::<crate::providers::Backend>(),
                 crate::ProjectStore::new(directory.path().join("projects.json")),
             );
             let runtime = Arc::new(

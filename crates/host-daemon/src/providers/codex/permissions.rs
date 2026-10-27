@@ -1,6 +1,6 @@
 //! The native user config owns permissions. Nothing is added to turn requests.
 use super::Codex;
-use crate::host_rpc::service::Failure;
+use crate::providers::Failure;
 use agent_protocol::permissions::{PermissionMode, PermissionSettings};
 use serde::Deserialize;
 use serde_json::{Value, json};

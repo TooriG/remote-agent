@@ -1,5 +1,4 @@
 mod account_usage;
-pub mod adapters;
 mod apns;
 pub mod browser;
 mod claude;
@@ -11,6 +10,7 @@ mod host_runtime;
 pub mod local_host;
 pub mod platform;
 mod projects;
+pub mod providers;
 mod terminals;
 mod workspace_files;
 mod workspace_review;

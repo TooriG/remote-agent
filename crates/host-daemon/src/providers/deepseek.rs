@@ -1,13 +1,9 @@
 //! DeepSeek Harness owns inference, tools, credentials and native sessions.
 //! BEX speaks its standard ACP v1 stdio interface and checkpoints display state.
-use crate::host_rpc::{
-    agent::{
-        AccountCommand, AccountReply, Agent, AgentChange, AgentEvent, Identity, SessionListScope,
-        SessionPage, SessionSummary, SubmissionState, emit,
-    },
-    requests::{AnswerSource, RequestOrigin},
-    service::Failure,
-    submission::{RunningInput, SubmissionTarget},
+use crate::providers::{
+    AccountCommand, AccountReply, Agent, AgentChange, AgentEvent, AnswerSource, Failure, Identity,
+    RequestOrigin, RunningInput, SessionListScope, SessionPage, SessionSummary, SubmissionState,
+    SubmissionTarget, emit,
 };
 use agent_protocol::{
     composer::ComposerCatalog,
@@ -1379,7 +1375,7 @@ mod tests {
         // A concurrent initialization holds the same lock. Model discovery
         // must bound this wait too, not just the eventual ACP request.
         let _initializing = adapter.0.rpc.lock().await;
-        let claude = crate::adapters::Claude::load(
+        let claude = crate::providers::Claude::load(
             root.path().join("missing-claude"),
             root.path().join("claude"),
             Some(root.path().join("native")),
@@ -1388,7 +1384,7 @@ mod tests {
         .unwrap();
         let service = crate::host_rpc::HostRpcService::new(
             [
-                crate::adapters::Backend::unavailable(ProviderKind::Codex, "offline"),
+                crate::providers::Backend::unavailable(ProviderKind::Codex, "offline"),
                 claude.into(),
                 adapter.clone().into(),
             ],

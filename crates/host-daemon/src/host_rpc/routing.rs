@@ -1,4 +1,5 @@
-use super::{requests::RequestOrigin, session_actor::SessionActor};
+use super::session_actor::SessionActor;
+use crate::providers::{AgentChange, Failure, RequestOrigin};
 use agent_protocol::live_activity::TaskState;
 use agent_protocol::{
     models::{Thread, ThreadResponse},
@@ -290,6 +291,38 @@ fn publish_task_activity(
 }
 
 impl SessionRouter {
+    /// Apply one routed provider change to live sessions and subscribers.
+    pub(crate) fn apply(
+        &self,
+        change: AgentChange,
+        bindings: &[(SessionRef, ProviderKind)],
+    ) -> Result<(), String> {
+        match change {
+            AgentChange::TaskParent { session, parent } => self.task_parent(session, parent),
+            AgentChange::Session { session, change } => self.session_change(&session, change),
+            AgentChange::Request {
+                session,
+                origin,
+                request,
+            } => return self.request(session, origin, request),
+            AgentChange::Resolved {
+                instance,
+                native_id,
+            } => self.resolve_native_request(instance, &native_id),
+            AgentChange::SourceClosed(instance) => self.close_request_source(instance),
+            AgentChange::Renamed { session, name } => {
+                self.broadcast(Notification::SessionRenamed {
+                    session,
+                    name,
+                    revision: 0,
+                })
+            }
+            AgentChange::Stopped { provider, reason } => {
+                self.fail_provider(provider, &reason, bindings)
+            }
+        }
+        Ok(())
+    }
     pub(super) fn set_apns(&self, apns: Option<Arc<crate::apns::Apns>>) {
         lock_state(&self.state).apns = apns;
     }
@@ -535,12 +568,7 @@ impl SessionRouter {
         receipt
     }
 
-    pub(super) fn begin_submission(
-        &self,
-        target: &SessionRef,
-        id: &str,
-    ) -> Result<(), super::service::Failure> {
-        use super::service::Failure;
+    pub(super) fn begin_submission(&self, target: &SessionRef, id: &str) -> Result<(), Failure> {
         if id.is_empty() || id.len() > 256 {
             return Err(Failure::new(
                 "invalid_params",
@@ -1836,7 +1864,7 @@ mod tests {
         let target = SessionRef::new(ProviderKind::Claude, "native".into()).unwrap();
         let (input, _receiver) = tokio::sync::mpsc::channel(1);
         let instance = uuid::Uuid::new_v4();
-        let adapted = crate::adapters::requests::claude(
+        let adapted = crate::providers::requests::claude(
             "request".into(),
             &"turn".into(),
             &crate::claude::SdkRequest::Elicitation {
@@ -1874,7 +1902,7 @@ mod tests {
         let _read = open(&router, "native");
         let instance = uuid::Uuid::new_v4();
         let request = || {
-            crate::adapters::requests::codex(
+            crate::providers::requests::codex(
                 "request".into(),
                 "item/commandExecution/requestApproval",
                 &json!({"turnId":"wanted","itemId":"tool","availableDecisions":["accept","decline"]}),
@@ -1885,7 +1913,7 @@ mod tests {
         let register = || {
             router.request(
                 target.clone(),
-                super::super::requests::unavailable_origin(
+                crate::providers::unavailable_origin(
                     instance,
                     json!("native-request"),
                     Default::default(),
@@ -2464,14 +2492,14 @@ fn identical_native_request_ids_keep_their_source_instance() {
             },
         );
         let adapted = if provider == ProviderKind::Codex {
-            crate::adapters::requests::codex(
+            crate::providers::requests::codex(
                 uuid::Uuid::new_v4().to_string().into(),
                 "item/commandExecution/requestApproval",
                 &serde_json::json!({"turnId":"turn","availableDecisions":["accept","decline"]}),
             )
             .unwrap()
         } else {
-            crate::adapters::requests::claude(
+            crate::providers::requests::claude(
                 uuid::Uuid::new_v4().to_string().into(),
                 &"turn".into(),
                 &crate::claude::SdkRequest::Tool {
@@ -2485,7 +2513,7 @@ fn identical_native_request_ids_keep_their_source_instance() {
         let request_id = adapted.request.id.clone();
         let choice_id = adapted.request.body.choices()[0].id.clone();
         let origin = if provider == ProviderKind::Codex {
-            super::requests::unavailable_origin(instance, native.clone(), Default::default())
+            crate::providers::unavailable_origin(instance, native.clone(), Default::default())
         } else {
             crate::claude::request_origin(instance, native.clone(), input.clone(), adapted.answers)
         };
@@ -2507,7 +2535,7 @@ fn identical_native_request_ids_keep_their_source_instance() {
         serde_json::json!({"id":1,"method":"serverRequest/resolved","params":{"requestId":native}})
             .to_string();
     assert!(
-        crate::adapters::codex::event_change(
+        crate::providers::codex::event_change(
             requests[0].0,
             &RpcMessage::parse(&malformed).unwrap()
         )
@@ -2516,11 +2544,13 @@ fn identical_native_request_ids_keep_their_source_instance() {
     let resolved =
         serde_json::json!({"method":"serverRequest/resolved","params":{"requestId":native}})
             .to_string();
-    crate::adapters::codex::event_change(requests[0].0, &RpcMessage::parse(&resolved).unwrap())
-        .unwrap()
-        .unwrap()
-        .apply(&router, &[])
-        .unwrap();
+    let change = crate::providers::codex::event_change(
+        requests[0].0,
+        &RpcMessage::parse(&resolved).unwrap(),
+    )
+    .unwrap()
+    .unwrap();
+    router.apply(change, &[]).unwrap();
     assert!(router.request_session(&requests[0].2).is_none());
     for (_, target, id) in &requests[1..] {
         assert_eq!(router.request_session(id).as_ref(), Some(target));

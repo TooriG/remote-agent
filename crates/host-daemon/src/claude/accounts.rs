@@ -1,7 +1,7 @@
 //! Credentials stay in Claude Code's own storage. Only account labels and the
 //! selection are persisted here. Conversation settings and transcripts stay in
 //! the native home; only secure credential storage changes with the account.
-use crate::host_rpc::agent::{AccountCommand, AccountReply};
+use crate::providers::{AccountCommand, AccountReply};
 use agent_protocol::{
     models::Empty,
     operations::{Account, AccountLogin, AccountLoginStatus, AccountSelection},

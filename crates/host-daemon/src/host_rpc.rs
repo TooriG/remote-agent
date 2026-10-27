@@ -1,9 +1,5 @@
-//! Host-owned routing for authenticated clients and independent agent backends.
-//! Backend adapters translate their protocols into the shared conversation API.
-
-pub(crate) mod agent;
+//! Host-owned routing for authenticated clients and independent providers.
 mod conversations;
-pub(crate) mod requests;
 pub(crate) mod routing;
 pub(crate) mod service;
 mod session_actor;

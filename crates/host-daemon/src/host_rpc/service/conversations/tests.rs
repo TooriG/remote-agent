@@ -1,5 +1,5 @@
 use super::*;
-use crate::host_rpc::agent::{
+use crate::providers::{
     AccountCommand, AccountReply, AgentChange, AgentEvent, SessionPage, SessionSummary,
     SubmissionState, emit,
 };
@@ -110,8 +110,8 @@ impl Agent for NativeAgent {
     fn data_recipient(&self) -> &'static str {
         "fixture"
     }
-    fn running_input(&self) -> crate::host_rpc::submission::RunningInput {
-        crate::host_rpc::submission::RunningInput::SteerOrQueue
+    fn running_input(&self) -> crate::providers::RunningInput {
+        crate::providers::RunningInput::SteerOrQueue
     }
     fn capabilities(&self) -> Capabilities {
         Capabilities {
@@ -294,7 +294,7 @@ impl Agent for NativeAgent {
     async fn submit(
         &self,
         input: &op::Submission,
-        _: crate::host_rpc::submission::SubmissionTarget<'_>,
+        _: crate::providers::SubmissionTarget<'_>,
         _: bool,
         _: Option<serde_json::Value>,
     ) -> Result<op::SubmissionReceipt, Failure> {

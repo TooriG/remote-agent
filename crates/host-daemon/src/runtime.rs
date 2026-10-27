@@ -54,8 +54,8 @@ pub(crate) async fn run(config: StartupConfig) -> Result<()> {
         .await
         .context("cannot bind Host endpoint")?;
     let account_directory = config.account_state_dir.as_deref().unwrap_or(&directory);
-    let codex = host_daemon::adapters::codex::Codex::spawn(
-        host_daemon::adapters::codex::Config {
+    let codex = host_daemon::providers::codex::Codex::spawn(
+        host_daemon::providers::codex::Config {
             program: config.codex,
             codex_home: config.codex_home,
             ..Default::default()
@@ -63,7 +63,7 @@ pub(crate) async fn run(config: StartupConfig) -> Result<()> {
         account_directory.join("codex-accounts"),
     )
     .await;
-    let claude = match host_daemon::adapters::Claude::load(
+    let claude = match host_daemon::providers::Claude::load(
         config.claude,
         account_directory.join("claude"),
         config.claude_home,
@@ -73,20 +73,20 @@ pub(crate) async fn run(config: StartupConfig) -> Result<()> {
         Ok(adapter) => adapter.into(),
         Err(error) => {
             tracing::error!(target: "bex", operation = "host.claude", message = %error);
-            host_daemon::adapters::Backend::unavailable(
+            host_daemon::providers::Backend::unavailable(
                 agent_protocol::session::ProviderKind::Claude,
                 error,
             )
         }
     };
-    let deepseek = match host_daemon::adapters::deepseek::DeepSeek::load(
+    let deepseek = match host_daemon::providers::deepseek::DeepSeek::load(
         config.deepseek,
         account_directory.join("deepseek"),
     )
     .await
     {
         Ok(adapter) => adapter.into(),
-        Err(error) => host_daemon::adapters::Backend::unavailable(
+        Err(error) => host_daemon::providers::Backend::unavailable(
             agent_protocol::session::ProviderKind::DeepSeek,
             error,
         ),

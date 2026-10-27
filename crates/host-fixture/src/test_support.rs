@@ -70,7 +70,7 @@ impl HostFixture {
             .await
             .map(Arc::new)
             .map_err(|error| error.to_string());
-        let codex = host_daemon::adapters::codex::Codex::new(server.clone());
+        let codex = host_daemon::providers::codex::Codex::new(server.clone());
         if accounts && server.is_ok() {
             codex
                 .enable_accounts(directory.join("state/accounts"), config)
@@ -79,7 +79,7 @@ impl HostFixture {
         }
         let mut backends = vec![codex.into()];
         if let Some(program) = claude {
-            let backend = match host_daemon::adapters::Claude::load(
+            let backend = match host_daemon::providers::Claude::load(
                 program.to_owned(),
                 directory.join("claude"),
                 Some(directory.join("claude-native")),
@@ -89,7 +89,7 @@ impl HostFixture {
                 Ok(adapter) => adapter.into(),
                 Err(error) => {
                     eprintln!("Claude fixture adapter unavailable: {error:#}");
-                    host_daemon::adapters::Backend::unavailable(
+                    host_daemon::providers::Backend::unavailable(
                         agent_protocol::session::ProviderKind::Claude,
                         error,
                     )

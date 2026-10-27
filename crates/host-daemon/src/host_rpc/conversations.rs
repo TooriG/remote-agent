@@ -1,7 +1,7 @@
 //! A conversation keeps its first native identity as its stable public address.
 //! Provider bindings and ordered native-history ranges belong to the Host. Text
 //! remains in native transcripts; only the exact delivered handoff is copied.
-use super::{agent::AgentChange, service::Failure};
+use crate::providers::{AgentChange, Failure};
 use agent_protocol::{
     handoff::Context, ids::ClientInputId, models::*, operations::SubmissionReceipt, session::*,
 };
