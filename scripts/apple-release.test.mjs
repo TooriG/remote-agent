@@ -13,11 +13,18 @@ test('build numbers advance past source, uploaded Apple builds and published rel
 });
 
 test('processing succeeds only when all three Apple delivery checks are valid', () => {
-  const valid = 'BUILD-STATUS: VALID\nIMPORT-STATUS: VALID\nIS-ON-APP-STORE-CONNECT: true\n';
-  parseBuildStatus(valid);
-  for (const invalid of [valid.replace('BUILD-STATUS: VALID', 'BUILD-STATUS: PROCESSING'), valid.replace('IMPORT-STATUS: VALID', 'IMPORT-STATUS: INVALID'), valid.replace('true', 'false'), 'Upload succeeded']) {
-    assert.throws(() => parseBuildStatus(invalid));
+  const fields = 'BUILD-STATUS: VALID\nIMPORT-STATUS: VALID\nIS-ON-APP-STORE-CONNECT: true\n';
+  // altool's actual text report frames each field with an '=' prefix.
+  for (const valid of [fields, `=======================\n${fields.replace(/^/gm, '=    ')}\n=======================\n`]) {
+    parseBuildStatus(valid);
+    for (const invalid of [valid.replace('BUILD-STATUS: VALID', 'BUILD-STATUS: PROCESSING'), valid.replace('IMPORT-STATUS: VALID', 'IMPORT-STATUS: INVALID'), valid.replace('true', 'false')]) {
+      assert.throws(() => parseBuildStatus(invalid));
+    }
+    for (const key of ['BUILD-STATUS', 'IMPORT-STATUS', 'IS-ON-APP-STORE-CONNECT']) {
+      assert.throws(() => parseBuildStatus(valid.split('\n').filter(line => !line.includes(key)).join('\n')));
+    }
   }
+  assert.throws(() => parseBuildStatus('Upload succeeded'));
 });
 
 test('ASC requests use a valid ES256 signature and never follow pagination to another origin', async () => {

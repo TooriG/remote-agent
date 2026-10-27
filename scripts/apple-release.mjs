@@ -14,7 +14,7 @@ export function nextBuildNumber(sourceVersions, appleVersions, releaseTags) {
 }
 
 export function parseBuildStatus(output) {
-  const status = key => new RegExp(`^\\s*${key}:\\s*(\\S+)`, 'mi').exec(output)?.[1];
+  const status = key => new RegExp(`^\\s*=?\\s*${key}:\\s*(\\S+)`, 'mi').exec(output)?.[1];
   if (status('BUILD-STATUS') !== 'VALID' || status('IMPORT-STATUS') !== 'VALID' || status('IS-ON-APP-STORE-CONNECT') !== 'true') {
     throw new Error('Apple has not confirmed a VALID imported build on App Store Connect.');
   }
