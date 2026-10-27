@@ -1,7 +1,8 @@
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { createPrivateKey, sign } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { join } from 'node:path';
 
 export function nextBuildNumber(sourceVersions, appleVersions, releaseTags) {
   const source = new Set(sourceVersions);
@@ -85,8 +86,16 @@ async function main(command) {
   const required = name => { const value = process.env[name]; if (!value) throw new Error(`${name} is required.`); return value; };
   const planPath = 'target/apple-release/plan.json';
   if (command === 'record-delivery') {
+    const directory = process.argv[3];
+    const marker = process.argv[4];
+    if (!directory || !marker) throw new Error('record-delivery requires the native temporary directory and upload start marker.');
+    const since = statSync(marker).mtimeMs;
     const plan = JSON.parse(readFileSync(planPath, 'utf8'));
-    const paths = readFileSync('target/apple-release/delivery-logs.txt', 'utf8').trim().split('\n').filter(Boolean);
+    // Inspect only Xcode-owned bundles, without entering protected system folders.
+    const paths = readdirSync(directory, { withFileTypes: true })
+      .filter(entry => entry.isDirectory() && entry.name.endsWith('.xcdistributionlogs'))
+      .map(entry => join(directory, entry.name, 'ContentDelivery.log'))
+      .filter(path => existsSync(path) && statSync(path).mtimeMs > since);
     plan.deliveryId = deliveryId(paths.map(path => readFileSync(path, 'utf8')));
     writeFileSync(planPath, JSON.stringify(plan) + '\n');
     console.log('Xcode delivery receipt recorded.');

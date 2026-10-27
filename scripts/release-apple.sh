@@ -49,5 +49,4 @@ for destination in export upload; do
         -exportOptionsPlist "$options" -allowProvisioningUpdates "${auth[@]}" \
         "OTHER_CODE_SIGN_FLAGS=--keychain $BEX_CODE_SIGN_KEYCHAIN"
 done
-find "${TMPDIR:-/tmp}" "$output" -type f -name ContentDelivery.log -newer "$output/upload-start" -print > "$output/delivery-logs.txt"
-node scripts/apple-release.mjs record-delivery
+node scripts/apple-release.mjs record-delivery "$(/usr/bin/getconf DARWIN_USER_TEMP_DIR)" "$output/upload-start"

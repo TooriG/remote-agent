@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, verify } from 'node:crypto';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { ascClient, deliveryId, distributeBuild, listAll, nextBuildNumber, parseBuildStatus } from './apple-release.mjs';
 
 test('build numbers advance past source, uploaded Apple builds and published releases', () => {
@@ -96,4 +101,47 @@ test('Xcode receipts must identify one unambiguous delivery', () => {
   assert.equal(deliveryId([JSON.stringify({ deliveryUUID: a }), `Delivery ID: ${a}`]), a);
   assert.throws(() => deliveryId(['Upload succeeded']));
   assert.throws(() => deliveryId([`delivery-id: ${a}`, `deliveryUUID = "${b}"`]));
+});
+
+test('receipt recording reads recent Xcode bundles and preserves the plan on ambiguity', () => {
+  const root = mkdtempSync(join(tmpdir(), 'bex-receipt-'));
+  try {
+    const native = join(root, 'native temporary directory');
+    const output = join(root, 'target/apple-release');
+    mkdirSync(native);
+    mkdirSync(output, { recursive: true });
+    const marker = join(output, 'upload-start');
+    writeFileSync(marker, '');
+    const cutoff = new Date('2026-01-02T00:00:00Z');
+    utimesSync(marker, cutoff, cutoff);
+    const a = '12345678-1234-1234-1234-123456789abc';
+    const b = '12345678-1234-1234-1234-123456789abd';
+    const log = (name, id, date) => {
+      const folder = join(native, name);
+      mkdirSync(folder, { recursive: true });
+      const path = join(folder, 'ContentDelivery.log');
+      writeFileSync(path, JSON.stringify({ deliveryUUID: id }));
+      utimesSync(path, date, date);
+    };
+    const recent = new Date('2026-01-03T00:00:00Z');
+    log('Bex-current.xcdistributionlogs', a, recent);
+    log('Bex-old.xcdistributionlogs', b, new Date('2026-01-01T00:00:00Z'));
+    log('Bex-at-cutoff.xcdistributionlogs', b, cutoff);
+    log('unrelated', b, recent);
+    log('unrelated/TemporaryItems', b, recent);
+    mkdirSync(join(native, 'Bex-export.xcdistributionlogs'));
+    const planPath = join(output, 'plan.json');
+    const plan = { appId: 'fixture-app', version: '78', sha: 'fixture-source' };
+    writeFileSync(planPath, JSON.stringify(plan));
+    const run = () => spawnSync(process.execPath, [fileURLToPath(new URL('./apple-release.mjs', import.meta.url)),
+      'record-delivery', native, marker], { cwd: root, encoding: 'utf8' });
+    const result = run();
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(readFileSync(planPath)), { ...plan, deliveryId: a });
+    log('Bex-other.xcdistributionlogs', b, recent);
+    assert.notEqual(run().status, 0);
+    assert.deepEqual(JSON.parse(readFileSync(planPath)), { ...plan, deliveryId: a });
+    rmSync(join(native, 'Bex-other.xcdistributionlogs'), { recursive: true });
+    assert.equal(run().status, 0);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
