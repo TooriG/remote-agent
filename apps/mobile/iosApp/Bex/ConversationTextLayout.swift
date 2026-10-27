@@ -24,10 +24,8 @@ final class ConversationTextContainer: UIView {
         textView.scrollsToTop = false
         textView.isEditable = false
         textView.isSelectable = true
-        textView.panGestureRecognizer.isEnabled = false
-        textView.showsVerticalScrollIndicator = false
-        textView.showsHorizontalScrollIndicator = false
-        textView.bounces = false
+        // The conversation owns scrolling; this offset only maps its viewport into the text.
+        textView.isScrollEnabled = false
         textView.backgroundColor = .clear
         textView.contentInsetAdjustmentBehavior = .never
         textView.textContainerInset = .zero
