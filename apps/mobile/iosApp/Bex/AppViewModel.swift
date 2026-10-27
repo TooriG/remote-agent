@@ -54,7 +54,7 @@ final class AppViewModel: ObservableObject {
         }
         pathMonitor.start(queue: DispatchQueue(label: "agent.network-path"))
         do { profiles = try HostProfile.load() } catch { notice = error.localizedDescription }
-        if let id = UserDefaults.standard.string(forKey: "agent.selected-host"),
+        if let id = UserDefaults.standard.string(forKey: "bex.selected-host"),
            profiles.contains(where: { $0.id == id }) {
             selectProfile(id)
         }
@@ -70,7 +70,7 @@ final class AppViewModel: ObservableObject {
         }
         let old = detachStore()
         selectedProfileId = id
-        UserDefaults.standard.set(id, forKey: "agent.selected-host")
+        UserDefaults.standard.set(id, forKey: "bex.selected-host")
         publish(AgentCore.Snapshot.empty())
         let writing = persistenceWrite
         initialization = Task { [weak self] in
@@ -87,7 +87,7 @@ final class AppViewModel: ObservableObject {
             if selectedProfileId == id {
                 let old = detachStore()
                 selectedProfileId = nil
-                UserDefaults.standard.removeObject(forKey: "agent.selected-host")
+                UserDefaults.standard.removeObject(forKey: "bex.selected-host")
                 notice = nil
                 publish(AgentCore.Snapshot.empty())
                 Task { [weak self] in
@@ -220,7 +220,7 @@ final class AppViewModel: ObservableObject {
                     profiles.removeAll { $0.id == id }
                     profiles.append(HostProfile(id: id, name: invitation.hostName, ticket: invitation.endpoint))
                     try HostProfile.save(profiles)
-                    UserDefaults.standard.set(id, forKey: "agent.selected-host")
+                    UserDefaults.standard.set(id, forKey: "bex.selected-host")
                     selectedProfileId = id
                     store = owner
                     recentConversations.removeAll()

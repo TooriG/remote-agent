@@ -27,11 +27,11 @@ impl ProjectStore {
         &self.path
     }
     pub(crate) fn chat_directory(&self) -> PathBuf {
-        self.path.with_file_name("agent-chats")
+        self.path.with_file_name("bex-chats")
     }
 
     async fn read_projects(&self) -> anyhow::Result<Vec<Project>> {
-        match tokio::fs::read(self.path.with_file_name("agent-projects.json")).await {
+        match tokio::fs::read(self.path.with_file_name("bex-projects.json")).await {
             Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
             Err(error) => Err(error.into()),
@@ -68,7 +68,7 @@ impl ProjectStore {
             roots: vec![agent_protocol::models::ProjectRoot { path: path.into() }],
             favicon_png: None,
         });
-        let file = self.path.with_file_name("agent-projects.json");
+        let file = self.path.with_file_name("bex-projects.json");
         let bytes = serde_json::to_vec(&projects)?;
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
             if let Some(parent) = file.parent() {
@@ -132,7 +132,7 @@ mod tests {
     async fn standalone_chat_directory_does_not_become_a_project() {
         let directory = tempfile::tempdir().unwrap();
         let root = dunce::canonicalize(directory.path()).unwrap();
-        let store = ProjectStore::new(root.join("agent-worktrees.json"));
+        let store = ProjectStore::new(root.join("bex-worktrees.json"));
         let chats = store.chat_directory();
         std::fs::create_dir(&chats).unwrap();
         store.register(&chats).await.unwrap();
@@ -143,7 +143,7 @@ mod tests {
             {"id":"mixed","name":"Workspace","roots":[{"path":chats},{"path":workspace}]}
         ]);
         std::fs::write(
-            root.join("agent-projects.json"),
+            root.join("bex-projects.json"),
             serde_json::to_vec(&projects).unwrap(),
         )
         .unwrap();
@@ -168,7 +168,7 @@ mod tests {
         let root = dunce::canonicalize(directory.path()).unwrap();
         let project = root.join("project");
         std::fs::create_dir(&project).unwrap();
-        let store = ProjectStore::new(root.join("agent-worktrees.json"));
+        let store = ProjectStore::new(root.join("bex-worktrees.json"));
         assert!(store.load().await.unwrap().projects.is_empty());
         store.register(&project).await.unwrap();
         store.register(&project).await.unwrap();

@@ -65,7 +65,7 @@ async fn main() {
         .install(&fixture, &directory)
         .unwrap()
     };
-    let projects = directory.join("agent-projects.json");
+    let projects = directory.join("bex-projects.json");
     std::fs::write(&projects,serde_json::to_vec(&serde_json::json!([{"id":"simulator-project","name":"検証プロジェクト","roots":[{"path":workspace}],"createdAt":1,"updatedAt":1}])).unwrap()).unwrap();
     std::fs::write(directory.join("account-fixture.json"), r#"{"type":"chatgpt","email":"desktop@example.invalid","planType":"plus","accountId":"desktop"}"#).unwrap();
     let config = codex_app_server::AppServerConfig {

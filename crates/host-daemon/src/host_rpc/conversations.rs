@@ -68,7 +68,7 @@ impl Conversation {
     }
 
     pub fn source(&self, id: &str) -> Result<(SessionRef, String), Failure> {
-        if id.starts_with("host:") {
+        if id.starts_with("bex:") {
             source(id)
         } else {
             Ok((self.id.clone(), id.into()))
@@ -251,14 +251,14 @@ pub(super) fn inline_context(context: &Context) -> String {
 
 pub(super) fn qualified(session: &SessionRef, id: &str) -> String {
     format!(
-        "host:{}",
+        "bex:{}",
         URL_SAFE_NO_PAD.encode(serde_json::to_vec(&(session, id)).expect("identity serializes"))
     )
 }
 
 pub(super) fn source(id: &str) -> Result<(SessionRef, String), Failure> {
     let value = id
-        .strip_prefix("host:")
+        .strip_prefix("bex:")
         .and_then(|id| URL_SAFE_NO_PAD.decode(id).ok())
         .and_then(|bytes| serde_json::from_slice(&bytes).ok());
     value.ok_or_else(|| {

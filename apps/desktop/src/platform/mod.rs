@@ -32,7 +32,7 @@ pub(crate) fn state_dir() -> Result<PathBuf, String> {
     std::env::var_os("AGENT_STATE_DIR")
         .map(PathBuf::from)
         .or_else(|| {
-            directories::ProjectDirs::from("dev", "remoteagent", "desktop")
+            directories::ProjectDirs::from("app", "bex", "BEX")
                 .map(|project| project.data_local_dir().to_path_buf())
         })
         .ok_or_else(|| "application data directory unavailable".into())

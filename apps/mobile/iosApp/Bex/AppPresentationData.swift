@@ -10,12 +10,12 @@ struct HostProfile: Codable, Identifiable {
     let ticket: String
 
     static func load() throws -> [HostProfile] {
-        guard let data = UserDefaults.standard.data(forKey: "agent.hosts.iroh") else { return [] }
+        guard let data = UserDefaults.standard.data(forKey: "bex.hosts.iroh") else { return [] }
         return try JSONDecoder().decode([HostProfile].self, from: data)
     }
 
     static func save(_ profiles: [HostProfile]) throws {
-        try UserDefaults.standard.set(JSONEncoder().encode(profiles), forKey: "agent.hosts.iroh")
+        try UserDefaults.standard.set(JSONEncoder().encode(profiles), forKey: "bex.hosts.iroh")
     }
 }
 

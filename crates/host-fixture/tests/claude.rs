@@ -388,8 +388,8 @@ async fn claude_submission_preserves_inputs_settings_workspaces_and_history_acro
         std::fs::write(workspace.join("tracked.txt"), "fixture\n").unwrap();
         git(&workspace, &["add", "tracked.txt"]);
         git(&workspace, &["-c","user.name=Fixture","-c","user.email=fixture@example.invalid","-c","commit.gpgsign=false","commit","--quiet","-m","fixture"]);
-        std::fs::write(root.join("agent-projects.json"), json!([{"id":"project","name":"Project","roots":[{"path":workspace}]}]).to_string()).unwrap();
-        std::fs::write(root.join("agent-worktrees.json"), json!({"settings":{"createOnNewSession":automatic,"worktreeDirectory":root.join("worktrees")}}).to_string()).unwrap();
+        std::fs::write(root.join("bex-projects.json"), json!([{"id":"project","name":"Project","roots":[{"path":workspace}]}]).to_string()).unwrap();
+        std::fs::write(root.join("bex-worktrees.json"), json!({"settings":{"createOnNewSession":automatic,"worktreeDirectory":root.join("worktrees")}}).to_string()).unwrap();
         let memory = Arc::new(Memory::default());
         let mut fixture = host(&root, memory.clone(), fixture_program()).await;
         let (mut store, mut endpoint) = connect(&fixture, Snapshot::default()).await;
@@ -425,7 +425,7 @@ async fn claude_submission_preserves_inputs_settings_workspaces_and_history_acro
                 assert_eq!(Path::new(&cwd).file_name(), workspace.file_name());
                 assert_eq!(Path::new(&cwd).parent().unwrap().parent().unwrap(), root.join("worktrees"));
             }
-            else { assert_eq!(Path::new(&cwd), if selected { workspace.clone() } else { root.join("agent-chats") }); }
+            else { assert_eq!(Path::new(&cwd), if selected { workspace.clone() } else { root.join("bex-chats") }); }
             let turn = &snapshot.conversations[&id].turns.as_ref().unwrap()[number];
             let items = turn.items.as_ref().unwrap();
             assert!(items.iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::Reasoning { .. }) && item_text(item) == Some("Fixture reasoning")));
@@ -894,8 +894,8 @@ async fn missing_codex_keeps_claude_inputs_workspaces_and_resumed_history_usable
         std::fs::write(workspace.join("tracked.txt"), "fixture\n").unwrap();
         git(&workspace, &["add", "tracked.txt"]);
         git(&workspace, &["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "fixture"]);
-        std::fs::write(root.join("agent-projects.json"), json!([{"id":"project","name":"Project","roots":[{"path":workspace}]}]).to_string()).unwrap();
-        std::fs::write(root.join("agent-worktrees.json"), json!({"settings":{"createOnNewSession":automatic,"worktreeDirectory":root.join("worktrees")}}).to_string()).unwrap();
+        std::fs::write(root.join("bex-projects.json"), json!([{"id":"project","name":"Project","roots":[{"path":workspace}]}]).to_string()).unwrap();
+        std::fs::write(root.join("bex-worktrees.json"), json!({"settings":{"createOnNewSession":automatic,"worktreeDirectory":root.join("worktrees")}}).to_string()).unwrap();
         let config = AppServerConfig { program: root.join("missing-codex"), ..Default::default() };
         let memory = Arc::new(Memory::default());
         let mut saved = Snapshot::default();
@@ -924,7 +924,7 @@ async fn missing_codex_keeps_claude_inputs_workspaces_and_resumed_history_usable
                 assert_eq!(Path::new(&current).file_name(), workspace.file_name());
                 assert_eq!(Path::new(&current).parent().unwrap().parent().unwrap(), root.join("worktrees"));
             }
-            else { assert_eq!(Path::new(&current), if selected { workspace.clone() } else { root.join("agent-chats") }); }
+            else { assert_eq!(Path::new(&current), if selected { workspace.clone() } else { root.join("bex-chats") }); }
             let turns = snapshot.conversations[&id].turns.as_ref().unwrap();
             assert!(turns[index].items.as_ref().unwrap().iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::AssistantText { .. }) && item_text(item).is_some_and(|text| text.starts_with(&format!("reply {}: independent {index}", index + 1)))));
             let snapshot = listed(&store, &id, selected.then_some(workspace.as_path())).await;
@@ -1121,7 +1121,7 @@ async fn claude_authentication_and_inference_failures_are_visible_and_retry_pres
  {
     tokio::time::timeout(Duration::from_secs(45), async {
         let root = tempfile::tempdir().unwrap();
-        let cwd = root.path().join("agent-chats");
+        let cwd = root.path().join("bex-chats");
         std::fs::create_dir(&cwd).unwrap();
         let config = cwd.join("claude-fixture.json");
         std::fs::write(&config, json!({"unauthenticated":true}).to_string()).unwrap();
@@ -1348,7 +1348,7 @@ async fn deleted_claude_worktree_restarts_the_retained_process_and_continues_the
             ],
         );
         std::fs::write(
-            root.join("agent-worktrees.json"),
+            root.join("bex-worktrees.json"),
             json!({"settings":{"createOnNewSession":true}}).to_string(),
         )
         .unwrap();

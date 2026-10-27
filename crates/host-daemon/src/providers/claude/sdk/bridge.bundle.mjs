@@ -26052,7 +26052,7 @@ async function runBridge(lines, emit2, startQuery = mGe) {
     pathToClaudeCodeExecutable: config.program,
     ...config.model ? { model: config.model } : {},
     ...config.effort ? { effort: config.effort } : {},
-    ...config.browser ? { mcpServers: { bex_browser: config.browser } } : {},
+    ...config.browser ? { mcpServers: { agent_browser: config.browser } } : {},
     settingSources: ["user", "project", "local"],
     systemPrompt: { type: "preset", preset: "claude_code" },
     includePartialMessages: true,

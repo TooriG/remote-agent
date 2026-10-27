@@ -331,7 +331,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let projects = ProjectStore::new(root.path().join("agent-worktrees.json"));
+        let projects = ProjectStore::new(root.path().join("bex-worktrees.json"));
         projects.register(&cwd).await.unwrap();
         let service = HostRpcService::new([agent.into()], projects);
         let snapshot = service.project_snapshot().await.unwrap();
@@ -367,8 +367,8 @@ mod tests {
             r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><path fill="red" d="M0 0h8v8H0z"/></svg>"#,
         )
         .unwrap();
-        let state = root.join("agent-worktrees.json");
-        std::fs::write(state.with_file_name("agent-projects.json"), "{").unwrap();
+        let state = root.join("bex-worktrees.json");
+        std::fs::write(state.with_file_name("bex-projects.json"), "{").unwrap();
         let service = HostRpcService::new(
             [crate::providers::codex::Codex::new(Err("provider is offline".into())).into()],
             ProjectStore::new(state),
@@ -393,7 +393,7 @@ mod tests {
         let workspace = root.path().join("workspace");
         std::fs::create_dir(&workspace).unwrap();
         let workspace = dunce::canonicalize(&workspace).unwrap();
-        let projects = ProjectStore::new(root.path().join("agent-worktrees.json"));
+        let projects = ProjectStore::new(root.path().join("bex-worktrees.json"));
         projects.register(&workspace).await.unwrap();
         let registered = projects.load().await.unwrap().projects[0].id.clone();
         let native = root.path().join("native");
@@ -478,7 +478,7 @@ mod tests {
         let root = dunce::canonicalize(directory.path()).unwrap();
         let project = root.join("project");
         std::fs::create_dir(&project).unwrap();
-        let store = ProjectStore::new(root.join("agent-worktrees.json"));
+        let store = ProjectStore::new(root.join("bex-worktrees.json"));
         store.register(&project).await.unwrap();
         let projects = store.load().await.unwrap();
         let registered = projects.projects[0].id.as_str();
@@ -538,7 +538,7 @@ mod tests {
         std::fs::create_dir_all(&transcript).unwrap();
         let id = "12345678-1234-4234-8234-123456789abc";
         std::fs::write(transcript.join(format!("{id}.jsonl")),serde_json::json!({"type":"user","sessionId":id,"cwd":dunce::canonicalize(&workspace).unwrap(),"message":{"content":"Branding task"}}).to_string()+"\n").unwrap();
-        let projects = ProjectStore::new(root.path().join("agent-worktrees.json"));
+        let projects = ProjectStore::new(root.path().join("bex-worktrees.json"));
         for workspace in &workspaces {
             projects.register(workspace).await.unwrap();
         }

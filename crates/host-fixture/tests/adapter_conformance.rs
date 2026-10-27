@@ -177,7 +177,7 @@ async fn initial_import_discovers_native_projects_and_continues_the_original_ses
         [&selected]
     );
     assert!(
-        !root.join("agent-projects.json").exists(),
+        !root.join("bex-projects.json").exists(),
         "scanning and skipping cannot register anything"
     );
     store
@@ -205,7 +205,7 @@ async fn initial_import_discovers_native_projects_and_continues_the_original_ses
             .is_empty()
     );
     let registered: Vec<agent_protocol::models::Project> =
-        serde_json::from_slice(&std::fs::read(root.join("agent-projects.json")).unwrap()).unwrap();
+        serde_json::from_slice(&std::fs::read(root.join("bex-projects.json")).unwrap()).unwrap();
     assert_eq!(registered.len(), 1);
     assert_eq!(registered[0].roots[0].path, selected);
     let local = host.local().await.unwrap();
@@ -800,7 +800,7 @@ async fn session_pages_preserve_healthy_listings_and_reject_repeated_native_curs
     .unwrap();
     let host = start(&root, Arc::new(Memory::default())).await;
     let local = host.local().await.unwrap();
-    let chats = root.join("agent-chats");
+    let chats = root.join("bex-chats");
     std::fs::create_dir(&chats).unwrap();
     let session = create(&local.peer, ProviderKind::Claude, &chats).await;
     let (_, mut events) = open(&local.peer, &session).await;
@@ -891,7 +891,7 @@ async fn worktree_lists_read_each_native_page_once_and_refresh_activity() {
     }
     git(&["worktree", "remove", paths[2].to_str().unwrap()]);
     std::fs::write(
-        root.join("agent-worktrees.json"),
+        root.join("bex-worktrees.json"),
         serde_json::json!({"workspaceRoots":mappings}).to_string(),
     )
     .unwrap();
@@ -1072,7 +1072,7 @@ async fn title_lists_stop_after_visible_sections_and_merge_provider_pages_in_ord
     std::fs::write(&fixture, serde_json::to_vec(&threads).unwrap()).unwrap();
     let host = start(&root, Arc::new(Memory::default())).await;
     let local = host.local().await.unwrap();
-    let chats = root.join("agent-chats");
+    let chats = root.join("bex-chats");
     std::fs::create_dir(&chats).unwrap();
     let session = create(&local.peer, ProviderKind::Claude, &chats).await;
     let (_, mut events) = open(&local.peer, &session).await;
@@ -1219,7 +1219,7 @@ async fn title_lists_stop_after_visible_sections_and_merge_provider_pages_in_ord
         })
         .collect();
     std::fs::write(
-        root.join("agent-projects.json"),
+        root.join("bex-projects.json"),
         serde_json::to_vec(&projects).unwrap(),
     )
     .unwrap();
@@ -1301,7 +1301,7 @@ async fn title_lists_stop_after_visible_sections_and_merge_provider_pages_in_ord
         })
         .collect();
     std::fs::write(
-        root.join("agent-projects.json"),
+        root.join("bex-projects.json"),
         serde_json::to_vec(&empty_projects).unwrap(),
     )
     .unwrap();
@@ -1417,7 +1417,7 @@ async fn adapter_initialization_failure_preserves_the_other_provider_and_host() 
         );
     }
     std::fs::write(
-        root.join("agent-worktrees.json"),
+        root.join("bex-worktrees.json"),
         serde_json::json!({
             "settings":{"createOnNewSession":true,"worktreeDirectory":root.join("worktrees")}
         })

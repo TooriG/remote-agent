@@ -28,7 +28,7 @@ use uuid::Uuid;
 
 // Versions describe the framing/codec, not application releases or RPC additions.
 // Named records and methods evolve under agent_protocol::protocol's contract.
-const ALPN: &[u8] = b"agent/messagepack/1";
+const ALPN: &[u8] = b"bex/messagepack/1";
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
     #[error("iroh transport failed: {0}")]

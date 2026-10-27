@@ -5,7 +5,7 @@
 	<key>CFBundleExecutable</key>
 	<string>node</string>
 	<key>CFBundleIdentifier</key>
-	<string>dev.remoteagent.node</string>
+	<string>app.bex.node</string>
 	<key>CFBundleName</key>
 	<string>BEX Runtime</string>
 	<key>CFBundlePackageType</key>

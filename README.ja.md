@@ -44,7 +44,7 @@ scripts/dev-env.sh cargo run -p host-daemon -- --name 'BEX Host'
 
 | オプション | 内容 |
 | --- | --- |
-| `--state-dir` | 新しいHostの認証情報ディレクトリ。未指定なら記憶したディレクトリを使用（macOSの初期値は`~/Library/Application Support/dev.remoteagent.desktop/`）。通常Hostを2つ起動するための指定ではありません |
+| `--state-dir` | 新しいHostの認証情報ディレクトリ。未指定なら記憶したディレクトリを使用（macOSの初期値は`~/Library/Application Support/app.bex.BEX/`）。通常Hostを2つ起動するための指定ではありません |
 | `--codex-home` | 別のCodex保存領域を選択 |
 | `--claude <path>` | Claude Codeの実行ファイル。既定値はPATH上の`claude`。デスクトップは設定済みの`AGENT_CLAUDE`を渡します |
 | `--relay-url <url>…` / `--no-relay` | 独自のirohリレー、または隔離テスト用のローカルアドレスのみを使用 |

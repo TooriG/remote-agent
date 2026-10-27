@@ -864,7 +864,7 @@ mod tests {
         .unwrap();
         let service = HostRpcService::new(
             [claude.into()],
-            ProjectStore::new(root.path().join("agent-worktrees.json")),
+            ProjectStore::new(root.path().join("bex-worktrees.json")),
         );
         let session = service.open_session();
         let call =

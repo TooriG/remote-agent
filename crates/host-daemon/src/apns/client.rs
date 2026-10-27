@@ -400,7 +400,7 @@ mod tests {
     #[tokio::test]
     async fn absent_configuration_is_optional_but_invalid_configuration_fails_startup() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("agent-apns.json");
+        let path = directory.path().join("bex-apns.json");
         assert!(Client::load(&path).await.unwrap().is_none());
         tokio::fs::write(&path, b"{}").await.unwrap();
         assert!(Client::load(&path).await.is_err());

@@ -46,9 +46,9 @@ verify() { /usr/bin/codesign --verify --deep --strict "$1"; }
 cargo build --locked --profile "$profile" "${packages[@]}"
 if [[ $product == host ]]; then
     node scripts/install-claude-sdk.mjs "$output"
-    sign --identifier dev.remoteagent.provider-supervisor "$output/agent-provider-supervisor"
+    sign --identifier app.bex.provider-supervisor "$output/agent-provider-supervisor"
     verify "$output/agent-provider-supervisor"
-    sign --identifier dev.remoteagent.host "$output/host-daemon"
+    sign --identifier app.bex.host "$output/host-daemon"
     verify "$output/host-daemon"
     echo "$output/host-daemon"
     exit
@@ -100,8 +100,8 @@ for executable in "$executables/bex" "$executables/host-daemon" "$executables/ag
     done < <(/usr/bin/otool -L "$executable" | awk 'NR > 1 {print $1}')
 done
 sign "$executables/bex"
-sign --identifier dev.remoteagent.provider-supervisor "$executables/agent-provider-supervisor"
-sign --identifier dev.remoteagent.host "$executables/host-daemon"
+sign --identifier app.bex.provider-supervisor "$executables/agent-provider-supervisor"
+sign --identifier app.bex.host "$executables/host-daemon"
 sign --options runtime --entitlements apps/desktop/macos/Node.entitlements "$node_bundle"
 verify "$node_bundle"
 sign "$bundle"

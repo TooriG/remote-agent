@@ -72,8 +72,8 @@ impl Apns {
             return Ok(None);
         };
         let registry_path = path.with_file_name(match client.environment() {
-            PushEnvironment::Sandbox => "agent-live-activities-sandbox.json",
-            PushEnvironment::Production => "agent-live-activities-production.json",
+            PushEnvironment::Sandbox => "bex-live-activities-sandbox.json",
+            PushEnvironment::Production => "bex-live-activities-production.json",
         });
         let mut registry: Registry = match tokio::fs::read(&registry_path).await {
             Ok(bytes) => serde_json::from_slice(&Zeroizing::new(bytes))?,

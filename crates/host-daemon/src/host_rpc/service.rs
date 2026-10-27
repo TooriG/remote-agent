@@ -52,14 +52,14 @@ struct ServiceInner {
 impl HostRpcService {
     pub fn new(backends: impl IntoIterator<Item = Backend>, projects: ProjectStore) -> Self {
         let files = crate::workspace_files::WorkspaceFiles::new(
-            projects.path().with_file_name("agent-attachments"),
+            projects.path().with_file_name("bex-attachments"),
         );
         let (providers, dictation) = crate::providers::Registry::new(backends);
         Self {
             inner: Arc::new(ServiceInner {
                 history_scope: OnceLock::new(),
                 conversations: super::conversations::Conversations::new(
-                    projects.path().with_file_name("agent-conversations.json"),
+                    projects.path().with_file_name("bex-conversations.json"),
                 ),
                 browser: OnceLock::new(),
                 providers,
@@ -769,7 +769,7 @@ mod tests {
         .unwrap();
         let service = HostRpcService::new(
             [claude.into()],
-            ProjectStore::new(root.path().join("agent-worktrees.json")),
+            ProjectStore::new(root.path().join("bex-worktrees.json")),
         );
         let session = service.open_session();
         for (method, expected) in [
@@ -794,7 +794,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let service = HostRpcService::new(
             [Backend::unavailable(ProviderKind::Codex, "unavailable")],
-            ProjectStore::new(root.path().join("agent-worktrees.json")),
+            ProjectStore::new(root.path().join("bex-worktrees.json")),
         );
         let session = service.open_session();
         for method in ["host/session/submit"] {

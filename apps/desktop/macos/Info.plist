@@ -9,7 +9,7 @@
 	<key>CFBundleIconFile</key>
 	<string>bex.icns</string>
 	<key>CFBundleIdentifier</key>
-	<string>dev.remoteagent.desktop</string>
+	<string>app.bex.desktop</string>
 	<key>CFBundleName</key>
 	<string>bex</string>
 	<key>CFBundlePackageType</key>

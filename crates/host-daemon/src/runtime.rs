@@ -91,12 +91,12 @@ pub(crate) async fn run(config: StartupConfig) -> Result<()> {
     };
     let service = HostRpcService::new(
         [codex.into(), claude, deepseek],
-        ProjectStore::new(directory.join("agent-worktrees.json")),
+        ProjectStore::new(directory.join("bex-worktrees.json")),
     );
     service.set_history_scope(directory.clone(), config.isolated);
     service
         .enable_apns(
-            &directory.join("agent-apns.json"),
+            &directory.join("bex-apns.json"),
             &config.name,
             &endpoint.node_id().to_string(),
         )

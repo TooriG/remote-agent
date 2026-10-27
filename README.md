@@ -44,7 +44,7 @@ scripts/dev-env.sh cargo run -p host-daemon -- --name 'BEX Host'
 
 | Flag | Meaning |
 | --- | --- |
-| `--state-dir` | Credential directory for a new Host; otherwise the remembered directory is used (initial macOS default: `~/Library/Application Support/dev.remoteagent.desktop/`). It does not permit a second normal Host. |
+| `--state-dir` | Credential directory for a new Host; otherwise the remembered directory is used (initial macOS default: `~/Library/Application Support/app.bex.BEX/`). It does not permit a second normal Host. |
 | `--codex-home` | Selects a separate Codex store. |
 | `--claude <path>` | Claude Code executable; defaults to `claude` on PATH. Desktop passes `AGENT_CLAUDE` when set. |
 | `--relay-url <url>…` / `--no-relay` | Custom iroh relays, or local addresses only for isolated fixtures. |

@@ -194,7 +194,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let repository = root.path().join("repository");
         let linked = root.path().join("linked");
-        let chats = root.path().join("agent-chats");
+        let chats = root.path().join("bex-chats");
         for path in [
             &repository.join(".git"),
             &repository.join("src"),
@@ -273,7 +273,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let store_path = root.path().join("agent-worktrees.json");
+        let store_path = root.path().join("bex-worktrees.json");
         let service = HostRpcService::new(
             [
                 agent.into(),
