@@ -64,7 +64,7 @@ impl Recovery {
                     }
                     match store.resume(&endpoint, &ticket).await {
                         Ok(mut performance) => {
-                            performance.client_revision = option_env!("BEX_BUILD_REVISION")
+                            performance.client_revision = option_env!("AGENT_BUILD_REVISION")
                                 .unwrap_or("development")
                                 .into();
                             performance.platform = crate::diagnostics::ClientPlatform::current();

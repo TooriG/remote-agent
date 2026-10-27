@@ -34,19 +34,19 @@ On desktop, first-run setup checks the selected computer and agents, then lets y
 
 The Host needs Git and at least one available agent for conversations. Codex is optional; the Host uses `codex` on PATH, falling back to Codex bundled with ChatGPT Desktop on macOS; `--codex <path>` is authoritative.
 
-Claude conversations run through the official Agent SDK. The Mac app includes a signed, portable Node.js runtime, so users with Claude Code installed do not need to install Node or npm. The app uses its bundled Node by default; `BEX_NODE` can explicitly select another executable. A standalone Host requires Node.js 22 or newer on its PATH or selected with `BEX_NODE`. The Nix development environment includes Node and pins the Mac distribution runtime by version and checksum. The SDK is pinned in an npm lockfile and shipped as `bex-claude-sdk.mjs` beside a standalone Host or in a Mac app's sealed Resources.
+Claude conversations run through the official Agent SDK. The Mac app includes a signed, portable Node.js runtime, so users with Claude Code installed do not need to install Node or npm. The app uses its bundled Node by default; `AGENT_NODE` can explicitly select another executable. A standalone Host requires Node.js 22 or newer on its PATH or selected with `AGENT_NODE`. The Nix development environment includes Node and pins the Mac distribution runtime by version and checksum. The SDK is pinned in an npm lockfile and shipped as `agent-claude-sdk.mjs` beside a standalone Host or in a Mac app's sealed Resources.
 
 ```sh
-scripts/dev-env.sh cargo build --locked -p bex-process --bin bex-provider-supervisor
+scripts/dev-env.sh cargo build --locked -p agent-process --bin agent-provider-supervisor
 scripts/dev-env.sh node scripts/install-claude-sdk.mjs target/debug
 scripts/dev-env.sh cargo run -p host-daemon -- --name 'BEX Host'
 ```
 
 | Flag | Meaning |
 | --- | --- |
-| `--state-dir` | Credential directory for a new Host; otherwise the remembered directory is used (initial macOS default: `~/Library/Application Support/app.bex.BEX/`). It does not permit a second normal Host. |
+| `--state-dir` | Credential directory for a new Host; otherwise the remembered directory is used (initial macOS default: `~/Library/Application Support/dev.remoteagent.desktop/`). It does not permit a second normal Host. |
 | `--codex-home` | Selects a separate Codex store. |
-| `--claude <path>` | Claude Code executable; defaults to `claude` on PATH. Desktop passes `BEX_CLAUDE` when set. |
+| `--claude <path>` | Claude Code executable; defaults to `claude` on PATH. Desktop passes `AGENT_CLAUDE` when set. |
 | `--relay-url <url>…` / `--no-relay` | Custom iroh relays, or local addresses only for isolated fixtures. |
 | `--isolated --state-dir <directory>` | Explicitly separate development/test Host. It still locks its own directory. |
 
@@ -65,7 +65,7 @@ Connection outages also retain `network.change`, `network.socket.rebound`, `netw
 Build both the Host and its companion supervisor with the pinned Linux environment:
 
 ```sh
-nix develop .#native --command cargo build --locked --release -p host-daemon -p bex-process -p agent-cli
+nix develop .#native --command cargo build --locked --release -p host-daemon -p agent-process -p agent-cli
 target/release/host-daemon --name 'Linux development'
 ```
 
@@ -82,11 +82,11 @@ target/release/host-daemon revoke <node-id>
 
 On iPhone, open **PC一覧 → PCを追加 → QRコードを読み取る**, or paste the invitation JSON into **QRの内容を手入力**. Each invitation expires after seven days by default and can pair only one new device. Host administrators can set `--invitation-days <1–90>` when starting the Host; this affects newly issued invitations only. Generate a separate invitation for each device; keep invitation output out of logs and source control. Paired devices can reconnect after the invitation expires. The Host retains its identity and paired devices across restarts. For an isolated development Host, put the same `--isolated --state-dir <directory>` before `invite` or `status`.
 
-Keep the default iroh relays enabled for Internet access. Run the service as the development user, with Git, the agent executables and Chromium on its PATH. Authenticate the agent accounts for that user and keep `bex-provider-supervisor` beside `host-daemon`. The iPhone operates the Linux filesystem, terminals and browser; select the Linux checkout when starting a project task. For systemd, use `KillSignal=SIGINT` so the Host shuts down its providers cleanly.
+Keep the default iroh relays enabled for Internet access. Run the service as the development user, with Git, the agent executables and Chromium on its PATH. Authenticate the agent accounts for that user and keep `agent-provider-supervisor` beside `host-daemon`. The iPhone operates the Linux filesystem, terminals and browser; select the Linux checkout when starting a project task. For systemd, use `KillSignal=SIGINT` so the Host shuts down its providers cleanly.
 
 For a trusted shared workspace, Codex can use a team API key configured with `codex login --with-api-key` through standard input. The Host discovers this as an **API key** account and retains its selection across restarts. API billing is separate from ChatGPT subscription usage, so no subscription allowance is shown. Set `forced_login_method = "api"` in the shared Codex configuration to keep it on API authentication. Each paired device shares the Host's accounts and credentials; separate task worktrees isolate source changes.
 
-Host preferences for worktrees (`bex-worktrees.json`) and the directory for chats without a project (`bex-chats/`) live beside the Codex project state, normally `$CODEX_HOME` or `~/.codex`. New worktrees default to `<original-repository>/.worktree/session-XXXXX/<repository-name>`; a custom directory replaces `.worktree` as the storage root. The repository name remains the checkout folder name, including when starting from another worktree. Existing worktrees stay in place. The default `.worktree` directory is excluded through Git’s local `info/exclude`. Worktree settings are edited from Mac **設定 → ワークツリー** or iPhone **タスク一覧 → … → 設定 → ワークツリー**.
+Host preferences for worktrees (`agent-worktrees.json`) and the directory for chats without a project (`agent-chats/`) live beside the Codex project state, normally `$CODEX_HOME` or `~/.codex`. New worktrees default to `<original-repository>/.worktree/session-XXXXX/<repository-name>`; a custom directory replaces `.worktree` as the storage root. The repository name remains the checkout folder name, including when starting from another worktree. Existing worktrees stay in place. The default `.worktree` directory is excluded through Git’s local `info/exclude`. Worktree settings are edited from Mac **設定 → ワークツリー** or iPhone **タスク一覧 → … → 設定 → ワークツリー**.
 
 To remove a saved PC on iPhone, open **タスク一覧 → PC一覧 → 接続を解除** and confirm. This deletes its authentication key on that iPhone and prevents reconnection after relaunch, while retaining Host conversation data. On Mac, **設定 → 端末と接続 → 接続を解除** revokes the device’s access and closes active connections. Pair again to reconnect. Removing a PC on iPhone does not remove the old device entry from the Mac.
 
@@ -99,7 +99,7 @@ release downloads, verified CI development artifacts, and source builds.
 ## Build the clients
 
 ```sh
-# Mac release (requires a signing certificate; BEX_CODE_SIGN_IDENTITY selects it)
+# Mac release (requires a signing certificate; AGENT_CODE_SIGN_IDENTITY selects it)
 scripts/dev-env.sh just build-desktop-macos && open target/release/bex.app
 
 # iPhone (iOS 26): build Simulator libraries, then open Xcode
@@ -112,7 +112,7 @@ scripts/dev-env.sh ./gradlew :apps:mobile:assembleDebug
 
 The separate iOS development app has its own [distribution procedure](docs/qa/IOS_DEV_RELEASE.md).
 
-Rerun the iOS library build after changing Rust sources. Desktop drafts and logs use `BEX_STATE_DIR`; Host discovery may select a different credential directory. An isolated desktop requires both `BEX_ISOLATED_HOST=1` and `BEX_STATE_DIR`; use a separate Codex home or fixture executable as well so tests cannot read personal provider state.
+Rerun the iOS library build after changing Rust sources. Desktop drafts and logs use `AGENT_STATE_DIR`; Host discovery may select a different credential directory. An isolated desktop requires both `AGENT_ISOLATED_HOST=1` and `AGENT_STATE_DIR`; use a separate Codex home or fixture executable as well so tests cannot read personal provider state.
 
 Use `scripts/dev-env.sh just check -p agent-core` for quick Rust feedback without
 generating executables; select the crate you changed with `-p`.
@@ -142,7 +142,7 @@ On Mac and iPhone, select assistant text to quote it into the draft or ask about
 
 iPhone starts one Live Activity for the selected PC's ongoing tasks. The collapsed Dynamic Island shows one status icon per task, split across its two sides; up to twelve icons fit, with additional tasks represented by a count badge. The Lock Screen and expanded island show running and awaiting-confirmation counts. Tapping opens that PC's task list. The activity ends only after every task finishes and remains on the Lock Screen for one minute. Switching PCs dismisses the previous PC's activity. Live Activities must be enabled in iOS Settings.
 
-For updates while the iPhone app is suspended, enable the app's Push Notifications capability in Apple Developer and configure APNs on the Host. Put `bex-apns.json` in the Host state directory (alongside `identity.keys`):
+For updates while the iPhone app is suspended, enable the app's Push Notifications capability in Apple Developer and configure APNs on the Host. Put `agent-apns.json` in the Host state directory (alongside `identity.keys`):
 
 ```json
 {
@@ -170,7 +170,7 @@ The Host runs the unmodified CLI with streaming JSON input/output and its own pe
 
 Text, PNG/JPEG/GIF/WebP images, file references, tool approvals, user questions, interruption and subsequent turns use the same Store and authenticated transport as Codex. Working-directory selection and automatic worktree settings apply to both. Claude's native transcript is the only persistent conversation source. The Host reads its configured native directory (`--claude-home`, `CLAUDE_CONFIG_DIR`, or `~/.claude`) without launching inference and never writes bex conversation records. Disconnecting a client leaves execution running; reconnecting opens the current snapshot, including currently valid unanswered requests, without replaying events.
 
-Use the model picker to switch between Codex, Claude, and DSH within a conversation. Finish the current response and unanswered requests, then send the next message to continue in the same conversation and workspace. Returning to an agent reuses its native session and supplies history it has not seen. Long handoffs favor the original request and recent exchanges; agents can retrieve omitted material with the Host's history command. Past attachments, reasoning, and native tool state are not transferred. Native transcripts remain the source of conversation text; `bex-conversations.json` stores provider bindings and the context delivered during handoffs. Update the Host and clients from the same revision.
+Use the model picker to switch between Codex, Claude, and DSH within a conversation. Finish the current response and unanswered requests, then send the next message to continue in the same conversation and workspace. Returning to an agent reuses its native session and supplies history it has not seen. Long handoffs favor the original request and recent exchanges; agents can retrieve omitted material with the Host's history command. Past attachments, reasoning, and native tool state are not transferred. Native transcripts remain the source of conversation text; `agent-conversations.json` stores provider bindings and the context delivered during handoffs. Update the Host and clients from the same revision.
 
 Claude-to-Codex delegation and Claude's own forks/side chats are not implemented. Codex startup failure or exit does not stop the Host, Claude turns, pairing, files, or workspace selection. The Host owns PTYs independently of Codex and retains device-owned shells across client disconnections. Dictation and Codex account operations still require Codex. Worktree deletion is blocked while Codex conversation activity cannot be checked. The CLI integration has been exercised with Claude Code 2.1.266.
 
@@ -180,9 +180,9 @@ The agent and clients use one shared browser. Open **ブラウザのメニュー
 
 Desktop conversation lists and titles refresh after messages and completed turns. The execution header shows elapsed time and the latest action; command output has a copy control. Click the change summary or a changed file to open the diff, choose files from its selector, and expand long unchanged sections. During dictation the composer shows a microphone waveform with cancel, stop, and send controls; Escape cancels recording and preserves the draft.
 
-Mac settings list bex-created worktrees and their conversations under **作成済みのワークツリー**. Move to another conversation before deleting its worktree, then confirm removal. The Host refuses removal when turns, unanswered requests, unresolved submissions or tracked terminal processes are active, files have changes (including untracked or ignored files), the worktree is locked, or HEAD is detached. Removal retains branches, conversation history, and the worktree’s entry in the list. Sending another message automatically recreates a deleted worktree at the same path, with a new branch based on the original repository’s local `main`. Only the worktree path and its original project path are persisted; the previous branch and deletion status are not stored.
+Mac settings list agent-created worktrees and their conversations under **作成済みのワークツリー**. Move to another conversation before deleting its worktree, then confirm removal. The Host refuses removal when turns, unanswered requests, unresolved submissions or tracked terminal processes are active, files have changes (including untracked or ignored files), the worktree is locked, or HEAD is detached. Removal retains branches, conversation history, and the worktree’s entry in the list. Sending another message automatically recreates a deleted worktree at the same path, with a new branch based on the original repository’s local `main`. Only the worktree path and its original project path are persisted; the previous branch and deletion status are not stored.
 
-The **マージ済みを自動削除** preference is disabled by default. When enabled, the Host checks bex-created worktrees every minute and removes clean, unused checkouts whose branch has commits beyond its creation point and whose current HEAD is contained in local `main`. The same removal protections apply, including running sessions not yet present in the provider's history list. Busy worktrees are reconsidered on later checks; a new unmerged commit cancels eligibility. If activity or Git state cannot be checked, the checkout stays. Automatic removal preserves branches and conversations and supports the same recreation on the next message.
+The **マージ済みを自動削除** preference is disabled by default. When enabled, the Host checks agent-created worktrees every minute and removes clean, unused checkouts whose branch has commits beyond its creation point and whose current HEAD is contained in local `main`. The same removal protections apply, including running sessions not yet present in the provider's history list. Busy worktrees are reconsidered on later checks; a new unmerged commit cancels eligibility. If activity or Git state cannot be checked, the checkout stays. Automatic removal preserves branches and conversations and supports the same recreation on the next message.
 
 Voice input appends recognized text on Stop or submits it with the draft and attachments on Send. Successful transcription with no recognized text ends quietly and leaves drafts and attachments unchanged, even if Send was pressed. Recording, connection, malformed-response, and transcription failures still report errors without discarding the draft.
 
@@ -235,7 +235,7 @@ scripts/dev-env.sh just macos-e2e                   # native Browser authenticat
 scripts/dev-env.sh just quality [apple|rust|kotlin|swift]  # default: Mac Host/desktop and iPhone checks
 ```
 
-Claude contracts run with `scripts/dev-env.sh cargo test --locked -p host-fixture --test claude`. Build the companion supervisor first (see above). The tests use a deterministic external CLI boundary with real Store, iroh, Host routing, native transcript files and isolated Git/filesystem state. An anonymized transcript from Claude Code 2.1.266 also exercises native format compatibility. The opt-in `live_claude_subscription_completes_and_resumes_through_store_and_host` test uses the real authenticated CLI; set `BEX_LIVE_CLAUDE_PROGRAM` to its absolute path and run that test with `-- --ignored --exact` to verify subscription inference, resumption across a Host restart, interruption and successful input after interruption.
+Claude contracts run with `scripts/dev-env.sh cargo test --locked -p host-fixture --test claude`. Build the companion supervisor first (see above). The tests use a deterministic external CLI boundary with real Store, iroh, Host routing, native transcript files and isolated Git/filesystem state. An anonymized transcript from Claude Code 2.1.266 also exercises native format compatibility. The opt-in `live_claude_subscription_completes_and_resumes_through_store_and_host` test uses the real authenticated CLI; set `AGENT_LIVE_CLAUDE_PROGRAM` to its absolute path and run that test with `-- --ignored --exact` to verify subscription inference, resumption across a Host restart, interruption and successful input after interruption.
 
 Development and integration policy is in [AGENTS.md](AGENTS.md). Native clients
 CI owns platform acceptance; its triggers, job selection, caches and runners are
@@ -252,7 +252,7 @@ Use `scripts/dev-env.sh kache stats --last-build` to inspect reuse or
 
 Inspect connection timing with `scripts/dev-env.sh cargo xtask connection-diagnostics`.
 Use `scripts/dev-env.sh just --list` to discover focused checks and
-`BEX_IOS_TEST_WORKERS=1`–`10` to select native iOS acceptance concurrency.
+`AGENT_IOS_TEST_WORKERS=1`–`10` to select native iOS acceptance concurrency.
 The acceptance runner serializes batches across worktrees and retains its
 results under `target/qa`. Build-cache implementation details live in
 [scripts/dev-env.sh](scripts/dev-env.sh) and the native runners. Enable the

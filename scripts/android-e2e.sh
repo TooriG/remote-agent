@@ -12,7 +12,7 @@ port_open() { (: <"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
 server_port=$((40000 + RANDOM % 15000))
 while port_open "$server_port"; do server_port=$((40000 + RANDOM % 15000)); done
 export ANDROID_ADB_SERVER_PORT=$server_port
-fixture=$(mktemp -d /tmp/bex-android.XXXXXX)
+fixture=$(mktemp -d /tmp/agent-android.XXXXXX)
 export ANDROID_AVD_HOME="$fixture/avd" ANDROID_USER_HOME="$fixture/user"
 host='' emulator_pid=''
 cleanup() {
@@ -32,7 +32,7 @@ trap 'exit 143' TERM
 mkdir -p "$ANDROID_AVD_HOME" "$ANDROID_USER_HOME"
 adb -P "$server_port" start-server
 case $(uname -m) in arm64|aarch64) abi=arm64-v8a ;; *) abi=x86_64 ;; esac
-avd="bex-os-$$"
+avd="agent-os-$$"
 avdmanager create avd --name "$avd" --package "system-images;android-37.0;google_apis;$abi" --device pixel_7 <<< no
 log="$target/qa/android-$(date +%s)-$$"
 # Headless automatic graphics use CPU rendering on macOS and compete with builds.
@@ -87,7 +87,7 @@ fi
 adb -P "$server_port" -s "$serial" pull /sdcard/Android/data/dev.remoteagent.mobile/files/network-permission-granted.png "$log.granted.png"
 fi
 # The permission test starts denied and leaves LAN access granted for the real Host checks.
-"$target/debug/bex-ui-fixture" "$fixture/host" "$target/debug/bex-codex-fixture" "$fixture/pairing.port" 100 >"$fixture/host.log" 2>&1 &
+"$target/debug/agent-ui-fixture" "$fixture/host" "$target/debug/agent-codex-fixture" "$fixture/pairing.port" 100 >"$fixture/host.log" 2>&1 &
 host=$!
 for ((attempt=0; attempt<100; attempt++)); do
     [[ -s $fixture/pairing.port ]] && break

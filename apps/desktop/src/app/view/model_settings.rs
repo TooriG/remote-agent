@@ -4,17 +4,17 @@ use gpui_kit::Rgba;
 
 fn provider_icon(provider: ProviderKind) -> Icon {
     Icon::default().path(match provider {
-        ProviderKind::Codex => "bex/openai.svg",
-        ProviderKind::Claude => "bex/anthropic.svg",
-        ProviderKind::DeepSeek => "bex/deepseek.svg",
+        ProviderKind::Codex => "icons/openai.svg",
+        ProviderKind::Claude => "icons/anthropic.svg",
+        ProviderKind::DeepSeek => "icons/deepseek.svg",
     })
 }
 
 fn fast_icon(fast: bool) -> Icon {
     Icon::default().path(if fast {
-        "bex/bolt-fill.svg"
+        "icons/bolt-fill.svg"
     } else {
-        "bex/bolt.svg"
+        "icons/bolt.svg"
     })
 }
 
@@ -1182,7 +1182,7 @@ impl Desktop {
                     .icon(
                         if value == ProviderKind::Claude {
                             Icon::default()
-                                .path("bex/claude.svg")
+                                .path("icons/claude.svg")
                                 .text_color(rgb(0xd97757))
                         } else {
                             provider_icon(value)

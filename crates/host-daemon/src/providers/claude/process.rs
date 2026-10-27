@@ -41,7 +41,7 @@ pub(super) fn executable(
 
 pub(super) fn runtime() -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
     let path = std::env::var_os("PATH");
-    let node = std::env::var_os("BEX_NODE");
+    let node = std::env::var_os("AGENT_NODE");
     let host = std::env::current_exe().map_err(|error| error.to_string())?;
     runtime_from(&host, node.as_deref(), path.as_deref())
 }
@@ -51,7 +51,7 @@ fn runtime_from(
     node: Option<&std::ffi::OsStr>,
     path: Option<&std::ffi::OsStr>,
 ) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
-    let companion = bex_process::companion_path(host, "bex-claude-sdk.mjs")
+    let companion = agent_process::companion_path(host, "agent-claude-sdk.mjs")
         .map_err(|error| error.to_string())?;
     let directory = companion.parent().expect("companion has a parent");
     // macOS treats Contents/MacOS as nested code. JavaScript belongs in the
@@ -62,14 +62,14 @@ fn runtime_from(
             directory
                 .parent()
                 .expect("Contents exists")
-                .join("Resources/bex-claude-sdk.mjs"),
+                .join("Resources/agent-claude-sdk.mjs"),
         )
     } else {
         (std::path::PathBuf::from("node"), companion)
     };
     let node = executable(node.map(Path::new).unwrap_or(&default_node), path)?;
     if !bridge.is_file() {
-        return Err("bex-claude-sdk.mjs must be installed with the Host".into());
+        return Err("agent-claude-sdk.mjs must be installed with the Host".into());
     }
     Ok((node, bridge))
 }
@@ -171,7 +171,7 @@ mod tests {
             .join("Bex Dev.app/Contents/Helpers/Bex Node.app/Contents/MacOS")
             .join(format!("node{}", std::env::consts::EXE_SUFFIX));
         std::fs::create_dir_all(bundled.parent().unwrap()).unwrap();
-        let bridge = resources.join("bex-claude-sdk.mjs");
+        let bridge = resources.join("agent-claude-sdk.mjs");
         std::fs::write(&bundled, b"bundled runtime").unwrap();
         std::fs::write(&bridge, b"SDK bridge").unwrap();
         assert_eq!(
@@ -197,7 +197,7 @@ mod tests {
         assert!(runtime_from(&host, None, Some(&path)).is_err());
 
         let standalone = path_directory.join("host-daemon");
-        let standalone_bridge = path_directory.join("bex-claude-sdk.mjs");
+        let standalone_bridge = path_directory.join("agent-claude-sdk.mjs");
         std::fs::write(&standalone_bridge, b"SDK bridge").unwrap();
         for host in [&standalone, &path_directory.join("deps/claude-test")] {
             assert_eq!(
@@ -206,11 +206,11 @@ mod tests {
             );
         }
         assert!(runtime_from(&standalone, None, None).is_err());
-        std::fs::remove_file(path_directory.join("bex-claude-sdk.mjs")).unwrap();
+        std::fs::remove_file(path_directory.join("agent-claude-sdk.mjs")).unwrap();
         assert!(
             runtime_from(&standalone, None, Some(&path))
                 .unwrap_err()
-                .contains("bex-claude-sdk.mjs")
+                .contains("agent-claude-sdk.mjs")
         );
     }
 }
@@ -336,7 +336,7 @@ impl Process {
         let path = std::env::var_os("PATH");
         let program = executable(program, path.as_deref())?;
         let (node, bridge) = runtime()?;
-        let mut command = bex_process::command(&node).map_err(|error| error.to_string())?;
+        let mut command = agent_process::command(&node).map_err(|error| error.to_string())?;
         // Account changes must not replace skills, settings, plugins or history.
         set_homes(&mut command, homes);
         command

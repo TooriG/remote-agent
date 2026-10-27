@@ -5,8 +5,8 @@ import UIKit
 /// Like T3, it is as tall as the message and never scrolls itself: the conversation owns scrolling,
 /// and UIKit tiles drawing to the visible part of a long message.
 final class ConversationTextView: UITextView {
-    static let quote = NSAttributedString.Key("bex.quote")
-    static let rule = NSAttributedString.Key("bex.rule")
+    static let quote = NSAttributedString.Key("agent.quote")
+    static let rule = NSAttributedString.Key("agent.rule")
 
     private struct TextLayout {
         let text: NSAttributedString

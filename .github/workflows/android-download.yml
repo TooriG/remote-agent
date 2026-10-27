@@ -13,8 +13,8 @@ jobs:
     env:
       CARGO_BUILD_JOBS: 4
       CARGO_INCREMENTAL: 0
-      GRADLE_USER_HOME: /tmp/bex-gradle
-      ANDROID_USER_HOME: /tmp/bex-android
+      GRADLE_USER_HOME: /tmp/agent-gradle
+      ANDROID_USER_HOME: /tmp/agent-android
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -36,7 +36,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6
       - name: Configure stable preview signing and version
         env:
-          BEX_ANDROID_PREVIEW_KEYSTORE_BASE64: ${{ secrets.BEX_ANDROID_PREVIEW_KEYSTORE_BASE64 }}
+          AGENT_ANDROID_PREVIEW_KEYSTORE_BASE64: ${{ secrets.BEX_ANDROID_PREVIEW_KEYSTORE_BASE64 }}
         run: bash scripts/configure-android-preview.sh
       - name: Test and build installable Android preview
         run: |
@@ -51,7 +51,7 @@ jobs:
       - name: Build isolated Android Host fixtures
         run: |
           nix develop .#native --command cargo test --locked -p agent-transport --lib
-          nix develop .#native --command cargo build --locked -p host-fixture -p codex-app-server -p bex-process --bins
+          nix develop .#native --command cargo build --locked -p host-fixture -p codex-app-server -p agent-process --bins
       - name: Verify Android acceptance against an isolated Host
         run: nix develop .#android-test --command bash scripts/android-e2e.sh
       - name: Retain Android verification reports

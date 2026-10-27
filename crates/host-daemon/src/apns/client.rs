@@ -187,7 +187,7 @@ impl Client {
 
     pub async fn send(&self, token: &[u8], payload: &[u8], urgent: bool, now: u64) -> ResultKind {
         let Ok(request) = self.request(token, payload, urgent, now) else {
-            tracing::warn!(target: "bex", operation = "host.apns.delivery", "Cannot prepare a Live Activity push request");
+            tracing::warn!(target: "agent", operation = "host.apns.delivery", "Cannot prepare a Live Activity push request");
             return ResultKind::Retry;
         };
         // reqwest errors include the URL, which contains a secret push token.
@@ -201,14 +201,14 @@ impl Client {
                 } else {
                     "transport"
                 };
-                tracing::warn!(target: "bex", operation = "host.apns.delivery",
+                tracing::warn!(target: "agent", operation = "host.apns.delivery",
                     message = %format_args!("Live Activity push transport failed: {kind}"));
                 return ResultKind::Retry;
             }
         };
         let status = response.status();
         if status.is_success() {
-            tracing::info!(target: "bex", operation = "host.apns.delivery", "APNs accepted a Live Activity update");
+            tracing::info!(target: "agent", operation = "host.apns.delivery", "APNs accepted a Live Activity update");
             return ResultKind::Accepted;
         }
         #[derive(Deserialize)]
@@ -219,7 +219,7 @@ impl Client {
             .json::<Failure>()
             .await
             .map_or(Rejection::Unknown, |failure| failure.reason);
-        tracing::warn!(target: "bex", operation = "host.apns.delivery", error_code = u64::from(status.as_u16()),
+        tracing::warn!(target: "agent", operation = "host.apns.delivery", error_code = u64::from(status.as_u16()),
             message = %format_args!("APNs rejected a Live Activity update: {rejection:?}"));
         rejection_result(status.as_u16(), rejection)
     }
@@ -400,7 +400,7 @@ mod tests {
     #[tokio::test]
     async fn absent_configuration_is_optional_but_invalid_configuration_fails_startup() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("bex-apns.json");
+        let path = directory.path().join("agent-apns.json");
         assert!(Client::load(&path).await.unwrap().is_none());
         tokio::fs::write(&path, b"{}").await.unwrap();
         assert!(Client::load(&path).await.is_err());

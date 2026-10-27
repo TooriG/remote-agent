@@ -4,7 +4,7 @@ import SwiftUI
 struct AgentSettingsScreen: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
-    @ObservedObject var model: BexAppViewModel
+    @ObservedObject var model: AppViewModel
     @State var provider: ProviderKind?
     let close: () -> Void
     @State private var changingAccount = false

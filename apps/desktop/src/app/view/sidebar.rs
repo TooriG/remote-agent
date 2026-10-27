@@ -295,7 +295,7 @@ impl SidebarItem for SidebarSection {
                         .when_some(self.add_project, |header, (desktop, enabled)| {
                             header.child(
                                 Button::new("choose-project")
-                                    .icon(Icon::default().path("bex/folder-plus.svg"))
+                                    .icon(Icon::default().path("icons/folder-plus.svg"))
                                     .small()
                                     .ghost()
                                     .tooltip("プロジェクトを追加")
@@ -595,13 +595,13 @@ impl Desktop {
         let unread = thread.unread;
         let worktree = thread.worktree_status.map(|status| match status {
             agent_protocol::models::WorktreeStatus::Unmerged => (
-                "bex/diff.svg",
+                "icons/diff.svg",
                 0xfb923c,
                 "main に未反映の変更あり",
                 format!("thread-unmerged-{}", thread.id),
             ),
             agent_protocol::models::WorktreeStatus::Merged => (
-                "bex/merge.svg",
+                "icons/merge.svg",
                 0xa78bfa,
                 "main にマージ済み",
                 format!("thread-merged-{}", thread.id),
@@ -994,8 +994,8 @@ mod tests {
         });
         window.run_until_parked();
         // Leave the Tokio executor parked so both task reads remain pending.
-        assert!(window.debug_bounds("bex/diff.svg").is_some());
-        assert!(window.debug_bounds("bex/merge.svg").is_some());
+        assert!(window.debug_bounds("icons/diff.svg").is_some());
+        assert!(window.debug_bounds("icons/merge.svg").is_some());
         for (id, selector) in [("first", "task-0"), ("second", "task-1")] {
             let bounds = window.debug_bounds(selector).unwrap();
             let button = gpui::point(bounds.left() + gpui::px(70.), bounds.top() + gpui::px(14.));

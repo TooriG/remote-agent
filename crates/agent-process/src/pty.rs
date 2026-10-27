@@ -1,4 +1,4 @@
-use bex_process::{PtyCommand, PtyEvent};
+use agent_process::{PtyCommand, PtyEvent};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use std::io::{self, Read, Write};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};

@@ -21,7 +21,7 @@ fn supervisor_command() -> io::Result<Command> {
 pub fn suppress_browser(command: &mut Command) -> io::Result<()> {
     command
         .env("BROWSER", supervisor_path()?)
-        .env("BEX_SUPPRESS_BROWSER", "1");
+        .env("AGENT_SUPPRESS_BROWSER", "1");
     Ok(())
 }
 
@@ -29,12 +29,12 @@ fn supervisor_path() -> io::Result<std::path::PathBuf> {
     let executable = std::env::current_exe()?;
     let supervisor = companion_path(
         &executable,
-        &format!("bex-provider-supervisor{}", std::env::consts::EXE_SUFFIX),
+        &format!("agent-provider-supervisor{}", std::env::consts::EXE_SUFFIX),
     )?;
     if !supervisor.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
-            "bex-provider-supervisor must be built and installed beside the Host; process execution is unavailable",
+            "agent-provider-supervisor must be built and installed beside the Host; process execution is unavailable",
         ));
     }
     Ok(supervisor)
@@ -57,7 +57,7 @@ pub fn companion_path(executable: &Path, name: &str) -> io::Result<std::path::Pa
 pub fn terminal_command() -> io::Result<process_wrap::tokio::CommandWrap> {
     let mut command = supervisor_command()?;
     command
-        .arg("--bex-pty")
+        .arg("--agent-pty")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::inherit());

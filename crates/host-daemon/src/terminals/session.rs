@@ -2,9 +2,9 @@
 //! Cleanup completes before the registry is allowed to release ownership.
 use super::{Action, Command, Receipt, screen::TerminalScreen};
 use crate::host_rpc::routing::{SessionId, SessionRouter};
+use agent_process::{PtyCommand, PtyEvent};
 use agent_protocol::{operations::TerminalSize, protocol::Notification};
 use agent_transport::peer::JsonlReader;
-use bex_process::{PtyCommand, PtyEvent};
 use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -36,7 +36,7 @@ impl Worker {
         let mut cleanup = Ok(());
         let result = async {
             if self.stop.is_cancelled() { return Err("terminal startup cancelled".into()); }
-            let mut child = bex_process::terminal_command().and_then(|mut command| command.spawn()).map_err(|error| error.to_string())?;
+            let mut child = agent_process::terminal_command().and_then(|mut command| command.spawn()).map_err(|error| error.to_string())?;
             cleanup = Err("terminal cleanup incomplete".into());
             let mut stdin = child.stdin().take().ok_or("terminal input pipe unavailable")?;
             let mut output = JsonlReader::new(child.stdout().take().ok_or("terminal output pipe unavailable")?);

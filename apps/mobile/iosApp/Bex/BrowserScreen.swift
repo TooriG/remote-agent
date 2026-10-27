@@ -97,7 +97,7 @@ struct WorkspaceBrowserScreen: View {
             }.font(.system(size: 14)).foregroundStyle(.secondary).padding(.horizontal, 4).disabled(!acceptsInput)
             Divider().opacity(0.6)
             if let message = error ?? connectionError ?? notice {
-                BexNotice(text: message).padding(.horizontal)
+                AppNotice(text: message).padding(.horizontal)
             }
             if let dialog = frame?.dialog {
                 VStack {

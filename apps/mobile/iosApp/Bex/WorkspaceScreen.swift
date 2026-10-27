@@ -8,7 +8,7 @@ private struct WorkspaceDestination: Hashable {
 
 /// Keep the workbench on its conversation while side-chat operations change Store selection.
 struct ConversationDestination: View {
-    @ObservedObject var model: BexAppViewModel
+    @ObservedObject var model: AppViewModel
     @State private var tools: WorkspaceDestination?
 
     var body: some View {
@@ -59,7 +59,7 @@ extension PanelKind {
     }
 }
 
-extension BexAppViewModel {
+extension AppViewModel {
     func migrateWorkbench(to next: AgentCore.Snapshot) {
         guard let session = next.submittedSession(draft: coreDraftKey) else { return }
         let host = selectedProfileId ?? ""
@@ -105,12 +105,12 @@ extension BexAppViewModel {
     }
 
     func workbenchTerminalHandle(_ id: UInt64) -> String {
-        "bex-terminal-\(workbenchInstance)-\(id)"
+        "agent-terminal-\(workbenchInstance)-\(id)"
     }
 }
 
 private struct WorkspaceToolsScreen: View {
-    @ObservedObject var model: BexAppViewModel
+    @ObservedObject var model: AppViewModel
     let scope: PanelScope
     let directory: String
     let close: () -> Void

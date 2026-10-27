@@ -163,7 +163,7 @@ pub(crate) struct Desktop {
 }
 impl Desktop {
     fn set_error(&mut self, error: String) {
-        tracing::error!(target: "bex", operation = "desktop", message = %error);
+        tracing::error!(target: "agent", operation = "desktop", message = %error);
         self.error = error;
     }
     pub(crate) fn new(mode: Mode, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -595,7 +595,7 @@ impl Desktop {
                             })
                         }
                         Err(error) => {
-                            tracing::error!(target: "bex", operation = "image.load", message = %error);
+                            tracing::error!(target: "agent", operation = "image.load", message = %error);
                             image.error = Some(error);
                         }
                     }
@@ -730,7 +730,7 @@ impl Desktop {
                         }
                     }
                     Err(error) => {
-                        tracing::error!(target: "bex", operation = "gallery.load", message = %error);
+                        tracing::error!(target: "agent", operation = "gallery.load", message = %error);
                         gallery.error = error;
                     }
                     _ => unreachable!("session image outcome"),
@@ -772,7 +772,7 @@ impl Desktop {
         if previous.error != self.snapshot.error
             && let Some(error) = &self.snapshot.error
         {
-            tracing::error!(target: "bex", operation = "store", message = %error);
+            tracing::error!(target: "agent", operation = "store", message = %error);
         }
         sync_error_banner(
             &mut self.error,
@@ -1250,7 +1250,7 @@ impl Desktop {
                     let terminal = crate::terminal::Terminal::new(
                         self.remote.as_ref().map_or("", |remote| &remote.ticket),
                         self.snapshot.navigation.cwd.clone(),
-                        format!("bex-terminal-{}", uuid::Uuid::new_v4()),
+                        format!("agent-terminal-{}", uuid::Uuid::new_v4()),
                         window,
                         cx,
                     );

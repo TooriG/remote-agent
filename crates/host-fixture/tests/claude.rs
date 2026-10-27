@@ -26,7 +26,7 @@ use serde_json::{Value, json};
 mod codex_fixture;
 
 async fn host(root: &Path, memory: Arc<Memory>, program: &Path) -> HostFixture {
-    let existing = root.join("bex-codex-fixture");
+    let existing = root.join("agent-codex-fixture");
     let config = if existing.exists() {
         AppServerConfig {
             program: existing,
@@ -211,7 +211,7 @@ async fn listed(
 }
 
 fn fixture_program() -> &'static Path {
-    Path::new(env!("CARGO_BIN_EXE_bex-claude-fixture"))
+    Path::new(env!("CARGO_BIN_EXE_agent-claude-fixture"))
 }
 
 fn git(cwd: &Path, args: &[&str]) {
@@ -388,8 +388,8 @@ async fn claude_submission_preserves_inputs_settings_workspaces_and_history_acro
         std::fs::write(workspace.join("tracked.txt"), "fixture\n").unwrap();
         git(&workspace, &["add", "tracked.txt"]);
         git(&workspace, &["-c","user.name=Fixture","-c","user.email=fixture@example.invalid","-c","commit.gpgsign=false","commit","--quiet","-m","fixture"]);
-        std::fs::write(root.join("bex-projects.json"), json!([{"id":"project","name":"Project","roots":[{"path":workspace}]}]).to_string()).unwrap();
-        std::fs::write(root.join("bex-worktrees.json"), json!({"settings":{"createOnNewSession":automatic,"worktreeDirectory":root.join("worktrees")}}).to_string()).unwrap();
+        std::fs::write(root.join("agent-projects.json"), json!([{"id":"project","name":"Project","roots":[{"path":workspace}]}]).to_string()).unwrap();
+        std::fs::write(root.join("agent-worktrees.json"), json!({"settings":{"createOnNewSession":automatic,"worktreeDirectory":root.join("worktrees")}}).to_string()).unwrap();
         let memory = Arc::new(Memory::default());
         let mut fixture = host(&root, memory.clone(), fixture_program()).await;
         let (mut store, mut endpoint) = connect(&fixture, Snapshot::default()).await;
@@ -425,7 +425,7 @@ async fn claude_submission_preserves_inputs_settings_workspaces_and_history_acro
                 assert_eq!(Path::new(&cwd).file_name(), workspace.file_name());
                 assert_eq!(Path::new(&cwd).parent().unwrap().parent().unwrap(), root.join("worktrees"));
             }
-            else { assert_eq!(Path::new(&cwd), if selected { workspace.clone() } else { root.join("bex-chats") }); }
+            else { assert_eq!(Path::new(&cwd), if selected { workspace.clone() } else { root.join("agent-chats") }); }
             let turn = &snapshot.conversations[&id].turns.as_ref().unwrap()[number];
             let items = turn.items.as_ref().unwrap();
             assert!(items.iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::Reasoning { .. }) && item_text(item) == Some("Fixture reasoning")));
@@ -894,8 +894,8 @@ async fn missing_codex_keeps_claude_inputs_workspaces_and_resumed_history_usable
         std::fs::write(workspace.join("tracked.txt"), "fixture\n").unwrap();
         git(&workspace, &["add", "tracked.txt"]);
         git(&workspace, &["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "fixture"]);
-        std::fs::write(root.join("bex-projects.json"), json!([{"id":"project","name":"Project","roots":[{"path":workspace}]}]).to_string()).unwrap();
-        std::fs::write(root.join("bex-worktrees.json"), json!({"settings":{"createOnNewSession":automatic,"worktreeDirectory":root.join("worktrees")}}).to_string()).unwrap();
+        std::fs::write(root.join("agent-projects.json"), json!([{"id":"project","name":"Project","roots":[{"path":workspace}]}]).to_string()).unwrap();
+        std::fs::write(root.join("agent-worktrees.json"), json!({"settings":{"createOnNewSession":automatic,"worktreeDirectory":root.join("worktrees")}}).to_string()).unwrap();
         let config = AppServerConfig { program: root.join("missing-codex"), ..Default::default() };
         let memory = Arc::new(Memory::default());
         let mut saved = Snapshot::default();
@@ -924,7 +924,7 @@ async fn missing_codex_keeps_claude_inputs_workspaces_and_resumed_history_usable
                 assert_eq!(Path::new(&current).file_name(), workspace.file_name());
                 assert_eq!(Path::new(&current).parent().unwrap().parent().unwrap(), root.join("worktrees"));
             }
-            else { assert_eq!(Path::new(&current), if selected { workspace.clone() } else { root.join("bex-chats") }); }
+            else { assert_eq!(Path::new(&current), if selected { workspace.clone() } else { root.join("agent-chats") }); }
             let turns = snapshot.conversations[&id].turns.as_ref().unwrap();
             assert!(turns[index].items.as_ref().unwrap().iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::AssistantText { .. }) && item_text(item).is_some_and(|text| text.starts_with(&format!("reply {}: independent {index}", index + 1)))));
             let snapshot = listed(&store, &id, selected.then_some(workspace.as_path())).await;
@@ -1121,7 +1121,7 @@ async fn claude_authentication_and_inference_failures_are_visible_and_retry_pres
  {
     tokio::time::timeout(Duration::from_secs(45), async {
         let root = tempfile::tempdir().unwrap();
-        let cwd = root.path().join("bex-chats");
+        let cwd = root.path().join("agent-chats");
         std::fs::create_dir(&cwd).unwrap();
         let config = cwd.join("claude-fixture.json");
         std::fs::write(&config, json!({"unauthenticated":true}).to_string()).unwrap();
@@ -1233,7 +1233,7 @@ async fn claude_authentication_and_inference_failures_are_visible_and_retry_pres
 #[ignore = "uses the Host user's authenticated Claude subscription; run explicitly"]
 async fn live_claude_subscription_completes_and_resumes_through_store_and_host() {
     tokio::time::timeout(Duration::from_secs(150), async {
-        let program = std::env::var_os("BEX_LIVE_CLAUDE_PROGRAM").expect("set an absolute Claude Code executable path");
+        let program = std::env::var_os("AGENT_LIVE_CLAUDE_PROGRAM").expect("set an absolute Claude Code executable path");
         let root = tempfile::tempdir().unwrap();
         let memory = Arc::new(Memory::default());
         let fixture = host(root.path(), memory.clone(), Path::new(&program)).await;
@@ -1241,11 +1241,11 @@ async fn live_claude_subscription_completes_and_resumes_through_store_and_host()
         store.dispatch(Intent::NewChat { cwd: String::new() }).await.unwrap();
         let key = store.snapshot().navigation.draft_key.clone();
         store.dispatch(Intent::SelectModel { thread_id: key, model: agent_protocol::models::ModelRef { provider: agent_protocol::session::ProviderKind::Claude, id: "haiku".into() } }).await.unwrap();
-        let id = send(&store, "Remember marker BEX_CLAUDE_STORE_OK. Reply with exactly that marker. Do not use tools.", "live-1").await;
+        let id = send(&store, "Remember marker AGENT_CLAUDE_STORE_OK. Reply with exactly that marker. Do not use tools.", "live-1").await;
         let snapshot = completed(&store, &id, 1, "completed").await;
         assert!(snapshot.error.is_none());
         assert!(snapshot.drafts[&agent_core::state::DraftKey::from(&id)].text.is_empty() && snapshot.pending_submissions.is_empty());
-        assert!(snapshot.conversations[&id].turns.as_ref().unwrap()[0].items.as_ref().unwrap().iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::AssistantText { .. }) && item_text(item).is_some_and(|text| text.contains("BEX_CLAUDE_STORE_OK"))));
+        assert!(snapshot.conversations[&id].turns.as_ref().unwrap()[0].items.as_ref().unwrap().iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::AssistantText { .. }) && item_text(item).is_some_and(|text| text.contains("AGENT_CLAUDE_STORE_OK"))));
         store.close().await.unwrap();
         endpoint.close().await;
         fixture.close().await.unwrap();
@@ -1256,28 +1256,28 @@ async fn live_claude_subscription_completes_and_resumes_through_store_and_host()
         let snapshot = completed(&store, &id, 2, "completed").await;
         assert!(snapshot.error.is_none());
         assert!(snapshot.drafts[&agent_core::state::DraftKey::from(&id)].text.is_empty() && snapshot.pending_submissions.is_empty());
-        assert!(snapshot.conversations[&id].turns.as_ref().unwrap()[1].items.as_ref().unwrap().iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::AssistantText { .. }) && item_text(item).is_some_and(|text| text.contains("BEX_CLAUDE_STORE_OK"))));
+        assert!(snapshot.conversations[&id].turns.as_ref().unwrap()[1].items.as_ref().unwrap().iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::AssistantText { .. }) && item_text(item).is_some_and(|text| text.contains("AGENT_CLAUDE_STORE_OK"))));
         send(&store, "Count from 1 to 10000, one number per line. Do not use tools.", "live-stop").await;
         let snapshot = until(&store, |snapshot| snapshot.conversations[&id].turns.as_ref().is_some_and(|turns| turns.len() == 3 && turns[2].items.as_ref().is_some_and(|items| items.iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::AssistantText { .. }) && item_text(item).is_some_and(|text| !text.is_empty()))))).await;
         let turn_id = snapshot.conversations[&id].turns.as_ref().unwrap()[2].id.clone();
         store.dispatch(Intent::Interrupt(op::Interrupt { thread_id: id.clone(), turn_id })).await.unwrap();
         let snapshot = completed(&store, &id, 3, "interrupted").await;
         assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
-        send(&store, "Reply with exactly BEX_CLAUDE_RECOVERED. Do not use tools.", "live-recovery").await;
+        send(&store, "Reply with exactly AGENT_CLAUDE_RECOVERED. Do not use tools.", "live-recovery").await;
         let snapshot = completed(&store, &id, 4, "completed").await;
         assert!(snapshot.error.is_none());
         assert!(snapshot.drafts[&agent_core::state::DraftKey::from(&id)].text.is_empty() && snapshot.pending_submissions.is_empty());
-        assert!(snapshot.conversations[&id].turns.as_ref().unwrap()[3].items.as_ref().unwrap().iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::AssistantText { .. }) && item_text(item).is_some_and(|text| text.contains("BEX_CLAUDE_RECOVERED"))));
+        assert!(snapshot.conversations[&id].turns.as_ref().unwrap()[3].items.as_ref().unwrap().iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::AssistantText { .. }) && item_text(item).is_some_and(|text| text.contains("AGENT_CLAUDE_RECOVERED"))));
         send(&store, "Count from 1 to 100, one number per line. Do not use tools.", "live-before-additional").await;
         until(&store, |snapshot| snapshot.conversations[&id].turns.as_ref().is_some_and(|turns| turns.len() == 5 && turns[4].items.as_ref().is_some_and(|items| items.iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::AssistantText { .. }) && item_text(item).is_some_and(|text| !text.is_empty()))))).await;
         assert!(agent_protocol::session::input_unavailable_reason(&store.snapshot().conversations[&id]).is_none());
-        send(&store, "Reply with exactly BEX_CLAUDE_ADDITIONAL_OK. Do not use tools.", "live-additional").await;
+        send(&store, "Reply with exactly AGENT_CLAUDE_ADDITIONAL_OK. Do not use tools.", "live-additional").await;
         let snapshot = completed(&store, &id, 5, "completed").await;
         assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
         assert!(snapshot.pending_submissions.is_empty());
         let items = snapshot.conversations[&id].turns.as_ref().unwrap()[4].items.as_ref().unwrap();
         assert_eq!(items.iter().filter(|item| item.client_input_id.as_deref() == Some("live-additional")).count(), 1);
-        assert!(items.iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::AssistantText { .. }) && item_text(item).is_some_and(|text| text.contains("BEX_CLAUDE_ADDITIONAL_OK"))));
+        assert!(items.iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::AssistantText { .. }) && item_text(item).is_some_and(|text| text.contains("AGENT_CLAUDE_ADDITIONAL_OK"))));
         store.close().await.unwrap();
         endpoint.close().await;
         fixture.close().await.unwrap();
@@ -1348,7 +1348,7 @@ async fn deleted_claude_worktree_restarts_the_retained_process_and_continues_the
             ],
         );
         std::fs::write(
-            root.join("bex-worktrees.json"),
+            root.join("agent-worktrees.json"),
             json!({"settings":{"createOnNewSession":true}}).to_string(),
         )
         .unwrap();
@@ -1429,9 +1429,9 @@ async fn missing_codex_terminal_is_owned_by_its_connection_and_supports_io_resiz
             process_handle: "owned".into(),
         };
         #[cfg(unix)]
-        let input = b"printf 'BEX_%s\\n' 'PTY_READY'; stty size\n".as_slice();
+        let input = b"printf 'AGENT_%s\\n' 'PTY_READY'; stty size\n".as_slice();
         #[cfg(windows)]
-        let input = b"echo BEX_PTY_READY\r\n".as_slice();
+        let input = b"echo AGENT_PTY_READY\r\n".as_slice();
         let write = rpc::TerminalWrite {
             process_handle: "owned".into(),
             data: input.to_vec(),
@@ -1472,7 +1472,7 @@ async fn missing_codex_terminal_is_owned_by_its_connection_and_supports_io_resiz
             if let agent_protocol::protocol::Notification::Output { data, .. } = message {
                 output.extend(data);
                 let text = String::from_utf8_lossy(&output);
-                if text.contains("BEX_PTY_READY") {
+                if text.contains("AGENT_PTY_READY") {
                     #[cfg(unix)]
                     if !text.contains("39 97") {
                         continue;
@@ -1661,9 +1661,10 @@ async fn claude_cancel_recovers_from_logout_failure_only_when_logged_out() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires BEX_LIVE_CLAUDE_PROGRAM; starts and cancels an isolated login, never performs inference"]
+#[ignore = "requires AGENT_LIVE_CLAUDE_PROGRAM; starts and cancels an isolated login, never performs inference"]
 async fn live_claude_account_login_url_and_cancellation() {
-    let program = std::env::var_os("BEX_LIVE_CLAUDE_PROGRAM").expect("set BEX_LIVE_CLAUDE_PROGRAM");
+    let program =
+        std::env::var_os("AGENT_LIVE_CLAUDE_PROGRAM").expect("set AGENT_LIVE_CLAUDE_PROGRAM");
     let root = tempfile::tempdir().unwrap();
     let fixture = HostFixture::start(
         root.path(),

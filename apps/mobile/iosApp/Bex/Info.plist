@@ -4,8 +4,8 @@
 <dict>
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
-    <key>BexTaskURLScheme</key>
-    <string>$(BEX_TASK_URL_SCHEME)</string>
+    <key>TaskURLScheme</key>
+    <string>$(AGENT_TASK_URL_SCHEME)</string>
     <key>CFBundleDevelopmentRegion</key>
     <string>$(DEVELOPMENT_LANGUAGE)</string>
     <key>CFBundleDisplayName</key>
@@ -30,7 +30,7 @@
     <true/>
     <key>NSSupportsLiveActivities</key>
     <true/>
-    <key>BexAPNSEnvironment</key>
+    <key>APNSEnvironment</key>
     <string>$(APNS_ENVIRONMENT)</string>
     <key>CFBundleURLTypes</key>
     <array>
@@ -38,7 +38,7 @@
             <key>CFBundleURLName</key>
             <string>$(PRODUCT_BUNDLE_IDENTIFIER).task</string>
             <key>CFBundleURLSchemes</key>
-            <array><string>$(BEX_TASK_URL_SCHEME)</string></array>
+            <array><string>$(AGENT_TASK_URL_SCHEME)</string></array>
         </dict>
     </array>
     <key>NSAppTransportSecurity</key>

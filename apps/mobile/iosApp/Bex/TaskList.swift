@@ -2,7 +2,7 @@ import AgentCore
 import SwiftUI
 
 struct ThreadsScreen: View {
-    @ObservedObject var model: BexAppViewModel
+    @ObservedObject var model: AppViewModel
     @State private var search = ""
     @State private var showingSettings = false
 
@@ -11,12 +11,12 @@ struct ThreadsScreen: View {
         let chats = model.list?.threads ?? []
         List {
             if let notice = model.list?.notice {
-                BexNotice(text: notice).taskListRowStyle()
+                AppNotice(text: notice).taskListRowStyle()
             }
             if model.threadLoadState == .failed {
                 Section {
                     if let error = model.notice {
-                        BexNotice(text: error)
+                        AppNotice(text: error)
                             .taskListRowStyle()
                     }
                     Button("再試行") { model.refreshTaskList() }
@@ -27,7 +27,7 @@ struct ThreadsScreen: View {
             }
             if let notice = model.notice {
                 Section {
-                    BexNotice(text: notice)
+                    AppNotice(text: notice)
                         .taskListRowStyle()
                 }
                 .listSectionSeparator(.hidden)
@@ -78,7 +78,7 @@ struct ThreadsScreen: View {
                             ProgressView().taskListRowStyle()
                         }
                         if let error = project.error {
-                            BexNotice(text: error).taskListRowStyle()
+                            AppNotice(text: error).taskListRowStyle()
                             Button("再試行") {
                                 model.perform(.refreshProject(projectId: project.id))
                             }.taskListRowStyle()

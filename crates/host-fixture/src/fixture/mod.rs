@@ -39,7 +39,10 @@ impl Config {
     pub fn install(&self, executable: &Path, directory: &Path) -> Result<PathBuf> {
         fs::create_dir_all(directory)?;
         let directory = dunce::canonicalize(directory)?;
-        let program = directory.join(format!("bex-codex-fixture{}", std::env::consts::EXE_SUFFIX));
+        let program = directory.join(format!(
+            "agent-codex-fixture{}",
+            std::env::consts::EXE_SUFFIX
+        ));
         // The launcher resolves symlinks, so use a private executable copy.
         // A hard link would share an inode with mutable Cargo outputs while
         // native UI and Rust tests build different feature combinations.
@@ -69,7 +72,7 @@ pub async fn run(arguments: &[String]) -> Result<()> {
         arguments = &arguments[2..];
     }
     if arguments != ["app-server"] && arguments != ["app-server", "--listen", "stdio://"] {
-        return Err("usage: bex-codex-fixture app-server --listen stdio://".into());
+        return Err("usage: agent-codex-fixture app-server --listen stdio://".into());
     }
     let program = std::env::current_exe()?;
     let home = program

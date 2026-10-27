@@ -28,7 +28,7 @@ use uuid::Uuid;
 
 // Versions describe the framing/codec, not application releases or RPC additions.
 // Named records and methods evolve under agent_protocol::protocol's contract.
-const ALPN: &[u8] = b"bex/messagepack/1";
+const ALPN: &[u8] = b"agent/messagepack/1";
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
     #[error("iroh transport failed: {0}")]
@@ -171,7 +171,7 @@ impl Endpoint {
                 builder.relay_mode(RelayMode::Custom(urls.into_iter().collect()))
             }
         };
-        let span = tracing::info_span!(target: "bex.net", "network", trace_id = trace.id);
+        let span = tracing::info_span!(target: "agent.net", "network", trace_id = trace.id);
         let endpoint = builder.bind().instrument(span).await.map_err(connection)?;
         trace.record(Phase::EndpointReady, 0, 0, 0);
         Ok(Self(Arc::new(endpoint), trace))
@@ -256,7 +256,7 @@ impl Endpoint {
             .elapsed_at(std::time::Instant::now())
             .saturating_sub(45_000_000);
         timeline.events.retain(|event| event.at_us >= cutoff);
-        tracing::info!(target: "bex", operation = "host.connection.timeline", message = %format_args!("trace={} dropped={}", timeline.id, timeline.dropped));
+        tracing::info!(target: "agent", operation = "host.connection.timeline", message = %format_args!("trace={} dropped={}", timeline.id, timeline.dropped));
         crate::diagnostics::connection_events("host.connection.event", &timeline);
     }
     pub async fn close(&self) {

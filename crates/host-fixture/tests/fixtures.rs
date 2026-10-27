@@ -25,17 +25,17 @@ async fn codex_fixture_uses_its_own_directory_instead_of_inherited_user_configur
             stream_delay_ms: 0,
             ..Default::default()
         }
-        .install(Path::new(env!("CARGO_BIN_EXE_bex-codex-fixture")), &root)
+        .install(Path::new(env!("CARGO_BIN_EXE_agent-codex-fixture")), &root)
         .unwrap();
         let mut child = Command::new(program)
             .arg("app-server")
             .current_dir(ambient.path())
             .env("CODEX_HOME", ambient.path())
             .env(
-                "BEX_FAKE_CODEX_TRACE",
+                "AGENT_FAKE_CODEX_TRACE",
                 ambient.path().join("unwanted-trace"),
             )
-            .env("BEX_FAKE_CODEX_EXPECTED_CWD", ambient.path())
+            .env("AGENT_FAKE_CODEX_EXPECTED_CWD", ambient.path())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .kill_on_drop(true)
@@ -85,7 +85,7 @@ async fn pairing_controls_restore_the_original_project_store_and_survive_rejecte
         let fixture = tempfile::tempdir().unwrap();
         let root = dunce::canonicalize(fixture.path()).unwrap();
         let original = b"[]\n";
-        fs::write(root.join("bex-projects.json"), original).unwrap();
+        fs::write(root.join("agent-projects.json"), original).unwrap();
         let host = HostFixture::start(
             &root,
             codex_fixture::config(&root),
@@ -136,7 +136,10 @@ async fn pairing_controls_restore_the_original_project_store_and_survive_rejecte
                 .status(),
             204
         );
-        assert_eq!(fs::read(root.join("bex-projects.json")).unwrap(), original);
+        assert_eq!(
+            fs::read(root.join("agent-projects.json")).unwrap(),
+            original
+        );
         assert!(!root.join("list-fixture.json").exists());
         assert!(!root.join("projects-before-list-fixture.json").exists());
         assert_eq!(

@@ -9,7 +9,7 @@ struct DraftIdentity: Hashable {
 
 typealias SnapshotRequest = (Intent, @escaping (AgentCore.Snapshot, Result<Outcome, Error>) -> Void) -> Void
 
-extension BexAppViewModel {
+extension AppViewModel {
     var sending: Bool {
         snapshot.operationRunning(key: .submission(draftKey: coreDraftKey))
     }
@@ -193,7 +193,7 @@ extension BexAppViewModel {
     }
 }
 
-extension BexAppViewModel {
+extension AppViewModel {
     func attach(_ url: URL, temporaryDirectory: URL? = nil) async throws {
         let access = url.startAccessingSecurityScopedResource()
         transferring = true

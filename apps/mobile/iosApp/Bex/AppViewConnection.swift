@@ -2,7 +2,7 @@ import AgentCore
 import Foundation
 import UIKit
 
-extension BexAppViewModel {
+extension AppViewModel {
     func connect(afterForeground: Bool = false) {
         guard screen != .pairing, let owner = store,
               let profile = profiles.first(where: { $0.id == selectedProfileId }),

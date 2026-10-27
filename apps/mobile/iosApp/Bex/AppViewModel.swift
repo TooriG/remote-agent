@@ -5,7 +5,7 @@ import Network
 import UIKit
 
 @MainActor
-final class BexAppViewModel: ObservableObject {
+final class AppViewModel: ObservableObject {
     @Published private(set) var snapshot = AgentCore.Snapshot.empty()
     @Published var screen: AppScreen = .profiles
     @Published var sideChatRequest: SideChatRequest?
@@ -52,9 +52,9 @@ final class BexAppViewModel: ObservableObject {
                 }
             }
         }
-        pathMonitor.start(queue: DispatchQueue(label: "bex.network-path"))
+        pathMonitor.start(queue: DispatchQueue(label: "agent.network-path"))
         do { profiles = try HostProfile.load() } catch { notice = error.localizedDescription }
-        if let id = UserDefaults.standard.string(forKey: "bex.selected-host"),
+        if let id = UserDefaults.standard.string(forKey: "agent.selected-host"),
            profiles.contains(where: { $0.id == id }) {
             selectProfile(id)
         }
@@ -70,7 +70,7 @@ final class BexAppViewModel: ObservableObject {
         }
         let old = detachStore()
         selectedProfileId = id
-        UserDefaults.standard.set(id, forKey: "bex.selected-host")
+        UserDefaults.standard.set(id, forKey: "agent.selected-host")
         publish(AgentCore.Snapshot.empty())
         let writing = persistenceWrite
         initialization = Task { [weak self] in
@@ -87,7 +87,7 @@ final class BexAppViewModel: ObservableObject {
             if selectedProfileId == id {
                 let old = detachStore()
                 selectedProfileId = nil
-                UserDefaults.standard.removeObject(forKey: "bex.selected-host")
+                UserDefaults.standard.removeObject(forKey: "agent.selected-host")
                 notice = nil
                 publish(AgentCore.Snapshot.empty())
                 Task { [weak self] in
@@ -220,7 +220,7 @@ final class BexAppViewModel: ObservableObject {
                     profiles.removeAll { $0.id == id }
                     profiles.append(HostProfile(id: id, name: invitation.hostName, ticket: invitation.endpoint))
                     try HostProfile.save(profiles)
-                    UserDefaults.standard.set(id, forKey: "bex.selected-host")
+                    UserDefaults.standard.set(id, forKey: "agent.selected-host")
                     selectedProfileId = id
                     store = owner
                     recentConversations.removeAll()
@@ -272,7 +272,7 @@ final class BexAppViewModel: ObservableObject {
     }
 }
 
-extension BexAppViewModel {
+extension AppViewModel {
     func publish(_ next: AgentCore.Snapshot) {
         guard !next.unchanged(other: snapshot) else { return }
         if let name = next.hostName(),

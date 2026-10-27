@@ -1,10 +1,10 @@
 import AVFoundation
 import UIKit
 
-final class BexQrCaptureViewController: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
+final class QrCaptureViewController: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
     private let completion: (String) -> Void
     private let session = AVCaptureSession()
-    private let sessionQueue = DispatchQueue(label: "bex.qr-capture")
+    private let sessionQueue = DispatchQueue(label: "agent.qr-capture")
     private let previewLayer = AVCaptureVideoPreviewLayer()
     private var hasCompleted = false
 

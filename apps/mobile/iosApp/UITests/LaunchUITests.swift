@@ -1,7 +1,7 @@
 import Foundation
 import XCTest
 
-final class BexLaunchUITests: XCTestCase {
+final class LaunchUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
     }
@@ -78,7 +78,7 @@ final class BexLaunchUITests: XCTestCase {
         line: UInt = #line
     ) throws -> Data {
         let pairingURL =
-            try XCTUnwrap(try URL(string: XCTUnwrap(ProcessInfo.processInfo.environment["BEX_PAIRING_URL"])))
+            try XCTUnwrap(try URL(string: XCTUnwrap(ProcessInfo.processInfo.environment["AGENT_PAIRING_URL"])))
         var request = URLRequest(url: pairingURL.deletingLastPathComponent().appendingPathComponent(path))
         request.httpMethod = method
         request.timeoutInterval = timeout

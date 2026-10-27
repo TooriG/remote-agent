@@ -761,7 +761,7 @@ impl Desktop {
                                                         cx.notify();
                                                     },
                                                 ))
-                                                .icon(Icon::default().path("bex/branch.svg"))
+                                                .icon(Icon::default().path("icons/branch.svg"))
                                                 .debug_selector(|| "response-fork".into())
                                                 .disabled(
                                                     !self.snapshot.connected
@@ -1302,7 +1302,7 @@ fn user_message_row(
                         }),
                 )
                 .child(
-                    edit.icon(Icon::default().path("bex/pencil.svg"))
+                    edit.icon(Icon::default().path("icons/pencil.svg"))
                         .small()
                         .ghost()
                         .debug_selector(|| "user-message-edit".into())

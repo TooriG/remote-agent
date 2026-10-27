@@ -3,13 +3,13 @@ import SwiftUI
 import WidgetKit
 
 @main
-struct BexTaskWidgets: WidgetBundle {
+struct TaskWidgets: WidgetBundle {
     var body: some Widget {
-        BexTaskActivity()
+        TaskActivityExtension()
     }
 }
 
-private struct BexTaskActivity: Widget {
+private struct TaskActivityExtension: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: TaskActivityAttributes.self) { context in
             let view = context.state.display.current

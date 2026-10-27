@@ -259,7 +259,7 @@ impl RpcPeer {
         let _permit = tokio::select! {
             permit = self.permits.acquire() => permit.map_err(|_| self.closed_error())?,
             _ = &mut expiration => {
-                tracing::error!(target: "bex", operation = %(&method), message = "RPC request timed out waiting for capacity");
+                tracing::error!(target: "agent", operation = %(&method), message = "RPC request timed out waiting for capacity");
                 return Err(PeerError::RequestTimeout { method });
             },
         };
@@ -309,7 +309,7 @@ impl RpcPeer {
                                 )),
                             );
                         } else {
-                            tracing::error!(target: "bex", operation = %(&method), message = "RPC request timed out waiting for response");
+                            tracing::error!(target: "agent", operation = %(&method), message = "RPC request timed out waiting for response");
                         }
                         PeerError::RequestTimeout { method }
                     }
@@ -539,7 +539,7 @@ fn terminate(
     stop.cancel();
     for pending in pending.into_values() {
         if failed {
-            tracing::error!(target: "bex", operation = %(&pending.method), message = %reason);
+            tracing::error!(target: "agent", operation = %(&pending.method), message = %reason);
         }
         let _ = pending
             .complete

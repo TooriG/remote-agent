@@ -1,6 +1,6 @@
 import XCTest
 
-extension BexLaunchUITests {
+extension LaunchUITests {
     func testSimulatorMarksMergedWorktreesToTheRightOfRunningStatus() throws {
         let app = try connectedSimulatorApp()
         try useSimulatorListFixture("merge-worktree/fresh")
@@ -117,7 +117,7 @@ extension BexLaunchUITests {
         XCTAssertTrue(app.staticTexts["worktree.error"].waitForExistence(timeout: 10))
         XCTAssertEqual(directory.value as? String, "relative")
         XCTAssertEqual(create.value as? String, "1")
-        let destination = "/tmp/bex-worktree-ui-\(UUID().uuidString)"
+        let destination = "/tmp/agent-worktree-ui-\(UUID().uuidString)"
         directory.tap()
         directory.typeKey("a", modifierFlags: .command)
         directory.typeText(destination)

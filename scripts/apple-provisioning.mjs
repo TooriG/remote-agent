@@ -51,13 +51,13 @@ export async function distributionProfiles(request, serial, now = Date.now()) {
 async function main() {
   let pem;
   try {
-    pem = execFileSync('/usr/bin/security', ['find-certificate', '-a', '-p', process.env.BEX_CODE_SIGN_KEYCHAIN], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    pem = execFileSync('/usr/bin/security', ['find-certificate', '-a', '-p', process.env.AGENT_CODE_SIGN_KEYCHAIN], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   } catch { throw new Error('Could not read the dedicated signing certificates.'); }
   const certificates = [...pem.matchAll(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g)]
     .map(match => new X509Certificate(match[0])).filter(cert => /^CN=Apple Distribution:/m.test(cert.subject) && /^OU=K65K9J8686$/m.test(cert.subject));
   if (certificates.length !== 1) throw new Error('The BEX distribution certificate is missing or ambiguous.');
-  const request = ascClient({ keyId: process.env.BEX_ASC_KEY_ID, issuer: process.env.BEX_ASC_ISSUER_ID,
-    privateKey: readFileSync(process.env.BEX_ASC_PRIVATE_KEY_FILE) });
+  const request = ascClient({ keyId: process.env.AGENT_ASC_KEY_ID, issuer: process.env.AGENT_ASC_ISSUER_ID,
+    privateKey: readFileSync(process.env.AGENT_ASC_PRIVATE_KEY_FILE) });
   const result = await distributionProfiles(request, certificates[0].serialNumber);
   const directory = join(process.env.HOME, 'Library/Developer/Xcode/UserData/Provisioning Profiles');
   mkdirSync(directory, { recursive: true, mode: 0o700 });

@@ -1,5 +1,5 @@
 {
-  "name": "bex-visualize-runtime",
+  "name": "agent-visualize-runtime",
   "private": true,
   "description": "Offline shared visualization runtime assets",
   "scripts": {

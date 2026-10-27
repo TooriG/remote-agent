@@ -489,7 +489,7 @@ async fn binary_transfers_use_the_issuing_iroh_session_and_preserve_bytes() {
             uploaded.starts_with(
                 dunce::canonicalize(directory.path())
                     .unwrap()
-                    .join("bex-attachments")
+                    .join("agent-attachments")
             )
         );
         let destination = directory.path().join("unscoped-download.bin");
@@ -630,7 +630,7 @@ async fn new_live_conversation_avoids_unmaterialized_history_and_survives_reconn
             ..Default::default()
         }
         .install(
-            Path::new(env!("CARGO_BIN_EXE_bex-codex-fixture")),
+            Path::new(env!("CARGO_BIN_EXE_agent-codex-fixture")),
             directory.path(),
         )
         .unwrap();
@@ -834,10 +834,10 @@ async fn submissions_complete_across_saved_worktree_settings_and_chat_scopes(
         let destination = root.join("worktrees");
         // Load persisted preferences before connecting, as a configured
         // installation does. No test depends on default/off settings.
-        std::fs::write(root.join("bex-worktrees.json"), serde_json::to_vec(&json!({
+        std::fs::write(root.join("agent-worktrees.json"), serde_json::to_vec(&json!({
             "settings":{"createOnNewSession":automatic,"worktreeDirectory":destination}
         })).unwrap()).unwrap();
-        std::fs::write(root.join("bex-projects.json"), serde_json::to_vec(&json!([{"id":"default","name":"Default checkout","roots":[{"path":root}]}])).unwrap()).unwrap();
+        std::fs::write(root.join("agent-projects.json"), serde_json::to_vec(&json!([{"id":"default","name":"Default checkout","roots":[{"path":root}]}])).unwrap()).unwrap();
         let source = root.join("photo.png");
         let bytes = include_bytes!("../../../apps/mobile/iosApp/Bex/Assets.xcassets/AppIcon.appiconset/AppIcon.png");
         std::fs::write(&source, bytes).unwrap();
@@ -867,7 +867,7 @@ async fn submissions_complete_across_saved_worktree_settings_and_chat_scopes(
                 Some(current.drafts[&current.navigation.draft_key].attachments[0].path.clone())
             } else { None };
             if !project && number == 0 {
-                let blocked = root.join("bex-chats");
+                let blocked = root.join("agent-chats");
                 std::fs::write(&blocked, "not a directory").unwrap();
                 let before = store.snapshot();
                 let failed = store.dispatch(Intent::Submit { thread_id: None, client_user_message_id: "failed-chat".into() }).await;
@@ -905,10 +905,10 @@ async fn submissions_complete_across_saved_worktree_settings_and_chat_scopes(
             else if project { assert_eq!(Path::new(&cwd), &workspace); }
             else {
                 assert!(store.snapshot().selected_directory().is_empty(), "an unselected chat must remain unselected: {cwd}");
-                assert_eq!(Path::new(&cwd), root.join("bex-chats"));
+                assert_eq!(Path::new(&cwd), root.join("agent-chats"));
                 let snapshot = store.snapshot();
                 assert_eq!(snapshot.conversations[&id].project_id, models::ProjectMembership::Unassigned {});
-                assert_eq!(snapshot.conversations[&id].cwd.as_deref(), root.join("bex-chats").to_str());
+                assert_eq!(snapshot.conversations[&id].cwd.as_deref(), root.join("agent-chats").to_str());
             }
             store.dispatch(Intent::ShowThreadList).await.unwrap();
             store.dispatch(Intent::ListSessions(op::ListSessions::new(Default::default()))).await.unwrap();
@@ -1283,7 +1283,7 @@ async fn refreshed_history_pages_recover_every_turn_and_item_through_store() {
             "id":"history","name":"History pagination","cwd":directory.path(),"historyMode":"paginated","turns":turns
         }])).unwrap()).unwrap();
         let program = host_fixture::fixture::Config { trace: true, ..Default::default() }
-            .install(Path::new(env!("CARGO_BIN_EXE_bex-codex-fixture")), directory.path()).unwrap();
+            .install(Path::new(env!("CARGO_BIN_EXE_agent-codex-fixture")), directory.path()).unwrap();
         let fixture = HostFixture::start(directory.path(), AppServerConfig { program, ..Default::default() },
             Arc::new(Memory::default()), "isolated Host", false, None).await.unwrap();
         let local = fixture.local().await.unwrap();
@@ -1457,7 +1457,7 @@ async fn many_small_command_outputs_do_not_delay_opening_history() {
 async fn large_history_loads_conversation_before_lossless_item_details() {
     tokio::time::timeout(Duration::from_secs(60), async {
         let directory = tempfile::tempdir().unwrap();
-        std::fs::write(directory.path().join("bex-projects.json"), serde_json::to_vec(&json!([{"id":"workspace", "name":"Workspace", "roots":[{"path":directory.path()}]}])).unwrap()).unwrap();
+        std::fs::write(directory.path().join("agent-projects.json"), serde_json::to_vec(&json!([{"id":"workspace", "name":"Workspace", "roots":[{"path":directory.path()}]}])).unwrap()).unwrap();
         let fixture = start_host(directory.path()).await;
         let mobile = fixture.local().await.unwrap();
 
@@ -1565,7 +1565,7 @@ async fn title_lists_are_recent_scoped_small_and_expand_without_loading_bodies()
         }
         threads.extend([
             json!({"id":"explicit","projectId":"ignored-native-assignment","cwd":directory.path().join("project-3"),"name":"Explicit assignment","updatedAt":90000}),
-            json!({"id":"projectless","projectId":"ignored-native-assignment","cwd":directory.path().join("bex-chats"),"name":"Explicit chat","updatedAt":90001}),
+            json!({"id":"projectless","projectId":"ignored-native-assignment","cwd":directory.path().join("agent-chats"),"name":"Explicit chat","updatedAt":90001}),
             json!({"id":"worktree","projectId":"ignored-native-assignment","cwd":directory.path().join("worktree"),"name":"Worktree conversation","updatedAt":90002}),
         ]);
         let rollout = directory.path().join("external-rollout.jsonl");
@@ -1575,11 +1575,11 @@ async fn title_lists_are_recent_scoped_small_and_expand_without_loading_bodies()
         external["status"] = json!({"type":"notLoaded"});
         external["path"] = json!(rollout);
         std::fs::write(directory.path().join("list-fixture.json"), serde_json::to_vec(&threads).unwrap()).unwrap();
-        std::fs::write(directory.path().join("bex-projects.json"), serde_json::to_vec(&projects).unwrap()).unwrap();
+        std::fs::write(directory.path().join("agent-projects.json"), serde_json::to_vec(&projects).unwrap()).unwrap();
         let checkout = directory.path().join("worktree");
-        std::fs::write(directory.path().join("bex-worktrees.json"), json!({"workspaceRoots":{checkout.to_str().unwrap():directory.path().join("project-5")}}).to_string()).unwrap();
+        std::fs::write(directory.path().join("agent-worktrees.json"), json!({"workspaceRoots":{checkout.to_str().unwrap():directory.path().join("project-5")}}).to_string()).unwrap();
         let program = host_fixture::fixture::Config { trace: true, stream_delay_ms: 5, ..Default::default() }
-            .install(Path::new(env!("CARGO_BIN_EXE_bex-codex-fixture")), directory.path()).unwrap();
+            .install(Path::new(env!("CARGO_BIN_EXE_agent-codex-fixture")), directory.path()).unwrap();
         let fixture = HostFixture::start(directory.path(), AppServerConfig { program, ..Default::default() }, Arc::new(Memory::default()), "isolated Host", false, None).await.unwrap();
         let mobile = fixture.local().await.unwrap();
 
@@ -1766,10 +1766,10 @@ async fn session_worktree_settings_apply_to_new_threads_and_preserve_project_mem
         git(&["add", "tracked.txt"]);
         git(&["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "fixture"]);
         std::fs::write(workspace.join(".env"), "FIXTURE_VALUE=isolated\n").unwrap();
-        let project_state = root.join("bex-projects.json");
+        let project_state = root.join("agent-projects.json");
         std::fs::write(&project_state, serde_json::to_vec(&json!([{"id":"workspace","name":"Workspace","roots":[{"path":workspace}]}])).unwrap()).unwrap();
         let server = Arc::new(CodexAppServer::spawn(codex_fixture::config(&root)).await.unwrap());
-        let service = HostRpcService::new([host_daemon::providers::codex::Codex::new(Ok(server.clone())).into()], ProjectStore::new(root.join("bex-worktrees.json")));
+        let service = HostRpcService::new([host_daemon::providers::codex::Codex::new(Ok(server.clone())).into()], ProjectStore::new(root.join("agent-worktrees.json")));
         let mut session = service.open_session();
         async fn request(service: &HostRpcService, session: &mut host_daemon::HostSession, method: &str, params: Value) -> Value {
             let reply = service.dispatch(session.id(), &agent_protocol::protocol::json_boundary::call(method, params).unwrap()).await.unwrap();
@@ -1806,16 +1806,16 @@ async fn session_worktree_settings_apply_to_new_threads_and_preserve_project_mem
         let mut chat_ids = Vec::new();
         for params in [json!({"provider":"codex"}), json!({"provider":"codex","cwd":"  "}), json!({"provider":"codex","cwd":""})] {
                 let global = request(&service, &mut session, "host/session/create", params).await["response"].clone();
-                assert_eq!(global["thread"]["cwd"], root.join("bex-chats").to_str().unwrap());
+                assert_eq!(global["thread"]["cwd"], root.join("agent-chats").to_str().unwrap());
                 assert_eq!(global["thread"]["projectId"], json!({"Unassigned":{}}));
                 chat_ids.push(global["thread"]["id"].clone());
         }
-        let restarted = HostRpcService::new([host_daemon::providers::codex::Codex::new(Ok(server.clone())).into()], ProjectStore::new(root.join("bex-worktrees.json")));
+        let restarted = HostRpcService::new([host_daemon::providers::codex::Codex::new(Ok(server.clone())).into()], ProjectStore::new(root.join("agent-worktrees.json")));
         let mut restarted_session = restarted.open_session();
         assert_eq!(request(&restarted, &mut restarted_session, "host/worktree/settings/read", json!({})).await, settings);
         for id in &chat_ids {
             let read = request(&restarted, &mut restarted_session, "host/session/open", json!({"session":id,"limit":5})).await["response"].clone();
-            assert_eq!(read["thread"]["cwd"], root.join("bex-chats").to_str().unwrap());
+            assert_eq!(read["thread"]["cwd"], root.join("agent-chats").to_str().unwrap());
             assert_eq!(read["thread"]["projectId"], json!({"Unassigned":{}}));
         }
         let listed = request(
@@ -1926,7 +1926,7 @@ async fn file_edits_preserve_encoding_and_reject_stale_revisions() {
 async fn daemon_exposes_project_roots_and_structured_tool_results() {
     tokio::time::timeout(Duration::from_secs(30), async {
         let directory = tempfile::tempdir().unwrap();
-        std::fs::write(directory.path().join("bex-projects.json"), serde_json::to_vec(&json!([{"id":"workspace","name":"Workspace","roots":[{"path":directory.path()}]}])).unwrap()).unwrap();
+        std::fs::write(directory.path().join("agent-projects.json"), serde_json::to_vec(&json!([{"id":"workspace","name":"Workspace","roots":[{"path":directory.path()}]}])).unwrap()).unwrap();
         let fixture = start_host(directory.path()).await;
         let local = fixture.local().await.unwrap();
         let started = local.peer.call(&serde_json::from_value::<op::CreateSession>(json!({"provider":"codex","cwd":directory.path()})).unwrap()).await.map(|output| serde_json::to_value(output.response).unwrap()).unwrap();
@@ -2045,11 +2045,10 @@ async fn expired_invitation_is_rejected_by_daemon_and_remains_unconsumed() {
         let saved_keys = fixture.memory.clone();
         local.close().await;
         fixture.close().await.unwrap();
-        std::fs::remove_file(
-            directory
-                .path()
-                .join(format!("bex-codex-fixture{}", std::env::consts::EXE_SUFFIX)),
-        )
+        std::fs::remove_file(directory.path().join(format!(
+            "agent-codex-fixture{}",
+            std::env::consts::EXE_SUFFIX
+        )))
         .unwrap();
         let path = directory.path().join("state/trust.json");
         let mut trust: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
@@ -2233,7 +2232,7 @@ async fn discovered_host_keeps_mobile_and_desktop_turns_in_sync_across_reconnect
         );
         let service = HostRpcService::new(
             [host_daemon::providers::codex::Codex::new(Ok(server.clone())).into()],
-            ProjectStore::new(root.join("bex-worktrees.json")),
+            ProjectStore::new(root.join("agent-worktrees.json")),
         );
         let runtime = Arc::new(
             HostRuntime::new(
@@ -2480,10 +2479,10 @@ async fn completed_conversations_refresh_the_sidebar_without_manual_reload() {
                 std::os::unix::fs::symlink(&project, &configured_project).unwrap();
                 #[cfg(not(unix))]
                 let configured_project = project.clone();
-                std::fs::write(root.join("bex-projects.json"), serde_json::to_vec(&json!([{"id":"project","name":"Project","roots":[{"path":configured_project}]}])).unwrap()).unwrap();
-                std::fs::write(root.join("bex-worktrees.json"), serde_json::to_vec(&json!({"settings":{"createOnNewSession":automatic}})).unwrap()).unwrap();
+                std::fs::write(root.join("agent-projects.json"), serde_json::to_vec(&json!([{"id":"project","name":"Project","roots":[{"path":configured_project}]}])).unwrap()).unwrap();
+                std::fs::write(root.join("agent-worktrees.json"), serde_json::to_vec(&json!({"settings":{"createOnNewSession":automatic}})).unwrap()).unwrap();
                 let program = host_fixture::fixture::Config { trace: true, deferred_thread_metadata: true, stream_delay_ms: 10, ..Default::default() }
-                    .install(Path::new(env!("CARGO_BIN_EXE_bex-codex-fixture")), &root).unwrap();
+                    .install(Path::new(env!("CARGO_BIN_EXE_agent-codex-fixture")), &root).unwrap();
                 let fixture = HostFixture::start(&root, AppServerConfig { program, ..Default::default() }, Arc::new(Memory::default()), "isolated", false, None).await.unwrap();
                 let endpoint = Endpoint::bind(fixture.credentials.local_identity().await, Relays::Disabled).await.unwrap();
                 let store = Store::connect(&endpoint, &fixture.ticket, codex_chat_snapshot(), None).await.unwrap();
@@ -2625,7 +2624,7 @@ async fn worktree_management_preserves_conversations_and_recreates_deleted_check
         store.dispatch(Intent::ListWorktrees(op::ListWorktrees {})).await.unwrap();
         assert_eq!(store.snapshot().workspace.worktrees.as_ref().unwrap().len(), 1);
         assert!(store.snapshot().error.is_none());
-        assert!(String::from_utf8(git(&["branch", "--list", "bex/*"])).unwrap().contains("bex/session-"));
+        assert!(String::from_utf8(git(&["branch", "--list", "agent/*"])).unwrap().contains("agent/session-"));
         let listed = local.peer.call(&rpc::ListSessions::new(Default::default())).await.map(|output| serde_json::to_value(output).unwrap()).unwrap();
         assert!(listed["data"].as_array().unwrap().iter().any(|thread| thread["id"] == json!(id)), "removal must preserve conversation history");
         let review = local.peer.call(&rpc::ReviewWorkspace { cwd: path.clone() }).await.unwrap();
@@ -2697,7 +2696,7 @@ async fn merged_worktree_cleanup_defers_live_work_and_rechecks_new_commits() {
             deferred_thread_metadata: true,
             ..Default::default()
         }
-        .install(Path::new(env!("CARGO_BIN_EXE_bex-codex-fixture")), &root)
+        .install(Path::new(env!("CARGO_BIN_EXE_agent-codex-fixture")), &root)
         .unwrap();
         let fixture = HostFixture::start(
             &root,
@@ -3062,7 +3061,7 @@ async fn session_list_tracks_real_worktree_changes_and_merges_through_host_and_s
         );
         std::fs::create_dir(checkout.join("nested")).unwrap();
         std::fs::write(
-            root.join("bex-worktrees.json"),
+            root.join("agent-worktrees.json"),
             json!({"workspaceRoots": {checkout.to_str().unwrap(): repo}}).to_string(),
         ).unwrap();
         let fixture = start_host(&root).await;
@@ -3514,7 +3513,7 @@ async fn adding_a_chat_folder_registers_a_project_before_submission() {
             created.response.thread.project_id.as_deref(),
             Some(project_id.as_str())
         );
-        assert!(root.join("bex-projects.json").exists());
+        assert!(root.join("agent-projects.json").exists());
         assert!(!root.join(".codex-global-state.json").exists());
         store.close().await.unwrap();
         local.endpoint.close().await;

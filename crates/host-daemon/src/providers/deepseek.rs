@@ -138,8 +138,8 @@ impl DeepSeek {
     fn command(&self) -> Result<tokio::process::Command, Failure> {
         let program = &self.0.program;
         if program.extension().is_some_and(|e| e == "js" || e == "mjs") {
-            let runtime = std::env::var_os("BEX_DEEPSEEK_NODE").unwrap_or_else(|| "node".into());
-            let mut command = bex_process::command(Path::new(&runtime)).map_err(failure)?;
+            let runtime = std::env::var_os("AGENT_DEEPSEEK_NODE").unwrap_or_else(|| "node".into());
+            let mut command = agent_process::command(Path::new(&runtime)).map_err(failure)?;
             command.arg(program);
             return Ok(command);
         }
@@ -167,15 +167,15 @@ impl DeepSeek {
                             .join("BEX/deepseek-harness/runtime/node.exe")
                     })
                     .filter(|p| p.is_file());
-                let runtime = std::env::var_os("BEX_DEEPSEEK_NODE")
+                let runtime = std::env::var_os("AGENT_DEEPSEEK_NODE")
                     .or_else(|| runtime.map(|p| p.into_os_string()))
                     .unwrap_or_else(|| "node".into());
-                let mut command = bex_process::command(Path::new(&runtime)).map_err(failure)?;
+                let mut command = agent_process::command(Path::new(&runtime)).map_err(failure)?;
                 command.arg(script);
                 return Ok(command);
             }
         }
-        bex_process::command(program).map_err(failure)
+        agent_process::command(program).map_err(failure)
     }
     async fn rpc(&self) -> Result<Arc<Rpc>, Failure> {
         let mut slot = self.0.rpc.lock().await;

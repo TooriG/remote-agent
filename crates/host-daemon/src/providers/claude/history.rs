@@ -829,12 +829,12 @@ mod tests {
     fn session_summary_retains_the_latest_native_workspace_and_branch() {
         let source = [
             json!({"sessionId":ID,"cwd":"/original","gitBranch":"main","type":"user","message":{"content":"question"}}),
-            json!({"sessionId":ID,"cwd":"/checkout","gitBranch":"bex/task","type":"assistant"}),
+            json!({"sessionId":ID,"cwd":"/checkout","gitBranch":"agent/task","type":"assistant"}),
         ].iter().map(Value::to_string).collect::<Vec<_>>().join("\n") + "\n";
         let (_root, path) = fixture(&source);
         let summary = summary(&path).unwrap();
         assert_eq!(summary.thread.cwd.as_deref(), Some("/checkout"));
-        assert_eq!(summary.branch.as_deref(), Some("bex/task"));
+        assert_eq!(summary.branch.as_deref(), Some("agent/task"));
         assert_eq!(summary.thread.preview.as_deref(), Some("question"));
         assert_eq!(fs::read_to_string(path).unwrap(), source);
     }

@@ -62,7 +62,7 @@ private struct WorkspaceNavigation: UIViewControllerRepresentable {
 }
 
 struct WorkspaceScreen: View {
-    @ObservedObject var model: BexAppViewModel
+    @ObservedObject var model: AppViewModel
     let root: String
     let draft: DraftKey
     let close: () -> Void
@@ -116,7 +116,7 @@ private struct WorkspaceDirectoryScreen: View {
     var body: some View {
         VStack(spacing: 0) {
             if let error {
-                BexNotice(text: error).padding()
+                AppNotice(text: error).padding()
             }
             if busy {
                 ProgressView().padding()
@@ -217,7 +217,7 @@ private struct WorkspaceDirectoryScreen: View {
 }
 
 struct WorkspaceDiffScreen: View {
-    @ObservedObject var model: BexAppViewModel
+    @ObservedObject var model: AppViewModel
     let root: String
     @State private var files: [WorkspaceDiffFile] = []
     @State private var error: String?
@@ -229,7 +229,7 @@ struct WorkspaceDiffScreen: View {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let error {
                 VStack {
-                    BexNotice(text: error).padding()
+                    AppNotice(text: error).padding()
                     Button("再試行", action: loadDiff).accessibilityIdentifier("files.diff.retry")
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if files.isEmpty {

@@ -1,8 +1,8 @@
 import Foundation
 import XCTest
 
-/// XCTest selectors remain on BexLaunchUITests for the fixture runner.
-extension BexLaunchUITests {
+/// XCTest selectors remain on LaunchUITests for the fixture runner.
+extension LaunchUITests {
     func testSimulatorRemovesHostAndRequiresPairingAfterRelaunch() throws {
         let app = try connectedSimulatorApp()
         app.buttons["tasks.hosts"].tap()

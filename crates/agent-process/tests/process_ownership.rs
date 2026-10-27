@@ -8,7 +8,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 #[tokio::test]
 async fn lifetime_pipe_relays_input_and_preserves_native_exit_status() {
-    let mut command = bex_process::command(Path::new("/bin/sh")).unwrap();
+    let mut command = agent_process::command(Path::new("/bin/sh")).unwrap();
     let mut child = command
         .args(["-c", "read value; echo \"$value\"; exit 7"])
         .stdin(Stdio::piped())
@@ -42,16 +42,16 @@ async fn lifetime_pipe_relays_input_and_preserves_native_exit_status() {
 // destructors, then verify its known provider and tool child both disappear.
 #[test]
 fn abrupt_host_exit_terminates_owned_provider_and_tool() {
-    if let Some(file) = std::env::var_os("BEX_TEST_OWNED_PID_FILE") {
+    if let Some(file) = std::env::var_os("AGENT_TEST_OWNED_PID_FILE") {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         runtime.block_on(async {
-            let mut command = bex_process::command(Path::new("/bin/sh")).unwrap();
+            let mut command = agent_process::command(Path::new("/bin/sh")).unwrap();
             let _child = command
                 .args([
                     "-c",
-                    "sleep 120 & echo \"$$ $!\" > \"$BEX_TEST_OWNED_PID_FILE\"; wait",
+                    "sleep 120 & echo \"$$ $!\" > \"$AGENT_TEST_OWNED_PID_FILE\"; wait",
                 ])
-                .env("BEX_TEST_OWNED_PID_FILE", file)
+                .env("AGENT_TEST_OWNED_PID_FILE", file)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::null())
                 .spawn()
@@ -68,7 +68,7 @@ fn abrupt_host_exit_terminates_owned_provider_and_tool() {
             "abrupt_host_exit_terminates_owned_provider_and_tool",
             "--nocapture",
         ])
-        .env("BEX_TEST_OWNED_PID_FILE", &file)
+        .env("AGENT_TEST_OWNED_PID_FILE", &file)
         .stdout(Stdio::null())
         .spawn()
         .unwrap();
@@ -108,11 +108,11 @@ fn abrupt_host_exit_terminates_owned_provider_and_tool() {
 
 #[test]
 fn abrupt_host_exit_terminates_owned_pty_and_shell_jobs() {
-    if let Some(file) = std::env::var_os("BEX_TEST_PTY_PID_FILE") {
+    if let Some(file) = std::env::var_os("AGENT_TEST_PTY_PID_FILE") {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         runtime.block_on(async {
-            let mut child = bex_process::terminal_command().unwrap().spawn().unwrap();
-            let command = bex_process::PtyCommand::Start {
+            let mut child = agent_process::terminal_command().unwrap().spawn().unwrap();
+            let command = agent_process::PtyCommand::Start {
                 command: vec![
                     "/bin/sh".into(),
                     "-c".into(),
@@ -130,9 +130,9 @@ fn abrupt_host_exit_terminates_owned_pty_and_shell_jobs() {
             let mut bytes = serde_json::to_vec(&command).unwrap();
             bytes.push(b'\n');
             input.write_all(&bytes).await.unwrap();
-            let write = bex_process::PtyCommand::Write {
+            let write = agent_process::PtyCommand::Write {
                 id: 1,
-                data: b"[ -z \"${BASH_VERSION-}\" ] || set +H\nsleep 120 & first=$!; sleep 120 & printf '%s %s %s\\n' \"$$\" \"$first\" \"$!\" > \"$BEX_TEST_PTY_PID_FILE\"; wait\n".to_vec(),
+                data: b"[ -z \"${BASH_VERSION-}\" ] || set +H\nsleep 120 & first=$!; sleep 120 & printf '%s %s %s\\n' \"$$\" \"$first\" \"$!\" > \"$AGENT_TEST_PTY_PID_FILE\"; wait\n".to_vec(),
             };
             let mut bytes = serde_json::to_vec(&write).unwrap();
             bytes.push(b'\n');
@@ -150,7 +150,7 @@ fn abrupt_host_exit_terminates_owned_pty_and_shell_jobs() {
             "abrupt_host_exit_terminates_owned_pty_and_shell_jobs",
             "--nocapture",
         ])
-        .env("BEX_TEST_PTY_PID_FILE", &file)
+        .env("AGENT_TEST_PTY_PID_FILE", &file)
         .env("SHELL", "/bin/sh")
         .stdout(Stdio::null())
         .spawn()

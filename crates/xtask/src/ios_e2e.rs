@@ -49,9 +49,12 @@ fn configure_run(configuration: Plist, pairing_url: &str, probe: &str) -> Result
                 let variables = environment
                     .as_dictionary_mut()
                     .ok_or("invalid test environment")?;
-                variables.insert("BEX_PAIRING_URL".to_owned(), Plist::String(url.to_owned()));
                 variables.insert(
-                    "BEX_TERMINAL_QUERY_PROBE".to_owned(),
+                    "AGENT_PAIRING_URL".to_owned(),
+                    Plist::String(url.to_owned()),
+                );
+                variables.insert(
+                    "AGENT_TERMINAL_QUERY_PROBE".to_owned(),
                     Plist::String(probe.to_owned()),
                 );
                 fields.insert("EnvironmentVariables".to_owned(), environment);
@@ -616,22 +619,22 @@ async fn worker(
     let run = products.join(label.as_ref()).with_extension("xctestrun");
     let log = File::create(prefix.with_extension("log"))?;
     let host_log = File::create(prefix.with_extension("host.log"))?;
-    let temporary = tempfile::Builder::new().prefix("bex-ios-").tempdir()?;
+    let temporary = tempfile::Builder::new().prefix("agent-ios-").tempdir()?;
     let root = temporary.path();
     let cwd = std::env::current_dir()?;
     let codex = if without_codex {
         "--without-codex".into()
     } else {
-        target.join("debug/bex-codex-fixture").into_os_string()
+        target.join("debug/agent-codex-fixture").into_os_string()
     };
-    let mut command = Command::new(target.join("debug/bex-ui-fixture"));
+    let mut command = Command::new(target.join("debug/agent-ui-fixture"));
     command
         .args(args![
             root.join("host"),
             codex,
             root.join("pairing.port"),
             "8000",
-            target.join("debug/bex-claude-fixture")
+            target.join("debug/agent-claude-fixture")
         ])
         .current_dir(&cwd)
         .stdin(std::process::Stdio::null())
@@ -686,7 +689,7 @@ async fn worker(
                 let driver_port = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?
                     .local_addr()?
                     .port();
-                let mut arguments = args![vec; "nix", "run", ".#maestro", "--", "--device", simulator, "test", "--driver-host-port", driver_port.to_string(), "--config", "apps/mobile/maestro/ios/config.yaml", "--format", "junit", "--output", &report, "--test-output-dir", &bundle, "--env", format!("BEX_PAIRING_URL={pairing_url}"), "--env", format!("BEX_IOS_DRIVER_URL=http://127.0.0.1:{driver_port}")];
+                let mut arguments = args![vec; "nix", "run", ".#maestro", "--", "--device", simulator, "test", "--driver-host-port", driver_port.to_string(), "--config", "apps/mobile/maestro/ios/config.yaml", "--format", "junit", "--output", &report, "--test-output-dir", &bundle, "--env", format!("AGENT_PAIRING_URL={pairing_url}"), "--env", format!("AGENT_IOS_DRIVER_URL=http://127.0.0.1:{driver_port}")];
                 arguments.extend(tests.iter().map(|test| cwd.join("apps/mobile/maestro/ios").join(test).with_extension("yaml").into_os_string()));
                 let setup_seconds = started.elapsed().as_secs_f64();
                 println!("{label}: Simulator and Host ready in {setup_seconds:.2}s");
@@ -698,7 +701,7 @@ async fn worker(
             let probe = std::env::current_exe()?;
             configure_run(Plist::from_file(&source)?, &pairing_url, probe.to_str().ok_or("non-UTF-8 terminal probe path")?)?.to_file_xml(&run)?;
             let mut arguments = args![vec; "xcodebuild", "-derivedDataPath", root.join("xcode"), "-xctestrun", &run, "-destination", format!("platform=iOS Simulator,id={simulator}"), "-parallel-testing-enabled", "NO", "-collect-test-diagnostics", "on-failure", "-resultBundlePath", &bundle];
-            arguments.extend(tests.iter().map(|test| format!("-only-testing:BexUITests/BexLaunchUITests/{test}").into()));
+            arguments.extend(tests.iter().map(|test| format!("-only-testing:UITests/LaunchUITests/{test}").into()));
             arguments.push("test-without-building".into());
             let setup_seconds = started.elapsed().as_secs_f64();
             println!("{label}: Simulator and Host ready in {setup_seconds:.2}s");
@@ -760,26 +763,26 @@ pub async fn run(tests: Vec<String>, without_codex: bool, driver: TestDriver) ->
     {
         return Err("Select unique isolated Simulator tests".into());
     }
-    let shard = std::env::var("BEX_IOS_TEST_SHARD")
+    let shard = std::env::var("AGENT_IOS_TEST_SHARD")
         .unwrap_or_else(|_| "0".to_owned())
         .parse::<usize>()?;
-    let shards = std::env::var("BEX_IOS_TEST_SHARDS")
+    let shards = std::env::var("AGENT_IOS_TEST_SHARDS")
         .unwrap_or_else(|_| "1".to_owned())
         .parse::<usize>()?;
     let tests = partition_tests(&tests, shard, shards)?;
-    let workers = std::env::var("BEX_IOS_TEST_WORKERS")
+    let workers = std::env::var("AGENT_IOS_TEST_WORKERS")
         .unwrap_or_else(|_| "1".to_owned())
         .parse::<usize>()?;
     if !(1..=10).contains(&workers) {
-        return Err("BEX_IOS_TEST_WORKERS must be between 1 and 10".into());
+        return Err("AGENT_IOS_TEST_WORKERS must be between 1 and 10".into());
     }
     let workers = workers.min(tests.len());
     // Repeated rounds measure flaky tests; each round gets fresh Simulators and Hosts.
-    let rounds = std::env::var("BEX_IOS_TEST_ROUNDS")
+    let rounds = std::env::var("AGENT_IOS_TEST_ROUNDS")
         .unwrap_or_else(|_| "1".to_owned())
         .parse::<usize>()?;
     if !(1..=10).contains(&rounds) {
-        return Err("BEX_IOS_TEST_ROUNDS must be between 1 and 10".into());
+        return Err("AGENT_IOS_TEST_ROUNDS must be between 1 and 10".into());
     }
     if driver == TestDriver::Maestro {
         for test in &tests {
@@ -834,7 +837,8 @@ pub async fn run(tests: Vec<String>, without_codex: bool, driver: TestDriver) ->
         SETUP_TIMEOUT,
     )
     .await?;
-    let state = PathBuf::from(std::str::from_utf8(&common.stdout)?.trim_end()).join("bex-ios-e2e");
+    let state =
+        PathBuf::from(std::str::from_utf8(&common.stdout)?.trim_end()).join("agent-ios-e2e");
     fs::create_dir_all(&state)?;
     let lock = OpenOptions::new()
         .read(true)
@@ -872,17 +876,17 @@ pub async fn run(tests: Vec<String>, without_codex: bool, driver: TestDriver) ->
             "build",
             "--locked",
             "--package",
-            "bex-process",
+            "agent-process",
             "--bin",
-            "bex-provider-supervisor",
+            "agent-provider-supervisor",
             "--package",
             "host-fixture",
             "--bin",
-            "bex-ui-fixture",
+            "agent-ui-fixture",
             "--bin",
-            "bex-codex-fixture",
+            "agent-codex-fixture",
             "--bin",
-            "bex-claude-fixture"
+            "agent-claude-fixture"
         ],
         args![vec; "node", "scripts/install-claude-sdk.mjs", target.join("debug")],
     ] {
@@ -921,7 +925,7 @@ pub async fn run(tests: Vec<String>, without_codex: bool, driver: TestDriver) ->
             "CODE_SIGNING_ALLOWED=YES",
             "CODE_SIGN_IDENTITY=-",
             "CODE_SIGNING_REQUIRED=YES",
-            format!("BEX_CARGO_TARGET_DIR={}", target.display()),
+            format!("AGENT_CARGO_TARGET_DIR={}", target.display()),
             "build-for-testing"
         ],
         &cwd,
@@ -936,7 +940,7 @@ pub async fn run(tests: Vec<String>, without_codex: bool, driver: TestDriver) ->
             &args![
                 "xcrun",
                 "swift",
-                "apps/mobile/iosApp/BexUITests/Fixtures/create-video.swift",
+                "apps/mobile/iosApp/UITests/Fixtures/create-video.swift",
                 records.join("attachment-video.mov")
             ],
             &cwd,
@@ -1095,7 +1099,7 @@ mod tests {
         fn diagnostic_sampling_stays_with_its_simulator(pid in 1u32..100_000, simulator in "[A-F0-9-]{36}") {
             let processes = format!(
                 "44 1 100 99 /Devices/{simulator}0/data/Applications/bex.app/bex\n\
-                 45 1 100 99 /Devices/{simulator}/data/Applications/bex.app/BexUITests-Runner\n\
+                 45 1 100 99 /Devices/{simulator}/data/Applications/bex.app/UITests-Runner\n\
                  46 1 100 99 /Devices/{simulator}/data/Applications/bex.app/BexHelper\n\
                  {pid} 1 100 99 /Devices/{simulator}/data/Applications/bex.app/bex\n"
             );
@@ -1152,7 +1156,7 @@ mod tests {
 
     #[test]
     fn each_worker_preserves_configuration_and_gets_its_own_pairing() {
-        let xml = br#"<?xml version="1.0"?><plist version="1.0"><dict><key>TestConfigurations</key><array><dict><key>TestTargets</key><array><dict><key>TestBundlePath</key><string>__TESTROOT__/BexUITests.xctest</string><key>EnvironmentVariables</key><dict><key>UNCHANGED</key><string>value</string></dict><key>IsUITestBundle</key><true/></dict></array></dict></array></dict></plist>"#;
+        let xml = br#"<?xml version="1.0"?><plist version="1.0"><dict><key>TestConfigurations</key><array><dict><key>TestTargets</key><array><dict><key>TestBundlePath</key><string>__TESTROOT__/UITests.xctest</string><key>EnvironmentVariables</key><dict><key>UNCHANGED</key><string>value</string></dict><key>IsUITestBundle</key><true/></dict></array></dict></array></dict></plist>"#;
         let source = Plist::from_reader(std::io::Cursor::new(xml)).unwrap();
         for index in 1..=10 {
             let url = format!("http://127.0.0.1:{}/pairing", 12300 + index);
@@ -1168,12 +1172,12 @@ mod tests {
                 .as_dictionary_mut()
                 .unwrap();
             assert_eq!(
-                environment.remove("BEX_PAIRING_URL").unwrap().as_string(),
+                environment.remove("AGENT_PAIRING_URL").unwrap().as_string(),
                 Some(url.as_str())
             );
             assert_eq!(
                 environment
-                    .remove("BEX_TERMINAL_QUERY_PROBE")
+                    .remove("AGENT_TERMINAL_QUERY_PROBE")
                     .unwrap()
                     .as_string(),
                 Some("/fixture/xtask")
@@ -1217,7 +1221,7 @@ mod tests {
     }
 
     #[test]
-    fn quiet_simulator_keeps_services_used_by_bex_and_ui_tests() {
+    fn quiet_simulator_keeps_services_used_by_the_app_and_ui_tests() {
         let services = IDLE_SIMULATOR_SERVICES
             .iter()
             .map(|path| service_label(path))

@@ -84,7 +84,7 @@ fn request(thread: &SessionRef, frame: &BrowserFrame, action: BrowserAction) -> 
 
 /// Exercises only a temporary BEX profile and a local, deterministic web fixture.
 #[tokio::test]
-#[ignore = "requires Chrome/Chromium and bex-provider-supervisor"]
+#[ignore = "requires Chrome/Chromium and agent-provider-supervisor"]
 async fn shared_browser_live() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let _ = tracing_subscriber::fmt()
@@ -112,9 +112,9 @@ async fn shared_browser_live() {
                         "<title>Logged out</title>"
                     }
                 } else if request.starts_with("GET /verify ") {
-                    "<script>document.title=document.cookie+' '+localStorage.getItem('bex-fixture')</script>"
+                    "<script>document.title=document.cookie+' '+localStorage.getItem('agent-fixture')</script>"
                 } else {
-                    r#"<body style="margin:0;height:3000px"><input style="position:absolute;left:20px;top:20px;width:300px;height:40px" oninput="document.title=this.value"><button style="position:absolute;left:20px;top:90px;width:200px;height:40px" onclick="window.open('/popup')">Popup</button><script>document.cookie='bex_fixture=persisted; Max-Age=3600; SameSite=Lax';localStorage.setItem('bex-fixture','stored');document.title='Fixture'</script>"#
+                    r#"<body style="margin:0;height:3000px"><input style="position:absolute;left:20px;top:20px;width:300px;height:40px" oninput="document.title=this.value"><button style="position:absolute;left:20px;top:90px;width:200px;height:40px" onclick="window.open('/popup')">Popup</button><script>document.cookie='agent_fixture=persisted; Max-Age=3600; SameSite=Lax';localStorage.setItem('agent-fixture','stored');document.title='Fixture'</script>"#
                 };
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -367,7 +367,7 @@ async fn shared_browser_live() {
         let value: serde_json::Value = serde_json::from_str(&visible.value).unwrap();
         let cookies = value.as_str().unwrap();
         if scope == &scope_a {
-            assert!(cookies.contains("bex_fixture=persisted"));
+            assert!(cookies.contains("agent_fixture=persisted"));
         } else {
             assert!(cookies.is_empty());
         }

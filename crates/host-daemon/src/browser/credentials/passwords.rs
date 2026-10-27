@@ -4,7 +4,7 @@ use super::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use zeroize::Zeroizing;
-const SERVICE: &str = "app.bex.BEX.browser-passwords";
+const SERVICE: &str = "dev.remoteagent.browser-passwords";
 static VAULT_WRITES: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[derive(Serialize, Deserialize)]

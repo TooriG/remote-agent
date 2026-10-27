@@ -104,13 +104,13 @@ impl Codex {
             .map(Arc::new)
             .map_err(|error| error.to_string());
         if let Err(error) = &process {
-            tracing::error!(target: "bex", operation = "host.codex", message = %error);
+            tracing::error!(target: "agent", operation = "host.codex", message = %error);
         }
         let available = process.is_ok();
         let mut adapter = Self::new(process);
         adapter.cli = cli::Updater::new(config.clone());
         if available && let Err(error) = adapter.enable_accounts(account_directory, config).await {
-            tracing::error!(target: "bex", operation = "host.codex.accounts", message = %error);
+            tracing::error!(target: "agent", operation = "host.codex.accounts", message = %error);
         }
         adapter
     }
@@ -343,7 +343,7 @@ fn native_failure(native: &serde_json::value::RawValue) -> Failure {
 
 fn with_browser_config(mut params: Value, browser: Option<Value>) -> Value {
     if let Some(browser) = browser {
-        params["config"] = serde_json::json!({"mcp_servers.bex_browser":browser});
+        params["config"] = serde_json::json!({"mcp_servers.agent_browser":browser});
     }
     params
 }
@@ -1132,7 +1132,7 @@ impl Agent for Codex {
                                 Err(error) => Err(error),
                             };
                             if let Err(error) = &admission {
-                                tracing::warn!(target: "bex", operation = "host.codex.request_rejected", message = %error);
+                                tracing::warn!(target: "agent", operation = "host.codex.request_rejected", message = %error);
                             }
                             if let Err(error) = admission
                                 && let Ok(codex) = &process
@@ -1177,15 +1177,15 @@ impl Agent for Codex {
                 *processed.borrow(),
             );
             if shutdown_requested {
-                tracing::info!(target: "bex", operation = "host.codex.event_stream_stopped", message = %message);
+                tracing::info!(target: "agent", operation = "host.codex.event_stream_stopped", message = %message);
             } else {
-                tracing::error!(target: "bex", operation = "host.codex.event_stream_stopped", message = %message);
+                tracing::error!(target: "agent", operation = "host.codex.event_stream_stopped", message = %message);
             }
             stopped.cancel();
             if let Ok(codex) = &process
                 && let Err(error) = codex.shutdown().await
             {
-                tracing::error!(target: "bex", operation = "host.codex.shutdown", message = %error);
+                tracing::error!(target: "agent", operation = "host.codex.shutdown", message = %error);
             }
             let _=emit(&output,AgentChange::Stopped {provider:ProviderKind::Codex,reason:"エージェントとの接続が終了しました。Hostを再起動してから再送信してください。".into()}).await;
         });

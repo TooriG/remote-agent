@@ -99,7 +99,7 @@ impl HostFixture {
         }
         let service = HostRpcService::new(
             backends,
-            ProjectStore::new(directory.join("bex-worktrees.json")),
+            ProjectStore::new(directory.join("agent-worktrees.json")),
         );
         #[cfg(unix)]
         service

@@ -30,7 +30,7 @@ fn file_name(path: &str) -> String {
 const CHAT_WIDTH: f32 = 780.;
 
 fn new_chat_icon() -> Icon {
-    Icon::default().path("bex/square-pen.svg")
+    Icon::default().path("icons/square-pen.svg")
 }
 
 pub(super) fn section_heading(title: &'static str, description: &'static str) -> Div {

@@ -222,7 +222,7 @@ pub(crate) fn init(cx: &mut App) {
                     .update(cx, |menu, _| match update {
                         Update::Connected(Ok(session)) => menu.session = Some(session),
                         Update::Connected(Err(error)) => {
-                            tracing::error!(target: "bex", operation = "task_menu.connect", %error)
+                            tracing::error!(target: "agent", operation = "task_menu.connect", %error)
                         }
                         Update::Snapshot(snapshot) => {
                             if let Some(display) = snapshot.task_activity_display() {

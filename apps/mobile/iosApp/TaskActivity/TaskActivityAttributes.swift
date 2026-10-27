@@ -31,7 +31,7 @@ struct TaskActivityAttributes: ActivityAttributes, Hashable {
     }
 
     static var urlScheme: String? {
-        Bundle.main.object(forInfoDictionaryKey: "BexTaskURLScheme") as? String
+        Bundle.main.object(forInfoDictionaryKey: "TaskURLScheme") as? String
     }
 
     var hostID: String

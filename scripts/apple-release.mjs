@@ -101,9 +101,9 @@ async function main(command) {
     console.log('Xcode delivery receipt recorded.');
     return;
   }
-  const keyId = required('BEX_ASC_KEY_ID');
-  const issuer = required('BEX_ASC_ISSUER_ID');
-  const keyPath = required('BEX_ASC_PRIVATE_KEY_FILE');
+  const keyId = required('AGENT_ASC_KEY_ID');
+  const issuer = required('AGENT_ASC_ISSUER_ID');
+  const keyPath = required('AGENT_ASC_PRIVATE_KEY_FILE');
   const request = ascClient({ keyId, issuer, privateKey: readFileSync(keyPath) });
   if (command === 'plan') {
     const app = (await request('/v1/apps?filter[bundleId]=dev.remoteagent.mobile.ios')).data[0];
@@ -115,9 +115,9 @@ async function main(command) {
     const macVersion = /<key>CFBundleVersion<\/key>\s*<string>(\d+)<\/string>/.exec(mac)?.[1];
     const releases = JSON.parse(readFileSync('target/apple-release/releases.json', 'utf8'));
     const version = nextBuildNumber([...versions, macVersion], builds.map(build => build.attributes.version), releases.map(release => release.tagName));
-    const plan = { appId: app.id, version, tag: `prd-${version}`, sha: required('BEX_RELEASE_SHA'), locale: app.attributes.primaryLocale, notes: execFileSync('git', ['log', '-1', '--format=%s'], { encoding: 'utf8' }).trim() };
+    const plan = { appId: app.id, version, tag: `prd-${version}`, sha: required('AGENT_RELEASE_SHA'), locale: app.attributes.primaryLocale, notes: execFileSync('git', ['log', '-1', '--format=%s'], { encoding: 'utf8' }).trim() };
     writeFileSync(planPath, JSON.stringify(plan) + '\n');
-    appendFileSync(required('GITHUB_ENV'), `BEX_BUILD_NUMBER=${version}\nBEX_RELEASE_TAG=${plan.tag}\n`);
+    appendFileSync(required('GITHUB_ENV'), `AGENT_BUILD_NUMBER=${version}\nAGENT_RELEASE_TAG=${plan.tag}\n`);
     console.log(`Apple release build ${version} planned for ${plan.sha}.`);
   } else if (command === 'verify') {
     const plan = JSON.parse(readFileSync(planPath, 'utf8'));
@@ -132,7 +132,7 @@ async function main(command) {
     const builds = (await request(`/v1/builds?filter[app]=${plan.appId}&filter[version]=${plan.version}`)).data;
     const build = builds.find(build => build.attributes.version === plan.version && build.attributes.processingState === 'VALID');
     if (!build) throw new Error('The processed BEX build could not be verified.');
-    const distribution = await distributeBuild(request, plan.appId, build.id, process.env.BEX_TESTFLIGHT_GROUP || 'BEX External', plan.notes, plan.locale);
+    const distribution = await distributeBuild(request, plan.appId, build.id, process.env.AGENT_TESTFLIGHT_GROUP || 'BEX External', plan.notes, plan.locale);
     console.log(`TestFlight ${plan.version}: ${distribution}.`);
     appendFileSync(required('GITHUB_STEP_SUMMARY'), `TestFlight build **${plan.version}**: ${distribution}.\n\nSource: \`${plan.sha}\`.\n`);
   } else throw new Error('Use apple-release.mjs plan, record-delivery or verify.');

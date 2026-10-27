@@ -554,7 +554,7 @@ impl SessionRouter {
         if let Err(reason) = result
             && reason != agent_protocol::session::UpdateError::MissingTurn
         {
-            tracing::warn!(target: "bex", operation = "host.session.invalid_update", message = %reason);
+            tracing::warn!(target: "agent", operation = "host.session.invalid_update", message = %reason);
             actor.release();
             return;
         }

@@ -139,7 +139,7 @@ final class TaskLiveActivities {
     }
 
     private var pushEnvironment: PushEnvironment {
-        Bundle.main.object(forInfoDictionaryKey: "BexAPNSEnvironment") as? String == "production"
+        Bundle.main.object(forInfoDictionaryKey: "APNSEnvironment") as? String == "production"
             ? .production : .sandbox
     }
 
@@ -279,7 +279,7 @@ final class TaskLiveActivities {
     }
 }
 
-extension BexAppViewModel {
+extension AppViewModel {
     func synchronizeLiveActivities(foreground: Bool) {
         liveActivities.synchronize(hostID: selectedProfileId, hostName: selectedProfileName ?? "PC Host",
                                    connected: snapshot.connected(), foreground: foreground,

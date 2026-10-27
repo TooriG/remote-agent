@@ -63,7 +63,7 @@ impl HostRuntime {
                     _ = maintenance_stop.cancelled() => break,
                     _ = interval.tick() => {
                         if let Err(error) = service.cleanup_merged_worktrees().await {
-                            tracing::warn!(target: "bex", operation = "host.worktree.cleanup", message = %error);
+                            tracing::warn!(target: "agent", operation = "host.worktree.cleanup", message = %error);
                         }
                     }
                 }
@@ -93,14 +93,14 @@ impl HostRuntime {
                                     runtime.serve(incoming, stop, permit, authorized_slots).await
                                 });
                             }
-                            Some(Err(error)) => tracing::error!(target: "bex", operation = "host.accept", message = %error),
+                            Some(Err(error)) => tracing::error!(target: "agent", operation = "host.accept", message = %error),
                             None => break Ok(()),
                         }
                     },
                     Some(result) = sessions.join_next(), if !sessions.is_empty() => {
                         match result {
-                            Ok(Err(error)) => tracing::error!(target: "bex", operation = "host.session", message = %format_args!("{error:#}")),
-                            Err(error) => tracing::error!(target: "bex", operation = "host.session", message = %error),
+                            Ok(Err(error)) => tracing::error!(target: "agent", operation = "host.session", message = %format_args!("{error:#}")),
+                            Err(error) => tracing::error!(target: "agent", operation = "host.session", message = %error),
                             Ok(Ok(())) => {}
                         }
                     }
@@ -220,7 +220,7 @@ impl HostRuntime {
                                 if let Call::ConnectionPerformance(performance) = &request.call && !performance.recovered {
                                     let endpoint = runtime.endpoint.clone();
                                     tokio::task::spawn_blocking(move || endpoint.log_connection_diagnostics()).await?;
-                                    tracing::info!(target: "bex", operation = "host.connection.link", message = %format_args!("session={} trace={} connection={} attempt={}", id, performance.timeline.id, performance.connection_id, performance.attempt_id));
+                                    tracing::info!(target: "agent", operation = "host.connection.link", message = %format_args!("session={} trace={} connection={} attempt={}", id, performance.timeline.id, performance.connection_id, performance.attempt_id));
                                 }
                                 let measured = runtime.endpoint.connection_diagnostics_active() && !matches!(request.call, Call::ConnectionPerformance(_));
                                 let stopped = request.send.stopped();
@@ -241,7 +241,7 @@ impl HostRuntime {
                                     let (_, write_finished_at_us) = runtime.endpoint.connection_time(finished);
                                     let message = format!("session={} stream={} method={} accepted_us={} decode_us={} queue_us={} handle_encode_us={} write_us={} bytes={} trace={} accepted_at_us={} write_started_at_us={} write_finished_at_us={}", id, stream, parsed.method(), accepted_us, decode_us, queue_us, handled_us, finished.duration_since(writing).as_micros(), response.initial.len(), trace, accepted_at_us, write_started_at_us, write_finished_at_us);
                                     tokio::task::spawn_blocking(move || {
-                                        tracing::info!(target: "bex", operation = "host.rpc.performance", message);
+                                        tracing::info!(target: "agent", operation = "host.rpc.performance", message);
                                     });
                                 }
                                 if let Some(mut updates) = response.updates {

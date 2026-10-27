@@ -75,7 +75,7 @@ class MarkdownLinkTest {
         compose.setContent {
             val base = LocalContext.current
             CompositionLocalProvider(LocalContext provides LinkContext(base) { launched.add(it) }) {
-                BexTheme {
+                AppTheme {
                     ConversationBody("[notes.md](/repo/notes.md)", "/repo") { intent, complete ->
                         intents.add(intent)
                         complete(Result.failure(IOException("fixture preview")))
@@ -96,7 +96,7 @@ class MarkdownLinkTest {
         compose.setContent {
             val base = LocalContext.current
             CompositionLocalProvider(LocalContext provides LinkContext(base, launch)) {
-                BexTheme { Surface { Column(Modifier.width(240.dp)) { ConversationBody(markdown) } } }
+                AppTheme { Surface { Column(Modifier.width(240.dp)) { ConversationBody(markdown) } } }
             }
         }
     }

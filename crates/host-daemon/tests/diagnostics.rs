@@ -96,7 +96,7 @@ printf '%s\n' '{{"id":1,"result":{{"userAgent":"diagnostic-fixture","platformFam
 read -r initialized
 case {} in
     eof)
-        while [ ! -f "$BEX_DIAGNOSTIC_HOST_READY" ]; do sleep 0.02; done
+        while [ ! -f "$AGENT_DIAGNOSTIC_HOST_READY" ]; do sleep 0.02; done
         exit 0
         ;;
     event)
@@ -121,7 +121,7 @@ while read -r line; do :; done
                 .arg(&program)
                 .arg("--claude")
                 .arg(directory.path().join("missing-claude"))
-                .env("BEX_DIAGNOSTIC_HOST_READY", state.join("host.ticket"))
+                .env("AGENT_DIAGNOSTIC_HOST_READY", state.join("host.ticket"))
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())

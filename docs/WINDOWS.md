@@ -93,7 +93,7 @@ For NanoGPT, save its key under **NanoGPT** and choose **NanoGPT · DeepSeek V4.
 
 Choose the **DeepSeek公式** route to use the official `deepseek-flash` model. Model names come from Harness's live catalog. BEX uses the official ACP interface for prompts, reasoning, tool results, permissions, cancellation and resuming the same native session after a Host restart. Additional messages wait until the current task finishes; fork is unavailable. Permission defaults belong to Harness; permission requests are answered in BEX.
 
-For a separate installation, pass `host-daemon --deepseek C:\path\to\dsh\lib\bin.js`. `BEX_DEEPSEEK_NODE` selects its Node runtime. The standard Windows installation also detects a BEX-managed Harness under `%LOCALAPPDATA%\BEX\deepseek-harness`.
+For a separate installation, pass `host-daemon --deepseek C:\path\to\dsh\lib\bin.js`. `AGENT_DEEPSEEK_NODE` selects its Node runtime. The standard Windows installation also detects a BEX-managed Harness under `%LOCALAPPDATA%\BEX\deepseek-harness`.
 
 Host・Windows版・Android版は同じ対応版へ更新してください。DeepSeek用APIキーをPCのBEXで設定すると、そのHostへ接続するAndroid端末からも利用できます。
 

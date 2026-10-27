@@ -77,7 +77,7 @@ async fn create(client: &Client, provider: ProviderKind, root: &Path) -> Session
 }
 
 async fn start(root: &Path, memory: Arc<Memory>) -> HostFixture {
-    let claude = Path::new(env!("CARGO_BIN_EXE_bex-claude-fixture"));
+    let claude = Path::new(env!("CARGO_BIN_EXE_agent-claude-fixture"));
     #[cfg(windows)]
     let executable = claude.with_extension("");
     #[cfg(windows)]
@@ -87,7 +87,7 @@ async fn start(root: &Path, memory: Arc<Memory>) -> HostFixture {
         stream_delay_ms: 5,
         ..Default::default()
     }
-    .install(Path::new(env!("CARGO_BIN_EXE_bex-codex-fixture")), root)
+    .install(Path::new(env!("CARGO_BIN_EXE_agent-codex-fixture")), root)
     .unwrap();
     HostFixture::start(
         root,
@@ -177,7 +177,7 @@ async fn initial_import_discovers_native_projects_and_continues_the_original_ses
         [&selected]
     );
     assert!(
-        !root.join("bex-projects.json").exists(),
+        !root.join("agent-projects.json").exists(),
         "scanning and skipping cannot register anything"
     );
     store
@@ -205,7 +205,7 @@ async fn initial_import_discovers_native_projects_and_continues_the_original_ses
             .is_empty()
     );
     let registered: Vec<agent_protocol::models::Project> =
-        serde_json::from_slice(&std::fs::read(root.join("bex-projects.json")).unwrap()).unwrap();
+        serde_json::from_slice(&std::fs::read(root.join("agent-projects.json")).unwrap()).unwrap();
     assert_eq!(registered.len(), 1);
     assert_eq!(registered[0].roots[0].path, selected);
     let local = host.local().await.unwrap();
@@ -265,7 +265,7 @@ async fn setup_catalog_isolates_stalled_native_providers(
     std::fs::create_dir_all(&claude_home).unwrap();
     let program = host_fixture::fixture::Config::default()
         .install(
-            Path::new(env!("CARGO_BIN_EXE_bex-codex-fixture")),
+            Path::new(env!("CARGO_BIN_EXE_agent-codex-fixture")),
             &codex_home,
         )
         .unwrap();
@@ -293,7 +293,7 @@ async fn setup_catalog_isolates_stalled_native_providers(
         .await
         .unwrap();
     let claude = host_daemon::providers::Claude::load(
-        Path::new(env!("CARGO_BIN_EXE_bex-claude-fixture")).to_owned(),
+        Path::new(env!("CARGO_BIN_EXE_agent-claude-fixture")).to_owned(),
         root.join("claude"),
         Some(claude_home.clone()),
     )
@@ -776,11 +776,11 @@ fn session_inputs(path: impl AsRef<Path>) -> serde_json::Value {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn codex_conforms_to_bex_conversations() {
+async fn codex_conforms_to_host_conversations() {
     scenarios(ProviderKind::Codex).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn claude_conforms_to_bex_conversations() {
+async fn claude_conforms_to_host_conversations() {
     scenarios(ProviderKind::Claude).await;
 }
 
@@ -800,7 +800,7 @@ async fn session_pages_preserve_healthy_listings_and_reject_repeated_native_curs
     .unwrap();
     let host = start(&root, Arc::new(Memory::default())).await;
     let local = host.local().await.unwrap();
-    let chats = root.join("bex-chats");
+    let chats = root.join("agent-chats");
     std::fs::create_dir(&chats).unwrap();
     let session = create(&local.peer, ProviderKind::Claude, &chats).await;
     let (_, mut events) = open(&local.peer, &session).await;
@@ -891,7 +891,7 @@ async fn worktree_lists_read_each_native_page_once_and_refresh_activity() {
     }
     git(&["worktree", "remove", paths[2].to_str().unwrap()]);
     std::fs::write(
-        root.join("bex-worktrees.json"),
+        root.join("agent-worktrees.json"),
         serde_json::json!({"workspaceRoots":mappings}).to_string(),
     )
     .unwrap();
@@ -1072,7 +1072,7 @@ async fn title_lists_stop_after_visible_sections_and_merge_provider_pages_in_ord
     std::fs::write(&fixture, serde_json::to_vec(&threads).unwrap()).unwrap();
     let host = start(&root, Arc::new(Memory::default())).await;
     let local = host.local().await.unwrap();
-    let chats = root.join("bex-chats");
+    let chats = root.join("agent-chats");
     std::fs::create_dir(&chats).unwrap();
     let session = create(&local.peer, ProviderKind::Claude, &chats).await;
     let (_, mut events) = open(&local.peer, &session).await;
@@ -1219,7 +1219,7 @@ async fn title_lists_stop_after_visible_sections_and_merge_provider_pages_in_ord
         })
         .collect();
     std::fs::write(
-        root.join("bex-projects.json"),
+        root.join("agent-projects.json"),
         serde_json::to_vec(&projects).unwrap(),
     )
     .unwrap();
@@ -1301,7 +1301,7 @@ async fn title_lists_stop_after_visible_sections_and_merge_provider_pages_in_ord
         })
         .collect();
     std::fs::write(
-        root.join("bex-projects.json"),
+        root.join("agent-projects.json"),
         serde_json::to_vec(&empty_projects).unwrap(),
     )
     .unwrap();
@@ -1347,7 +1347,7 @@ async fn codex_queues_when_the_native_turn_is_not_observed() {
         stream_delay_ms: 5,
         ..Default::default()
     }
-    .install(Path::new(env!("CARGO_BIN_EXE_bex-codex-fixture")), &root)
+    .install(Path::new(env!("CARGO_BIN_EXE_agent-codex-fixture")), &root)
     .unwrap();
     let host = HostFixture::start(
         &root,
@@ -1417,7 +1417,7 @@ async fn adapter_initialization_failure_preserves_the_other_provider_and_host() 
         );
     }
     std::fs::write(
-        root.join("bex-worktrees.json"),
+        root.join("agent-worktrees.json"),
         serde_json::json!({
             "settings":{"createOnNewSession":true,"worktreeDirectory":root.join("worktrees")}
         })

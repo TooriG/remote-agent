@@ -2,14 +2,14 @@ import AgentCore
 import SwiftUI
 
 @main
-struct BexIOSApp: App {
+struct IOSApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var wasBackgrounded = false
-    @StateObject private var model = BexAppViewModel()
+    @StateObject private var model = AppViewModel()
 
     var body: some Scene {
         WindowGroup {
-            BexSwiftUIRoot(model: model)
+            SwiftUIRoot(model: model)
                 .onOpenURL { model.openTaskActivity($0) }
                 .onChange(of: scenePhase) { phase in
                     model.synchronizeLiveActivities(foreground: phase == .active)

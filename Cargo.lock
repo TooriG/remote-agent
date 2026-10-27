@@ -179,6 +179,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "agent-desktop"
+version = "0.1.0"
+dependencies = [
+ "agent-core",
+ "agent-local-host",
+ "agent-protocol",
+ "agent-transport",
+ "alacritty_terminal",
+ "anyhow",
+ "async-channel",
+ "base64 0.23.1",
+ "block2 0.6.2",
+ "chrono",
+ "cpal",
+ "directories",
+ "futures-util",
+ "gpui-kit",
+ "gpui-pre-reqwest-client",
+ "image",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-av-foundation",
+ "objc2-foundation 0.3.2",
+ "proptest",
+ "qrcode",
+ "raw-window-handle",
+ "rfd",
+ "rubato",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "similar",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "url",
+ "uuid",
+ "windows 0.61.3",
+]
+
+[[package]]
 name = "agent-ffi"
 version = "0.1.0"
 dependencies = [
@@ -202,6 +244,19 @@ dependencies = [
  "tokio",
  "tracing",
  "zeroize",
+]
+
+[[package]]
+name = "agent-process"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "portable-pty",
+ "process-wrap",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -1007,61 +1062,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bex-desktop"
-version = "0.1.0"
-dependencies = [
- "agent-core",
- "agent-local-host",
- "agent-protocol",
- "agent-transport",
- "alacritty_terminal",
- "anyhow",
- "async-channel",
- "base64 0.23.1",
- "block2 0.6.2",
- "chrono",
- "cpal",
- "directories",
- "futures-util",
- "gpui-kit",
- "gpui-pre-reqwest-client",
- "image",
- "objc2 0.6.4",
- "objc2-app-kit 0.3.2",
- "objc2-av-foundation",
- "objc2-foundation 0.3.2",
- "proptest",
- "qrcode",
- "raw-window-handle",
- "rfd",
- "rubato",
- "rust-embed",
- "serde",
- "serde_json",
- "similar",
- "tempfile",
- "tokio",
- "tokio-util",
- "tracing",
- "url",
- "uuid",
- "windows 0.61.3",
-]
-
-[[package]]
-name = "bex-process"
-version = "0.1.0"
-dependencies = [
- "libc",
- "portable-pty",
- "process-wrap",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
-]
-
-[[package]]
 name = "bincode"
 version = "1.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1636,8 +1636,8 @@ dependencies = [
 name = "codex-app-server"
 version = "0.1.0"
 dependencies = [
+ "agent-process",
  "agent-transport",
- "bex-process",
  "serde",
  "tempfile",
  "thiserror 2.0.20",
@@ -4247,6 +4247,7 @@ dependencies = [
  "aes",
  "agent-core",
  "agent-local-host",
+ "agent-process",
  "agent-protocol",
  "agent-transport",
  "alacritty_terminal",
@@ -4255,7 +4256,6 @@ dependencies = [
  "async-tungstenite",
  "atomicwrites",
  "base64 0.23.1",
- "bex-process",
  "cbc",
  "chrono",
  "clap",

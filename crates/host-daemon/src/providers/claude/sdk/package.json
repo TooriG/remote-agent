@@ -1,5 +1,5 @@
 {
-  "name": "bex-claude-sdk",
+  "name": "agent-claude-sdk",
   "private": true,
   "type": "module",
   "scripts": {

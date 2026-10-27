@@ -23,7 +23,7 @@ extension ThreadScreen {
                 .accessibilityIdentifier("task.diff")
             }
             if let error = model.transferError {
-                BexNotice(text: error)
+                AppNotice(text: error)
             }
             VStack(alignment: .leading, spacing: 4) {
                 if !attachments.isEmpty {

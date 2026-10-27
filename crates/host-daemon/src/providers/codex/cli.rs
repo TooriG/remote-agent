@@ -69,7 +69,7 @@ async fn run(config: &Config, argument: &str, timeout: Duration) -> Result<Strin
     // Re-resolve after update: a standalone installation can repoint its launcher.
     let program =
         codex_app_server::resolve_executable(&config.program).map_err(|error| error.to_string())?;
-    let mut command = bex_process::command(&program).map_err(|error| error.to_string())?;
+    let mut command = agent_process::command(&program).map_err(|error| error.to_string())?;
     if let Some(home) = &config.codex_home {
         command.env("CODEX_HOME", home);
     }
@@ -123,13 +123,13 @@ mod tests {
         #[cfg(windows)]
         {
             let program = std::env::var_os("COMSPEC").unwrap();
-            let mut command = bex_process::command(std::path::Path::new(&program)).unwrap();
+            let mut command = agent_process::command(std::path::Path::new(&program)).unwrap();
             command.args(["/D", "/C", script]);
             command
         }
         #[cfg(unix)]
         {
-            let mut command = bex_process::command(std::path::Path::new("/bin/sh")).unwrap();
+            let mut command = agent_process::command(std::path::Path::new("/bin/sh")).unwrap();
             command.args(["-c", script]);
             command
         }
@@ -154,7 +154,7 @@ mod tests {
         #[cfg(windows)]
         let slow = {
             let system = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap());
-            let mut command = bex_process::command(&system.join("System32/ping.exe")).unwrap();
+            let mut command = agent_process::command(&system.join("System32/ping.exe")).unwrap();
             // GUI-launched Hosts may not inherit a PATH containing System32.
             // The timeout fixture must still start rather than fail immediately.
             command.env("PATH", "");

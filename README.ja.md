@@ -34,19 +34,19 @@ Android 8〜16ではAndroid 17専用のローカルネットワーク許可を�
 
 会話にはGitと、利用可能なエージェントが最低1つ必要です。Codexは任意です。PATH上の`codex`を使い、見つからない場合はmacOSのChatGPT Desktop同梱版を使います。`--codex <path>`で明示した実行ファイルが最優先です。
 
-Claudeとの会話は公式Agent SDKが実行します。Macアプリは署名済みのポータブルなNode.jsを同梱するため、Claude Codeがインストール済みならNodeやnpmを別途用意する必要はありません。既定ではアプリ内のNodeを使い、`BEX_NODE`で別の実行ファイルを明示できます。単体HostではPATHにNode.js 22以降を置くか、`BEX_NODE`で指定してください。Nixの開発環境はNode.jsを含み、Mac同梱用ランタイムのバージョンとチェックサムも固定します。SDKはnpmのlockfileに固定し、Hostへ同梱するコードを生成します。
+Claudeとの会話は公式Agent SDKが実行します。Macアプリは署名済みのポータブルなNode.jsを同梱するため、Claude Codeがインストール済みならNodeやnpmを別途用意する必要はありません。既定ではアプリ内のNodeを使い、`AGENT_NODE`で別の実行ファイルを明示できます。単体HostではPATHにNode.js 22以降を置くか、`AGENT_NODE`で指定してください。Nixの開発環境はNode.jsを含み、Mac同梱用ランタイムのバージョンとチェックサムも固定します。SDKはnpmのlockfileに固定し、Hostへ同梱するコードを生成します。
 
 ```sh
-scripts/dev-env.sh cargo build --locked -p bex-process --bin bex-provider-supervisor
+scripts/dev-env.sh cargo build --locked -p agent-process --bin agent-provider-supervisor
 scripts/dev-env.sh node scripts/install-claude-sdk.mjs target/debug
 scripts/dev-env.sh cargo run -p host-daemon -- --name 'BEX Host'
 ```
 
 | オプション | 内容 |
 | --- | --- |
-| `--state-dir` | 新しいHostの認証情報ディレクトリ。未指定なら記憶したディレクトリを使用（macOSの初期値は`~/Library/Application Support/app.bex.BEX/`）。通常Hostを2つ起動するための指定ではありません |
+| `--state-dir` | 新しいHostの認証情報ディレクトリ。未指定なら記憶したディレクトリを使用（macOSの初期値は`~/Library/Application Support/dev.remoteagent.desktop/`）。通常Hostを2つ起動するための指定ではありません |
 | `--codex-home` | 別のCodex保存領域を選択 |
-| `--claude <path>` | Claude Codeの実行ファイル。既定値はPATH上の`claude`。デスクトップは設定済みの`BEX_CLAUDE`を渡します |
+| `--claude <path>` | Claude Codeの実行ファイル。既定値はPATH上の`claude`。デスクトップは設定済みの`AGENT_CLAUDE`を渡します |
 | `--relay-url <url>…` / `--no-relay` | 独自のirohリレー、または隔離テスト用のローカルアドレスのみを使用 |
 | `--isolated --state-dir <directory>` | 明示的に分離した開発・テストHost。自身のディレクトリロックも保持します |
 
@@ -65,7 +65,7 @@ Codexのイベント処理終了は、プロセスの片付け前に`host.codex.
 固定したLinux環境でHostと監視用実行ファイルをビルドします。
 
 ```sh
-nix develop .#native --command cargo build --locked --release -p host-daemon -p bex-process -p agent-cli
+nix develop .#native --command cargo build --locked --release -p host-daemon -p agent-process -p agent-cli
 target/release/host-daemon --name 'Linux development'
 ```
 
@@ -82,11 +82,11 @@ target/release/host-daemon revoke <node-id>
 
 iPhoneで**PC一覧 → PCを追加 → QRコードを読み取る**を開くか、**QRの内容を手入力**に招待JSONを貼り付けます。招待の有効期限は既定で7日、登録できる新規端末は1台です。Hostの起動時に`--invitation-days <1–90>`を指定すると、新しく発行する招待の期限だけを変更できます。端末ごとに別の招待を発行し、出力をログやGitへ保存しないでください。登録済み端末は招待の期限後も再接続できます。Hostの識別情報と登録済み端末は再起動後も保持します。隔離開発Hostでは、`invite`・`status`の前にも同じ`--isolated --state-dir <directory>`を指定します。
 
-インターネット経由の接続には既定のirohリレーを有効にします。Git、エージェントの実行ファイル、ChromiumがPATH上にある開発ユーザーでサービスを動かし、そのユーザーのエージェントアカウントを認証してください。`bex-provider-supervisor`は`host-daemon`と同じディレクトリに置きます。iPhoneから操作するのはLinux上のファイル、ターミナル、ブラウザーです。プロジェクトのタスク開始時はLinux側のチェックアウトを選びます。systemdでは`KillSignal=SIGINT`を使い、Hostがプロバイダーを正常終了できるようにします。
+インターネット経由の接続には既定のirohリレーを有効にします。Git、エージェントの実行ファイル、ChromiumがPATH上にある開発ユーザーでサービスを動かし、そのユーザーのエージェントアカウントを認証してください。`agent-provider-supervisor`は`host-daemon`と同じディレクトリに置きます。iPhoneから操作するのはLinux上のファイル、ターミナル、ブラウザーです。プロジェクトのタスク開始時はLinux側のチェックアウトを選びます。systemdでは`KillSignal=SIGINT`を使い、Hostがプロバイダーを正常終了できるようにします。
 
 信頼できる共有環境では、`codex login --with-api-key`の標準入力でチーム用APIキーを設定できます。Hostはこれを**API key**アカウントとして検出し、再起動後も選択を保持します。API料金はChatGPTのサブスクリプション使用量と別なので、サブスクリプションの残量は表示しません。共有Codex設定で`forced_login_method = "api"`を指定するとAPI認証を維持できます。ペアリングした全端末がHostのアカウントと認証情報を共有し、タスクごとのワークツリーでソース変更を分離します。
 
-ワークツリー設定の`bex-worktrees.json`と、プロジェクトに属さないチャットの`bex-chats/`は、通常`$CODEX_HOME`または`~/.codex`のCodexプロジェクト状態の隣に保存します。新規ワークツリーの既定パスは`<original-repository>/.worktree/session-XXXXX/<repository-name>`です。独自ディレクトリを設定すると`.worktree`部分を置き換えます。別のワークツリーから開始しても、チェックアウトのフォルダー名はリポジトリ名を使います。既存ワークツリーは移動しません。既定の`.worktree`はGitのローカル`info/exclude`で除外します。設定画面はMacの**設定 → ワークツリー**、iPhoneの**タスク一覧 → … → 設定 → ワークツリー**です。
+ワークツリー設定の`agent-worktrees.json`と、プロジェクトに属さないチャットの`agent-chats/`は、通常`$CODEX_HOME`または`~/.codex`のCodexプロジェクト状態の隣に保存します。新規ワークツリーの既定パスは`<original-repository>/.worktree/session-XXXXX/<repository-name>`です。独自ディレクトリを設定すると`.worktree`部分を置き換えます。別のワークツリーから開始しても、チェックアウトのフォルダー名はリポジトリ名を使います。既存ワークツリーは移動しません。既定の`.worktree`はGitのローカル`info/exclude`で除外します。設定画面はMacの**設定 → ワークツリー**、iPhoneの**タスク一覧 → … → 設定 → ワークツリー**です。
 
 iPhoneから保存済みPCを削除するには、**タスク一覧 → PC一覧 → 接続を解除**を開いて確認します。そのiPhoneの認証鍵を削除し、再起動後も再接続しません。Hostの会話データは保持します。Macの**設定 → 端末と接続 → 接続を解除**は、端末のアクセスを取り消して接続を閉じます。再接続には再ペアリングが必要です。iPhoneでPCを削除しても、Macにある以前の端末エントリーは削除しません。
 
@@ -99,7 +99,7 @@ Windows 11では、ビルド済みEXEインストーラーを使えばRustのイ
 ## クライアントのビルド
 
 ```sh
-# Mac配布用（署名証明書が必要。BEX_CODE_SIGN_IDENTITYで選択）
+# Mac配布用（署名証明書が必要。AGENT_CODE_SIGN_IDENTITYで選択）
 scripts/dev-env.sh just build-desktop-macos && open target/release/bex.app
 
 # iPhone（iOS 26）: Simulator用ライブラリをビルドしてXcodeを開く
@@ -112,7 +112,7 @@ scripts/dev-env.sh ./gradlew :apps:mobile:assembleDebug
 
 別アプリとして配布するiOS開発版は、[配布手順](docs/qa/IOS_DEV_RELEASE.md)を参照してください。
 
-Rustのソースを変更したら、iOS用ライブラリも再ビルドしてください。デスクトップの下書きとログは`BEX_STATE_DIR`を使いますが、Host探索で別の認証情報ディレクトリを選ぶことがあります。デスクトップを隔離するには`BEX_ISOLATED_HOST=1`と`BEX_STATE_DIR`の両方が必要です。個人のプロバイダー状態をテストが読み込まないよう、別のCodexホームかフィクスチャ実行ファイルも使ってください。
+Rustのソースを変更したら、iOS用ライブラリも再ビルドしてください。デスクトップの下書きとログは`AGENT_STATE_DIR`を使いますが、Host探索で別の認証情報ディレクトリを選ぶことがあります。デスクトップを隔離するには`AGENT_ISOLATED_HOST=1`と`AGENT_STATE_DIR`の両方が必要です。個人のプロバイダー状態をテストが読み込まないよう、別のCodexホームかフィクスチャ実行ファイルも使ってください。
 
 編集中は`scripts/dev-env.sh just check -p agent-core`で、実行ファイルを生成せずにRustを確認できます。`-p`には変更したクレートを指定してください。
 
@@ -138,7 +138,7 @@ Hostは変更していないCLIを、ストリーミングJSON入出力と独自
 
 テキスト、PNG・JPEG・GIF・WebP画像、ファイル参照、ツール承認、ユーザーへの質問、中断、後続ターンは、Codexと同じStore・認証済み接続を使います。作業ディレクトリ選択と自動ワークツリー設定も共通です。永続的な会話の唯一の保存元はClaudeのネイティブ記録です。Hostは`--claude-home`、`CLAUDE_CONFIG_DIR`、または`~/.claude`を推論実行なしで読み、Bex独自の会話記録は書きません。クライアントを切断しても実行は続き、再接続ではイベントを再送せず、現在有効な未回答の要求を含む最新の状態を開きます。
 
-会話中もモデル選択からCodex・Claude・DSHを切り替えられます。現在の応答と未回答の確認を終え、次のメッセージを送信すると、同じ会話・作業場所で続行します。以前使ったAIへ戻ると、そのAIのネイティブ会話を再利用し、まだ見ていない履歴を渡します。長い履歴は最初の依頼と最近のやり取りを優先し、省いた内容はAIがHostの履歴コマンドで参照できます。過去の添付や思考・ツールの内部状態は移しません。本文は引き続き各AIのネイティブ記録を使い、切替先の対応と投入した文脈を`bex-conversations.json`へ保存します。Hostとクライアントを同じリビジョンから更新してください。
+会話中もモデル選択からCodex・Claude・DSHを切り替えられます。現在の応答と未回答の確認を終え、次のメッセージを送信すると、同じ会話・作業場所で続行します。以前使ったAIへ戻ると、そのAIのネイティブ会話を再利用し、まだ見ていない履歴を渡します。長い履歴は最初の依頼と最近のやり取りを優先し、省いた内容はAIがHostの履歴コマンドで参照できます。過去の添付や思考・ツールの内部状態は移しません。本文は引き続き各AIのネイティブ記録を使い、切替先の対応と投入した文脈を`agent-conversations.json`へ保存します。Hostとクライアントを同じリビジョンから更新してください。
 
 ClaudeからCodexへの委任、Claude自体のフォーク・サイドチャットは未実装です。Codexの起動失敗・終了でも、Host、Claudeの実行、ペアリング、ファイル、作業場所の選択は停止しません。HostはCodexと独立してPTYを所有し、端末に属するシェルはクライアントの切断後も保持します。音声入力とCodexアカウント操作にはCodexが必要です。Codexの会話活動を確認できない場合はワークツリー削除を禁止します。CLI連携はClaude Code 2.1.266で検証しています。
 
@@ -196,7 +196,7 @@ scripts/dev-env.sh just macos-e2e                  # ネイティブBrowserの�
 scripts/dev-env.sh just quality [apple|rust|kotlin|swift]  # 既定はMac Host・デスクトップとiPhone
 ```
 
-Claudeの契約テストは`scripts/dev-env.sh cargo test --locked -p host-fixture --test claude`です。先に監視用実行ファイルをビルドしてください。決定的に動作する外部CLI境界と、実際のStore・iroh・Hostルーティング・ネイティブ会話ファイル・隔離Git環境を使います。Claude Code 2.1.266の匿名化した記録でもネイティブ形式との互換性を確認します。任意実行の`live_claude_subscription_completes_and_resumes_through_store_and_host`は実際の認証済みCLIを使います。`BEX_LIVE_CLAUDE_PROGRAM`に絶対パスを設定し、`-- --ignored --exact`を付けて実行すると、サブスクリプションでの推論、Host再起動後の再開、中断、中断後の入力を確認できます。
+Claudeの契約テストは`scripts/dev-env.sh cargo test --locked -p host-fixture --test claude`です。先に監視用実行ファイルをビルドしてください。決定的に動作する外部CLI境界と、実際のStore・iroh・Hostルーティング・ネイティブ会話ファイル・隔離Git環境を使います。Claude Code 2.1.266の匿名化した記録でもネイティブ形式との互換性を確認します。任意実行の`live_claude_subscription_completes_and_resumes_through_store_and_host`は実際の認証済みCLIを使います。`AGENT_LIVE_CLAUDE_PROGRAM`に絶対パスを設定し、`-- --ignored --exact`を付けて実行すると、サブスクリプションでの推論、Host再起動後の再開、中断、中断後の入力を確認できます。
 
 開発・統合の方針は[AGENTS.md](AGENTS.md)を参照してください。プラットフォームの受け入れ検証はNative clients CIが担当し、起動条件、対象選択、キャッシュ、ランナーは[native.yml](.github/workflows/native.yml)で管理します。
 
@@ -204,7 +204,7 @@ Claudeの契約テストは`scripts/dev-env.sh cargo test --locked -p host-fixtu
 
 Nixシェルは固定したKacheでワークツリー間のビルド結果を再利用します。`KACHE_CACHE_DIR`でキャッシュ先を指定でき、`bex.buildRoot`設定時の既定値は`<buildRoot>/.kache`です。`scripts/dev-env.sh kache stats --last-build`で再利用、`scripts/dev-env.sh kache explain`でミスの原因を確認できます。キャッシュの方針は[.kache.toml](.kache.toml)で管理し、CIは独自のCargoキャッシュを使います。
 
-接続時間は`scripts/dev-env.sh cargo xtask connection-diagnostics`で解析できます。対象を絞った検証コマンドは`scripts/dev-env.sh just --list`で確認できます。iOSの受け入れ検証は`BEX_IOS_TEST_WORKERS=1`〜`10`で並列数を指定できます。ランナーはワークツリー間で実行を直列化し、結果を`target/qa`へ残します。ビルドキャッシュの詳細は[scripts/dev-env.sh](scripts/dev-env.sh)と各ネイティブランナーで管理します。`agent-ffi/bindgen`機能はバインディング生成時にだけ有効にしてください。
+接続時間は`scripts/dev-env.sh cargo xtask connection-diagnostics`で解析できます。対象を絞った検証コマンドは`scripts/dev-env.sh just --list`で確認できます。iOSの受け入れ検証は`AGENT_IOS_TEST_WORKERS=1`〜`10`で並列数を指定できます。ランナーはワークツリー間で実行を直列化し、結果を`target/qa`へ残します。ビルドキャッシュの詳細は[scripts/dev-env.sh](scripts/dev-env.sh)と各ネイティブランナーで管理します。`agent-ffi/bindgen`機能はバインディング生成時にだけ有効にしてください。
 
 新規ワークツリーのビルド出力を外付けディスクへ置くには、マウント済みディスクにディレクトリを作り、`git config --local bex.buildRoot /absolute/path/to/builds`を設定します。このローカル設定は全ワークツリーで共有します。`scripts/dev-env.sh`は新しい`target`を外付け上の専用ディレクトリへのシンボリックリンクにし、Cargo・Xcode・生成バインディング・キャッシュの既存パスを維持します。既存`target`は移動しません。移す場合は使用していない間に移動して元の場所をリンクへ置き換えてください。指定ディレクトリは事前に存在する必要があり、ディスク取り外しなどで利用できなければコマンドは失敗します。`git config --local --unset bex.buildRoot`で設定を削除すると、その後の新規ワークツリーはローカル出力へ戻ります。
 

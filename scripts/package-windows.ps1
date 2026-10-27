@@ -52,12 +52,12 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Cannot verify the source checkout." }
     if ($sourceStatus) { $revision = "$revision-dirty" }
     if (-not $SkipBuild) {
-        $previousRevision = $env:BEX_BUILD_REVISION
+        $previousRevision = $env:AGENT_BUILD_REVISION
         try {
-            $env:BEX_BUILD_REVISION = $revision
-            & cargo build --locked --profile $Profile --features agent-core/bindings -p bex-desktop -p host-daemon -p bex-process -p agent-cli
+            $env:AGENT_BUILD_REVISION = $revision
+            & cargo build --locked --profile $Profile --features agent-core/bindings -p agent-desktop -p host-daemon -p agent-process -p agent-cli
             if ($LASTEXITCODE -ne 0) { throw "Windows build failed." }
-        } finally { $env:BEX_BUILD_REVISION = $previousRevision }
+        } finally { $env:AGENT_BUILD_REVISION = $previousRevision }
     }
     # A unique staging directory avoids modifying an installed/running Host.
     $packageRoot = Join-Path $metadata.target_directory "windows-packages"
@@ -66,7 +66,7 @@ try {
     $bundle = Join-Path $staging "bex"
     New-Item -ItemType Directory -Path $bundle -Force | Out-Null
     try {
-        foreach ($executable in @("bex-desktop.exe", "host-daemon.exe", "bex-provider-supervisor.exe", "agent-cli.exe")) {
+        foreach ($executable in @("agent-desktop.exe", "host-daemon.exe", "agent-provider-supervisor.exe", "agent-cli.exe")) {
             Copy-Item -LiteralPath (Join-Path $buildDirectory $executable) -Destination $bundle
         }
         # Claude's bridge and its license must travel with the Host.

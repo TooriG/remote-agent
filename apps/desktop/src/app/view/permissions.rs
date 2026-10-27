@@ -15,7 +15,7 @@ impl Desktop {
             .trigger(
                 Button::new("composer-permissions")
                     .debug_selector(|| "composer-permissions".into())
-                    .icon(Icon::default().path("bex/shield.svg"))
+                    .icon(Icon::default().path("icons/shield.svg"))
                     .label(control.label)
                     .accessibility_label("承認方法を変更")
                     .ghost()
@@ -71,7 +71,7 @@ impl Desktop {
                     .w_full()
                     .h_auto()
                     .py_2()
-                    .icon(Icon::default().path("bex/shield.svg"))
+                    .icon(Icon::default().path("icons/shield.svg"))
                     .child(
                         v_flex()
                             .flex_1()

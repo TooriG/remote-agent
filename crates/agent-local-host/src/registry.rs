@@ -47,7 +47,7 @@ impl Drop for FileLock {
         // A concurrently forked child can retain this open file description
         // until exec. Releasing ownership must not wait for its descriptor.
         if let Err(error) = self.0.unlock() {
-            tracing::error!(target: "bex", operation = "release local Host lock", message = %error);
+            tracing::error!(target: "agent", operation = "release local Host lock", message = %error);
         }
     }
 }
@@ -59,7 +59,7 @@ impl LocalHostRegistry {
     }
 
     pub fn for_user() -> Result<Self> {
-        let directory = directories::ProjectDirs::from("app", "bex", "BEX")
+        let directory = directories::ProjectDirs::from("dev", "remoteagent", "desktop")
             .context("application data directory unavailable")?
             .data_local_dir()
             .to_owned();
@@ -326,7 +326,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_process_crash_releases_the_reservation_without_reusing_its_ticket() {
-        const CHILD_ROOT: &str = "BEX_LOCAL_HOST_TEST_ROOT";
+        const CHILD_ROOT: &str = "AGENT_LOCAL_HOST_TEST_ROOT";
         if let Some(root) = std::env::var_os(CHILD_ROOT) {
             let root = PathBuf::from(root);
             let registry = LocalHostRegistry::new(root.join("registry"));

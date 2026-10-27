@@ -11,12 +11,12 @@ async fn main() {
     // Unix. Reuse this companion as a successful no-op browser so no host-local
     // callback tab can escape a provider's explicitly client-owned login flow.
     if suppressed_browser_request(
-        std::env::var_os("BEX_SUPPRESS_BROWSER").as_deref() == Some(std::ffi::OsStr::new("1")),
+        std::env::var_os("AGENT_SUPPRESS_BROWSER").as_deref() == Some(std::ffi::OsStr::new("1")),
         &std::env::args_os().skip(1).collect::<Vec<_>>(),
     ) {
         return;
     }
-    let code = if std::env::args().nth(1).as_deref() == Some("--bex-pty") {
+    let code = if std::env::args().nth(1).as_deref() == Some("--agent-pty") {
         pty::run().await
     } else {
         run().await

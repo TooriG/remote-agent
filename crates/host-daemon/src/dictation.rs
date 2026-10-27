@@ -1146,7 +1146,7 @@ mod tests {
 
     #[tokio::test]
     async fn first_dictation_initializes_tls_for_both_auth_methods() {
-        const CHILD: &str = "BEX_TEST_COLD_DICTATION_TLS";
+        const CHILD: &str = "AGENT_TEST_COLD_DICTATION_TLS";
         if std::env::var_os(CHILD).is_none() {
             // A separate process prevents another test from installing the
             // global TLS provider first and hiding cold-start failures.

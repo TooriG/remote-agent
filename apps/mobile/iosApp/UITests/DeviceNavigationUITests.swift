@@ -2,8 +2,8 @@ import Foundation
 import UIKit
 import XCTest
 
-/// XCTest selectors remain on BexLaunchUITests for the fixture runner.
-extension BexLaunchUITests {
+/// XCTest selectors remain on LaunchUITests for the fixture runner.
+extension LaunchUITests {
     private func assertTerminalReady(_ app: XCUIApplication) {
         let terminal = app.descendants(matching: .any)["terminal.screen"]
         let ready = expectation(for: NSPredicate(format: "value == %@", "入力可能"), evaluatedWith: terminal)
@@ -76,7 +76,7 @@ extension BexLaunchUITests {
         let terminal = app.descendants(matching: .any)["terminal.screen"]
         XCTAssertTrue(terminal.waitForExistence(timeout: 5))
         terminal.tap()
-        UIPasteboard.general.string = "BEX_PASTE='日本語\nsecond line'"
+        UIPasteboard.general.string = "AGENT_PASTE='日本語\nsecond line'"
         terminal.press(forDuration: 1.2)
         let paste = app.menuItems.matching(NSPredicate(format: "label IN %@", ["Paste", "ペースト"])).firstMatch
         XCTAssertTrue(paste.waitForExistence(timeout: 5)); paste.tap()
@@ -84,7 +84,7 @@ extension BexLaunchUITests {
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         terminal.typeText("\n")
         let expected = "\\346\\227\\245\\346\\234\\254\\350\\252\\236\\nsecond line"
-        terminal.typeText("[ \"$BEX_PASTE\" = \"$(printf '\(expected)')\" ]; exit $?\n")
+        terminal.typeText("[ \"$AGENT_PASTE\" = \"$(printf '\(expected)')\" ]; exit $?\n")
         XCTAssertTrue(app.staticTexts["終了 · 0"].waitForExistence(timeout: 15))
         captureScreen(app, named: "Native terminal pastes Unicode and multiline text")
         closeWorkbench(app)
@@ -99,7 +99,7 @@ extension BexLaunchUITests {
         let terminal = app.descendants(matching: .any)["terminal.screen"]
         XCTAssertTrue(terminal.waitForExistence(timeout: 5))
         terminal.tap()
-        let probe = try XCTUnwrap(ProcessInfo.processInfo.environment["BEX_TERMINAL_QUERY_PROBE"])
+        let probe = try XCTUnwrap(ProcessInfo.processInfo.environment["AGENT_TERMINAL_QUERY_PROBE"])
             .replacingOccurrences(of: "'", with: "'\\''")
         terminal.typeText("'\(probe)' terminal-query-probe; exit $?\n")
         XCTAssertTrue(app.staticTexts["終了 · 0"].waitForExistence(timeout: 20))
@@ -127,7 +127,7 @@ extension BexLaunchUITests {
         assertTerminalReady(app)
         let terminal = app.descendants(matching: .any)["terminal.screen"]
         XCTAssertTrue(terminal.waitForExistence(timeout: 5))
-        terminal.tap(); terminal.typeText("BEX_NATIVE=17\n")
+        terminal.tap(); terminal.typeText("AGENT_NATIVE=17\n")
         captureScreen(app, named: "Native terminal with keyboard")
         XCTAssertFalse(app.buttons["終了"].exists)
         XCTAssertFalse(app.buttons["terminal.close"].exists)
@@ -150,7 +150,7 @@ extension BexLaunchUITests {
         XCTAssertFalse(terminal.exists)
         XCTAssertEqual(composer.value as? String, "Keep my draft")
         openTerminal()
-        terminal.tap(); terminal.typeText("exit $BEX_NATIVE\n")
+        terminal.tap(); terminal.typeText("exit $AGENT_NATIVE\n")
         XCTAssertTrue(app.staticTexts["終了 · 17"].waitForExistence(timeout: 10))
         captureScreen(app, named: "Reattached native shell retains state")
         closeWorkbench(app)
@@ -237,10 +237,10 @@ extension BexLaunchUITests {
     }
 
     func testPhysicalDeviceCanPairWithManualPayload() throws {
-        guard let payload = ProcessInfo.processInfo.environment["BEX_PAIRING_PAYLOAD"],
+        guard let payload = ProcessInfo.processInfo.environment["AGENT_PAIRING_PAYLOAD"],
               !payload.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else {
-            throw XCTSkip("BEX_PAIRING_PAYLOAD is required for the physical-device pairing test")
+            throw XCTSkip("AGENT_PAIRING_PAYLOAD is required for the physical-device pairing test")
         }
 
         let app = XCUIApplication()

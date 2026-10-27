@@ -74,7 +74,7 @@ impl Desktop {
             .child(
                 Self::icon_button(
                     "stop-dictation",
-                    Icon::default().path("bex/stop.svg"),
+                    Icon::default().path("icons/stop.svg"),
                     "録音を終了して文字起こし",
                     cx,
                     |s, _, _| s.finish_dictation(false),

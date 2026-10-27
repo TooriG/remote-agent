@@ -788,7 +788,7 @@ impl Claude {
         };
         while let Some(result) = workers.try_join_next() {
             if let Err(error) = result {
-                tracing::error!(target: "bex", operation = "claude.worker", message = %error);
+                tracing::error!(target: "agent", operation = "claude.worker", message = %error);
             }
         }
         workers.spawn(worker.run(process, receiver));
@@ -882,7 +882,7 @@ impl Worker {
                     SdkEvent::Message { message } => message,
                     SdkEvent::Request { request_id, request } => {
                         if let Err(error) = self.permission(&request_id, &request).await {
-                            tracing::warn!(target: "bex", operation = "host.claude.request_rejected", message = %error);
+                            tracing::warn!(target: "agent", operation = "host.claude.request_rejected", message = %error);
                             process.write(&SdkInput::Answer { request_id, response: None, error: Some(error) }).await?;
                         }
                         continue;
@@ -1963,7 +1963,7 @@ impl Agent for Claude {
         let mut workers = self.workers.lock().await;
         while let Some(result) = workers.join_next().await {
             if let Err(error) = result {
-                tracing::error!(target: "bex", operation = "claude.worker", message = %error);
+                tracing::error!(target: "agent", operation = "claude.worker", message = %error);
             }
         }
     }

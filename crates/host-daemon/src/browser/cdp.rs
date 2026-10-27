@@ -147,8 +147,8 @@ impl Chrome {
             Err(e) => return Err(e.to_string()),
         }
         let started = Instant::now();
-        tracing::info!(target: "bex", operation = "browser.launch", message = "Chrome starting");
-        let mut child = bex_process::command(executable)
+        tracing::info!(target: "agent", operation = "browser.launch", message = "Chrome starting");
+        let mut child = agent_process::command(executable)
             .map_err(|e| e.to_string())?
             .arg(format!("--user-data-dir={}", profile.display()))
             .args([
@@ -181,7 +181,7 @@ impl Chrome {
                         && !path.contains(['\r', '\n', '?', '#'])
                     {
                         let url = format!("ws://127.0.0.1:{port}{path}");
-                        tracing::info!(target: "bex", operation = "browser.launch",
+                        tracing::info!(target: "agent", operation = "browser.launch",
                             message = %format_args!("DevTools endpoint published after {} ms", started.elapsed().as_millis()));
                         let (socket, _) = async_tungstenite::tokio::connect_async(url)
                             .await
@@ -196,12 +196,12 @@ impl Chrome {
         .unwrap_or_else(|_| Err("BEXブラウザの起動がタイムアウトしました。".into()));
         match result {
             Ok(socket) => {
-                tracing::info!(target: "bex", operation = "browser.launch",
+                tracing::info!(target: "agent", operation = "browser.launch",
                     message = %format_args!("Chrome connected after {} ms", started.elapsed().as_millis()));
                 Ok(Self::connected(child, socket))
             }
             Err(error) => {
-                tracing::warn!(target: "bex", operation = "browser.launch",
+                tracing::warn!(target: "agent", operation = "browser.launch",
                     message = %format_args!("Chrome launch failed after {} ms: {error}", started.elapsed().as_millis()));
                 child.stdin.take();
                 let _ = child.wait().await;
@@ -250,13 +250,13 @@ impl Chrome {
         match result {
             Ok(Ok(value)) if value.get("error").is_none() => {
                 if started.elapsed() >= Duration::from_secs(1) {
-                    tracing::info!(target: "bex", operation = "browser.cdp",
+                    tracing::info!(target: "agent", operation = "browser.cdp",
                         message = %format_args!("{method} completed after {} ms", started.elapsed().as_millis()));
                 }
                 Ok(value["result"].clone())
             }
             Ok(Ok(value)) => {
-                tracing::debug!(target: "bex", operation = "browser.cdp",
+                tracing::debug!(target: "agent", operation = "browser.cdp",
                     error_code = value["error"]["code"].as_i64(),
                     message = %format_args!("{method} rejected"));
                 Err(format!(
@@ -264,7 +264,7 @@ impl Chrome {
                 ))
             }
             _ => {
-                tracing::warn!(target: "bex", operation = "browser.cdp",
+                tracing::warn!(target: "agent", operation = "browser.cdp",
                     message = %format_args!("{method} interrupted after {} ms", started.elapsed().as_millis()));
                 self.broken = true;
                 Err("BEXブラウザとの通信が中断しました。再接続してください。".into())

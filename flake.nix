@@ -57,18 +57,18 @@
             if [ -z "''${CI:-}" ]; then
               export RUSTC_WRAPPER="${kache}/bin/kache"
               if [ -z "''${KACHE_CACHE_DIR:-}" ]; then
-                bex_kache_build_root=$(git config --path --get bex.buildRoot 2>/dev/null || true)
-                if [ -n "$bex_kache_build_root" ]; then
-                  if [ "''${bex_kache_build_root#/}" = "$bex_kache_build_root" ] || [ ! -d "$bex_kache_build_root" ]; then
-                    printf 'Build storage is unavailable: %s\n' "$bex_kache_build_root" >&2
+                agent_kache_build_root=$(git config --path --get bex.buildRoot 2>/dev/null || true)
+                if [ -n "$agent_kache_build_root" ]; then
+                  if [ "''${agent_kache_build_root#/}" = "$agent_kache_build_root" ] || [ ! -d "$agent_kache_build_root" ]; then
+                    printf 'Build storage is unavailable: %s\n' "$agent_kache_build_root" >&2
                     exit 1
                   fi
                   # Keep the shared compiler cache on the build volume for CoW restores.
-                  export KACHE_CACHE_DIR="$bex_kache_build_root/.kache"
+                  export KACHE_CACHE_DIR="$agent_kache_build_root/.kache"
                 else
                   export KACHE_CACHE_DIR="$HOME/${if pkgs.stdenv.hostPlatform.isDarwin then "Library/Caches/kache" else ".cache/kache"}"
                 fi
-                unset bex_kache_build_root
+                unset agent_kache_build_root
               fi
             fi
           '';
@@ -105,7 +105,7 @@
             ];
           };
           native = mkDevShell {
-            BEX_NODE_RUNTIME = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "${nodeRuntime}";
+            AGENT_NODE_RUNTIME = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "${nodeRuntime}";
             RUST_TOOLCHAIN_VERSION = rustToolchain.version;
             NEXTEST_VERSION = pkgs.cargo-nextest.version;
             packages = with pkgs; [ rustToolchain kache cargo-mutants cargo-nextest just jq git pkg-config cmake clang workflowLinter nodejs powershell ]
@@ -128,7 +128,7 @@
             ANDROID_SDK_ROOT = "${androidTestSdk}/libexec/android-sdk";
           };
           default = mkDevShell ({
-            BEX_NODE_RUNTIME = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "${nodeRuntime}";
+            AGENT_NODE_RUNTIME = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "${nodeRuntime}";
             packages = with pkgs; [
               just
               jq
@@ -157,8 +157,8 @@
               # build scans this host much more slowly under Simulator load.
               export PATH="/usr/sbin:$PATH"
               # The Nix compiler setup overwrites DEVELOPER_DIR with its own SDK.
-              if [ -d "''${BEX_XCODE_DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}" ]; then
-                export DEVELOPER_DIR="''${BEX_XCODE_DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
+              if [ -d "''${AGENT_XCODE_DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}" ]; then
+                export DEVELOPER_DIR="''${AGENT_XCODE_DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
                 unset SDKROOT
                 # Xcode expects to drive clang itself. Nix's LD override makes
                 # xcodebuild invoke ld directly with clang-only -Xlinker flags.

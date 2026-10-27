@@ -164,7 +164,7 @@
 
 - Keep command activity collapsed by default while running and after reopening; preserve explicit expansion.
 
-- Keep chats without a selected project unassigned after sending, reopening, and restarting the Host. Use a dedicated `bex-chats` working directory beside the Codex project state instead of inheriting the App Server's checkout, while retaining the real directory for attachments and file operations. Preserve unsent drafts when that directory cannot be prepared, and skip automatic Git reviews for unassigned chats so a parent repository’s changes do not appear.
+- Keep chats without a selected project unassigned after sending, reopening, and restarting the Host. Use a dedicated `agent-chats` working directory beside the Codex project state instead of inheriting the App Server's checkout, while retaining the real directory for attachments and file operations. Preserve unsent drafts when that directory cannot be prepared, and skip automatic Git reviews for unassigned chats so a parent repository’s changes do not appear.
 
 - Render desktop approval labels, queued requests, images and thread summaries from core presentation. Share Store session subscription, shutdown and snapshot persistence across desktop windows; split desktop views and core operations by responsibility, and remove the Swift presentation mirror.
 
@@ -186,7 +186,7 @@
 
 - Apply automatic worktree creation only when a new session has an explicitly selected checkout. Global chats can send with the setting enabled. Cover saved settings on/off, global/project scope, text/photo input, first/follow-up turns, and reopened history through the real Store and isolated Host; exercise native photo/video submission after saving and reloading the enabled setting.
 
-- Store uploads from chats without a project in the Host's private `$CODEX_HOME/bex-attachments` directory. Preserve explicit absolute destinations and reject other relative paths. Return an empty review for folders without a Git worktree while preserving real Git errors. Verify complete photo/video submission without an error notice; keep unscoped fixture threads inside their isolated directory instead of inheriting the developer's checkout.
+- Store uploads from chats without a project in the Host's private `$CODEX_HOME/agent-attachments` directory. Preserve explicit absolute destinations and reject other relative paths. Return an empty review for folders without a Git worktree while preserving real Git errors. Verify complete photo/video submission without an error notice; keep unscoped fixture threads inside their isolated directory instead of inheriting the developer's checkout.
 
 - Initialize the Host's Rustls provider before the first dictation WebSocket handshake. Prevent voice submission from closing the iPhone's JSONL session when desktop builds enable both TLS backends; cover cold-process TLS failure followed by recording-upload recovery.
 

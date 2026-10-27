@@ -178,7 +178,7 @@ impl Timeline {
             images: HashMap::new(),
             gallery: None,
             image_dir: tempfile::Builder::new()
-                .prefix("bex-images-")
+                .prefix("agent-images-")
                 .tempdir()
                 .expect("image temporary directory"),
         }

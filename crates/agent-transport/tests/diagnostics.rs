@@ -89,7 +89,7 @@ async fn rpc_failure_is_persisted_before_delivery_and_success_preserves_it() {
         .unwrap();
     assert_eq!(reply.value["ok"], true);
     fixture.await.unwrap();
-    tracing::info!(target: "bex", operation = "shutdown", "Bex shutting down");
+    tracing::info!(target: "agent", operation = "shutdown", "Bex shutting down");
     let after = fs::read_to_string(&path).unwrap();
     assert!(after.starts_with(&before));
     assert!(!after.contains("PRIVATE_"));
@@ -113,8 +113,8 @@ async fn rpc_failure_is_persisted_before_delivery_and_success_preserves_it() {
     // Exercise the process-wide subscriber used by Host and Desktop, including
     // events emitted from async workers above and explicit field filtering here.
     tracing::error!(target: "dependency", operation = "ignored", "PRIVATE_DEPENDENCY");
-    tracing::debug!(target: "bex", operation = "ignored", "PRIVATE_DEBUG");
-    tracing::error!(target: "bex", operation = "upload", request_id = 42u64,
+    tracing::debug!(target: "agent", operation = "ignored", "PRIVATE_DEBUG");
+    tracing::error!(target: "agent", operation = "upload", request_id = 42u64,
         payload = "PRIVATE_PAYLOAD", message = "failed password=PRIVATE_PASSWORD");
     diagnostics::rpc_error(
         "read",

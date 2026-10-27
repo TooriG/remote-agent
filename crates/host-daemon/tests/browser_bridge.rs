@@ -91,7 +91,7 @@ async fn installed_codex_exposes_the_same_browser_as_the_phone() {
     mcp["command"] = env!("CARGO_BIN_EXE_host-daemon").into();
     std::fs::create_dir_all(root.path().join("codex")).unwrap();
     let server = codex_app_server::CodexAppServer::spawn(codex_app_server::AppServerConfig {
-        program: std::env::var_os("BEX_CODEX_TEST_PROGRAM")
+        program: std::env::var_os("AGENT_CODEX_TEST_PROGRAM")
             .map(PathBuf::from)
             .unwrap_or_else(|| codex_app_server::AppServerConfig::default().program),
         codex_home: Some(root.path().join("codex")),
@@ -102,7 +102,7 @@ async fn installed_codex_exposes_the_same_browser_as_the_phone() {
     let started = server
         .request::<_, Value>(
             "thread/start",
-            &json!({"cwd":root.path(),"config":{"mcp_servers.bex_browser":mcp}}),
+            &json!({"cwd":root.path(),"config":{"mcp_servers.agent_browser":mcp}}),
         )
         .await
         .unwrap()
@@ -125,9 +125,9 @@ async fn installed_codex_exposes_the_same_browser_as_the_phone() {
             .outcome
             .unwrap();
         found = status["data"].as_array().is_some_and(|servers| {
-            servers
-                .iter()
-                .any(|s| s["name"] == "bex_browser" && s["tools"].get("preview_snapshot").is_some())
+            servers.iter().any(|s| {
+                s["name"] == "agent_browser" && s["tools"].get("preview_snapshot").is_some()
+            })
         });
         if found {
             break;
@@ -138,7 +138,7 @@ async fn installed_codex_exposes_the_same_browser_as_the_phone() {
         found,
         "Codex must discover the conversation-scoped MCP tool"
     );
-    let result=server.request::<_,Value>("mcpServer/tool/call",&json!({"threadId":thread,"server":"bex_browser","tool":"preview_snapshot","arguments":{}})).await.unwrap().outcome.unwrap();
+    let result=server.request::<_,Value>("mcpServer/tool/call",&json!({"threadId":thread,"server":"agent_browser","tool":"preview_snapshot","arguments":{}})).await.unwrap().outcome.unwrap();
     assert!(
         result.to_string().contains("image/jpeg"),
         "Codex receives the Host screenshot"
@@ -163,7 +163,7 @@ async fn installed_codex_exposes_the_same_browser_as_the_phone() {
 async fn cancelled_mcp_call_keeps_the_bridge_responsive() {
     use agent_protocol::browser::BrowserFrame;
     let root = tempfile::Builder::new()
-        .prefix("bex-cancel-")
+        .prefix("agent-cancel-")
         .tempdir_in("/tmp")
         .unwrap();
     let socket = root.path().join("bridge.sock");

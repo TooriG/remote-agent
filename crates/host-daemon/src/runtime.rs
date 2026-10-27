@@ -70,7 +70,7 @@ pub(crate) async fn run(config: StartupConfig) -> Result<()> {
     {
         Ok(adapter) => adapter.into(),
         Err(error) => {
-            tracing::error!(target: "bex", operation = "host.claude", message = %error);
+            tracing::error!(target: "agent", operation = "host.claude", message = %error);
             host_daemon::providers::Backend::unavailable(
                 agent_protocol::session::ProviderKind::Claude,
                 error,
@@ -91,12 +91,12 @@ pub(crate) async fn run(config: StartupConfig) -> Result<()> {
     };
     let service = HostRpcService::new(
         [codex.into(), claude, deepseek],
-        ProjectStore::new(directory.join("bex-worktrees.json")),
+        ProjectStore::new(directory.join("agent-worktrees.json")),
     );
     service.set_history_scope(directory.clone(), config.isolated);
     service
         .enable_apns(
-            &directory.join("bex-apns.json"),
+            &directory.join("agent-apns.json"),
             &config.name,
             &endpoint.node_id().to_string(),
         )

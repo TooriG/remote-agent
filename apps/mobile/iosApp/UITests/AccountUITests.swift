@@ -1,7 +1,7 @@
 import Foundation
 import XCTest
 
-extension BexLaunchUITests {
+extension LaunchUITests {
     func testSimulatorSwitchesCodexAccountsAndForksConversation() throws {
         #if !targetEnvironment(simulator)
             throw XCTSkip("This test uses the isolated Simulator fixture")

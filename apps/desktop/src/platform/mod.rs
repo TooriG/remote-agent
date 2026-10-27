@@ -29,10 +29,10 @@ pub(crate) use microphone::prepare_microphone;
 pub(crate) use microphone::{Recording, RecordingEvent, start_recording};
 
 pub(crate) fn state_dir() -> Result<PathBuf, String> {
-    std::env::var_os("BEX_STATE_DIR")
+    std::env::var_os("AGENT_STATE_DIR")
         .map(PathBuf::from)
         .or_else(|| {
-            directories::ProjectDirs::from("app", "bex", "BEX")
+            directories::ProjectDirs::from("dev", "remoteagent", "desktop")
                 .map(|project| project.data_local_dir().to_path_buf())
         })
         .ok_or_else(|| "application data directory unavailable".into())
@@ -242,13 +242,13 @@ impl Connections {
 }
 
 fn isolated_host() -> anyhow::Result<bool> {
-    match std::env::var("BEX_ISOLATED_HOST").as_deref() {
+    match std::env::var("AGENT_ISOLATED_HOST").as_deref() {
         Err(std::env::VarError::NotPresent) | Ok("0") => Ok(false),
-        Ok("1") if std::env::var_os("BEX_STATE_DIR").is_some() => Ok(true),
+        Ok("1") if std::env::var_os("AGENT_STATE_DIR").is_some() => Ok(true),
         Ok("1") => Err(anyhow::anyhow!(
-            "BEX_ISOLATED_HOST=1 requires BEX_STATE_DIR"
+            "AGENT_ISOLATED_HOST=1 requires AGENT_STATE_DIR"
         )),
-        _ => Err(anyhow::anyhow!("BEX_ISOLATED_HOST must be 0 or 1")),
+        _ => Err(anyhow::anyhow!("AGENT_ISOLATED_HOST must be 0 or 1")),
     }
 }
 
@@ -267,7 +267,7 @@ async fn discover_local_host() -> anyhow::Result<LocalHost> {
 }
 
 fn start_host(directory: &std::path::Path, isolated: bool) -> anyhow::Result<std::process::Child> {
-    let executable = std::env::var_os("BEX_HOST_DAEMON")
+    let executable = std::env::var_os("AGENT_HOST_DAEMON")
         .map(PathBuf::from)
         .map(Ok)
         .unwrap_or_else(|| {
@@ -280,16 +280,16 @@ fn start_host(directory: &std::path::Path, isolated: bool) -> anyhow::Result<std
         .arg("--state-dir")
         .arg(directory)
         .arg("--codex")
-        .arg(std::env::var_os("BEX_CODEX").unwrap_or_else(|| "codex".into()))
+        .arg(std::env::var_os("AGENT_CODEX").unwrap_or_else(|| "codex".into()))
         .arg("--claude")
-        .arg(std::env::var_os("BEX_CLAUDE").unwrap_or_else(|| "claude".into()))
+        .arg(std::env::var_os("AGENT_CLAUDE").unwrap_or_else(|| "claude".into()))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     if isolated {
         command.arg("--isolated");
     }
-    if let Some(directory) = std::env::var_os("BEX_ACCOUNT_STATE_DIR") {
+    if let Some(directory) = std::env::var_os("AGENT_ACCOUNT_STATE_DIR") {
         command.arg("--account-state-dir").arg(directory);
     }
     os::prepare_host(&mut command);

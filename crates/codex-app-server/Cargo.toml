@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-bex-process = { path = "../bex-process" }
+agent-process = { path = "../agent-process" }
 agent-transport = { path = "../agent-transport" }
 serde.workspace = true
 thiserror.workspace = true

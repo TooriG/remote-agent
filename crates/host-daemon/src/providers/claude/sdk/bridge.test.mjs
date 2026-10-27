@@ -97,7 +97,7 @@ test("SDK callbacks wait for Host answers and cancel when the SDK aborts", async
 });
 
 test("the bundled runtime starts through a symlink", async () => {
-  const root = await mkdtemp(join(tmpdir(), "bex-sdk-entry-"));
+  const root = await mkdtemp(join(tmpdir(), "agent-sdk-entry-"));
   try {
     const directory = join(root, "runtime");
     await symlink(fileURLToPath(new URL(".", import.meta.url)), directory, "junction");

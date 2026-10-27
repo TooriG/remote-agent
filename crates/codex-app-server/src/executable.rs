@@ -151,7 +151,7 @@ mod tests {
         let message = Error::ExecutableNotFound(PathBuf::from("codex")).to_string();
         assert!(message.starts_with("Codex executable was not found: codex. "));
         assert!(message.to_lowercase().contains("put codex on path"));
-        assert!(message.contains("--codex") && message.contains("BEX_CODEX"));
+        assert!(message.contains("--codex") && message.contains("AGENT_CODEX"));
         if let Some(bundled) = bundled_codex_path() {
             assert!(bundled.starts_with("/Applications/ChatGPT.app"));
             assert!(message.contains("ChatGPT.app in /Applications"));

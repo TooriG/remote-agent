@@ -1,6 +1,6 @@
 import XCTest
 
-extension BexLaunchUITests {
+extension LaunchUITests {
     func testSimulatorModelDefaultsInheritAndPersistAcrossScopes() throws {
         let app = try connectedSimulatorApp()
         openDefaultModelSettings(app)

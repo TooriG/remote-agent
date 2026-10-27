@@ -130,7 +130,7 @@ impl Desktop {
                     let source = menu_source.clone();
                     menu.item(
                         PopupMenuItem::new("画像を名前を付けて保存…")
-                            .icon(Icon::default().path("bex/download.svg"))
+                            .icon(Icon::default().path("icons/download.svg"))
                             .disabled(saving)
                             .on_click(move |_, _, cx| {
                                 let _ = owner.update(cx, |view, cx| {
@@ -552,7 +552,7 @@ impl Desktop {
                             if saved {
                                 Icon::new(IconName::Check)
                             } else {
-                                Icon::default().path("bex/download.svg")
+                                Icon::default().path("icons/download.svg")
                             },
                             if saved { "保存済み" } else { "保存" },
                             cx,
@@ -744,12 +744,12 @@ impl Desktop {
                     match result {
                         Ok(saved) => gallery.saved = saved,
                         Err(error) => {
-                            tracing::error!(target: "bex", operation = "gallery.save", message = %error);
+                            tracing::error!(target: "agent", operation = "gallery.save", message = %error);
                             gallery.error = error;
                         }
                     }
                 } else if let Err(error) = result {
-                    tracing::error!(target: "bex", operation = "image.save", message = %error);
+                    tracing::error!(target: "agent", operation = "image.save", message = %error);
                     s.set_error(error);
                 }
                 cx.notify();

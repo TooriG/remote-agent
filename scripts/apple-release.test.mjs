@@ -104,7 +104,7 @@ test('Xcode receipts must identify one unambiguous delivery', () => {
 });
 
 test('receipt recording reads recent Xcode bundles and preserves the plan on ambiguity', () => {
-  const root = mkdtempSync(join(tmpdir(), 'bex-receipt-'));
+  const root = mkdtempSync(join(tmpdir(), 'agent-receipt-'));
   try {
     const native = join(root, 'native temporary directory');
     const output = join(root, 'target/apple-release');

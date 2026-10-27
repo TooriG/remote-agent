@@ -28,12 +28,12 @@ async fn main() {
     };
     if let Err(error) = result {
         let error = format!("{error:#}");
-        tracing::error!(target: "bex", operation = "host.runtime", message = %error);
+        tracing::error!(target: "agent", operation = "host.runtime", message = %error);
         eprintln!(
             "host daemon failed: {}",
             agent_transport::diagnostics::sanitize(&error)
         );
         std::process::exit(1);
     }
-    tracing::info!(target: "bex", operation = "shutdown", "Bex shutting down");
+    tracing::info!(target: "agent", operation = "shutdown", "Bex shutting down");
 }

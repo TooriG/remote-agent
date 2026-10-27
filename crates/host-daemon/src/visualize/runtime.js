@@ -1,9 +1,9 @@
 (() => {
   const notice = message => {
-    let element = document.getElementById('bex-runtime-notice');
+    let element = document.getElementById('agent-runtime-notice');
     if (!element) {
       element = document.createElement('p');
-      element.id = 'bex-runtime-notice';
+      element.id = 'agent-runtime-notice';
       element.setAttribute('role', 'status');
       document.body.prepend(element);
     }

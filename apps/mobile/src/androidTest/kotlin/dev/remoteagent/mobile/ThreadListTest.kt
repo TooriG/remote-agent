@@ -54,7 +54,7 @@ class ThreadListTest {
         Snapshot.restore(persisted.toString().encodeToByteArray()).use { snapshot ->
             val intents = mutableListOf<Intent>()
             compose.setContent {
-                BexTheme {
+                AppTheme {
                     ThreadListScreen(snapshot.recentThreadList(), snapshot.listQuery(), false, { intents.add(it) }, {})
                 }
             }
@@ -87,7 +87,7 @@ class ThreadListTest {
         Snapshot.restore(persisted.toString().encodeToByteArray()).use { snapshot ->
             val intents = mutableListOf<Intent>()
             compose.setContent {
-                BexTheme {
+                AppTheme {
                     ThreadListScreen(snapshot.threadList(), snapshot.listQuery(), false, { intents.add(it) }, {})
                 }
             }
@@ -134,7 +134,7 @@ class ThreadListTest {
             val intents = mutableListOf<Intent>()
             var openedHosts = false
             compose.setContent {
-                BexTheme {
+                AppTheme {
                     Box(Modifier.width(320.dp)) {
                         ThreadListScreen(
                             snapshot.threadList(),
@@ -174,7 +174,7 @@ class ThreadListTest {
             val intents = mutableListOf<Intent>()
             var query by mutableStateOf(snapshot.listQuery())
             compose.setContent {
-                BexTheme {
+                AppTheme {
                     ThreadListScreen(
                         snapshot.threadList(),
                         query,

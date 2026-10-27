@@ -225,7 +225,7 @@ pub async fn serve(socket: &Path, thread: &str) -> Result<(), String> {
                     continue;
                 };
                 let response = match request["method"].as_str() {
-                    Some("initialize") => json!({"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"bex-browser","version":env!("CARGO_PKG_VERSION")}}),
+                    Some("initialize") => json!({"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"agent-browser","version":env!("CARGO_PKG_VERSION")}}),
                     Some("tools/list") => json!({"tools":tools()}),
                     Some("ping") => json!({}),
                     Some("tools/call") => {

@@ -480,7 +480,7 @@ internal fun RemoteAgentApp(
     BackHandler(model.screen != Screen.Hosts) {
         if (model.screen == Screen.Conversation) model.showThreads() else model.showHosts()
     }
-    BexTheme {
+    AppTheme {
         Scaffold(
             topBar = {
                 if (screen in listOf(Screen.Pairing, Screen.Hosts))

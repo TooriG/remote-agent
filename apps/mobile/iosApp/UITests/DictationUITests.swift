@@ -1,8 +1,8 @@
 import Foundation
 import XCTest
 
-/// XCTest selectors remain on BexLaunchUITests for the fixture runner.
-extension BexLaunchUITests {
+/// XCTest selectors remain on LaunchUITests for the fixture runner.
+extension LaunchUITests {
     func testSimulatorDictationContinuesPastThirtySecondsAndReachesHost() throws {
         #if !targetEnvironment(simulator)
             throw XCTSkip("This test uses the isolated Simulator fixture")

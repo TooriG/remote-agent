@@ -3,7 +3,7 @@ import SwiftUI
 
 struct SettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject var model: BexAppViewModel
+    @ObservedObject var model: AppViewModel
 
     var body: some View {
         NavigationStack {
@@ -54,7 +54,7 @@ struct SettingsSheet: View {
 }
 
 struct WorktreeSettingsScreen: View {
-    @ObservedObject var model: BexAppViewModel
+    @ObservedObject var model: AppViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var createOnNewSession = false
     @State private var copyOnCreate = false
@@ -196,7 +196,7 @@ struct SettingsScopeBar<Projects: View, Environment: View>: View {
 }
 
 struct EnvironmentScopeMenu: View {
-    @ObservedObject var model: BexAppViewModel
+    @ObservedObject var model: AppViewModel
 
     var body: some View {
         Menu {

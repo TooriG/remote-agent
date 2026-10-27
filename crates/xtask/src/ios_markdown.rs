@@ -42,7 +42,7 @@ pub async fn run() -> Result<()> {
         bindings.join("AgentCoreFFI.h"),
         bindings.join("AgentCoreFFI.modulemap"),
         cwd.join("apps/mobile/iosApp/Bex/ConversationMarkdownContent.swift"),
-        cwd.join("apps/mobile/iosApp/BexUITests/Fixtures/markdown-tests.swift"),
+        cwd.join("apps/mobile/iosApp/UITests/Fixtures/markdown-tests.swift"),
     ] {
         let bytes = fs::read(path)?;
         hash.update((bytes.len() as u64).to_le_bytes());
@@ -120,7 +120,7 @@ pub async fn run() -> Result<()> {
                 "xcrun",
                 "swiftc",
                 "apps/mobile/iosApp/Bex/ConversationMarkdownContent.swift",
-                "apps/mobile/iosApp/BexUITests/Fixtures/markdown-tests.swift",
+                "apps/mobile/iosApp/UITests/Fixtures/markdown-tests.swift",
                 "-I",
                 build,
                 "-I",

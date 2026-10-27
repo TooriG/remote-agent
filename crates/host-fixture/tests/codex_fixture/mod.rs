@@ -8,7 +8,7 @@ pub fn config(directory: &Path) -> AppServerConfig {
             ..Default::default()
         }
         .install(
-            Path::new(env!("CARGO_BIN_EXE_bex-codex-fixture")),
+            Path::new(env!("CARGO_BIN_EXE_agent-codex-fixture")),
             directory,
         )
         .unwrap(),

@@ -10,7 +10,7 @@
 		C0DE00000000000000000801 /* ConversationScrollObserver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000802 /* ConversationScrollObserver.swift */; };
         C0DE00000000000000000701 /* BrowserScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000702 /* BrowserScreen.swift */; };
 		C0DE00000000000000000601 /* ConversationTextLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000602 /* ConversationTextLayout.swift */; };
-		C0DE0000000000000000029A /* BexModelScopeUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000039A /* BexModelScopeUITests.swift */; };
+		C0DE0000000000000000029A /* ModelScopeUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000039A /* ModelScopeUITests.swift */; };
 		C0DE00000000000000000401 /* AgentSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000402; };
         D60000000000000000000001 /* SkeletonUI in Frameworks */ = {isa = PBXBuildFile; productRef = D60000000000000000000002; };
         D36E8C890D10474EB83C8D37 /* WorkspaceScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E85101D97E4E84A7B33C96 /* WorkspaceScreen.swift */; };
@@ -19,11 +19,11 @@
         C30000000000000000000003 /* TerminalScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = C30000000000000000000004; };
 		123AEE37BEE0000000000001 /* ConversationVisualization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 123AEE37BEE0000000000002 /* ConversationVisualization.swift */; };
 		A10000000000000000000007 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000018 /* Assets.xcassets */; };
-		A10000000000000000000001 /* BexIOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000011 /* BexIOSApp.swift */; };
+		A10000000000000000000001 /* IOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000011 /* IOSApp.swift */; };
 		A10000000000000000000002 /* PlatformServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000012 /* PlatformServices.swift */; };
 		A10000000000000000000003 /* QRCodeCaptureViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000013 /* QRCodeCaptureViewController.swift */; };
 		A10000000000000000000006 /* SwiftUIRoot.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000017 /* SwiftUIRoot.swift */; };
-		B20000000000000000000001 /* BexLaunchUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000011 /* BexLaunchUITests.swift */; };
+		B20000000000000000000001 /* LaunchUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000011 /* LaunchUITests.swift */; };
 		FD93084AF1873DEF927C9EDC /* AppViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DBDDA3779489C57B929936E /* AppViewModel.swift */; };
 		D08EEED058A8C4FE92AA21E2 /* TaskList.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04926FF582DA33DFFF64E6C5 /* TaskList.swift */; };
 		FD938C839188C56CFF5BE7A4 /* ConversationScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 613A5AAB450EC067108110F3 /* ConversationScreen.swift */; };
@@ -37,19 +37,19 @@
 		556D7396D1777928A463D2DF /* ConversationHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 109E523F621AEB123226918A /* ConversationHistory.swift */; };
 		110EFBD84D6039D2705F2B1F /* ConversationMediaImport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4134613DBAED1B9229F23DE5 /* ConversationMediaImport.swift */; };
 		D9577A51AE685A04BA449953 /* ConversationComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8550A6EE10FA45896134CE4D /* ConversationComposer.swift */; };
-		328998D7336CC8BC714813B1 /* BexDictationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3FB9F620E5019535A07535C /* BexDictationUITests.swift */; };
-		50CDAC84E50373218F0D4701 /* BexNavigationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F2E21BFDA246CD79D24E025 /* BexNavigationUITests.swift */; };
-		C0DE00000000000000000299 /* BexAccountUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000399 /* BexAccountUITests.swift */; };
-		7B720FF73022C3D1A61212E7 /* BexSynchronizationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFD5E43A73C7D1330B7555BE /* BexSynchronizationUITests.swift */; };
-		D91C55F205406D05C866CFC1 /* BexPaginationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99DFAD99B6F46C18561C7E66 /* BexPaginationUITests.swift */; };
-		24D2B99DB40046FDBC04C1E4 /* BexActivityUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC9C2558785B2B5B5C9E0ACF /* BexActivityUITests.swift */; };
-		D8E57FFF9C3242A47D764234 /* BexHistoryUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1FE6417542ABCCAC5FA2485 /* BexHistoryUITests.swift */; };
-		4C00B3BFF9EA25CF95AA572A /* BexTurnUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03E61F2D2347EE7D2D79661E /* BexTurnUITests.swift */; };
-		AF050050F20B797430311320 /* BexImagesUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38FCD895E48DF5DF2BEBB7BC /* BexImagesUITests.swift */; };
-		EB471364BA1B149D8AFD90B2 /* BexAttachmentsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C4934BC96A7BCD59CF839E6 /* BexAttachmentsUITests.swift */; };
-		B07533A831C4029B21F39F66 /* BexDeviceNavigationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62C019CF42F8F9FA5A861FC9 /* BexDeviceNavigationUITests.swift */; };
+		328998D7336CC8BC714813B1 /* DictationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3FB9F620E5019535A07535C /* DictationUITests.swift */; };
+		50CDAC84E50373218F0D4701 /* NavigationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F2E21BFDA246CD79D24E025 /* NavigationUITests.swift */; };
+		C0DE00000000000000000299 /* AccountUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000399 /* AccountUITests.swift */; };
+		7B720FF73022C3D1A61212E7 /* SynchronizationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFD5E43A73C7D1330B7555BE /* SynchronizationUITests.swift */; };
+		D91C55F205406D05C866CFC1 /* PaginationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99DFAD99B6F46C18561C7E66 /* PaginationUITests.swift */; };
+		24D2B99DB40046FDBC04C1E4 /* ActivityUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC9C2558785B2B5B5C9E0ACF /* ActivityUITests.swift */; };
+		D8E57FFF9C3242A47D764234 /* HistoryUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1FE6417542ABCCAC5FA2485 /* HistoryUITests.swift */; };
+		4C00B3BFF9EA25CF95AA572A /* TurnUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03E61F2D2347EE7D2D79661E /* TurnUITests.swift */; };
+		AF050050F20B797430311320 /* ImagesUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38FCD895E48DF5DF2BEBB7BC /* ImagesUITests.swift */; };
+		EB471364BA1B149D8AFD90B2 /* AttachmentsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C4934BC96A7BCD59CF839E6 /* AttachmentsUITests.swift */; };
+		B07533A831C4029B21F39F66 /* DeviceNavigationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62C019CF42F8F9FA5A861FC9 /* DeviceNavigationUITests.swift */; };
 		0FF3408BDCB920A7C06397A8 /* WorktreeSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25A49FEF4CFAB482E889EBDF /* WorktreeSettings.swift */; };
-		316AE30ED1CAB6B32EF98FFE /* BexWorktreeUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04889B95D12DED5A33B271D4 /* BexWorktreeUITests.swift */; };
+		316AE30ED1CAB6B32EF98FFE /* WorktreeUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04889B95D12DED5A33B271D4 /* WorktreeUITests.swift */; };
 		C0DE00000000000000000101 /* CodexModelSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000001 /* CodexModelSettings.swift */; };
 		C0DE00000000000000000102 /* ModelSettingsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000002 /* ModelSettingsSheet.swift */; };
 		C0DE00000000000000000202 /* AccountViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000203 /* AccountViews.swift */; };
@@ -64,7 +64,7 @@
 		F70000000000000000000002 /* TaskActivityAttributes.swift in App Sources */ = {isa = PBXBuildFile; fileRef = F70000000000000000000012; };
 		F70000000000000000000003 /* TaskActivityAttributes.swift in Widget Sources */ = {isa = PBXBuildFile; fileRef = F70000000000000000000012; };
 		F70000000000000000000004 /* TaskActivityWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = F70000000000000000000013; };
-		F70000000000000000000005 /* BexTaskActivity.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = F70000000000000000000010; settings = {ATTRIBUTES = (RemoveHeadersOnCopy,); }; };
+		F70000000000000000000005 /* TaskActivityExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = F70000000000000000000010; settings = {ATTRIBUTES = (RemoveHeadersOnCopy,); }; };
 		C0DE00000000000000000501 /* ModelDefaultsControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000502 /* ModelDefaultsControls.swift */; };
 /* End PBXBuildFile section */
 
@@ -76,7 +76,7 @@
 		C0DE00000000000000000802 /* ConversationScrollObserver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationScrollObserver.swift; sourceTree = "<group>"; };
         C0DE00000000000000000702 /* BrowserScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserScreen.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000602 /* ConversationTextLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationTextLayout.swift; sourceTree = "<group>"; };
-		C0DE0000000000000000039A /* BexModelScopeUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BexModelScopeUITests.swift; sourceTree = "<group>"; };
+		C0DE0000000000000000039A /* ModelScopeUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelScopeUITests.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000402 /* AgentSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSettings.swift; sourceTree = "<group>"; };
         F1E85101D97E4E84A7B33C96 /* WorkspaceScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceScreen.swift; sourceTree = "<group>"; };
 		E50000000000000000000002 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
@@ -84,13 +84,13 @@
 		123AEE37BEE0000000000002 /* ConversationVisualization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationVisualization.swift; sourceTree = "<group>"; };
 		A10000000000000000000018 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A10000000000000000000010 /* bex.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = bex.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		A10000000000000000000011 /* BexIOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BexIOSApp.swift; sourceTree = "<group>"; };
+		A10000000000000000000011 /* IOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSApp.swift; sourceTree = "<group>"; };
 		A10000000000000000000012 /* PlatformServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformServices.swift; sourceTree = "<group>"; };
 		A10000000000000000000013 /* QRCodeCaptureViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRCodeCaptureViewController.swift; sourceTree = "<group>"; };
 		A10000000000000000000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A10000000000000000000017 /* SwiftUIRoot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftUIRoot.swift; sourceTree = "<group>"; };
-		B20000000000000000000010 /* BexUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BexUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		B20000000000000000000011 /* BexLaunchUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BexLaunchUITests.swift; sourceTree = "<group>"; };
+		B20000000000000000000010 /* UITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = UITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B20000000000000000000011 /* LaunchUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchUITests.swift; sourceTree = "<group>"; };
 		1DBDDA3779489C57B929936E /* AppViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppViewModel.swift; sourceTree = "<group>"; };
 		04926FF582DA33DFFF64E6C5 /* TaskList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskList.swift; sourceTree = "<group>"; };
 		613A5AAB450EC067108110F3 /* ConversationScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationScreen.swift; sourceTree = "<group>"; };
@@ -104,19 +104,19 @@
 		109E523F621AEB123226918A /* ConversationHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationHistory.swift; sourceTree = "<group>"; };
 		4134613DBAED1B9229F23DE5 /* ConversationMediaImport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationMediaImport.swift; sourceTree = "<group>"; };
 		8550A6EE10FA45896134CE4D /* ConversationComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationComposer.swift; sourceTree = "<group>"; };
-		D3FB9F620E5019535A07535C /* BexDictationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BexDictationUITests.swift; sourceTree = "<group>"; };
-		2F2E21BFDA246CD79D24E025 /* BexNavigationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BexNavigationUITests.swift; sourceTree = "<group>"; };
-		C0DE00000000000000000399 /* BexAccountUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BexAccountUITests.swift; sourceTree = "<group>"; };
-		DFD5E43A73C7D1330B7555BE /* BexSynchronizationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BexSynchronizationUITests.swift; sourceTree = "<group>"; };
-		99DFAD99B6F46C18561C7E66 /* BexPaginationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BexPaginationUITests.swift; sourceTree = "<group>"; };
-		DC9C2558785B2B5B5C9E0ACF /* BexActivityUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BexActivityUITests.swift; sourceTree = "<group>"; };
-		A1FE6417542ABCCAC5FA2485 /* BexHistoryUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BexHistoryUITests.swift; sourceTree = "<group>"; };
-		03E61F2D2347EE7D2D79661E /* BexTurnUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BexTurnUITests.swift; sourceTree = "<group>"; };
-		38FCD895E48DF5DF2BEBB7BC /* BexImagesUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BexImagesUITests.swift; sourceTree = "<group>"; };
-		3C4934BC96A7BCD59CF839E6 /* BexAttachmentsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BexAttachmentsUITests.swift; sourceTree = "<group>"; };
-		62C019CF42F8F9FA5A861FC9 /* BexDeviceNavigationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BexDeviceNavigationUITests.swift; sourceTree = "<group>"; };
+		D3FB9F620E5019535A07535C /* DictationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationUITests.swift; sourceTree = "<group>"; };
+		2F2E21BFDA246CD79D24E025 /* NavigationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationUITests.swift; sourceTree = "<group>"; };
+		C0DE00000000000000000399 /* AccountUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountUITests.swift; sourceTree = "<group>"; };
+		DFD5E43A73C7D1330B7555BE /* SynchronizationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SynchronizationUITests.swift; sourceTree = "<group>"; };
+		99DFAD99B6F46C18561C7E66 /* PaginationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaginationUITests.swift; sourceTree = "<group>"; };
+		DC9C2558785B2B5B5C9E0ACF /* ActivityUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityUITests.swift; sourceTree = "<group>"; };
+		A1FE6417542ABCCAC5FA2485 /* HistoryUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryUITests.swift; sourceTree = "<group>"; };
+		03E61F2D2347EE7D2D79661E /* TurnUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnUITests.swift; sourceTree = "<group>"; };
+		38FCD895E48DF5DF2BEBB7BC /* ImagesUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImagesUITests.swift; sourceTree = "<group>"; };
+		3C4934BC96A7BCD59CF839E6 /* AttachmentsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentsUITests.swift; sourceTree = "<group>"; };
+		62C019CF42F8F9FA5A861FC9 /* DeviceNavigationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceNavigationUITests.swift; sourceTree = "<group>"; };
 		25A49FEF4CFAB482E889EBDF /* WorktreeSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeSettings.swift; sourceTree = "<group>"; };
-		04889B95D12DED5A33B271D4 /* BexWorktreeUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BexWorktreeUITests.swift; sourceTree = "<group>"; };
+		04889B95D12DED5A33B271D4 /* WorktreeUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeUITests.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000001 /* CodexModelSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexModelSettings.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000002 /* ModelSettingsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelSettingsSheet.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000203 /* AccountViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountViews.swift; sourceTree = "<group>"; };
@@ -127,7 +127,7 @@
 		C0DE00000000000000000006 /* ConversationSideChat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationSideChat.swift; sourceTree = "<group>"; };
 		1F3F1E491E3943D59F2A2CB5 /* WorkspaceFileEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceFileEditor.swift; sourceTree = "<group>"; };
 		B2E000270000000000000002 /* ConversationRequest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationRequest.swift; sourceTree = "<group>"; };
-		F70000000000000000000010 /* BexTaskActivity.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = BexTaskActivity.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		F70000000000000000000010 /* TaskActivityExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TaskActivityExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		F70000000000000000000011 /* TaskLiveActivities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskLiveActivities.swift; sourceTree = "<group>"; };
 		F70000000000000000000012 /* TaskActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskActivityAttributes.swift; sourceTree = "<group>"; };
 		F70000000000000000000013 /* TaskActivityWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskActivityWidget.swift; sourceTree = "<group>"; };
@@ -157,35 +157,35 @@
 			children = (
 				A10000000000000000000031 /* Bex */,
 				F70000000000000000000030 /* TaskActivity */,
-				B20000000000000000000031 /* BexUITests */,
+				B20000000000000000000031 /* UITests */,
 				A10000000000000000000032 /* Frameworks */,
 				A10000000000000000000033 /* Products */,
 			);
 			sourceTree = "<group>";
 		};
-		B20000000000000000000031 /* BexUITests */ = {
+		B20000000000000000000031 /* UITests */ = {
 			isa = PBXGroup;
-			children = (B20000000000000000000011 /* BexLaunchUITests.swift */,
-				62C019CF42F8F9FA5A861FC9 /* BexDeviceNavigationUITests.swift */,
-				3C4934BC96A7BCD59CF839E6 /* BexAttachmentsUITests.swift */,
-				38FCD895E48DF5DF2BEBB7BC /* BexImagesUITests.swift */,
-				03E61F2D2347EE7D2D79661E /* BexTurnUITests.swift */,
-				A1FE6417542ABCCAC5FA2485 /* BexHistoryUITests.swift */,
-				DC9C2558785B2B5B5C9E0ACF /* BexActivityUITests.swift */,
-				99DFAD99B6F46C18561C7E66 /* BexPaginationUITests.swift */,
-				DFD5E43A73C7D1330B7555BE /* BexSynchronizationUITests.swift */,
-				2F2E21BFDA246CD79D24E025 /* BexNavigationUITests.swift */,
-				C0DE00000000000000000399 /* BexAccountUITests.swift */,
-				C0DE0000000000000000039A /* BexModelScopeUITests.swift */,
-				04889B95D12DED5A33B271D4 /* BexWorktreeUITests.swift */,
-				D3FB9F620E5019535A07535C /* BexDictationUITests.swift */,);
-			path = BexUITests;
+			children = (B20000000000000000000011 /* LaunchUITests.swift */,
+				62C019CF42F8F9FA5A861FC9 /* DeviceNavigationUITests.swift */,
+				3C4934BC96A7BCD59CF839E6 /* AttachmentsUITests.swift */,
+				38FCD895E48DF5DF2BEBB7BC /* ImagesUITests.swift */,
+				03E61F2D2347EE7D2D79661E /* TurnUITests.swift */,
+				A1FE6417542ABCCAC5FA2485 /* HistoryUITests.swift */,
+				DC9C2558785B2B5B5C9E0ACF /* ActivityUITests.swift */,
+				99DFAD99B6F46C18561C7E66 /* PaginationUITests.swift */,
+				DFD5E43A73C7D1330B7555BE /* SynchronizationUITests.swift */,
+				2F2E21BFDA246CD79D24E025 /* NavigationUITests.swift */,
+				C0DE00000000000000000399 /* AccountUITests.swift */,
+				C0DE0000000000000000039A /* ModelScopeUITests.swift */,
+				04889B95D12DED5A33B271D4 /* WorktreeUITests.swift */,
+				D3FB9F620E5019535A07535C /* DictationUITests.swift */,);
+			path = UITests;
 			sourceTree = "<group>";
 		};
 		A10000000000000000000031 /* Bex */ = {
 			isa = PBXGroup;
 			children = (
-				A10000000000000000000011 /* BexIOSApp.swift */,
+				A10000000000000000000011 /* IOSApp.swift */,
 				F70000000000000000000011 /* TaskLiveActivities.swift */,
 				A10000000000000000000012 /* PlatformServices.swift */,
 				A10000000000000000000013 /* QRCodeCaptureViewController.swift */,
@@ -237,7 +237,7 @@
 		};
 		A10000000000000000000033 /* Products */ = {
 			isa = PBXGroup;
-			children = (A10000000000000000000010 /* bex.app */, B20000000000000000000010 /* BexUITests.xctest */, F70000000000000000000010 /* BexTaskActivity.appex */,);
+			children = (A10000000000000000000010 /* bex.app */, B20000000000000000000010 /* UITests.xctest */, F70000000000000000000010 /* TaskActivityExtension.appex */,);
 			name = Products;
 			sourceTree = "<group>";
 		};
@@ -267,9 +267,9 @@
 			productReference = A10000000000000000000010 /* bex.app */;
 			productType = "com.apple.product-type.application";
 		};
-		B20000000000000000000040 /* BexUITests */ = {
+		B20000000000000000000040 /* UITests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = B20000000000000000000041 /* Build configuration list for PBXNativeTarget "BexUITests" */;
+			buildConfigurationList = B20000000000000000000041 /* Build configuration list for PBXNativeTarget "UITests" */;
 			buildPhases = (
 				B20000000000000000000020 /* Sources */,
 				B20000000000000000000021 /* Frameworks */,
@@ -277,19 +277,19 @@
 			);
 			buildRules = ();
 			dependencies = (B20000000000000000000050 /* PBXTargetDependency */,);
-			name = BexUITests;
-			productName = BexUITests;
-			productReference = B20000000000000000000010 /* BexUITests.xctest */;
+			name = UITests;
+			productName = UITests;
+			productReference = B20000000000000000000010 /* UITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
-		F70000000000000000000040 /* BexTaskActivity */ = {
+		F70000000000000000000040 /* TaskActivityExtension */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = F70000000000000000000041;
 			buildPhases = (F70000000000000000000020, F70000000000000000000021, F70000000000000000000022,);
 			buildRules = ();
 			dependencies = ();
-			name = BexTaskActivity;
-			productName = BexTaskActivity;
+			name = TaskActivityExtension;
+			productName = TaskActivityExtension;
 			productReference = F70000000000000000000010;
 			productType = "com.apple.product-type.app-extension";
 		};
@@ -326,7 +326,7 @@
 			projectDirPath = "";
 			projectRoot = "";
             packageReferences = (C30000000000000000000005, D60000000000000000000003, D80000000000000000000003,);
-			targets = (A10000000000000000000040 /* Bex */, B20000000000000000000040 /* BexUITests */, F70000000000000000000040 /* BexTaskActivity */,);
+			targets = (A10000000000000000000040 /* Bex */, B20000000000000000000040 /* UITests */, F70000000000000000000040 /* TaskActivityExtension */,);
 		};
 /* End PBXProject section */
 
@@ -338,7 +338,7 @@
 			remoteGlobalIDString = A10000000000000000000040;
 			remoteInfo = Bex;
 		};
-		F70000000000000000000051 = {isa = PBXContainerItemProxy; containerPortal = A10000000000000000000050; proxyType = 1; remoteGlobalIDString = F70000000000000000000040; remoteInfo = BexTaskActivity; };
+		F70000000000000000000051 = {isa = PBXContainerItemProxy; containerPortal = A10000000000000000000050; proxyType = 1; remoteGlobalIDString = F70000000000000000000040; remoteInfo = TaskActivityExtension; };
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXTargetDependency section */
@@ -366,7 +366,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A10000000000000000000001 /* BexIOSApp.swift in Sources */,
+				A10000000000000000000001 /* IOSApp.swift in Sources */,
 				F70000000000000000000001 /* TaskLiveActivities.swift in Sources */,
 				F70000000000000000000002 /* TaskActivityAttributes.swift in App Sources */,
 				A10000000000000000000002 /* PlatformServices.swift in Sources */,
@@ -410,20 +410,20 @@
 		B20000000000000000000020 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
-			files = (B20000000000000000000001 /* BexLaunchUITests.swift in Sources */,
-				B07533A831C4029B21F39F66 /* BexDeviceNavigationUITests.swift in Sources */,
-				EB471364BA1B149D8AFD90B2 /* BexAttachmentsUITests.swift in Sources */,
-				AF050050F20B797430311320 /* BexImagesUITests.swift in Sources */,
-				4C00B3BFF9EA25CF95AA572A /* BexTurnUITests.swift in Sources */,
-				D8E57FFF9C3242A47D764234 /* BexHistoryUITests.swift in Sources */,
-				24D2B99DB40046FDBC04C1E4 /* BexActivityUITests.swift in Sources */,
-				D91C55F205406D05C866CFC1 /* BexPaginationUITests.swift in Sources */,
-				7B720FF73022C3D1A61212E7 /* BexSynchronizationUITests.swift in Sources */,
-				50CDAC84E50373218F0D4701 /* BexNavigationUITests.swift in Sources */,
-				C0DE00000000000000000299 /* BexAccountUITests.swift in Sources */,
-				C0DE0000000000000000029A /* BexModelScopeUITests.swift in Sources */,
-				316AE30ED1CAB6B32EF98FFE /* BexWorktreeUITests.swift in Sources */,
-				328998D7336CC8BC714813B1 /* BexDictationUITests.swift in Sources */,);
+			files = (B20000000000000000000001 /* LaunchUITests.swift in Sources */,
+				B07533A831C4029B21F39F66 /* DeviceNavigationUITests.swift in Sources */,
+				EB471364BA1B149D8AFD90B2 /* AttachmentsUITests.swift in Sources */,
+				AF050050F20B797430311320 /* ImagesUITests.swift in Sources */,
+				4C00B3BFF9EA25CF95AA572A /* TurnUITests.swift in Sources */,
+				D8E57FFF9C3242A47D764234 /* HistoryUITests.swift in Sources */,
+				24D2B99DB40046FDBC04C1E4 /* ActivityUITests.swift in Sources */,
+				D91C55F205406D05C866CFC1 /* PaginationUITests.swift in Sources */,
+				7B720FF73022C3D1A61212E7 /* SynchronizationUITests.swift in Sources */,
+				50CDAC84E50373218F0D4701 /* NavigationUITests.swift in Sources */,
+				C0DE00000000000000000299 /* AccountUITests.swift in Sources */,
+				C0DE0000000000000000029A /* ModelScopeUITests.swift in Sources */,
+				316AE30ED1CAB6B32EF98FFE /* WorktreeUITests.swift in Sources */,
+				328998D7336CC8BC714813B1 /* DictationUITests.swift in Sources */,);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		F70000000000000000000020 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (F70000000000000000000003, F70000000000000000000004,); runOnlyForDeploymentPostprocessing = 0; };
@@ -434,7 +434,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
-				BEX_TASK_URL_SCHEME = bex;
+				AGENT_TASK_URL_SCHEME = bex;
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
@@ -446,7 +446,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
-				BEX_TASK_URL_SCHEME = bex;
+				AGENT_TASK_URL_SCHEME = bex;
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
@@ -458,14 +458,14 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = arm64;
-				BEX_CARGO_TARGET_DIR = "$(SRCROOT)/../../../target";
+				AGENT_CARGO_TARGET_DIR = "$(SRCROOT)/../../../target";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 76;
 				DEVELOPMENT_TEAM = K65K9J8686;
-				"SWIFT_INCLUDE_PATHS[sdk=iphoneos*]" = "$(inherited) $(BEX_CARGO_TARGET_DIR)/aarch64-apple-ios/release $(SRCROOT)/../../../target/agent-bindings";
-				"SWIFT_INCLUDE_PATHS[sdk=iphonesimulator*]" = "$(inherited) $(BEX_CARGO_TARGET_DIR)/aarch64-apple-ios-sim/release $(SRCROOT)/../../../target/agent-bindings";
-				"LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = "$(inherited) $(BEX_CARGO_TARGET_DIR)/aarch64-apple-ios/release";
-				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(inherited) $(BEX_CARGO_TARGET_DIR)/aarch64-apple-ios-sim/release";
+				"SWIFT_INCLUDE_PATHS[sdk=iphoneos*]" = "$(inherited) $(AGENT_CARGO_TARGET_DIR)/aarch64-apple-ios/release $(SRCROOT)/../../../target/agent-bindings";
+				"SWIFT_INCLUDE_PATHS[sdk=iphonesimulator*]" = "$(inherited) $(AGENT_CARGO_TARGET_DIR)/aarch64-apple-ios-sim/release $(SRCROOT)/../../../target/agent-bindings";
+				"LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = "$(inherited) $(AGENT_CARGO_TARGET_DIR)/aarch64-apple-ios/release";
+				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(inherited) $(AGENT_CARGO_TARGET_DIR)/aarch64-apple-ios-sim/release";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Bex/Info.plist;
 				CODE_SIGN_ENTITLEMENTS = Bex/Bex.entitlements;
@@ -473,8 +473,8 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
 				MARKETING_VERSION = 1.0;
-				"OTHER_LDFLAGS[sdk=iphoneos*]" = "$(inherited) $(BEX_CARGO_TARGET_DIR)/aarch64-apple-ios/release/libagent_ffi.a -lAgentCore -framework Security -framework SystemConfiguration";
-				"OTHER_LDFLAGS[sdk=iphonesimulator*]" = "$(inherited) $(BEX_CARGO_TARGET_DIR)/aarch64-apple-ios-sim/release/libagent_ffi.a -lAgentCore -framework Security -framework SystemConfiguration";
+				"OTHER_LDFLAGS[sdk=iphoneos*]" = "$(inherited) $(AGENT_CARGO_TARGET_DIR)/aarch64-apple-ios/release/libagent_ffi.a -lAgentCore -framework Security -framework SystemConfiguration";
+				"OTHER_LDFLAGS[sdk=iphonesimulator*]" = "$(inherited) $(AGENT_CARGO_TARGET_DIR)/aarch64-apple-ios-sim/release/libagent_ffi.a -lAgentCore -framework Security -framework SystemConfiguration";
 				PRODUCT_BUNDLE_IDENTIFIER = dev.remoteagent.mobile.ios;
 				PRODUCT_NAME = bex;
 				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos";
@@ -488,18 +488,18 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = arm64;
-				BEX_CARGO_TARGET_DIR = "$(SRCROOT)/../../../target";
-				BEX_IOS_CODE_SIGN_STYLE = Automatic;
-				BEX_IOS_CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = "$(BEX_IOS_CODE_SIGN_STYLE)";
-				CODE_SIGN_IDENTITY = "$(BEX_IOS_CODE_SIGN_IDENTITY)";
-				PROVISIONING_PROFILE_SPECIFIER = "$(BEX_IOS_PROFILE_SPECIFIER)";
+				AGENT_CARGO_TARGET_DIR = "$(SRCROOT)/../../../target";
+				AGENT_IOS_CODE_SIGN_STYLE = Automatic;
+				AGENT_IOS_CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = "$(AGENT_IOS_CODE_SIGN_STYLE)";
+				CODE_SIGN_IDENTITY = "$(AGENT_IOS_CODE_SIGN_IDENTITY)";
+				PROVISIONING_PROFILE_SPECIFIER = "$(AGENT_IOS_PROFILE_SPECIFIER)";
 				CURRENT_PROJECT_VERSION = 76;
 				DEVELOPMENT_TEAM = K65K9J8686;
-				"SWIFT_INCLUDE_PATHS[sdk=iphoneos*]" = "$(inherited) $(BEX_CARGO_TARGET_DIR)/aarch64-apple-ios/release $(SRCROOT)/../../../target/agent-bindings";
-				"SWIFT_INCLUDE_PATHS[sdk=iphonesimulator*]" = "$(inherited) $(BEX_CARGO_TARGET_DIR)/aarch64-apple-ios-sim/release $(SRCROOT)/../../../target/agent-bindings";
-				"LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = "$(inherited) $(BEX_CARGO_TARGET_DIR)/aarch64-apple-ios/release";
-				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(inherited) $(BEX_CARGO_TARGET_DIR)/aarch64-apple-ios-sim/release";
+				"SWIFT_INCLUDE_PATHS[sdk=iphoneos*]" = "$(inherited) $(AGENT_CARGO_TARGET_DIR)/aarch64-apple-ios/release $(SRCROOT)/../../../target/agent-bindings";
+				"SWIFT_INCLUDE_PATHS[sdk=iphonesimulator*]" = "$(inherited) $(AGENT_CARGO_TARGET_DIR)/aarch64-apple-ios-sim/release $(SRCROOT)/../../../target/agent-bindings";
+				"LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = "$(inherited) $(AGENT_CARGO_TARGET_DIR)/aarch64-apple-ios/release";
+				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(inherited) $(AGENT_CARGO_TARGET_DIR)/aarch64-apple-ios-sim/release";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Bex/Info.plist;
 				CODE_SIGN_ENTITLEMENTS = Bex/Bex.entitlements;
@@ -507,8 +507,8 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
 				MARKETING_VERSION = 1.0;
-				"OTHER_LDFLAGS[sdk=iphoneos*]" = "$(inherited) $(BEX_CARGO_TARGET_DIR)/aarch64-apple-ios/release/libagent_ffi.a -lAgentCore -framework Security -framework SystemConfiguration";
-				"OTHER_LDFLAGS[sdk=iphonesimulator*]" = "$(inherited) $(BEX_CARGO_TARGET_DIR)/aarch64-apple-ios-sim/release/libagent_ffi.a -lAgentCore -framework Security -framework SystemConfiguration";
+				"OTHER_LDFLAGS[sdk=iphoneos*]" = "$(inherited) $(AGENT_CARGO_TARGET_DIR)/aarch64-apple-ios/release/libagent_ffi.a -lAgentCore -framework Security -framework SystemConfiguration";
+				"OTHER_LDFLAGS[sdk=iphonesimulator*]" = "$(inherited) $(AGENT_CARGO_TARGET_DIR)/aarch64-apple-ios-sim/release/libagent_ffi.a -lAgentCore -framework Security -framework SystemConfiguration";
 				PRODUCT_BUNDLE_IDENTIFIER = dev.remoteagent.mobile.ios;
 				PRODUCT_NAME = bex;
 				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos";
@@ -578,11 +578,11 @@
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				ARCHS = arm64;
-				BEX_IOS_CODE_SIGN_STYLE = Automatic;
-				BEX_IOS_CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = "$(BEX_IOS_CODE_SIGN_STYLE)";
-				CODE_SIGN_IDENTITY = "$(BEX_IOS_CODE_SIGN_IDENTITY)";
-				PROVISIONING_PROFILE_SPECIFIER = "$(BEX_IOS_PROFILE_SPECIFIER)";
+				AGENT_IOS_CODE_SIGN_STYLE = Automatic;
+				AGENT_IOS_CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = "$(AGENT_IOS_CODE_SIGN_STYLE)";
+				CODE_SIGN_IDENTITY = "$(AGENT_IOS_CODE_SIGN_IDENTITY)";
+				PROVISIONING_PROFILE_SPECIFIER = "$(AGENT_IOS_PROFILE_SPECIFIER)";
 				CURRENT_PROJECT_VERSION = 76;
 				DEVELOPMENT_TEAM = K65K9J8686;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -615,7 +615,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
 		};
-		B20000000000000000000041 /* Build configuration list for PBXNativeTarget "BexUITests" */ = {
+		B20000000000000000000041 /* Build configuration list for PBXNativeTarget "UITests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (B20000000000000000000062 /* Debug */, B20000000000000000000063 /* Release */);
 			defaultConfigurationIsVisible = 0;

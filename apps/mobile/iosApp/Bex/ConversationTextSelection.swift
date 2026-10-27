@@ -193,7 +193,7 @@ enum ConversationAttributedText {
         return attributes
     }
 
-    private static let copySource = NSAttributedString.Key("bex.markdown-copy")
+    private static let copySource = NSAttributedString.Key("agent.markdown-copy")
 
     private static func fileChip(_ file: MarkdownFileReference, link: String, font: UIFont,
                                  maxWidth: CGFloat) -> NSAttributedString {

@@ -20,46 +20,52 @@ struct DesktopAssets;
 impl DesktopAssets {
     const FILES: &[(&str, &[u8])] = &[
         (
-            "bex/openai.svg",
+            "icons/openai.svg",
             include_bytes!("../../mobile/iosApp/Bex/Assets.xcassets/openai.imageset/openai.svg"),
         ),
         (
-            "bex/anthropic.svg",
+            "icons/anthropic.svg",
             include_bytes!(
                 "../../mobile/iosApp/Bex/Assets.xcassets/anthropic.imageset/anthropic.svg"
             ),
         ),
-        ("bex/deepseek.svg", include_bytes!("../assets/deepseek.svg")),
         (
-            "bex/claude.svg",
+            "icons/deepseek.svg",
+            include_bytes!("../assets/deepseek.svg"),
+        ),
+        (
+            "icons/claude.svg",
             include_bytes!("../../mobile/iosApp/Bex/Assets.xcassets/claude.imageset/claude.svg"),
         ),
-        ("bex/shield.svg", include_bytes!("../assets/shield.svg")),
-        ("bex/bolt.svg", include_bytes!("../assets/bolt.svg")),
+        ("icons/shield.svg", include_bytes!("../assets/shield.svg")),
+        ("icons/bolt.svg", include_bytes!("../assets/bolt.svg")),
         (
-            "bex/bolt-fill.svg",
+            "icons/bolt-fill.svg",
             include_bytes!("../assets/bolt-fill.svg"),
         ),
         (
-            "bex/microphone.svg",
+            "icons/microphone.svg",
             include_bytes!("../assets/microphone.svg"),
         ),
-        ("bex/stop.svg", include_bytes!("../assets/stop.svg")),
-        ("bex/pencil.svg", include_bytes!("../assets/pencil.svg")),
-        ("bex/download.svg", include_bytes!("../assets/download.svg")),
+        ("icons/stop.svg", include_bytes!("../assets/stop.svg")),
+        ("icons/pencil.svg", include_bytes!("../assets/pencil.svg")),
         (
-            "bex/square-pen.svg",
+            "icons/download.svg",
+            include_bytes!("../assets/download.svg"),
+        ),
+        (
+            "icons/square-pen.svg",
             include_bytes!("../assets/square-pen.svg"),
         ),
         (
-            "bex/folder-plus.svg",
+            "icons/folder-plus.svg",
             include_bytes!("../assets/folder-plus.svg"),
         ),
-        ("bex/branch.svg", include_bytes!("../assets/branch.svg")),
-        ("bex/merge.svg", include_bytes!("../assets/merge.svg")),
-        ("bex/diff.svg", include_bytes!("../assets/diff.svg")),
-        ("bex/monitor.svg", include_bytes!("../assets/monitor.svg")),
-        ("bex/qr-code.svg", include_bytes!("../assets/qr-code.svg")),
+        ("icons/branch.svg", include_bytes!("../assets/branch.svg")),
+        ("icons/merge.svg", include_bytes!("../assets/merge.svg")),
+        ("icons/diff.svg", include_bytes!("../assets/diff.svg")),
+        ("icons/monitor.svg", include_bytes!("../assets/monitor.svg")),
+        ("icons/qr-code.svg", include_bytes!("../assets/qr-code.svg")),
     ];
 }
 impl AssetSource for DesktopAssets {
@@ -157,7 +163,7 @@ fn main() {
             connections: std::sync::Arc::new(platform::Connections::default()),
         });
         cx.on_app_quit(|cx| {
-            tracing::info!(target: "bex", operation = "shutdown", "Bex shutting down");
+            tracing::info!(target: "agent", operation = "shutdown", "Bex shutting down");
             let runtime = cx.global::<Runtime>().clone();
             async move {
                 runtime.closing.close();

@@ -26,7 +26,7 @@ OutputBaseFilename=bex-windows-x86_64-setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
-UninstallDisplayIcon={app}\bex-desktop.exe
+UninstallDisplayIcon={app}\agent-desktop.exe
 CloseApplications=no
 RestartApplications=no
 
@@ -41,8 +41,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "{#BundleDirectory}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\BEX"; Filename: "{app}\bex-desktop.exe"
-Name: "{autodesktop}\BEX"; Filename: "{app}\bex-desktop.exe"; Tasks: desktopicon
+Name: "{group}\BEX"; Filename: "{app}\agent-desktop.exe"
+Name: "{autodesktop}\BEX"; Filename: "{app}\agent-desktop.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\bex-desktop.exe"; Description: "{cm:LaunchProgram,BEX}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\agent-desktop.exe"; Description: "{cm:LaunchProgram,BEX}"; Flags: nowait postinstall skipifsilent

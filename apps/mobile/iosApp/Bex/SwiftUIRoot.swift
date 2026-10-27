@@ -2,8 +2,8 @@ import AgentCore
 import SwiftUI
 import UIKit
 
-struct BexSwiftUIRoot: View {
-    @ObservedObject var model: BexAppViewModel
+struct SwiftUIRoot: View {
+    @ObservedObject var model: AppViewModel
 
     var body: some View {
         NavigationStack(path: Binding<[AppScreen]>(
@@ -194,7 +194,7 @@ private struct PairingScreen: View {
                     if connecting {
                         ProgressView("接続中…").accessibilityIdentifier("pairing.progress")
                     } else if let error {
-                        BexNotice(text: error)
+                        AppNotice(text: error)
                     }
                     PrivacyPolicyButton()
                         .font(.footnote)
@@ -220,7 +220,7 @@ private struct PairingScreen: View {
         .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("bex")
         .sheet(isPresented: $isScanning) {
-            BexQrScannerSheet {
+            QrScannerSheet {
                 isScanning = false
                 if let contents = $0 {
                     prepare(contents)
@@ -258,7 +258,7 @@ private struct ProfilesScreen: View {
                     }
                     .padding(.vertical, 20)
                     if let notice {
-                        BexNotice(text: notice)
+                        AppNotice(text: notice)
                     }
                     ForEach(profiles, id: \.id) { profile in
                         Button { select(profile.id) } label: {
@@ -322,7 +322,7 @@ private struct ProfilesScreen: View {
     }
 }
 
-struct BexNotice: View {
+struct AppNotice: View {
     let text: String
 
     var body: some View {
@@ -332,12 +332,12 @@ struct BexNotice: View {
     }
 }
 
-private struct BexQrScannerSheet: View {
+private struct QrScannerSheet: View {
     let completion: (String?) -> Void
 
     var body: some View {
         NavigationStack {
-            BexQrScannerController(completion: completion)
+            QrScannerController(completion: completion)
                 .navigationTitle("QRコードを読み取る")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -351,14 +351,14 @@ private struct BexQrScannerSheet: View {
     }
 }
 
-private struct BexQrScannerController: UIViewControllerRepresentable {
+private struct QrScannerController: UIViewControllerRepresentable {
     let completion: (String) -> Void
 
-    func makeUIViewController(context _: Context) -> BexQrCaptureViewController {
-        BexQrCaptureViewController(completion: completion)
+    func makeUIViewController(context _: Context) -> QrCaptureViewController {
+        QrCaptureViewController(completion: completion)
     }
 
-    func updateUIViewController(_: BexQrCaptureViewController, context _: Context) {}
+    func updateUIViewController(_: QrCaptureViewController, context _: Context) {}
 }
 
 /// Keep native editing ahead of Store publication; every edit still dispatches synchronously.

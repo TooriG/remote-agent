@@ -74,11 +74,11 @@ class NetworkPermissionTest {
                 PackageManager.PERMISSION_GRANTED,
                 context.checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK),
             )
-            assertEquals("bex-os-network-ok", readLocalHost())
+            assertEquals("agent-os-network-ok", readLocalHost())
             activity.recreate()
             assertTrue(device.wait(Until.hasObject(By.text("PCとペアリング")), 10_000))
             assertFalse(device.hasObject(By.text("許可して接続")))
-            assertEquals("bex-os-network-ok", readLocalHost())
+            assertEquals("agent-os-network-ok", readLocalHost())
             assertTrue(device.takeScreenshot(File(context.getExternalFilesDir(null), "network-permission-granted.png")))
         }
     }

@@ -12,7 +12,7 @@ run_test() {
     xcrun swiftc -sdk "$sdk" -target "$(uname -m)-apple-ios26.0-macabi" \
         -F "$sdk/System/iOSSupport/System/Library/Frameworks" \
         -L "$sdk/System/iOSSupport/usr/lib" \
-        "$@" "apps/mobile/iosApp/BexUITests/Fixtures/$name.swift" \
+        "$@" "apps/mobile/iosApp/UITests/Fixtures/$name.swift" \
         -o "$output/$name"
     "$output/$name"
 }

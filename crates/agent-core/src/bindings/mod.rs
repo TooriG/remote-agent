@@ -165,7 +165,7 @@ impl AgentStore {
             let mut performance = result?;
             performance.endpoint_ms = endpoint_ms;
             performance.total_ms = started.elapsed().as_millis() as u64;
-            performance.client_revision = option_env!("BEX_BUILD_REVISION")
+            performance.client_revision = option_env!("AGENT_BUILD_REVISION")
                 .unwrap_or("development")
                 .into();
             performance.platform = crate::diagnostics::ClientPlatform::current();

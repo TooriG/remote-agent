@@ -58,7 +58,7 @@ pub struct SessionImage {
 #[cfg_attr(feature = "bindings", uniffi::export)]
 pub fn terminal_handle(cwd: String) -> String {
     format!(
-        "bex-terminal-{}",
+        "agent-terminal-{}",
         uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, cwd.as_bytes())
     )
 }

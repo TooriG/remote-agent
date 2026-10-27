@@ -190,7 +190,7 @@ impl Hosts {
                                         .min_dimensions(320, 320)
                                         .build();
                                     let mut file = tempfile::Builder::new()
-                                        .prefix("bex-invitation-")
+                                        .prefix("agent-invitation-")
                                         .suffix(".svg")
                                         .tempfile()
                                         .map_err(|error| error.to_string())?;
@@ -303,7 +303,7 @@ impl Hosts {
                                         .child(if remote.is_some() {
                                             Icon::new(IconName::Network)
                                         } else {
-                                            Icon::default().path("bex/monitor.svg")
+                                            Icon::default().path("icons/monitor.svg")
                                         })
                                         .child(name.to_owned()),
                                 )
@@ -527,7 +527,7 @@ impl Hosts {
             .accessibility_label(format!("実行先: {name}"))
             .tooltip(format!("実行先: {name}"))
             .label(name)
-            .icon(Icon::default().path("bex/monitor.svg"))
+            .icon(Icon::default().path("icons/monitor.svg"))
             .dropdown_caret(true)
             .h_8()
             .min_w_0()
@@ -602,7 +602,7 @@ impl Render for Hosts {
                 .child(
                     Button::new("invite")
                         .label("接続用QRを表示")
-                        .icon(Icon::default().path("bex/qr-code.svg"))
+                        .icon(Icon::default().path("icons/qr-code.svg"))
                         .primary()
                         .disabled(disabled)
                         .on_click(cx.listener(|view, _, _, cx| {

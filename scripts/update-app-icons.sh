@@ -28,7 +28,7 @@ xcrun swiftc "$temporary/app-icon.swift" -o "$temporary/app-icon"
 icon=apps/desktop/assets/icon.png
 "$temporary/app-icon" "$source" "$icon"
 cp "$icon" apps/mobile/iosApp/Bex/Assets.xcassets/AppIcon.appiconset/AppIcon.png
-sips -z 192 192 "$icon" --out apps/mobile/src/main/res/drawable/bex_icon.png >/dev/null
+sips -z 192 192 "$icon" --out apps/mobile/src/main/res/drawable/agent_icon.png >/dev/null
 iconset="$temporary/Bex.iconset"
 mkdir -p "$iconset"
 for size in 16 32 128 256 512; do

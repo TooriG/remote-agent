@@ -32,12 +32,12 @@ enum SnapshotFiles {
 
     static func withModelPreferences(_ persisted: Data) throws -> Data {
         try applyModelPreferences(persisted: persisted,
-                                  defaults: UserDefaults.standard.data(forKey: "bex.model-defaults") ?? Data())
+                                  defaults: UserDefaults.standard.data(forKey: "agent.model-defaults") ?? Data())
     }
 
     static func save(_ host: String, snapshot: AgentCore.Snapshot) async throws {
         try await Task.detached(priority: .utility) {
-            try UserDefaults.standard.set(snapshot.serializeModelPreferences(), forKey: "bex.model-defaults")
+            try UserDefaults.standard.set(snapshot.serializeModelPreferences(), forKey: "agent.model-defaults")
             try snapshot.serializeLocalState().write(to: location(host), options: .atomic)
         }.value
     }
@@ -47,7 +47,7 @@ enum DeviceIdentity {
     static func remove(_ reference: String) throws {
         let status = SecItemDelete([
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "app.bex.iroh.identity",
+            kSecAttrService as String: "dev.remoteagent.identity",
             kSecAttrAccount as String: reference
         ] as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
@@ -58,7 +58,7 @@ enum DeviceIdentity {
     static func loadOrGenerate(_ reference: String) throws -> Data {
         let query: [String: CFTypeRef] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "app.bex.iroh.identity" as CFString,
+            kSecAttrService as String: "dev.remoteagent.identity" as CFString,
             kSecAttrAccount as String: reference as CFString,
             kSecReturnData as String: kCFBooleanTrue!
         ]
@@ -250,7 +250,7 @@ final class DictationRecorder: NSObject, ObservableObject, AVAudioRecorderDelega
     }
 
     private static func error(_ message: String) -> Error {
-        NSError(domain: "BexDictation", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+        NSError(domain: "Dictation", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
     }
 }
 

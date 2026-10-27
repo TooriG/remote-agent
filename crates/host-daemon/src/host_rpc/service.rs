@@ -52,14 +52,14 @@ struct ServiceInner {
 impl HostRpcService {
     pub fn new(backends: impl IntoIterator<Item = Backend>, projects: ProjectStore) -> Self {
         let files = crate::workspace_files::WorkspaceFiles::new(
-            projects.path().with_file_name("bex-attachments"),
+            projects.path().with_file_name("agent-attachments"),
         );
         let (providers, dictation) = crate::providers::Registry::new(backends);
         Self {
             inner: Arc::new(ServiceInner {
                 history_scope: OnceLock::new(),
                 conversations: super::conversations::Conversations::new(
-                    projects.path().with_file_name("bex-conversations.json"),
+                    projects.path().with_file_name("agent-conversations.json"),
                 ),
                 browser: OnceLock::new(),
                 providers,
@@ -412,7 +412,7 @@ impl HostRpcService {
             Call::SessionScope(_) => {
                 let started = std::time::Instant::now();
                 let scope = self.inner.providers.storage_scope()?;
-                tracing::info!(target: "bex", operation = "host.connection.scope",
+                tracing::info!(target: "agent", operation = "host.connection.scope",
                     message = %format_args!("elapsed_ms={}", started.elapsed().as_millis()));
                 scope.into()
             }
@@ -769,7 +769,7 @@ mod tests {
         .unwrap();
         let service = HostRpcService::new(
             [claude.into()],
-            ProjectStore::new(root.path().join("bex-worktrees.json")),
+            ProjectStore::new(root.path().join("agent-worktrees.json")),
         );
         let session = service.open_session();
         for (method, expected) in [
@@ -794,7 +794,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let service = HostRpcService::new(
             [Backend::unavailable(ProviderKind::Codex, "unavailable")],
-            ProjectStore::new(root.path().join("bex-worktrees.json")),
+            ProjectStore::new(root.path().join("agent-worktrees.json")),
         );
         let session = service.open_session();
         for method in ["host/session/submit"] {

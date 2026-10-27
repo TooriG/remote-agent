@@ -439,7 +439,7 @@ impl HostRpcService {
                 .router
                 .finish_session_read(read, session, response)
                 .map_err(anyhow::Error::msg)?;
-            tracing::info!(target: "bex", operation = "history.open",
+            tracing::info!(target: "agent", operation = "history.open",
                 message = %format_args!("native_ms={native_ms} project_ms={project_ms} total_ms={} bytes={} limit={limit}",
                     started.elapsed().as_millis(), reply.initial.len()));
             Ok(reply)
@@ -449,7 +449,7 @@ impl HostRpcService {
             Ok(reply) => Ok(reply),
             Err(error) => {
                 let message = format!("{error:#}");
-                tracing::error!(target: "bex", operation = "history.open", message);
+                tracing::error!(target: "agent", operation = "history.open", message);
                 Ok(Response::error("session_open_failed", &message).into())
             }
         }
@@ -864,7 +864,7 @@ mod tests {
         .unwrap();
         let service = HostRpcService::new(
             [claude.into()],
-            ProjectStore::new(root.path().join("bex-worktrees.json")),
+            ProjectStore::new(root.path().join("agent-worktrees.json")),
         );
         let session = service.open_session();
         let call =

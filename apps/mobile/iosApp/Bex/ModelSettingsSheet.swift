@@ -5,7 +5,7 @@ private let modelSettingsBackground = Color(red: 0.08, green: 0.09, blue: 0.11)
 
 struct ModelSettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject var model: BexAppViewModel
+    @ObservedObject var model: AppViewModel
 
     var body: some View {
         NavigationStack {
@@ -19,14 +19,14 @@ struct ModelSettingsSheet: View {
 }
 
 struct ModelSettingsScreen: View {
-    @ObservedObject var model: BexAppViewModel
+    @ObservedObject var model: AppViewModel
     @State private var scope: ModelDefaultsScope?
     let close: () -> Void
     @State private var search = ""
     @State private var providerOverride: ProviderKind?
     @State private var loadingModels = false
 
-    init(model: BexAppViewModel, scope: ModelDefaultsScope? = nil, close: @escaping () -> Void) {
+    init(model: AppViewModel, scope: ModelDefaultsScope? = nil, close: @escaping () -> Void) {
         self.model = model
         _scope = State(initialValue: scope)
         self.close = close

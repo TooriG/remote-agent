@@ -66,7 +66,7 @@ class MainActivity : ComponentActivity() {
                 val requestQrScan = rememberAndroidQrScanner(this)
                 RemoteAgentApp(activity = this, model = model, requestQrScan = requestQrScan)
             } else {
-                BexTheme {
+                AppTheme {
                     Surface(Modifier.fillMaxSize()) {
                         Column(Modifier.safeDrawingPadding().padding(24.dp)) {
                             Text("同じネットワークのPCへ接続するには、付近のデバイスへのアクセスを許可してください。")

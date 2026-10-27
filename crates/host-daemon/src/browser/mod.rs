@@ -66,7 +66,7 @@ impl Drop for Browser {
 
 impl Browser {
     pub async fn start(profile: PathBuf) -> Result<Arc<Self>, String> {
-        let executable = std::env::var_os("BEX_BROWSER_EXECUTABLE")
+        let executable = std::env::var_os("AGENT_BROWSER_EXECUTABLE")
             .map(PathBuf::from)
             .unwrap_or_else(|| {
                 if cfg!(target_os = "macos") {
@@ -76,7 +76,7 @@ impl Browser {
                 }
             });
         let bridge_directory = tempfile::Builder::new()
-            .prefix("bex-browser-")
+            .prefix("agent-browser-")
             // macOS Unix sockets have a 104-byte path limit. Nix's TMPDIR may
             // be nested under a long checkout path; keep the socket root short.
             .tempdir_in("/tmp")

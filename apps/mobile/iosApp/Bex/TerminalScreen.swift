@@ -3,7 +3,7 @@ import SwiftTerm
 import SwiftUI
 
 struct TerminalScreen: View {
-    @ObservedObject var model: BexAppViewModel
+    @ObservedObject var model: AppViewModel
     let cwd: String
     let handle: String
 
@@ -21,7 +21,7 @@ struct TerminalScreen: View {
 }
 
 private struct NativeTerminalView: UIViewRepresentable {
-    @ObservedObject var model: BexAppViewModel
+    @ObservedObject var model: AppViewModel
     let handle: String
     let cwd: String
     let terminal: AgentCore.TerminalView?
@@ -67,14 +67,14 @@ private struct NativeTerminalView: UIViewRepresentable {
     }
 
     @MainActor final class Coordinator: NSObject, TerminalViewDelegate {
-        let model: BexAppViewModel
+        let model: AppViewModel
         let handle: String
         var sequence: UInt64 = 0
         var restoring = false
         var started = false
         var dismantled = false
         let cwd: String
-        init(model: BexAppViewModel, handle: String, cwd: String) {
+        init(model: AppViewModel, handle: String, cwd: String) {
             self.model = model; self.handle = handle; self.cwd = cwd
         }
 

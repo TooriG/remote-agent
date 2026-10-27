@@ -62,12 +62,12 @@ impl Outbound {
             })
             .is_err()
         {
-            tracing::warn!(target: "bex", operation = "host.session.queue_failed", message = %format_args!("session={session} reason=byte_limit queued_bytes={} frame_bytes={} frame_cost={cost} limit_bytes={MAX_QUEUED_BYTES}", self.bytes.load(Relaxed), frame.len()));
+            tracing::warn!(target: "agent", operation = "host.session.queue_failed", message = %format_args!("session={session} reason=byte_limit queued_bytes={} frame_bytes={} frame_cost={cost} limit_bytes={MAX_QUEUED_BYTES}", self.bytes.load(Relaxed), frame.len()));
             return Err(mpsc::error::TrySendError::Full(frame));
         }
         self.sender.send(frame).map_err(|error| {
             self.bytes.fetch_sub(cost, Relaxed);
-            tracing::warn!(target: "bex", operation = "host.session.queue_failed", message = %format_args!("session={session} reason=receiver_closed frame_bytes={}", error.0.len()));
+            tracing::warn!(target: "agent", operation = "host.session.queue_failed", message = %format_args!("session={session} reason=receiver_closed frame_bytes={}", error.0.len()));
             mpsc::error::TrySendError::Closed(error.0)
         })
     }

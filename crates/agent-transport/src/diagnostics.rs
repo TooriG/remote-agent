@@ -27,7 +27,7 @@ const MESSAGE_BYTES: usize = 8192;
 pub use agent_protocol::diagnostics::{ClientPlatform, ConnectionPerformance, ConnectionRoute};
 pub fn connection_performance(performance: &ConnectionPerformance) {
     if !performance.recovered {
-        tracing::info!(target: "bex", operation = "client.connection",
+        tracing::info!(target: "agent", operation = "client.connection",
         message = %format_args!(
             "platform={:?} total_ms={} endpoint_ms={} transport_ms={} verification_ms={} reused={} route={:?} resolution_ms={} rtt_ms={} trace={} attempt={} connection={}",
             performance.platform, performance.total_ms, performance.endpoint_ms,
@@ -36,7 +36,7 @@ pub fn connection_performance(performance: &ConnectionPerformance) {
         ));
     }
     if performance.timeline.id != 0 {
-        tracing::info!(target: "bex", operation = "client.connection.timeline",
+        tracing::info!(target: "agent", operation = "client.connection.timeline",
             message = %format_args!("trace={} attempt={} connection={} dropped={} platform={:?} client_revision={} recovered={} started_at_ms={}",
                 performance.timeline.id, performance.attempt_id, performance.connection_id,
                 performance.timeline.dropped, performance.platform,
@@ -47,7 +47,7 @@ pub fn connection_performance(performance: &ConnectionPerformance) {
 
 pub(crate) fn connection_events(operation: &'static str, timeline: &ConnectionTimeline) {
     for event in timeline.events.iter().take(connection::CAPACITY) {
-        tracing::info!(target: "bex", operation,
+        tracing::info!(target: "agent", operation,
             message = %format_args!("trace={} seq={} at_us={} phase={:?} group={} stream={} value={}",
                 timeline.id, event.sequence, event.at_us, event.phase, event.group, event.stream, event.value));
     }
@@ -123,7 +123,7 @@ pub fn initialize(
     .map_err(io::Error::other)?;
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        tracing::error!(target: "bex", operation = "panic", message = %info);
+        tracing::error!(target: "agent", operation = "panic", message = %info);
         previous(info);
     }));
     Ok(())
@@ -133,7 +133,7 @@ pub fn rpc_error(operation: &str, request_id: Option<u64>, raw: &RawValue) {
     match serde_json::from_str::<Value>(raw.get()) {
         Ok(value) => {
             let error = &value;
-            tracing::error!(target: "bex",
+            tracing::error!(target: "agent",
                 operation,
                 message = error.get("message").and_then(serde_json::Value::as_str)
                     .or_else(|| error.as_str()).unwrap_or("RPC error without a message"),
@@ -141,7 +141,7 @@ pub fn rpc_error(operation: &str, request_id: Option<u64>, raw: &RawValue) {
                 error_code = %error.get("code").filter(|code| code.is_number() || code.is_string()).unwrap_or(&serde_json::Value::Null),
             );
         }
-        Err(_) => tracing::error!(target: "bex", operation, request_id, "Malformed RPC error"),
+        Err(_) => tracing::error!(target: "agent", operation, request_id, "Malformed RPC error"),
     }
 }
 
@@ -207,7 +207,7 @@ impl tracing::field::Visit for Fields {
 }
 
 fn private_event(metadata: &tracing::Metadata<'_>) -> bool {
-    (metadata.target() == "bex" && *metadata.level() <= tracing::Level::INFO)
+    (metadata.target() == "agent" && *metadata.level() <= tracing::Level::INFO)
         || network_health::enabled(metadata)
 }
 
@@ -216,7 +216,7 @@ impl<S: tracing::Subscriber> Layer<S> for Log {
         if !private_event(event.metadata()) {
             return;
         }
-        let fields = if event.metadata().target() == "bex" {
+        let fields = if event.metadata().target() == "agent" {
             let mut fields = Fields::default();
             event.record(&mut fields);
             fields
@@ -328,7 +328,7 @@ impl Log {
             pid: std::process::id(),
             component: self.component,
             version: self.version,
-            revision: option_env!("BEX_BUILD_REVISION").unwrap_or("development"),
+            revision: option_env!("AGENT_BUILD_REVISION").unwrap_or("development"),
             level,
             operation: &sanitize(operation),
             message: sanitize(message),

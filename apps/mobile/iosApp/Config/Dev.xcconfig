@@ -1,12 +1,12 @@
 // Separate iPhone app and sandbox for the development Host.
 CURRENT_PROJECT_VERSION = 85
-BEX_DEV_BUNDLE_Bex = dev.remoteagent.mobile.ios.dev
-BEX_DEV_BUNDLE_BexTaskActivity = dev.remoteagent.mobile.ios.dev.TaskActivity
-BEX_DEV_BUNDLE_BexUITests = dev.remoteagent.mobile.ios.dev.uitests
-PRODUCT_BUNDLE_IDENTIFIER = $(BEX_DEV_BUNDLE_$(TARGET_NAME))
-BEX_DEV_PRODUCT_Bex = BEX Dev
-BEX_DEV_PRODUCT_BexTaskActivity = BexTaskActivity
-BEX_DEV_PRODUCT_BexUITests = BexUITests
-PRODUCT_NAME = $(BEX_DEV_PRODUCT_$(TARGET_NAME))
+AGENT_DEV_BUNDLE_Bex = dev.remoteagent.mobile.ios.dev
+AGENT_DEV_BUNDLE_TaskActivityExtension = dev.remoteagent.mobile.ios.dev.TaskActivity
+AGENT_DEV_BUNDLE_UITests = dev.remoteagent.mobile.ios.dev.uitests
+PRODUCT_BUNDLE_IDENTIFIER = $(AGENT_DEV_BUNDLE_$(TARGET_NAME))
+AGENT_DEV_PRODUCT_Bex = BEX Dev
+AGENT_DEV_PRODUCT_TaskActivityExtension = TaskActivityExtension
+AGENT_DEV_PRODUCT_UITests = UITests
+PRODUCT_NAME = $(AGENT_DEV_PRODUCT_$(TARGET_NAME))
 ASSETCATALOG_COMPILER_APPICON_NAME = AppIconDev
-BEX_TASK_URL_SCHEME = bex-dev
+AGENT_TASK_URL_SCHEME = bex-dev

@@ -68,7 +68,7 @@ pub struct CodexAppServer {
 impl CodexAppServer {
     pub async fn spawn(config: AppServerConfig) -> Result<Self, Error> {
         let executable = executable::resolve(&config.program)?;
-        let mut command = bex_process::command(&executable).map_err(Error::Spawn)?;
+        let mut command = agent_process::command(&executable).map_err(Error::Spawn)?;
         if let Some(home) = &config.codex_home {
             command.env("CODEX_HOME", home);
         }

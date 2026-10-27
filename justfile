@@ -20,7 +20,7 @@ unit-tests *targets:
     npm --prefix crates/host-daemon/src/providers/claude/sdk ci --ignore-scripts --no-audit --no-fund || failed=1
     npm --prefix crates/host-daemon/src/providers/claude/sdk test || failed=1
     node scripts/install-claude-sdk.mjs "${CARGO_TARGET_DIR:-target}/debug" || failed=1
-    cargo build --locked -p bex-process --bin bex-provider-supervisor || failed=1
+    cargo build --locked -p agent-process --bin agent-provider-supervisor || failed=1
     cargo nextest run --locked --no-fail-fast --workspace --lib --bins --features agent-core/bindings "$@" &
     rust_pid=$!
     CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$PWD/target}" cargo test --locked --no-fail-fast --manifest-path tools/agent-peer/Cargo.toml || failed=1
@@ -47,14 +47,14 @@ build-desktop-macos profile="release":
 dev: (build-desktop-macos "dev")
     #!/usr/bin/env bash
     set -euo pipefail
-    accounts="$HOME/Library/Application Support/app.bex.BEX"
+    accounts="$HOME/Library/Application Support/dev.remoteagent.desktop"
     if [[ -f "$accounts/host-instance.json" ]]; then
         accounts=$(/usr/bin/plutil -extract directory raw -o - "$accounts/host-instance.json")
     fi
     target=$(cargo metadata --no-deps --format-version 1 | jq -er .target_directory)
-    open -n "$target/debug/bex.app" --env BEX_ISOLATED_HOST=1 \
-        --env "BEX_STATE_DIR=$HOME/Library/Application Support/app.bex.BEX-Dev" \
-        --env "BEX_ACCOUNT_STATE_DIR=$accounts"
+    open -n "$target/debug/bex.app" --env AGENT_ISOLATED_HOST=1 \
+        --env "AGENT_STATE_DIR=$HOME/Library/Application Support/dev.remoteagent.desktop-dev" \
+        --env "AGENT_ACCOUNT_STATE_DIR=$accounts"
 
 # Run isolated iOS Simulator tests; reject skipped and missing results.
 ios-e2e *tests:
@@ -78,7 +78,7 @@ macos-e2e:
 
 # Build and test Store recovery, Markdown and network permission on a fresh Android 17 emulator.
 android-e2e:
-    cargo build --locked -p host-fixture -p codex-app-server -p bex-process --bins
+    cargo build --locked -p host-fixture -p codex-app-server -p agent-process --bins
     ./gradlew :apps:mobile:assembleDebug :apps:mobile:assembleDebugAndroidTest --console=plain
     nix develop .#android-test --command bash scripts/android-e2e.sh
 
@@ -123,7 +123,7 @@ conversation-ui:
 
 # Exercise the real iroh Host through the headless client.
 iroh-e2e:
-    cargo build --locked --package bex-process --bin bex-provider-supervisor
+    cargo build --locked --package agent-process --bin agent-provider-supervisor
     cargo test --locked --package host-fixture --test iroh_host
 
 # Check the local Mac Host/desktop and iPhone client, or one selected language.

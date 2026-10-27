@@ -202,7 +202,7 @@ impl HostRpcService {
             if status == agent_protocol::models::WorktreeStatus::Merged
                 && let Err(error) = self.inner.worktrees.remove(source.cwd, true).await
             {
-                tracing::warn!(target: "bex", operation = "host.worktree.cleanup", message = %error);
+                tracing::warn!(target: "agent", operation = "host.worktree.cleanup", message = %error);
             }
         }
         Ok(())

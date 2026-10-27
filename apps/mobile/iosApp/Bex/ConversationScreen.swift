@@ -5,7 +5,7 @@ import SwiftUIIntrospect
 import UniformTypeIdentifiers
 
 struct ThreadScreen: View {
-    @ObservedObject var model: BexAppViewModel
+    @ObservedObject var model: AppViewModel
     let conversation: ConversationPresentation?
     var isSideChat = false
     var openTools: ((PanelKind?) -> Void)?
@@ -117,7 +117,7 @@ struct ThreadScreen: View {
         let followLatest = $isFollowingLatest
         return VStack(spacing: 0) {
             if let notice = model.notice, notice != history?.error {
-                BexNotice(text: notice).padding(.horizontal).padding(.top, 8)
+                AppNotice(text: notice).padding(.horizontal).padding(.top, 8)
             }
             if let thread = conversation {
                 let rows = conversationRows(thread.rows, expansion: activityExpansionOverrides)

@@ -24,7 +24,7 @@ final class SideChatRequest: ObservableObject {
         self.cwd = cwd
     }
 
-    func activate(_ active: Bool, model: BexAppViewModel) {
+    func activate(_ active: Bool, model: AppViewModel) {
         if active {
             preparing = true
         }
@@ -42,7 +42,7 @@ final class SideChatRequest: ObservableObject {
         }
     }
 
-    private func prepare(_ model: BexAppViewModel) async {
+    private func prepare(_ model: AppViewModel) async {
         if model.notice == error {
             model.notice = nil
         }
@@ -70,7 +70,7 @@ final class SideChatRequest: ObservableObject {
             if !draftInitialized {
                 if !text.isEmpty {
                     _ = try await model.outcome(for: .setDraftText(
-                        threadId: .session(session: threadId), text: BexAppViewModel.selectionQuote(text)
+                        threadId: .session(session: threadId), text: AppViewModel.selectionQuote(text)
                     ))
                 }
                 draftInitialized = true
@@ -85,7 +85,7 @@ final class SideChatRequest: ObservableObject {
         preparing = false
     }
 
-    private func restoreOriginal(_ model: BexAppViewModel) async {
+    private func restoreOriginal(_ model: AppViewModel) async {
         guard model.screen == .thread, model.selectedProfileId == host,
               model.sideChatRequest?.id == id, model.selectedThreadId == threadId else { return }
         do {
@@ -95,7 +95,7 @@ final class SideChatRequest: ObservableObject {
     }
 }
 
-extension BexAppViewModel {
+extension AppViewModel {
     var isShowingSideChat: Bool {
         guard let request = sideChatRequest else { return false }
         return selectedProfileId == request.host && selectedThreadId == request.threadId
@@ -129,7 +129,7 @@ extension ThreadScreen {
 }
 
 struct ConversationSideChat: View {
-    @ObservedObject var model: BexAppViewModel
+    @ObservedObject var model: AppViewModel
     @ObservedObject var request: SideChatRequest
 
     var body: some View {

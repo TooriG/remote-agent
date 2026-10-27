@@ -102,7 +102,7 @@ impl Desktop {
                             tooltip::Tooltip::new(format!("実行先: {name}")).build(window, cx)
                         }
                     })
-                    .child(Icon::default().path("bex/monitor.svg").size_4())
+                    .child(Icon::default().path("icons/monitor.svg").size_4())
                     .child(div().min_w_0().text_ellipsis().child(name)),
             );
         }
@@ -118,7 +118,7 @@ impl Desktop {
                 Button::new("composer-branch")
                     .debug_selector(|| "composer-branch".into())
                     .label(review.branch.clone())
-                    .icon(Icon::default().path("bex/branch.svg"))
+                    .icon(Icon::default().path("icons/branch.svg"))
                     .accessibility_label(format!("現在のブランチ: {}", review.branch))
                     .tooltip(format!("現在のブランチ: {}", review.branch))
                     .dropdown_caret(true)
@@ -418,7 +418,7 @@ impl Desktop {
         let send = if let Some(id) = running.filter(|_| empty) {
             Self::icon_button(
                 "stop",
-                Icon::default().path("bex/stop.svg"),
+                Icon::default().path("icons/stop.svg"),
                 "停止",
                 cx,
                 move |s, _, _| {
@@ -450,7 +450,7 @@ impl Desktop {
             )
         };
         let microphone = Button::new("dictation-toggle")
-            .icon(Icon::default().path("bex/microphone.svg").size(px(20.)))
+            .icon(Icon::default().path("icons/microphone.svg").size(px(20.)))
             .ghost()
             .w(px(40.))
             .h(px(40.))

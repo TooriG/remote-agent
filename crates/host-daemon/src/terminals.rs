@@ -291,7 +291,7 @@ mod tests {
             for handle in ["one", "two"] {
                 terminals.start(router.clone(), first.id(), handle.into(), cwd.clone(), size).await.unwrap();
             }
-            terminals.request(first.id(), &Call::WriteTerminal(agent_protocol::operations::TerminalWrite { process_handle: "one".into(), data: "BEX_RETAINED=survived\n".as_bytes().to_vec() })).await.unwrap();
+            terminals.request(first.id(), &Call::WriteTerminal(agent_protocol::operations::TerminalWrite { process_handle: "one".into(), data: "AGENT_RETAINED=survived\n".as_bytes().to_vec() })).await.unwrap();
             terminals.request(first.id(), &Call::DetachTerminal(agent_protocol::operations::DetachTerminal { handle: "one".into() })).await.unwrap();
             assert!(terminals.request(first.id(), &Call::WriteTerminal(agent_protocol::operations::TerminalWrite { process_handle: "one".into(), data: b"a".to_vec() })).await.is_err());
             terminals.request(first.id(), &Call::WriteTerminal(agent_protocol::operations::TerminalWrite { process_handle: "two".into(), data: "true\n".as_bytes().to_vec() })).await.unwrap();
@@ -303,7 +303,7 @@ mod tests {
                 if matches!(agent_protocol::protocol::decode::<Notification>(&line).unwrap(), Notification::TerminalRestored { .. }) { restored=true; break; }
             }
             assert!(restored);
-            terminals.request(second.id(), &Call::WriteTerminal(agent_protocol::operations::TerminalWrite { process_handle: "one".into(), data: "printf '%s' \"$BEX_RETAINED\" > retained\n".as_bytes().to_vec() })).await.unwrap();
+            terminals.request(second.id(), &Call::WriteTerminal(agent_protocol::operations::TerminalWrite { process_handle: "one".into(), data: "printf '%s' \"$AGENT_RETAINED\" > retained\n".as_bytes().to_vec() })).await.unwrap();
             loop {
                 if std::fs::read_to_string(directory.path().join("retained")).ok().as_deref()==Some("survived") {break;}
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;

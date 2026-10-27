@@ -146,9 +146,9 @@ jobs:
         name: Prepare isolated Zsh startup for terminal tests
         shell: bash
         run: |
-          mkdir -p "$RUNNER_TEMP/bex-zsh"
-          : > "$RUNNER_TEMP/bex-zsh/.zshrc"
-          echo "ZDOTDIR=$RUNNER_TEMP/bex-zsh" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/agent-zsh"
+          : > "$RUNNER_TEMP/agent-zsh/.zshrc"
+          echo "ZDOTDIR=$RUNNER_TEMP/agent-zsh" >> "$GITHUB_ENV"
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
@@ -157,13 +157,13 @@ jobs:
           save-if: ${{ github.event_name != 'pull_request' }}
           cache-on-failure: true
       - name: Build desktop, Host and CLI
-        run: nix develop .#native --command cargo build --locked --features agent-core/bindings -p codex-app-server -p bex-process -p bex-desktop -p host-daemon -p agent-cli
+        run: nix develop .#native --command cargo build --locked --features agent-core/bindings -p codex-app-server -p agent-process -p agent-desktop -p host-daemon -p agent-cli
       - name: Install the SDK runtime beside the Host
         run: nix develop .#native --command node scripts/install-claude-sdk.mjs target/debug
       - name: Core contracts and isolated iroh Host
-        run: nix develop .#native --command cargo nextest run --locked --no-fail-fast --features agent-core/bindings -p codex-app-server -p bex-process -p agent-protocol -p agent-transport -p agent-local-host -p agent-core -p agent-cli -p host-daemon -p host-fixture -p xtask
+        run: nix develop .#native --command cargo nextest run --locked --no-fail-fast --features agent-core/bindings -p codex-app-server -p agent-process -p agent-protocol -p agent-transport -p agent-local-host -p agent-core -p agent-cli -p host-daemon -p host-fixture -p xtask
       - name: Documentation examples
-        run: nix develop .#native --command cargo test --locked --doc --features agent-core/bindings -p codex-app-server -p bex-process -p agent-protocol -p agent-transport -p agent-local-host -p agent-core -p agent-cli -p host-daemon -p host-fixture -p xtask
+        run: nix develop .#native --command cargo test --locked --doc --features agent-core/bindings -p codex-app-server -p agent-process -p agent-protocol -p agent-transport -p agent-local-host -p agent-core -p agent-cli -p host-daemon -p host-fixture -p xtask
       - name: Real-time passive approval soak
         if: github.event_name == 'workflow_dispatch'
         run: nix develop .#native --command cargo test --locked -p host-fixture --test iroh_host passive_client_can_approve_after_five_minutes_without_reconnecting -- --ignored
@@ -182,7 +182,7 @@ jobs:
       - name: Configure Android release signing and version
         if: github.event_name == 'release'
         env:
-          BEX_ANDROID_PREVIEW_KEYSTORE_BASE64: ${{ secrets.BEX_ANDROID_PREVIEW_KEYSTORE_BASE64 }}
+          AGENT_ANDROID_PREVIEW_KEYSTORE_BASE64: ${{ secrets.BEX_ANDROID_PREVIEW_KEYSTORE_BASE64 }}
         run: bash scripts/configure-android-preview.sh
       - *free-space
       - *prepare-zsh
@@ -213,7 +213,7 @@ jobs:
       - name: Enable emulator hardware acceleration
         run: sudo chmod a+rw /dev/kvm
       - name: Build isolated Android Host fixtures
-        run: nix develop .#native --command cargo build --locked -p host-fixture -p codex-app-server -p bex-process --bins
+        run: nix develop .#native --command cargo build --locked -p host-fixture -p codex-app-server -p agent-process --bins
       - name: Android emulator acceptance
         run: nix develop .#android-test --command bash scripts/android-e2e.sh
       - name: Retain Android acceptance logs and screenshots
@@ -255,7 +255,7 @@ jobs:
     timeout-minutes: 120
     env:
       CARGO_BUILD_JOBS: 2
-      BEX_XCODE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      AGENT_XCODE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       NEXTEST_TEST_THREADS: 6
     steps:
       - &apple-checkout
@@ -265,7 +265,7 @@ jobs:
       - &apple-xcode
         name: Use preinstalled Xcode 26.6
         run: |
-          export DEVELOPER_DIR="$BEX_XCODE_DEVELOPER_DIR"
+          export DEVELOPER_DIR="$AGENT_XCODE_DEVELOPER_DIR"
           test -d "$DEVELOPER_DIR"
           xcodebuild -version
           xcrun simctl list runtimes
@@ -311,15 +311,15 @@ jobs:
     timeout-minutes: 120
     env:
       CARGO_BUILD_JOBS: 2
-      BEX_XCODE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      AGENT_XCODE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       NEXTEST_TEST_THREADS: 6
       # The iPhone runner has its own Host and one Simulator on a 7 GiB Mac.
-      BEX_IOS_TEST_WORKERS: 1
-      BEX_IOS_TEST_SHARD: ${{ matrix.shard }}
-      BEX_IOS_TEST_SHARDS: ${{ inputs.ios-tests && 1 || 3 }}
-      BEX_IOS_TEST_ROUNDS: ${{ inputs.ios-test-rounds || 1 }}
+      AGENT_IOS_TEST_WORKERS: 1
+      AGENT_IOS_TEST_SHARD: ${{ matrix.shard }}
+      AGENT_IOS_TEST_SHARDS: ${{ inputs.ios-tests && 1 || 3 }}
+      AGENT_IOS_TEST_ROUNDS: ${{ inputs.ios-test-rounds || 1 }}
       # The builders validate Swift content/toolchain hashes before reuse.
-      BEX_IOS_SWIFT_CACHE_PATHS: |
+      AGENT_IOS_SWIFT_CACHE_PATHS: |
         target/qa/ios-derived-data
         target/qa/ios-markdown
         target/agent-bindings
@@ -341,17 +341,17 @@ jobs:
       - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         id: ios-cache
         with:
-          path: ${{ env.BEX_IOS_SWIFT_CACHE_PATHS }}
+          path: ${{ env.AGENT_IOS_SWIFT_CACHE_PATHS }}
           key: ios-swift-xcode-26.6-${{ hashFiles('flake.lock', 'Cargo.lock', 'crates/agent-core/src/**', 'crates/agent-protocol/src/**', 'crates/xtask/src/ios_markdown.rs', 'scripts/build-agent*.sh', 'apps/mobile/iosApp/**') }}
           restore-keys: ios-swift-xcode-26.6-
       - name: iPhone contracts and acceptance
         env:
-          BEX_IOS_TESTS: ${{ inputs.ios-tests }}
+          AGENT_IOS_TESTS: ${{ inputs.ios-tests }}
         run: |
           set -o pipefail
           mkdir -p target/qa
-          if [[ -n "$BEX_IOS_TESTS" ]]; then
-            read -r -a ios_tests <<< "$BEX_IOS_TESTS"
+          if [[ -n "$AGENT_IOS_TESTS" ]]; then
+            read -r -a ios_tests <<< "$AGENT_IOS_TESTS"
             nix develop . --command just ios-e2e "${ios_tests[@]}" 2>&1 | tee target/qa/quality.log
           else
             nix develop . --command just quality swift 2>&1 | tee target/qa/quality.log
@@ -360,7 +360,7 @@ jobs:
         if: ${{ !cancelled() && github.event_name != 'pull_request' && matrix.shard == 0 && steps.ios-cache.outputs.cache-primary-key != '' && steps.ios-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
-          path: ${{ env.BEX_IOS_SWIFT_CACHE_PATHS }}
+          path: ${{ env.AGENT_IOS_SWIFT_CACHE_PATHS }}
           key: ${{ steps.ios-cache.outputs.cache-primary-key }}
       - name: Retain Apple acceptance logs and result bundles
         if: always()
@@ -381,7 +381,7 @@ jobs:
     timeout-minutes: 60
     env:
       # rust-cache prunes non-Cargo files inside target, leaving empty tool caches.
-      BEX_FXC_CACHE_ROOT: ${{ github.workspace }}/output/tool-cache/windows-fxc
+      AGENT_FXC_CACHE_ROOT: ${{ github.workspace }}/output/tool-cache/windows-fxc
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -396,19 +396,19 @@ jobs:
           tool: cargo-nextest@${{ needs.toolchain.outputs.nextest-version }}
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          cache-directories: ${{ env.BEX_FXC_CACHE_ROOT }}
+          cache-directories: ${{ env.AGENT_FXC_CACHE_ROOT }}
           save-if: ${{ github.event_name != 'pull_request' }}
           cache-on-failure: true
       - name: Verify pinned shader compiler and reproducible bytecode
         run: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tools/windows-fxc/verify.ps1
       - name: Build desktop, Host and CLI
-        run: cargo build --locked --features agent-core/bindings -p codex-app-server -p bex-process -p bex-desktop -p host-daemon -p agent-cli
+        run: cargo build --locked --features agent-core/bindings -p codex-app-server -p agent-process -p agent-desktop -p host-daemon -p agent-cli
       - name: Install the SDK runtime beside the Host
         run: node scripts/install-claude-sdk.mjs target/debug
       - name: Core contracts and isolated iroh Host
-        run: cargo nextest run --locked --no-fail-fast --features agent-core/bindings -p codex-app-server -p bex-process -p agent-protocol -p agent-transport -p agent-local-host -p agent-core -p agent-cli -p host-daemon -p host-fixture -p xtask
+        run: cargo nextest run --locked --no-fail-fast --features agent-core/bindings -p codex-app-server -p agent-process -p agent-protocol -p agent-transport -p agent-local-host -p agent-core -p agent-cli -p host-daemon -p host-fixture -p xtask
       - name: Documentation examples
-        run: cargo test --locked --doc --features agent-core/bindings -p codex-app-server -p bex-process -p agent-protocol -p agent-transport -p agent-local-host -p agent-core -p agent-cli -p host-daemon -p host-fixture -p xtask
+        run: cargo test --locked --doc --features agent-core/bindings -p codex-app-server -p agent-process -p agent-protocol -p agent-transport -p agent-local-host -p agent-core -p agent-cli -p host-daemon -p host-fixture -p xtask
       - name: Real-time passive approval soak
         if: github.event_name == 'workflow_dispatch'
         run: cargo test --locked -p host-fixture --test iroh_host passive_client_can_approve_after_five_minutes_without_reconnecting -- --ignored

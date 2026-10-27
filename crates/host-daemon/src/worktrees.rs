@@ -23,7 +23,7 @@ pub(crate) struct Worktrees {
 impl Worktrees {
     pub(crate) fn new(project_state: &Path) -> Self {
         Self {
-            path: project_state.with_file_name("bex-worktrees.json"),
+            path: project_state.with_file_name("agent-worktrees.json"),
             lock: tokio::sync::Mutex::new(()),
         }
     }
@@ -140,7 +140,7 @@ impl Worktrees {
                 Err(error) => return Err(error.into()),
             }
             let root = Path::new(project);
-            let branch = format!("bex/session-{}", uuid::Uuid::new_v4());
+            let branch = format!("agent/session-{}", uuid::Uuid::new_v4());
             let relative_cwd = cwd.strip_prefix(destination)?;
             create_checkout(
                 root,
@@ -253,7 +253,7 @@ impl Worktrees {
                     .file_name()
                     .context("repository has no folder name")?,
             );
-            let branch = format!("bex/{}", session.file_name().unwrap().to_string_lossy());
+            let branch = format!("agent/{}", session.file_name().unwrap().to_string_lossy());
             let target = create_checkout(
                 &root,
                 &destination,
@@ -496,7 +496,7 @@ fn already_removed(path: &str, listing: &str) -> Result<bool> {
 }
 
 pub(crate) async fn workspace_roots(project_state: &Path) -> Result<HashMap<String, String>> {
-    let path = project_state.with_file_name("bex-worktrees.json");
+    let path = project_state.with_file_name("agent-worktrees.json");
     tokio::task::spawn_blocking(move || read(&path).map(|state| state.workspace_roots)).await?
 }
 
@@ -1143,7 +1143,7 @@ mod tests {
         assert!(
             crate::git::text(&first, &["branch", "--show-current"])
                 .unwrap()
-                .starts_with("bex/session-")
+                .starts_with("agent/session-")
         );
         #[cfg(unix)]
         assert_eq!(
@@ -1302,7 +1302,7 @@ mod tests {
             let root = dunce::canonicalize(repository.path()).unwrap();
             let state_directory = tempfile::tempdir().unwrap();
             let projects = state_directory.path().join("projects.json");
-            let legacy = root.join(".git/bex-worktrees/session-legacy");
+            let legacy = root.join(".git/agent-worktrees/session-legacy");
             crate::git::text(
                 &root,
                 &["worktree", "add", "-b", "legacy", legacy.to_str().unwrap()],
@@ -1345,7 +1345,7 @@ mod tests {
                     root.to_str().unwrap().into(),
                 );
             }
-            save(&projects.with_file_name("bex-worktrees.json"), &state).unwrap();
+            save(&projects.with_file_name("agent-worktrees.json"), &state).unwrap();
             let store = Worktrees::new(&projects);
             let first = store
                 .prepare(legacy.join("packages/app").to_str())
@@ -1404,7 +1404,7 @@ mod tests {
                     .await
                     .unwrap();
                 assert!(!legacy.exists());
-                assert!(root.join(".git/bex-worktrees").is_dir());
+                assert!(root.join(".git/agent-worktrees").is_dir());
             }
             assert!(first.join("source.txt").is_file());
         }

@@ -34,7 +34,7 @@ pub fn identifier() -> u64 {
 
 impl Trace {
     pub fn new() -> Arc<Self> {
-        Self::with_enabled(std::env::var("BEX_CONNECTION_DIAGNOSTICS").as_deref() != Ok("off"))
+        Self::with_enabled(std::env::var("AGENT_CONNECTION_DIAGNOSTICS").as_deref() != Ok("off"))
     }
     fn with_enabled(enabled: bool) -> Arc<Self> {
         let trace = Arc::new(Self {
@@ -210,7 +210,7 @@ impl Trace {
             attempt_id,
             connection_id,
             platform: super::ClientPlatform::current(),
-            client_revision: option_env!("BEX_BUILD_REVISION")
+            client_revision: option_env!("AGENT_BUILD_REVISION")
                 .unwrap_or("development")
                 .into(),
             timeline,
@@ -252,7 +252,7 @@ where
     NetworkLayer.with_filter(tracing_subscriber::filter::filter_fn(|metadata| {
         matches!(
             metadata.target(),
-            "bex.net"
+            "agent.net"
                 | "iroh::net_report"
                 | "iroh_relay::client"
                 | "iroh_relay::client::tls"
@@ -346,7 +346,7 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for NetworkLayer {
         let mut inherited = span
             .parent()
             .and_then(|p| p.extensions().get::<Context>().cloned());
-        if attrs.metadata().target() == "bex.net" {
+        if attrs.metadata().target() == "agent.net" {
             let mut fields = Fields::default();
             attrs.record(&mut fields);
             inherited = TRACES
@@ -365,7 +365,7 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for NetworkLayer {
                 attrs.record(&mut fields);
                 inherited.region = fields.region;
             }
-            if attrs.metadata().target() == "bex.net"
+            if attrs.metadata().target() == "agent.net"
                 && let Some(trace) = inherited.trace.upgrade()
             {
                 trace.record(ConnectionPhase::NetworkCapture, 0, 0, 1);
@@ -529,7 +529,7 @@ mod tests {
         tracing::subscriber::with_default(
             tracing_subscriber::registry().with(network_layer()),
             || {
-                let root = tracing::info_span!(target: "bex.net", "network", trace_id = trace.id);
+                let root = tracing::info_span!(target: "agent.net", "network", trace_id = trace.id);
                 let _root = root.enter();
                 let dial =
                     tracing::info_span!(target: "iroh::relay", "dialing", url = "private-address");

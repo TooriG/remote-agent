@@ -470,7 +470,7 @@ impl Cli {
         url: Option<oneshot::Sender<String>>,
     ) -> Result<Self, String> {
         let mut command =
-            bex_process::command(program).map_err(|_| "Claude の認証処理を起動できません。")?;
+            agent_process::command(program).map_err(|_| "Claude の認証処理を起動できません。")?;
         super::process::set_homes(&mut command, home.map(|home| (home, home)));
         command
             .args(args)
@@ -482,7 +482,7 @@ impl Cli {
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
         // The browser is opened by the requesting client, including an iPhone.
-        bex_process::suppress_browser(&mut command)
+        agent_process::suppress_browser(&mut command)
             .map_err(|_| "Claude の認証処理を起動できません。")?;
         let mut child = command
             .spawn()
