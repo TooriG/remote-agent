@@ -191,6 +191,7 @@ private fun BrowserPane(
     var showKeyboard by remember { mutableStateOf(false) }
     val tab = frame?.tabs?.firstOrNull { it.id == frame.tabId }
     val density = LocalDensity.current.density
+    val colors = MaterialTheme.colorScheme
     Column {
         Row(
             Modifier.fillMaxWidth().height(44.dp).padding(horizontal = 8.dp),
@@ -199,7 +200,7 @@ private fun BrowserPane(
             Text("ブラウザ", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
             IconButton(onClick = dismiss) { Icon(painterResource(R.drawable.ic_close), "閉じる", Modifier.size(16.dp)) }
         }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
+        HorizontalDivider(color = colors.outlineVariant.copy(alpha = 0.6f))
         if ((frame?.tabs?.size ?: 0) > 1) BrowserTabs(frame?.tabs.orEmpty(), session::send)
         BrowserToolbar(
             tab,
@@ -212,8 +213,9 @@ private fun BrowserPane(
         ) {
             session.error = it
         }
-        val message = session.error ?: session.connectionError ?: session.notice
-        message?.let { Text(it, modifier = Modifier.padding(12.dp)) }
+        val failure = session.error ?: session.connectionError
+        val messageColor = if (failure == null) colors.onSurfaceVariant else colors.error
+        (failure ?: session.notice)?.let { Text(it, color = messageColor, modifier = Modifier.padding(12.dp)) }
         frame?.dialog?.let { BrowserDialogView(it, enabled, session::send) }
         val blank = tab?.url == "about:blank"
         BrowserImage(

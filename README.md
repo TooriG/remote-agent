@@ -131,12 +131,12 @@ headings to reorder them and chat rows onto a project to change their sidebar
 placement. These device preferences preserve the conversation's execution directory
 and files.
 
-On iPhone, open the workspace from the conversation's grid button; its tabs select
-terminal, browser or files. Closing the terminal view or disconnecting retains its
-shell; choose **終了** to end it. Host restart ends shells. The browser shares the
-conversation's Host-owned tabs with the agent on desktop, iPhone and Android.
-Choose **操作権を取得** before interacting, then **AI に操作を戻す** to let the agent
-continue. Agent conversations have separate, temporary login storage.
+On iPhone, open the workspace from the conversation's grid button and use **＋**
+or the centered list to open tools. Only opened tools appear as tabs, as on desktop.
+Closing the terminal view or disconnecting retains its shell; choose **終了** to
+end it. Host restart ends shells. The browser shares the conversation's tabs with
+the agent on desktop, iPhone and Android. Login storage is separate for each
+conversation and is discarded when the Host restarts.
 
 On Mac and iPhone, select assistant text to quote it into the draft or ask about it in a side chat. Closing an iPhone side chat restores the original conversation and draft. Mac also supports right-click Copy and Google Search, and own-message hover actions for copying or returning text to the composer. Command activity starts collapsed while running and after reopening; explicit expansion is preserved.
 

@@ -594,9 +594,14 @@ impl Desktop {
                     Some(SurfaceResource::Terminal(view)) => view.clone().into_any_element(),
                     Some(SurfaceResource::Diff(view)) => view.clone().into_any_element(),
                     Some(SurfaceResource::Browser { view, .. }) => view.clone().into_any_element(),
-                    Some(SurfaceResource::Pending { .. }) => {
-                        div().p_4().child("ブラウザを起動中…").into_any_element()
-                    }
+                    Some(SurfaceResource::Pending { .. }) => div()
+                        .p_4()
+                        .child(if matches!(self.draft_key(), DraftKey::Session { .. }) {
+                            "ブラウザを起動中…"
+                        } else {
+                            "会話を始めると、AIと同じブラウザを利用できます。"
+                        })
+                        .into_any_element(),
                     None => div()
                         .p_4()
                         .child("機能を開けませんでした。「＋」から再試行してください。")

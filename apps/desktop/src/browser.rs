@@ -19,8 +19,8 @@ use gpui_kit::{
 use std::{collections::VecDeque, ops::Range, sync::Arc, time::Duration};
 
 pub(crate) struct Browser {
-    store: Option<Arc<Store>>,
-    thread: Option<SessionRef>,
+    store: Arc<Store>,
+    thread: SessionRef,
     runtime: Runtime,
     frame: BrowserFrame,
     image: Option<Arc<RenderImage>>,
@@ -43,8 +43,8 @@ pub(crate) struct Browser {
 
 impl Browser {
     pub(crate) fn new(
-        store: Option<Arc<Store>>,
-        thread: Option<SessionRef>,
+        store: Arc<Store>,
+        thread: SessionRef,
         url: Option<String>,
         window: &mut Window,
         cx: &mut App,
@@ -177,21 +177,16 @@ impl Browser {
     }
 
     fn next_request(&mut self) -> Option<(Runtime, Arc<Store>, BrowserRequest)> {
-        let store = self.store.clone()?;
-        self.thread.as_ref()?;
         let request = self
             .pending
             .pop_front()
             .or_else(|| self.visible.then(|| self.request(BrowserAction::Read)))?;
-        Some((self.runtime.clone(), store, request))
+        Some((self.runtime.clone(), self.store.clone(), request))
     }
 
     fn request(&self, action: BrowserAction) -> BrowserRequest {
         BrowserRequest {
-            thread_id: self
-                .thread
-                .clone()
-                .expect("a shared browser has a conversation"),
+            thread_id: self.thread.clone(),
             generation: self.frame.generation,
             tab_id: self.frame.tab_id.clone(),
             image_id: self.frame.image_id.clone(),
@@ -211,7 +206,7 @@ impl Browser {
             );
         }
         self.credentials = None;
-        if self.thread.is_some() && !self.frame.tab_id.is_empty() && self.pending.len() < 64 {
+        if !self.frame.tab_id.is_empty() && self.pending.len() < 64 {
             self.pending.push_back(self.request(action));
         }
         cx.notify();
@@ -763,11 +758,7 @@ impl Render for Browser {
                                         )
                                         .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).child("プレビューはまだありません"))
                                         .child(div().max_w(px(384.)).text_sm().text_center()
-                                            .text_color(rgb(appearance::MUTED)).child(if self.thread.is_some() {
-                                                "上の欄に URL を入力するか、AI にブラウザ操作を依頼してください。"
-                                            } else {
-                                                "会話を始めると、AI と同じタブを利用できます。"
-                                            })),
+                                            .text_color(rgb(appearance::MUTED)).child("上の欄に URL を入力するか、AI にブラウザ操作を依頼してください。")),
                                 )
                             }
                         })

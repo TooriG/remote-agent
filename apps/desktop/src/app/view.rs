@@ -161,13 +161,28 @@ impl Render for Desktop {
         }
         if active
             && let Some(id) = active_surface
-            && matches!(
-                self.surface_resources.get(&id),
-                Some(SurfaceResource::Pending { .. })
-            )
-            && let Some(SurfaceResource::Pending { url }) = self.surface_resources.remove(&id)
+            && let Some(connection) = self.session.as_ref()
+            && let Some(PanelScope {
+                draft: DraftKey::Session { session: thread },
+                ..
+            }) = self.panels.scope(id)
+            && let Some(SurfaceResource::Pending { url }) = self.surface_resources.get(&id)
         {
-            self.start_browser(id, url, window, cx);
+            let browser = crate::browser::Browser::new(
+                connection.store.clone(),
+                thread,
+                url.clone(),
+                window,
+                cx,
+            );
+            let observation = cx.observe(&browser, |_, _, cx| cx.notify());
+            self.surface_resources.insert(
+                id,
+                SurfaceResource::Browser {
+                    view: browser,
+                    _observation: observation,
+                },
+            );
         }
         for (id, resource) in &self.surface_resources {
             match resource {

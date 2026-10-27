@@ -369,7 +369,14 @@ async fn shared_browser_live() {
 #[tokio::test]
 async fn credential_import_and_vault_access_are_explicit_client_actions() {
     let root = tempfile::tempdir().unwrap();
-    let browser = Browser::start(root.path().join("profile")).await.unwrap();
+    // Agent credential requests must fail before starting Chrome or the Unix MCP bridge.
+    let browser = Browser {
+        profile: root.path().join("profile"),
+        executable: "unused-browser".into(),
+        state: Default::default(),
+        stop: Default::default(),
+        bridge_directory: root,
+    };
     for action in [
         BrowserAction::Credentials,
         BrowserAction::ImportCookies {
@@ -392,7 +399,9 @@ async fn credential_import_and_vault_access_are_explicit_client_actions() {
         let error = browser.agent("thread", action).await.err().unwrap();
         assert!(error.contains("ブラウザのメニュー"));
     }
-    browser.shutdown().await;
+    let state = browser.state.lock().await;
+    assert!(state.chrome.is_none());
+    assert!(state.pages.is_empty());
 }
 
 #[tokio::test]

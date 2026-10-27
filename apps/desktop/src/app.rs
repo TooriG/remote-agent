@@ -1591,29 +1591,6 @@ impl Desktop {
             }
         }
     }
-    fn start_browser(
-        &mut self,
-        id: u64,
-        url: Option<String>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let browser = crate::browser::Browser::new(
-            self.session.as_ref().map(|session| session.store.clone()),
-            self.snapshot.navigation.thread_id.clone(),
-            url,
-            window,
-            cx,
-        );
-        let observation = cx.observe(&browser, |_, _, cx| cx.notify());
-        self.surface_resources.insert(
-            id,
-            SurfaceResource::Browser {
-                view: browser,
-                _observation: observation,
-            },
-        );
-    }
     fn open_browser(&mut self, scope: PanelScope, url: &str, cx: &mut Context<Self>) {
         if let Err(error) = agent_protocol::browser::browser_url(url) {
             self.set_error(error);
