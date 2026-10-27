@@ -87,12 +87,12 @@ impl StoreSession {
                     let saved_preferences = next_preferences.clone();
                     let result = tokio::task::spawn_blocking(move || {
                         if preferences_changed {
-                            host_daemon::platform::save_private_json(
+                            agent_local_host::save_private_json(
                                 &path.with_file_name("model-preferences.json"),
                                 &saved_preferences,
                             )?;
                         }
-                        host_daemon::platform::save_private_json(
+                        agent_local_host::save_private_json(
                             &path,
                             &agent_core::persistence::PersistedState::capture(&snapshot),
                         )

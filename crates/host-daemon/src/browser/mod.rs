@@ -79,7 +79,7 @@ impl Browser {
             // be nested under a long checkout path; keep the socket root short.
             .tempdir_in("/tmp")
             .map_err(|e| e.to_string())?;
-        crate::platform::create_state_directory(bridge_directory.path())
+        agent_local_host::create_state_directory(bridge_directory.path())
             .map_err(|e| e.to_string())?;
         let browser = Arc::new(Self {
             profile,

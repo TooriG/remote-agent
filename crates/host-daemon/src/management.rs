@@ -1,11 +1,11 @@
 use crate::command_line::Mode;
+use agent_local_host::{LocalHostRegistry, LocalHostState};
 use agent_protocol::{
     operations::{ReadHostStatus, RevokeDevice},
     protocol::Call,
 };
 use agent_transport::transport::{Endpoint, Relays};
 use anyhow::{Context, Result, bail};
-use host_daemon::local_host::{LocalHostRegistry, LocalHostState};
 use std::{path::PathBuf, time::Duration};
 
 pub(crate) async fn run(mode: Mode, state_dir: Option<PathBuf>, isolated: bool) -> Result<()> {
@@ -21,7 +21,7 @@ pub(crate) async fn run(mode: Mode, state_dir: Option<PathBuf>, isolated: bool) 
             LocalHostState::Stopped => bail!("Host is not running"),
             LocalHostState::Starting => bail!("Host is still starting; try again shortly"),
         };
-        let identity = host_daemon::load_local_identity(&host.directory)?;
+        let identity = agent_local_host::load_local_identity(&host.directory)?;
         Ok::<_, anyhow::Error>((identity, ticket))
     })
     .await??;

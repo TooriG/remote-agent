@@ -139,7 +139,7 @@ impl Chrome {
     }
 
     pub async fn launch(profile: &Path, executable: &Path) -> Result<Self, String> {
-        crate::platform::create_state_directory(profile).map_err(|e| e.to_string())?;
+        agent_local_host::create_state_directory(profile).map_err(|e| e.to_string())?;
         let port_file = profile.join("DevToolsActivePort");
         match tokio::fs::remove_file(&port_file).await {
             Ok(()) => {}

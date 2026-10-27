@@ -85,7 +85,7 @@ impl LocalHostRegistry {
                 current.directory.display()
             );
         }
-        crate::platform::create_state_directory(directory)?;
+        crate::create_state_directory(directory)?;
         let directory = dunce::canonicalize(directory)?;
         let lock = open_lock(&directory.join("host.lock"))?;
         lock.try_lock()
@@ -102,7 +102,7 @@ impl LocalHostRegistry {
     }
 
     fn coordinate(&self) -> Result<FileLock> {
-        crate::platform::create_state_directory(&self.directory)?;
+        crate::create_state_directory(&self.directory)?;
         let lock = open_lock(&self.directory.join("host-instance.lock"))?;
         lock.lock()?;
         Ok(FileLock(lock))
@@ -138,7 +138,7 @@ impl LocalHostRegistry {
     }
 
     fn save(&self, registration: &Registration) -> Result<()> {
-        crate::platform::save_private_json(&self.directory.join("host-instance.json"), registration)
+        crate::save_private_json(&self.directory.join("host-instance.json"), registration)
     }
 }
 
@@ -181,7 +181,7 @@ impl HostLease {
                 file.write_all(ticket.to_string().as_bytes())?;
                 file.sync_all()
             },
-            crate::platform::private_file_options(),
+            crate::private_file_options(),
         )?;
         self.registry.save(&Registration {
             directory: self.directory.clone(),
@@ -223,7 +223,6 @@ fn running(directory: &Path) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_transport::transport::{Endpoint, Relays};
 
     #[cfg(unix)]
     #[test]
@@ -253,70 +252,6 @@ mod tests {
         let replacement = registry.acquire(&host).unwrap();
         assert!(registry.acquire(&host).is_err());
         drop(replacement);
-    }
-
-    #[tokio::test]
-    async fn discovery_restores_the_hosts_identity_after_restart() {
-        let fixture = tempfile::tempdir().unwrap();
-        let registry = LocalHostRegistry::new(fixture.path().join("registry"));
-        let host = fixture.path().join("mobile-host");
-        let desktop = fixture.path().join("desktop");
-        let lease = registry.acquire(&host).unwrap();
-        fs::write(host.join("host.ticket"), "stale invalid ticket").unwrap();
-        assert!(matches!(
-            registry.resolve(&desktop).unwrap().state,
-            LocalHostState::Starting
-        ));
-        let credentials = crate::HostCredentials::load(
-            std::sync::Arc::new(crate::FileKeyStore(lease.directory().join("identity.keys"))),
-            lease.directory().to_owned(),
-        )
-        .await
-        .unwrap();
-        let endpoint = Endpoint::bind(credentials.host_identity().await, Relays::Disabled)
-            .await
-            .unwrap();
-        lease.publish(&endpoint.local_ticket()).unwrap();
-        let location = registry.resolve(&desktop).unwrap();
-        assert_eq!(location.directory, dunce::canonicalize(&host).unwrap());
-        assert!(
-            matches!(location.state, LocalHostState::Ready(ref ticket) if *ticket == endpoint.local_ticket())
-        );
-        assert_eq!(
-            crate::load_local_identity(&location.directory)
-                .unwrap()
-                .node_id(),
-            credentials.local_identity().await.node_id()
-        );
-        assert!(
-            !desktop.exists(),
-            "discovery must not provision desktop credentials"
-        );
-        endpoint.close().await;
-        drop(lease);
-        let registry = LocalHostRegistry::new(registry.directory().to_owned());
-        let location = registry.resolve(&desktop).unwrap();
-        assert!(matches!(location.state, LocalHostState::Stopped));
-        assert_eq!(location.directory, dunce::canonicalize(&host).unwrap());
-        let lease = registry.acquire(&location.directory).unwrap();
-        assert!(matches!(
-            registry.resolve(&desktop).unwrap().state,
-            LocalHostState::Starting
-        ));
-        let restored = crate::HostCredentials::load(
-            std::sync::Arc::new(crate::FileKeyStore(lease.directory().join("identity.keys"))),
-            lease.directory().to_owned(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            restored.host_identity().await.node_id(),
-            credentials.host_identity().await.node_id()
-        );
-        assert_eq!(
-            restored.local_identity().await.node_id(),
-            credentials.local_identity().await.node_id()
-        );
     }
 
     #[test]
@@ -405,7 +340,7 @@ mod tests {
             let fixture = tempfile::tempdir().unwrap();
             let root = fixture.path();
             let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", "local_host::tests::a_process_crash_releases_the_reservation_without_reusing_its_ticket"])
+                .args(["--exact", "registry::tests::a_process_crash_releases_the_reservation_without_reusing_its_ticket"])
                 .env(CHILD_ROOT, root).stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::null()).kill_on_drop(true).spawn().unwrap();
             while !root.join("acquired").exists() {

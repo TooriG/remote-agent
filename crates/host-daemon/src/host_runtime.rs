@@ -451,7 +451,9 @@ mod tests {
             let directory = tempfile::tempdir().unwrap();
             let credentials = Arc::new(
                 HostCredentials::load(
-                    Arc::new(crate::FileKeyStore(directory.path().join("identity.keys"))),
+                    Arc::new(crate::FileKeyStore(agent_local_host::identity_path(
+                        directory.path(),
+                    ))),
                     directory.path().to_owned(),
                 )
                 .await

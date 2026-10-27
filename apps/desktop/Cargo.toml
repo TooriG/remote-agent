@@ -14,7 +14,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tokio = { workspace = true, features = ["fs"] }
 tokio-util = { workspace = true, features = ["rt"] }
 agent-core = { path = "../../crates/agent-core", features = ["diagrams", "browser-import"] }
-host-daemon = { path = "../../crates/host-daemon" }
+agent-local-host = { path = "../../crates/agent-local-host" }
 directories = "6"
 rfd = "0.17.2"
 gpui-kit = { version = "=0.6.0", features = ["tree-sitter-languages"] }

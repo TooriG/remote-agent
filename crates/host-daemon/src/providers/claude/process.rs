@@ -58,7 +58,7 @@ fn runtime_from(
     // sealed Resources directory, rather than alongside its Mach-O executables.
     let (default_node, bridge) = if directory.ends_with("Contents/MacOS") {
         (
-            bex_process::bundled_node_path(host).expect("Mac bundle has a runtime path"),
+            agent_local_host::bundled_node_path(host).expect("Mac bundle has a runtime path"),
             directory
                 .parent()
                 .expect("Contents exists")

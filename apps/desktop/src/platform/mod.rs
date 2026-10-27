@@ -1,6 +1,6 @@
 use agent_core::{state::Snapshot, store::Store};
+use agent_local_host::{LocalHost, LocalHostRegistry, LocalHostState};
 use agent_transport::transport::{Endpoint, Relays, Ticket};
-use host_daemon::local_host::{LocalHost, LocalHostRegistry, LocalHostState};
 use std::{
     path::PathBuf,
     process::{Command, Stdio},
@@ -126,7 +126,7 @@ impl Connections {
             .get_or_try_init(|| async {
                 let identity_directory = directory.clone();
                 let identity = tokio::task::spawn_blocking(move || {
-                    host_daemon::load_local_identity(&identity_directory)
+                    agent_local_host::load_local_identity(&identity_directory)
                 })
                 .await??;
                 let endpoint = if local {

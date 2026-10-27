@@ -1,10 +1,8 @@
 use crate::command_line::StartupConfig;
+use agent_local_host::{HostLease, LocalHostRegistry};
 use agent_transport::transport::{Endpoint, Relays};
 use anyhow::{Context, Result};
-use host_daemon::{
-    FileKeyStore, HostCredentials, HostRpcService, HostRuntime, ProjectStore,
-    local_host::{HostLease, LocalHostRegistry},
-};
+use host_daemon::{FileKeyStore, HostCredentials, HostRpcService, HostRuntime, ProjectStore};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
@@ -37,7 +35,7 @@ pub(crate) async fn run(config: StartupConfig) -> Result<()> {
         env!("CARGO_PKG_VERSION"),
     )
     .context("cannot initialize Host error log")?;
-    let store = Arc::new(FileKeyStore(directory.join("identity.keys")));
+    let store = Arc::new(FileKeyStore(agent_local_host::identity_path(&directory)));
     let credentials = Arc::new(
         HostCredentials::load(store, directory.clone())
             .await

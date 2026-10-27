@@ -4,6 +4,7 @@ members = [
     "crates/agent-core",
     "crates/agent-protocol",
     "crates/agent-transport",
+    "crates/agent-local-host",
     "crates/agent-cli",
     "crates/agent-ffi",
     "crates/codex-app-server",

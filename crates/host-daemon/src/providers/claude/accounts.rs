@@ -103,7 +103,7 @@ impl Accounts {
         native_home: PathBuf,
         native_inherited: bool,
     ) -> anyhow::Result<Self> {
-        crate::platform::create_state_directory(&directory)?;
+        agent_local_host::create_state_directory(&directory)?;
         let registry = match tokio::fs::read(directory.join("accounts.json")).await {
             Ok(bytes) => serde_json::from_slice(&bytes)?,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Registry::default(),
@@ -156,7 +156,7 @@ impl Accounts {
     async fn save(&self) -> Result<(), String> {
         let path = self.directory.join("accounts.json");
         let value = self.registry.clone();
-        tokio::task::spawn_blocking(move || crate::platform::save_private_json(&path, &value))
+        tokio::task::spawn_blocking(move || agent_local_host::save_private_json(&path, &value))
             .await
             .map_err(|_| "Claude アカウントを保存できません。")?
             .map_err(|_| "Claude アカウントを保存できません。".into())
@@ -305,7 +305,7 @@ impl Accounts {
                 self.cancel().await?;
                 let id = format!("claude:{}", uuid::Uuid::new_v4());
                 let home = self.directory.join(id.strip_prefix("claude:").unwrap());
-                crate::platform::create_state_directory(&home)
+                agent_local_host::create_state_directory(&home)
                     .map_err(|_| "Claude の保存先を作成できません。")?;
                 let (sender, url) = oneshot::channel();
                 let process = Cli::start(

@@ -517,7 +517,7 @@ fn save(path: &Path, state: &State) -> Result<()> {
                 serde_json::to_writer(&mut *file, state).map_err(std::io::Error::other)?;
                 file.write_all(b"\n")
             },
-            crate::platform::private_file_options(),
+            agent_local_host::private_file_options(),
         )
         .map_err(Into::into)
 }
@@ -533,9 +533,9 @@ fn create_checkout(
 ) -> Result<PathBuf> {
     let destination_text = destination.to_str().context("worktree path is not UTF-8")?;
     if let Some(parent) = destination.parent() {
-        crate::platform::create_state_directory(parent)?;
+        agent_local_host::create_state_directory(parent)?;
     }
-    crate::platform::create_state_directory(destination)?;
+    agent_local_host::create_state_directory(destination)?;
     if let Err(error) = crate::git::text(source, &["branch", branch, base]) {
         let _ = fs::remove_dir(destination);
         return Err(error);

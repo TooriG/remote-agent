@@ -2193,11 +2193,9 @@ async fn discovered_host_keeps_mobile_and_desktop_turns_in_sync_across_reconnect
     use agent_core::state::Intent;
     use agent_core::state::Snapshot;
     use agent_core::store::Store;
+    use agent_local_host::{LocalHostRegistry, LocalHostState};
     use agent_protocol::requests::Answer;
-    use host_daemon::{
-        FileKeyStore, HostRuntime,
-        local_host::{LocalHostRegistry, LocalHostState},
-    };
+    use host_daemon::{FileKeyStore, HostRuntime};
 
     async fn wait_for(store: &Store, condition: impl Fn(&Snapshot) -> bool) {
         let mut updates = store.subscribe();
@@ -2262,7 +2260,7 @@ async fn discovered_host_keeps_mobile_and_desktop_turns_in_sync_across_reconnect
         assert!(!desktop_state.join("identity.keys").exists());
         assert!(!desktop_state.join("trust.json").exists());
         let desktop_endpoint = Endpoint::bind(
-            host_daemon::load_local_identity(&location.directory).unwrap(),
+            agent_local_host::load_local_identity(&location.directory).unwrap(),
             Relays::Disabled,
         )
         .await

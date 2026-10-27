@@ -13,19 +13,6 @@ pub trait CredentialStore: Send + Sync {
     fn save(&self, bytes: &[u8]) -> Result<()>;
 }
 
-/// Read only the local identity already provisioned by the daemon.
-/// File access must run on a blocking worker.
-pub fn load_local_identity(directory: &std::path::Path) -> Result<Identity> {
-    let bytes = FileKeyStore(directory.join("identity.keys"))
-        .load()?
-        .context("local Host credentials are not provisioned")?;
-    ensure!(
-        bytes.len() == 64,
-        "saved Host keys must contain exactly 64 bytes"
-    );
-    Ok(Identity::from_bytes(bytes[32..].try_into().unwrap()))
-}
-
 /// Host identity storage. Keep the containing directory private; Unix files
 /// are 0600, Windows inherits its user DACL.
 pub struct FileKeyStore(pub PathBuf);
@@ -41,7 +28,7 @@ impl CredentialStore for FileKeyStore {
         atomicwrites::AtomicFile::new(&self.0, atomicwrites::DisallowOverwrite)
             .write_with_options(
                 |file| file.write_all(bytes),
-                crate::platform::private_file_options(),
+                agent_local_host::private_file_options(),
             )
             .map_err(Into::into)
     }
@@ -62,7 +49,7 @@ impl HostCredentials {
     /// Read and write credentials on a blocking worker.
     pub async fn load(store: Arc<dyn CredentialStore>, directory: PathBuf) -> Result<Self> {
         tokio::task::spawn_blocking(move || {
-            crate::platform::create_state_directory(&directory)?;
+            agent_local_host::create_state_directory(&directory)?;
             let record_path = directory.join("trust.json");
             let saved_record = match std::fs::read(&record_path) {
                 Ok(bytes) => Some(
@@ -99,7 +86,7 @@ impl HostCredentials {
                         .trust
                         .allowed
                         .insert(Identity::from_bytes(keys[32..].try_into().unwrap()).node_id());
-                    crate::platform::save_private_json(&record_path, &record)?;
+                    agent_local_host::save_private_json(&record_path, &record)?;
                     record
                 }
             };
@@ -121,7 +108,7 @@ impl HostCredentials {
     pub(crate) async fn persist(&self, record: Record) -> Result<Record> {
         let path = self.record_path.clone();
         tokio::task::spawn_blocking(move || {
-            crate::platform::save_private_json(&path, &record)?;
+            agent_local_host::save_private_json(&path, &record)?;
             Ok(record)
         })
         .await?
@@ -219,7 +206,9 @@ mod tests {
         );
         assert_eq!(std::fs::metadata(&path).unwrap().len(), 64);
         assert_eq!(
-            load_local_identity(directory.path()).unwrap().node_id(),
+            agent_local_host::load_local_identity(directory.path())
+                .unwrap()
+                .node_id(),
             credentials.local_identity().await.node_id()
         );
         assert!(
@@ -244,7 +233,7 @@ mod tests {
             );
         }
         std::fs::remove_file(&path).unwrap();
-        assert!(load_local_identity(directory.path()).is_err());
+        assert!(agent_local_host::load_local_identity(directory.path()).is_err());
         assert!(
             !path.exists(),
             "clients must not provision replacement keys"
@@ -266,6 +255,80 @@ mod tests {
         assert!(
             error.downcast_ref::<serde_json::Error>().is_some(),
             "{error:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn discovery_restores_the_hosts_identity_after_restart() {
+        let fixture = tempfile::tempdir().unwrap();
+        let registry = agent_local_host::LocalHostRegistry::new(fixture.path().join("registry"));
+        let host = fixture.path().join("mobile-host");
+        let desktop = fixture.path().join("desktop");
+        let lease = registry.acquire(&host).unwrap();
+        std::fs::write(host.join("host.ticket"), "stale invalid ticket").unwrap();
+        assert!(matches!(
+            registry.resolve(&desktop).unwrap().state,
+            agent_local_host::LocalHostState::Starting
+        ));
+        let credentials = HostCredentials::load(
+            std::sync::Arc::new(FileKeyStore(agent_local_host::identity_path(
+                lease.directory(),
+            ))),
+            lease.directory().to_owned(),
+        )
+        .await
+        .unwrap();
+        let endpoint = agent_transport::transport::Endpoint::bind(
+            credentials.host_identity().await,
+            agent_transport::transport::Relays::Disabled,
+        )
+        .await
+        .unwrap();
+        lease.publish(&endpoint.local_ticket()).unwrap();
+        let location = registry.resolve(&desktop).unwrap();
+        assert_eq!(location.directory, dunce::canonicalize(&host).unwrap());
+        assert!(
+            matches!(location.state, agent_local_host::LocalHostState::Ready(ref ticket) if *ticket == endpoint.local_ticket())
+        );
+        assert_eq!(
+            agent_local_host::load_local_identity(&location.directory)
+                .unwrap()
+                .node_id(),
+            credentials.local_identity().await.node_id()
+        );
+        assert!(
+            !desktop.exists(),
+            "discovery must not provision desktop credentials"
+        );
+        endpoint.close().await;
+        drop(lease);
+        let registry = agent_local_host::LocalHostRegistry::new(registry.directory().to_owned());
+        let location = registry.resolve(&desktop).unwrap();
+        assert!(matches!(
+            location.state,
+            agent_local_host::LocalHostState::Stopped
+        ));
+        assert_eq!(location.directory, dunce::canonicalize(&host).unwrap());
+        let lease = registry.acquire(&location.directory).unwrap();
+        assert!(matches!(
+            registry.resolve(&desktop).unwrap().state,
+            agent_local_host::LocalHostState::Starting
+        ));
+        let restored = HostCredentials::load(
+            std::sync::Arc::new(FileKeyStore(agent_local_host::identity_path(
+                lease.directory(),
+            ))),
+            lease.directory().to_owned(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            restored.host_identity().await.node_id(),
+            credentials.host_identity().await.node_id()
+        );
+        assert_eq!(
+            restored.local_identity().await.node_id(),
+            credentials.local_identity().await.node_id()
         );
     }
 }

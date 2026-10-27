@@ -151,7 +151,7 @@ impl Apns {
     }
     fn save(&self, registry: &Registry) -> anyhow::Result<()> {
         if let Some(path) = &self.path {
-            crate::platform::save_private_json(path, registry)?;
+            agent_local_host::save_private_json(path, registry)?;
         }
         Ok(())
     }

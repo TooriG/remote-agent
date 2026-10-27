@@ -6,8 +6,7 @@ mod git;
 mod host_identity;
 mod host_rpc;
 mod host_runtime;
-pub mod local_host;
-pub mod platform;
+mod platform;
 mod projects;
 pub mod providers;
 mod terminals;
@@ -16,10 +15,9 @@ mod workspace_review;
 mod worktrees;
 use workspace_review::inspect_workspace;
 
-pub use bex_process::bundled_node_path;
 pub use host_runtime::HostRuntime;
 
-pub use host_identity::{CredentialStore, FileKeyStore, HostCredentials, load_local_identity};
+pub use host_identity::{CredentialStore, FileKeyStore, HostCredentials};
 
 pub use host_rpc::{HostRpcService, HostSession, SessionId};
 pub use projects::ProjectStore;

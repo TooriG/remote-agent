@@ -153,7 +153,7 @@ impl Claude {
         directory: PathBuf,
         native_home: Option<PathBuf>,
     ) -> anyhow::Result<Self> {
-        crate::platform::create_state_directory(&directory)?;
+        agent_local_host::create_state_directory(&directory)?;
         let native_inherited = native_home.is_none();
         let native_home = native_home.map(Ok).unwrap_or_else(history::home)?;
         let path = std::env::var_os("PATH");

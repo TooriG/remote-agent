@@ -4,6 +4,7 @@
 
 - `crates/agent-protocol`: Host・クライアント共通の型、RPC 契約、純粋な検証・モデル操作。
 - `crates/agent-transport`: 共通の通信・転送処理。protocol に依存する。
+- `crates/agent-local-host`: 同じマシンの Host とクライアントが共有するファイル（状態ファイル、ローカル識別子、Host の探索、バンドル構成）。クライアントは host-daemon に依存せず、これと transport を使う。
 - `crates/agent-core`: クライアント共通の状態管理・操作フロー・表示判断・保存形式。
 - `crates/host-daemon`: Host 側の実行・認可・リソース操作とプロバイダー連携。
 - `apps/`: 各 OS の UI・入力・OS 連携。共通の判断は core の結果を使い、必要なら core を拡張する。

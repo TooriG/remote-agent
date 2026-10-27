@@ -124,7 +124,7 @@ impl WorkspaceFiles {
                     atomicwrites::AtomicFile::new(&archive, atomicwrites::AllowOverwrite)
                         .write_with_options(
                             |file| file.write_all(&bytes),
-                            crate::platform::private_file_options(),
+                            agent_local_host::private_file_options(),
                         )?;
                     bytes
                 } else {
@@ -214,7 +214,7 @@ impl WorkspaceFiles {
                             }
                             Ok(())
                         },
-                        crate::platform::private_file_options(),
+                        agent_local_host::private_file_options(),
                     )
                     .map_err(|error| match error {
                         atomicwrites::Error::Internal(error) => {
@@ -229,7 +229,7 @@ impl WorkspaceFiles {
                 // Host-owned storage; explicit destinations remain absolute.
                 let directory = if params.directory.is_empty() {
                     let directory = absolute_path(&self.upload_directory)?;
-                    crate::platform::create_state_directory(directory)?;
+                    agent_local_host::create_state_directory(directory)?;
                     directory
                 } else {
                     absolute_path(&params.directory)?

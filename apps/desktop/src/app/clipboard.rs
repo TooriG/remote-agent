@@ -2,7 +2,7 @@ use gpui_kit::{Image, ImageFormat};
 use std::{io::Write, path::Path};
 
 pub(super) fn save_image(directory: &Path, image: Image) -> Result<String, String> {
-    host_daemon::platform::create_state_directory(directory).map_err(|e| e.to_string())?;
+    agent_local_host::create_state_directory(directory).map_err(|e| e.to_string())?;
     let passthrough = matches!(
         image.format,
         ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::Gif | ImageFormat::Webp

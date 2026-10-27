@@ -106,7 +106,7 @@ fn now() -> f64 {
 
 impl DeepSeek {
     pub async fn load(program: PathBuf, directory: PathBuf) -> anyhow::Result<Self> {
-        crate::platform::create_state_directory(&directory)?;
+        agent_local_host::create_state_directory(&directory)?;
         let mut records: BTreeMap<String, ThreadResponse> =
             match tokio::fs::read(directory.join("conversations.json")).await {
                 Ok(bytes) => serde_json::from_slice(&bytes)?,
@@ -197,10 +197,10 @@ impl DeepSeek {
         ];
         if !keys.is_empty() {
             let credentials = self.0.directory.join("dsh-runtime-credentials.json");
-            crate::platform::save_private_json(&credentials, &keys).map_err(failure)?;
+            agent_local_host::save_private_json(&credentials, &keys).map_err(failure)?;
             overlays.push(json!({"id":"credentials","config":{"path":credentials}}));
         }
-        crate::platform::save_private_json(&patch, &overlays).map_err(failure)?;
+        agent_local_host::save_private_json(&patch, &overlays).map_err(failure)?;
         command
             .args(["--profile", "acp", "--patch"])
             .arg(patch)
@@ -371,7 +371,7 @@ impl DeepSeek {
         Ok(())
     }
     async fn save(&self, records: &BTreeMap<String, ThreadResponse>) -> Result<(), Failure> {
-        crate::platform::save_private_json(&self.0.directory.join("conversations.json"), records)
+        agent_local_host::save_private_json(&self.0.directory.join("conversations.json"), records)
             .map_err(failure)
     }
     async fn change(&self, id: &str, change: SessionChange) -> Result<(), Failure> {
@@ -1621,7 +1621,7 @@ mod tests {
         );
         let mut keys = ManagedKeys::load(&adapter.0.directory).await.unwrap();
         keys.set(KeyProvider::DeepSeek, Some("sk-or-misplaced"));
-        crate::platform::save_private_json(&dir.path().join("dsh-keys.json"), &keys).unwrap();
+        agent_local_host::save_private_json(&dir.path().join("dsh-keys.json"), &keys).unwrap();
         let error = adapter.validate_model_key(DEFAULT_MODEL).await.unwrap_err();
         assert_eq!(error.code, "dsh_key_provider_mismatch");
         adapter
@@ -1832,7 +1832,7 @@ mod tests {
                 id: DEFAULT_MODEL.into(),
             }),
         };
-        crate::platform::save_private_json(
+        agent_local_host::save_private_json(
             &dir.path().join("conversations.json"),
             &BTreeMap::from([("native", record)]),
         )

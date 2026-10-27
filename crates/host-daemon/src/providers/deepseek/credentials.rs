@@ -78,7 +78,7 @@ impl ManagedKeys {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(failure(error)),
         }
-        crate::platform::save_private_json(&directory.join("dsh-keys.json"), self).map_err(failure)
+        agent_local_host::save_private_json(&directory.join("dsh-keys.json"), self).map_err(failure)
     }
     pub fn status(&self, external: bool) -> Credentials {
         Credentials {

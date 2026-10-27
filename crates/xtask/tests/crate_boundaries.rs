@@ -73,3 +73,20 @@ fn production_host_transport_and_protocol_stay_independent_of_clients() {
         }
     }
 }
+
+#[test]
+fn clients_reach_the_host_only_through_the_transport() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for manifest in [
+        "apps/desktop/Cargo.toml",
+        "crates/agent-core/Cargo.toml",
+        "crates/agent-ffi/Cargo.toml",
+        "crates/agent-cli/Cargo.toml",
+    ] {
+        let names = reachable(&root.join(manifest), &mut BTreeSet::new());
+        assert!(
+            !names.contains("host-daemon"),
+            "{manifest} depends on host-daemon"
+        );
+    }
+}

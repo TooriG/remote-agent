@@ -513,7 +513,7 @@ impl Accounts {
         let path = self.directory.join("accounts.json");
         let registry = self.registry.clone();
         tokio::task::spawn_blocking(move || {
-            crate::platform::save_private_json(&path, &registry)
+            agent_local_host::save_private_json(&path, &registry)
                 .map_err(|_| "アカウント設定を保存できませんでした。".to_owned())
         })
         .await
