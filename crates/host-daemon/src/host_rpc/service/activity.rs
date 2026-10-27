@@ -46,7 +46,7 @@ impl HostRpcService {
         let revision = self.inner.router.task_activity_revision();
         let agents = self.inner.providers.all();
         let has_sources =
-            !agents.is_empty() || !self.inner.providers.startup_errors().next().is_none();
+            !agents.is_empty() || self.inner.providers.startup_errors().next().is_some();
         let listings =
             futures_util::future::join_all(agents.into_iter().map(|(_, agent)| async move {
                 tokio::time::timeout(

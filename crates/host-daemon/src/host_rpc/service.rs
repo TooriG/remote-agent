@@ -1,31 +1,32 @@
-use agent_protocol::session::ProviderKind;
-use std::sync::{Arc, OnceLock};
-
-use agent_protocol::operations as op;
-
-use agent_protocol::models::Thread;
-
-use agent_protocol::models::ThreadResponse;
-
-use crate::providers::Backend;
-use agent_protocol::protocol::{Body, Call, Response};
-
-use crate::providers::{Agent, Failure, SessionListScope, read_session_page, session_pages};
-use futures_util::{StreamExt, TryStreamExt};
-use std::collections::HashMap;
-
-use super::routing::{HostReply, HostSession, SessionId, SessionRouter};
-use crate::ProjectStore;
-
-const SESSION_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+//! The Host's RPC entry point. Dispatch admits each call, then routes it to the
+//! owner of its resource; workflows that span owners live in the domain files.
 mod activity;
 mod conversations;
 mod project_import;
 mod sessions;
 mod titles;
 mod worktrees;
+
+use super::routing::{HostReply, HostSession, SessionId, SessionRouter};
+use crate::ProjectStore;
+use crate::providers::{
+    Agent, Backend, Failure, SessionListScope, read_session_page, session_pages,
+};
+use agent_protocol::{
+    models::{Thread, ThreadResponse},
+    operations as op,
+    protocol::{Body, Call, Response},
+    session::ProviderKind,
+};
+use futures_util::{StreamExt, TryStreamExt};
 use sessions::describe_thread;
+use std::{
+    collections::HashMap,
+    sync::{Arc, OnceLock},
+};
 use worktrees::worktree_active;
+
+const SESSION_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 #[derive(Clone)]
 pub struct HostRpcService {
