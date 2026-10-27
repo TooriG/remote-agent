@@ -34,7 +34,7 @@ impl Desktop {
         provider: Option<ProviderKind>,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let scope = self.settings_model_scope.clone();
+        let scope = self.model_controls.settings_scope.clone();
         let selected = match provider {
             Some(provider) => {
                 self.snapshot
@@ -125,17 +125,17 @@ impl Desktop {
     fn provider_model_settings(&self, provider: ProviderKind, cx: &Context<Self>) -> AnyElement {
         let defaults = self
             .snapshot
-            .provider_model_defaults(self.settings_model_scope.clone(), provider);
+            .provider_model_defaults(self.model_controls.settings_scope.clone(), provider);
         let model_picker = self.default_model_picker(Some(provider), cx);
         let mut controls = h_flex().gap_2().child(model_picker);
         let quick = self
             .snapshot
-            .default_model_controls(self.settings_model_scope.clone(), provider);
+            .default_model_controls(self.model_controls.settings_scope.clone(), provider);
         if !quick.efforts.is_empty() {
             let efforts = quick.efforts.clone();
             let entity = cx.entity().downgrade();
             let effort = defaults.effort.clone();
-            let scope = self.settings_model_scope.clone();
+            let scope = self.model_controls.settings_scope.clone();
             controls = controls.child(
                 Button::new(format!("default-model-effort-{provider:?}"))
                     .disabled(self.session.is_none())
@@ -171,7 +171,7 @@ impl Desktop {
         if let Some(fast_tier) = quick.fast_service_tier {
             let entity = cx.entity().downgrade();
             let selected = defaults.service_tier.clone();
-            let scope = self.settings_model_scope.clone();
+            let scope = self.model_controls.settings_scope.clone();
             controls = controls.child(
                 Button::new(format!("default-model-speed-{provider:?}"))
                     .disabled(self.session.is_none())
@@ -253,9 +253,9 @@ impl Desktop {
             )
             .when(
                 self.snapshot
-                    .has_model_defaults_override(self.settings_model_scope.clone()),
+                    .has_model_defaults_override(self.model_controls.settings_scope.clone()),
                 |view| {
-                    let scope = self.settings_model_scope.clone();
+                    let scope = self.model_controls.settings_scope.clone();
                     view.child(
                         self.button(
                             "model-defaults-inherit",
@@ -324,14 +324,15 @@ impl Desktop {
                 if *open {
                     let _ = opening.update(cx, |view, cx| {
                         if view.snapshot.account.login.is_some() {
-                            view.model_panel = ModelPanel::Manage;
+                            view.model_controls.panel = ModelPanel::Manage;
                         } else {
-                            view.model_provider = None;
-                            view.model_panel = ModelPanel::Models;
+                            view.model_controls.provider = None;
+                            view.model_controls.panel = ModelPanel::Models;
                         }
-                        view.model_search
+                        view.model_controls
+                            .search
                             .update(cx, |input, cx| input.set_value("", window, cx));
-                        view.account_sign_out = None;
+                        view.account.sign_out = None;
                         view.refresh_accounts_and_models();
                     });
                 }
@@ -352,7 +353,7 @@ impl Desktop {
         let in_settings = self.tab == Tab::Settings;
         let accounts = self.snapshot.account.accounts.as_ref();
         let provider = self.account_provider();
-        let disabled = self.account_busy
+        let disabled = self.account.busy
             || self.busy > 0
             || self.snapshot.account.login.is_some()
             || !self.snapshot.connected;
@@ -374,12 +375,13 @@ impl Desktop {
                     },
                     cx,
                     move |s, window, cx| {
-                        if s.model_provider != Some(value) {
-                            s.account_code
+                        if s.model_controls.provider != Some(value) {
+                            s.account
+                                .code
                                 .update(cx, |input, cx| input.set_value("", window, cx));
                         }
-                        s.model_provider = Some(value);
-                        s.account_sign_out = None;
+                        s.model_controls.provider = Some(value);
+                        s.account.sign_out = None;
                         if value == ProviderKind::DeepSeek {
                             s.dispatch(Intent::ReadDshCredentials(op::ReadDshCredentials {}));
                         }
@@ -511,7 +513,7 @@ impl Desktop {
                             ).child(div().text_xs().text_color(rgb(appearance::MUTED))
                                 .child("利用枠は表示時刻に自動リセットされます。上限の変更・追加クレジットは管理画面で行えます。"))
                         });
-                    if manage && self.account_sign_out.as_deref() == Some(account.id.as_str()) {
+                    if manage && self.account.sign_out.as_deref() == Some(account.id.as_str()) {
                         row =
                             row.child(div().text_sm().child(
                                 "サインアウトしますか？ 再び使うにはサインインが必要です。",
@@ -525,7 +527,7 @@ impl Desktop {
                                             "サインアウト",
                                             cx,
                                             move |s, _, _| {
-                                                s.account_sign_out = None;
+                                                s.account.sign_out = None;
                                                 s.account_operation(Intent::LogoutAccount(
                                                     op::LogoutAccount {
                                                         provider,
@@ -541,7 +543,7 @@ impl Desktop {
                                             format!("account-logout-cancel-{index}"),
                                             "キャンセル",
                                             cx,
-                                            |s, _, _| s.account_sign_out = None,
+                                            |s, _, _| s.account.sign_out = None,
                                         )
                                         .debug_selector(
                                             move || format!("account-logout-cancel-{index}"),
@@ -554,7 +556,7 @@ impl Desktop {
                                 format!("account-logout-{index}"),
                                 "サインアウト",
                                 cx,
-                                move |s, _, _| s.account_sign_out = Some(logout_id.clone()),
+                                move |s, _, _| s.account.sign_out = Some(logout_id.clone()),
                             )
                             .debug_selector(move || format!("account-logout-{index}"))
                             .disabled(disabled);
@@ -609,7 +611,7 @@ impl Desktop {
                         "アカウントを管理",
                         cx,
                         |s, _, _| {
-                            s.model_panel = ModelPanel::Manage;
+                            s.model_controls.panel = ModelPanel::Manage;
                         },
                     )
                     .icon(IconName::Settings)
@@ -625,7 +627,7 @@ impl Desktop {
                     .text_color(rgb(appearance::MUTED))
                     .child("アカウントの切替は、同じ接続先を使う端末にも反映されます。"),
             )
-            .when(self.account_busy, |body| {
+            .when(self.account.busy, |body| {
                 body.child(div().text_sm().child("アカウントを更新中…"))
             })
             .when_some(
@@ -664,7 +666,8 @@ impl Desktop {
 
 impl Desktop {
     pub(super) fn account_provider(&self) -> Option<ProviderKind> {
-        self.model_provider
+        self.model_controls
+            .provider
             .or_else(|| {
                 self.snapshot
                     .account
@@ -684,11 +687,12 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.account_code
+        self.account
+            .code
             .update(cx, |input, cx| input.set_value("", window, cx));
-        self.model_provider = Some(provider);
+        self.model_controls.provider = Some(provider);
         if provider == ProviderKind::DeepSeek {
-            self.model_panel = ModelPanel::Manage;
+            self.model_controls.panel = ModelPanel::Manage;
             self.account_operation(Intent::ReadDshCredentials(op::ReadDshCredentials {}));
         } else {
             self.account_operation(Intent::StartAccountLogin(op::StartAccountLogin {
@@ -697,14 +701,14 @@ impl Desktop {
         }
     }
     pub(in crate::app) fn account_operation(&mut self, intent: Intent) {
-        if self.account_busy || self.session.is_none() || !self.snapshot.connected {
+        if self.account.busy || self.session.is_none() || !self.snapshot.connected {
             return;
         }
         if let Intent::StartAccountLogin(start) = &intent {
-            self.model_provider = Some(start.provider);
-            self.account_login_draft = Some(self.draft_key().clone());
+            self.model_controls.provider = Some(start.provider);
+            self.account.login_draft = Some(self.draft_key().clone());
         }
-        self.account_busy = true;
+        self.account.busy = true;
         self.perform(intent, OperationCompletion::Account);
     }
 
@@ -716,7 +720,7 @@ impl Desktop {
         let controls = self.snapshot.credential_controls();
         let selected = controls
             .iter()
-            .find(|route| route.provider == self.dsh_key_provider)
+            .find(|route| route.provider == self.account.dsh_key_provider)
             .expect("all credential routes");
         let url = selected.key_url.clone();
         let mut form = v_flex()
@@ -733,13 +737,14 @@ impl Desktop {
                             route.label.clone(),
                             cx,
                             move |s, window, cx| {
-                                s.dsh_key_provider = provider;
-                                s.account_code
+                                s.account.dsh_key_provider = provider;
+                                s.account
+                                    .code
                                     .update(cx, |input, cx| input.set_value("", window, cx));
                             },
                         )
                         .small()
-                        .selected(self.dsh_key_provider == provider)
+                        .selected(self.account.dsh_key_provider == provider)
                         .disabled(disabled)
                         .debug_selector(move || format!("dsh-key-{}", provider.reference()))
                     })),
@@ -761,24 +766,25 @@ impl Desktop {
                         div()
                             .flex_1()
                             .min_w_0()
-                            .child(Input::new(&self.account_code).aria_label("APIキー")),
+                            .child(Input::new(&self.account.code).aria_label("APIキー")),
                     )
                     .child(
                         self.button("account-submit-code", "保存", cx, |s, window, cx| {
-                            let key = s.account_code.read(cx).value().to_string();
+                            let key = s.account.code.read(cx).value().to_string();
                             if key.trim().is_empty() {
                                 return;
                             }
                             s.account_operation(Intent::UpdateDshCredential(
                                 op::UpdateDshCredential {
-                                    provider: s.dsh_key_provider,
+                                    provider: s.account.dsh_key_provider,
                                     key: Some(key),
                                 },
                             ));
-                            s.account_code
+                            s.account
+                                .code
                                 .update(cx, |input, cx| input.set_value("", window, cx));
                         })
-                        .disabled(disabled || self.account_code.read(cx).value().trim().is_empty())
+                        .disabled(disabled || self.account.code.read(cx).value().trim().is_empty())
                         .debug_selector(|| "account-submit-code".into()),
                     ),
             )
@@ -800,7 +806,7 @@ impl Desktop {
                     cx,
                     |s, _, _| {
                         s.account_operation(Intent::UpdateDshCredential(op::UpdateDshCredential {
-                            provider: s.dsh_key_provider,
+                            provider: s.account.dsh_key_provider,
                             key: None,
                         }));
                     },
@@ -842,7 +848,7 @@ impl Desktop {
         let Some(login) = &self.snapshot.account.login else {
             return div().into_any_element();
         };
-        let disabled = !self.snapshot.connected || self.account_busy || self.busy > 0;
+        let disabled = !self.snapshot.connected || self.account.busy || self.busy > 0;
         let url = login.verification_url.clone();
         let cancel_id = login.login_id.clone();
         let provider = login.provider;
@@ -891,11 +897,11 @@ impl Desktop {
                         div()
                             .flex_1()
                             .min_w_0()
-                            .child(Input::new(&self.account_code).aria_label("認証コード")),
+                            .child(Input::new(&self.account.code).aria_label("認証コード")),
                     )
                     .child(
                         self.button("account-submit-code", "接続", cx, move |s, window, cx| {
-                            let code = s.account_code.read(cx).value().to_string();
+                            let code = s.account.code.read(cx).value().to_string();
                             if code.trim().is_empty() {
                                 return;
                             }
@@ -906,11 +912,12 @@ impl Desktop {
                                     code,
                                 },
                             ));
-                            s.account_code
+                            s.account
+                                .code
                                 .update(cx, |input, cx| input.set_value("", window, cx));
                         })
                         .debug_selector(|| "account-submit-code".into())
-                        .disabled(disabled || self.account_code.read(cx).value().trim().is_empty()),
+                        .disabled(disabled || self.account.code.read(cx).value().trim().is_empty()),
                     ),
             );
         } else {
@@ -940,14 +947,14 @@ impl Desktop {
                     .text_color(rgb(appearance::MUTED))
                     .child("ログインが完了すると、自動で接続されます。"),
             )
-            .when(!self.account_polling && !self.account_busy, |form| {
+            .when(!self.account.polling && !self.account.busy, |form| {
                 form.child(
                     self.button(
                         "account-retry-login",
                         "接続状態を再確認",
                         cx,
                         |s, _, _| {
-                            s.account_polling = true;
+                            s.account.polling = true;
                         },
                     )
                     .small()
@@ -1024,9 +1031,10 @@ fn account_usage_view(usage: Option<&agent_protocol::operations::AccountUsage>) 
 
 impl Desktop {
     fn show_openrouter_models(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.model_provider = Some(ProviderKind::DeepSeek);
-        self.model_panel = ModelPanel::Models;
-        self.model_search
+        self.model_controls.provider = Some(ProviderKind::DeepSeek);
+        self.model_controls.panel = ModelPanel::Models;
+        self.model_controls
+            .search
             .update(cx, |input, cx| input.set_value("openrouter", window, cx));
         self.refresh_accounts_and_models();
         cx.notify();
@@ -1077,7 +1085,8 @@ impl Desktop {
                             model: value.clone(),
                         });
                         s.accept_snapshot(window, cx);
-                        s.model_search
+                        s.model_controls
+                            .search
                             .update(cx, |input, cx| input.set_value("openrouter", window, cx));
                         cx.notify();
                     }))
@@ -1100,8 +1109,8 @@ impl Desktop {
 
     fn model_panel_content(&self, cx: &Context<Self>) -> AnyElement {
         let mut body = v_flex().flex_1().min_w_0().gap_2();
-        if self.model_panel != ModelPanel::Models {
-            let title = if self.model_panel == ModelPanel::Accounts {
+        if self.model_controls.panel != ModelPanel::Models {
+            let title = if self.model_controls.panel == ModelPanel::Accounts {
                 "アカウント"
             } else {
                 "アカウントを管理"
@@ -1116,10 +1125,10 @@ impl Desktop {
                         "戻る",
                         cx,
                         |s, _, _| {
-                            s.account_sign_out = None;
-                            s.model_panel = match s.model_panel {
+                            s.account.sign_out = None;
+                            s.model_controls.panel = match s.model_controls.panel {
                                 ModelPanel::Manage => {
-                                    s.model_provider = None;
+                                    s.model_controls.provider = None;
                                     ModelPanel::Accounts
                                 }
                                 _ => ModelPanel::Models,
@@ -1137,12 +1146,17 @@ impl Desktop {
                         .id("model-accounts-scroll")
                         .max_h(px(440.))
                         .overflow_y_scroll()
-                        .child(self.account_controls(self.model_panel == ModelPanel::Manage, cx)),
+                        .child(
+                            self.account_controls(
+                                self.model_controls.panel == ModelPanel::Manage,
+                                cx,
+                            ),
+                        ),
                 )
                 .into_any_element();
         }
         let provider = self.account_provider();
-        let disabled = self.account_busy
+        let disabled = self.account.busy
             || self.busy > 0
             || !self.snapshot.connected
             || self.snapshot.account.login.is_some();
@@ -1188,8 +1202,9 @@ impl Desktop {
                     .debug_selector(move || format!("model-agent-{label}"))
                     .disabled(disabled)
                     .on_click(cx.listener(move |s, _, window, cx| {
-                        s.model_provider = Some(value);
-                        s.model_search
+                        s.model_controls.provider = Some(value);
+                        s.model_controls
+                            .search
                             .update(cx, |input, cx| input.set_value("", window, cx));
                         if let Some(model) =
                             s.snapshot.model_for_provider(s.draft_key().clone(), value)
@@ -1249,7 +1264,7 @@ impl Desktop {
                 .p_2()
                 .rounded(px(8.))
                 .on_click(cx.listener(|s, _, _, cx| {
-                    s.model_panel = ModelPanel::Accounts;
+                    s.model_controls.panel = ModelPanel::Accounts;
                     cx.notify();
                 }))
                 .child(
@@ -1289,7 +1304,7 @@ impl Desktop {
         body = body
             .child(div().h(px(1.)).w_full().bg(rgb(appearance::RAISED)))
             .child(
-                Input::new(&self.model_search)
+                Input::new(&self.model_controls.search)
                     .prefix(IconName::Search)
                     .appearance(false)
                     .large()
@@ -1297,13 +1312,14 @@ impl Desktop {
             );
         let custom_model = self
             .snapshot
-            .custom_model_choice(provider, &self.model_search.read(cx).value());
+            .custom_model_choice(provider, &self.model_controls.search.read(cx).value());
         if provider == Some(ProviderKind::DeepSeek) {
             body = body.child(self.dsh_model_controls(disabled, cx));
         }
-        let models = self
-            .snapshot
-            .models_matching(provider, self.model_search.read(cx).value().to_string());
+        let models = self.snapshot.models_matching(
+            provider,
+            self.model_controls.search.read(cx).value().to_string(),
+        );
         let mut list = v_flex()
             .id("model-catalog")
             .max_h(px(264.))
@@ -1451,7 +1467,7 @@ impl Desktop {
             })
             .disabled(
                 !self.snapshot.connected
-                    || self.account_busy
+                    || self.account.busy
                     || self.busy > 0
                     || self.snapshot.account.login.is_some(),
             );
@@ -1540,7 +1556,7 @@ impl Desktop {
             .accessibility_label(label)
             .disabled(
                 !self.snapshot.connected
-                    || self.account_busy
+                    || self.account.busy
                     || self.busy > 0
                     || self.snapshot.account.login.is_some(),
             )
@@ -1752,17 +1768,18 @@ mod tests {
         window.run_until_parked();
         window.update(|_, cx| {
             assert_eq!(
-                view.read(cx).0.read(cx).account_sign_out.as_deref(),
+                view.read(cx).0.read(cx).account.sign_out.as_deref(),
                 Some("first")
             )
         });
         let cancel = window.debug_bounds("account-logout-cancel-0").unwrap();
         window.simulate_click(cancel.center(), Modifiers::default());
-        window.update(|_, cx| assert!(view.read(cx).0.read(cx).account_sign_out.is_none()));
+        window.update(|_, cx| assert!(view.read(cx).0.read(cx).account.sign_out.is_none()));
         window.update(|window, cx| {
             view.read(cx).0.clone().update(cx, |view, cx| {
-                view.model_panel = ModelPanel::Models;
-                view.model_search
+                view.model_controls.panel = ModelPanel::Models;
+                view.model_controls
+                    .search
                     .update(cx, |input, cx| input.set_value("no match", window, cx));
                 cx.notify();
             })
@@ -1780,8 +1797,9 @@ mod tests {
                 Arc::make_mut(&mut snapshot.navigation).thread_id = Some(session.clone());
                 Arc::make_mut(&mut snapshot.navigation).draft_key = session.clone().into();
                 Arc::make_mut(&mut snapshot.drafts).insert(session.into(), Arc::new(draft));
-                view.model_provider = None;
-                view.model_search
+                view.model_controls.provider = None;
+                view.model_controls
+                    .search
                     .update(cx, |input, cx| input.set_value("", window, cx));
                 cx.notify();
             })
@@ -1796,7 +1814,7 @@ mod tests {
         window.update(|_, cx| {
             let desktop = view.read(cx).0.read(cx);
             assert_eq!(
-                desktop.model_provider,
+                desktop.model_controls.provider,
                 Some(agent_protocol::session::ProviderKind::Claude)
             );
             assert_eq!(desktop.selected().unwrap().id, "existing");
@@ -1804,8 +1822,8 @@ mod tests {
         assert!(window.debug_bounds("model-choice-claude:sonnet").is_some());
         window.update(|_, cx| {
             view.read(cx).0.clone().update(cx, |view, cx| {
-                view.model_panel = ModelPanel::Manage;
-                view.account_busy = true;
+                view.model_controls.panel = ModelPanel::Manage;
+                view.account.busy = true;
                 cx.notify();
             })
         });
@@ -1814,7 +1832,7 @@ mod tests {
         window.simulate_click(claude.center(), Modifiers::default());
         window.update(|_, cx| {
             assert_eq!(
-                view.read(cx).0.read(cx).model_provider,
+                view.read(cx).0.read(cx).model_controls.provider,
                 Some(agent_protocol::session::ProviderKind::Claude)
             )
         });
@@ -1852,8 +1870,9 @@ mod tests {
                 )
             });
             desktop.update(cx, |view, cx| {
-                view.model_provider = Some(agent_protocol::session::ProviderKind::DeepSeek);
-                view.model_panel = ModelPanel::Manage;
+                view.model_controls.provider =
+                    Some(agent_protocol::session::ProviderKind::DeepSeek);
+                view.model_controls.panel = ModelPanel::Manage;
                 let snapshot = Arc::make_mut(&mut view.snapshot);
                 snapshot.connected = true;
                 Arc::make_mut(&mut snapshot.account).dsh_credentials =
@@ -1864,7 +1883,7 @@ mod tests {
                             needs_attention: false,
                         }],
                     }));
-                view.account_code.update(cx, |input, cx| {
+                view.account.code.update(cx, |input, cx| {
                     input.set_value("previous-secret", window, cx)
                 });
             });
@@ -1878,15 +1897,17 @@ mod tests {
         window.run_until_parked();
         window.update(|_, cx| {
             let desktop = view.read(cx).0.read(cx);
-            assert!(desktop.dsh_key_provider == agent_protocol::dsh::KeyProvider::OpenRouter);
-            assert!(desktop.account_code.read(cx).value().is_empty());
+            assert!(
+                desktop.account.dsh_key_provider == agent_protocol::dsh::KeyProvider::OpenRouter
+            );
+            assert!(desktop.account.code.read(cx).value().is_empty());
         });
         assert!(window.debug_bounds("dsh-key-remove").is_some());
         assert!(window.debug_bounds("account-submit-code").is_some());
         assert!(window.debug_bounds("dsh-openrouter-models").is_some());
         window.update(|window, cx| {
             view.read(cx).0.clone().update(cx, |view, cx| {
-                view.account_code.update(cx, |input, cx| {
+                view.account.code.update(cx, |input, cx| {
                     input.set_value("unsaved-route-key", window, cx)
                 });
             });
@@ -1899,7 +1920,8 @@ mod tests {
                 view.read(cx)
                     .0
                     .read(cx)
-                    .account_code
+                    .account
+                    .code
                     .read(cx)
                     .value()
                     .is_empty()
@@ -1923,8 +1945,8 @@ mod tests {
         assert!(window.debug_bounds("model-choice-official").is_none());
         window.update(|_, cx| {
             let desktop = view.read(cx).0.read(cx);
-            assert!(desktop.model_panel == ModelPanel::Models);
-            assert_eq!(desktop.model_search.read(cx).value(), "openrouter");
+            assert!(desktop.model_controls.panel == ModelPanel::Models);
+            assert_eq!(desktop.model_controls.search.read(cx).value(), "openrouter");
         });
     }
 
@@ -1995,7 +2017,8 @@ mod tests {
                 view.snapshot = store.snapshot();
                 Arc::make_mut(&mut view.snapshot).connected = true;
                 view.session = Some(session);
-                view.model_provider = Some(agent_protocol::session::ProviderKind::DeepSeek);
+                view.model_controls.provider =
+                    Some(agent_protocol::session::ProviderKind::DeepSeek);
             });
             cx.observe(&desktop, |_, _, cx| cx.notify()).detach();
             PickerView(desktop)

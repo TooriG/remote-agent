@@ -4,8 +4,8 @@ use agent_protocol::composer::Invocation;
 
 impl Desktop {
     fn completion_suggestions(&self, cx: &App) -> Option<ComposerSuggestions> {
-        let input = self.composer.read(cx);
-        if self.completion_dismissed
+        let input = self.composer.input.read(cx);
+        if self.composer.completion_dismissed
             || !input.selected_range().is_empty()
             || !self.snapshot.connected
         {
@@ -26,15 +26,20 @@ impl Desktop {
         if candidates.is_empty() {
             return false;
         }
-        if self.composer.update(cx, |input, cx| {
+        if self.composer.input.update(cx, |input, cx| {
             input.marked_text_range(window, cx).is_some()
         }) {
             return false;
         }
         match key {
-            "up" => self.completion_index = self.completion_index.saturating_sub(1),
-            "down" => self.completion_index = (self.completion_index + 1).min(candidates.len() - 1),
-            "escape" => self.completion_dismissed = true,
+            "up" => {
+                self.composer.completion_index = self.composer.completion_index.saturating_sub(1)
+            }
+            "down" => {
+                self.composer.completion_index =
+                    (self.composer.completion_index + 1).min(candidates.len() - 1)
+            }
+            "escape" => self.composer.completion_dismissed = true,
             "tab" => {
                 self.accept_completion(window, cx);
             }
@@ -49,7 +54,7 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.composer.update(cx, |input, cx| {
+        if self.composer.input.update(cx, |input, cx| {
             input.marked_text_range(window, cx).is_some()
         }) {
             return false;
@@ -58,7 +63,8 @@ impl Desktop {
             .completion_suggestions(cx)
             .map_or_else(Vec::new, |s| s.candidates);
         let Some(candidate) = candidates.get(
-            self.completion_index
+            self.composer
+                .completion_index
                 .min(candidates.len().saturating_sub(1)),
         ) else {
             return false;
@@ -72,7 +78,7 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let input = self.composer.read(cx);
+        let input = self.composer.input.read(cx);
         let Some(inserted) = insert_invocation(
             input.value().to_string(),
             input.cursor() as u32,
@@ -81,11 +87,8 @@ impl Desktop {
         ) else {
             return;
         };
-        self.composer_value = inserted.text.clone().into();
-        self.composer_revision += 1;
-        let revision = self.composer_revision;
-        self.composer_pending = Some(revision);
-        self.composer.update(cx, |input, cx| {
+        let revision = self.composer.text.record(inserted.text.clone().into());
+        self.composer.input.update(cx, |input, cx| {
             input.set_value(inserted.text.clone(), window, cx);
             input.set_selected_range(inserted.cursor as usize..inserted.cursor as usize, cx);
             input.focus(window, cx);
@@ -98,7 +101,7 @@ impl Desktop {
             },
             OperationCompletion::Composer(revision),
         );
-        self.completion_dismissed = false;
+        self.composer.completion_dismissed = false;
         cx.notify();
     }
     pub(super) fn completion_menu(&self, cx: &Context<Self>) -> AnyElement {
@@ -115,6 +118,7 @@ impl Desktop {
         for (index, candidate) in candidates.iter().enumerate() {
             let selected = index
                 == self
+                    .composer
                     .completion_index
                     .min(candidates.len().saturating_sub(1));
             let candidate = candidate.clone();
@@ -219,7 +223,7 @@ mod tests {
                             description: description.into(),
                         }).collect(), ..Default::default()
                     }));
-                    view.composer.update(cx, |input, cx| {
+                    view.composer.input.update(cx, |input, cx| {
                         input.set_value("/", window, cx);
                         input.set_selected_range(1..1, cx);
                     });
@@ -292,13 +296,13 @@ mod tests {
                     cx,
                 );
                 Arc::make_mut(&mut desktop.snapshot).connected = true;
-                desktop.composer.update(cx, |input, cx| {
+                desktop.composer.input.update(cx, |input, cx| {
                     input.set_readonly(false, cx);
                     input.set_value("ABCDE", window, cx);
                     input.set_selected_range(3..3, cx);
                     input.focus_handle(cx).focus(window, cx);
                 });
-                composer = Some(desktop.composer.clone());
+                composer = Some(desktop.composer.input.clone());
                 desktop
             });
             gpui_kit::component::Root::new(desktop, window, cx)
@@ -394,7 +398,7 @@ mod tests {
                 }],
                 ..Default::default()
             }));
-            view.composer.update(cx, |input, cx| {
+            view.composer.input.update(cx, |input, cx| {
                 input.set_readonly(false, cx);
                 input.set_value("日本語 /rev 後半", window, cx);
                 let cursor = "日本語 /rev".len();
@@ -404,14 +408,24 @@ mod tests {
             });
             assert!(!view.accept_completion(window, cx));
             view.composer
+                .input
                 .update(cx, |input, cx| input.unmark_text(window, cx));
             assert!(view.accept_completion(window, cx));
             assert_eq!(
-                view.composer.read(cx).value().as_ref(),
+                view.composer.input.read(cx).value().as_ref(),
                 "日本語 $review  後半"
             );
-            assert_eq!(view.composer.read(cx).cursor(), "日本語 $review ".len());
-            assert!(view.composer.read(cx).focus_handle(cx).is_focused(window));
+            assert_eq!(
+                view.composer.input.read(cx).cursor(),
+                "日本語 $review ".len()
+            );
+            assert!(
+                view.composer
+                    .input
+                    .read(cx)
+                    .focus_handle(cx)
+                    .is_focused(window)
+            );
         })
         .unwrap();
     }

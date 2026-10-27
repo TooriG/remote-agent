@@ -2,6 +2,7 @@ use agent_core::state::operations as op;
 mod clipboard;
 mod completions;
 mod dictation;
+mod forms;
 mod hosts;
 mod selection;
 mod view;
@@ -15,7 +16,7 @@ use agent_core::{
 };
 use agent_protocol::{
     ids::{ItemId, RequestId, TurnId},
-    models::{Item, Model, RemoteHost, Thread, Turn, WorktreeSettings},
+    models::{Item, Model, RemoteHost, Thread, Turn},
     requests::Answer,
     session::SessionRef,
 };
@@ -23,7 +24,7 @@ use dictation::{Dictation, Phase};
 use gpui_kit::{
     component::{
         button::{Button, ButtonVariants},
-        input::{Editor, EditorState, Input, InputEvent, InputState, Textarea, TextareaState},
+        input::{Editor, Input, InputEvent, InputState, Textarea, TextareaState},
         menu::{DropdownMenu, PopupMenuItem},
         text::TextView,
         *,
@@ -275,41 +276,17 @@ pub(crate) struct Desktop {
     initial_cwd: Option<String>,
     busy: usize,
     error: String,
-    composer: Entity<TextareaState>,
+    composer: forms::ComposerInput,
     selection: Entity<selection::ConversationSelection>,
     pending_quote: Option<String>,
     pending_explanation: Option<String>,
-    composer_value: SharedString,
-    composer_revision: u64,
-    completion_index: usize,
-    completion_dismissed: bool,
-    composer_pending: Option<u64>,
-    editor_input: Entity<EditorState>,
-    editor_value: SharedString,
-    editor_path: Option<String>,
-    editor_revision: u64,
-    editor_pending: Option<u64>,
+    editor: forms::FileEditor,
     project_editor: Option<ProjectEditor>,
     search: Entity<InputState>,
     path: Entity<InputState>,
-    model_panel: ModelPanel,
-    model_search: Entity<InputState>,
-    model_provider: Option<agent_protocol::session::ProviderKind>,
-    settings_model_scope: ModelDefaultsScope,
-    account_sign_out: Option<String>,
-    dsh_key_provider: agent_protocol::dsh::KeyProvider,
-    account_login_draft: Option<DraftKey>,
-    worktree_copy_paths: Entity<TextareaState>,
-    worktree_directory: Entity<InputState>,
-    worktree_dirty: bool,
-    worktree_saved: bool,
-    worktree_saving: bool,
-    worktree_save_pending: bool,
-    worktree_removal: Option<String>,
-    worktree_busy: bool,
-    account_code: Entity<InputState>,
-    account_busy: bool,
-    account_polling: bool,
+    model_controls: forms::ModelControls,
+    account: forms::AccountForm,
+    worktrees: forms::WorktreeForm,
     expanded_items: HashSet<String>,
     expanded_work: HashMap<String, ActivityExpansion>,
     tab: Tab,
@@ -364,19 +341,19 @@ impl Desktop {
                     .await;
                 if view
                     .update(cx, |view, _| {
-                        if view.account_polling
-                            && !view.account_busy
+                        if view.account.polling
+                            && !view.account.busy
                             && view.snapshot.connected
                             && let Some(login) = &view.snapshot.account.login
                         {
                             let id = login.login_id.clone();
                             let provider = login.provider;
-                            view.account_busy = true;
+                            view.account.busy = true;
                             view.perform(
                                 Intent::ReadAccountLogin(op::ReadAccountLogin {
                                     provider,
                                     id,
-                                    thread_id: view.account_login_draft.clone(),
+                                    thread_id: view.account.login_draft.clone(),
                                 }),
                                 OperationCompletion::Account,
                             );
@@ -389,28 +366,13 @@ impl Desktop {
             }
         })
         .detach();
-        let composer = cx.new(|cx| {
-            TextareaState::new(window, cx)
-                .placeholder("AI に依頼する")
-                .auto_grow(2, 8)
-        });
-        let editor_input = cx.new(|cx| EditorState::new(window, cx));
-        let model_search = cx.new(|cx| InputState::new(window, cx).placeholder("モデルを検索"));
-        let account_code = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("認証コード・APIキーを貼り付け")
-                .masked(true)
-        });
+        let composer = forms::ComposerInput::new(window, cx);
+        let editor = forms::FileEditor::new(window, cx);
+        let model_controls = forms::ModelControls::new(window, cx);
+        let account = forms::AccountForm::new(window, cx);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("会話を検索"));
         let path = cx.new(|cx| InputState::new(window, cx).placeholder("絶対パス"));
-        let worktree_copy_paths = cx.new(|cx| {
-            TextareaState::new(window, cx)
-                .placeholder(".env\n.env.local\nconfig/local")
-                .auto_grow(3, 8)
-        });
-        let worktree_directory = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("接続先 Host 上の絶対パス（空欄で既定）")
-        });
+        let worktrees = forms::WorktreeForm::new(window, cx);
         let hosts = (!side_chat_mode).then(|| cx.new(|cx| Hosts::new(window, cx)));
         let selection = cx.new(|_| selection::ConversationSelection::new(!side_chat_mode));
         let mut subscriptions = vec![
@@ -449,17 +411,11 @@ impl Desktop {
                     }
                 },
             ),
-            cx.subscribe(&composer, |view, input, event, cx| {
+            cx.subscribe(&composer.input, |view, input, event, cx| {
                 if matches!(event, InputEvent::Change) {
                     let value = input.read(cx).value();
-                    if value != view.composer_value {
-                        view.completion_index = 0;
-                        view.completion_dismissed = false;
+                    if let Some(revision) = view.composer.typed(value.clone()) {
                         let cursor = input.read(cx).cursor();
-                        view.composer_value = value.clone();
-                        view.composer_revision += 1;
-                        let revision = view.composer_revision;
-                        view.composer_pending = Some(revision);
                         view.perform(
                             Intent::EditComposer {
                                 thread_id: view.draft_key().clone(),
@@ -472,16 +428,10 @@ impl Desktop {
                     cx.notify();
                 }
             }),
-            cx.subscribe(&editor_input, |view, input, event, cx| {
+            cx.subscribe(&editor.input, |view, input, event, cx| {
                 if matches!(event, InputEvent::Change) {
                     let value = input.read(cx).value();
-                    if value != view.editor_value
-                        && let Some(path) = view.editor_path.clone()
-                    {
-                        view.editor_value = value.clone();
-                        view.editor_revision += 1;
-                        let revision = view.editor_revision;
-                        view.editor_pending = Some(revision);
+                    if let Some((path, revision)) = view.editor.typed(value.clone()) {
                         view.perform(
                             Intent::SetFileDraft {
                                 path,
@@ -492,12 +442,12 @@ impl Desktop {
                     }
                 }
             }),
-            cx.subscribe(&model_search, |_, _, event, cx| {
+            cx.subscribe(&model_controls.search, |_, _, event, cx| {
                 if matches!(event, InputEvent::Change) {
                     cx.notify();
                 }
             }),
-            cx.subscribe(&account_code, |_, _, event, cx| {
+            cx.subscribe(&account.code, |_, _, event, cx| {
                 if matches!(event, InputEvent::Change) {
                     cx.notify();
                 }
@@ -512,20 +462,18 @@ impl Desktop {
                     }
                 }
             }),
-            cx.subscribe(&worktree_copy_paths, |view, _, event, cx| {
+            cx.subscribe(&worktrees.copy_paths, |view, _, event, cx| {
                 if matches!(event, InputEvent::Change) {
-                    view.worktree_dirty = !view.settings_match_inputs(cx);
-                    view.worktree_saved = false;
+                    view.worktree_input_changed(cx);
                     cx.notify();
                 }
                 if matches!(event, InputEvent::Blur) {
                     view.save_worktree_settings(None, cx);
                 }
             }),
-            cx.subscribe(&worktree_directory, |view, _, event, cx| {
+            cx.subscribe(&worktrees.directory, |view, _, event, cx| {
                 if matches!(event, InputEvent::Change) {
-                    view.worktree_dirty = !view.settings_match_inputs(cx);
-                    view.worktree_saved = false;
+                    view.worktree_input_changed(cx);
                     cx.notify();
                 }
                 if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
@@ -573,37 +521,13 @@ impl Desktop {
             selection,
             pending_quote: None,
             pending_explanation: None,
-            composer_value: "".into(),
-            composer_revision: 0,
-            completion_index: 0,
-            completion_dismissed: false,
-            composer_pending: None,
-            editor_input,
-            editor_value: "".into(),
-            editor_path: None,
-            editor_revision: 0,
-            editor_pending: None,
+            editor,
             project_editor: None,
             search,
             path,
-            model_panel: ModelPanel::Models,
-            model_search,
-            model_provider: None,
-            settings_model_scope: ModelDefaultsScope::Global,
-            account_sign_out: None,
-            dsh_key_provider: Default::default(),
-            account_login_draft: None,
-            worktree_copy_paths,
-            worktree_directory,
-            worktree_dirty: false,
-            worktree_saved: false,
-            worktree_saving: false,
-            worktree_save_pending: false,
-            worktree_removal: None,
-            worktree_busy: false,
-            account_code,
-            account_busy: false,
-            account_polling: false,
+            model_controls,
+            account,
+            worktrees,
             expanded_items: HashSet::new(),
             expanded_work: HashMap::new(),
             tab: Tab::Chat,
@@ -638,13 +562,13 @@ impl Desktop {
         self.epoch += 1;
         self.connecting = true;
         self.busy = 0;
-        self.worktree_removal = None;
-        self.worktree_busy = false;
-        self.account_busy = false;
-        self.account_polling = false;
-        self.model_provider = None;
-        self.account_sign_out = None;
-        self.account_login_draft = None;
+        self.worktrees.removal = None;
+        self.worktrees.removing = false;
+        self.account.busy = false;
+        self.account.polling = false;
+        self.model_controls.provider = None;
+        self.account.sign_out = None;
+        self.account.login_draft = None;
         self.error = self.runtime.logging_error.clone().unwrap_or_default();
         let epoch = self.epoch;
         let remote = self.remote.clone();
@@ -871,16 +795,8 @@ impl Desktop {
                 }
                 return;
             }
-            OperationCompletion::Composer(revision) => {
-                if self.composer_pending == Some(revision) {
-                    self.composer_pending = None;
-                }
-            }
-            OperationCompletion::Editor(revision) => {
-                if self.editor_pending == Some(revision) {
-                    self.editor_pending = None;
-                }
-            }
+            OperationCompletion::Composer(revision) => self.composer.text.saved(revision),
+            OperationCompletion::Editor(revision) => self.editor.text.saved(revision),
             OperationCompletion::Busy => {
                 self.busy = self.busy.saturating_sub(1);
             }
@@ -896,14 +812,16 @@ impl Desktop {
                 return;
             }
             OperationCompletion::WorktreeSettings => {
-                self.worktree_saving = false;
+                self.worktrees.saving = false;
                 if let Err(error) = result {
                     self.set_error(error);
                 }
                 self.accept_snapshot(window, cx);
-                self.worktree_dirty = !self.settings_match_inputs(cx);
-                self.worktree_saved = !self.worktree_dirty;
-                if std::mem::take(&mut self.worktree_save_pending) {
+                self.worktrees.dirty = !self
+                    .worktrees
+                    .matches(self.snapshot.workspace.settings.as_deref(), cx);
+                self.worktrees.saved = !self.worktrees.dirty;
+                if std::mem::take(&mut self.worktrees.save_pending) {
                     self.save_worktree_settings(None, cx);
                 }
                 return;
@@ -920,24 +838,24 @@ impl Desktop {
                 return;
             }
             OperationCompletion::Account => {
-                self.account_busy = false;
+                self.account.busy = false;
                 if let Err(error) = result {
-                    self.account_polling = false;
+                    self.account.polling = false;
                     self.set_error(error);
                     self.dispatch(Intent::ListAccounts(op::ListAccounts {}));
                 } else {
                     self.accept_snapshot(window, cx);
-                    self.account_polling = self.snapshot.account.login.is_some();
+                    self.account.polling = self.snapshot.account.login.is_some();
                 }
                 if self.snapshot.account.login.is_none() {
-                    self.account_login_draft = None;
+                    self.account.login_draft = None;
                 }
                 return;
             }
             OperationCompletion::RemoveWorktree => {
-                self.worktree_busy = false;
+                self.worktrees.removing = false;
                 match result {
-                    Ok(_) => self.worktree_removal = None,
+                    Ok(_) => self.worktrees.removal = None,
                     Err(error) => {
                         self.set_error(error);
                         self.dispatch(Intent::ListWorktrees(op::ListWorktrees {}));
@@ -1005,7 +923,8 @@ impl Desktop {
                 .as_ref()
                 .map(|login| &login.login_id)
         {
-            self.account_code
+            self.account
+                .code
                 .update(cx, |input, cx| input.set_value("", window, cx));
         }
         if let Some(request) = self
@@ -1068,45 +987,35 @@ impl Desktop {
             self.selection
                 .update(cx, |selection, cx| selection.clear(cx));
             self.cancel_recording();
-            self.composer_pending = None;
+            self.composer.text.pending = None;
             self.rendered = None;
             self.diffs.clear();
             self.markdown_cache.clear();
         }
-        if self.composer_pending.is_none() && self.composer_value.as_ref() != self.draft().text {
-            let value: SharedString = self.draft().text.clone().into();
-            self.composer_value = value.clone();
+        let text = self.draft().text.clone();
+        if let Some(value) = self.composer.text.adopt(&text) {
             self.composer
+                .input
                 .update(cx, |input, cx| input.set_value(value, window, cx));
         }
         let file = self.snapshot.workspace.file.as_ref();
-        let path = file.map(|file| file.path.as_str());
-        let file_changed = self.editor_path.as_deref() != path;
         let text = file.map_or("", |file| {
             self.snapshot
                 .file_drafts
                 .get(&file.path)
                 .map_or(file.text.as_str(), |draft| draft.text.as_str())
         });
-        if file_changed || (self.editor_pending.is_none() && self.editor_value.as_ref() != text) {
-            self.editor_path = path.map(str::to_owned);
-            self.editor_value = text.to_owned().into();
-            self.editor_pending = None;
-            self.editor_input.update(cx, |input, cx| {
-                input.set_value(self.editor_value.clone(), window, cx)
-            });
+        if let Some(value) = self.editor.show(file.map(|file| file.path.as_str()), text) {
+            self.editor
+                .input
+                .update(cx, |input, cx| input.set_value(value, window, cx));
         }
-        if !self.worktree_dirty
-            && !self.worktree_saving
+        if !self.worktrees.dirty
+            && !self.worktrees.saving
             && previous.workspace.settings != self.snapshot.workspace.settings
             && let Some(settings) = &self.snapshot.workspace.settings
         {
-            self.worktree_copy_paths.update(cx, |input, cx| {
-                input.set_value(settings.copy_paths.join("\n"), window, cx)
-            });
-            self.worktree_directory.update(cx, |input, cx| {
-                input.set_value(settings.worktree_directory.clone(), window, cx)
-            });
+            self.worktrees.show(settings, window, cx);
         }
         let conversations_changed =
             !Arc::ptr_eq(&previous.conversations, &self.snapshot.conversations);
@@ -1376,13 +1285,21 @@ impl Desktop {
         self.tab = Tab::Chat;
         self.cancel_recording();
         self.dispatch(Intent::NewChat { cwd });
-        self.composer.read(cx).focus_handle(cx).focus(window, cx);
+        self.composer
+            .input
+            .read(cx)
+            .focus_handle(cx)
+            .focus(window, cx);
     }
     fn open_chat(&mut self, id: SessionRef, window: &mut Window, cx: &mut Context<Self>) {
         self.tab = Tab::Chat;
         self.cancel_recording();
         self.dispatch(Intent::ReadThread(op::ReadThread::open(id)));
-        self.composer.read(cx).focus_handle(cx).focus(window, cx);
+        self.composer
+            .input
+            .read(cx)
+            .focus_handle(cx)
+            .focus(window, cx);
     }
     fn detail(&mut self, turn_id: TurnId, item_id: ItemId) {
         let Some(thread_id) = self.selected().cloned() else {
@@ -1446,16 +1363,15 @@ impl Desktop {
         };
         self.session.take();
         self.remote = remote;
-        self.settings_model_scope = ModelDefaultsScope::Global;
+        self.model_controls.settings_scope = ModelDefaultsScope::Global;
         self.snapshot = Arc::default();
-        self.composer_pending = None;
         self.pending_quote = None;
         self.pending_explanation = None;
-        self.editor_pending = None;
-        self.editor_path = None;
-        self.worktree_dirty = false;
-        self.worktree_saving = false;
-        self.worktree_save_pending = false;
+        self.editor.text.pending = None;
+        self.editor.path = None;
+        self.worktrees.dirty = false;
+        self.worktrees.saving = false;
+        self.worktrees.save_pending = false;
         self.images.clear();
         self.image_gallery = None;
         self.rows.clear();
@@ -1464,9 +1380,10 @@ impl Desktop {
         self.requests.clear();
         self.diffs.clear();
         self.markdown_cache.clear();
-        self.composer_value = "".into();
+        let value = self.composer.text.replace("");
         self.composer
-            .update(cx, |input, cx| input.set_value("", window, cx));
+            .input
+            .update(cx, |input, cx| input.set_value(value, window, cx));
         self.connect(preferences);
     }
     fn send(&mut self, cx: &Context<Self>) {
@@ -1479,7 +1396,9 @@ impl Desktop {
             }
             return;
         }
-        if self.composer.read(cx).value().trim().is_empty() && self.draft().attachments.is_empty() {
+        if self.composer.input.read(cx).value().trim().is_empty()
+            && self.draft().attachments.is_empty()
+        {
             return;
         }
         self.busy += 1;
@@ -1500,7 +1419,7 @@ impl Desktop {
             queued.push_str(text);
             return;
         }
-        selection::append_to_composer(&self.composer, text, window, cx);
+        selection::append_to_composer(&self.composer.input, text, window, cx);
     }
 
     fn explain_selection(&mut self, text: &str, cx: &mut Context<Self>) {
@@ -1709,7 +1628,7 @@ impl Desktop {
         if self.completion_key(key, window, cx) {
             return;
         }
-        let moved = self.composer.update(cx, |input, cx| {
+        let moved = self.composer.input.update(cx, |input, cx| {
             if input.marked_text_range(window, cx).is_some() || !input.selected_range().is_empty() {
                 return false;
             }
@@ -1746,7 +1665,7 @@ impl Desktop {
             cx.stop_propagation();
             return;
         }
-        let submit = self.composer.update(cx, |input, cx| {
+        let submit = self.composer.input.update(cx, |input, cx| {
             composer_should_submit(input, action, window, cx)
         });
         if submit && self.snapshot.connected && self.busy == 0 {
@@ -1892,7 +1811,7 @@ impl Desktop {
         }));
     }
     fn save_file(&mut self) {
-        let Some(path) = self.editor_path.clone() else {
+        let Some(path) = self.editor.path.clone() else {
             return;
         };
         self.busy += 1;
@@ -1901,28 +1820,17 @@ impl Desktop {
             OperationCompletion::Busy,
         );
     }
-    fn settings_match_inputs(&self, cx: &App) -> bool {
-        self.snapshot
-            .workspace
-            .settings
-            .as_ref()
-            .is_some_and(|settings| {
-                self.worktree_directory.read(cx).value().trim() == settings.worktree_directory
-                    && self
-                        .worktree_copy_paths
-                        .read(cx)
-                        .value()
-                        .lines()
-                        .map(str::trim)
-                        .filter(|line| !line.is_empty())
-                        .eq(settings.copy_paths.iter().map(String::as_str))
-            })
+    fn worktree_input_changed(&mut self, cx: &App) {
+        self.worktrees.dirty = !self
+            .worktrees
+            .matches(self.snapshot.workspace.settings.as_deref(), cx);
+        self.worktrees.saved = false;
     }
     fn save_worktree_settings(&mut self, toggle: Option<WorktreeToggle>, cx: &Context<Self>) {
         let Some(settings) = &self.snapshot.workspace.settings else {
             return;
         };
-        let mut settings: WorktreeSettings = settings.as_ref().clone();
+        let mut settings = self.worktrees.edited(settings, cx);
         if let Some(toggle) = toggle {
             match toggle {
                 WorktreeToggle::Create(checked) => settings.create_on_new_session = checked,
@@ -1930,25 +1838,15 @@ impl Desktop {
                 WorktreeToggle::DeleteMerged(checked) => settings.delete_merged = checked,
             }
         }
-        settings.worktree_directory = self.worktree_directory.read(cx).value().trim().into();
-        settings.copy_paths = self
-            .worktree_copy_paths
-            .read(cx)
-            .value()
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .map(str::to_owned)
-            .collect();
         if self.snapshot.workspace.settings.as_deref() == Some(&settings) {
             return;
         }
-        if self.worktree_saving {
-            self.worktree_save_pending = true;
+        if self.worktrees.saving {
+            self.worktrees.save_pending = true;
             return;
         }
-        self.worktree_saving = true;
-        self.worktree_saved = false;
+        self.worktrees.saving = true;
+        self.worktrees.saved = false;
         self.perform(
             Intent::UpdateWorktreeSettings(op::UpdateWorktreeSettings { settings }),
             OperationCompletion::WorktreeSettings,
@@ -2189,8 +2087,8 @@ mod completion_tests {
             view.epoch = 3;
             Arc::make_mut(&mut view.snapshot).epoch = 5;
             view.busy = 2;
-            view.composer_pending = Some(9);
-            view.editor_pending = Some(12);
+            view.composer.text.pending = Some(9);
+            view.editor.text.pending = Some(12);
             let deliver = |view: &mut Desktop,
                            host,
                            kind,
@@ -2225,8 +2123,8 @@ mod completion_tests {
                 window,
                 cx,
             );
-            assert_eq!(view.composer_pending, Some(9));
-            assert_eq!(view.editor_pending, Some(12));
+            assert_eq!(view.composer.text.pending, Some(9));
+            assert_eq!(view.editor.text.pending, Some(12));
             deliver(
                 view,
                 3,
@@ -2243,8 +2141,8 @@ mod completion_tests {
                 window,
                 cx,
             );
-            assert_eq!(view.composer_pending, None);
-            assert_eq!(view.editor_pending, None);
+            assert_eq!(view.composer.text.pending, None);
+            assert_eq!(view.editor.text.pending, None);
             deliver(
                 view,
                 3,

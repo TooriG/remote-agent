@@ -6,12 +6,12 @@ impl Desktop {
         self.tab = Tab::Settings;
         self.settings_page = SettingsPage::Agents;
         if self.snapshot.account.login.is_none() {
-            self.model_provider = None;
+            self.model_controls.provider = None;
         }
-        self.account_sign_out = None;
+        self.account.sign_out = None;
         self.refresh_accounts_and_models();
         self.dispatch(Intent::ManageCodexCli(op::ManageCodexCli { update: false }));
-        self.worktree_removal = None;
+        self.worktrees.removal = None;
         self.dispatch(Intent::ReadWorktreeSettings(op::ReadWorktreeSettings {}));
         self.dispatch(Intent::ListWorktrees(op::ListWorktrees {}));
     }
@@ -59,13 +59,14 @@ impl Desktop {
                 self.model_scope_menu(
                     "settings-scope-projects",
                     self.snapshot
-                        .model_project_scope_choices(self.settings_model_scope.clone()),
+                        .model_project_scope_choices(self.model_controls.settings_scope.clone()),
                     cx,
                 ),
                 self.model_scope_menu(
                     "settings-scope-environment",
-                    self.snapshot
-                        .model_environment_scope_choices(self.settings_model_scope.clone()),
+                    self.snapshot.model_environment_scope_choices(
+                        self.model_controls.settings_scope.clone(),
+                    ),
                     cx,
                 ),
             ),
@@ -82,8 +83,8 @@ impl Desktop {
                             .as_ref()
                             .map_or("Local", |host| host.name.as_str()),
                         self.busy > 0
-                            || self.worktree_dirty
-                            || self.worktree_saving
+                            || self.worktrees.dirty
+                            || self.worktrees.saving
                             || self.snapshot.account.login.is_some(),
                         cx,
                     )
@@ -241,7 +242,7 @@ impl Desktop {
         choices: Vec<agent_core::presentation::model_settings::ModelScopeChoice>,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let selected = self.settings_model_scope.clone();
+        let selected = self.model_controls.settings_scope.clone();
         let label = choices
             .iter()
             .find(|choice| choice.scope == selected)
@@ -265,7 +266,7 @@ impl Desktop {
                             .checked(scope == selected)
                             .on_click(move |_, _, cx| {
                                 let _ = owner.update(cx, |view, cx| {
-                                    view.settings_model_scope = scope.clone();
+                                    view.model_controls.settings_scope = scope.clone();
                                     cx.notify();
                                 });
                             }),
@@ -290,14 +291,14 @@ impl Desktop {
                     .child(switch::Switch::new("worktree-create")
                         .accessibility_label("新規セッションをワークツリーで開始")
                         .checked(settings.is_some_and(|settings| settings.create_on_new_session))
-                        .disabled(disabled || self.worktree_saving)
+                        .disabled(disabled || self.worktrees.saving)
                         .on_click(cx.listener(|s, checked, _, cx| {
                             s.save_worktree_settings(Some(WorktreeToggle::Create(*checked)), cx);
                             cx.notify();
                         }))))
                 .child(v_flex().gap_2()
                     .child(div().text_sm().child("保存先"))
-                    .child(Input::new(&self.worktree_directory).aria_label("ワークツリーの保存先").disabled(disabled))
+                    .child(Input::new(&self.worktrees.directory).aria_label("ワークツリーの保存先").disabled(disabled))
                     .child(div().text_xs().text_color(rgb(appearance::MUTED)).child("空欄の場合は、元のリポジトリ内の .worktree に保存します。指定先には「セッション名/リポジトリ名」の構成で作ります。"))))
             .child(v_flex().gap_5().pt_6().border_t_1().border_color(rgb(appearance::BORDER))
                 .child(h_flex().gap_5().items_center()
@@ -306,14 +307,14 @@ impl Desktop {
                     .child(switch::Switch::new("worktree-copy")
                         .accessibility_label("ワークツリー作成時にファイルをコピー")
                         .checked(settings.is_some_and(|settings| settings.copy_on_create))
-                        .disabled(disabled || self.worktree_saving)
+                        .disabled(disabled || self.worktrees.saving)
                         .on_click(cx.listener(|s, checked, _, cx| {
                             s.save_worktree_settings(Some(WorktreeToggle::Copy(*checked)), cx);
                             cx.notify();
                         }))))
                 .child(v_flex().gap_2()
                     .child(div().text_sm().child("コピーするファイル"))
-                    .child(Textarea::new(&self.worktree_copy_paths).aria_label("コピー対象").readonly(disabled))
+                    .child(Textarea::new(&self.worktrees.copy_paths).aria_label("コピー対象").readonly(disabled))
                     .child(div().text_xs().text_color(rgb(appearance::MUTED)).child("リポジトリからの相対パスを1行に1つ入力します。例: .env.local、config/local。存在しないパスはスキップし、シンボリックリンクはコピーしません。")))
                 .child(div().text_xs().text_color(rgb(appearance::MUTED)).child("最初のメッセージ送信時に作成・コピーします。指定ファイルはコピー元の内容で置き換え、既存セッションでは再実行しません。")))
             .child(h_flex().gap_5().items_center().pt_6().border_t_1().border_color(rgb(appearance::BORDER))
@@ -322,12 +323,12 @@ impl Desktop {
                 .child(switch::Switch::new("worktree-delete-merged")
                     .accessibility_label("マージ済みワークツリーを自動削除")
                     .checked(settings.is_some_and(|settings| settings.delete_merged))
-                    .disabled(disabled || self.worktree_saving)
+                    .disabled(disabled || self.worktrees.saving)
                     .on_click(cx.listener(|s, checked, _, cx| {
                         s.save_worktree_settings(Some(WorktreeToggle::DeleteMerged(*checked)), cx);
                         cx.notify();
                     }))))
-            .child(div().text_xs().text_color(rgb(appearance::MUTED)).child(if self.worktree_saved { "保存しました" } else { "変更は自動で保存されます。既存のワークツリーは移動しません。" }))
+            .child(div().text_xs().text_color(rgb(appearance::MUTED)).child(if self.worktrees.saved { "保存しました" } else { "変更は自動で保存されます。既存のワークツリーは移動しません。" }))
             .child(div().pt_6().border_t_1().border_color(rgb(appearance::BORDER)).child(self.managed_worktrees(cx)))
             .into_any_element()
     }
@@ -514,7 +515,7 @@ impl Desktop {
                             s.dispatch(Intent::ListWorktrees(op::ListWorktrees {}));
                         },
                     )
-                    .disabled(!self.snapshot.connected || self.worktree_busy),
+                    .disabled(!self.snapshot.connected || self.worktrees.removing),
                 ),
         );
         let Some(worktrees) = &self.snapshot.workspace.worktrees else {
@@ -538,7 +539,7 @@ impl Desktop {
             let reason = worktree.blocked_reason.as_deref().or(current.then_some(
                 "現在開いている会話の作業場所です。別の会話に移動してから削除してください。",
             ));
-            let confirming = self.worktree_removal.as_deref() == Some(path.as_str());
+            let confirming = self.worktrees.removal.as_deref() == Some(path.as_str());
             let mut entry = v_flex()
                 .p_4()
                 .gap_2()
@@ -560,11 +561,13 @@ impl Desktop {
                                 "削除…",
                                 cx,
                                 move |s, _, _| {
-                                    s.worktree_removal = Some(path.clone());
+                                    s.worktrees.removal = Some(path.clone());
                                 },
                             )
                             .disabled(
-                                reason.is_some() || !self.snapshot.connected || self.worktree_busy,
+                                reason.is_some()
+                                    || !self.snapshot.connected
+                                    || self.worktrees.removing,
                             ),
                         ),
                 )
@@ -588,7 +591,7 @@ impl Desktop {
                         move |s, window, cx| s.open_chat(id.clone(), window, cx),
                     )
                     .icon(IconName::FileText)
-                    .disabled(!self.snapshot.connected || self.worktree_busy),
+                    .disabled(!self.snapshot.connected || self.worktrees.removing),
                 );
             }
             if let Some(reason) = reason {
@@ -603,9 +606,9 @@ impl Desktop {
                 let path = worktree.path.clone();
                 entry = entry.child(div().text_sm().child("この作業ディレクトリを削除します。ブランチと会話履歴は残ります。次のメッセージ送信時に、元プロジェクトの main から同じ場所に作り直します。"))
                     .child(h_flex().gap_2()
-                        .child(self.button(format!("cancel-remove-worktree-{index}"), "取消", cx, |s, _, _| s.worktree_removal = None).disabled(self.worktree_busy))
+                        .child(self.button(format!("cancel-remove-worktree-{index}"), "取消", cx, |s, _, _| s.worktrees.removal = None).disabled(self.worktrees.removing))
                         .child(self.button(format!("confirm-remove-worktree-{index}"), "ワークツリーを削除", cx, move |s, _, _| s.remove_worktree(path.clone()))
-                            .disabled(reason.is_some() || !self.snapshot.connected || self.worktree_busy)));
+                            .disabled(reason.is_some() || !self.snapshot.connected || self.worktrees.removing)));
             }
             body = body.child(entry);
         }
@@ -613,10 +616,10 @@ impl Desktop {
     }
 
     fn remove_worktree(&mut self, path: String) {
-        if self.worktree_busy || !self.snapshot.connected {
+        if self.worktrees.removing || !self.snapshot.connected {
             return;
         }
-        self.worktree_busy = true;
+        self.worktrees.removing = true;
         self.perform(
             Intent::RemoveWorktree(op::RemoveWorktree { path }),
             OperationCompletion::RemoveWorktree,

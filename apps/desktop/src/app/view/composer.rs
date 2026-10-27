@@ -406,7 +406,8 @@ impl Desktop {
             });
         }
         let running = self.thread().and_then(|thread| thread.active_turn_id());
-        let empty = self.composer.read(cx).value().trim().is_empty() && attachments.is_empty();
+        let empty =
+            self.composer.input.read(cx).value().trim().is_empty() && attachments.is_empty();
         let inactive = empty && running.is_none();
         let phase = self.dictation.as_ref().map(|d| d.phase);
         let send = if let Some(id) = running.filter(|_| empty) {
@@ -453,13 +454,13 @@ impl Desktop {
             .accessibility_label("音声をCodexで文字起こし")
             .disabled(!self.snapshot.connected || self.busy > 0)
             .on_click(cx.listener(|s, _, window, cx| {
-                s.composer.read(cx).focus_handle(cx).focus(window, cx);
+                s.composer.input.read(cx).focus_handle(cx).focus(window, cx);
                 s.start_dictation();
                 cx.notify();
             }));
         let composer = v_flex()
             .key_context("ChatComposer")
-            .track_focus(&self.composer.read(cx).focus_handle(cx))
+            .track_focus(&self.composer.input.read(cx).focus_handle(cx))
             .capture_key_down(cx.listener(|s, event: &KeyDownEvent, window, cx| {
                 let modifiers = event.keystroke.modifiers;
                 if !(modifiers.shift || modifiers.control || modifiers.alt || modifiers.platform)
@@ -502,7 +503,7 @@ impl Desktop {
             .when(phase.is_none(), |composer| {
                 composer.child(
                     div().px_2().pt(px(10.)).pb_1().child(
-                        Textarea::new(&self.composer)
+                        Textarea::new(&self.composer.input)
                             .appearance(false)
                             .bordered(false)
                             .text_size(px(14.))

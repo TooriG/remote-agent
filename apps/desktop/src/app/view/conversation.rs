@@ -342,7 +342,12 @@ impl Desktop {
                 let text = body_text.expect("user message has text");
                 let copied = text.to_owned();
                 let edit = self.button(format!("edit-{id}"), "", cx, move |s, window, cx| {
-                    selection::set_composer_text(&s.composer, copied.clone().into(), window, cx);
+                    selection::set_composer_text(
+                        &s.composer.input,
+                        copied.clone().into(),
+                        window,
+                        cx,
+                    );
                 });
                 let timestamp = turn.and_then(|turn| turn.started_at.map(|time| time as i64));
                 user_message_row(&id, text, body, timestamp, edit).into_any_element()
@@ -641,8 +646,8 @@ impl Desktop {
                                             cx,
                                             move |s, _, _| {
                                                 s.open_settings();
-                                                s.model_provider = provider;
-                                                s.model_panel = ModelPanel::Manage;
+                                                s.model_controls.provider = provider;
+                                                s.model_controls.panel = ModelPanel::Manage;
                                             },
                                         )
                                         .small(),

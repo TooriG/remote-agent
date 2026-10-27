@@ -10,7 +10,7 @@ impl Desktop {
     ) -> Div {
         let login_provider = self.account_provider();
         let login = self.snapshot.account.login.is_some();
-        let disabled = !self.snapshot.connected || self.account_busy || login;
+        let disabled = !self.snapshot.connected || self.account.busy || login;
         let mut body = v_flex().gap_2().child(
             div()
                 .text_xs()
@@ -23,7 +23,7 @@ impl Desktop {
                 body = body.child(self.account_login_controls(Some(&agent.name), cx));
                 continue;
             }
-            let pending = self.account_busy && Some(provider) == login_provider;
+            let pending = self.account.busy && Some(provider) == login_provider;
             let mut row = h_flex()
                 .items_center()
                 .gap_3()
@@ -592,15 +592,15 @@ mod tests {
             let desktop = view.read(cx).0.read(cx);
             assert!(desktop.tab == Tab::Chat);
             assert_eq!(
-                desktop.model_provider,
+                desktop.model_controls.provider,
                 Some(agent_protocol::session::ProviderKind::Claude)
             );
-            assert!(desktop.account_busy);
+            assert!(desktop.account.busy);
         });
         window.update(|_, cx| {
             view.read(cx).0.clone().update(cx, |view, cx| {
-                view.account_busy = false;
-                view.account_polling = true;
+                view.account.busy = false;
+                view.account.polling = true;
                 Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).account).login =
                     Some(Arc::new(agent_protocol::operations::AccountLogin {
                         provider: agent_protocol::session::ProviderKind::Claude,
@@ -622,10 +622,11 @@ mod tests {
         assert!(window.debug_bounds("account-open-login").is_some());
         let submit = window.debug_bounds("account-submit-code").unwrap();
         window.simulate_click(submit.center(), Modifiers::default());
-        window.update(|_, cx| assert!(!view.read(cx).0.read(cx).account_busy));
+        window.update(|_, cx| assert!(!view.read(cx).0.read(cx).account.busy));
         window.update(|window, cx| {
             view.read(cx).0.clone().update(cx, |view, cx| {
-                view.account_code
+                view.account
+                    .code
                     .update(cx, |input, cx| input.set_value("fixture-code", window, cx));
             })
         });
@@ -634,12 +635,12 @@ mod tests {
         window.update(|_, cx| {
             let desktop = view.read(cx).0.read(cx);
             assert!(desktop.tab == Tab::Chat);
-            assert!(desktop.account_busy);
-            assert!(desktop.account_code.read(cx).value().is_empty());
+            assert!(desktop.account.busy);
+            assert!(desktop.account.code.read(cx).value().is_empty());
         });
         window.update(|_, cx| {
             view.read(cx).0.clone().update(cx, |view, cx| {
-                view.account_busy = false;
+                view.account.busy = false;
                 cx.notify();
             })
         });
@@ -649,11 +650,11 @@ mod tests {
         window.update(|_, cx| {
             let desktop = view.read(cx).0.read(cx);
             assert!(desktop.tab == Tab::Chat);
-            assert!(desktop.account_busy);
+            assert!(desktop.account.busy);
         });
         window.update(|_, cx| {
             view.read(cx).0.clone().update(cx, |view, cx| {
-                view.account_busy = false;
+                view.account.busy = false;
                 let account = Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).account);
                 account.login = None;
                 account.accounts = Some(Arc::new(serde_json::from_value(serde_json::json!({

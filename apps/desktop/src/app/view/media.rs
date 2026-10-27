@@ -814,7 +814,7 @@ mod file_panel_tests {
                     }],
                     truncated: false,
                 }));
-                view.composer.update(cx, |input, cx| {
+                view.composer.input.update(cx, |input, cx| {
                     input.set_value("Keep this draft", window, cx)
                 });
                 view.panels.open(view.panel_scope(), Panel::Files, None);
@@ -835,7 +835,10 @@ mod file_panel_tests {
                     .as_ref()
                     .expect("file click must open the image gallery");
                 assert_eq!(gallery.current_image().0.as_str(), source);
-                assert_eq!(view.composer.read(cx).value().as_ref(), "Keep this draft");
+                assert_eq!(
+                    view.composer.input.read(cx).value().as_ref(),
+                    "Keep this draft"
+                );
                 assert!(
                     view.snapshot.workspace.file.is_none(),
                     "images must bypass the text editor"
@@ -860,7 +863,10 @@ mod file_panel_tests {
                     "installers must bypass the editor panel"
                 );
                 assert!(view.image_gallery.is_none());
-                assert_eq!(view.composer.read(cx).value().as_ref(), "Keep this draft");
+                assert_eq!(
+                    view.composer.input.read(cx).value().as_ref(),
+                    "Keep this draft"
+                );
                 view.open_file(directory.path().join("readme.txt"), cx);
                 assert!(
                     view.image_gallery.is_none(),
@@ -915,7 +921,7 @@ mod file_panel_tests {
             desktop.update(cx, |view, cx| {
                 Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).navigation).cwd =
                     "/fixture".into();
-                view.composer.update(cx, |input, cx| {
+                view.composer.input.update(cx, |input, cx| {
                     input.set_value("Keep this side draft", window, cx)
                 });
                 view.open_conversation_link("readme.txt:1", cx);
@@ -952,7 +958,7 @@ mod file_panel_tests {
                     view.click_conversation_link("readme.txt:1", true, cx);
                     assert!(view.panels.get(view.panel_scope()).kind() == Panel::File);
                     assert_eq!(
-                        view.composer.read(cx).value().as_ref(),
+                        view.composer.input.read(cx).value().as_ref(),
                         "Keep this side draft"
                     );
                 }
@@ -971,7 +977,7 @@ mod file_panel_tests {
         window.update(|_, cx| {
             desktop.update(cx, |view, cx| {
                 assert_eq!(
-                    view.composer.read(cx).value().as_ref(),
+                    view.composer.input.read(cx).value().as_ref(),
                     "Keep this side draft"
                 );
                 assert!(!view.panels.get(view.panel_scope()).open);
@@ -989,7 +995,7 @@ mod file_panel_tests {
         window.update(|_, cx| {
             desktop.update(cx, |view, cx| {
                 assert_eq!(
-                    view.composer.read(cx).value().as_ref(),
+                    view.composer.input.read(cx).value().as_ref(),
                     "Keep this side draft"
                 );
                 assert!(!view.panels.get(view.panel_scope()).open);

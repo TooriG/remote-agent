@@ -274,7 +274,7 @@ impl Desktop {
                 )
                 .child(
                     div().flex_1().min_h_0().child(
-                        Editor::new(&self.editor_input)
+                        Editor::new(&self.editor.input)
                             .h_full()
                             .aria_label("ファイル編集"),
                     ),
