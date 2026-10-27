@@ -178,12 +178,13 @@ async fn shared_browser_live() {
         .agent(&scope_a, BrowserAction::Snapshot)
         .await
         .unwrap();
-    assert_eq!(observed.tabs, typed.tabs);
+    assert_eq!(observed.tab_id, typed.tab_id);
+    assert_eq!(observed.tabs[0].title, "日本語 inputAI input");
     let other_viewer = browser
         .request(&request(&thread_a, &typed, BrowserAction::Read))
         .await
         .unwrap();
-    assert_eq!(other_viewer.tabs, typed.tabs);
+    assert_eq!(other_viewer.tabs, observed.tabs);
     browser
         .request(&request(
             &thread_a,

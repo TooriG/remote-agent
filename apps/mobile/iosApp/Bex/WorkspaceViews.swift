@@ -64,6 +64,7 @@ private struct WorkspaceNavigation: UIViewControllerRepresentable {
 struct WorkspaceScreen: View {
     @ObservedObject var model: BexAppViewModel
     let root: String
+    let draft: DraftKey
     let close: () -> Void
 
     var body: some View {
@@ -71,7 +72,10 @@ struct WorkspaceScreen: View {
             WorkspaceDirectoryScreen(snapshot: model.snapshot, directory: directory,
                                      perform: request, fileDraft: fileDraft,
                                      downloadFile: model.download,
-                                     aiEdit: { model.draft = "このファイルを編集してください: \($0)\n変更内容: " },
+                                     aiEdit: { model.perform(.setDraftText(
+                                         threadId: draft,
+                                         text: "このファイルを編集してください: \($0)\n変更内容: "
+                                     )) },
                                      close: close, openDirectory: openDirectory)
         }
         .background(Color(uiColor: .systemGroupedBackground))

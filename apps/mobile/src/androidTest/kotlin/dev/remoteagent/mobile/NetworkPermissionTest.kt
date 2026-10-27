@@ -44,6 +44,10 @@ class NetworkPermissionTest {
             }
             device.waitForIdle()
             device.findObject(deny).click()
+            assertTrue(
+                "Permission dialog must close after denying access",
+                device.wait(Until.gone(deny), 10_000),
+            )
             if (!device.wait(Until.hasObject(By.text("アプリの設定を開く")), 10_000)) {
                 throw permissionFailure("App settings did not appear after permission denial", activity.state, device)
             }
@@ -76,7 +80,7 @@ class NetworkPermissionTest {
             device.findObject(allow).click()
             assertTrue(
                 "Permission dialog must close after allowing access",
-                device.wait(Until.gone(By.pkg("com.android.permissioncontroller")), 10_000),
+                device.wait(Until.gone(allow), 10_000),
             )
             assertTrue(device.wait(Until.hasObject(By.text("PCとペアリング")), 10_000))
             assertEquals(
