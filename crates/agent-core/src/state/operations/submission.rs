@@ -1,5 +1,5 @@
 use super::{
-    threads::{open_thread, refresh_thread},
+    sessions::{open_thread, refresh_thread},
     *,
 };
 use crate::client::ClientExt;
