@@ -53,7 +53,8 @@ extension BexLaunchUITests {
         openWorkbenchTool(app, "browser")
         let menu = app.buttons["browser.menu"]
         XCTAssertTrue(menu.waitForExistence(timeout: 20))
-        wait(for: [expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: menu)], timeout: 20)
+        // A cold Host launch has a 20-second deadline, followed by page setup or a reconnect.
+        wait(for: [expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: menu)], timeout: 60)
         XCTAssertFalse(app.buttons["個人用"].exists)
         menu.tap()
         app.buttons["browser.credentials"].tap()
