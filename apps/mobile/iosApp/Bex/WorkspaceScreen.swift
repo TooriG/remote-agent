@@ -7,18 +7,26 @@ struct ConversationDestination: View {
     @State private var showingTools = false
 
     var body: some View {
-        ThreadScreen(model: model,
-                     conversation: model.isShowingSideChat ? model.sideChatRequest?.originalConversation : model
-                         .conversation,
-                     openTools: { kind in
-                         if let kind {
-                             model.openWorkbench(kind)
-                         }
-                         showingTools = true
-                     })
-                     .navigationDestination(isPresented: $showingTools) {
-                         WorkspaceToolsScreen(model: model) { showingTools = false }
-                     }
+        GeometryReader { geometry in
+            ThreadScreen(model: model,
+                         conversation: model.isShowingSideChat ? model.sideChatRequest?.originalConversation : model
+                             .conversation,
+                         openTools: { kind in
+                             if let kind {
+                                 model.openWorkbench(kind)
+                             }
+                             showingTools = true
+                         })
+                         .simultaneousGesture(DragGesture(minimumDistance: 30).onEnded { value in
+                             guard value.startLocation.x >= geometry.size.width - 32,
+                                   value.translation.width < -60,
+                                   abs(value.translation.width) > abs(value.translation.height) * 1.5 else { return }
+                             showingTools = true
+                         })
+        }
+        .navigationDestination(isPresented: $showingTools) {
+            WorkspaceToolsScreen(model: model) { showingTools = false }
+        }
     }
 }
 

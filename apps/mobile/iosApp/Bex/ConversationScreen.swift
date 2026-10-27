@@ -26,104 +26,93 @@ struct ThreadScreen: View {
     @FocusState var composerFocused: Bool
 
     var body: some View {
-        GeometryReader { geometry in
-            chatContent
-                .simultaneousGesture(DragGesture(minimumDistance: 30).onEnded { value in
-                    guard !isSideChat, value.startLocation.x >= geometry.size.width - 32,
-                          value.translation.width < -60,
-                          abs(value.translation.width) > abs(value.translation.height) * 1.5 else { return }
-                    composerFocused = false
-                    openTools?(nil)
-                })
-        }
-        .onDisappear {
-            scrollController.onScrollToTop = {}
-            scrollController.cancelHistoryRestoration()
-            scrollController.detach()
-            visibleLatest = nil
-            dictation.cancel()
-        }
-        .onChange(of: conversation?.id) {
-            expandedItemIds.removeAll()
-            activityExpansionOverrides.removeAll()
-            visibleLatest = nil
-            scrollController.cancelHistoryRestoration()
-            isFollowingLatest = true
-            scrollPosition.scrollTo(edge: .bottom)
-        }
-        .onChange(of: model.composerFocusRequest) { _ in
-            if model.isShowingSideChat == isSideChat {
-                composerFocused = true
-            }
-        }
-        .onChange(of: model.draftKey) { _ in dictation.cancel() }
-        .onChange(of: model.isConnected) {
-            if !$0 {
+        chatContent
+            .onDisappear {
+                scrollController.onScrollToTop = {}
+                scrollController.cancelHistoryRestoration()
+                scrollController.detach()
+                visibleLatest = nil
                 dictation.cancel()
             }
-        }
-        .fileImporter(isPresented: $importing, allowedContentTypes: [.item]) { result in
-            Task {
-                do { try await model.attach(result.get()) } catch {
-                    model.transferError = error.localizedDescription
+            .onChange(of: conversation?.id) {
+                expandedItemIds.removeAll()
+                activityExpansionOverrides.removeAll()
+                visibleLatest = nil
+                scrollController.cancelHistoryRestoration()
+                isFollowingLatest = true
+                scrollPosition.scrollTo(edge: .bottom)
+            }
+            .onChange(of: model.composerFocusRequest) { _ in
+                if model.isShowingSideChat == isSideChat {
+                    composerFocused = true
                 }
             }
-        }
-        .photosPicker(isPresented: $showingPhotos, selection: $selectedPhotos,
-                      selectionBehavior: .ordered, matching: .any(of: [.images, .videos]),
-                      preferredItemEncoding: .compatible)
-        .onChange(of: selectedPhotos) { _, items in
-            guard !items.isEmpty else { return }
-            selectedPhotos = []
-            preparingMedia = true
-            model.transferError = nil
-            let draftKey = model.draftKey
-            Task { await importPhotos(items, draftKey: draftKey) }
-        }
-        .fullScreenCover(isPresented: $showingCamera) {
-            ChatCameraPicker { result in
-                showingCamera = false
+            .onChange(of: model.draftKey) { _ in dictation.cancel() }
+            .onChange(of: model.isConnected) {
+                if !$0 {
+                    dictation.cancel()
+                }
+            }
+            .fileImporter(isPresented: $importing, allowedContentTypes: [.item]) { result in
                 Task {
-                    do {
-                        if let url = try result.get() {
-                            try await model.attach(url, temporaryDirectory: url.deletingLastPathComponent())
-                        }
-                    } catch { model.transferError = error.localizedDescription }
+                    do { try await model.attach(result.get()) } catch {
+                        model.transferError = error.localizedDescription
+                    }
                 }
-            }.ignoresSafeArea()
-        }
-        .sheet(isPresented: $showingModelSettings) { ModelSettingsSheet(model: model) }
-        .onAppear {
-            if model.isNewThread {
-                composerFocused = true
             }
-        }
-        .onChange(of: model.isNewThread) {
-            if $0 {
-                composerFocused = true
+            .photosPicker(isPresented: $showingPhotos, selection: $selectedPhotos,
+                          selectionBehavior: .ordered, matching: .any(of: [.images, .videos]),
+                          preferredItemEncoding: .compatible)
+            .onChange(of: selectedPhotos) { _, items in
+                guard !items.isEmpty else { return }
+                selectedPhotos = []
+                preparingMedia = true
+                model.transferError = nil
+                let draftKey = model.draftKey
+                Task { await importPhotos(items, draftKey: draftKey) }
             }
-        }
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                if !isSideChat {
-                    HStack(spacing: 0) {
-                        Button { composerFocused = false; openTools?(nil) } label: {
-                            Image(systemName: "square.grid.2x2").frame(width: 44, height: 44)
-                        }
-                        .accessibilityLabel("ツールを開く")
-                        .accessibilityIdentifier("task.tools")
-                        if !model.isNewThread {
-                            conversationActions
+            .fullScreenCover(isPresented: $showingCamera) {
+                ChatCameraPicker { result in
+                    showingCamera = false
+                    Task {
+                        do {
+                            if let url = try result.get() {
+                                try await model.attach(url, temporaryDirectory: url.deletingLastPathComponent())
+                            }
+                        } catch { model.transferError = error.localizedDescription }
+                    }
+                }.ignoresSafeArea()
+            }
+            .sheet(isPresented: $showingModelSettings) { ModelSettingsSheet(model: model) }
+            .onAppear {
+                if model.isNewThread {
+                    composerFocused = true
+                }
+            }
+            .onChange(of: model.isNewThread) {
+                if $0 {
+                    composerFocused = true
+                }
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    if !isSideChat {
+                        HStack(spacing: 0) {
+                            Button { composerFocused = false; openTools?(nil) } label: {
+                                Image(systemName: "square.grid.2x2").frame(width: 44, height: 44)
+                            }
+                            .accessibilityLabel("ツールを開く")
+                            .accessibilityIdentifier("task.tools")
+                            if !model.isNewThread {
+                                conversationActions
+                            }
                         }
                     }
                 }
             }
-        }
     }
-}
 
-extension ThreadScreen {
     private var chatContent: some View {
         let history = conversation?.id.flatMap { model.snapshot.historyControl(session: $0) }
         let followLatest = $isFollowingLatest
