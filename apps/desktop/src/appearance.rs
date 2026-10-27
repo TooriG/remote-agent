@@ -17,6 +17,7 @@ pub(crate) const ACCENT: u32 = 0x346bf1;
 
 #[cfg(target_os = "windows")]
 pub(crate) fn style_native_titlebar(window: &gpui_kit::Window) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows::Win32::{
         Foundation::HWND,
         Graphics::Dwm::{
@@ -24,7 +25,6 @@ pub(crate) fn style_native_titlebar(window: &gpui_kit::Window) {
             DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute,
         },
     };
-    use wry::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
     let Ok(handle) = HasWindowHandle::window_handle(window) else {
         return;

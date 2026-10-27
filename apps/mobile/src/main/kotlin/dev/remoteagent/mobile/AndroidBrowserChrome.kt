@@ -11,11 +11,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -41,6 +43,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.remoteagent.core.BrowserCredentials
 import dev.remoteagent.core.BrowserAction
 import dev.remoteagent.core.BrowserTab
 import dev.remoteagent.core.browserAddressUrl
@@ -140,6 +143,11 @@ private fun BrowserMenu(
             Icon(painterResource(R.drawable.ic_more), "ブラウザのメニュー", Modifier.size(16.dp))
         }
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+            DropdownMenuItem(text = { Text("ログイン状態・保存パスワード") }, onClick = {
+                menuOpen = false
+                send(BrowserAction.Credentials)
+            })
+            HorizontalDivider()
             DropdownMenuItem(
                 text = { Text("新しいタブ") },
                 onClick = {
@@ -217,4 +225,47 @@ internal fun BrowserEmptyState(connected: Boolean, modifier: Modifier) {
                 )
             }
     }
+}
+
+@Composable
+internal fun BrowserCredentialsDialog(
+    credentials: BrowserCredentials,
+    send: (BrowserAction) -> Unit,
+    close: () -> Unit,
+) {
+    AlertDialog(onDismissRequest = close, title = { Text("ブラウザデータ") }, confirmButton = {
+        TextButton(onClick = close) { Text("閉じる") }
+    }, text = {
+        Column(Modifier.verticalScroll(rememberScrollState())) {
+            Text("接続先のブラウザから取り込む")
+            if (credentials.profiles.isEmpty()) Text("取り込めるブラウザプロファイルがありません。")
+            credentials.profiles.forEach { profile ->
+                Text(profile.label)
+                TextButton(
+                    onClick = { send(BrowserAction.ImportCookies(profile.id)) },
+                    enabled = profile.id.isNotEmpty(),
+                ) { Text("ログイン状態（Cookie）") }
+                TextButton(
+                    onClick = { send(BrowserAction.ImportPasswords(profile.id)) },
+                    enabled = profile.id.isNotEmpty(),
+                ) { Text("保存パスワード → Keychain") }
+            }
+            credentials.origin?.let { origin ->
+                HorizontalDivider()
+                Text("保存パスワード · $origin")
+                if (credentials.accounts.isEmpty()) {
+                    Text(credentials.passwordError ?: "このサイトの保存パスワードはありません。")
+                }
+                credentials.accounts.forEach { username ->
+                    TextButton(onClick = { send(BrowserAction.FillPassword(origin, username)) }) {
+                        Text(username.ifEmpty { "ユーザー名なし" })
+                    }
+                }
+                TextButton(
+                    onClick = { send(BrowserAction.DeletePasswords(origin)) },
+                    enabled = credentials.accounts.isNotEmpty(),
+                ) { Text("このサイトの保存パスワードを削除") }
+            }
+        }
+    })
 }

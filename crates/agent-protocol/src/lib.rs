@@ -1,5 +1,6 @@
 //! Shared wire contracts and deterministic value operations. No client state or I/O.
 pub mod browser;
+pub mod browser_import;
 pub mod composer;
 pub mod diagnostics;
 pub mod dsh;

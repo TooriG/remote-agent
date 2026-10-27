@@ -25,6 +25,20 @@ impl std::fmt::Debug for BrowserRequest {
 #[derive(Clone, Serialize, Deserialize)]
 pub enum BrowserAction {
     Read,
+    Credentials,
+    ImportCookies {
+        profile: String,
+    },
+    ImportPasswords {
+        profile: String,
+    },
+    FillPassword {
+        origin: String,
+        username: String,
+    },
+    DeletePasswords {
+        origin: String,
+    },
     OpenTab {
         url: String,
     },
@@ -99,6 +113,16 @@ impl BrowserAction {
                 && (0.0..f64::from(MAX_HEIGHT)).contains(&y)
         }
         let valid = match self {
+            Self::ImportCookies { profile } | Self::ImportPasswords { profile } => {
+                !profile.is_empty() && profile.len() <= 256
+            }
+            Self::FillPassword { origin, username } => {
+                crate::browser_import::password_origin(origin).as_deref() == Ok(origin.as_str())
+                    && username.len() <= 4096
+            }
+            Self::DeletePasswords { origin } => {
+                crate::browser_import::password_origin(origin).as_deref() == Ok(origin.as_str())
+            }
             Self::Navigate { url } | Self::OpenTab { url } => {
                 browser_url(url)?;
                 url.len() <= 8192
@@ -173,6 +197,19 @@ pub struct BrowserDialog {
     pub prompt: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BrowserImportProfile {
+    pub id: String,
+    pub label: String,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BrowserCredentials {
+    pub profiles: Vec<BrowserImportProfile>,
+    pub origin: Option<String>,
+    pub accounts: Vec<String>,
+    pub password_error: Option<String>,
+}
+
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct BrowserFrame {
     pub tabs: Vec<BrowserTab>,
@@ -189,6 +226,7 @@ pub struct BrowserFrame {
     pub loading: bool,
     pub page_text: String,
     pub value: String,
+    pub credentials: Option<BrowserCredentials>,
 }
 impl std::fmt::Debug for BrowserFrame {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -236,6 +274,45 @@ mod tests {
             },
         ] {
             assert!(action.validate().is_err());
+        }
+        for action in [
+            BrowserAction::ImportCookies {
+                profile: String::new(),
+            },
+            BrowserAction::ImportPasswords {
+                profile: "x".repeat(257),
+            },
+            BrowserAction::FillPassword {
+                origin: "https://example.test/login".into(),
+                username: "fixture-user".into(),
+            },
+            BrowserAction::FillPassword {
+                origin: "https://example.test".into(),
+                username: "x".repeat(4097),
+            },
+            BrowserAction::DeletePasswords {
+                origin: "http://example.test".into(),
+            },
+        ] {
+            assert!(action.validate().is_err());
+        }
+        for action in [
+            BrowserAction::Credentials,
+            BrowserAction::ImportCookies {
+                profile: "Chrome/Default".into(),
+            },
+            BrowserAction::ImportPasswords {
+                profile: "x".repeat(256),
+            },
+            BrowserAction::FillPassword {
+                origin: "https://example.test".into(),
+                username: "x".repeat(4096),
+            },
+            BrowserAction::DeletePasswords {
+                origin: "https://example.test:8443".into(),
+            },
+        ] {
+            assert!(action.validate().is_ok());
         }
         let frame = BrowserFrame {
             image: vec![0, 255, 128],

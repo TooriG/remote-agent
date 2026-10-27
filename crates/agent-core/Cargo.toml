@@ -11,7 +11,6 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
 [features]
 bindings = ["dep:uniffi", "dep:zeroize"]
 diagrams = ["dep:mermaid-rs-renderer"]
-browser-import = []
 
 [dependencies]
 agent-protocol = { path = "../agent-protocol" }

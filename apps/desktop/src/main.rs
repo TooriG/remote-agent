@@ -123,13 +123,6 @@ fn open_main_window(cx: &mut App) {
 }
 
 fn main() {
-    // GPUI's DirectComposition target is above child HWNDs, hiding WebView2
-    // behind the app surface. Use its HWND swap-chain renderer for embedding.
-    // Set this before any runtime or platform threads can read the environment.
-    #[cfg(target_os = "windows")]
-    unsafe {
-        std::env::set_var("GPUI_DISABLE_DIRECT_COMPOSITION", "1");
-    }
     #[cfg(target_os = "macos")]
     let _ = std::thread::Builder::new()
         .name("microphone-prepare".into())

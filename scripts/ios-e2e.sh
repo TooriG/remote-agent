@@ -17,6 +17,7 @@ fi
 if [[ $# == 0 ]]; then
     set -- \
         testSimulatorWorkbenchStartsEmptyAndOwnsOnlyOpenedTabs \
+        testSimulatorBrowserUsesOneSharedImportMenu \
         testSimulatorNativeTerminalRetainsShellAfterReopening \
         testSimulatorNativeTerminalPastesMultilineText \
         testSimulatorNativeTerminalDoesNotDuplicateQueryResponses \

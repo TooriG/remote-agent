@@ -1,10 +1,9 @@
-//! Local password import and explicit fill. Secrets never enter the Host or agent protocol.
-use super::*;
-use agent_core::browser_import::password_origin;
+use super::{
+    StoragePassword, chromium_key, chromium_payload, decrypt_chromium_payload, password_origin,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use zeroize::Zeroizing;
-
 const SERVICE: &str = "app.bex.BEX.browser-passwords";
 static VAULT_WRITES: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -133,225 +132,44 @@ fn read_passwords(
     Ok((result, skipped))
 }
 
-impl Browser {
-    pub(super) fn import_passwords(
-        &mut self,
-        profile: std::path::PathBuf,
-        password: StoragePassword,
-        cx: &mut Context<Self>,
-    ) {
-        if self.importing {
-            return;
-        }
-        self.importing = true;
-        self.error.clear();
-        self.import_notice =
-            "保存パスワードを Keychain に取り込み中… OS のアクセス確認を許可してください。".into();
-        let job = cx.background_executor().spawn(async move {
-            let (origins, skipped) = read_passwords(&profile, password)?;
-            let mut saved = 0;
-            for (origin, logins) in origins {
-                saved += save(&origin, logins).map_err(|_| format!("{saved}件を保存した後、Keychain への保存に失敗しました。アクセスを確認して再試行してください。"))?;
-            }
-            Ok::<_, String>(format!("パスワードを{saved}件 Keychain に保存しました（HTTPS 以外など{skipped}件を除外）。入力はサイトごとに選択してください。"))
-        });
-        cx.spawn(async move |owner, cx| {
-            let result = job.await;
-            let _ = owner.update(cx, |view, cx| {
-                view.importing = false;
-                match result {
-                    Ok(notice) => view.import_notice = notice,
-                    Err(error) => {
-                        view.import_notice.clear();
-                        view.error = error;
-                    }
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-        cx.notify();
+pub(super) fn import(
+    profile: &std::path::Path,
+    password: StoragePassword,
+) -> Result<String, String> {
+    let (origins, skipped) = read_passwords(profile, password)?;
+    let mut saved = 0;
+    for (origin, logins) in origins {
+        saved += save(&origin,logins).map_err(|_|format!("{saved}件を保存した後、Keychainへの保存に失敗しました。アクセスを確認して再試行してください。"))?;
     }
-
-    pub(super) fn show_passwords(&mut self, cx: &mut Context<Self>) {
-        if self.password_accounts.take().is_some() {
-            cx.notify();
-            return;
-        }
-        let result = self
-            .webview
-            .read(cx)
-            .raw()
-            .url()
-            .map_err(|_| "サイトの URL を確認できません。".to_owned())
-            .and_then(|url| password_origin(&url));
-        let origin = match result {
-            Ok(origin) => origin,
-            Err(error) => {
-                self.error = error;
-                cx.notify();
-                return;
-            }
-        };
-        let requested_origin = origin.clone();
-        let job = cx.background_executor().spawn(async move {
-            load(&requested_origin)
-                .map(|logins| logins.into_iter().map(|login| login.username).collect())
-        });
-        cx.spawn(async move |owner, cx| {
-            let result = job.await;
-            let _ = owner.update(cx, |view, cx| {
-                if view
-                    .webview
-                    .read(cx)
-                    .raw()
-                    .url()
-                    .ok()
-                    .and_then(|url| password_origin(&url).ok())
-                    .as_deref()
-                    != Some(&origin)
-                {
-                    return;
-                }
-                match result {
-                    Ok(accounts) => view.password_accounts = Some(accounts),
-                    Err(error) => view.error = error,
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
-    pub(super) fn fill_password(&mut self, username: String, cx: &mut Context<Self>) {
-        let Some(origin) = self
-            .webview
-            .read(cx)
-            .raw()
-            .url()
-            .ok()
-            .and_then(|url| password_origin(&url).ok())
-        else {
-            return;
-        };
-        let requested_origin = origin.clone();
-        let job = cx.background_executor().spawn(async move {
-            let login = load(&requested_origin)?
-                .into_iter()
-                .find(|login| login.username == username)
-                .ok_or("保存パスワードが見つかりません。")?;
-            let origin = serde_json::to_string(&requested_origin).unwrap();
-            let username = Zeroizing::new(serde_json::to_string(&login.username).unwrap());
-            let password = Zeroizing::new(serde_json::to_string(&login.password).unwrap());
-            Ok::<_, String>(Zeroizing::new(format!(
-                "({})({origin},{},{})",
-                include_str!("password-fill.js"),
-                username.as_str(),
-                password.as_str()
-            )))
-        });
-        cx.spawn(async move |owner, cx| {
-            let result = job.await;
-            let (tx, rx) = async_channel::bounded(1);
-            let started = owner.update(cx, |view, cx| {
-                view.password_accounts = None;
-                if view
-                    .webview
-                    .read(cx)
-                    .raw()
-                    .url()
-                    .ok()
-                    .and_then(|url| password_origin(&url).ok())
-                    .as_deref()
-                    != Some(&origin)
-                {
-                    return false;
-                }
-                match result {
-                    Ok(script) => {
-                        if view
-                            .webview
-                            .read(cx)
-                            .raw()
-                            .evaluate_script_with_callback(&script, move |result| {
-                                let _ = tx.try_send(result == "true");
-                            })
-                            .is_err()
-                        {
-                            view.error = "パスワードを入力できません。".into();
-                            cx.notify();
-                            return false;
-                        }
-                    }
-                    Err(error) => {
-                        view.error = error;
-                        cx.notify();
-                        return false;
-                    }
-                }
-                cx.notify();
-                true
-            });
-            if !matches!(started, Ok(true)) {
-                return;
-            }
-            let filled = match futures_util::future::select(
-                Box::pin(rx.recv()),
-                Box::pin(
-                    cx.background_executor()
-                        .timer(std::time::Duration::from_secs(5)),
-                ),
-            )
-            .await
-            {
-                futures_util::future::Either::Left((Ok(filled), _)) => filled,
-                _ => false,
-            };
-            let _ = owner.update(cx, |view, cx| {
-                if filled {
-                    view.error.clear();
-                    view.import_notice =
-                        "パスワードを入力しました。内容を確認してからログインしてください。".into();
-                } else {
-                    view.error =
-                        "表示中の、同じ HTTPS サイトのログインフォームで入力してください。".into();
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
-    pub(super) fn delete_passwords(&mut self, cx: &mut Context<Self>) {
-        let Some(origin) = self
-            .webview
-            .read(cx)
-            .raw()
-            .url()
-            .ok()
-            .and_then(|url| password_origin(&url).ok())
-        else {
-            return;
-        };
-        let job = cx.background_executor().spawn(async move {
-            let _write = VAULT_WRITES
-                .lock()
-                .map_err(|_| "パスワードの削除を再試行してください。")?;
-            security_framework::passwords::delete_generic_password_options(options(&origin))
-                .map_err(|_| "Keychain のパスワードを削除できません。")
-        });
-        cx.spawn(async move |owner, cx| {
-            let result = job.await;
-            let _ = owner.update(cx, |view, cx| {
-                match result {
-                    Ok(()) => view.password_accounts = None,
-                    Err(error) => view.error = error.into(),
-                };
-                cx.notify();
-            });
-        })
-        .detach();
-    }
+    Ok(format!(
+        "パスワードを{saved}件Keychainに保存しました（HTTPS以外など{skipped}件を除外）。入力はサイトごとに選択してください。"
+    ))
+}
+pub(super) fn accounts(origin: &str) -> Result<Vec<String>, String> {
+    load(origin).map(|logins| logins.into_iter().map(|login| login.username).collect())
+}
+pub(super) fn script(origin: &str, username: &str) -> Result<Zeroizing<String>, String> {
+    let login = load(origin)?
+        .into_iter()
+        .find(|login| login.username == username)
+        .ok_or("保存パスワードが見つかりません。")?;
+    let origin = serde_json::to_string(origin).unwrap();
+    let username = Zeroizing::new(serde_json::to_string(&login.username).unwrap());
+    let password = Zeroizing::new(serde_json::to_string(&login.password).unwrap());
+    Ok(Zeroizing::new(format!(
+        "({})({origin},{},{})",
+        include_str!("../password-fill.js"),
+        username.as_str(),
+        password.as_str()
+    )))
+}
+pub(super) fn delete(origin: &str) -> Result<String, String> {
+    let _write = VAULT_WRITES
+        .lock()
+        .map_err(|_| "パスワードの削除を再試行してください。")?;
+    security_framework::passwords::delete_generic_password_options(options(origin))
+        .map_err(|_| "Keychainのパスワードを削除できません。")?;
+    Ok("このサイトの保存パスワードを削除しました。".into())
 }
 
 #[cfg(test)]

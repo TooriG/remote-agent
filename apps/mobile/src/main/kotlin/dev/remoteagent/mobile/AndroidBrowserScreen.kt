@@ -45,6 +45,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.remoteagent.core.BrowserAction
+import dev.remoteagent.core.BrowserCredentials
 import dev.remoteagent.core.BrowserFrame
 import dev.remoteagent.core.BrowserKey
 import dev.remoteagent.core.BrowserRequest
@@ -85,6 +86,9 @@ private class BrowserSession(private val thread: SessionRef) {
         private set
 
     var error by mutableStateOf<String?>(null)
+    var connectionError by mutableStateOf<String?>(null)
+    var notice by mutableStateOf<String?>(null)
+    var credentials by mutableStateOf<BrowserCredentials?>(null)
     private var viewportWidth = 0.0
     private var viewportHeight = 0.0
 
@@ -101,6 +105,10 @@ private class BrowserSession(private val thread: SessionRef) {
         BrowserRequest(thread, frame?.tabId ?: "", frame?.imageId ?: "", frame?.generation ?: 0uL, action)
 
     fun send(action: BrowserAction) {
+        error = null
+        credentials = null
+        notice = if (action is BrowserAction.ImportCookies || action is BrowserAction.ImportPasswords)
+            "ブラウザデータを取り込み中… 接続先のMacでOSのアクセス確認が出たら許可してください。" else null
         if (commands.size < BROWSER_QUEUE_LIMIT) {
             commands.addLast(request(action))
         }
@@ -113,22 +121,30 @@ private class BrowserSession(private val thread: SessionRef) {
         return request(BrowserAction.Read)
     }
 
+    private fun failed(message: String?, reading: Boolean) {
+        if (reading) connectionError = message else { error = message; notice = null }
+    }
+
     suspend fun run(profile: String?, browser: suspend (String?, BrowserRequest) -> BrowserFrame) {
         try {
             while (kotlinx.coroutines.currentCoroutineContext().isActive) {
+                val request = nextRequest()
+                val reading = request.action == BrowserAction.Read
                 try {
-                    val result = browser(profile, nextRequest())
+                    val result = browser(profile, request)
                     image = decodeBrowserImage(result.image) ?: image
                     frame = result
-                    error = null
+                    credentials = result.credentials ?: credentials
+                    notice = result.value.takeIf(String::isNotEmpty) ?: notice
+                    connectionError = null
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (failure: dev.remoteagent.core.AgentException) {
-                    error = failure.message
+                    failed(failure.message, reading)
                 } catch (failure: IllegalStateException) {
-                    error = failure.message
+                    failed(failure.message, reading)
                 }
-                delay(if (error == null) BROWSER_POLL_MS else BROWSER_RETRY_MS)
+                delay(if (connectionError == null) BROWSER_POLL_MS else BROWSER_RETRY_MS)
             }
         } finally {
             commands.clear()
@@ -169,6 +185,7 @@ private fun BrowserPane(
         onDispose { lifecycle.removeObserver(observer) }
     }
     LaunchedEffect(thread, active) { if (active) session.run(profile, browser) }
+    session.credentials?.let { BrowserCredentialsDialog(it, session::send) { session.credentials = null } }
     val frame = session.frame
     val enabled = frame != null
     var showKeyboard by remember { mutableStateOf(false) }
@@ -195,7 +212,8 @@ private fun BrowserPane(
         ) {
             session.error = it
         }
-        session.error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp)) }
+        val message = session.error ?: session.connectionError ?: session.notice
+        message?.let { Text(it, modifier = Modifier.padding(12.dp)) }
         frame?.dialog?.let { BrowserDialogView(it, enabled, session::send) }
         val blank = tab?.url == "about:blank"
         BrowserImage(

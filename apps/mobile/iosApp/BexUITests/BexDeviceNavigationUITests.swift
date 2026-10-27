@@ -45,6 +45,27 @@ extension BexLaunchUITests {
         closeWorkbench(app)
     }
 
+    func testSimulatorBrowserUsesOneSharedImportMenu() throws {
+        let app = try connectedSimulatorApp()
+        try startSimulatorConversation(app, promptText: "[success] Shared browser import menu")
+        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 30))
+        app.buttons["task.tools"].tap()
+        openWorkbenchTool(app, "browser")
+        let menu = app.buttons["browser.menu"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 20))
+        wait(for: [expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: menu)], timeout: 20)
+        XCTAssertFalse(app.buttons["個人用"].exists)
+        menu.tap()
+        app.buttons["browser.credentials"].tap()
+        let data = app.navigationBars["ブラウザデータ"]
+        XCTAssertTrue(data.waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["接続先のブラウザから取り込む"].exists)
+        captureScreen(app, named: "One shared browser with import menu")
+        data.buttons["閉じる"].tap()
+        XCTAssertTrue(menu.waitForExistence(timeout: 5))
+        closeWorkbench(app)
+    }
+
     func testSimulatorNativeTerminalPastesMultilineText() throws {
         let app = try connectedSimulatorApp()
         app.buttons["tasks.new.project.simulator-project"].tap()

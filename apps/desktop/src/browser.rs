@@ -1,9 +1,7 @@
-mod personal;
-
 use crate::{Runtime, appearance};
 use agent_core::store::Store;
 use agent_protocol::{
-    browser::{BrowserAction, BrowserFrame, BrowserKey, BrowserRequest},
+    browser::{BrowserAction, BrowserCredentials, BrowserFrame, BrowserKey, BrowserRequest},
     session::SessionRef,
 };
 use gpui_kit::{
@@ -20,8 +18,6 @@ use gpui_kit::{
 };
 use std::{collections::VecDeque, ops::Range, sync::Arc, time::Duration};
 
-pub(crate) struct OpenTab(pub(crate) String);
-
 pub(crate) struct Browser {
     store: Option<Arc<Store>>,
     thread: Option<SessionRef>,
@@ -31,21 +27,19 @@ pub(crate) struct Browser {
     address: Entity<InputState>,
     dialog_input: Entity<InputState>,
     error: Option<String>,
+    connection_error: Option<String>,
+    notice: Option<String>,
+    credentials: Option<BrowserCredentials>,
     pending: VecDeque<BrowserRequest>,
     visible: bool,
-    covered: bool,
-    personal_mode: bool,
-    personal: Option<Entity<personal::Browser>>,
     focus: FocusHandle,
     bounds: Bounds<Pixels>,
     composition: String,
     composition_selection: Range<usize>,
     _poll: Task<()>,
-    _subscriptions: Vec<Subscription>,
-    #[cfg(target_os = "windows")]
-    personal_start: Option<Task<()>>,
+    initial_url: Option<String>,
+    _subscription: Subscription,
 }
-impl EventEmitter<OpenTab> for Browser {}
 
 impl Browser {
     pub(crate) fn new(
@@ -59,8 +53,7 @@ impl Browser {
         let address = cx.new(|cx| InputState::new(window, cx).placeholder("検索または URL を入力"));
         let dialog_input = cx.new(|cx| InputState::new(window, cx));
         let focus = cx.focus_handle();
-        let personal_mode = url.is_some() || thread.is_none();
-        let view = cx.new(|cx: &mut Context<Self>| {
+        cx.new(|cx: &mut Context<Self>| {
             let subscription = cx.subscribe_in(&address, window, |view, _, event, _, cx| {
                 if matches!(event, InputEvent::PressEnter { .. }) {
                     view.navigate(cx);
@@ -72,6 +65,7 @@ impl Browser {
                         break;
                     };
                     if let Some((runtime, store, request)) = job {
+                        let reading = matches!(request.action, BrowserAction::Read);
                         let result = runtime
                             .handle
                             .spawn(async move {
@@ -98,7 +92,7 @@ impl Browser {
                         if view
                             .update_in(cx, |view, window, cx| {
                                 match result {
-                                    Ok((frame, image)) => {
+                                    Ok((mut frame, image)) => {
                                         if !view
                                             .address
                                             .read(cx)
@@ -124,10 +118,26 @@ impl Browser {
                                         if image.is_some() {
                                             view.image = image;
                                         }
+                                        if let Some(metadata) = frame.credentials.take() {
+                                            view.credentials = Some(metadata);
+                                        }
+                                        if !frame.value.is_empty() {
+                                            view.notice = Some(std::mem::take(&mut frame.value));
+                                        }
                                         view.frame = frame;
-                                        view.error = None;
+                                        if let Some(url) = view.initial_url.take() {
+                                            view.send(BrowserAction::Navigate { url }, cx);
+                                        }
+                                        view.connection_error = None;
                                     }
-                                    Err(error) => view.error = Some(error),
+                                    Err(error) => {
+                                        if reading {
+                                            view.connection_error = Some(error);
+                                        } else {
+                                            view.error = Some(error);
+                                            view.notice = None;
+                                        }
+                                    }
                                 }
                                 cx.notify();
                             })
@@ -150,33 +160,29 @@ impl Browser {
                 address,
                 dialog_input,
                 error: None,
+                connection_error: None,
+                notice: None,
+                credentials: None,
                 pending: VecDeque::new(),
                 visible: false,
-                covered: false,
-                personal_mode,
-                personal: None,
                 focus,
                 bounds: Bounds::default(),
                 composition: String::new(),
                 composition_selection: 0..0,
                 _poll: poll,
-                _subscriptions: vec![subscription],
-                #[cfg(target_os = "windows")]
-                personal_start: None,
+                initial_url: url,
+                _subscription: subscription,
             }
-        });
-        if personal_mode {
-            view.update(cx, |view, cx| view.start_personal(url, window, cx));
-        }
-        view
+        })
     }
 
     fn next_request(&mut self) -> Option<(Runtime, Arc<Store>, BrowserRequest)> {
         let store = self.store.clone()?;
         self.thread.as_ref()?;
-        let request = self.pending.pop_front().or_else(|| {
-            (self.visible && !self.personal_mode).then(|| self.request(BrowserAction::Read))
-        })?;
+        let request = self
+            .pending
+            .pop_front()
+            .or_else(|| self.visible.then(|| self.request(BrowserAction::Read)))?;
         Some((self.runtime.clone(), store, request))
     }
 
@@ -194,6 +200,17 @@ impl Browser {
     }
 
     fn send(&mut self, action: BrowserAction, cx: &mut Context<Self>) {
+        self.error = None;
+        self.notice = None;
+        if matches!(
+            action,
+            BrowserAction::ImportCookies { .. } | BrowserAction::ImportPasswords { .. }
+        ) {
+            self.notice = Some(
+                "ブラウザデータを取り込み中… OSのアクセス確認が出たら許可してください。".into(),
+            );
+        }
+        self.credentials = None;
         if self.thread.is_some() && !self.frame.tab_id.is_empty() && self.pending.len() < 64 {
             self.pending.push_back(self.request(action));
         }
@@ -208,61 +225,6 @@ impl Browser {
                 cx.notify();
             }
         }
-    }
-
-    pub(crate) fn mode_menu(&self, cx: &Context<Self>) -> AnyElement {
-        let owner = cx.entity().downgrade();
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
-        let visibility = owner.clone();
-        Button::new("browser-mode")
-            .icon(if self.personal_mode {
-                IconName::User
-            } else {
-                IconName::Globe
-            })
-            .xsmall()
-            .ghost()
-            .dropdown_caret(true)
-            .accessibility_label(if self.personal_mode {
-                "個人用ブラウザ・モードを変更"
-            } else {
-                "AI と共有・モードを変更"
-            })
-            .dropdown_menu(move |menu, _, _| {
-                let shared = owner.clone();
-                let personal = owner.clone();
-                menu.item(PopupMenuItem::new("AI と共有").on_click(move |_, _, cx| {
-                    let _ = shared.update(cx, |view, cx| {
-                        view.personal_mode = false;
-                        if let Some(personal) = &view.personal {
-                            personal.update(cx, |view, cx| view.set_visible(false, cx));
-                        }
-                        cx.notify();
-                    });
-                }))
-                .item(PopupMenuItem::new("個人用").on_click(move |_, window, cx| {
-                    let _ = personal.update(cx, |view, cx| {
-                        view.personal_mode = true;
-                        view.start_personal(None, window, cx);
-                        if let Some(personal) = &view.personal {
-                            personal.update(cx, |view, cx| view.set_visible(true, cx));
-                        }
-                        cx.notify();
-                    });
-                }))
-            })
-            .map(|button| {
-                #[cfg(any(target_os = "macos", target_os = "windows"))]
-                let button = button.on_open_change(move |open, _, cx| {
-                    let _ = visibility.update(cx, |view, cx| {
-                        if let Some(personal) = &view.personal {
-                            personal.update(cx, |view, cx| view.set_menu_open(*open, cx));
-                        }
-                    });
-                });
-                button
-            })
-            .into_any_element()
     }
 
     fn actions_menu(&self, cx: &Context<Self>) -> impl IntoElement {
@@ -286,9 +248,17 @@ impl Browser {
                 let fit = owner.clone();
                 let desktop = owner.clone();
                 let mobile = owner.clone();
+                let credentials = owner.clone();
                 let tab_id = tab_id.clone();
                 let url = url.clone();
-                menu.item(PopupMenuItem::new("新しいタブ").on_click(move |_, _, cx| {
+                menu.item(PopupMenuItem::new("ログイン状態・保存パスワード").on_click(
+                    move |_, _, cx| {
+                        let _ = credentials
+                            .update(cx, |view, cx| view.send(BrowserAction::Credentials, cx));
+                    },
+                ))
+                .separator()
+                .item(PopupMenuItem::new("新しいタブ").on_click(move |_, _, cx| {
                     let _ = new_tab.update(cx, |view, cx| {
                         view.send(
                             BrowserAction::OpenTab {
@@ -359,94 +329,155 @@ impl Browser {
             })
     }
 
-    pub(crate) fn title(&self, cx: &App) -> String {
-        if self.personal_mode {
-            return self
-                .personal
-                .as_ref()
-                .map_or_else(|| "個人用ブラウザ".into(), |view| view.read(cx).title(cx));
+    fn credentials_panel(
+        &self,
+        metadata: BrowserCredentials,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let mut panel = v_flex()
+            .id("browser-credentials")
+            .max_h(px(360.))
+            .overflow_y_scroll()
+            .p_3()
+            .gap_2()
+            .border_b_1()
+            .border_color(rgb(0x202020))
+            .child(
+                h_flex().justify_between().child("ブラウザデータ").child(
+                    Button::new("close-browser-data")
+                        .icon(IconName::Close)
+                        .ghost()
+                        .xsmall()
+                        .accessibility_label("ブラウザデータを閉じる")
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.credentials = None;
+                            cx.notify();
+                        })),
+                ),
+            )
+            .child(div().text_sm().child("Hostのブラウザから取り込む"));
+        if metadata.profiles.is_empty() {
+            panel = panel.child(
+                div()
+                    .text_sm()
+                    .child("取り込めるブラウザプロファイルがありません。"),
+            );
         }
+        for (index, profile) in metadata.profiles.into_iter().enumerate() {
+            let cookies = profile.id.clone();
+            let passwords = profile.id;
+            panel = panel.child(
+                v_flex().gap_1().child(profile.label).child(
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            Button::new(SharedString::from(format!("import-cookies-{index}")))
+                                .label("ログイン状態（Cookie）")
+                                .small()
+                                .ghost()
+                                .disabled(cookies.is_empty())
+                                .on_click(cx.listener(move |view, _, _, cx| {
+                                    view.send(
+                                        BrowserAction::ImportCookies {
+                                            profile: cookies.clone(),
+                                        },
+                                        cx,
+                                    )
+                                })),
+                        )
+                        .child(
+                            Button::new(SharedString::from(format!("import-passwords-{index}")))
+                                .label("保存パスワード → Keychain")
+                                .small()
+                                .ghost()
+                                .disabled(passwords.is_empty())
+                                .on_click(cx.listener(move |view, _, _, cx| {
+                                    view.send(
+                                        BrowserAction::ImportPasswords {
+                                            profile: passwords.clone(),
+                                        },
+                                        cx,
+                                    )
+                                })),
+                        ),
+                ),
+            );
+        }
+        if let Some(origin) = metadata.origin {
+            panel = panel.child(
+                div()
+                    .mt_2()
+                    .text_sm()
+                    .child(format!("保存パスワード · {origin}")),
+            );
+            if metadata.accounts.is_empty() {
+                panel = panel.child(
+                    div().text_sm().child(
+                        metadata
+                            .password_error
+                            .unwrap_or_else(|| "このサイトの保存パスワードはありません。".into()),
+                    ),
+                );
+            }
+            for (index, username) in metadata.accounts.iter().enumerate() {
+                let origin = origin.clone();
+                let username = username.clone();
+                panel = panel.child(
+                    Button::new(SharedString::from(format!("fill-password-{index}")))
+                        .label(if username.is_empty() {
+                            "ユーザー名なし".into()
+                        } else {
+                            username.clone()
+                        })
+                        .small()
+                        .ghost()
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            view.send(
+                                BrowserAction::FillPassword {
+                                    origin: origin.clone(),
+                                    username: username.clone(),
+                                },
+                                cx,
+                            )
+                        })),
+                );
+            }
+            panel = panel.child(
+                Button::new("delete-site-passwords")
+                    .label("このサイトの保存パスワードを削除")
+                    .small()
+                    .ghost()
+                    .disabled(metadata.accounts.is_empty())
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        view.send(
+                            BrowserAction::DeletePasswords {
+                                origin: origin.clone(),
+                            },
+                            cx,
+                        )
+                    })),
+            );
+        }
+        panel
+    }
+
+    pub(crate) fn title(&self) -> String {
         self.frame
             .tabs
             .iter()
             .find(|tab| tab.id == self.frame.tab_id)
             .map(|tab| {
                 if tab.title.is_empty() || tab.url == "about:blank" {
-                    "AI ブラウザ".into()
+                    "ブラウザ".into()
                 } else {
                     tab.title.clone()
                 }
             })
-            .unwrap_or_else(|| "AI ブラウザ".into())
+            .unwrap_or_else(|| "ブラウザ".into())
     }
 
-    pub(crate) fn set_visible(&mut self, visible: bool, covered: bool, cx: &mut App) {
+    pub(crate) fn set_visible(&mut self, visible: bool) {
         self.visible = visible;
-        self.covered = covered;
-        if let Some(personal) = &self.personal {
-            personal.update(cx, |view, cx| {
-                view.set_visible(visible && self.personal_mode && !covered, cx)
-            });
-        }
-    }
-
-    fn attach_personal(
-        &mut self,
-        view: Entity<personal::Browser>,
-        url: Option<String>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        view.update(cx, |view, cx| {
-            view.set_visible(self.visible && self.personal_mode && !self.covered, cx);
-            if let Some(url) = url {
-                view.open_url(&url, window, cx);
-            }
-        });
-        self._subscriptions
-            .push(cx.subscribe(&view, |_, _, event: &personal::OpenTab, cx| {
-                cx.emit(OpenTab(event.0.clone()))
-            }));
-        self._subscriptions
-            .push(cx.observe(&view, |_, _, cx| cx.notify()));
-        self.personal = Some(view);
-        cx.notify();
-    }
-
-    fn start_personal(&mut self, url: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
-        if self.personal.is_some() {
-            return;
-        }
-        #[cfg(target_os = "windows")]
-        {
-            if self.personal_start.is_some() {
-                return;
-            }
-            let owner = cx.entity().downgrade();
-            match personal::Browser::start(window, cx, move |result, window, cx| {
-                let _ = owner.update(cx, |view, cx| match result {
-                    Ok(personal) => view.attach_personal(personal, url, window, cx),
-                    Err(error) => {
-                        view.error = Some(error);
-                        cx.notify();
-                    }
-                });
-            }) {
-                Ok(task) => self.personal_start = Some(task),
-                Err(error) => self.error = Some(error),
-            }
-        }
-        #[cfg(not(target_os = "windows"))]
-        match personal::Browser::new(
-            wry::WebViewBuilder::new(),
-            #[cfg(target_os = "macos")]
-            personal::import_sources(),
-            window,
-            cx,
-        ) {
-            Ok(view) => self.attach_personal(view, url, window, cx),
-            Err(error) => self.error = Some(error),
-        }
     }
 
     fn page_point(&self, position: Point<Pixels>) -> Option<(f64, f64)> {
@@ -508,23 +539,6 @@ impl Render for Browser {
             .min_h_0()
             .bg(rgb(appearance::BACKGROUND))
             .map(|body| {
-                if self.personal_mode {
-                    return body.child(
-                        self.personal
-                            .as_ref()
-                            .map(|view| view.clone().into_any_element())
-                            .unwrap_or_else(|| {
-                                div()
-                                    .p_4()
-                                    .child(
-                                        self.error
-                                            .clone()
-                                            .unwrap_or_else(|| "ブラウザを準備中…".into()),
-                                    )
-                                    .into_any_element()
-                            }),
-                    );
-                }
                 body.when(tabs.len() > 1, |body| body.child(
                     h_flex()
                         .id("browser-tabs")
@@ -639,7 +653,9 @@ impl Render for Browser {
                         )
                         .child(self.actions_menu(cx)),
                 )
-                .when_some(self.error.clone(), |body, error| {
+                .when_some(self.credentials.clone(), |body, metadata| body.child(self.credentials_panel(metadata,cx)))
+                .when_some(self.notice.clone(), |body, notice| body.child(div().px_3().py_2().text_sm().child(notice)))
+                .when_some(self.error.clone().or(self.connection_error.clone()), |body, error| {
                     body.child(div().px_3().py_2().text_sm().child(error))
                 })
                 .when_some(self.frame.dialog.clone(), |body, dialog| {

@@ -14,9 +14,6 @@ if [[ $language == apple || $language == rust ]]; then
         --test management --test codex_accounts --test claude --test adapter_conformance
         --test crate_boundaries --test build_cleanup --test diagnostics
     )
-    if [[ $(uname -s) == Darwin ]]; then
-        integration_targets+=(--test chrome_cookie_webview)
-    fi
     just unit-tests "${integration_targets[@]}" || failed=1
     if [[ $(uname -s) == Darwin ]]; then
         # The Host-owned Chrome: navigation, clicks, concurrent phone and agent input, popups and persistence.

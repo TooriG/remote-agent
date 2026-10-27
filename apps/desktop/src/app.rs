@@ -103,7 +103,6 @@ enum SurfaceResource {
     },
     Browser {
         view: Entity<crate::browser::Browser>,
-        _events: Subscription,
         _observation: Subscription,
     },
     Terminal(Entity<crate::terminal::Terminal>),
@@ -318,7 +317,6 @@ pub(crate) struct Desktop {
     sidebar: bool,
     panels: Panels,
     surface_resources: HashMap<u64, SurfaceResource>,
-    panel_menu_open: bool,
     panel_focus: FocusHandle,
     dictation: Option<Dictation>,
     review_expanded: bool,
@@ -613,7 +611,6 @@ impl Desktop {
             sidebar: true,
             panels: Panels::default(),
             surface_resources: HashMap::new(),
-            panel_menu_open: false,
             panel_focus: cx.focus_handle(),
             dictation: None,
             review_expanded: false,
@@ -1585,7 +1582,7 @@ impl Desktop {
         for resource in self.surface_resources.values() {
             match resource {
                 SurfaceResource::Browser { view, .. } => {
-                    view.update(cx, |view, cx| view.set_visible(false, false, cx))
+                    view.update(cx, |view, _| view.set_visible(false))
                 }
                 SurfaceResource::SideChat(view) => {
                     view.update(cx, |view, cx| view.hide_surfaces(cx))
@@ -1608,21 +1605,11 @@ impl Desktop {
             window,
             cx,
         );
-        let events = cx.subscribe_in(
-            &browser,
-            window,
-            move |view, _, event: &crate::browser::OpenTab, _, cx| {
-                if let Some(scope) = view.panels.scope(id) {
-                    view.open_browser(scope, &event.0, cx);
-                }
-            },
-        );
         let observation = cx.observe(&browser, |_, _, cx| cx.notify());
         self.surface_resources.insert(
             id,
             SurfaceResource::Browser {
                 view: browser,
-                _events: events,
                 _observation: observation,
             },
         );
@@ -1715,7 +1702,7 @@ impl Desktop {
         self.panels.close(self.panel_scope(), id);
         match self.surface_resources.remove(&id) {
             Some(SurfaceResource::Browser { view, .. }) => {
-                view.update(cx, |view, cx| view.set_visible(false, false, cx));
+                view.update(cx, |view, _| view.set_visible(false));
             }
             Some(SurfaceResource::Terminal(view)) => view.update(cx, |view, _| view.close()),
             Some(SurfaceResource::SideChat(view)) => {
