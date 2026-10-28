@@ -208,10 +208,10 @@ impl ClientSession {
         Ok(reused)
     }
 
-    /// Wait for all intents accepted before this flush, then capture under the
-    /// write lock so an older autosave cannot replace the flushed snapshot.
+    /// Wait for intents accepted before this flush, then capture and enqueue
+    /// under the session lock to preserve order with autosaves and retirement.
     pub async fn flush(self: Arc<Self>) -> Result<(), AgentError> {
-        let store = self.clone().ready().await?;
+        self.clone().ready().await?;
         let operations = self.operations.lock().unwrap().clone();
         for operation in operations {
             let _ = operation.await;
@@ -220,7 +220,7 @@ impl ClientSession {
             .lock()
             .unwrap()
             .retain(|operation| operation.peek().is_none());
-        self.save(store)?.await
+        self.save()?.await
     }
 
     /// Start closing synchronously. Native cancellation cannot discard the final save.
@@ -244,7 +244,7 @@ impl ClientSession {
             runtime.spawn(async move {
                 let closed = store.shutdown().await;
                 let saved = if observing {
-                    match persistence.enqueue(store) {
+                    match persistence.enqueue(store.snapshot()) {
                         Ok(saved) => saved.await,
                         Err(reason) => Err(reason),
                     }
@@ -393,24 +393,24 @@ impl ClientSession {
                 let Some(session) = session.upgrade() else {
                     return;
                 };
-                if let Ok(saved) = session.save(store.clone()) {
+                if let Ok(saved) = session.save() {
                     let _ = saved.await;
                 }
                 dirty = false;
             }
         });
     }
-    fn save(&self, store: Arc<AgentStore>) -> Result<Completion<()>, AgentError> {
+    fn save(&self) -> Result<Completion<()>, AgentError> {
         let phase = self.phase.lock().unwrap();
         match &*phase {
-            Phase::Ready { .. } => self.persistence.enqueue(store),
+            Phase::Ready { store, .. } => self.persistence.enqueue(store.snapshot()),
             _ => Err(error("session closed")),
         }
     }
 }
 
 struct Save {
-    store: Arc<AgentStore>,
+    snapshot: Arc<Snapshot>,
     complete: oneshot::Sender<Result<(), AgentError>>,
 }
 struct Persistence {
@@ -431,9 +431,8 @@ impl Persistence {
         // This worker owns each write through completion, even if its native
         // waiter is cancelled. Closing enqueues the final save after earlier ones.
         tokio::spawn(async move {
-            while let Some(Save { store, complete }) = receive.recv().await {
+            while let Some(Save { snapshot, complete }) = receive.recv().await {
                 let storage = storage.clone();
-                let snapshot = store.snapshot();
                 let result = tokio::task::spawn_blocking(move || {
                     storage.save(
                         snapshot.serialize_local_state()?,
@@ -449,14 +448,14 @@ impl Persistence {
         });
     }
 
-    fn enqueue(&self, store: Arc<AgentStore>) -> Result<Completion<()>, AgentError> {
+    fn enqueue(&self, snapshot: Arc<Snapshot>) -> Result<Completion<()>, AgentError> {
         let (complete, result) = oneshot::channel();
         self.queue
             .lock()
             .unwrap()
             .as_ref()
             .ok_or_else(|| error("session is not ready"))?
-            .send(Save { store, complete })
+            .send(Save { snapshot, complete })
             .map_err(error)?;
         Ok(async move { result.await.map_err(error)? }.boxed().shared())
     }
