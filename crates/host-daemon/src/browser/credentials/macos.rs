@@ -234,9 +234,9 @@ fn decrypt_chromium_payload(
     encrypted: &[u8],
     key: &[u8; 16],
 ) -> Result<zeroize::Zeroizing<Vec<u8>>, String> {
-    use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
+    use aes::cipher::{BlockModeDecrypt, KeyIvInit, block_padding::Pkcs7};
     cbc::Decryptor::<aes::Aes128>::new(key.into(), (&[b' '; 16]).into())
-        .decrypt_padded_vec_mut::<Pkcs7>(encrypted)
+        .decrypt_padded_vec::<Pkcs7>(encrypted)
         .map(zeroize::Zeroizing::new)
         .map_err(|_| "ブラウザの保存データを復号できません。取り込みは行いませんでした。".into())
 }

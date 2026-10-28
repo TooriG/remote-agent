@@ -15,7 +15,7 @@ diagrams = ["dep:mermaid-rs-renderer"]
 [dependencies]
 agent-protocol = { path = "../agent-protocol" }
 agent-transport = { path = "../agent-transport" }
-uniffi = { version = "=0.32.0", features = ["tokio"], optional = true }
+uniffi = { version = "=0.32.2", features = ["tokio"], optional = true }
 zeroize = { workspace = true, optional = true }
 uuid = { version = "1", features = ["v4", "serde", "v5"] }
 futures-util.workspace = true
@@ -37,7 +37,7 @@ base64.workspace = true
 agent-protocol = { path = "../agent-protocol", features = ["test-support"] }
 ring.workspace = true
 tempfile = "3"
-insta = { version = "1.46", default-features = false, features = ["json"] }
-proptest = "1.11"
-rstest = { version = "0.27", default-features = false }
+insta = { version = "1.49", default-features = false, features = ["json"] }
+proptest = "1.12"
+rstest = { version = "0.28", default-features = false }
 tokio = { workspace = true, features = ["test-util"] }

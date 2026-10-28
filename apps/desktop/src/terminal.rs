@@ -491,7 +491,7 @@ impl Render for Terminal {
                             s.selecting = false;
                         }),
                     )
-                    .on_scroll_wheel(cx.listener(|s, event: &ScrollWheelEvent, _, cx| {
+                    .on_scroll(cx.listener(|s, event: &ScrollEvent, _, cx| {
                         let delta = event.delta.pixel_delta(px(LINE_HEIGHT));
                         let lines = (delta.y / px(LINE_HEIGHT)).round() as i32;
                         if s.term.mode().intersects(TermMode::MOUSE_MODE) && !event.modifiers.shift

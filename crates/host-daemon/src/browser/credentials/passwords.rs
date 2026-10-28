@@ -175,7 +175,7 @@ pub(super) fn delete(origin: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::chromium_key;
-    use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
+    use aes::cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
 
     fn storage_secret() -> Result<Vec<u8>, String> {
         Ok(b"synthetic-storage-key".to_vec())
@@ -193,7 +193,7 @@ mod tests {
         let mut encrypted = b"v10".to_vec();
         encrypted.extend(
             cbc::Encryptor::<aes::Aes128>::new((&*key).into(), (&[b' '; 16]).into())
-                .encrypt_padded_vec_mut::<Pkcs7>(value.as_bytes()),
+                .encrypt_padded_vec::<Pkcs7>(value.as_bytes()),
         );
         db.execute(
             "INSERT INTO logins VALUES (?1,?2,'fixture-user',?3,0,0,0)",

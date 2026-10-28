@@ -712,7 +712,7 @@ impl Render for Browser {
                                 }
                             }),
                         )
-                        .on_scroll_wheel(cx.listener(|view, event: &ScrollWheelEvent, _, cx| {
+                        .on_scroll(cx.listener(|view, event: &ScrollEvent, _, cx| {
                             if let Some((x, y)) = view.page_point(event.position)
                             {
                                 let delta = event.delta.pixel_delta(px(16.));

@@ -115,7 +115,7 @@ impl ConversationSelection {
                             cx.notify();
                         });
                     })
-                    .on_scroll_wheel(move |_, _, cx| {
+                    .on_scroll(move |_, _, cx| {
                         close_owner.update(cx, |view, cx| view.clear(cx));
                     })
                     .child(content)
