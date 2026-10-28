@@ -128,8 +128,7 @@ impl ClientSession {
         let previous = self.previous.lock().unwrap().clone();
         if let Some(previous) = previous {
             if let Err(reason) = previous.shutdown().await {
-                self.fail(reason.clone());
-                return Err(reason);
+                *self.persistence.error.lock().unwrap() = Some(reason.to_string());
             }
             self.previous.lock().unwrap().take();
         }
@@ -555,6 +554,39 @@ mod tests {
     }
     fn open(storage: Arc<Storage>) -> Arc<ClientSession> {
         ClientSession::open(storage, None, false, 42)
+    }
+
+    #[tokio::test]
+    async fn a_failed_previous_host_save_is_reported_without_blocking_the_new_host_or_queued_work()
+    {
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            let old_storage = Arc::new(Storage::default());
+            let old = open(old_storage.clone());
+            old.dispatch(edit("saved old Host work")).unwrap();
+            old.clone().flush().await.unwrap();
+            old.dispatch(edit("unsaved old Host edit")).unwrap();
+            old_storage.fail_save.store(true, Ordering::SeqCst);
+
+            let storage = Arc::new(Storage::default());
+            let next = ClientSession::open(storage.clone(), Some(old), false, 0);
+            let queued = next.dispatch(edit("new Host work")).unwrap();
+            next.clone().ready().await.unwrap();
+            assert_eq!(
+                next.persistence_error().as_deref(),
+                Some("disk unavailable")
+            );
+            queued.wait().await.unwrap();
+            next.clone().flush().await.unwrap();
+            assert!(next.persistence_error().is_none());
+            assert_eq!(text(&storage.bytes.lock().unwrap()), "new Host work");
+            assert_eq!(
+                text(&old_storage.bytes.lock().unwrap()),
+                "saved old Host work"
+            );
+            next.shutdown().await.unwrap();
+        })
+        .await
+        .expect("an old Host save failure blocked switching Hosts");
     }
 
     #[tokio::test]
