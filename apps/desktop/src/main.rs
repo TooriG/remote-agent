@@ -1,6 +1,7 @@
 mod app;
 mod appearance;
 mod browser;
+mod composition;
 mod diff;
 mod platform;
 mod store_session;

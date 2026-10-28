@@ -62,8 +62,7 @@ pub(crate) struct Terminal {
     focus: FocusHandle,
     bounds: Bounds<Pixels>,
     cell_width: Pixels,
-    composition: String,
-    composition_selection: Range<usize>,
+    composition: crate::composition::Composition,
     selecting: bool,
     mouse_pressed: bool,
     error: Option<String>,
@@ -128,8 +127,7 @@ impl Terminal {
                 focus,
                 bounds: Bounds::default(),
                 cell_width: px(8.),
-                composition: String::new(),
-                composition_selection: 0..0,
+                composition: Default::default(),
                 selecting: false,
                 mouse_pressed: false,
                 error: None,
@@ -264,7 +262,7 @@ impl Terminal {
             cx.stop_propagation();
             return;
         }
-        if !self.composition.is_empty() {
+        if !self.composition.text().is_empty() {
             return;
         }
         let arrow = if self.term.mode().contains(TermMode::APP_CURSOR) {
@@ -707,9 +705,9 @@ impl Element for TerminalCanvas {
                     Bounds::new(position, size(px(2.), px(LINE_HEIGHT))),
                     rgb(0xeeeeee),
                 ));
-                if !view.composition.is_empty() {
+                if !view.composition.text().is_empty() {
                     let run = TextRun {
-                        len: view.composition.len(),
+                        len: view.composition.text().len(),
                         font: font("Menlo"),
                         color: rgb(0xffffff).into(),
                         background_color: Some(rgb(0x444444).into()),
@@ -721,7 +719,7 @@ impl Element for TerminalCanvas {
                         strikethrough: None,
                     };
                     let line = window.text_system().shape_line(
-                        view.composition.clone().into(),
+                        view.composition.text().to_owned().into(),
                         px(FONT_SIZE),
                         &[run],
                         None,
@@ -757,11 +755,7 @@ impl EntityInputHandler for Terminal {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<String> {
-        let chars: Vec<u16> = self.composition.encode_utf16().collect();
-        let end = range.end.min(chars.len());
-        let start = range.start.min(end);
-        *actual = Some(start..end);
-        Some(String::from_utf16_lossy(&chars[start..end]))
+        Some(self.composition.text_for_range(range, actual))
     }
     fn selected_text_range(
         &mut self,
@@ -769,17 +763,13 @@ impl EntityInputHandler for Terminal {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
-        Some(UTF16Selection {
-            range: self.composition_selection.clone(),
-            reversed: false,
-        })
+        Some(self.composition.selection())
     }
     fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<Range<usize>> {
-        (!self.composition.is_empty()).then(|| 0..self.composition.encode_utf16().count())
+        self.composition.marked_range()
     }
     fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         self.composition.clear();
-        self.composition_selection = 0..0;
         cx.notify();
     }
     fn replace_text_in_range(
@@ -790,7 +780,6 @@ impl EntityInputHandler for Terminal {
         cx: &mut Context<Self>,
     ) {
         self.composition.clear();
-        self.composition_selection = 0..0;
         self.input(text.as_bytes().to_vec(), cx);
     }
     fn replace_and_mark_text_in_range(
@@ -801,9 +790,7 @@ impl EntityInputHandler for Terminal {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.composition = text.into();
-        let end = text.encode_utf16().count();
-        self.composition_selection = selected.unwrap_or(end..end);
+        self.composition.mark(text, selected);
         cx.notify();
     }
     fn bounds_for_range(

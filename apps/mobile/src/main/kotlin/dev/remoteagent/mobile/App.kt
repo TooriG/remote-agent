@@ -35,36 +35,28 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import dev.remoteagent.core.AgentException
 import dev.remoteagent.core.AgentStore
-import dev.remoteagent.core.Connection
+import dev.remoteagent.core.ClientSession
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.ListSessions
 import dev.remoteagent.core.LoadHostName
 import dev.remoteagent.core.OperationKey
-import dev.remoteagent.core.Outcome
 import dev.remoteagent.core.Snapshot
 import dev.remoteagent.core.ThreadList
 import dev.remoteagent.core.UploadAttachment
-import dev.remoteagent.core.generateIdentity
 import dev.remoteagent.core.parseInvitation
 import dev.remoteagent.core.ticketIdentity
 import java.io.File
 import java.io.IOException
-import java.security.GeneralSecurityException
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CoroutineStart
-import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.SupervisorJob
+import dev.remoteagent.core.Outcome
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerializationException
@@ -106,26 +98,11 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     var list by mutableStateOf<ThreadList?>(null)
         private set
 
+    private var session: ClientSession? = null
     private var owner: AgentStore? = null
-    private var initialization: Job? = null
     private var connection: Job? = null
     private var attachmentTransfers = 0
     private var observation: Job? = null
-    private var persistence: Job? = null
-    private val writes = Channel<Pair<String, Snapshot>>(Channel.UNLIMITED)
-    private val writer =
-        scope.launch(Dispatchers.IO) {
-            for ((id, current) in writes) {
-                try {
-                    repository.save(id, current.serializeLocalState())
-                } catch (error: IOException) {
-                    withContext(Dispatchers.Main) { notice = error.message }
-                }
-            }
-        }
-    private val operations = mutableSetOf<Deferred<Outcome>>()
-    private val flushes = mutableSetOf<Job>()
-    private val pending = ArrayDeque<Pair<Intent, (Result<Outcome>) -> Unit>>()
     val draftKey
         get() = snapshot.navigation().draftKey
 
@@ -153,10 +130,9 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     }
 
     fun perform(intent: Intent, complete: (Result<Outcome>) -> Unit = {}) {
-        val store = owner
+        val store = session
         if (store == null) {
-            if (initialization != null) pending.addLast(intent to complete)
-            else complete(Result.failure(IllegalStateException("Host not connected")))
+            complete(Result.failure(IllegalStateException("Host not connected")))
             return
         }
         val receipt =
@@ -168,62 +144,39 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
             }
         publish(store.snapshot())
         val host = profileId
-        val operation = scope.async(start = CoroutineStart.LAZY) { receipt.wait() }
-        operations.add(operation)
         scope.launch {
-            val result = runCatching { operation.await() }
-            operations.remove(operation)
-            if (host == profileId) publish(store.snapshot())
+            val result = runCatching { receipt.wait() }
+            if (host == profileId && session === store) publish(store.snapshot())
             complete(result)
         }
     }
 
     fun selectProfile(id: String) {
-        fun fail(error: Exception) {
-            if (profileId == id) {
-                initialization = null
-                notice = error.message
-                while (pending.isNotEmpty()) pending.removeFirst().second(Result.failure(error))
-            }
-        }
         screen = Screen.Threads
         if (profileId == id && owner != null) {
             connect()
             return
         }
-        persist()
-        initialization?.cancel()
         observation?.cancel()
         connection?.cancel()
-        val old = owner
+        val old = session
+        val selected = ClientSession.open(repository.sessionStorage(id), old, true, 0uL)
+        session = selected
         owner = null
-        while (pending.isNotEmpty()) pending.removeFirst().second(Result.failure(CancellationException()))
         profileId = id
         repository.selected = id
         busy = false
-        initialization = scope.launch {
-            old?.shutdown()
+        publish(Snapshot.empty())
+        observation = scope.launch {
             try {
-                val bytes = withContext(Dispatchers.IO) { repository.load(id) }
-                val store = AgentStore.offline(bytes, repository.diagnosticsDirectory(id))
-                if (profileId != id || !isActive) {
-                    store.shutdown()
-                    return@launch
-                }
+                val store = selected.ready()
+                if (session !== selected || !isActive) return@launch
                 owner = store
-                initialization = null
                 publish(store.snapshot())
-                perform(Intent.ShowThreadList)
-                while (pending.isNotEmpty()) {
-                    val (intent, complete) = pending.removeFirst()
-                    perform(intent, complete)
-                }
                 observe(store, id)
                 connect()
-            } catch (error: IOException) {
-                fail(error)
             } catch (error: AgentException) {
-                fail(error)
+                if (session === selected && isActive) notice = error.message
             }
         }
     }
@@ -237,42 +190,25 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
                 val invitation =
                     parseInvitation(contents, System.currentTimeMillis().milliseconds.inWholeSeconds.toULong())
                 val id = ticketIdentity(invitation.endpoint)
-                val identity =
-                    withContext(Dispatchers.IO) { AndroidCredentialStore(context, id).loadOrCreate(::generateIdentity) }
-                val store =
-                    try {
-                        AgentStore.connect(
-                            Connection(invitation.endpoint, identity, invitation.invitation, true),
-                            byteArrayOf(),
-                            repository.diagnosticsDirectory(id),
-                        )
-                    } finally {
-                        identity.fill(0)
-                    }
-                persist()
-                initialization?.cancel()
+                val store = ClientSession.pair(
+                    repository.sessionStorage(id), session, invitation.endpoint, invitation.invitation, true, 0uL
+                )
+                if (!isActive) { store.shutdown(); return@launch }
                 observation?.cancel()
-                owner?.shutdown()
+                session?.shutdown()
                 profiles = profiles.filterNot { it.id == id } + HostProfile(id, id, invitation.endpoint)
                 repository.saveProfiles(profiles)
                 repository.selected = id
                 profileId = id
-                owner = store
-                publish(store.snapshot())
-                observe(store, id)
+                session = store
+                val ready = store.ready()
+                owner = ready
+                publish(ready.snapshot())
+                observe(ready, id)
                 perform(Intent.LoadHostName(LoadHostName()))
                 screen = Screen.Threads
                 busy = false
             } catch (error: AgentException) {
-                busy = false
-                notice = error.message
-            } catch (error: IOException) {
-                busy = false
-                notice = error.message
-            } catch (error: GeneralSecurityException) {
-                busy = false
-                notice = error.message
-            } catch (error: IllegalArgumentException) {
                 busy = false
                 notice = error.message
             }
@@ -280,37 +216,22 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     }
 
     fun connect() {
-        val store = owner
+        val store = session
         val profile = profiles.firstOrNull { it.id == profileId }
-        if (store == null || profile == null || busy) return
+        if (owner == null || busy) return
+        if (store == null || profile == null) return
         busy = true
         notice = null
         connection = scope.launch {
             try {
-                val identity =
-                    withContext(Dispatchers.IO) {
-                        AndroidCredentialStore(context, profile.id).loadOrCreate(::generateIdentity)
-                    }
-                try {
-                    store.resume(Connection(profile.ticket, identity, null, true))
-                } finally {
-                    identity.fill(0)
-                }
+                store.resume(profile.ticket)
                 if (profileId != profile.id) return@launch
                 publish(store.snapshot())
-                perform(Intent.LoadHostName(LoadHostName()))
                 notice = null
-                busy = false
             } catch (error: AgentException) {
-                connectionFailed(profile.id, error)
-            } catch (error: IOException) {
-                connectionFailed(profile.id, error)
-            } catch (error: GeneralSecurityException) {
-                connectionFailed(profile.id, error)
-            } catch (error: IllegalArgumentException) {
-                connectionFailed(profile.id, error)
+                if (session === store) notice = error.message
             } finally {
-                if (owner === store && profileId == profile.id && connection === currentCoroutineContext()[Job])
+                if (session === store && profileId == profile.id && connection === currentCoroutineContext()[Job])
                     busy = false
             }
         }
@@ -325,7 +246,6 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     }
 
     private fun observe(store: AgentStore, id: String) {
-        perform(Intent.ShowRecentChats)
         val initial = snapshot
         observation = scope.launch {
             var previous = initial
@@ -340,20 +260,18 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     }
 
     private fun publish(next: Snapshot) {
-        if (next.connected() && next.connectionGeneration() != snapshot.connectionGeneration()) notice = null
+        val changes = next.changes(snapshot)
+        if (!changes.changed) return
+        if (changes.reconnected) notice = null
         val name = next.hostName()
         if (name != null && profiles.any { it.id == profileId && it.name != name }) {
             profiles = profiles.map { if (it.id == profileId) it.copy(name = name) else it }
             repository.saveProfiles(profiles)
         }
-        if (!next.listUnchanged(snapshot)) list = next.recentThreadList()
-        conversation = projectConversationRows(next, next.conversationSource(), conversation)
+        if (changes.list) list = next.recentThreadList()
+        if (changes.conversation) conversation = projectConversationRows(next, next.conversationSource(), conversation)
         snapshot = next
-        persistence?.cancel()
-        persistence = scope.launch {
-            delay(250.milliseconds)
-            persist()
-        }
+        session?.persistenceError()?.let { notice = it }
     }
 
     fun attach(selection: Pair<String?, dev.remoteagent.core.DraftKey>, uri: Uri, complete: () -> Unit) {
@@ -401,50 +319,26 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     }
 
     fun persist() {
-        val id = profileId ?: return
-        val store = owner
-        val current = snapshot
-        val receipts = operations.toList()
-        lateinit var flush: Job
-        flush =
-            scope.launch(start = CoroutineStart.LAZY) {
-                try {
-                    for (receipt in receipts) runCatching { receipt.await() }
-                    writes.send(id to (store?.snapshot() ?: current))
-                } finally {
-                    flushes.remove(flush)
-                }
+        val selected = session ?: return
+        scope.launch {
+            try { selected.flush() } catch (error: AgentException) {
+                if (session === selected) notice = error.message
             }
-        flushes.add(flush)
-        flush.start()
+        }
     }
 
     override fun onCleared() {
         observation?.cancel()
         connection?.cancel()
-        initialization?.cancel()
-        persistence?.cancel()
+        val selected = session
+        session = null
+        owner = null
+        selected?.retire()
         scope.launch {
-            for (operation in operations.toList()) runCatching { operation.await() }
-            persistence?.cancel()
-            flushes.toList().joinAll()
-            val store = owner
-            if (store != null) {
-                runCatching { store.shutdown() }
-                profileId?.let { writes.send(it to store.snapshot()) }
-            }
-            writes.close()
-            writer.join()
-            scope.cancel()
+            try { selected?.shutdown() } finally { scope.cancel() }
         }
     }
-}
 
-private fun AndroidAppModel.connectionFailed(id: String, error: Exception) {
-    if (profileId == id) {
-        busy = false
-        notice = error.message
-    }
 }
 
 internal fun AndroidAppModel.showThreads() {

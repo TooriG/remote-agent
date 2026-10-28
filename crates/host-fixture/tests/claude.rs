@@ -1311,9 +1311,9 @@ async fn consecutive_claude_inputs_reuse_one_native_process() {
     let inputs = session_inputs(
         Path::new(&snapshot.navigation.cwd).join(format!("claude-session-{native}.jsonl")),
     );
-    assert!(inputs[0]["pid"].is_u64());
+    assert!(inputs[0]["process"].is_string());
     assert_eq!(
-        inputs[0]["pid"], inputs[1]["pid"],
+        inputs[0]["process"], inputs[1]["process"],
         "consecutive inputs must use the same CLI process"
     );
     store.close().await.unwrap();
@@ -1382,7 +1382,7 @@ async fn deleted_claude_worktree_restarts_the_retained_process_and_continues_the
         assert_eq!(snapshot.navigation.cwd, cwd);
         let after = session_inputs(&inputs_path);
         assert_ne!(
-            before[0]["pid"], after[1]["pid"],
+            before[0]["process"], after[1]["process"],
             "deleted cwd must not reuse the retained process"
         );
         store.close().await.unwrap();
@@ -1886,7 +1886,7 @@ async fn claude_keeps_loading_through_background_results_and_follow_up_after_rec
         );
         let inputs = session_inputs(root.path().join(format!("claude-session-{}.jsonl", id.id)));
         assert_eq!(inputs[3]["effort"], "high");
-        assert_ne!(inputs[2]["pid"], inputs[3]["pid"]);
+        assert_ne!(inputs[2]["process"], inputs[3]["process"]);
         store.close().await.unwrap();
         endpoint.close().await;
         fixture.close().await.unwrap();
@@ -2117,7 +2117,11 @@ async fn claude_accepts_running_input_and_reads_past_the_previous_result() {
     );
     let inputs = inputs.as_array().unwrap();
     assert_eq!(inputs.len(), 5);
-    assert!(inputs.iter().all(|input| input["pid"] == inputs[0]["pid"]));
+    assert!(
+        inputs
+            .iter()
+            .all(|input| input["process"] == inputs[0]["process"])
+    );
     send(&store, "wait", "before-live-refresh").await;
     until(&store, |snapshot| {
         snapshot.conversations[&id]

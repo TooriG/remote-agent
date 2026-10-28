@@ -401,6 +401,11 @@ jobs:
           cache-on-failure: true
       - name: Verify pinned shader compiler and reproducible bytecode
         run: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tools/windows-fxc/verify.ps1
+      - name: Compile GPUI shaders with the pinned compiler
+        run: |
+          $compiler = & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tools/windows-fxc/prepare.ps1
+          if ($LASTEXITCODE -ne 0) { throw "Pinned FXC preparation failed." }
+          "GPUI_FXC_PATH=$compiler" >> $env:GITHUB_ENV
       - name: Build desktop, Host and CLI
         run: cargo build --locked --features agent-core/bindings -p codex-app-server -p agent-process -p agent-desktop -p host-daemon -p agent-cli
       - name: Install the SDK runtime beside the Host

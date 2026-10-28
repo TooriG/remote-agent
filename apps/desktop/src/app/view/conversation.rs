@@ -1937,8 +1937,9 @@ mod rendering_tests {
                     if short {
                         assert!(bubble.size.width < px(120.), "short message: {bubble:?}");
                     } else {
+                        // List items keep the bullet column outside their measured text.
                         assert!(
-                            bubble.size.width >= px((viewport_width - 48.).min(560.)),
+                            bubble.size.width >= px((viewport_width - 48.).min(560.) * 0.9),
                             "long message must use the available width (pending={pending}): {bubble:?}"
                         );
                     }

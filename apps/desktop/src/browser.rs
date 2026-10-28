@@ -34,8 +34,7 @@ pub(crate) struct Browser {
     visible: bool,
     focus: FocusHandle,
     bounds: Bounds<Pixels>,
-    composition: String,
-    composition_selection: Range<usize>,
+    composition: crate::composition::Composition,
     _poll: Task<()>,
     initial_url: Option<String>,
     _subscription: Subscription,
@@ -167,8 +166,7 @@ impl Browser {
                 visible: false,
                 focus,
                 bounds: Bounds::default(),
-                composition: String::new(),
-                composition_selection: 0..0,
+                composition: Default::default(),
                 _poll: poll,
                 initial_url: url,
                 _subscription: subscription,
@@ -799,11 +797,7 @@ impl EntityInputHandler for Browser {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<String> {
-        let chars: Vec<u16> = self.composition.encode_utf16().collect();
-        let end = range.end.min(chars.len());
-        let start = range.start.min(end);
-        *actual = Some(start..end);
-        Some(String::from_utf16_lossy(&chars[start..end]))
+        Some(self.composition.text_for_range(range, actual))
     }
     fn selected_text_range(
         &mut self,
@@ -811,17 +805,13 @@ impl EntityInputHandler for Browser {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
-        Some(UTF16Selection {
-            range: self.composition_selection.clone(),
-            reversed: false,
-        })
+        Some(self.composition.selection())
     }
     fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<Range<usize>> {
-        (!self.composition.is_empty()).then(|| 0..self.composition.encode_utf16().count())
+        self.composition.marked_range()
     }
     fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         self.composition.clear();
-        self.composition_selection = 0..0;
         cx.notify();
     }
     fn replace_text_in_range(
@@ -832,7 +822,6 @@ impl EntityInputHandler for Browser {
         cx: &mut Context<Self>,
     ) {
         self.composition.clear();
-        self.composition_selection = 0..0;
         self.send(BrowserAction::Type { text: text.into() }, cx);
     }
     fn replace_and_mark_text_in_range(
@@ -843,9 +832,7 @@ impl EntityInputHandler for Browser {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.composition = text.into();
-        let end = text.encode_utf16().count();
-        self.composition_selection = selected.unwrap_or(end..end);
+        self.composition.mark(text, selected);
         cx.notify();
     }
     fn bounds_for_range(

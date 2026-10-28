@@ -53,11 +53,17 @@ try {
     if ($sourceStatus) { $revision = "$revision-dirty" }
     if (-not $SkipBuild) {
         $previousRevision = $env:AGENT_BUILD_REVISION
+        $previousCompiler = $env:GPUI_FXC_PATH
         try {
             $env:AGENT_BUILD_REVISION = $revision
+            # GPUI compiles its shaders with the compiler named here.
+            $env:GPUI_FXC_PATH = & (Join-Path $PSScriptRoot "../tools/windows-fxc/prepare.ps1")
             & cargo build --locked --profile $Profile --features agent-core/bindings -p agent-desktop -p host-daemon -p agent-process -p agent-cli
             if ($LASTEXITCODE -ne 0) { throw "Windows build failed." }
-        } finally { $env:AGENT_BUILD_REVISION = $previousRevision }
+        } finally {
+            $env:AGENT_BUILD_REVISION = $previousRevision
+            $env:GPUI_FXC_PATH = $previousCompiler
+        }
     }
     # A unique staging directory avoids modifying an installed/running Host.
     $packageRoot = Join-Path $metadata.target_directory "windows-packages"

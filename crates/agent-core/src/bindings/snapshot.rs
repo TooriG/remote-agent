@@ -13,74 +13,12 @@ use std::sync::Arc;
 
 #[uniffi::export]
 impl Snapshot {
-    pub fn unchanged(&self, other: Arc<Self>) -> bool {
-        std::ptr::eq(self, other.as_ref())
-    }
     pub fn connection_generation(&self) -> u64 {
         self.connection_generation
     }
     pub fn conversation_source(&self) -> Option<Arc<Thread>> {
         self.conversation_thread()
             .map(|value| Arc::new(Thread(value)))
-    }
-    pub fn list_unchanged(&self, other: Arc<Self>) -> bool {
-        let same_list = match (&self.threads, &other.threads) {
-            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-            (None, None) => true,
-            _ => false,
-        };
-        self.recent_chats == other.recent_chats
-            && same_list
-            && Arc::ptr_eq(&self.activity, &other.activity)
-            && Arc::ptr_eq(&self.expanded_projects, &other.expanded_projects)
-            && Arc::ptr_eq(&self.project_preferences, &other.project_preferences)
-            && self.storage_scope == other.storage_scope
-            && Arc::ptr_eq(&self.project_threads, &other.project_threads)
-            && Arc::ptr_eq(&self.archived_scopes, &other.archived_scopes)
-            && self.connected == other.connected
-            && [
-                crate::state::operations::OperationKey::SessionList,
-                crate::state::operations::OperationKey::SessionPage {
-                    part: crate::models::ListPart::Projects,
-                },
-                crate::state::operations::OperationKey::SessionPage {
-                    part: crate::models::ListPart::Chats,
-                },
-            ]
-            .iter()
-            .all(|key| {
-                self.operations.get(key).map(|state| &state.phase)
-                    == other.operations.get(key).map(|state| &state.phase)
-            })
-            && self.threads.as_ref().is_none_or(|list| {
-                list.projects.iter().all(|project| {
-                    let key = crate::state::operations::OperationKey::ProjectList {
-                        project_id: project.id.clone(),
-                    };
-                    self.operations.get(&key).map(|state| &state.phase)
-                        == other.operations.get(&key).map(|state| &state.phase)
-                })
-            })
-    }
-    pub fn models_unchanged(&self, other: Arc<Self>) -> bool {
-        Arc::ptr_eq(&self.models, &other.models)
-    }
-    pub fn conversation_unchanged(&self, other: Arc<Self>) -> bool {
-        let id = self.navigation.thread_id.as_ref();
-        if id != other.navigation.thread_id.as_ref()
-            || self.navigation.draft_key != other.navigation.draft_key
-        {
-            return false;
-        }
-        let same_thread = match (
-            id.and_then(|id| self.conversations.get(id)),
-            id.and_then(|id| other.conversations.get(id)),
-        ) {
-            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-            (None, None) => true,
-            _ => false,
-        };
-        same_thread && Arc::ptr_eq(&self.pending_submissions, &other.pending_submissions)
     }
     #[uniffi::constructor]
     pub fn empty() -> Arc<Self> {
