@@ -622,6 +622,7 @@ fn convert(
                     &session,
                     id,
                     block,
+                    node["message"]["stop_reason"].as_str(),
                     thread.cwd.as_deref(),
                     ItemStatus::Unknown,
                 )?,

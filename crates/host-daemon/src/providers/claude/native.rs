@@ -273,10 +273,20 @@ pub(super) fn notification_outcome<'a>(
     )
 }
 
+/// Claude reports the phase only through its message stop reason. A message
+/// without one has not ended, so its text stays commentary until it does.
+pub(super) fn text_phase(stop_reason: Option<&str>) -> AssistantPhase {
+    match stop_reason {
+        None | Some("tool_use" | "pause_turn") => AssistantPhase::Commentary,
+        Some(_) => AssistantPhase::Final,
+    }
+}
+
 pub(super) fn content_item(
     session: &SessionRef,
     id: String,
     block: &Value,
+    stop_reason: Option<&str>,
     cwd: Option<&str>,
     tool_status: ItemStatus,
 ) -> Result<Item, serde_json::Error> {
@@ -286,7 +296,7 @@ pub(super) fn content_item(
     let body = match block["type"].as_str() {
         Some("text") => ItemBody::AssistantText {
             text: text("text"),
-            phase: AssistantPhase::Unknown,
+            phase: text_phase(stop_reason),
         },
         Some("thinking") => ItemBody::Reasoning {
             content: vec![text("thinking")],
@@ -495,7 +505,7 @@ mod tests {
             let session = SessionRef::new(ProviderKind::Claude, "session".into()).unwrap();
             let call = content_item(&session, "block".into(),
                 &json!({"type":"tool_use","id":"work","name":match tool_kind {0=>"Bash", 1=>"Agent", _=>"mcp__workflow__run"},"input":{"command":"work","prompt":"work"}}),
-                None, ItemStatus::Running).unwrap();
+                None, None, ItemStatus::Running).unwrap();
             let metadata = if tool_kind != 0 {
                 json!({"status":if background {"async_launched"} else {"completed"},"agentId":"agent"})
             } else {
@@ -635,15 +645,24 @@ mod tests {
     }
 
     #[test]
-    fn commands_and_responses_use_the_same_conversation_projection_as_codex() {
-        use agent_protocol::{execution::TurnStatus, models::Turn};
-        use std::sync::Arc;
-
+    fn commands_and_responses_translate_to_the_same_items_as_codex() {
         let session = SessionRef::new(ProviderKind::Claude, "session".into()).unwrap();
+        let text = |stop_reason| {
+            content_item(
+                &session,
+                "text".into(),
+                &json!({"type":"text","text":"text"}),
+                stop_reason,
+                None,
+                ItemStatus::Unknown,
+            )
+            .unwrap()
+        };
         let command = content_item(
             &session,
             "block".into(),
             &json!({"type":"tool_use","id":"command","name":"Bash","input":{"command":"false"}}),
+            None,
             Some("/work"),
             ItemStatus::Running,
         )
@@ -655,47 +674,26 @@ mod tests {
             &json!({"exitCode":7}),
             true,
         );
-        let answer = content_item(
-            &session,
-            "answer".into(),
-            &json!({"type":"text","text":"finished"}),
-            None,
-            ItemStatus::Unknown,
-        )
-        .unwrap();
-        let codex_command = crate::providers::codex::native::parse_item(json!({
-            "type":"commandExecution","id":"command","status":"failed","command":"false",
-            "cwd":"/work","aggregatedOutput":"failed","exitCode":7,
-        }))
-        .unwrap();
-        let codex_answer = crate::providers::codex::native::parse_item(json!({
-            "type":"agentMessage","id":"answer","status":"completed","text":"finished","phase":"final_answer",
-        })).unwrap();
-        assert_eq!(command, codex_command);
-        for status in [
-            TurnStatus::Running,
-            TurnStatus::Completed,
-            TurnStatus::Failed,
-            TurnStatus::Interrupted,
-        ] {
-            let turn = Turn {
-                id: "turn".into(),
-                status,
-                items: Some(vec![Arc::new(command.clone()), Arc::new(answer.clone())]),
-                ..Default::default()
-            };
-            let codex = Turn {
-                items: Some(vec![
-                    Arc::new(codex_command.clone()),
-                    Arc::new(codex_answer.clone()),
-                ]),
-                ..turn.clone()
-            };
-            let projection = |turn: &Turn| {
-                serde_json::to_value(agent_core::presentation::project(turn).collect::<Vec<_>>())
-                    .unwrap()
-            };
-            assert_eq!(projection(&turn), projection(&codex));
+        let codex = |value| crate::providers::codex::native::parse_item(value).unwrap();
+        assert_eq!(
+            command,
+            codex(json!({
+                "type":"commandExecution","id":"command","status":"failed","command":"false",
+                "cwd":"/work","aggregatedOutput":"failed","exitCode":7,
+            }))
+        );
+        let commentary = codex(json!({
+            "type":"agentMessage","id":"text","status":"completed","text":"text","phase":"commentary",
+        }));
+        let answer = codex(json!({
+            "type":"agentMessage","id":"text","status":"completed","text":"text","phase":"final_answer",
+        }));
+        // A streaming message has no stop reason until it ends.
+        for stop_reason in [None, Some("tool_use"), Some("pause_turn")] {
+            assert_eq!(text(stop_reason), commentary);
+        }
+        for stop_reason in ["end_turn", "stop_sequence", "max_tokens", "refusal"] {
+            assert_eq!(text(Some(stop_reason)), answer);
         }
     }
     #[test]
@@ -705,6 +703,7 @@ mod tests {
             &session,
             "stream".into(),
             &json!({"type":"tool_use","id":"bash","name":"Bash","input":{"command":"false"}}),
+            None,
             Some("/work"),
             ItemStatus::Running,
         )
@@ -742,7 +741,7 @@ mod tests {
                 ..
             }
         ));
-        let edit = content_item(&session,"stream".into(),&json!({"type":"tool_use","id":"edit","name":"Edit","input":{"file_path":"/work/a","old_string":"old","new_string":"new"}}),Some("/work"),ItemStatus::Running).unwrap();
+        let edit = content_item(&session,"stream".into(),&json!({"type":"tool_use","id":"edit","name":"Edit","input":{"file_path":"/work/a","old_string":"old","new_string":"new"}}),None,Some("/work"),ItemStatus::Running).unwrap();
         assert!(
             matches!(edit.body(),ItemBody::FileChange {changes,..} if changes[0].diff.is_none() && changes[0].proposal.is_some())
         );
@@ -756,11 +755,11 @@ mod tests {
         );
         let future = json!({"type":"future_block","nested":{"a":[1,2]}});
         assert!(
-            matches!(content_item(&session,"unknown".into(),&future,None,ItemStatus::Unknown).unwrap().body(),ItemBody::Custom {provider:ProviderKind::Claude,value,..} if value == &future)
+            matches!(content_item(&session,"unknown".into(),&future,None,None,ItemStatus::Unknown).unwrap().body(),ItemBody::Custom {provider:ProviderKind::Claude,value,..} if value == &future)
         );
         let mcp = content_item(&session, "stream".into(),
             &json!({"type":"tool_use","id":"mcp","name":"mcp__my_server__search","input":{"query":"example"}}),
-            None, ItemStatus::Running).unwrap();
+            None, None, ItemStatus::Running).unwrap();
         assert!(
             matches!(mcp.body(), ItemBody::ToolCall {kind: ToolKind::Mcp, server: Some(server), tool, arguments, ..}
             if server == "my_server" && tool == "search" && arguments == &json!({"query":"example"}))
@@ -769,6 +768,7 @@ mod tests {
             &session,
             "stream".into(),
             &json!({"type":"tool_use","id":"agent","name":"Agent","input":{"prompt":"inspect"}}),
+            None,
             None,
             ItemStatus::Running,
         )

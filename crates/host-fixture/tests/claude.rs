@@ -1894,6 +1894,78 @@ async fn claude_keeps_loading_through_background_results_and_follow_up_after_rec
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn claude_keeps_loading_until_it_answers_a_background_shell_and_interrupt_stops_it() {
+    let root = tempfile::tempdir().unwrap();
+    let paused = root.path().join("background-shell-paused");
+    let fixture = host(root.path(), Arc::new(Memory::default()), fixture_program()).await;
+    let (store, endpoint) = connect(&fixture, Snapshot::default()).await;
+    store
+        .dispatch(Intent::NewChat {
+            cwd: root.path().to_str().unwrap().into(),
+        })
+        .await
+        .unwrap();
+    store
+        .dispatch(Intent::SelectModel {
+            thread_id: store.snapshot().navigation.draft_key.clone(),
+            model: models::ModelRef {
+                provider: ProviderKind::Claude,
+                id: "default".into(),
+            },
+        })
+        .await
+        .unwrap();
+    let says = |turn: usize, text: &'static str| {
+        move |snapshot: &Snapshot| {
+            snapshot.conversations.values().any(|thread| {
+                thread
+                    .turns
+                    .as_ref()
+                    .and_then(|turns| turns.get(turn)?.items.as_ref())
+                    .is_some_and(|items| items.iter().any(|item| item_text(item) == Some(text)))
+            })
+        }
+    };
+    std::fs::write(&paused, "").unwrap();
+    let id = send(&store, "background-shell", "background-shell-answered").await;
+    until(&store, says(0, "あとで結果を報告します")).await;
+    std::fs::remove_file(&paused).unwrap();
+    let snapshot = until(&store, says(0, "結果を報告します")).await;
+    assert_eq!(
+        snapshot.conversations[&id].turns.as_ref().unwrap().len(),
+        1,
+        "Claude's answer to its finished shell must stay in the requesting turn"
+    );
+    completed(&store, &id, 1, "completed").await;
+
+    std::fs::write(&paused, "").unwrap();
+    send(&store, "background-shell", "background-shell-interrupted").await;
+    let snapshot = until(&store, says(1, "あとで結果を報告します")).await;
+    store
+        .dispatch(Intent::Interrupt(op::Interrupt {
+            thread_id: id.clone(),
+            turn_id: snapshot.conversations[&id].turns.as_ref().unwrap()[1]
+                .id
+                .clone(),
+        }))
+        .await
+        .unwrap();
+    let snapshot = completed(&store, &id, 2, "interrupted").await;
+    let turn = &snapshot.conversations[&id].turns.as_ref().unwrap()[1];
+    assert!(turn.error.is_none(), "{:?}", turn.error);
+    std::fs::remove_file(&paused).unwrap();
+    send(&store, "after interrupt", "after-background-shell").await;
+    let snapshot = completed(&store, &id, 3, "completed").await;
+    assert!(
+        !says(2, "結果を報告します")(&snapshot),
+        "an interrupted shell must not answer into a later turn"
+    );
+    store.close().await.unwrap();
+    endpoint.close().await;
+    fixture.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn claude_accepts_running_input_and_reads_past_the_previous_result() {
     let root = tempfile::tempdir().unwrap();
     let fixture = host(root.path(), Arc::new(Memory::default()), fixture_program()).await;

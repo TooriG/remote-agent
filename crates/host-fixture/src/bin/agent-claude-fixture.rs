@@ -113,7 +113,16 @@ fn output(value: Value) {
     out.flush().unwrap();
 }
 
-fn block(session: &str, message: &str, index: usize, kind: &str, text: &str) {
+/// Claude saves each block with its message stop reason, but live output sends
+/// the block before that reason arrives in `message_delta`.
+fn block(
+    session: &str,
+    message: &str,
+    index: usize,
+    kind: &str,
+    text: &str,
+    stop_reason: Option<&str>,
+) {
     let (field, delta) = if kind == "thinking" {
         ("thinking", "thinking_delta")
     } else {
@@ -125,21 +134,36 @@ fn block(session: &str, message: &str, index: usize, kind: &str, text: &str) {
     emit(
         json!({"type":"stream_event","session_id":session,"event":{"type":"content_block_delta","index":index,"delta":{"type":delta,field:text}}}),
     );
-    emit(
-        json!({"type":"assistant","apiBlockIndex":index,"uuid":format!("envelope-{message}-{index}"),"session_id":session,"message":{"id":message,"role":"assistant","content":[{"type":kind,field:text}]}}),
-    );
+    let envelope = json!({"type":"assistant","apiBlockIndex":index,"uuid":format!("envelope-{message}-{index}"),"session_id":session,"message":{"id":message,"role":"assistant","stop_reason":null,"content":[{"type":kind,field:text}]}});
+    let mut saved = envelope.clone();
+    saved["message"]["stop_reason"] = stop_reason.into();
+    native(saved);
+    output(envelope);
     emit(
         json!({"type":"stream_event","session_id":session,"event":{"type":"content_block_stop","index":index}}),
     );
 }
 
-fn reply(session: &str, count: usize, text: &str, idle_before_result: bool) {
-    let message = format!("message-{count}");
+fn end_turn(session: &str) {
+    emit(
+        json!({"type":"stream_event","session_id":session,"event":{"type":"message_delta","delta":{"stop_reason":"end_turn"}}}),
+    );
+}
+
+fn reply(session: &str, message: &str, text: &str, idle_before_result: bool) {
     emit(
         json!({"type":"stream_event","session_id":session,"event":{"type":"message_start","message":{"id":message}}}),
     );
-    block(session, &message, 0, "thinking", "Fixture reasoning");
-    block(session, &message, 1, "text", text);
+    block(
+        session,
+        message,
+        0,
+        "thinking",
+        "Fixture reasoning",
+        Some("end_turn"),
+    );
+    block(session, message, 1, "text", text, Some("end_turn"));
+    end_turn(session);
     let result = json!({"type":"result","subtype":"success","session_id":session,"is_error":false,"result":text});
     if idle_before_result {
         output(session_state(session, "idle"));
@@ -346,13 +370,54 @@ fn main() {
                     emit(
                         json!({"type":"result","session_id":session,"is_error":true,"errors":["fixture inference failed"]}),
                     );
+                } else if text == "background-shell" {
+                    // Claude settles the response while its shell runs, then
+                    // answers the finished shell without another input.
+                    emit(
+                        json!({"type":"system","subtype":"background_tasks_changed","session_id":session,"tasks":[
+                            {"task_id":"shell-1","task_type":"local_bash","description":"background shell"},
+                            {"task_id":"watcher-1","task_type":"monitor","description":"watcher","ambient":true}
+                        ]}),
+                    );
+                    let message = format!("message-{}", inputs.len());
+                    reply(&session, &message, "あとで結果を報告します", false);
+                    waiting = Some("background-shell");
+                    let session = session.clone();
+                    std::thread::spawn(move || {
+                        while Path::new("background-shell-paused").exists() {
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                        }
+                        emit(
+                            json!({"type":"system","subtype":"background_tasks_changed","session_id":session,"tasks":[
+                                {"task_id":"watcher-1","task_type":"monitor","description":"watcher","ambient":true}
+                            ]}),
+                        );
+                        emit(
+                            json!({"type":"system","subtype":"task_notification","task_id":"shell-1","status":"completed","output_file":"","summary":"background shell done","session_id":session}),
+                        );
+                        emit(json!({"type":"system","subtype":"init","session_id":session}));
+                        output(session_state(&session, "running"));
+                        reply(
+                            &session,
+                            &format!("{message}-report"),
+                            "結果を報告します",
+                            false,
+                        );
+                    });
                 } else if text == "wait" {
                     waiting = Some("wait");
                     let message = format!("waiting-{}", inputs.len());
                     emit(
                         json!({"type":"stream_event","session_id":session,"event":{"type":"message_start","message":{"id":message}}}),
                     );
-                    block(&session, &message, 0, "text", "Waiting for interruption");
+                    block(
+                        &session,
+                        &message,
+                        0,
+                        "text",
+                        "Waiting for interruption",
+                        None,
+                    );
                 } else if matches!(text.as_str(), "unknown_control" | "dialog" | "elicitation") {
                     let request = match text.as_str() {
                         "dialog" => json!({"subtype":"request_user_dialog","dialog_kind":"future"}),
@@ -381,7 +446,15 @@ fn main() {
                         emit(
                             json!({"type":"stream_event","session_id":session,"event":{"type":"message_start","message":{"id":message}}}),
                         );
-                        block(&session, &message, 0, "text", "あとで報告します");
+                        block(
+                            &session,
+                            &message,
+                            0,
+                            "text",
+                            "あとで報告します",
+                            Some("end_turn"),
+                        );
+                        end_turn(&session);
                         if text == "background-settled" {
                             emit(
                                 json!({"type":"system","subtype":"task_notification","task_id":"background-1","status":"completed","summary":"background done","session_id":session}),
@@ -417,7 +490,7 @@ fn main() {
                 } else {
                     reply(
                         &session,
-                        inputs.len(),
+                        &format!("message-{}", inputs.len()),
                         &format!("reply {}: {text}", inputs.len()),
                         config["idleBeforeResult"] == true,
                     );
@@ -439,7 +512,7 @@ fn main() {
                     }
                     reply(
                         &session,
-                        inputs.len(),
+                        &format!("message-{}", inputs.len()),
                         "control resolved",
                         config["idleBeforeResult"] == true,
                     );
@@ -478,7 +551,7 @@ fn main() {
                 }
                 reply(
                     &session,
-                    inputs.len(),
+                    &format!("message-{}", inputs.len()),
                     &text,
                     config["idleBeforeResult"] == true,
                 );
@@ -488,9 +561,12 @@ fn main() {
                 emit(
                     json!({"type":"control_response","response":{"subtype":"success","request_id":value["request_id"],"response":{}}}),
                 );
-                emit(
-                    json!({"type":"result","session_id":session,"is_error":false,"result":"interrupted"}),
-                );
+                // A settled response has no result to end; its shell keeps running.
+                if waiting != Some("background-shell") {
+                    emit(
+                        json!({"type":"result","session_id":session,"is_error":false,"result":"interrupted"}),
+                    );
+                }
                 waiting = None;
             }
             _ => panic!("unexpected fixture input type"),

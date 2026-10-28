@@ -851,6 +851,8 @@ impl Worker {
         let mut pending_inputs = HashSet::new();
         let mut result_received = false;
         let mut idle = false;
+        // Claude reports this level per process; ambient tasks are not activity.
+        let mut background = false;
         let outcome = async {
             let turn=self.current_turn().cloned().ok_or("Claude execution state is unavailable")?;
             self.change(SessionChange::Turn {turn,completed:false}).await?;
@@ -895,6 +897,10 @@ impl Worker {
                         if request_id == "interrupt" {
                             let result = error.map_or_else(|| { interrupted = true; Ok(()) }, Err);
                             self.interrupt.send_replace(Some(result));
+                            // Only background work remains, so no result will follow.
+                            if interrupted && result_received && idle && pending_inputs.is_empty() {
+                                return Ok(());
+                            }
                         }
                         continue;
                     }
@@ -906,6 +912,16 @@ impl Worker {
                 match kind {
                     "system" if message["subtype"] == "session_state_changed" => {
                         idle = message["state"] == "idle";
+                    }
+                    "system" if message["subtype"] == "background_tasks_changed" => {
+                        let running = message["tasks"].as_array().into_iter().flatten()
+                            .any(|task| task["ambient"] != true);
+                        // Finished work leaves this level before Claude reports it
+                        // and responds, so a settled response owes that follow-up.
+                        if background && !running {
+                            result_received = false;
+                        }
+                        background = running;
                     }
                     "result" => {
                         if message["is_error"] == true {
@@ -936,9 +952,10 @@ impl Worker {
                         self.message(message).await?;
                     }
                 }
-                // A result ends a response. SDK session state also covers its
-                // background work; accepted input must be consumed before idle.
-                if result_received && idle && pending_inputs.is_empty() {
+                // A result ends a response. SDK idle covers background agents,
+                // but not background shells and monitors, which Claude answers
+                // after they finish; accepted input must be consumed before idle.
+                if result_received && idle && pending_inputs.is_empty() && (!background || interrupted) {
                     return Ok(());
                 }
             }
@@ -948,7 +965,8 @@ impl Worker {
         let _ = emit(&self.events, AgentChange::SourceClosed(self.instance)).await;
         scopeguard::ScopeGuard::into_inner(_requests);
         let mut retained = None;
-        let outcome = if outcome.is_ok() && !self.stop.is_cancelled() {
+        // An interrupt leaves background work running; stop it with its CLI.
+        let outcome = if outcome.is_ok() && !self.stop.is_cancelled() && !background {
             retained = Some(process);
             outcome
         } else {
@@ -1249,6 +1267,7 @@ impl Worker {
                         &self.session,
                         id,
                         block,
+                        message["message"]["stop_reason"].as_str(),
                         Some(cwd.as_str()),
                         ItemStatus::Running,
                     )
@@ -1293,6 +1312,7 @@ impl Worker {
                     format!("{message}:{index}"),
                     &event["content_block"],
                     None,
+                    None,
                     ItemStatus::Running,
                 )
                 .map_err(|error| error.to_string())?;
@@ -1302,6 +1322,43 @@ impl Worker {
                     item: item.into(),
                 })
                 .await?;
+            }
+            Some("message_delta") => {
+                // Live block envelopes precede the stop reason, so their text
+                // starts as commentary and learns its final phase here.
+                let Some(stop_reason) = event["delta"]["stop_reason"].as_str() else {
+                    return Ok(());
+                };
+                let message = self
+                    .stream
+                    .as_ref()
+                    .ok_or("Claude stream ended a message without starting it")?;
+                let prefix = format!("{message}:");
+                let phase = native::text_phase(Some(stop_reason));
+                let items: Vec<_> = self
+                    .current_turn()
+                    .and_then(|turn| turn.items.as_deref())
+                    .unwrap_or_default()
+                    .iter()
+                    .filter(|item| {
+                        item.id.starts_with(&prefix)
+                            && matches!(item.body(), ItemBody::AssistantText { phase: current, .. } if *current != phase)
+                    })
+                    .map(|item| {
+                        let mut item = Item::clone(item);
+                        if let ItemBody::AssistantText { phase: current, .. } = item.body_mut() {
+                            *current = phase;
+                        }
+                        item
+                    })
+                    .collect();
+                for item in items {
+                    self.change(SessionChange::Item {
+                        turn_id: self.turn_id.clone(),
+                        item: item.into(),
+                    })
+                    .await?;
+                }
             }
             Some("content_block_delta") => {
                 let (target, field) = match event["delta"]["type"].as_str() {
@@ -2303,6 +2360,19 @@ mod execution_tests {
         assert!(
             matches!(items[1].body(),ItemBody::Reasoning {content,..} if content == &["abandoned"])
         );
+        let phase = |turn: Arc<Turn>| match turn.items.as_ref().unwrap()[0].body() {
+            ItemBody::AssistantText { phase, .. } => *phase,
+            _ => panic!("streamed text must remain assistant text"),
+        };
+        assert_eq!(phase(turn), AssistantPhase::Commentary);
+        worker
+            .stream_event(&json!({"type":"message_delta","delta":{"stop_reason":"end_turn"}}))
+            .await
+            .unwrap();
+        assert_eq!(
+            phase(router.current_turn(&session, "turn").unwrap()),
+            AssistantPhase::Final
+        );
         worker
             .message(json!({"type":"system","subtype":"api_retry","attempt":1}))
             .await
@@ -2320,7 +2390,7 @@ mod execution_tests {
         ];
         let mut rows = vec![
             json!({"type":"assistant","uuid":"answer","parentUuid":null,"cwd":"/work",
-            "message":{"id":"message","content":[{"type":"text","text":"answer"}]}}),
+            "message":{"id":"message","stop_reason":"end_turn","content":[{"type":"text","text":"answer"}]}}),
         ];
         let mut parent = "answer".to_owned();
         for (index, attachment) in attachments.iter().enumerate() {
