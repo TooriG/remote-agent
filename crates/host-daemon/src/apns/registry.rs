@@ -1,7 +1,7 @@
 //! Device registrations and dismissal state are persisted by their Host owner.
 use super::client::ResultKind;
 use agent_protocol::live_activity::{
-    RegisterLiveActivity, TASK_ACTIVITY_DISMISS_SECONDS, TaskActivityDisplay,
+    PushEnvironment, RegisterLiveActivity, TASK_ACTIVITY_DISMISS_SECONDS, TaskActivityDisplay,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -18,6 +18,7 @@ pub(super) struct Content {
 struct Registration {
     #[serde(with = "agent_protocol::protocol::bytes")]
     token: Zeroizing<Vec<u8>>,
+    environment: PushEnvironment,
     content: Content,
     expires: u64,
     due: u64,
@@ -32,6 +33,7 @@ pub(super) struct Delivery {
     pub owner: String,
     pub activity: Option<String>,
     pub token: Zeroizing<Vec<u8>>,
+    pub environment: PushEnvironment,
     pub payload: Vec<u8>,
     pub urgent: bool,
     generation: u64,
@@ -111,6 +113,7 @@ impl Registry {
             key,
             Registration {
                 token: Zeroizing::new(params.token.clone()),
+                environment: params.environment,
                 content,
                 expires,
                 due: now.max(sent_at + 1),
@@ -207,6 +210,7 @@ impl Registry {
                 owner: owner.clone(),
                 activity: activity.clone(),
                 token: entry.token.clone(),
+                environment: entry.environment,
                 payload: serde_json::to_vec(&serde_json::json!({"aps":aps}))
                     .expect("bounded APNs content encodes"),
                 urgent: entry.urgent,
@@ -299,6 +303,46 @@ mod tests {
         registry.unregister("other", "activity");
         registry.revoke("phone");
         assert!(registry.deliveries(101).is_empty());
+    }
+    #[test]
+    fn each_delivery_targets_the_environment_of_its_latest_token() {
+        let mut registry = Registry::default();
+        let mut production = params("release", 2);
+        production.environment = PushEnvironment::Production;
+        for registration in [params("development", 1), production.clone()] {
+            registry
+                .register("phone", &registration, "PC", display(1, 0, 0), 100)
+                .unwrap();
+        }
+        let environments = |registry: &mut Registry, now| {
+            let mut targets: Vec<_> = registry
+                .deliveries(now)
+                .into_iter()
+                .map(|delivery| (delivery.activity.unwrap(), delivery.environment))
+                .collect();
+            targets.sort_by(|a, b| a.0.cmp(&b.0));
+            targets
+        };
+        assert_eq!(
+            environments(&mut registry, 100),
+            [
+                ("development".into(), PushEnvironment::Sandbox),
+                ("release".into(), PushEnvironment::Production)
+            ]
+        );
+        production.environment = PushEnvironment::Sandbox;
+        registry
+            .register("phone", &production, "PC", display(1, 0, 0), 101)
+            .unwrap();
+        let bytes = Zeroizing::new(serde_json::to_vec(&registry).unwrap());
+        let mut restarted: Registry = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            environments(&mut restarted, 101),
+            [
+                ("development".into(), PushEnvironment::Sandbox),
+                ("release".into(), PushEnvironment::Sandbox)
+            ]
+        );
     }
     #[test]
     fn the_activity_ends_only_when_the_authoritative_display_is_empty() {

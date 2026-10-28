@@ -10,11 +10,7 @@ impl HostRpcService {
         params
             .validate()
             .map_err(|error| Failure::new("invalid_params", error))?;
-        let enabled = self
-            .inner
-            .router
-            .apns()
-            .is_some_and(|apns| apns.environment() == params.environment);
+        let enabled = self.inner.router.apns().is_some();
         if enabled {
             self.inner
                 .router
@@ -113,7 +109,7 @@ impl HostRpcService {
 #[cfg(test)]
 mod tests {
     #[tokio::test]
-    async fn live_activity_registration_falls_back_without_apns_and_rejects_malformed_tokens() {
+    async fn live_activity_registration_accepts_both_environments_and_rejects_malformed_tokens() {
         use super::*;
         use agent_protocol::live_activity::{
             LiveActivityRegistration, PushEnvironment, RegisterLiveActivity,
@@ -130,14 +126,19 @@ mod tests {
             token: vec![1; 32],
             environment: PushEnvironment::Sandbox,
         };
-        for configured in [false, true] {
+        // One Host serves store and directly installed development builds of the same app.
+        for (configured, environment) in [
+            (false, PushEnvironment::Sandbox),
+            (true, PushEnvironment::Sandbox),
+            (true, PushEnvironment::Production),
+        ] {
             if configured {
                 service
                     .inner
                     .router
                     .set_apns(Some(crate::apns::Apns::testing()));
-                params.environment = PushEnvironment::Production;
             }
+            params.environment = environment;
             let response = service
                 .dispatch(connection.id(), &Call::RegisterLiveActivity(params.clone()))
                 .await
@@ -146,9 +147,9 @@ mod tests {
                 Response<LiveActivityRegistration>,
             >(&response.initial)
             .unwrap() else {
-                panic!("unconfigured or mismatched APNs must keep local updates available");
+                panic!("unconfigured APNs must keep local updates available");
             };
-            assert!(!result.enabled);
+            assert_eq!(result.enabled, configured);
         }
         params.token.clear();
         let response = service

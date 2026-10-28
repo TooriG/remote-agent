@@ -30,8 +30,6 @@
     <true/>
     <key>NSSupportsLiveActivities</key>
     <true/>
-    <key>APNSEnvironment</key>
-    <string>$(APNS_ENVIRONMENT)</string>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>

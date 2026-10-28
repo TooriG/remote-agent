@@ -138,10 +138,20 @@ final class TaskLiveActivities {
         ))))
     }
 
-    private var pushEnvironment: PushEnvironment {
-        Bundle.main.object(forInfoDictionaryKey: "APNSEnvironment") as? String == "production"
-            ? .production : .sandbox
-    }
+    /// Tokens belong to the signature's APNs environment, which re-signing can change after the build.
+    /// Store and TestFlight builds carry no embedded profile and always use production.
+    private let pushEnvironment: PushEnvironment = {
+        guard let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision"),
+              let signed = try? Data(contentsOf: url),
+              let start = signed.range(of: Data("<?xml".utf8)),
+              let end = signed.range(of: Data("</plist>".utf8), in: start.lowerBound ..< signed.endIndex),
+              let profile = try? PropertyListSerialization.propertyList(
+                  from: signed[start.lowerBound ..< end.upperBound], format: nil
+              ) as? [String: Any],
+              let entitlements = profile["Entitlements"] as? [String: Any]
+        else { return .production }
+        return entitlements["aps-environment"] as? String == "development" ? .sandbox : .production
+    }()
 
     private func register(_ activity: Activity<TaskActivityAttributes>, token: Data) {
         tokens[activity.id] = token

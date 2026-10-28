@@ -1,7 +1,7 @@
 //! Host-owned Live Activity push updates, independent of connected phone sessions.
 mod client;
 mod registry;
-use agent_protocol::live_activity::{PushEnvironment, RegisterLiveActivity, TaskActivityDisplay};
+use agent_protocol::live_activity::{RegisterLiveActivity, TaskActivityDisplay};
 use client::{Client, ResultKind};
 use futures_util::{StreamExt, stream};
 use registry::Registry;
@@ -71,10 +71,7 @@ impl Apns {
         let Some(client) = Client::load(path).await? else {
             return Ok(None);
         };
-        let registry_path = path.with_file_name(match client.environment() {
-            PushEnvironment::Sandbox => "bex-live-activities-sandbox.json",
-            PushEnvironment::Production => "bex-live-activities-production.json",
-        });
+        let registry_path = path.with_file_name("bex-live-activities.json");
         let mut registry: Registry = match tokio::fs::read(&registry_path).await {
             Ok(bytes) => serde_json::from_slice(&Zeroizing::new(bytes))?,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Registry::default(),
@@ -132,7 +129,13 @@ impl Apns {
                         let result = if delivery.payload.len() <= 4096 {
                             service
                                 .client
-                                .send(&delivery.token, &delivery.payload, delivery.urgent, now())
+                                .send(
+                                    delivery.environment,
+                                    &delivery.token,
+                                    &delivery.payload,
+                                    delivery.urgent,
+                                    now(),
+                                )
                                 .await
                         } else {
                             ResultKind::Expired
@@ -174,9 +177,6 @@ impl Apns {
             self.wake.notify_one();
         }
         self.ready.store(true, Ordering::Release);
-    }
-    pub fn environment(&self) -> PushEnvironment {
-        self.client.environment()
     }
     pub fn register(
         &self,
@@ -233,7 +233,7 @@ impl Apns {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_protocol::live_activity::TaskActivitySummary;
+    use agent_protocol::live_activity::{PushEnvironment, TaskActivitySummary};
     #[test]
     fn persisted_registrations_wait_for_fresh_host_state_and_retain_private_permissions() {
         let directory = tempfile::tempdir().unwrap();

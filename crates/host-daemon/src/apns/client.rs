@@ -24,7 +24,6 @@ pub(super) struct Config {
     pub team_id: String,
     pub bundle_id: String,
     pub key_file: PathBuf,
-    pub environment: PushEnvironment,
 }
 pub(super) struct Client {
     http: reqwest::Client,
@@ -118,10 +117,6 @@ impl Client {
             token: Mutex::new(None),
         }))
     }
-    pub fn environment(&self) -> PushEnvironment {
-        self.config.environment
-    }
-
     fn authentication(&self, now: u64) -> Result<Zeroizing<String>> {
         let mut cached = self.token.lock().unwrap_or_else(|error| error.into_inner());
         if let Some((issued, token)) = cached.as_ref()
@@ -151,13 +146,15 @@ impl Client {
 
     fn request(
         &self,
+        environment: PushEnvironment,
         token: &[u8],
         payload: &[u8],
         urgent: bool,
         now: u64,
     ) -> Result<reqwest::Request> {
         let authentication = self.authentication(now)?;
-        let endpoint = match self.config.environment {
+        // One key signs for both environments; each token belongs to the build that issued it.
+        let endpoint = match environment {
             PushEnvironment::Sandbox => "https://api.sandbox.push.apple.com",
             PushEnvironment::Production => "https://api.push.apple.com",
         };
@@ -185,8 +182,15 @@ impl Client {
             .map_err(|_| anyhow::anyhow!("cannot encode APNs request"))
     }
 
-    pub async fn send(&self, token: &[u8], payload: &[u8], urgent: bool, now: u64) -> ResultKind {
-        let Ok(request) = self.request(token, payload, urgent, now) else {
+    pub async fn send(
+        &self,
+        environment: PushEnvironment,
+        token: &[u8],
+        payload: &[u8],
+        urgent: bool,
+        now: u64,
+    ) -> ResultKind {
+        let Ok(request) = self.request(environment, token, payload, urgent, now) else {
             tracing::warn!(target: "agent", operation = "host.apns.delivery", "Cannot prepare a Live Activity push request");
             return ResultKind::Retry;
         };
@@ -262,7 +266,6 @@ impl Client {
                 team_id: "TESTTEAM01".into(),
                 bundle_id: "dev.remoteagent.mobile.ios".into(),
                 key_file: PathBuf::new(),
-                environment: PushEnvironment::Sandbox,
             },
             key: EcdsaKeyPair::from_pkcs8(
                 &ECDSA_P256_SHA256_FIXED_SIGNING,
@@ -319,16 +322,17 @@ mod tests {
         }
     }
     #[test]
-    fn push_request_uses_live_activity_topic_http2_and_the_signed_builds_environment() {
-        let mut client = Client::testing();
+    fn push_request_uses_live_activity_topic_http2_and_the_tokens_environment() {
+        let client = Client::testing();
         for (environment, domain) in [
             (PushEnvironment::Sandbox, "api.sandbox.push.apple.com"),
             (PushEnvironment::Production, "api.push.apple.com"),
         ] {
-            client.config.environment = environment;
             for urgent in [false, true] {
                 let payload = b"{\"aps\":{\"event\":\"update\"}}";
-                let request = client.request(&[0xab; 32], payload, urgent, 10000).unwrap();
+                let request = client
+                    .request(environment, &[0xab; 32], payload, urgent, 10000)
+                    .unwrap();
                 assert_eq!(request.version(), reqwest::Version::HTTP_2);
                 assert_eq!(request.method(), reqwest::Method::POST);
                 assert_eq!(request.url().host_str(), Some(domain));
