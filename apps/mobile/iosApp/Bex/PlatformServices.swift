@@ -5,41 +5,52 @@ import Security
 import SwiftUI
 import UIKit
 
-/// Device preferences and atomic per-Host user work share one persistence owner.
-enum SnapshotFiles {
-    private static func location(_ host: String) throws -> URL {
+/// Keychain and private file I/O; core owns restoration and save scheduling.
+final class MobileSessionStorage: ClientStorage, @unchecked Sendable {
+    let host: String
+
+    init(host: String) {
+        self.host = host
+    }
+
+    private func location() throws -> URL {
         let directory = try FileManager.default.url(
             for: .applicationSupportDirectory, in: .userDomainMask,
             appropriateFor: nil, create: true
         ).appendingPathComponent("snapshots", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let name = Data(host.utf8).base64EncodedString()
-            .replacingOccurrences(of: "/", with: "_")
+        let name = Data(host.utf8).base64EncodedString().replacingOccurrences(of: "/", with: "_")
         return directory.appendingPathComponent(name).appendingPathExtension("json")
     }
 
-    static func diagnosticsDirectory(_ host: String) throws -> String {
-        try location(host).deletingPathExtension().appendingPathExtension("diagnostics").path
+    private func access<T>(_ body: () throws -> T) throws -> T {
+        do { return try body() } catch { throw AgentError.Failed(reason: error.localizedDescription) }
     }
 
-    static func load(_ host: String) async throws -> Data {
-        let bytes = try await Task.detached(priority: .utility) {
-            let url = try location(host)
-            return FileManager.default.fileExists(atPath: url.path) ? try Data(contentsOf: url) : Data()
-        }.value
-        return try withModelPreferences(bytes)
+    func load(newPairing: Bool) throws -> Data {
+        try access {
+            let url = try location()
+            let bytes = !newPairing && FileManager.default.fileExists(atPath: url.path)
+                ? try Data(contentsOf: url) : Data()
+            return try applyModelPreferences(persisted: bytes,
+                                             defaults: UserDefaults.standard
+                                                 .data(forKey: "bex.model-defaults") ?? Data())
+        }
     }
 
-    static func withModelPreferences(_ persisted: Data) throws -> Data {
-        try applyModelPreferences(persisted: persisted,
-                                  defaults: UserDefaults.standard.data(forKey: "bex.model-defaults") ?? Data())
+    func save(localState: Data, modelPreferences: Data) throws {
+        try access {
+            UserDefaults.standard.set(modelPreferences, forKey: "bex.model-defaults")
+            try localState.write(to: location(), options: .atomic)
+        }
     }
 
-    static func save(_ host: String, snapshot: AgentCore.Snapshot) async throws {
-        try await Task.detached(priority: .utility) {
-            try UserDefaults.standard.set(snapshot.serializeModelPreferences(), forKey: "bex.model-defaults")
-            try snapshot.serializeLocalState().write(to: location(host), options: .atomic)
-        }.value
+    func identity() throws -> Data {
+        try access { try DeviceIdentity.loadOrGenerate(host) }
+    }
+
+    func diagnosticsDirectory() throws -> String? {
+        try access { try location().deletingPathExtension().appendingPathExtension("diagnostics").path }
     }
 }
 

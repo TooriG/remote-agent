@@ -25,15 +25,14 @@ final class AppViewModel: ObservableObject {
     private var pendingPresentation: ConversationPresentationInput?
     private var recentConversations: [ConversationPresentation] = []
 
-    private(set) var store: AgentStore?
-    private var initialization: Task<Void, Never>?
+    private(set) var session: ClientSession?
+    var store: AgentStore? {
+        session?.store()
+    }
+
     var observation: Task<Void, Never>?
-    private var persistence: Task<Void, Never>?
-    private var persistenceWrite: Task<Void, Never>?
     var connection: Task<Void, Never>?
     private let pathMonitor = NWPathMonitor()
-    private var pending: [(Intent, (Result<Outcome, Error>) -> Void)] = []
-    private var operations: [UUID: Task<Void, Never>] = [:]
     let liveActivities = TaskLiveActivities()
     let panels = Panels()
     let workbenchInstance = UUID()
@@ -72,11 +71,25 @@ final class AppViewModel: ObservableObject {
         selectedProfileId = id
         UserDefaults.standard.set(id, forKey: "bex.selected-host")
         publish(AgentCore.Snapshot.empty())
-        let writing = persistenceWrite
-        initialization = Task { [weak self] in
-            await writing?.value
-            await self?.initialize(id, previous: old)
+        let owner = ClientSession.open(storage: MobileSessionStorage(host: id), previous: old, recentChats: false,
+                                       clientBuild: Self.clientBuild)
+        session = owner
+        observation = Task { [weak self] in
+            do {
+                let store = try await owner.ready()
+                guard let self, session === owner, !Task.isCancelled else { return }
+                publish(store.snapshot())
+                observe(store, host: id)
+                connect()
+            } catch {
+                guard let self, session === owner, !Task.isCancelled else { return }
+                notice = error.localizedDescription
+            }
         }
+    }
+
+    private static var clientBuild: UInt64 {
+        UInt64(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0") ?? 0
     }
 
     func removeProfile(_ id: String) {
@@ -100,73 +113,17 @@ final class AppViewModel: ObservableObject {
         } catch { notice = error.localizedDescription }
     }
 
-    /// Save and stop the current Host's work; the caller shuts down the returned store.
-    private func detachStore() -> AgentStore? {
-        persist()
+    private func detachStore() -> ClientSession? {
         connection?.cancel()
         observation?.cancel()
-        cancelInitialization()
-        let old = store
-        store = nil
+        let old = session
+        old?.retire()
+        session = nil
         recentConversations.removeAll()
         pendingPresentation = nil
         conversation = nil
         isConnecting = false
         return old
-    }
-
-    private func cancelInitialization() {
-        initialization?.cancel()
-        initialization = nil
-        let cancelled = pending
-        pending.removeAll()
-        for (_, complete) in cancelled {
-            complete(.failure(CancellationError()))
-        }
-    }
-
-    private func initialize(_ id: String, previous old: AgentStore?) async {
-        let preparationStarted = ProcessInfo.processInfo.systemUptime
-        // Draining the previous Host's transport must not delay opening this Host.
-        async let previousClosed: Void? = try? old?.shutdown()
-        do {
-            let bytes = try await SnapshotFiles.load(id)
-            let snapshotRead = ProcessInfo.processInfo.systemUptime - preparationStarted
-            let owner = try await AgentStore.offline(
-                persisted: bytes,
-                diagnosticsDirectory: SnapshotFiles.diagnosticsDirectory(id)
-            )
-            guard !Task.isCancelled, selectedProfileId == id else { try? await owner.shutdown(); return }
-            store = owner
-            owner.recordConnectionEvent(phase: .snapshotRead, value: UInt64(snapshotRead * 1_000_000))
-            owner.recordConnectionEvent(
-                phase: .appPreparation,
-                value: UInt64((ProcessInfo.processInfo.systemUptime - preparationStarted) * 1_000_000)
-            )
-            owner.recordConnectionEvent(
-                phase: .clientBuild,
-                value: UInt64(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0") ?? 0
-            )
-            initialization = nil
-            publish(owner.snapshot())
-            perform(.showThreadList)
-            let queued = pending
-            pending.removeAll()
-            for (intent, complete) in queued {
-                perform(intent, completion: complete)
-            }
-            observe(owner, host: id)
-            connect()
-        } catch {
-            guard !Task.isCancelled, selectedProfileId == id else { return }
-            initialization = nil
-            let queued = pending
-            pending.removeAll()
-            for (_, complete) in queued {
-                complete(.failure(error))
-            }
-        }
-        _ = await previousClosed
     }
 
     func openPairing() {
@@ -204,25 +161,21 @@ final class AppViewModel: ObservableObject {
             connection?.cancel()
             connection = Task { [weak self] in
                 do {
-                    await self?.persistenceWrite?.value
-                    let persisted = try SnapshotFiles.withModelPreferences(Data())
-                    let owner = try await AgentStore.connect(connection: Connection(
-                        ticket: invitation.endpoint,
-                        identity: DeviceIdentity.loadOrGenerate(id),
-                        invitation: invitation.invitation,
-                        useRelays: true
-                    ), persisted: persisted, diagnosticsDirectory: SnapshotFiles.diagnosticsDirectory(id))
+                    let owner = try await ClientSession.pair(
+                        storage: MobileSessionStorage(host: id), previous: self?.session,
+                        ticket: invitation.endpoint, invitation: invitation.invitation, recentChats: false,
+                        clientBuild: Self.clientBuild
+                    )
                     guard let self, !Task.isCancelled else { try? await owner.shutdown(); return }
-                    persist()
                     observation?.cancel()
-                    cancelInitialization()
-                    let old = store
+                    let old = session
                     profiles.removeAll { $0.id == id }
                     profiles.append(HostProfile(id: id, name: invitation.hostName, ticket: invitation.endpoint))
                     try HostProfile.save(profiles)
+                    try? await old?.shutdown()
                     UserDefaults.standard.set(id, forKey: "bex.selected-host")
                     selectedProfileId = id
-                    store = owner
+                    session = owner
                     recentConversations.removeAll()
                     pendingPresentation = nil
                     conversation = nil
@@ -230,9 +183,8 @@ final class AppViewModel: ObservableObject {
                     screen = .threads
                     pairingInvitation = nil
                     isConnecting = false
-                    observe(owner, host: id)
+                    try await observe(owner.ready(), host: id)
                     perform(.loadHostName(LoadHostName()))
-                    try? await old?.shutdown()
                 } catch {
                     guard !Task.isCancelled else { return }
                     self?.isConnecting = false; self?.pairingError = error.localizedDescription
@@ -242,25 +194,19 @@ final class AppViewModel: ObservableObject {
     }
 
     func perform(_ intent: Intent, completion: @escaping (Result<Outcome, Error>) -> Void = { _ in }) {
-        guard let owner = store else {
-            if initialization != nil {
-                pending.append((intent, completion))
-            } else {
-                completion(.failure(CocoaError(.fileReadUnknown)))
-            }
+        guard let owner = session else {
+            completion(.failure(CocoaError(.fileReadUnknown)))
             return
         }
         do {
             let receipt = try owner.dispatch(intent: intent)
             publish(owner.snapshot())
-            let id = UUID()
             let host = selectedProfileId
-            operations[id] = Task { [weak self] in
+            Task { [weak self] in
                 let result: Result<Outcome, Error>
                 do { result = try await .success(receipt.wait()) } catch { result = .failure(error) }
                 guard let self else { return }
-                operations[id] = nil
-                if selectedProfileId == host {
+                if selectedProfileId == host, session === owner {
                     publish(owner.snapshot())
                     if case let .failure(error) = result {
                         notice = snapshot.error() ?? error.localizedDescription
@@ -274,42 +220,34 @@ final class AppViewModel: ObservableObject {
 
 extension AppViewModel {
     func publish(_ next: AgentCore.Snapshot) {
-        guard !next.unchanged(other: snapshot) else { return }
+        let changes = next.changes(previous: snapshot)
+        guard changes.changed else { return }
         if let name = next.hostName(),
            let index = profiles.firstIndex(where: { $0.id == selectedProfileId }),
            profiles[index].name != name {
             profiles[index].name = name
             do { try HostProfile.save(profiles) } catch { notice = error.localizedDescription }
         }
-        if snapshot.error() != next.error() {
+        if changes.error {
             notice = next.error()
         }
-        let listChanged = !next.listUnchanged(other: snapshot)
-        if listChanged {
+        if changes.list {
             list = next.threadList()
             if list != nil {
                 store?.recordConnectionEvent(phase: .listPublished, value: next.connected() ? 1 : 0)
             }
         }
-        if !next.modelsUnchanged(other: snapshot) {
+        if changes.models {
             models = next.models()
         }
-        let changed = !next.conversationUnchanged(other: snapshot)
         migrateWorkbench(to: next)
         snapshot = next
         synchronizeLiveActivities(foreground: UIApplication.shared.applicationState == .active)
-        if changed {
+        if changes.conversation {
             projectConversation(next.conversationSource())
         }
-        persistence?.cancel()
-        if listChanged {
-            // Completion badges can outlive the process; do not debounce their write.
-            persist()
-        } else {
-            persistence = Task { [weak self] in
-                do { try await Task.sleep(nanoseconds: 250_000_000) } catch { return }
-                self?.persist()
-            }
+        if let error = session?.persistenceError() {
+            notice = error
         }
     }
 
@@ -347,24 +285,18 @@ extension AppViewModel {
     }
 
     func persist() {
-        guard let id = selectedProfileId, let owner = store else { return }
-        let current = owner.snapshot()
-        let previous = persistenceWrite
-        // Serialize immutable snapshots off MainActor and commit writes in order.
-        persistenceWrite = Task { [weak self] in
-            await previous?.value
-            do {
-                try await SnapshotFiles.save(id, snapshot: current)
-            } catch { self?.notice = error.localizedDescription }
+        guard let owner = session else { return }
+        Task { [weak self] in
+            do { try await owner.flush() } catch {
+                if self?.session === owner {
+                    self?.notice = error.localizedDescription
+                }
+            }
         }
     }
 
     func persistBeforeBackground() async {
-        for operation in Array(operations.values) {
-            await operation.value
-        }
-        persist()
-        await persistenceWrite?.value
+        do { try await session?.flush() } catch { notice = error.localizedDescription }
         await liveActivities.flush()
     }
 }

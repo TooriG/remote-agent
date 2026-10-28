@@ -251,3 +251,8 @@ impl ClientExt for Client {
         Ok(images)
     }
 }
+
+#[cfg(feature = "bindings")]
+pub mod native;
+#[cfg(feature = "bindings")]
+pub mod session;
