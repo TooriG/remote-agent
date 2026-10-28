@@ -142,19 +142,18 @@ On Mac and iPhone, select assistant text to quote it into the draft or ask about
 
 iPhone starts one Live Activity for the selected PC's ongoing tasks. The collapsed Dynamic Island shows one status icon per task, split across its two sides; up to twelve icons fit, with additional tasks represented by a count badge. The Lock Screen and expanded island show running and awaiting-confirmation counts. Tapping opens that PC's task list. The activity ends only after every task finishes and remains on the Lock Screen for one minute. Switching PCs dismisses the previous PC's activity. Live Activities must be enabled in iOS Settings.
 
-For updates while the iPhone app is suspended, enable the app's Push Notifications capability in Apple Developer and configure APNs on the Host. Put `agent-apns.json` in the Host state directory (alongside `identity.keys`):
+For updates while the iPhone app is suspended, enable the app's Push Notifications capability in Apple Developer and configure APNs on the Host. Put `bex-apns.json` in the Host state directory (alongside `identity.keys`):
 
 ```json
 {
   "key_id": "YOURKEYID1",
   "team_id": "K65K9J8686",
   "bundle_id": "dev.remoteagent.mobile.ios",
-  "key_file": "/absolute/path/outside/the/repository/AuthKey.p8",
-  "environment": "production"
+  "key_file": "/absolute/path/outside/the/repository/AuthKey.p8"
 }
 ```
 
-Use an APNs ES256 `.p8` authentication key with permission for this bundle ID. Keep the private key outside the repository and Nix store; restrict file access to the Host account. `key_file` may also be relative to this configuration file. Use `sandbox` with a Debug/development-signed app, or `production` with TestFlight/App Store builds. Restart the Host after configuring it, when its active tasks can be safely stopped. Invalid configuration fails startup; a missing file keeps local Live Activity updates available.
+Use an APNs ES256 `.p8` authentication key with permission for this bundle ID. Keep the private key outside the repository and Nix store; restrict file access to the Host account. `key_file` may also be relative to this configuration file. The iPhone app registers the APNs environment from its signing profile, so the same Host supports development and TestFlight/App Store builds. Restart the Host after configuring it. Invalid configuration fails startup; a missing file keeps local Live Activity updates available.
 
 Each phone registers its activity update token through the authenticated Host connection. The Host sends APNs updates directly, retains registrations after phone disconnection, replaces rotated tokens and removes registrations on device revocation, activity completion, invalid tokens or the eight-hour activity limit. APNs can update activities already started by the app; it does not start activities remotely. Running activities receive low-priority heartbeats every minute; confirmation and final results use immediate delivery. If updates stop, the activity shows **更新待ち** after two minutes. Without APNs, background content becomes stale after 30 seconds or immediately on disconnection. Actual delivery requires matching signing entitlements, APNs environment and Apple credentials.
 
