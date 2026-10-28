@@ -180,6 +180,15 @@ fn main() {
         return;
     }
 
+    // Process IDs can be reused after a restart; this names one process run.
+    let process = format!(
+        "{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
     assert_eq!(
         option(&args, "--input-format").as_deref(),
         Some("stream-json")
@@ -340,7 +349,7 @@ fn main() {
                 }
                 let content = value["message"]["content"].clone();
                 inputs.push(
-                    json!({"content":content,"model":option(&args, "--model"),"effort":option(&args, "--effort"),"pid":std::process::id()}),
+                    json!({"content":content,"model":option(&args, "--model"),"effort":option(&args, "--effort"),"process":process}),
                 );
                 let bytes = serde_json::to_vec(&inputs).unwrap();
                 fs::create_dir_all(history.parent().unwrap()).unwrap();

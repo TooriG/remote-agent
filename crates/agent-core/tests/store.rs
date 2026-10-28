@@ -214,7 +214,8 @@ async fn list_refresh_bursts_keep_only_the_latest_refresh_without_blocking_navig
     let refresh = store.dispatch(Intent::ListSessions(op::ListSessions::new(
         (*store.snapshot().list_query).clone(),
     )));
-    let request = read(&mut reader).await;
+    let request = read_after_status(&mut reader, &writer).await;
+    assert_eq!(request["method"], "host/session/list");
     store.dispatch(Intent::ShowThreadList).await.unwrap();
     writer.reply(&request, json!({"result":{"data":[],"projects":[{"id":"after-navigation","name":"Current project","roots":[]}],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5}})).await.unwrap();
     refresh.await.unwrap();
