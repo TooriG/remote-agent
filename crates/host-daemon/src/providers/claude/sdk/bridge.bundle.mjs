@@ -31,10 +31,22 @@ import TS from "node:process";
 import { delimiter as e8e, isAbsolute as rQ } from "path";
 import { once as uI } from "events";
 import { constants as $c, createWriteStream as Eye } from "fs";
+import { lstat as bye, open as SI, lstat as f7e, readdir as Hc, realpath as EI, rename as m7e, stat as Cye } from "fs/promises";
+import { basename as vye, dirname as Aye, isAbsolute as h7e, join as _r } from "path";
 import { execFile as _ye } from "child_process";
 import { promisify as yye } from "util";
+import { execFileSync as aye } from "child_process";
+import { lstatSync as lye } from "fs";
+import { join as cye } from "path";
+import { basename as gN, dirname as hN, isAbsolute as _tt, join as mCe, relative as ytt, sep as Stt } from "path";
 import { createHash as _be } from "crypto";
 import { constants as jM } from "fs";
+import { isAbsolute as pCe, sep as mN } from "path";
+import { readFile as ICe } from "fs/promises";
+import { dirname as DCe, join as LCe } from "path";
+import { basename as PN, dirname as IN } from "path";
+import { randomUUID as xu } from "crypto";
+import { basename as Hve, join as yi } from "path";
 import { AsyncLocalStorage as Ive } from "async_hooks";
 import { constants as Dve } from "fs";
 import { appendFile as Lve, copyFile as Mve, lstat as Nve, mkdir as Uve, open as JN, readdir as XN, readFile as QN, stat as Fve, unlink as zve, writeFile as rv } from "fs/promises";
@@ -8570,6 +8582,9 @@ function ns() {
   return $y().host.launchOptions.diskless();
 }
 var _3e = new Fe(() => ze());
+function V(e14, t) {
+  return { code: "InvalidArgument", argument: e14, ...t !== void 0 && { reason: t } };
+}
 var jp = { home: (e14) => ({ space: "home", path: e14 }), workspace: (e14) => ({ space: "workspace", path: e14 }), system: (e14) => ({ space: "system", path: e14 }), userNamed: (e14) => ({ space: "userNamed", path: e14 }) };
 var jy = globalThis.process?.getBuiltinModule?.("async_hooks");
 var ik = jy !== void 0;
@@ -10800,6 +10815,49 @@ function kS(e14) {
   return t;
 }
 var l5e = OS("claude-cli");
+function q7(e14) {
+  return `</pasted_content id="${e14}">
+`;
+}
+function Z7(e14) {
+  if (e14.length !== 4) return false;
+  for (let t = 0; t < e14.length; t++) {
+    let n = e14.charCodeAt(t);
+    if (!(n >= 48 && n <= 57 || n >= 97 && n <= 102)) return false;
+  }
+  return true;
+}
+function Y7(e14) {
+  let t = [], n = 0, r = 0;
+  for (; ; ) {
+    let o = e14.indexOf('<pasted_content id="', r);
+    if (o === -1) break;
+    let s = o + 20, i = e14.slice(s, s + 4);
+    if (!Z7(i) || !e14.startsWith(`">
+`, s + 4)) {
+      r = s;
+      continue;
+    }
+    let a = s + 4 + 3, c = q7(i).slice(0, -1), d = e14.indexOf(`
+${c}`, a - 1) + 1;
+    if (d === 0) break;
+    let p = o;
+    for (let f = 0; f < 2 && p > n && e14[p - 1] === `
+`; f++) p--;
+    if (p > n) t.push({ kind: "text", text: e14.slice(n, p) });
+    n = d + c.length;
+    for (let f = 0; f < 2 && e14[n] === `
+`; f++) n++;
+    t.push({ kind: "block", id: i, body: e14.slice(a, d - 1), raw: e14.slice(p, n) }), r = n;
+  }
+  if (n < e14.length) t.push({ kind: "text", text: e14.slice(n) });
+  return t;
+}
+function PS(e14) {
+  let t = Y7(e14);
+  if (t.length === 1 && t[0].kind === "text") return e14;
+  return t.map((n) => n.kind === "text" ? n.text : n.body).join("");
+}
 function J7() {
   if (process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC) return "essential-traffic";
   if (process.env.DISABLE_TELEMETRY) return "no-telemetry";
@@ -12312,6 +12370,54 @@ var nye = {};
 var $8e = zS(nye, null);
 var rye = {};
 var H8e = zS(rye, null);
+async function hr(e14, t, n) {
+  let r = Math.max(1, Math.floor(n?.maxPages ?? 1e4)), o;
+  for (let s = 0; s < r; s++) {
+    if (n?.budget !== void 0) {
+      if (n.budget.pagesLeft < 1) return { status: "capped" };
+      n.budget.pagesLeft--;
+    }
+    let i = await e14(o);
+    if (!i.ok) return { status: "error", error: i.error };
+    if (await t(i.value.items), n?.until?.()) return { status: "done" };
+    if (o = i.value.cursor, !o) return { status: "done" };
+  }
+  return { status: "capped" };
+}
+var sye = /^(?:\s*<[a-z][\w-]*[\s>]|\[Request interrupted by user[^\]]*\])/;
+var iye = /<command-name>(.*?)<\/command-name>/;
+function ii(e14, t) {
+  if (e14.type !== "user") return;
+  if (e14.isMeta === true || e14.isCompactSummary === true) return;
+  let n = e14.message;
+  if (!n) return;
+  let r = n.content, o = [];
+  if (typeof r === "string") o.push(r);
+  else if (Array.isArray(r)) for (let s of r) {
+    if (!s || typeof s !== "object") continue;
+    if (s.type === "tool_result") return;
+    if (s.type === "text" && typeof s.text === "string") o.push(s.text);
+  }
+  for (let s of o) {
+    let i = PS(s).replaceAll(`
+`, " ").trim();
+    if (!i) continue;
+    let a = iye.exec(i);
+    if (a) {
+      if (!t.commandFallback) t.commandFallback = a[1];
+      continue;
+    }
+    let l = /<bash-input>([\s\S]*?)<\/bash-input>/.exec(i);
+    if (l) return `! ${l[1].trim()}`;
+    if (sye.test(i)) continue;
+    if (i.length > 200) i = rs(i, 200).trim() + "\u2026";
+    return i;
+  }
+  return;
+}
+function uye() {
+  return process.platform === "win32";
+}
 var lI = class {
   resolved = /* @__PURE__ */ new Map();
   lookup(e14) {
@@ -12325,11 +12431,143 @@ var lI = class {
   }
 };
 var dye = new Fe(() => new lI());
+var pye = 5e3;
+function aI(e14) {
+  try {
+    return lye(e14, { throwIfNoEntry: false }) === void 0;
+  } catch {
+    return false;
+  }
+}
+var fye = /* @__PURE__ */ new Set([".com", ".exe", ".bat", ".cmd"]);
+function mye(e14) {
+  let t = e14.toLowerCase().replace(/.*[\\/]/, "").replace(/[. ]+$/, ""), n = t.lastIndexOf(".");
+  return n > 0 && fye.has(t.slice(n));
+}
+function gye(e14, t = false) {
+  let n = dye.of(tn().host), r = n.lookup(e14);
+  if (r !== void 0) if (r !== null) {
+    if (!aI(r)) return r;
+    n.forget(e14);
+  } else {
+    if (!t) return r;
+    n.forget(e14);
+  }
+  let o = Kp("SYSTEMROOT") || "C:\\Windows", s = cye(o, "System32", "where.exe");
+  try {
+    let a = aye(s, [e14], { stdio: "pipe", encoding: "utf8", timeout: pye, windowsHide: true, env: process.env }).trim().split(/\r?\n/).filter(Boolean), l = process.cwd(), c = false;
+    for (let d of a) {
+      if (aI(d)) continue;
+      if (Fp(d, l)) {
+        c = true;
+        continue;
+      }
+      if (!mye(d)) continue;
+      return n.remember(e14, d), d;
+    }
+    if (a.length > 0 && !c) n.remember(e14, null);
+    return null;
+  } catch (i) {
+    if (hye(i)) n.remember(e14, null);
+    return null;
+  }
+}
+function hye(e14) {
+  if (e14 === null || typeof e14 !== "object") return false;
+  let t = "status" in e14 ? e14.status : void 0, n = "signal" in e14 ? e14.signal : void 0, r = "code" in e14 ? e14.code : void 0;
+  return t === 1 && !n && !r;
+}
+function cI(e14, t = false) {
+  if (!uye()) return e14;
+  if (e14.includes("/") || e14.includes("\\")) return e14;
+  return gye(e14, t);
+}
 var Sye = yye(_ye);
+async function go(e14) {
+  let t = cI("git");
+  if (t === null) return [];
+  try {
+    let { stdout: n } = await Sye(t, ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=", "worktree", "list", "--porcelain"], { cwd: e14, timeout: 5e3, windowsHide: true });
+    if (!n) return [];
+    return n.split(`
+`).filter((r) => r.startsWith("worktree ")).map((r) => je(r.slice(9)));
+  } catch {
+    return [];
+  }
+}
+var on = 65536;
 var xye = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function $e(e14) {
   if (typeof e14 !== "string") return null;
   return xye.test(e14) ? e14 : null;
+}
+function CI(e14) {
+  if (!e14.includes("\\")) return e14;
+  try {
+    return JSON.parse(`"${e14}"`);
+  } catch {
+    return e14;
+  }
+}
+function Ft(e14, t) {
+  let n = [`"${t}":"`, `"${t}": "`], r, o = -1;
+  for (let s of n) {
+    let i = 0;
+    while (true) {
+      let a = e14.indexOf(s, i);
+      if (a < 0) break;
+      let l = a + s.length, c = l;
+      while (c < e14.length) {
+        if (e14[c] === "\\") {
+          c += 2;
+          continue;
+        }
+        if (e14[c] === '"') {
+          if (a > o) r = CI(e14.slice(l, c)), o = a;
+          break;
+        }
+        c++;
+      }
+      i = c + 1;
+    }
+  }
+  return r;
+}
+function Ef(e14, t, n) {
+  return Tye(e14, n, t);
+}
+function Tye(e14, t, n) {
+  let r = n === void 0 ? void 0 : `"type":"${n}"`, o = `"${t}":`, s = e14.length;
+  while (s > 0) {
+    let i = e14.lastIndexOf(`
+`, s - 1), a = e14.slice(i + 1, s);
+    if (s = i, a.includes(o) && (r === void 0 || a.includes(r))) try {
+      let l = JSON.parse(a);
+      if (typeof l === "object" && l !== null && (n === void 0 || l.type === n)) {
+        let c = l[t];
+        if (typeof c === "string") return c;
+      }
+    } catch {
+    }
+    if (i < 0) break;
+  }
+  return;
+}
+function HS(e14, t) {
+  let n = `"${t}":`, r = 0;
+  while (r < e14.length) {
+    let o = e14.indexOf(`
+`, r), s = o < 0 ? e14.slice(r) : e14.slice(r, o);
+    if (r = o < 0 ? e14.length : o + 1, s.includes(n)) try {
+      let i = JSON.parse(s);
+      if (typeof i === "object" && i !== null) {
+        let a = i[t];
+        if (typeof a === "string") return a;
+      }
+    } catch {
+    }
+  }
+  return;
 }
 async function Bc(e14, t, n) {
   return wye(e14, t, "w", n);
@@ -12356,9 +12594,89 @@ async function Oye(e14, t, n) {
   let i = await r.append(o, s);
   if (!i.ok) throw Error("transcript stream append failed", { cause: i.error });
 }
+function Cf(e14) {
+  let t = 0, n = { commandFallback: "" };
+  while (t < e14.length) {
+    let r = e14.indexOf(`
+`, t), o = r >= 0 ? e14.slice(t, r) : e14.slice(t);
+    if (t = r >= 0 ? r + 1 : e14.length, !o.includes('"type":"user"') && !o.includes('"type": "user"')) continue;
+    if (o.includes('"tool_result"')) continue;
+    if (o.includes('"isMeta":true') || o.includes('"isMeta": true')) continue;
+    if (o.includes('"isCompactSummary":true') || o.includes('"isCompactSummary": true')) continue;
+    try {
+      let s = JSON.parse(o), i = ii(s, n);
+      if (i !== void 0) return i;
+    } catch {
+      continue;
+    }
+  }
+  return n.commandFallback;
+}
+function AI(e14) {
+  let t = { commandFallback: "" };
+  for (let n of e14) {
+    if (typeof n !== "object" || n === null) continue;
+    let r = ii(n, t);
+    if (r !== void 0) return r;
+  }
+  return t.commandFallback;
+}
 var dI = process.platform === "win32" ? $c.O_RDONLY : $c.O_RDONLY | $c.O_NOFOLLOW | $c.O_NONBLOCK;
+async function kye(e14) {
+  let { backend: t, key: n } = e14;
+  try {
+    let r = await t.read([{ key: n, offset: 0, length: on }, { key: n, tail: on }]);
+    if (!r.ok) return null;
+    let [o, s] = r.value.items;
+    if (!o.found || o.value.length === 0) return null;
+    let i = pI(o.value), a = s.found && s.value.length > 0 ? pI(s.value) : i;
+    return { head: i, tail: a, mtimeMs: o.mtimeMs, totalBytes: o.totalBytes };
+  } catch {
+    return null;
+  }
+}
+function pI(e14) {
+  return Buffer.from(e14.buffer, e14.byteOffset, e14.byteLength).toString("utf8");
+}
 var A7e = Buffer.from('"type":"user"');
 var R7e = Buffer.from('"type":"assistant"');
+function vf(e14, t) {
+  if (e14.kind !== "scope" || e14.scope.namespace !== "transcript" || e14.scope.projectKey === void 0 || e14.scope.sessionId !== void 0 || !t(e14.scope.projectKey)) return;
+  return e14.scope.projectKey;
+}
+function RI(e14) {
+  return { skipScopeStats: true, skipKeyStats: true, ...e14 !== void 0 && { cursor: e14 } };
+}
+async function li(e14, t) {
+  if (t !== void 0 && t.hoverRestOn) return xI(t.source);
+  try {
+    if (dI === $c.O_RDONLY) {
+      if (!(await bye(e14)).isFile()) return null;
+    }
+    let n = await SI(e14, dI);
+    try {
+      let r = await n.stat();
+      if (!r.isFile()) return null;
+      let o = Buffer.allocUnsafe(on), s = await n.read(o, 0, on, 0);
+      if (s.bytesRead === 0) return null;
+      let i = o.toString("utf8", 0, s.bytesRead), a = Math.max(0, r.size - on), l = i;
+      if (a > 0) {
+        let c = await n.read(o, 0, on, a);
+        l = o.toString("utf8", 0, c.bytesRead);
+      }
+      return { mtime: r.mtime.getTime(), size: r.size, head: i, tail: l };
+    } finally {
+      await n.close();
+    }
+  } catch {
+    return null;
+  }
+}
+async function xI(e14) {
+  let t = await kye(e14);
+  if (t === null) return null;
+  return { mtime: Math.trunc(t.mtimeMs), size: t.totalBytes, head: t.head, tail: t.tail };
+}
 var ho = 200;
 function Pye(e14) {
   return Math.abs(kS(e14)).toString(36);
@@ -12371,14 +12689,155 @@ function Kc(e14) {
   if (t.length <= ho) return t;
   return `${t.slice(0, ho)}-${Pye(e14)}`;
 }
+function lt() {
+  return _r(it(), "projects");
+}
 function Nr(e14) {
   return hk() ?? Kc(e14);
+}
+function KS(e14) {
+  let t = Kc(e14);
+  return t === Nr(e14) ? void 0 : t;
+}
+function Ba(e14, t = lt()) {
+  return _r(t, Nr(e14));
+}
+function ci(e14, t) {
+  let n = vye(e14);
+  return Aye(e14) === lt() && t(n) ? n : void 0;
+}
+async function _o(e14, t) {
+  try {
+    if (t !== void 0 && t.hoverRestOn) {
+      let n = await t.realPath(e14);
+      return je(n.ok && n.value.found ? n.value.path : e14);
+    }
+    return je(await EI(e14));
+  } catch {
+    return je(e14);
+  }
+}
+async function Ka(e14, t, n, r) {
+  let o = r !== void 0 && r.hoverRestOn ? r.source : void 0, s = o === void 0 ? void 0 : ci(e14, o.isKeySegment);
+  if (o !== void 0 && s !== void 0) {
+    let l = await Iye(s, t, n, o);
+    if (l !== void 0) return l;
+  }
+  let i = ja(t), a;
+  try {
+    a = await Hc(e14, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  for (let l of a) {
+    if (!l.isFile() || !l.name.endsWith(".jsonl")) continue;
+    let c = await li(_r(e14, l.name));
+    if (c === null) continue;
+    if (OI(c, i, n)) return true;
+  }
+  return false;
+}
+function OI(e14, t, n) {
+  let r = Ef(e14.tail, "relocated", "relocatedCwd") ?? HS(e14.head, "cwd");
+  if (r === void 0) return false;
+  let o = ja(je(r));
+  return n ? o.toLowerCase() === t.toLowerCase() : o === t;
+}
+async function Iye(e14, t, n, r) {
+  let { backend: o, transcriptKey: s, isKeySegment: i } = r, a = ja(t), l = false, c = /* @__PURE__ */ new Set();
+  try {
+    let d = await hr((p) => o.listEntries({ namespace: "transcript", projectKey: e14 }, RI(p)), async (p) => {
+      for (let f of p) {
+        if (f.kind !== "key" || f.key.namespace !== "transcript" || f.key.projectKey !== e14 || f.key.agentId !== void 0 || !i(f.key.sessionId) || c.has(f.key.sessionId)) continue;
+        let m = f.key.sessionId, g = await xI({ backend: o, key: s(e14, m) });
+        if (g === null) continue;
+        if (c.add(m), OI(g, a, n)) {
+          l = true;
+          return;
+        }
+      }
+    }, { until: () => l });
+    if (l) return true;
+    if (d.status !== "done") return;
+  } catch {
+    return;
+  }
+  return false;
+}
+async function Un(e14, t, n = lt()) {
+  if (t !== void 0 && t.hoverRestOn) return Dye(e14, t);
+  let r = Ba(e14, n), o = [];
+  try {
+    await Hc(r), o.push(r);
+  } catch {
+  }
+  let s = KS(e14);
+  if (s !== void 0) {
+    let p = _r(n, s);
+    try {
+      await Hc(p), o.push(p);
+    } catch {
+    }
+    return o;
+  }
+  let i = Kc(e14);
+  if (i.length <= ho) return o;
+  let a = process.platform === "win32", l = (p) => a ? p.toLowerCase() : p, c = l(i.slice(0, ho) + "-"), d = l(r);
+  try {
+    for (let p of await Hc(n, { withFileTypes: true })) {
+      if (!p.isDirectory() || !l(p.name).startsWith(c)) continue;
+      let f = _r(n, p.name);
+      if (l(f) !== d && await Ka(f, e14, a)) o.push(f);
+    }
+  } catch {
+  }
+  return o;
+}
+async function Dye(e14, t) {
+  let n = await Ga(t.source);
+  if (n === null) {
+    let r = KS(e14);
+    return [Ba(e14), ...r !== void 0 ? [_r(lt(), r)] : []];
+  }
+  return WS(e14, n, process.platform === "win32", t);
+}
+async function Ga(e14) {
+  let { backend: t, isKeySegment: n } = e14, r = [], o = /* @__PURE__ */ new Set(), s = 0;
+  try {
+    if ((await hr((a) => t.listEntries({ namespace: "transcript" }, RI(a)), (a) => {
+      for (let l of a) {
+        let c = vf(l, n);
+        if (c !== void 0 && !o.has(c)) o.add(c), r.push(c);
+      }
+      s++;
+    })).status === "error") return s === 0 ? null : r;
+  } catch {
+    return s === 0 ? null : r;
+  }
+  return r;
+}
+async function WS(e14, t, n, r) {
+  let o = Nr(e14), s = Ba(e14), i = KS(e14), a = i === void 0 && o.length > ho ? o.slice(0, ho) + "-" : void 0, l = lt(), c = (S) => n ? S.toLowerCase() : S, d = a !== void 0 ? c(a) : void 0, p = c(o), f = false, m, g = [], _ = /* @__PURE__ */ new Set();
+  for (let S of t) if (S === o) f = true;
+  else if (i !== void 0) {
+    if (m === void 0 && c(S) === c(i)) m = _r(l, S);
+  } else if (d !== void 0 && c(S).startsWith(d) && c(S) !== p && !_.has(c(S))) _.add(c(S)), g.push(S);
+  let y = [];
+  for (let S of g) {
+    let b = _r(l, S);
+    if (await Ka(b, e14, n, r)) y.push(b);
+  }
+  return [...f ? [s] : [], ...m !== void 0 ? [m] : [], ...y];
 }
 var Mye = Buffer.from('"compact_boundary"');
 var Sf = Buffer.from('{"type":"attribution-snapshot"');
 var Nye = Buffer.from('{"type":"system"');
 var jc = 10;
 var Uye = Buffer.from([jc]);
+var LI = /^[0-9a-f]{16}(?:[0-9a-f]{48})?@v\d+$/;
+function MI(e14, t, n) {
+  return { type: "history-suppression", sessionId: e14, cause: t, ...n && { vetoedAgainstAccountUuid: n }, ts: (/* @__PURE__ */ new Date()).toISOString() };
+}
 var VS = "Tool permission request failed";
 var Hye = "Tool permission stream closed before response received";
 var jye = "Stream closed";
@@ -15706,8 +16165,64 @@ function P(e14) {
   return obe.lazy(e14);
 }
 var sbe = P(() => A({ lineage: h().min(1), source: fe().optional() }));
+function UM(e14, t) {
+  let n = e14.type === "attachment" ? e14.attachment : void 0;
+  if (typeof n !== "object" || n === null || !("type" in n) || n.type !== "queued_command") return;
+  let r = Reflect.get(n, t);
+  return typeof r === "string" && r ? r : void 0;
+}
+function gu(e14) {
+  return UM(e14, "source_uuid");
+}
+function $C(e14, t) {
+  let n = e14.findIndex((r) => r.uuid === t);
+  return n !== -1 ? n : e14.findIndex((r) => gu(r) === t);
+}
+function FM(e14, t) {
+  let n = gu(e14);
+  return n === void 0 ? void 0 : t.get(n);
+}
 var cbe = [[`<${vS}>`, "record"], [`<${AS}>`, "output"], [`<${RS}>`, "output"], [`<${xS}>`, "caveat"]];
 var ube = String.fromCharCode(0);
+var dbe = /^\.[0-9a-f]{16}\.aside$/;
+function pbe(e14) {
+  if (e14.charCodeAt(0) !== 46) return false;
+  return bo(e14).some((t) => dbe.test(t));
+}
+function HM(e14) {
+  return typeof e14 === "string" && /^[. ]+$/.test(e14);
+}
+function Ht(e14) {
+  return !(typeof e14 !== "string" || e14.length === 0 || HM(e14) || e14.includes("/") || e14.includes("\\") || e14.includes(ube) || pbe(e14));
+}
+function xn(e14) {
+  return e14.length > 0 && e14.every(Ht);
+}
+function hu(e14) {
+  return bo(e14).some((t) => t.endsWith(".jsonl"));
+}
+function bo(e14) {
+  let t = rm.get(e14);
+  if (t !== void 0) return t;
+  let n = Object.freeze(fbe(e14));
+  if (rm.size >= mbe) rm.clear();
+  return rm.set(e14, n), n;
+}
+function fbe(e14) {
+  let t = e14.toLowerCase(), n = t.indexOf(":");
+  return n === -1 ? [jC(t)] : [jC(t), jC(t.slice(0, n))];
+}
+var rm = /* @__PURE__ */ new Map();
+var mbe = 32768;
+function jC(e14) {
+  let t = e14.length;
+  while (t > 0) {
+    let n = e14.charCodeAt(t - 1);
+    if (n !== 46 && n !== 32) break;
+    t -= 1;
+  }
+  return t === e14.length ? e14 : e14.slice(0, t);
+}
 function om(e14, t, n) {
   return n === void 0 ? e14 : { ...e14, [t]: n };
 }
@@ -15732,6 +16247,31 @@ var BM = class {
   procUnreadableLogged = false;
 };
 var Jet = new Fe(() => new BM());
+function Cbe(e14) {
+  return V(e14, "expected a segment that is not empty or made only of dots and spaces, with no path separator, NUL or set-aside shape");
+}
+function Co(e14) {
+  if (typeof e14 !== "object" || e14 === null) return V("key", "expected a key object");
+  let t = Ibe(e14);
+  if (t !== void 0) return t;
+  let n = aCe(e14);
+  if (n === void 0) return V("key", `${e14.namespace} is not a storage namespace`);
+  return GM("key", n);
+}
+function GM(e14, t) {
+  for (let [n, r, o] of t) {
+    let s = `${e14}.${n}`;
+    if (r === void 0) {
+      if (o !== "optional") return V(s, "required");
+    } else if (vbe(n)) {
+      if (!(e14 === "scope" && n === "agentRelPath" && Array.isArray(r) && r.length === 0) && (!Array.isArray(r) || !xn(r))) return V(s, "expected a non-empty array of segments, none empty or made only of dots and spaces, with no path separator, NUL or set-aside shape");
+    } else if (typeof r !== "string" || !Ht(r)) return Cbe(s);
+  }
+  return;
+}
+function vbe(e14) {
+  return e14 === "relPath" || e14 === "agentRelPath";
+}
 var WM = ["commands", "agents", "output-styles", "skills", "workflows", "routines", "themes", "rules", "session-env", "uploads", "mcp-skill-archives", "usage-data", "mcp-discovery-cache"];
 var VM = new Set(WM);
 var qM = `must be one of the userConfigDir directory names (${WM.join(", ")})`;
@@ -15744,20 +16284,465 @@ var Tbe = `must be one of the marketplaceCache forms (${YM.join(", ")})`;
 var JM = ["world"];
 var wbe = new Set(JM);
 var Obe = `must be one of the session journal names (${JM.join(", ")})`;
+function kbe(e14) {
+  return wbe.has(e14);
+}
+function Pbe(e14) {
+  return typeof e14 === "string" && /^[0-9a-f]{64}$/.test(e14);
+}
+function Ibe(e14) {
+  if (e14.namespace === "transcript") return Mbe(e14);
+  if (e14.namespace === "pluginAssetCache" && !Pbe(e14.digest)) return V("key.digest", "must be a SHA-256 digest: 64 lowercase hexadecimal characters");
+  if (e14.namespace === "globalConfig" && "kind" in e14) {
+    if (!tN(e14.kind)) return V("key.kind", eN);
+    if (typeof e14.stamp !== "string") return V("key.stamp", "a recovery copy key carries its stamp");
+  }
+  if (e14.namespace === "task") return Xbe(e14);
+  if (e14.namespace === "sidecar") {
+    let t = im("key.sessionId", e14.sessionId);
+    if (t !== void 0) return t;
+    if (am(e14.relPath)) return V("key.relPath", yu);
+    return sN(e14.relPath) ? V("key.relPath", rN) : void 0;
+  }
+  if (e14.namespace === "recording") return im("key.sessionId", e14.sessionId) ?? (oN(e14.stamp) ? void 0 : V("key.stamp", Fbe));
+  if (e14.namespace === "jobsRoot") return Qbe(e14);
+  if (e14.namespace === "userConfigDir" && !VM.has(e14.dir)) return V("key.dir", qM);
+  if (e14.namespace === "fileHistory") return Dbe(e14);
+  if (e14.namespace === "settings" && !Ybe(e14.layer)) return V("key.layer", "must be user, project or local");
+  if (e14.namespace === "log") return Jbe(e14);
+  if (e14.namespace === "job" && pN(e14.relPath)) return V("key.relPath", dN);
+  if (e14.namespace === "sessionLog") return fN("key", e14) ?? (oCe(e14.logName) ? void 0 : V("key.logName", "must be the session-log stem <sessionId8>[-<title-slug>]: up to eight word characters, then lower-case a-z / 0-9 runs joined by single hyphens; not a bare device name"));
+  if (e14.namespace === "pluginRegistry" && !Abe.has(e14.file)) return V("key.file", Rbe);
+  if (e14.namespace === "marketplaceCache") {
+    if (!("relPath" in e14)) return xbe.has(e14.form) ? void 0 : V("key.form", Tbe);
+    return e14.form === void 0 ? void 0 : V("key.form", "a tree file key carries relPath, not form");
+  }
+  if (e14.namespace !== "agentMemory") return;
+  if (!XM(e14.layer)) return V("key.layer", "must be user, project or local");
+  if (e14.layer === "user" && "projectKey" in e14) return V("key.projectKey", "the user layer is not keyed by project");
+  if (e14.layer !== "user" && typeof e14.projectKey !== "string") return V("key.projectKey", "required for the project and local layers");
+  return typeof e14.agentType === "string" ? void 0 : V("key.agentType", "an agent memory key names its agent");
+}
+function Dbe(e14) {
+  return typeof e14.backupFileName !== "string" || !LI.test(e14.backupFileName) ? V("key.backupFileName", "must be a backup file name the engine has ever written (hex hash @v version)") : void 0;
+}
+function XM(e14) {
+  return e14 === "user" || e14 === "project" || e14 === "local";
+}
 var QM = ["backup", "corrupted"];
 var Lbe = new Set(QM);
 var eN = `must be one of the global-config copy kinds (${QM.join(", ")})`;
+function tN(e14) {
+  return Lbe.has(e14);
+}
+function Mbe(e14) {
+  let t = im("key.sessionId", e14.sessionId);
+  if (t !== void 0) return t;
+  if (am(e14.agentRelPath)) return V("key.agentRelPath", yu);
+  if ("sessionJournal" in e14) {
+    if (typeof e14.sessionJournal !== "string" || !kbe(e14.sessionJournal)) return V("key.sessionJournal", Obe);
+    return e14.agentId === void 0 && e14.agentRelPath === void 0 && !("journal" in e14) ? void 0 : V("key.sessionJournal", "a session journal key names the session's own journal: no agentId, agentRelPath or run journal");
+  }
+  if ("journal" in e14) {
+    if (e14.journal !== true) return V("key.journal", "must be true");
+    if (!Array.isArray(e14.agentRelPath)) return V("key.agentRelPath", "a run journal key carries its run directory");
+    return e14.agentId === void 0 ? void 0 : V("key.agentId", "a transcript key names an agent transcript or the run journal, never both");
+  }
+  return e14.agentRelPath !== void 0 && e14.agentId === void 0 ? V("key.agentRelPath", "requires agentId or journal") : void 0;
+}
 var Nbe = "cloud-snapshots";
 var nN = /* @__PURE__ */ new Set(["memory", "tiny_memory", "bagel", Nbe, "bridge-pointer.json", ".session-aliases"]);
+var Ube = /^[0-9]{1,16}$/;
+var Fbe = "must be the recording stamp: 1 to 16 decimal digits (epoch milliseconds)";
 var sm = ".cast";
 var rN = `<stamp>${sm} inside a session's folder is that session's terminal recording stream: address it as keys.recording(projectKey, sessionId, stamp)`;
+function oN(e14) {
+  return typeof e14 === "string" && Ube.test(e14);
+}
+function sN(e14) {
+  return Array.isArray(e14) && typeof e14[0] === "string" && bo(e14[0]).some((t) => zbe(t) !== void 0);
+}
+function zbe(e14) {
+  if (!e14.endsWith(sm)) return;
+  let t = e14.slice(0, -sm.length);
+  return oN(t) ? t : void 0;
+}
 var iN = [".ccr-tip.json", ".precompact.json", sm];
 var $be = `must not end with ${iN.join(", ")}: those name a session's project-level sibling files`;
+function Hbe(e14) {
+  return bo(e14).some((t) => iN.some((n) => t.endsWith(n)));
+}
 var aN = ".dir-sync.json";
 var jbe = `must not end with ${aN}: that name is reserved for a cloud session's record at the project level`;
+function Bbe(e14) {
+  return bo(e14).some((t) => t.endsWith(aN));
+}
 var Kbe = `${[...nN].join(", ")} are reserved: they name project-level entries, not sessions`;
+function Gbe(e14) {
+  return bo(e14).some((t) => nN.has(t));
+}
+function im(e14, t) {
+  if (typeof t !== "string") return;
+  if (Gbe(t)) return V(e14, Kbe);
+  if (Hbe(t)) return V(e14, $be);
+  if (Bbe(t)) return V(e14, jbe);
+  return hu(t) ? V(e14, yu) : void 0;
+}
+var Wbe = ".meta.json";
+var Vbe = ".meta is reserved for the list metadata key, under every spelling that opens its file";
+function qbe(e14) {
+  return Zbe(`${e14}.json`);
+}
+function Zbe(e14) {
+  return bo(e14).includes(Wbe);
+}
+var yu = "names a .jsonl stream, which only a transcript key addresses";
+function am(e14) {
+  return Array.isArray(e14) && e14.some((t) => typeof t === "string" && hu(t));
+}
+function Ybe(e14) {
+  return e14 === "user" || e14 === "project" || e14 === "local";
+}
+var lN = "must be debug, telemetry or apiDump";
+function cN(e14) {
+  return e14 === "debug" || e14 === "telemetry" || e14 === "apiDump";
+}
+function Jbe(e14) {
+  if (!cN(e14.channel)) return V("key.channel", lN);
+  if (e14.channel !== "apiDump") return;
+  for (let t of ["agentId", "runId"]) if (t in e14 && e14[t] !== void 0) return V(`key.${t}`, "an apiDump key names its dump by one id \u2014 the agent's for a subagent's requests, else the session's (today's dump-prompts/<id>.jsonl); agentId and runId nest nothing on this channel");
+  return;
+}
+function Xbe(e14) {
+  if ("taskId" in e14 && ("meta" in e14 || "highWaterMark" in e14)) return V("key.taskId", "a task key names an item, the list metadata or the list high-water mark, never more than one");
+  if ("meta" in e14 && "highWaterMark" in e14) return V("key.highWaterMark", "a task key names an item, the list metadata or the list high-water mark, never more than one");
+  if ("meta" in e14 && e14.meta !== true) return V("key.meta", "must be true");
+  if ("highWaterMark" in e14 && e14.highWaterMark !== true) return V("key.highWaterMark", "must be true");
+  if (typeof e14.listId !== "string") return V("key.listId", "a task key carries its listId");
+  if ("meta" in e14 || "highWaterMark" in e14) return;
+  if (typeof e14.taskId !== "string") return V("key.taskId", "a task item key carries its taskId");
+  if (qbe(e14.taskId)) return V("key.taskId", Vbe);
+  return;
+}
+function Qbe(e14) {
+  if ("file" in e14 && "draftKey" in e14) return V("key.draftKey", "a jobs-root key names the pins file or one draft, never both");
+  if ("file" in e14) return e14.file === "pins" ? void 0 : V("key.file", "must be pins");
+  if (typeof e14.draftKey !== "string") return V("key.draftKey", "a jobs-root draft key carries its draftKey");
+  return iCe.test(e14.draftKey) ? void 0 : V("key.draftKey", "must be 8 lowercase hex characters");
+}
 var uN = "timeline.jsonl";
 var dN = `${uN} is the job's timeline stream: address it as keys.jobTimeline(jobId)`;
+function pN(e14) {
+  return Array.isArray(e14) && typeof e14[0] === "string" && bo(e14[0]).includes(uN);
+}
+var eCe = /^\d{4}$/;
+var KM = /^\d{2}$/;
+var tCe = /^[A-Za-z0-9_-]{1,8}(?:-[a-z0-9]+)*$/;
+var nCe = 128;
+var rCe = /^(?:con|prn|aux|nul|com\d|lpt\d)$/i;
+function oCe(e14) {
+  return typeof e14 === "string" && e14.length <= nCe && tCe.test(e14) && !rCe.test(e14);
+}
+function fN(e14, t) {
+  if (t.year !== void 0 && !KC(eCe, t.year)) return V(`${e14}.year`, "must be four digits (YYYY)");
+  if (t.month !== void 0 && !KC(KM, t.month)) return V(`${e14}.month`, "must be two digits (MM)");
+  if (t.day !== void 0 && !KC(KM, t.day)) return V(`${e14}.day`, "must be two digits (DD)");
+  return;
+}
+function KC(e14, t) {
+  return typeof t === "string" && e14.test(t);
+}
+var iCe = /^[0-9a-f]{8}$/;
+function aCe(e14) {
+  switch (e14.namespace) {
+    case "transcript":
+      return [["projectKey", e14.projectKey], ["sessionId", e14.sessionId], ["agentId", e14.agentId, "optional"], ["agentRelPath", e14.agentRelPath, "optional"]];
+    case "history":
+    case "identity":
+      return [];
+    case "globalConfig":
+      return "kind" in e14 ? [["stamp", e14.stamp]] : [];
+    case "settings":
+      return e14.layer === "user" ? [] : e14.layer === "project" ? [["projectKey", e14.projectKey]] : [["consentRootKey", e14.consentRootKey]];
+    case "task":
+      return "taskId" in e14 ? [["listId", e14.listId], ["taskId", e14.taskId]] : [["listId", e14.listId]];
+    case "memory":
+      return [["projectKey", e14.projectKey], ["relPath", e14.relPath]];
+    case "pluginRegistry":
+      return [];
+    case "marketplaceCache":
+      return "relPath" in e14 ? [["marketplace", e14.marketplace], ["relPath", e14.relPath]] : [["marketplace", e14.marketplace]];
+    case "pluginCache":
+      return [["marketplace", e14.marketplace], ["plugin", e14.plugin], ["version", e14.version], ["relPath", e14.relPath]];
+    case "cache":
+      return [["store", e14.store], ["id", e14.id]];
+    case "paste":
+      return [["id", e14.id]];
+    case "pluginAssetCache":
+      return [["digest", e14.digest]];
+    case "state":
+      return [["id", e14.id]];
+    case "plan":
+      return [["name", e14.name]];
+    case "feedbackDraft":
+      return [["draftId", e14.draftId]];
+    case "agentMemory":
+      return [...e14.layer === "user" ? [] : [["projectKey", e14.projectKey]], ["agentType", e14.agentType], ["relPath", e14.relPath]];
+    case "team":
+      return [["team", e14.team]];
+    case "sidecar":
+      return [["projectKey", e14.projectKey], ["sessionId", e14.sessionId], ["relPath", e14.relPath]];
+    case "scratch":
+      return [["sessionId", e14.sessionId], ["relPath", e14.relPath]];
+    case "userConfigDir":
+      return [["relPath", e14.relPath]];
+    case "fileHistory":
+      return [["sessionId", e14.sessionId], ["backupFileName", e14.backupFileName]];
+    case "job":
+      return [["jobId", e14.jobId], ["relPath", e14.relPath]];
+    case "daemon":
+      return [["relPath", e14.relPath]];
+    case "jobsRoot":
+      return "file" in e14 ? [] : [["draftKey", e14.draftKey]];
+    case "session":
+      return [["file", e14.file]];
+    case "bridgePointer":
+    case "sessionAliases":
+      return [["projectKey", e14.projectKey]];
+    case "dirSyncRecord":
+      return [["projectKey", e14.projectKey], ["sessionId", e14.sessionId]];
+    case "mailbox":
+      return [["team", e14.team], ["teammate", e14.teammate]];
+    case "log":
+      return [["sessionId", e14.sessionId], ["agentId", e14.agentId, "optional"], ["runId", e14.runId, "optional"]];
+    case "jobTimeline":
+      return [["jobId", e14.jobId]];
+    case "recording":
+      return [["projectKey", e14.projectKey], ["sessionId", e14.sessionId], ["stamp", e14.stamp]];
+    case "sessionLog":
+      return [["projectKey", e14.projectKey], ["year", e14.year], ["month", e14.month], ["day", e14.day], ["logName", e14.logName]];
+  }
+  return;
+}
+function fCe(e14) {
+  let t = process.cwd();
+  return t.endsWith(mN) ? t + e14 : t + mN + e14;
+}
+function WC(e14) {
+  return (t) => e14.hostFiles.realPath(jp.workspace(t === "" || pCe(t) ? t : fCe(t)), { native: true });
+}
+function Su(e14) {
+  return e14 === void 0 ? void 0 : { hoverRestOn: Ee(), realPath: WC(e14) };
+}
+function Er(e14, t) {
+  if (!Ee() || t === void 0) return;
+  if (!e14.endsWith(".jsonl")) return;
+  let n = hN(e14);
+  if (hN(n) !== lt()) return;
+  let r = gN(n), o = gN(e14, ".jsonl");
+  if (e14 !== mCe(lt(), r, `${o}.jsonl`)) return;
+  let s = At.transcript(r, o);
+  return Co(s) === void 0 ? { backend: t, key: s } : void 0;
+}
+function Tn(e14) {
+  if (!Ee() || e14 === void 0) return;
+  return { backend: e14, transcriptKey: At.transcript, isKeySegment: Ht, realWorkspacePath: WC(e14) };
+}
+function Zt(e14) {
+  return e14 === void 0 ? void 0 : { source: e14, hoverRestOn: Ee() };
+}
+var yN = 8192;
+async function bu(e14, t) {
+  let n = /* @__PURE__ */ new Map();
+  for (let S of e14) n.set(S.uuid, S);
+  let r = 0;
+  for (let S of n.values()) {
+    if (S.type !== "system" || S.subtype !== "compact_boundary") continue;
+    let b = S.compactMetadata?.preservedMessages, E = S.compactMetadata?.preservedSegment;
+    if (b) {
+      if (b.uuids.length === 0 || b.uuids.some((L) => !n.has(L))) continue;
+      let C = b.anchorUuid;
+      for (let L of b.uuids) {
+        let z = n.get(L);
+        n.set(L, { ...z, parentUuid: C }), C = L;
+      }
+      let v = b.uuids[0], w = b.uuids.at(-1);
+      for (let [L, z] of n) {
+        if (++r % yN === 0) await new Promise((U) => setImmediate(U));
+        if (z.parentUuid === b.anchorUuid && L !== v) n.set(L, { ...z, parentUuid: w });
+      }
+    } else if (E) {
+      let C = n.get(E.headUuid);
+      if (C) n.set(E.headUuid, { ...C, parentUuid: E.anchorUuid });
+      for (let [v, w] of n) {
+        if (++r % yN === 0) await new Promise((L) => setImmediate(L));
+        if (w.parentUuid === E.anchorUuid && v !== E.headUuid) n.set(v, { ...w, parentUuid: E.tailUuid });
+      }
+    }
+  }
+  let o = /* @__PURE__ */ new Map();
+  for (let S = 0; S < e14.length; S++) o.set(e14[S].uuid, S);
+  let s = /* @__PURE__ */ new Set();
+  for (let S of n.values()) if (S.parentUuid) s.add(S.parentUuid);
+  let i = [...n.values()].filter((S) => !s.has(S.uuid)), a = (S) => !S.isSidechain && !S.teamName && S.type !== "progress" && !(S.type === "attachment" && S.attachment?.type === "fork_briefing"), l = /* @__PURE__ */ new Set();
+  for (let S of n.values()) if (S.parentUuid && a(S)) l.add(S.parentUuid);
+  let c = [...n.values()].filter((S) => a(S) && !l.has(S.uuid)).sort((S, b) => (o.get(b.uuid) ?? -1) - (o.get(S.uuid) ?? -1)), d = /* @__PURE__ */ new Set(), p, f;
+  for (let S of c) {
+    let b = [], E = /* @__PURE__ */ new Set(), C = S;
+    while (C && !d.has(C.uuid) && !E.has(C.uuid)) {
+      if (C.type === "user" || C.type === "assistant") {
+        p = C, f = S;
+        break;
+      }
+      E.add(C.uuid), b.push(C.uuid), C = C.parentUuid ? n.get(C.parentUuid) : void 0;
+    }
+    if (p) break;
+    for (let v of b) d.add(v);
+  }
+  let m = p;
+  if (!m) {
+    let S = [];
+    for (let C of i) {
+      let v = C, w = /* @__PURE__ */ new Set();
+      while (v) {
+        if (w.has(v.uuid)) break;
+        if (w.add(v.uuid), v.type === "user" || v.type === "assistant") {
+          S.push(v);
+          break;
+        }
+        v = v.parentUuid ? n.get(v.parentUuid) : void 0;
+      }
+    }
+    if (S.length === 0) return [];
+    let b = S.filter((C) => !C.isSidechain && !C.teamName && !C.isMeta), E = (C) => C.reduce((v, w) => (o.get(w.uuid) ?? -1) > (o.get(v.uuid) ?? -1) ? w : v);
+    m = b.length > 0 ? E(b) : E(S);
+  }
+  let g = [], _ = /* @__PURE__ */ new Set(), y = n.get(m.uuid);
+  while (y) {
+    if (_.has(y.uuid)) break;
+    _.add(y.uuid), g.push(y), y = y.parentUuid ? n.get(y.parentUuid) : void 0;
+  }
+  if (g.reverse(), await new Promise((S) => setImmediate(S)), t?.found) t.found.terminal = m === p ? f : void 0, t.found.leaf = m;
+  return yCe(n, g, _);
+}
+function lm(e14) {
+  if (e14.type !== "assistant") return;
+  let t = e14.message;
+  if (typeof t !== "object" || t === null) return;
+  let n = t.id;
+  return typeof n === "string" ? n : void 0;
+}
+function vN(e14) {
+  if (e14.type !== "user" || !e14.parentUuid) return false;
+  let t = e14.message;
+  if (typeof t !== "object" || t === null) return false;
+  let n = t.content;
+  if (!Array.isArray(n)) return false;
+  return n.some((r) => typeof r === "object" && r !== null && r.type === "tool_result");
+}
+function yCe(e14, t, n) {
+  let r = t.filter((E) => E.type === "assistant");
+  if (r.length === 0) return t;
+  let o = /* @__PURE__ */ new Map();
+  for (let E of r) {
+    let C = lm(E);
+    if (C) o.set(C, E);
+  }
+  let s = /* @__PURE__ */ new Map(), i = /* @__PURE__ */ new Map(), a = /* @__PURE__ */ new Map(), l = [];
+  for (let E of e14.values()) {
+    let C = lm(E);
+    if (C) {
+      let v = s.get(C);
+      if (v) v.push(E);
+      else s.set(C, [E]);
+      for (let w of Eu(E, "tool_use", "id")) {
+        let L = a.get(w);
+        a.set(w, L === void 0 || L !== null && lm(L) === C ? E : null);
+      }
+    } else if (vN(E)) l.push(E);
+  }
+  let c = /* @__PURE__ */ new Set(), d = (E, C) => {
+    if (c.has(E + `
+` + C.uuid)) return;
+    c.add(E + `
+` + C.uuid);
+    let v = i.get(E);
+    if (v) v.push(C);
+    else i.set(E, [C]);
+  }, p = (E, C) => (E.isSidechain ?? false) === (C.isSidechain ?? false) && E.agentId === C.agentId;
+  for (let E of l) {
+    d(E.parentUuid, E);
+    let C = typeof E.sourceToolAssistantUUID === "string" && E.sourceToolAssistantUUID !== E.parentUuid ? e14.get(E.sourceToolAssistantUUID) : void 0;
+    if (C && p(E, C)) d(C.uuid, E);
+    for (let v of Eu(E, "tool_result", "tool_use_id")) {
+      let w = a.get(v);
+      if (w && p(E, w)) d(w.uuid, E);
+    }
+  }
+  let f = /* @__PURE__ */ new Set();
+  for (let E of t) for (let C of Eu(E, "tool_result", "tool_use_id")) f.add(C);
+  let m, g = (E) => {
+    if (m === void 0) {
+      m = /* @__PURE__ */ new Map();
+      let C = 0;
+      for (let v of e14.keys()) m.set(v, C++);
+    }
+    return m.get(E.uuid) ?? Number.MAX_SAFE_INTEGER;
+  }, _ = /* @__PURE__ */ new Set(), y = /* @__PURE__ */ new Map(), S = 0;
+  for (let E of r) {
+    let C = lm(E);
+    if (!C || _.has(C)) continue;
+    _.add(C);
+    let v = s.get(C) ?? [E], w = new Set(v.map((D) => D.uuid)), L = v.filter((D) => !n.has(D.uuid)), z = [], U = [], de = /* @__PURE__ */ new Set();
+    for (let D of v) for (let B of i.get(D.uuid) ?? []) {
+      if (n.has(B.uuid) || de.has(B.uuid)) continue;
+      if (de.add(B.uuid), w.has(B.parentUuid)) z.push(B);
+      else U.push(B);
+    }
+    if (U.length > 0) {
+      let D = new Set(f);
+      for (let B of z) for (let oe of Eu(B, "tool_result", "tool_use_id")) D.add(oe);
+      U.sort((B, oe) => g(B) - g(oe));
+      for (let B of U) {
+        let oe = Eu(B, "tool_result", "tool_use_id");
+        if (!oe.some((J) => {
+          let K = a.get(J);
+          return !D.has(J) && !!K && w.has(K.uuid);
+        })) continue;
+        for (let J of oe) D.add(J);
+        z.push(B);
+      }
+    }
+    if (L.length === 0 && z.length === 0) continue;
+    let x = (D, B) => (D.timestamp ?? "").localeCompare(B.timestamp ?? "");
+    L.sort(x), z.sort(x);
+    let R = o.get(C), O = [...L, ...z];
+    for (let D of O) n.add(D.uuid);
+    S += O.length, y.set(R.uuid, O);
+  }
+  if (S === 0) return t;
+  let b = [];
+  for (let E of t) {
+    b.push(E);
+    let C = y.get(E.uuid);
+    if (C) b.push(...C);
+  }
+  return b;
+}
+function Eu(e14, t, n) {
+  let r = e14.message;
+  if (typeof r !== "object" || r === null) return [];
+  let o = r.content;
+  if (!Array.isArray(o)) return [];
+  let s = [];
+  for (let i of o) {
+    if (typeof i !== "object" || i === null) continue;
+    if (i.type !== t) continue;
+    let a = i[n];
+    if (typeof a === "string") s.push(a);
+  }
+  return s;
+}
 var wN = class {
   projectDirCache = /* @__PURE__ */ new Map();
   agentTranscriptSubdirs = /* @__PURE__ */ new Map();
@@ -15775,7 +16760,64 @@ var wN = class {
   }
 };
 var Xtt = new Fe(() => new wN());
+var ON = 200;
+function kCe(e14) {
+  return [...e14.replace(/[\x00-\x1f\x7f-\x9f]/g, "")].slice(0, ON).join("");
+}
+function kN(e14) {
+  return kCe(of(e14.trim())).trim();
+}
+var PCe = 6;
+function DN(e14) {
+  let t = PN(e14);
+  if (hu(t)) return;
+  let n = lt(), r = [t], o = IN(e14);
+  while (o !== n && r.length <= PCe + 1) {
+    let c = IN(o);
+    if (c === o) return;
+    r.unshift(PN(o)), o = c;
+  }
+  if (o !== n || r.length < 3) return;
+  let [s, i, ...a] = r;
+  if (!Ht(s) || !Ht(i) || a.length === 0 || !a.every(Ht)) return;
+  let l = At.sidecar(s, i, a);
+  return Co(l) === void 0 ? l : void 0;
+}
 var MCe = P(() => A({ customTitle: h() }));
+function NCe(e14, t) {
+  return LCe(DCe(e14), t, "custom-title.json");
+}
+async function Za(e14, t, n) {
+  let r = await UCe(NCe(e14, t), n);
+  if (r === void 0) return;
+  let o;
+  try {
+    o = JSON.parse(r);
+  } catch {
+    return;
+  }
+  let s = MCe().safeParse(o);
+  if (!s.success) return;
+  return kN(s.data.customTitle) || void 0;
+}
+async function UCe(e14, t) {
+  if (Ee() && t !== void 0) try {
+    let n = DN(e14);
+    if (n !== void 0) {
+      let r = await t.readText([n]);
+      if (!r.ok) return;
+      let o = r.value.items[0];
+      return o.found ? o.value : void 0;
+    }
+  } catch {
+    return;
+  }
+  try {
+    return await ICe(e14, "utf8");
+  } catch {
+    return;
+  }
+}
 function ce(e14) {
   return typeof e14 === "object" && e14 !== null && !Array.isArray(e14);
 }
@@ -16173,6 +17215,253 @@ async function eU(e14, t, n) {
 var $ve = new Ive();
 function Ja() {
   return $ve.getStore() ?? new tU();
+}
+async function jve(e14, t, n) {
+  let r = `${e14}.jsonl`, o = Zt(Tn(n));
+  async function s(l) {
+    let c = Zt(Er(yi(l, r), n));
+    if (c !== void 0 && c.hoverRestOn) try {
+      let d = await c.source.backend.read([c.source.key]);
+      if (!d.ok) return null;
+      let p = d.value.items[0];
+      if (!p?.found) return null;
+      if (p.value.byteLength === 0) {
+        let f = await c.source.backend.statMeta(c.source.key);
+        if (!f.ok || (f.value.storedBytes ?? f.value.size) === 0) return null;
+      }
+      return { buf: Buffer.from(p.value), projectDir: l };
+    } catch {
+      return null;
+    }
+    try {
+      let d = await Ja().readBytes(yi(l, r));
+      if (d.length === 0) return null;
+      return { buf: d, projectDir: l };
+    } catch {
+      return null;
+    }
+  }
+  if (t) {
+    let l = await _o(t, Su(n));
+    for (let d of await Un(l, o)) {
+      let p = await s(d);
+      if (p) return p;
+    }
+    let c;
+    try {
+      c = await go(l);
+    } catch {
+      c = [];
+    }
+    for (let d of c) {
+      if (d === l) continue;
+      for (let p of await Un(d, o)) {
+        let f = await s(p);
+        if (f) return f;
+      }
+    }
+    return null;
+  }
+  let i = lt();
+  if (o !== void 0 && o.hoverRestOn) {
+    let l = await Ga(o.source);
+    if (l !== null) {
+      for (let c of l) {
+        let d = await s(yi(i, c));
+        if (d) return d;
+      }
+      return null;
+    }
+  }
+  let a;
+  try {
+    a = await Ja().list(i);
+  } catch {
+    return null;
+  }
+  for (let l of a) {
+    let c = await s(yi(i, l));
+    if (c) return c;
+  }
+  return null;
+}
+var Bve = /* @__PURE__ */ new Set(["user", "assistant", "attachment", "system", "progress"]);
+function Kve(e14, t) {
+  let n = [], r = [], o, s = { historySuppressed: false }, i = 10, a = e14.length, l = 0;
+  while (l < a) {
+    let d = e14.indexOf(10, l);
+    if (d === -1) d = a;
+    let p = l;
+    while (p < d && e14[p] <= 32) p++;
+    if (l = d + 1, p >= d) continue;
+    let f = e14.toString("utf-8", p, d);
+    try {
+      o = rU(We(f), t, n, r, s) ?? o;
+    } catch {
+    }
+  }
+  return { transcript: n, contentReplacements: r, relocatedCwd: o, historySuppressed: s.historySuppressed, atisLatch: s.atisLatch };
+}
+function Gve(e14, t) {
+  let n = [], r = [], o, s = { historySuppressed: false };
+  for (let a of e14) {
+    if (typeof a !== "object" || a === null) continue;
+    o = rU(a, t, n, r, s) ?? o;
+  }
+  return { transcript: n, contentReplacements: r, relocatedCwd: o, historySuppressed: s.historySuppressed, atisLatch: s.atisLatch };
+}
+function rU(e14, t, n, r, o) {
+  if (Bve.has(e14.type) && typeof e14.uuid === "string") n.push(e14);
+  else if (e14.type === "history-suppression") {
+    if (o) o.historySuppressed = true;
+  } else if (e14.type === "atis-latch" && e14.sessionId === t && typeof e14.atis === "string" && /^[\x21-\x7e]*$/.test(e14.atis)) {
+    if (o) o.atisLatch = e14.atis;
+  } else if (e14.type === "content-replacement" && e14.sessionId === t && Array.isArray(e14.replacements)) r.push(...e14.replacements);
+  else if (e14.type === "relocated" && e14.sessionId === t && typeof e14.relocatedCwd === "string" && e14.relocatedCwd !== "") return e14.relocatedCwd;
+  return;
+}
+async function oU(e14, t = {}, n) {
+  let r = Ee() ? n : void 0;
+  if (!$e(e14)) throw new we(`Invalid sessionId: ${e14}`, "forkSession: invalid sessionId (not a UUID)");
+  let o = await jve(e14, t.dir, r);
+  if (!o) throw Error(t.dir ? `Session ${e14} not found in project directory for ${t.dir}` : `Session ${e14} not found`);
+  let s = await Za(yi(o.projectDir, `${e14}.jsonl`), e14, r), { entries: i, forkedSessionId: a } = await Vve(o.buf, e14, t, s);
+  return await Bc(yi(o.projectDir, `${a}.jsonl`), i, Zt(Wve(o.projectDir, a, Tn(r)))), { sessionId: a };
+}
+function Wve(e14, t, n) {
+  if (n === void 0) return;
+  let r = Hve(e14);
+  if (yi(lt(), r) !== e14 || !n.isKeySegment(r) || !n.isKeySegment(t)) return;
+  return { backend: n.backend, key: n.transcriptKey(r, t) };
+}
+async function Vve(e14, t, n, r) {
+  let o = Kve(e14, t);
+  return aU(o, t, n, () => {
+    let i = e14.length, a = e14.toString("utf-8", 0, Math.min(i, on)), l = e14.toString("utf-8", Math.max(0, i - on)), c = Ft(l, "customTitle");
+    return (c !== void 0 ? c : r ?? Ft(a, "customTitle")) || Ft(l, "aiTitle") || Ft(a, "aiTitle") || Cf(a);
+  });
+}
+async function sU(e14, t, n) {
+  let r = Gve(e14, t);
+  return aU(r, t, n, () => qve(e14));
+}
+function qve(e14) {
+  let t, n;
+  for (let r of e14) {
+    if (typeof r !== "object" || r === null) continue;
+    let o = r;
+    if (typeof o.customTitle === "string" && o.customTitle) t = o.customTitle;
+    if (typeof o.aiTitle === "string" && o.aiTitle) n = o.aiTitle;
+  }
+  return t || n || AI(e14) || void 0;
+}
+function Zve(e14) {
+  let t = e14.compactMetadata;
+  if (typeof t !== "object" || t === null) return [];
+  let n = "preservedMessages" in t ? t.preservedMessages : void 0, r = "preservedSegment" in t ? t.preservedSegment : void 0;
+  return [...typeof n === "object" && n !== null && "uuids" in n && Array.isArray(n.uuids) ? n.uuids : [], ...typeof r === "object" && r !== null ? ["headUuid" in r ? r.headUuid : void 0, "tailUuid" in r ? r.tailUuid : void 0] : []];
+}
+var iU = { isSidechain: false, teamName: void 0, agentName: void 0, sessionKind: void 0, slug: void 0, sourceToolAssistantUUID: void 0, summarizedTurnPromptUuids: void 0 };
+async function aU(e14, t, n, r) {
+  let o = e14.transcript.filter((g) => !g.isSidechain);
+  if (o.length === 0) throw Error(`Session ${t} has no messages to fork`);
+  let s = n.upToMessageId;
+  if (s) {
+    let g = await bu(o), _ = /* @__PURE__ */ new Map();
+    o.forEach((C, v) => {
+      if (!_.has(C.uuid)) _.set(C.uuid, v);
+    });
+    let y = -1;
+    for (let C of g) y = Math.max(y, _.get(C.uuid) ?? -1);
+    let S = g.concat(o.slice(y + 1)), b = S[$C(S, s)], E = b ? _.get(b.uuid) ?? -1 : $C(o, s);
+    if (E === -1) throw new we(`Message ${s} not found in session ${t}`, "forkSession: upToMessageId not found in session");
+    o = await Yve(o.slice(0, E + 1));
+  }
+  let i = /* @__PURE__ */ new Map();
+  for (let g of o) i.set(g.uuid, xu());
+  let a = o.filter((g) => g.type !== "progress"), l = new Map(a.map((g) => [g.uuid, i.get(g.uuid)]));
+  if (a.length === 0) throw Error(`Session ${t} has no messages to fork`);
+  let c = /* @__PURE__ */ new Map();
+  for (let g of o) c.set(g.uuid, g);
+  let d = xu(), p = (/* @__PURE__ */ new Date()).toISOString(), f = [];
+  if (e14.historySuppressed) f.push(MI(d, "fork_inherit"));
+  for (let g = 0; g < a.length; g++) {
+    let _ = a[g], y = i.get(_.uuid), S = null, b = _.parentUuid, E;
+    while (b) {
+      let x = c.get(b);
+      if (!x) break;
+      if (x.type !== "progress") {
+        S = i.get(b) ?? null;
+        break;
+      }
+      if (E ??= /* @__PURE__ */ new Set(), E.has(x.uuid)) {
+        S = i.get(x.uuid) ?? null;
+        break;
+      }
+      E.add(x.uuid), b = x.parentUuid;
+    }
+    let C = g === a.length - 1 ? p : _.timestamp, v = _.logicalParentUuid == null ? _.logicalParentUuid : i.get(_.logicalParentUuid) ?? null, w = _.type === "system" && _.subtype === "model_refusal_fallback" ? { neutralizedByFork: true } : void 0, L = Xve(_, i), z = Jve(_, l), U = FM(_, i), de = { ..._, ...w, ...L, ...z, ...U !== void 0 && { attachment: Object.assign({}, _.attachment, { source_uuid: U }) }, uuid: y, parentUuid: S, logicalParentUuid: v, sessionId: d, timestamp: C, ...iU, forkedFrom: { sessionId: t, messageUuid: _.uuid } };
+    f.push(de);
+  }
+  if (e14.contentReplacements.length > 0) f.push({ type: "content-replacement", sessionId: d, replacements: e14.contentReplacements, uuid: xu(), timestamp: p });
+  if (e14.atisLatch !== void 0) f.push({ type: "atis-latch", sessionId: d, atis: e14.atisLatch });
+  if (e14.relocatedCwd) f.push({ type: "relocated", sessionId: d, relocatedCwd: e14.relocatedCwd });
+  let m = n.title?.trim();
+  if (!m) m = `${r() || "Forked session"} (fork)`;
+  return f.push({ type: "custom-title", sessionId: d, customTitle: m, uuid: xu(), timestamp: p }), { entries: f, forkedSessionId: d };
+}
+async function Yve(e14) {
+  let t = e14.at(-1);
+  if (!t) return e14;
+  let n = e14.map((p) => ({ ...p, ...iU })), r = await bu([...n, { type: "system", uuid: xu(), parentUuid: t.uuid, sessionId: t.sessionId, timestamp: t.timestamp }]), o = /* @__PURE__ */ new Map();
+  e14.forEach((p, f) => {
+    if (!o.has(p.uuid)) o.set(p.uuid, f);
+  });
+  let s = r[0] && o.get(r[0].uuid);
+  if (s === void 0) return e14;
+  let i = new Set(r.map((p) => p.uuid)), a = new Map(e14.map((p) => [p.uuid, p])), l = /* @__PURE__ */ new Set();
+  for (let p of [t.uuid, ...i]) for (let f = a.get(p); f && !l.has(f.uuid); f = f.parentUuid ? a.get(f.parentUuid) : void 0) l.add(f.uuid);
+  let c = { slice: e14, byUuid: a, live: l, index: o, start: s, leftOut: /* @__PURE__ */ new Set() };
+  for (let p of e14) if (p.type === "system" && p.subtype === "compact_boundary" && sv(c, p) && !Zve(p).some((f) => typeof f === "string" && l.has(f))) nU(c, p);
+  let { leftOut: d } = c;
+  for (; ; ) {
+    let p = {}, f = await bu(n.filter((m) => !d.has(m.uuid)), { found: p });
+    if (f.length === i.size && f.every((m) => i.has(m.uuid))) break;
+    if (!p.terminal || !sv(c, p.terminal)) break;
+    nU(c, p.terminal);
+  }
+  return d.size === 0 ? e14 : e14.filter((p) => !d.has(p.uuid));
+}
+function sv({ live: e14, index: t, start: n }, r) {
+  return !e14.has(r.uuid) && (t.get(r.uuid) ?? n) >= n;
+}
+function nU(e14, t) {
+  let { slice: n, byUuid: r, leftOut: o } = e14;
+  for (let s = r.get(t.uuid); s && sv(e14, s) && !o.has(s.uuid); s = s.parentUuid ? r.get(s.parentUuid) : void 0) o.add(s.uuid);
+  for (let s of n) if (s.parentUuid && o.has(s.parentUuid)) o.add(s.uuid);
+}
+function Jve(e14, t) {
+  let n = e14.compactMetadata;
+  if (e14.type !== "system" || typeof n !== "object" || n === null || Array.isArray(n)) return;
+  let { preservedMessages: r, preservedSegment: o } = n;
+  if (r === void 0 && o === void 0) return;
+  let s = (a) => typeof a === "string" ? t.get(a) ?? a : a, i = (a, l) => {
+    if (typeof a !== "object" || a === null || Array.isArray(a)) return a;
+    let c = { ...a };
+    for (let d of l) {
+      let p = c[d];
+      if (d in c) c[d] = Array.isArray(p) ? p.map(s) : s(p);
+    }
+    return c;
+  };
+  return { compactMetadata: { ...n, ...r !== void 0 && { preservedMessages: i(r, ["anchorUuid", "uuids", "allUuids"]) }, ...o !== void 0 && { preservedSegment: i(o, ["headUuid", "anchorUuid", "tailUuid"]) } } };
+}
+function Xve(e14, t) {
+  let n = e14.attachment;
+  if (e14.type !== "attachment" || typeof n !== "object" || n === null || n.type !== "deferred_tools_record") return;
+  let r = n.nameOnlyAnnouncements;
+  if (!Array.isArray(r)) return;
+  return { attachment: { ...n, nameOnlyAnnouncements: r.flatMap((o) => typeof o === "string" && t.has(o) ? [t.get(o)] : []) } };
 }
 var Ie;
 (function(e14) {
@@ -25930,6 +27219,17 @@ function gGe(e14, t) {
     r.spawnAbort(m), n.setError(m);
   }), mT(n, e14, o, i), n;
 }
+async function Xkt(e14, t) {
+  if (t?.sessionStore) return jGe(t.sessionStore, e14, t);
+  return oU(e14, t);
+}
+async function jGe(e14, t, n) {
+  if (!$e(t)) throw new we(`Invalid sessionId: ${t}`, "forkSession: invalid sessionId (must be a UUID)");
+  let r = hn(n.dir), o = await e14.load({ projectKey: r, sessionId: t });
+  if (!o || o.length === 0) throw Error(`Session ${t} not found`);
+  let { entries: s, forkedSessionId: i } = await sU(o, t, n);
+  return await e14.append({ projectKey: r, sessionId: i }, s), { sessionId: i };
+}
 
 // session-state.mjs
 import { spawn } from "node:child_process";
@@ -26004,11 +27304,16 @@ function probeOptions(managedMcpConfig, environment) {
     }
   };
 }
-async function runBridge(lines, emit2, startQuery = mGe) {
+async function runBridge(lines, emit2, startQuery = mGe, fork = Xkt) {
   const iterator = lines[Symbol.asyncIterator]();
   const first = await iterator.next();
   if (first.done) return;
   const config = JSON.parse(first.value);
+  if (config.type === "fork") {
+    const { sessionId } = await fork(config.sessionId, { dir: config.cwd, upToMessageId: config.upToMessageId });
+    emit2({ type: "forked", sessionId });
+    return;
+  }
   if (config.type !== "initialize") throw new Error("Expected SDK initialization");
   const requests = /* @__PURE__ */ new Map();
   const messages = [];

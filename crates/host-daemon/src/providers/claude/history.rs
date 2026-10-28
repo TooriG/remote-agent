@@ -329,6 +329,8 @@ fn input_text(content: &Value) -> Option<String> {
 pub(super) struct NativeHistory {
     pub response: ThreadResponse,
     pub output_paths: BTreeMap<ItemId, String>,
+    /// The last assistant message of each turn, where a fork of that turn ends.
+    pub fork_points: HashMap<agent_protocol::ids::TurnId, String>,
 }
 pub(super) fn read_details(path: &Path) -> Result<NativeHistory> {
     read_with_summary(path, summary(path)?.thread, usize::MAX)
@@ -469,6 +471,7 @@ fn convert(
         warnings.push("transcript has no readable message chain");
     }
     let mut output_paths = BTreeMap::new();
+    let mut fork_points = HashMap::new();
     let session = thread.id.as_ref().unwrap().clone();
     let mut turns: Vec<Arc<Turn>> = Vec::new();
     let mut model = None;
@@ -576,10 +579,17 @@ fn convert(
                 ..Default::default()
             }));
         }
-        let items = Arc::make_mut(turns.last_mut().unwrap())
-            .items
-            .as_mut()
-            .unwrap();
+        let turn = Arc::make_mut(turns.last_mut().unwrap());
+        let time = node["timestamp"]
+            .as_str()
+            .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok())
+            .and_then(|time| u64::try_from(time.timestamp_millis()).ok());
+        turn.started_at_ms = turn.started_at_ms.or(time);
+        turn.completed_at_ms = time.or(turn.completed_at_ms);
+        if kind == "assistant" && !id.is_empty() {
+            fork_points.insert(turn.id.clone(), id.to_owned());
+        }
+        let items = turn.items.as_mut().unwrap();
         if let Some(item) = initial_item {
             items.push(Arc::new(item));
         }
@@ -655,6 +665,7 @@ fn convert(
     Ok(NativeHistory {
         response: ThreadResponse { thread, model },
         output_paths,
+        fork_points,
     })
 }
 
@@ -1165,5 +1176,45 @@ mod tests {
         );
         assert_eq!(items[2].id, "m:1".into());
         assert_eq!(item_text(&(items[2])), Some("selected answer"));
+    }
+
+    #[test]
+    fn turns_keep_native_times_and_fork_after_their_last_assistant_message() {
+        let rows = [
+            json!({"type":"user","uuid":"first","parentUuid":null,"timestamp":"2026-10-28T01:00:00.000Z","message":{"content":"first"}}),
+            json!({"type":"assistant","uuid":"call","parentUuid":"first","timestamp":"2026-10-28T01:00:01.000Z","message":{"id":"a","content":[{"type":"tool_use","id":"tool","name":"Bash","input":{"command":"true"}}]}}),
+            json!({"type":"user","uuid":"result","parentUuid":"call","timestamp":"2026-10-28T01:00:02.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"tool","content":""}]}}),
+            json!({"type":"assistant","uuid":"answer","parentUuid":"result","timestamp":"2026-10-28T01:00:05.500Z","message":{"id":"b","content":[{"type":"text","text":"done"}]}}),
+            json!({"type":"attachment","uuid":"hook","parentUuid":"answer","timestamp":"2026-10-28T01:00:06.000Z","attachment":{"type":"hook_success","stdout":"after"}}),
+            json!({"type":"user","uuid":"second","parentUuid":"hook","timestamp":"2026-10-28T01:01:00.000Z","message":{"content":"second"}}),
+            json!({"type":"assistant","uuid":"reply","parentUuid":"second","timestamp":"2026-10-28T01:01:03.000Z","message":{"id":"c","content":[{"type":"text","text":"again"}]}}),
+        ];
+        let history = convert(
+            Thread {
+                id: Some(SessionRef {
+                    provider: ProviderKind::Claude,
+                    id: ID.into(),
+                }),
+                ..Default::default()
+            },
+            rows.into(),
+            5,
+            Vec::new(),
+        )
+        .unwrap();
+        let turns = history.response.thread.turns.unwrap();
+        let start = 1_793_149_200_000;
+        assert_eq!(
+            turns
+                .iter()
+                .map(|turn| (turn.started_at_ms, turn.completed_at_ms))
+                .collect::<Vec<_>>(),
+            [
+                (Some(start), Some(start + 6_000)),
+                (Some(start + 60_000), Some(start + 63_000))
+            ]
+        );
+        assert_eq!(history.fork_points["first"], "answer");
+        assert_eq!(history.fork_points["second"], "reply");
     }
 }

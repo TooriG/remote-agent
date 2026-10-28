@@ -1,4 +1,4 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { forkSession, query } from "@anthropic-ai/claude-agent-sdk";
 import { spawnClaudeCodeProcess } from "./session-state.mjs";
 import { existsSync } from "node:fs";
 
@@ -27,11 +27,17 @@ export function probeOptions(managedMcpConfig, environment) {
 }
 
 /** The SDK owns Claude's protocol, callbacks and process lifecycle. */
-export async function runBridge(lines, emit, startQuery = query) {
+export async function runBridge(lines, emit, startQuery = query, fork = forkSession) {
   const iterator = lines[Symbol.asyncIterator]();
   const first = await iterator.next();
   if (first.done) return;
   const config = JSON.parse(first.value);
+  if (config.type === "fork") {
+    // Forking copies the native transcript; it starts no model request.
+    const { sessionId } = await fork(config.sessionId, { dir: config.cwd, upToMessageId: config.upToMessageId });
+    emit({ type: "forked", sessionId });
+    return;
+  }
   if (config.type !== "initialize") throw new Error("Expected SDK initialization");
   const requests = new Map();
   const messages = [];

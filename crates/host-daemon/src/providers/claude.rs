@@ -269,7 +269,7 @@ impl Claude {
                 cwd: Some(cwd.to_string_lossy().into_owned()),
                 status: SessionStatus::Idle,
                 turns: Some(Vec::new()),
-                updated_at: Some(now() as f64),
+                updated_at: Some(now_ms() as f64 / 1000.),
                 ..Default::default()
             },
             model: Some(agent_protocol::models::ModelRef {
@@ -354,7 +354,7 @@ impl Claude {
             .into_iter()
             .filter(|thread| thread.status == SessionStatus::Running)
             .map(|mut thread| {
-                thread.updated_at = Some(now() as f64);
+                thread.updated_at = Some(now_ms() as f64 / 1000.);
                 thread
             })
             .collect();
@@ -736,7 +736,7 @@ impl Claude {
             id: turn_id.clone(),
             status: TurnStatus::Running,
             items: Some(vec![Arc::new(user)]),
-            started_at: Some(now() as f64),
+            started_at_ms: Some(now_ms()),
             ..Default::default()
         };
         let mut workers = self.workers.lock().await;
@@ -905,7 +905,7 @@ impl Worker {
                         continue;
                     }
                     SdkEvent::Ready { .. } => return Err("Claude SDK initialized twice".into()),
-                    SdkEvent::Usage { .. } => return Err("Unexpected Claude usage response".into()),
+                    SdkEvent::Usage { .. } => return Err("Unexpected Claude usage response".into()),                    SdkEvent::Forked { .. } => return Err("Unexpected Claude fork response".into()),
                     SdkEvent::Error { message } => return Err(message),
                 };
                 let kind = message["type"].as_str().unwrap_or_default();
@@ -998,6 +998,7 @@ impl Worker {
         } else {
             TurnStatus::Failed
         };
+        turn.completed_at_ms = Some(now_ms());
         if let Some(items) = &mut turn.items {
             for item in items
                 .iter_mut()
@@ -1574,11 +1575,11 @@ async fn input_content(input: &[op::Input]) -> Result<Vec<Value>, String> {
     Ok(content)
 }
 
-fn now() -> u64 {
+fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_secs()
+        .as_millis() as u64
 }
 
 #[async_trait::async_trait]
@@ -1703,7 +1704,7 @@ impl Agent for Claude {
     fn capabilities(&self) -> agent_protocol::session::Capabilities {
         agent_protocol::session::Capabilities {
             additional_input: true,
-            fork: false,
+            fork: true,
             rename: false,
             model_change: true,
         }
@@ -1989,14 +1990,51 @@ impl Agent for Claude {
     }
     async fn fork(
         &self,
-        _id: &str,
-        _turn: &str,
+        id: &str,
+        turn: &str,
         _browser: Option<Value>,
     ) -> Result<ThreadResponse, Failure> {
-        Err(Failure::new(
-            "unsupported_operation",
-            "fork is unsupported by this provider",
-        ))
+        let failure = |error: String| Failure::new("fork_failed", error);
+        let native = Uuid::parse_str(id).map_err(|_| failure("invalid Claude ID".into()))?;
+        // A running turn is still writing the source; a retained CLI must not
+        // keep a stale view of the session it forks from.
+        self.unload(id)
+            .await
+            .map_err(|error| failure(error.message))?;
+        let home = self.native_home.clone();
+        let history = tokio::task::spawn_blocking(move || {
+            history::read_details(&history::resolve(&home, native)?)
+        })
+        .await
+        .map_err(|error| failure(error.to_string()))?
+        .map_err(|error| failure(format!("{error:#}")))?;
+        let up_to = history
+            .fork_points
+            .get(turn)
+            .ok_or_else(|| failure("Claude turn is unavailable in native history".into()))?;
+        let cwd = history
+            .response
+            .thread
+            .cwd
+            .ok_or_else(|| failure("Claude session workspace is unavailable".into()))?;
+        let auth_home = self
+            .accounts
+            .lock()
+            .await
+            .selected_home()
+            .map_err(failure)?
+            .ok_or_else(|| failure("Claude アカウントを選択してください。".into()))?;
+        let forked = Process::fork(
+            process::homes(&self.native_home, self.native_inherited, &auth_home),
+            Path::new(&cwd),
+            id,
+            up_to,
+        )
+        .await
+        .map_err(failure)?;
+        self.read(&forked, usize::MAX)
+            .await
+            .map_err(|error| failure(format!("{error:#}")))
     }
     async fn rename(
         &self,

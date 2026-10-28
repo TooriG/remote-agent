@@ -25,6 +25,17 @@ fn write_json_line(writer: &mut impl Write, value: &Value) -> io::Result<()> {
     writer.write_all(&row)
 }
 
+/// Claude keeps a session beside others started in the same workspace.
+fn project_directory(home: &Path) -> std::path::PathBuf {
+    let cwd = std::env::current_dir().unwrap();
+    let name: String = cwd
+        .to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    home.join("projects").join(name)
+}
+
 fn native(mut value: Value) {
     if value["type"] == "system" && value["subtype"] == "task_notification" {
         let Some(tool) = value["tool_use_id"].as_str() else {
@@ -55,9 +66,7 @@ fn native(mut value: Value) {
     let session = option(&args, "--resume")
         .or_else(|| option(&args, "--session-id"))
         .unwrap();
-    let directory = Path::new(&home)
-        .join("projects")
-        .join("fixture-native-project");
+    let directory = project_directory(Path::new(&home));
     fs::create_dir_all(&directory).unwrap();
     let path = directory.join(format!("{session}.jsonl"));
     let previous: Option<Value> = fs::read_to_string(&path).ok().and_then(|text| {
@@ -236,9 +245,7 @@ fn main() {
         })).unwrap();
     }
     let path = format!("claude-session-{session}.jsonl");
-    let history = Path::new(&std::env::var_os("CLAUDE_CONFIG_DIR").unwrap())
-        .join("projects")
-        .join("fixture-native-project")
+    let history = project_directory(Path::new(&std::env::var_os("CLAUDE_CONFIG_DIR").unwrap()))
         .join(format!("{session}.inputs.json"));
     let mut inputs: Vec<Value> = if option(&args, "--resume").is_some() {
         serde_json::from_slice(

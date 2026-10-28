@@ -251,6 +251,9 @@ pub(super) enum Event {
     Ready {
         initialized: Value,
     },
+    Forked {
+        session_id: String,
+    },
     Message {
         message: Value,
     },
@@ -335,6 +338,64 @@ impl Process {
     ) -> Result<(Self, Value), String> {
         let path = std::env::var_os("PATH");
         let program = executable(program, path.as_deref())?;
+        let mut process = Self::spawn(homes, cwd)?;
+        let initialized: Result<Value, String> = tokio::time::timeout(Duration::from_secs(30), async {
+            process.input.write_line(&json!({"type":"initialize", "program":program,"cwd":cwd,
+                "sessionId":session.map(|(id,_)|id),"resume":session.is_some_and(|(_,resume)|resume),
+                "model":model.map(|(model,_)|model),"effort":model.and_then(|(_,effort)|effort),"browser":browser,
+                "probe":session.is_none()}).to_string())
+                .await.map_err(|error|error.to_string())?;
+            match process.read().await?.ok_or("Claude SDK exited before initialization")? {
+                Event::Ready { initialized } => Ok(initialized),
+                Event::Error { message } => Err(message),
+                _ => Err("Claude SDK emitted an event before initialization".into()),
+            }
+        }).await.map_err(|_| "Claude SDKの初期化がタイムアウトしました。".to_owned())?;
+        match initialized {
+            Ok(result) => Ok((process, result)),
+            Err(error) => {
+                let detail = process.finish().await.err().unwrap_or_default();
+                Err(format!("{error}. {detail}"))
+            }
+        }
+    }
+
+    /// Copy a native session through its last message `up_to` into a new one.
+    pub(super) async fn fork(
+        homes: Option<(&Path, &Path)>,
+        cwd: &Path,
+        session: &str,
+        up_to: &str,
+    ) -> Result<String, String> {
+        let mut process = Self::spawn(homes, cwd)?;
+        let forked = tokio::time::timeout(Duration::from_secs(30), async {
+            process
+                .input
+                .write_line(
+                    &json!({"type":"fork","sessionId":session,"cwd":cwd,"upToMessageId":up_to})
+                        .to_string(),
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+            match process
+                .read()
+                .await?
+                .ok_or("Claude SDK exited before forking")?
+            {
+                Event::Forked { session_id } => Ok(session_id),
+                Event::Error { message } => Err(message),
+                _ => Err("Claude SDK emitted an unexpected fork event".into()),
+            }
+        })
+        .await
+        .map_err(|_| "Claude の会話の分岐がタイムアウトしました。".to_owned())?;
+        let finished = process.finish().await;
+        let forked = forked?;
+        finished?;
+        Ok(forked)
+    }
+
+    fn spawn(homes: Option<(&Path, &Path)>, cwd: &Path) -> Result<Self, String> {
         let (node, bridge) = runtime()?;
         let mut command = agent_process::command(&node).map_err(|error| error.to_string())?;
         // Account changes must not replace skills, settings, plugins or history.
@@ -369,32 +430,13 @@ impl Process {
             }
             String::from_utf8_lossy(&tail).into_owned()
         });
-        let mut process = Self {
+        Ok(Self {
             capacity: None,
             input: JsonlWriter::new(child.stdin.take().ok_or("Claude SDK stdin is missing")?),
             output: JsonlReader::new(child.stdout.take().ok_or("Claude SDK stdout is missing")?),
             child,
             stderr,
-        };
-        let initialized: Result<Value, String> = tokio::time::timeout(Duration::from_secs(30), async {
-            process.input.write_line(&json!({"type":"initialize", "program":program,"cwd":cwd,
-                "sessionId":session.map(|(id,_)|id),"resume":session.is_some_and(|(_,resume)|resume),
-                "model":model.map(|(model,_)|model),"effort":model.and_then(|(_,effort)|effort),"browser":browser,
-                "probe":session.is_none()}).to_string())
-                .await.map_err(|error|error.to_string())?;
-            match process.read().await?.ok_or("Claude SDK exited before initialization")? {
-                Event::Ready { initialized } => Ok(initialized),
-                Event::Error { message } => Err(message),
-                _ => Err("Claude SDK emitted an event before initialization".into()),
-            }
-        }).await.map_err(|_| "Claude SDKの初期化がタイムアウトしました。".to_owned())?;
-        match initialized {
-            Ok(result) => Ok((process, result)),
-            Err(error) => {
-                let detail = process.finish().await.err().unwrap_or_default();
-                Err(format!("{error}. {detail}"))
-            }
-        }
+        })
     }
 
     pub(super) fn retain_capacity(&mut self, permit: tokio::sync::OwnedSemaphorePermit) {

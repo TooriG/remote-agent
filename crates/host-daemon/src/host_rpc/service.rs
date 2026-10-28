@@ -773,7 +773,6 @@ mod tests {
         );
         let session = service.open_session();
         for (method, expected) in [
-            ("host/session/fork", "unsupported_operation"),
             ("host/session/rename", "unsupported_operation"),
             ("host/session/submit", "provider_unavailable"),
         ] {

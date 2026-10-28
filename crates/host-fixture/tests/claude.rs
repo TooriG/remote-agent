@@ -1894,6 +1894,77 @@ async fn claude_keeps_loading_through_background_results_and_follow_up_after_rec
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn claude_responses_show_their_time_and_fork_from_the_selected_turn() {
+    use agent_core::presentation::conversation::{ConversationRowContent, project_conversation};
+
+    let root = tempfile::tempdir().unwrap();
+    let fixture = host(root.path(), Arc::new(Memory::default()), fixture_program()).await;
+    let (store, endpoint) = connect(&fixture, Snapshot::default()).await;
+    store
+        .dispatch(Intent::NewChat {
+            cwd: root.path().to_str().unwrap().into(),
+        })
+        .await
+        .unwrap();
+    store
+        .dispatch(Intent::SelectModel {
+            thread_id: store.snapshot().navigation.draft_key.clone(),
+            model: models::ModelRef {
+                provider: ProviderKind::Claude,
+                id: "default".into(),
+            },
+        })
+        .await
+        .unwrap();
+    let id = send(&store, "first", "fork-first").await;
+    completed(&store, &id, 1, "completed").await;
+    send(&store, "second", "fork-second").await;
+    let snapshot = completed(&store, &id, 2, "completed").await;
+    let thread = snapshot.conversations[&id].clone();
+    let projected = project_conversation(&snapshot, thread.clone(), &None);
+    for turn in &projected.turns {
+        assert!(
+            turn.rows.iter().any(|row| matches!(
+                &row.content,
+                ConversationRowContent::Response { fork_turn_id: Some(_), .. }
+                    if row.timestamp_ms.is_some()
+            )),
+            "a completed Claude answer must show its time and offer a fork like Codex"
+        );
+    }
+    let first = thread.turns.as_ref().unwrap()[0].id.clone();
+    store
+        .dispatch(Intent::ForkSession(op::ForkSession::new(id.clone(), first)))
+        .await
+        .unwrap();
+    let snapshot = until(&store, |snapshot| {
+        snapshot.conversations.iter().any(|(fork, thread)| {
+            fork != &id
+                && fork.provider == ProviderKind::Claude
+                && thread.turns.as_ref().is_some_and(|turns| turns.len() == 1)
+        })
+    })
+    .await;
+    let (_, forked) = snapshot
+        .conversations
+        .iter()
+        .find(|(fork, _)| *fork != &id)
+        .unwrap();
+    let items = forked.turns.as_ref().unwrap()[0].items.as_ref().unwrap();
+    assert!(items.iter().any(|item| matches!(item.body(),
+        agent_protocol::items::ItemBody::UserMessage { content, .. }
+            if content == &[agent_protocol::items::MessagePart::Text { text: "first".into() }])));
+    assert!(
+        items
+            .iter()
+            .any(|item| item_text(item) == Some("reply 1: first"))
+    );
+    store.close().await.unwrap();
+    endpoint.close().await;
+    fixture.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn claude_keeps_loading_until_it_answers_a_background_shell_and_interrupt_stops_it() {
     let root = tempfile::tempdir().unwrap();
     let paused = root.path().join("background-shell-paused");
