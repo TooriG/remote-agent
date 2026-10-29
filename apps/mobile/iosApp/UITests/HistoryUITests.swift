@@ -301,6 +301,8 @@ extension LaunchUITests {
         XCTAssertTrue(persisted.waitForExistence(timeout: 20)); persisted.tap()
         let persistedActivity = app.buttons["turn.activity.fixture-turn-persisted"]
         XCTAssertTrue(persistedActivity.waitForExistence(timeout: 20))
+        // The review badge changes the viewport height. Wait before targeting a work row.
+        XCTAssertTrue(app.buttons["task.diff"].waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["item.fixture-command-persisted"].exists)
         persistedActivity.tap()
         let persistedCommand = app.buttons["item.fixture-command-persisted"]
