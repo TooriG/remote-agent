@@ -198,7 +198,7 @@ impl StartSubmission {
             Arc::make_mut(&mut snapshot.workspaces).insert(id.clone().into(), workspace);
         }
         let mut effects = if current_view {
-            open_thread(snapshot, thread, None)
+            open_thread(snapshot, thread, None, None, None)
         } else {
             refresh_thread(snapshot, thread);
             Vec::new()

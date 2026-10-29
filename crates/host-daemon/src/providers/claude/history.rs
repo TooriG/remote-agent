@@ -696,7 +696,11 @@ fn convert(
     ));
     thread.turns = Some(page.turns);
     Ok(NativeHistory {
-        response: ThreadResponse { thread, model },
+        response: ThreadResponse {
+            thread,
+            model,
+            ..Default::default()
+        },
         output_paths,
         fork_points,
     })

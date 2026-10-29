@@ -196,10 +196,12 @@ fn fits_inline(value: &impl Serialize, limit: usize) -> bool {
     crate::protocol::encode_into(Budget(limit), value).is_ok()
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ThreadResponse {
     pub thread: Thread,
     pub model: Option<ModelRef>,
+    pub effort: Option<String>,
+    pub service_tier: Option<String>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

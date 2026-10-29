@@ -287,7 +287,13 @@ impl Operation for ReadThread {
             *live = turns;
         }
         let mut effects = if self.open {
-            open_thread(snapshot, output.response.thread, output.response.model)
+            open_thread(
+                snapshot,
+                output.response.thread,
+                output.response.model,
+                output.response.effort,
+                output.response.service_tier,
+            )
         } else {
             refresh_thread(snapshot, output.response.thread);
             Vec::new()
@@ -357,41 +363,57 @@ pub(super) fn open_thread(
     snapshot: &mut Snapshot,
     thread: Thread,
     model: Option<crate::models::ModelRef>,
+    effort: Option<String>,
+    service_tier: Option<String>,
 ) -> Vec<Effect> {
     let id = thread.id.clone();
     let cwd = thread.cwd.clone().unwrap_or_default();
     refresh_thread(snapshot, thread);
     if let Some(id) = id {
         let key = DraftKey::from(id.clone());
-        if snapshot
-            .drafts
-            .get(&key)
-            .is_none_or(|draft| draft.model.is_none())
-        {
-            let (model, effort, tier) = supported_settings(
-                model.as_ref(),
-                None,
-                None,
-                Some(
-                    snapshot
-                        .thread_metadata(&id)
-                        .and_then(|thread| thread.active_provider)
-                        .unwrap_or(id.provider),
-                ),
-                &snapshot.models,
-                &snapshot.model_errors,
-                snapshot.allows_custom_codex_models(),
-            );
-            let (model, effort, tier) = (
-                model.cloned(),
-                effort.map(str::to_owned),
-                tier.map(str::to_owned),
-            );
-            let draft = Arc::make_mut(Arc::make_mut(&mut snapshot.drafts).entry(key).or_default());
-            draft.model = model;
-            draft.effort = effort;
-            draft.service_tier = tier;
-        }
+        let previous = snapshot.drafts.get(&key).cloned().unwrap_or_default();
+        let same_model = model.is_none() || model == previous.model;
+        let (model, effort, tier) = if previous.model_settings_changed {
+            (
+                previous.model.as_ref().or(model.as_ref()),
+                previous.effort.as_deref(),
+                previous.service_tier.as_deref(),
+            )
+        } else {
+            (
+                model.as_ref().or(previous.model.as_ref()),
+                effort
+                    .as_deref()
+                    .or_else(|| previous.effort.as_deref().filter(|_| same_model)),
+                service_tier
+                    .as_deref()
+                    .or_else(|| previous.service_tier.as_deref().filter(|_| same_model)),
+            )
+        };
+        let (model, effort, tier) = supported_settings(
+            model,
+            effort,
+            tier,
+            Some(
+                snapshot
+                    .thread_metadata(&id)
+                    .and_then(|thread| thread.active_provider)
+                    .unwrap_or(id.provider),
+            ),
+            &snapshot.models,
+            &snapshot.model_errors,
+            snapshot.allows_custom_codex_models(),
+        );
+        let (model, effort, tier) = (
+            model.cloned(),
+            effort.map(str::to_owned),
+            tier.map(str::to_owned),
+        );
+        let draft = Arc::make_mut(Arc::make_mut(&mut snapshot.drafts).entry(key).or_default());
+        draft.model = model;
+        draft.effort = effort;
+        draft.service_tier = tier;
+
         navigate(
             snapshot,
             Navigation {
@@ -477,7 +499,13 @@ impl Operation for ForkSession {
                 .entry(id.clone().into())
                 .or_insert(draft);
         }
-        let mut effects = open_thread(snapshot, output.thread, output.model);
+        let mut effects = open_thread(
+            snapshot,
+            output.thread,
+            output.model,
+            output.effort,
+            output.service_tier,
+        );
         effects.push(Effect::execute(ReadThread::new(id)));
         effects
     }
@@ -497,7 +525,13 @@ impl Operation for CreateSession {
     rpc_operation!();
     fn apply(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
         Arc::make_mut(&mut snapshot.subscriptions).insert(output.session, output.subscription_id);
-        open_thread(snapshot, output.response.thread, output.response.model)
+        open_thread(
+            snapshot,
+            output.response.thread,
+            output.response.model,
+            output.response.effort,
+            output.response.service_tier,
+        )
     }
     fn stale(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
         Arc::make_mut(&mut snapshot.subscriptions).insert(output.session, output.subscription_id);
@@ -554,6 +588,244 @@ mod tests {
     use crate::session::{ProviderKind, SessionRef};
 
     #[rstest::rstest]
+    fn missing_native_options_keep_saved_options_only_for_the_same_model(
+        #[values(None, Some("saved"), Some("changed"))] native_model: Option<&str>,
+    ) {
+        let id = SessionRef::new(ProviderKind::Codex, "missing-options".into()).unwrap();
+        let key = DraftKey::from(id.clone());
+        let model = |name: &str| crate::models::ModelRef {
+            provider: id.provider,
+            id: name.into(),
+        };
+        let mut snapshot = Snapshot::default();
+        Arc::make_mut(&mut snapshot.drafts).insert(
+            key.clone(),
+            Arc::new(Draft {
+                model: Some(model("saved")),
+                effort: Some("high".into()),
+                service_tier: Some("priority".into()),
+                ..Default::default()
+            }),
+        );
+        open_thread(
+            &mut snapshot,
+            Thread {
+                id: Some(id.clone()),
+                ..Default::default()
+            },
+            native_model.map(model),
+            None,
+            None,
+        );
+        assert_eq!(
+            snapshot.drafts[&key].model.as_ref().unwrap().id,
+            native_model.unwrap_or("saved")
+        );
+        let same_model = native_model != Some("changed");
+        assert_eq!(
+            snapshot.drafts[&key].effort.as_deref(),
+            same_model.then_some("high")
+        );
+        assert_eq!(
+            snapshot.drafts[&key].service_tier.as_deref(),
+            same_model.then_some("priority")
+        );
+    }
+
+    #[rstest::rstest]
+    fn reopening_preserves_only_unsubmitted_local_settings(
+        #[values(false, true)] accepted: bool,
+        #[values(false, true)] edited_during_send: bool,
+    ) {
+        let id = SessionRef::new(ProviderKind::Codex, "local-settings".into()).unwrap();
+        let key = DraftKey::from(id.clone());
+        let model = crate::models::ModelRef {
+            provider: id.provider,
+            id: "model".into(),
+        };
+        let mut snapshot = Snapshot::default();
+        open_thread(
+            &mut snapshot,
+            Thread {
+                id: Some(id.clone()),
+                ..Default::default()
+            },
+            Some(model.clone()),
+            Some("low".into()),
+            None,
+        );
+        let (snapshot, _) = reduce_intent(
+            &snapshot,
+            Intent::SelectEffort {
+                thread_id: key.clone(),
+                effort: "high".into(),
+            },
+        );
+        let (snapshot, _) = reduce_intent(
+            &snapshot,
+            Intent::SetDraftText {
+                thread_id: key.clone(),
+                text: "Continue".into(),
+            },
+        );
+        let (mut snapshot, _) = reduce_intent(
+            &snapshot,
+            Intent::Submit {
+                thread_id: Some(id.clone()),
+                client_user_message_id: "input".into(),
+            },
+        );
+        if edited_during_send {
+            snapshot = reduce_intent(
+                &snapshot,
+                Intent::SelectEffort {
+                    thread_id: key.clone(),
+                    effort: "max".into(),
+                },
+            )
+            .0;
+        }
+        if accepted {
+            SendSubmission {
+                thread_id: id.clone(),
+                client_user_message_id: "input".into(),
+                draft: snapshot.pending_submissions["input"].draft.clone(),
+            }
+            .apply(&mut snapshot, SubmissionProgress::Sent(Some("turn".into())));
+        } else {
+            snapshot = reduce(&snapshot, Event::SubmissionFailed("input".into())).0;
+            assert_eq!(snapshot.drafts[&key].text, "Continue");
+        }
+        // Persistence must retain an unsent choice, including one made while
+        // another submission was awaiting its acknowledgement.
+        let mut snapshot =
+            crate::persistence::decode(&crate::persistence::encode(&snapshot).unwrap()).unwrap();
+        open_thread(
+            &mut snapshot,
+            Thread {
+                id: Some(id),
+                ..Default::default()
+            },
+            Some(model),
+            Some("low".into()),
+            None,
+        );
+        let expected = if edited_during_send {
+            "max"
+        } else if accepted {
+            "low"
+        } else {
+            "high"
+        };
+        assert_eq!(snapshot.drafts[&key].effort.as_deref(), Some(expected));
+        assert_eq!(
+            snapshot.drafts[&key].model_settings_changed,
+            edited_during_send || !accepted
+        );
+    }
+
+    #[rstest::rstest]
+    fn reopening_uses_latest_settings_despite_cached_defaults(
+        #[values("before", "during", "after")] catalog_at: &str,
+        #[values(false, true)] cached: bool,
+        #[values(ProviderKind::Codex, ProviderKind::Claude, ProviderKind::DeepSeek)]
+        provider: ProviderKind,
+    ) {
+        let id = SessionRef::new(provider, "reopened".into()).unwrap();
+        let key = DraftKey::from(id.clone());
+        let models = || {
+            serde_json::from_value(serde_json::json!({"data":[
+            {"id":"default","model":{"provider":provider,"id":"default"},"isDefault":true,"displayName":"Default"},
+            {"id":"saved","model":{"provider":provider,"id":"saved"},"displayName":"Saved","settings":{
+                "defaultReasoningEffort":"medium","supportedReasoningEfforts":[{"reasoningEffort":"medium"},{"reasoningEffort":"high"}],
+                "serviceTiers":[{"id":"priority","fast":true}]
+            }}
+        ]})).unwrap()
+        };
+        let mut snapshot = Snapshot::default();
+        if cached {
+            refresh_thread(
+                &mut snapshot,
+                Thread {
+                    id: Some(id.clone()),
+                    ..Default::default()
+                },
+            );
+            Arc::make_mut(&mut snapshot.drafts).insert(
+                key.clone(),
+                Arc::new(Draft {
+                    text: "Unsent text".into(),
+                    model: Some(crate::models::ModelRef {
+                        provider,
+                        id: "default".into(),
+                    }),
+                    effort: Some("medium".into()),
+                    service_tier: Some("default".into()),
+                    ..Default::default()
+                }),
+            );
+        }
+        if catalog_at == "before" {
+            LoadModels {}.apply(&mut snapshot, models());
+        }
+        let mut open = ReadThread::open(id.clone());
+        open.prepare(&mut snapshot).unwrap();
+        if catalog_at == "during" {
+            LoadModels {}.apply(&mut snapshot, models());
+        }
+        let model = crate::models::ModelRef {
+            provider,
+            id: "saved".into(),
+        };
+        open.apply(
+            &mut snapshot,
+            crate::session::OpenedSession {
+                session: id.clone(),
+                subscription_id: uuid::Uuid::new_v4(),
+                response: crate::models::ThreadResponse {
+                    thread: Thread {
+                        id: Some(id.clone()),
+                        ..Default::default()
+                    },
+                    model: Some(model.clone()),
+                    effort: Some("high".into()),
+                    service_tier: Some("priority".into()),
+                },
+            },
+        );
+        if catalog_at == "after" {
+            LoadModels {}.apply(&mut snapshot, models());
+        }
+        let draft = &snapshot.drafts[&key];
+        assert_eq!(draft.model.as_ref(), Some(&model));
+        assert_eq!(draft.effort.as_deref(), Some("high"));
+        assert_eq!(draft.service_tier.as_deref(), Some("priority"));
+        assert_eq!(draft.text, if cached { "Unsent text" } else { "" });
+        let controls = snapshot.model_quick_controls(key.clone());
+        assert_eq!(controls.effort, "high");
+        assert!(controls.fast);
+        let (snapshot, _) = reduce_intent(
+            &snapshot,
+            Intent::SetDraftText {
+                thread_id: key,
+                text: "Continue".into(),
+            },
+        );
+        let (submitted, effects) = reduce_intent(
+            &snapshot,
+            Intent::Submit {
+                thread_id: Some(id),
+                client_user_message_id: "next".into(),
+            },
+        );
+        assert_eq!(effects.len(), 1);
+        let next = &submitted.pending_submissions["next"].draft;
+        assert_eq!(next.model.as_ref(), Some(&model));
+        assert_eq!(next.effort.as_deref(), Some("high"));
+        assert_eq!(next.service_tier.as_deref(), Some("priority"));
+    }
+
+    #[rstest::rstest]
     fn reopening_preserves_the_saved_model_on_every_provider(
         #[values(ProviderKind::Codex, ProviderKind::Claude, ProviderKind::DeepSeek)]
         provider: ProviderKind,
@@ -570,6 +842,7 @@ mod tests {
                 id: "local-choice".into(),
             }),
             effort: Some("high".into()),
+            model_settings_changed: true,
             ..Default::default()
         });
         let mut snapshot = Snapshot::default();
@@ -584,6 +857,8 @@ mod tests {
                 provider,
                 id: "native-choice".into(),
             }),
+            None,
+            None,
         );
         assert_eq!(snapshot.drafts[&key], draft);
         assert_eq!(snapshot.navigation.thread_id.as_ref(), Some(&id));
@@ -731,6 +1006,7 @@ mod tests {
             Arc::new(Draft {
                 text: "Keep my unfinished request".into(),
                 model: Some(selected.clone()),
+                model_settings_changed: true,
                 ..Default::default()
             }),
         );
@@ -744,6 +1020,8 @@ mod tests {
                 ..Default::default()
             },
             Some(official),
+            None,
+            None,
         );
         assert_eq!(snapshot.drafts[&key].model, Some(selected.clone()));
         assert_eq!(snapshot.drafts[&key].text, "Keep my unfinished request");
@@ -803,6 +1081,7 @@ mod tests {
                         id: "saved".into(),
                     }),
                     effort: saved_choice.then(|| "low".into()),
+                    model_settings_changed: saved_choice,
                     ..Default::default()
                 }),
             );
@@ -823,6 +1102,8 @@ mod tests {
                 provider,
                 id: "saved".into(),
             }),
+            None,
+            None,
         );
         if catalog_at == "after" {
             LoadModels {}.apply(&mut snapshot, catalog());

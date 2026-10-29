@@ -4,11 +4,64 @@ use agent_protocol::{
     execution::ItemStatus,
     ids::ItemId,
     items::*,
-    models::Item,
+    models::{Item, Model, ReasoningEffort},
     session::{ProviderKind, SessionRef},
 };
 use serde_json::{Value, json};
 use std::borrow::Cow;
+
+pub(super) fn parse_model(entry: &Value) -> Result<Model, String> {
+    let name = entry["value"]
+        .as_str()
+        .filter(|name| !name.is_empty())
+        .ok_or("Claude model has no value")?;
+    let display = entry["displayName"]
+        .as_str()
+        .ok_or("Claude model has no display name")?;
+    let values = match entry.get("supportedEffortLevels") {
+        Some(value) => value
+            .as_array()
+            .ok_or("invalid Claude effort levels")?
+            .as_slice(),
+        None => &[],
+    };
+    let efforts = values
+        .iter()
+        .map(|value| {
+            Ok(ReasoningEffort {
+                reasoning_effort: value.as_str().ok_or("invalid Claude effort level")?.into(),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let default = efforts
+        .iter()
+        .find(|effort| effort.reasoning_effort == "high")
+        .or(efforts.first())
+        .map(|effort| effort.reasoning_effort.clone())
+        .unwrap_or_default();
+    let model = agent_protocol::models::ModelRef {
+        provider: ProviderKind::Claude,
+        id: entry["resolvedModel"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .unwrap_or(name)
+            .into(),
+    };
+    Ok(Model {
+        id: name.into(),
+        model,
+        display_name: display.into(),
+        credential_route: None,
+        settings_discovery: false,
+        settings: Some(agent_protocol::models::ModelSettings {
+            default_reasoning_effort: default,
+            supported_reasoning_efforts: efforts,
+            service_tiers: Some(Vec::new()),
+            default_service_tier: None,
+        }),
+        is_default: Some(false),
+    })
+}
 
 pub(super) fn message_blocks(content: &Value) -> Option<Cow<'_, [Value]>> {
     match content {
@@ -495,6 +548,25 @@ pub(super) fn tool_result_body(body: &ItemBody, content: &Value, metadata: &Valu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catalog_uses_the_resolved_model_identity_stored_in_transcripts() {
+        let model = parse_model(&json!({
+            "value":"sonnet", "resolvedModel":"claude-sonnet-5", "displayName":"Sonnet",
+            "supportedEffortLevels":["low","high","max"]
+        }))
+        .unwrap();
+        assert_eq!(model.id, "sonnet");
+        assert_eq!(model.model.id, "claude-sonnet-5");
+        let settings = model.settings.unwrap();
+        assert_eq!(settings.default_reasoning_effort, "high");
+        assert_eq!(settings.supported_reasoning_efforts.len(), 3);
+        let model = parse_model(&json!({"value":"custom-model", "displayName":"Custom"})).unwrap();
+        assert_eq!(model.model.id, "custom-model");
+        assert!(
+            parse_model(&json!({"resolvedModel":"model", "displayName":"Missing value"})).is_err()
+        );
+    }
 
     #[test]
     fn only_bash_tasks_are_outside_sdk_turn_ownership() {

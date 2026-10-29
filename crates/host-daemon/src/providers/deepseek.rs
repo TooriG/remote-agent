@@ -995,6 +995,7 @@ impl Agent for DeepSeek {
                     .unwrap_or(DEFAULT_MODEL)
                     .into(),
             }),
+            ..Default::default()
         };
         let mut records = self.0.records.lock().await;
         records.insert(id.into(), record.clone());
@@ -1831,6 +1832,7 @@ mod tests {
                 provider: PROVIDER,
                 id: DEFAULT_MODEL.into(),
             }),
+            ..Default::default()
         };
         agent_local_host::save_private_json(
             &dir.path().join("conversations.json"),

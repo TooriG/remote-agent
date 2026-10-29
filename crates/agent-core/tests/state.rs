@@ -105,7 +105,7 @@ fn reply(thread: Thread) -> agent_protocol::session::OpenedSession {
         subscription_id: uuid::Uuid::nil(),
         response: ThreadResponse {
             thread,
-            model: None,
+            ..Default::default()
         },
     }
 }
@@ -369,7 +369,10 @@ fn model_settings_corpus() {
             )
         };
         assert!(effects.is_empty());
-        let expected: Draft = serde_json::from_value(case["expected"].clone()).unwrap();
+        let mut expected: Draft = serde_json::from_value(case["expected"].clone()).unwrap();
+        // Only an explicit selection reserves a local override for the next
+        // submission; catalog refreshes retain the visible fixture settings.
+        expected.model_settings_changed = case["select"].is_object();
         assert_eq!(
             *next.drafts[&DraftKey::from(SessionRef {
                 provider: ProviderKind::Codex,

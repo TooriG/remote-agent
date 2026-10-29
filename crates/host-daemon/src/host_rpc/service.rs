@@ -2,6 +2,7 @@
 //! owner of its resource; workflows that span owners live in the domain files.
 mod activity;
 mod conversations;
+mod model_selections;
 mod project_import;
 mod sessions;
 mod titles;
@@ -46,6 +47,7 @@ struct ServiceInner {
     terminals: crate::terminals::Terminals,
     dictation: crate::dictation::Dictation,
     conversations: super::conversations::Conversations,
+    model_selections: model_selections::ModelSelections,
     history_scope: OnceLock<(std::path::PathBuf, bool)>,
 }
 
@@ -62,6 +64,9 @@ impl HostRpcService {
                 history_scope: OnceLock::new(),
                 conversations: super::conversations::Conversations::new(
                     projects.path().with_file_name("bex-conversations.json"),
+                ),
+                model_selections: model_selections::ModelSelections::new(
+                    projects.path().with_file_name("bex-model-selections.json"),
                 ),
                 browser: OnceLock::new(),
                 providers,

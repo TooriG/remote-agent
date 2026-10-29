@@ -957,6 +957,7 @@ impl Desktop {
             model: None,
             effort: None,
             service_tier: None,
+            model_settings_changed: false,
         };
         self.snapshot
             .drafts

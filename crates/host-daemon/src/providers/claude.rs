@@ -23,8 +23,6 @@ use agent_protocol::models::Item;
 
 use agent_protocol::models::Model;
 
-use agent_protocol::models::ReasoningEffort;
-
 use agent_protocol::models::Thread;
 
 use agent_protocol::models::ThreadResponse;
@@ -201,60 +199,7 @@ impl Claude {
         let entries = probe.initialized["models"]
             .as_array()
             .ok_or("Claude Code did not return a model catalog")?;
-        entries
-            .iter()
-            .map(|entry| {
-                let name = entry["value"]
-                    .as_str()
-                    .filter(|name| !name.is_empty())
-                    .ok_or("Claude model has no value")?;
-                let display = entry["displayName"]
-                    .as_str()
-                    .ok_or("Claude model has no display name")?;
-                let values = match entry.get("supportedEffortLevels") {
-                    Some(value) => value
-                        .as_array()
-                        .ok_or("invalid Claude effort levels")?
-                        .as_slice(),
-                    None => &[],
-                };
-                let efforts = values
-                    .iter()
-                    .map(|value| {
-                        Ok(ReasoningEffort {
-                            reasoning_effort: value
-                                .as_str()
-                                .ok_or("invalid Claude effort level")?
-                                .into(),
-                        })
-                    })
-                    .collect::<Result<Vec<_>, String>>()?;
-                let default = efforts
-                    .iter()
-                    .find(|effort| effort.reasoning_effort == "high")
-                    .or(efforts.first())
-                    .map(|effort| effort.reasoning_effort.clone())
-                    .unwrap_or_default();
-                let model = agent_protocol::models::ModelRef {
-                    provider: ProviderKind::Claude,
-                    id: name.into(),
-                };
-                Ok(Model {
-                    id: name.into(),
-                    model,
-                    display_name: display.into(),
-                    credential_route: None,
-                    settings_discovery: false,
-                    settings: Some(agent_protocol::models::ModelSettings {
-                        default_reasoning_effort: default,
-                        supported_reasoning_efforts: efforts,
-                        service_tiers: Some(Vec::new()),
-                        default_service_tier: None,
-                    }),
-                    is_default: Some(false),
-                })
-            })
-            .collect::<Result<Vec<Model>, String>>()
+        entries.iter().map(native::parse_model).collect()
     }
 
     async fn create(&self, cwd: &str, model: &str) -> anyhow::Result<ThreadResponse> {
@@ -279,6 +224,7 @@ impl Claude {
                 provider: ProviderKind::Claude,
                 id: model.into(),
             }),
+            ..Default::default()
         };
         let record = Record {
             cwd: cwd.to_string_lossy().into_owned(),
@@ -407,7 +353,7 @@ impl Claude {
                         ));
                     Ok(ThreadResponse {
                         thread,
-                        model: None,
+                        ..Default::default()
                     })
                 }
             }
@@ -446,6 +392,7 @@ impl Claude {
                         provider: ProviderKind::Claude,
                         id: record.model.clone(),
                     }),
+                    ..Default::default()
                 })
             }
         }

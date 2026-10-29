@@ -383,7 +383,7 @@ async fn detail_reads_are_ordered_with_live_changes_and_stay_on_the_requesting_c
             })]),
             ..Default::default()
         },
-        model: None,
+        ..Default::default()
     };
     let mut first_updates = router
         .finish_session_read(open(&router, "native"), first.id(), response.clone())
@@ -553,7 +553,7 @@ async fn malformed_delta_keeps_all_subscriptions_and_the_last_valid_item() {
             id: Some(target.clone()),
             ..Default::default()
         },
-        model: None,
+        ..Default::default()
     };
     let mut streams = Vec::new();
     for connection in &connections {
@@ -778,7 +778,7 @@ async fn history_is_not_retained_or_trimmed_and_subscriptions_do_not_pin_executi
             turns: Some(turns),
             ..Default::default()
         },
-        model: None,
+        ..Default::default()
     };
     let mut response = router
         .finish_session_read(open(&router, "native"), connection.id(), response)

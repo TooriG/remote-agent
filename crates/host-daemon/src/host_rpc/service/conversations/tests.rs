@@ -261,6 +261,7 @@ impl Agent for NativeAgent {
                 provider: self.provider,
                 id: model.unwrap_or("model").into(),
             }),
+            ..Default::default()
         };
         self.records.lock().unwrap().insert(id, response.clone());
         Ok(response)
@@ -493,6 +494,79 @@ async fn history(
     .await
     .unwrap()
     .response
+}
+
+#[tokio::test]
+async fn reopening_after_restart_restores_only_accepted_turn_settings() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));
+    let b = NativeAgent::new(ProviderKind::Claude, directory.path().join("claude"));
+    let root = a
+        .create(directory.path().to_str().unwrap(), Some("model"), None)
+        .await
+        .unwrap()
+        .thread
+        .id
+        .unwrap();
+    let host = service(directory.path(), &a, &b);
+    let client = host.open_session();
+    let input = |id: &str, provider, effort: &str, tier: &str| op::Submission {
+        thread_id: root.clone(),
+        client_user_message_id: id.into(),
+        input: vec![op::Input::Text {
+            text: "Continue".into(),
+        }],
+        model: Some(ModelRef {
+            provider,
+            id: "model".into(),
+        }),
+        effort: Some(effort.into()),
+        service_tier: Some(tier.into()),
+    };
+    call::<op::SubmissionReceipt>(
+        &host,
+        client.id(),
+        Call::Submit(input("first", ProviderKind::Codex, "high", "priority")),
+    )
+    .await
+    .unwrap();
+    let second_client = host.open_session();
+    let reopened = history(&host, second_client.id(), &root).await;
+    assert_eq!(reopened.effort.as_deref(), Some("high"));
+    assert_eq!(reopened.service_tier.as_deref(), Some("priority"));
+    // Switching providers must address settings by native identity while the
+    // client continues opening the original public conversation.
+    call::<op::SubmissionReceipt>(
+        &host,
+        client.id(),
+        Call::Submit(input("switch", ProviderKind::Claude, "max", "default")),
+    )
+    .await
+    .unwrap();
+    drop(second_client);
+    drop(client);
+    drop(host);
+    let a = a.restarted();
+    let b = b.restarted();
+    let host = service(directory.path(), &a, &b);
+    let client = host.open_session();
+    let reopened = history(&host, client.id(), &root).await;
+    assert_eq!(reopened.model.unwrap().provider, ProviderKind::Claude);
+    assert_eq!(reopened.effort.as_deref(), Some("max"));
+    assert_eq!(reopened.service_tier.as_deref(), Some("default"));
+    b.fail_submit.store(1, Ordering::SeqCst);
+    assert!(
+        call::<op::SubmissionReceipt>(
+            &host,
+            client.id(),
+            Call::Submit(input("refused", ProviderKind::Claude, "low", "priority"))
+        )
+        .await
+        .is_err()
+    );
+    let reopened = history(&host, client.id(), &root).await;
+    assert_eq!(reopened.effort.as_deref(), Some("max"));
+    assert_eq!(reopened.service_tier.as_deref(), Some("default"));
 }
 
 #[tokio::test]

@@ -233,6 +233,13 @@ impl HostRpcService {
                 .await?
         };
         let mut turns = Vec::new();
+        (response.model, response.effort, response.service_tier) =
+            self.inner.model_selections.resolve(
+                &row.active,
+                response.model.as_ref(),
+                response.effort.as_deref(),
+                response.service_tier.as_deref(),
+            )?;
         for segment in &row.segments {
             let source = native.get(&segment.session).expect("segment loaded");
             let source = source.thread.turns.as_deref().unwrap_or_default();

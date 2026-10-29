@@ -263,6 +263,13 @@ impl HostRpcService {
         agent.availability()?;
         let state = agent.state(&target.id).await?;
         let mut response = state.response;
+        (response.model, response.effort, response.service_tier) =
+            self.inner.model_selections.resolve(
+                target,
+                response.model.as_ref(),
+                response.effort.as_deref(),
+                response.service_tier.as_deref(),
+            )?;
         if response.thread.id.as_ref() != Some(target) {
             return Err(Failure::new(
                 "invalid_session",
@@ -319,6 +326,7 @@ impl HostRpcService {
                 .await?;
             reload = true;
         }
+        let starts_turn = matches!(route, crate::providers::SubmissionTarget::Start { .. });
         let receipt = agent
             .submit(
                 input,
@@ -327,6 +335,24 @@ impl HostRpcService {
                 self.browser_config(&root.to_string())?,
             )
             .await?;
+        if starts_turn {
+            let same_model = input
+                .model
+                .as_ref()
+                .is_none_or(|model| Some(model) == response.model.as_ref());
+            self.inner.model_selections.record(
+                target,
+                input.model.as_ref().or(response.model.as_ref()),
+                input
+                    .effort
+                    .as_deref()
+                    .or_else(|| response.effort.as_deref().filter(|_| same_model)),
+                input
+                    .service_tier
+                    .as_deref()
+                    .or_else(|| response.service_tier.as_deref().filter(|_| same_model)),
+            );
+        }
         response.thread.updated_at = Some(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -409,7 +435,11 @@ impl HostRpcService {
             let started = std::time::Instant::now();
             let mut response = if let Some(row) = &row {
                 Self::conversation_page(self.conversation_history(row, false).await?, None, limit)?
-            } else { agent.open(&target.id, limit, params.include_activity).await? };
+            } else {
+                let mut response = agent.open(&target.id, limit, params.include_activity).await?;
+                (response.model, response.effort, response.service_tier) = self.inner.model_selections.resolve(native, response.model.as_ref(), response.effort.as_deref(), response.service_tier.as_deref())?;
+                response
+            };
             response.thread.list_revision = revision;
             let native_ms = started.elapsed().as_millis();
             if response.thread.id.as_ref() != Some(&target) {

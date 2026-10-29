@@ -23,6 +23,11 @@ pub struct Draft {
     pub effort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<String>,
+    /// An explicit local choice awaiting an accepted submission. Reopening
+    /// otherwise refreshes these options from the Host's latest conversation.
+    #[serde(default)]
+    #[cfg_attr(feature = "bindings", uniffi(default = false))]
+    pub model_settings_changed: bool,
 }
 /// Device preferences for new chats and each provider, with independent choices.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -962,6 +967,10 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 );
                 (draft.model, draft.effort, draft.service_tier) = settings;
             }
+            draft.model_settings_changed |= previous.drafts.get(&thread_id).is_none_or(|saved| {
+                (saved.model.as_ref(), saved.effort.as_deref(), saved.service_tier.as_deref())
+                    != (draft.model.as_ref(), draft.effort.as_deref(), draft.service_tier.as_deref())
+            });
             if previous
                 .drafts
                 .get(&thread_id)
@@ -1764,6 +1773,13 @@ fn reconcile_pending(snapshot: &mut Snapshot, thread_id: &crate::session::Sessio
         match delivery {
             SubmissionDelivery::Sending => pending.delivery_unknown = false,
             SubmissionDelivery::Accepted { turn_id } => {
+                if let Some(draft) = shared_mut(&mut snapshot.drafts, &pending.draft_key)
+                    && draft.model == pending.draft.model
+                    && draft.effort == pending.draft.effort
+                    && draft.service_tier == pending.draft.service_tier
+                {
+                    draft.model_settings_changed = false;
+                }
                 pending.accepted = true;
                 pending.delivery_unknown = false;
                 if turn_id.is_some() && pending.turn_id != turn_id {

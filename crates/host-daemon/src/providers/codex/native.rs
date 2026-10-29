@@ -555,6 +555,9 @@ pub(crate) fn parse_thread_response(mut value: Value) -> Result<ThreadResponse, 
                 provider: ProviderKind::Codex,
                 id,
             }),
+        effort: field::<Option<String>>(&value, "reasoningEffort")?
+            .or(field(&value["thread"], "reasoningEffort")?),
+        service_tier: field(&value, "serviceTier")?,
         thread: parse_thread(value["thread"].take())?,
     })
 }
@@ -592,7 +595,7 @@ mod tests {
     #[test]
     fn thread_reads_restore_the_model_from_native_thread_metadata() {
         let response = parse_thread_response(json!({
-            "thread":{"id":"saved","model":"previous-model","status":{"type":"notLoaded"}}
+            "thread":{"id":"saved","model":"previous-model","reasoningEffort":"high","status":{"type":"notLoaded"}}
         }))
         .unwrap();
         assert_eq!(
@@ -602,12 +605,16 @@ mod tests {
                 id: "previous-model".into(),
             })
         );
+        assert_eq!(response.effort.as_deref(), Some("high"));
         let started = parse_thread_response(json!({
             "model":"configured-model",
-            "thread":{"id":"started","model":null}
+            "reasoningEffort":"low", "serviceTier":"priority",
+            "thread":{"id":"started","model":null,"reasoningEffort":"high"}
         }))
         .unwrap();
         assert_eq!(started.model.unwrap().id, "configured-model");
+        assert_eq!(started.effort.as_deref(), Some("low"));
+        assert_eq!(started.service_tier.as_deref(), Some("priority"));
         assert!(
             parse_thread_response(json!({"thread":{"id":"unknown","model":null}}))
                 .unwrap()
