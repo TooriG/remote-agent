@@ -1210,28 +1210,7 @@ impl Desktop {
                     })),
             );
         }
-        if self.selected().is_some() {
-            body = body.child(
-                v_flex()
-                    .id("model-agent-handoff-notice")
-                    .debug_selector(|| "model-agent-handoff-notice".into())
-                    .gap_2()
-                    .p_2()
-                    .rounded(px(8.))
-                    .bg(rgb(appearance::RAISED))
-                    .child(
-                        div()
-                            .text_sm()
-                            .child("AIを切り替えて会話を続けられます"),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(appearance::MUTED))
-                            .child("次の送信時に履歴を引き継ぎます。実行中の応答がある場合は完了を待ってください。"),
-                    ),
-            );
-        } else {
+        if self.selected().is_none() {
             body = body.child(div().text_xs().text_color(rgb(appearance::MUTED)).child(
                 "Codex・Claude・DSH（DeepSeek / OpenRouterなど）を選んで会話を始められます。",
             ));
@@ -1711,7 +1690,6 @@ mod tests {
                 <= window.debug_bounds("model-effort").unwrap().left()
         );
         assert!(window.debug_bounds("model-choice-gpt").is_some());
-        assert!(window.debug_bounds("model-agent-handoff-notice").is_none());
         let model = window.debug_bounds("model-choice-gpt").unwrap();
         let effort = window.debug_bounds("model-picker-effort").unwrap();
         let speed = window.debug_bounds("model-picker-speed").unwrap();
@@ -1790,9 +1768,6 @@ mod tests {
         });
         window.run_until_parked();
         let claude = window.debug_bounds("model-agent-Claude").unwrap();
-        let notice = window.debug_bounds("model-agent-handoff-notice").unwrap();
-        let summary = window.debug_bounds("model-account-summary").unwrap();
-        assert!(notice.bottom() <= summary.top());
         window.simulate_click(claude.center(), Modifiers::default());
         window.run_until_parked();
         window.update(|_, cx| {

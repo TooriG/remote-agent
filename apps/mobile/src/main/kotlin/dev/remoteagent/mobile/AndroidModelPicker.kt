@@ -91,8 +91,6 @@ private fun ModelPickerDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                if (snapshot.navigation().threadId != null)
-                    Text("次の送信時に選んだAIへ履歴を引き継ぎます。", style = MaterialTheme.typography.bodySmall)
                 LazyColumn(Modifier.heightIn(max = 220.dp)) {
                     items(choices, key = { "${it.model.provider}:${it.model.id}" }) { choice ->
                         TextButton(

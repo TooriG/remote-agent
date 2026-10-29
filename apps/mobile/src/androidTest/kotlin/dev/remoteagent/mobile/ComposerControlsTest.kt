@@ -54,7 +54,6 @@ class ComposerControlsTest {
             val intents = mutableListOf<Intent>()
             compose.setContent { MaterialTheme { ModelPickerButton(snapshot, { intent, _ -> intents.add(intent) }) } }
             compose.onNodeWithTag("model.settings").performClick()
-            compose.onNodeWithText("次の送信時に選んだAIへ履歴を引き継ぎます。").assertIsDisplayed()
             compose.onNodeWithText("Other Provider").performClick()
             compose.onNodeWithText("GPT-6.1").performClick()
             compose.onNodeWithText("高").performClick()
