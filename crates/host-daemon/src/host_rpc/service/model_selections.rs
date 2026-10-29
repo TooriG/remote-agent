@@ -8,9 +8,15 @@ use std::{path::PathBuf, sync::Mutex};
 #[derive(Serialize, Deserialize)]
 struct Selection {
     session: SessionRef,
-    model: Option<ModelRef>,
-    effort: Option<String>,
-    service_tier: Option<String>,
+    #[serde(flatten)]
+    options: SelectedOptions,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(super) struct SelectedOptions {
+    pub model: Option<ModelRef>,
+    pub effort: Option<String>,
+    pub service_tier: Option<String>,
 }
 
 pub(super) struct ModelSelections {
@@ -37,7 +43,7 @@ impl ModelSelections {
         model: Option<&ModelRef>,
         effort: Option<&str>,
         service_tier: Option<&str>,
-    ) -> Result<(Option<ModelRef>, Option<String>, Option<String>), Failure> {
+    ) -> Result<SelectedOptions, Failure> {
         let selections = self.selections.lock().unwrap();
         let selections = selections
             .as_ref()
@@ -46,18 +52,19 @@ impl ModelSelections {
         let saved = selections
             .iter()
             .find(|saved| &saved.session == session)
-            .filter(|saved| model.is_none() || model == saved.model.as_ref());
-        Ok((
-            model
+            .filter(|saved| model.is_none() || model == saved.options.model.as_ref())
+            .map(|saved| &saved.options);
+        Ok(SelectedOptions {
+            model: model
                 .or_else(|| saved.and_then(|saved| saved.model.as_ref()))
                 .cloned(),
-            effort
+            effort: effort
                 .or_else(|| saved.and_then(|saved| saved.effort.as_deref()))
                 .map(str::to_owned),
-            service_tier
+            service_tier: service_tier
                 .or_else(|| saved.and_then(|saved| saved.service_tier.as_deref()))
                 .map(str::to_owned),
-        ))
+        })
     }
 
     pub fn record(
@@ -73,9 +80,11 @@ impl ModelSelections {
         };
         let next = Selection {
             session: session.clone(),
-            model: model.cloned(),
-            effort: effort.map(str::to_owned),
-            service_tier: service_tier.map(str::to_owned),
+            options: SelectedOptions {
+                model: model.cloned(),
+                effort: effort.map(str::to_owned),
+                service_tier: service_tier.map(str::to_owned),
+            },
         };
         if let Some(saved) = selections
             .iter_mut()
@@ -116,7 +125,7 @@ mod tests {
                     Some("priority"),
                 );
                 let store = ModelSelections::new(path);
-                let (resolved_model, effort, tier) = store
+                let resolved = store
                     .resolve(
                         &session,
                         native_model.map(model).as_ref(),
@@ -124,18 +133,21 @@ mod tests {
                         None,
                     )
                     .unwrap();
-                assert_eq!(resolved_model.unwrap().id, native_model.unwrap_or("saved"));
+                assert_eq!(resolved.model.unwrap().id, native_model.unwrap_or("saved"));
                 let saved_applies = native_model != Some("external");
                 assert_eq!(
-                    effort.as_deref(),
+                    resolved.effort.as_deref(),
                     native_effort.or(saved_applies.then_some("high"))
                 );
-                assert_eq!(tier.as_deref(), saved_applies.then_some("priority"));
-                let other = SessionRef::new(ProviderKind::Claude, session.id).unwrap();
                 assert_eq!(
-                    store.resolve(&other, None, None, None).unwrap(),
-                    (None, None, None)
+                    resolved.service_tier.as_deref(),
+                    saved_applies.then_some("priority")
                 );
+                let other = SessionRef::new(ProviderKind::Claude, session.id).unwrap();
+                let resolved = store.resolve(&other, None, None, None).unwrap();
+                assert!(resolved.model.is_none());
+                assert!(resolved.effort.is_none());
+                assert!(resolved.service_tier.is_none());
             }
         }
     }
@@ -156,17 +168,17 @@ mod tests {
             store
                 .resolve(&session, None, None, None)
                 .unwrap()
-                .1
+                .effort
                 .as_deref(),
             Some("high")
         );
         std::fs::remove_dir(&path).unwrap();
         store.record(&session, Some(&model), Some("low"), Some("default"));
-        let (_, effort, tier) = ModelSelections::new(path.clone())
+        let resolved = ModelSelections::new(path.clone())
             .resolve(&session, None, None, None)
             .unwrap();
-        assert_eq!(effort.as_deref(), Some("low"));
-        assert_eq!(tier.as_deref(), Some("default"));
+        assert_eq!(resolved.effort.as_deref(), Some("low"));
+        assert_eq!(resolved.service_tier.as_deref(), Some("default"));
         std::fs::write(&path, "broken").unwrap();
         assert!(
             ModelSelections::new(path)

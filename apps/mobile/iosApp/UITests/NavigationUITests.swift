@@ -107,7 +107,9 @@ extension LaunchUITests {
         )).firstMatch.waitForExistence(timeout: 10))
         app.navigationBars.buttons.element(boundBy: 0).tap()
         let addHost = app.buttons["profiles.add"]
-        XCTAssertTrue(addHost.waitForExistence(timeout: 10)); addHost.tap()
+        XCTAssertTrue(addHost.waitForExistence(timeout: 10))
+        waitForStableFrame(addHost)
+        addHost.tap()
         let cancel = app.buttons["pairing.cancel"]
         XCTAssertTrue(cancel.waitForExistence(timeout: 10))
         dismissSimulatorSetupNotification()
@@ -274,7 +276,9 @@ extension LaunchUITests {
     }
 
     func chooseFixtureModel(_ app: XCUIApplication) {
-        app.buttons["model.settings"].tap()
+        let settings = app.buttons["model.settings"]
+        waitForStableFrame(settings)
+        settings.tap()
         openModelChoices(app)
         let choice = app.buttons["model.choice.fixture-model"]
         XCTAssertTrue(choice.waitForExistence(timeout: 10)); choice.tap()

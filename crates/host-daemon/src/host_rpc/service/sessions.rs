@@ -263,13 +263,14 @@ impl HostRpcService {
         agent.availability()?;
         let state = agent.state(&target.id).await?;
         let mut response = state.response;
+        let options = self.inner.model_selections.resolve(
+            target,
+            response.model.as_ref(),
+            response.effort.as_deref(),
+            response.service_tier.as_deref(),
+        )?;
         (response.model, response.effort, response.service_tier) =
-            self.inner.model_selections.resolve(
-                target,
-                response.model.as_ref(),
-                response.effort.as_deref(),
-                response.service_tier.as_deref(),
-            )?;
+            (options.model, options.effort, options.service_tier);
         if response.thread.id.as_ref() != Some(target) {
             return Err(Failure::new(
                 "invalid_session",
@@ -437,7 +438,8 @@ impl HostRpcService {
                 Self::conversation_page(self.conversation_history(row, false).await?, None, limit)?
             } else {
                 let mut response = agent.open(&target.id, limit, params.include_activity).await?;
-                (response.model, response.effort, response.service_tier) = self.inner.model_selections.resolve(native, response.model.as_ref(), response.effort.as_deref(), response.service_tier.as_deref())?;
+                let options = self.inner.model_selections.resolve(native, response.model.as_ref(), response.effort.as_deref(), response.service_tier.as_deref())?;
+                (response.model, response.effort, response.service_tier) = (options.model, options.effort, options.service_tier);
                 response
             };
             response.thread.list_revision = revision;
