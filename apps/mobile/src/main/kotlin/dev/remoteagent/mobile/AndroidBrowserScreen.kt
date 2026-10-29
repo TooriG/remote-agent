@@ -107,8 +107,10 @@ private class BrowserSession(private val thread: SessionRef) {
     fun send(action: BrowserAction) {
         error = null
         credentials = null
-        notice = if (action is BrowserAction.ImportCookies || action is BrowserAction.ImportPasswords)
-            "ブラウザデータを取り込み中… 接続先のMacでOSのアクセス確認が出たら許可してください。" else null
+        notice =
+            if (action is BrowserAction.ImportCookies || action is BrowserAction.ImportPasswords)
+                "ブラウザデータを取り込み中… 接続先のMacでOSのアクセス確認が出たら許可してください。"
+            else null
         if (commands.size < BROWSER_QUEUE_LIMIT) {
             commands.addLast(request(action))
         }
@@ -122,7 +124,11 @@ private class BrowserSession(private val thread: SessionRef) {
     }
 
     private fun failed(message: String?, reading: Boolean) {
-        if (reading) connectionError = message else { error = message; notice = null }
+        if (reading) connectionError = message
+        else {
+            error = message
+            notice = null
+        }
     }
 
     suspend fun run(profile: String?, browser: suspend (String?, BrowserRequest) -> BrowserFrame) {
@@ -148,7 +154,6 @@ private class BrowserSession(private val thread: SessionRef) {
             }
         } finally {
             commands.clear()
-
         }
     }
 }

@@ -21,8 +21,8 @@ detekt {
     basePath = rootProject.projectDir.absolutePath
 }
 
-val generateAgentBindings by
-    tasks.registering(Exec::class) {
+val generateAgentBindings =
+    tasks.register<Exec>("generateAgentBindings") {
         workingDir(rootProject.projectDir)
         commandLine("scripts/build-agent-bindings.sh")
         inputs.file(rootProject.file("scripts/build-agent-bindings.sh"))
@@ -33,8 +33,8 @@ val generateAgentBindings by
         inputs.dir(rootProject.file("crates/agent-transport"))
         outputs.dir(rootProject.file("target/agent-bindings"))
     }
-val buildAgentAndroid by
-    tasks.registering(Exec::class) {
+val buildAgentAndroid =
+    tasks.register<Exec>("buildAgentAndroid") {
         workingDir(rootProject.projectDir)
         commandLine(
             "cargo",
@@ -91,34 +91,36 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     buildFeatures { compose = true }
-    sourceSets.getByName("androidTest").assets.srcDir(rootProject.file("crates/agent-core/tests/fixtures/markdown"))
+    sourceSets.getByName("androidTest").assets.directories +=
+        rootProject.file("crates/agent-core/tests/fixtures/markdown").path
     sourceSets.getByName("main") {
-        kotlin.srcDir(rootProject.file("target/agent-bindings/dev"))
-        jniLibs.srcDir(layout.buildDirectory.dir("generated/jniLibs").get().asFile)
+        kotlin.directories += rootProject.file("target/agent-bindings/dev").path
+        jniLibs.directories += layout.buildDirectory.dir("generated/jniLibs").get().asFile.path
     }
 }
 
 dependencies {
     testImplementation("junit:junit:4.13.2")
     implementation(project(":terminal-native"))
-    androidTestImplementation("androidx.compose.ui:ui-test-junit4:1.11.2")
-    debugImplementation("androidx.compose.ui:ui-test-manifest:1.11.2")
-    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4:1.12.1")
+    debugImplementation("androidx.compose.ui:ui-test-manifest:1.12.1")
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.4.0")
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     // Compose UI tests pull an older Espresso that calls InputManager.getInstance,
     // which Android 17 removed; pin the version that supports it.
     androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.12.0")
     implementation("net.java.dev.jna:jna:5.19.1@aar")
-    implementation("androidx.activity:activity-compose:1.12.4")
+    implementation("androidx.activity:activity-compose:1.13.0")
     implementation("com.revenuecat.purchases:placeholder:1.0.4")
-    implementation("org.jetbrains.compose.foundation:foundation:1.11.1")
-    implementation("org.jetbrains.compose.material3:material3:1.11.0-alpha07")
-    implementation("org.jetbrains.compose.ui:ui:1.11.1")
-    implementation("androidx.camera:camera-camera2:1.6.1")
-    implementation("androidx.camera:camera-lifecycle:1.6.1")
-    implementation("androidx.camera:camera-view:1.6.1")
+    implementation("org.jetbrains.compose.foundation:foundation:1.12.2")
+    // Compose Multiplatform publishes material3 for its 1.12 line only as alphas.
+    implementation("org.jetbrains.compose.material3:material3:1.12.0-alpha03")
+    implementation("org.jetbrains.compose.ui:ui:1.12.2")
+    implementation("androidx.camera:camera-camera2:1.6.2")
+    implementation("androidx.camera:camera-lifecycle:1.6.2")
+    implementation("androidx.camera:camera-view:1.6.2")
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
 }

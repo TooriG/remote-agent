@@ -104,14 +104,14 @@ class NetworkPermissionTest {
                 "currentPackage=${device.currentPackageName}"
         val failure = AssertionError("$message\n$state")
         runCatching {
-                check(device.takeScreenshot(File(context.getExternalFilesDir(null), "network-permission-failure.png"))) {
-                    "Could not capture the permission failure screenshot"
-                }
+            check(device.takeScreenshot(File(context.getExternalFilesDir(null), "network-permission-failure.png"))) {
+                "Could not capture the permission failure screenshot"
             }
+        }
             .onFailure { failure.addSuppressed(it) }
         runCatching {
-                device.dumpWindowHierarchy(File(context.getExternalFilesDir(null), "network-permission-failure.xml"))
-            }
+            device.dumpWindowHierarchy(File(context.getExternalFilesDir(null), "network-permission-failure.xml"))
+        }
             .onFailure { failure.addSuppressed(it) }
         runCatching { File(context.getExternalFilesDir(null), "network-permission-failure.txt").writeText(state) }
             .onFailure { failure.addSuppressed(it) }

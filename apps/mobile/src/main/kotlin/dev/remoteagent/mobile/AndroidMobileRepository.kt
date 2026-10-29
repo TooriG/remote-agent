@@ -4,10 +4,10 @@ import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.AtomicFile
-import dev.remoteagent.core.ClientStorage
 import dev.remoteagent.core.AgentException
-import dev.remoteagent.core.generateIdentity
 import dev.remoteagent.core.Attachment
+import dev.remoteagent.core.ClientStorage
+import dev.remoteagent.core.generateIdentity
 import java.io.File
 import java.io.IOException
 import java.security.GeneralSecurityException
@@ -50,27 +50,35 @@ internal class AndroidMobileRepository(private val context: Context) {
 
     fun save(id: String, bytes: ByteArray) = snapshotFile(id).writeSynced(bytes)
 
-    fun sessionStorage(id: String): ClientStorage = object : ClientStorage {
-        private fun <T> access(body: () -> T): T = try { body() } catch (error: IOException) {
-            throw AgentException.Failed(error.message ?: error.toString()).apply { initCause(error) }
-        } catch (error: GeneralSecurityException) {
-            throw AgentException.Failed(error.message ?: error.toString()).apply { initCause(error) }
-        } catch (error: IllegalArgumentException) {
-            throw AgentException.Failed(error.message ?: error.toString()).apply { initCause(error) }
+    fun sessionStorage(id: String): ClientStorage =
+        object : ClientStorage {
+            private fun <T> access(body: () -> T): T =
+                try {
+                    body()
+                } catch (error: IOException) {
+                    throw AgentException.Failed(error.message ?: error.toString()).apply { initCause(error) }
+                } catch (error: GeneralSecurityException) {
+                    throw AgentException.Failed(error.message ?: error.toString()).apply { initCause(error) }
+                } catch (error: IllegalArgumentException) {
+                    throw AgentException.Failed(error.message ?: error.toString()).apply { initCause(error) }
+                }
+
+            override fun load(newPairing: Boolean): ByteArray = access {
+                if (newPairing) byteArrayOf() else this@AndroidMobileRepository.load(id)
+            }
+
+            override fun save(localState: ByteArray, modelPreferences: ByteArray) = access {
+                this@AndroidMobileRepository.save(id, localState)
+            }
+
+            override fun identity(): ByteArray = access {
+                AndroidCredentialStore(context, id).loadOrCreate(::generateIdentity)
+            }
+
+            override fun diagnosticsDirectory(): String? = access {
+                this@AndroidMobileRepository.diagnosticsDirectory(id)
+            }
         }
-        override fun load(newPairing: Boolean): ByteArray = access {
-            if (newPairing) byteArrayOf() else this@AndroidMobileRepository.load(id)
-        }
-        override fun save(localState: ByteArray, modelPreferences: ByteArray) = access {
-            this@AndroidMobileRepository.save(id, localState)
-        }
-        override fun identity(): ByteArray = access {
-            AndroidCredentialStore(context, id).loadOrCreate(::generateIdentity)
-        }
-        override fun diagnosticsDirectory(): String? = access {
-            this@AndroidMobileRepository.diagnosticsDirectory(id)
-        }
-    }
 
     private fun snapshotFile(id: String) = AtomicFile(File(directory, "agent-snapshot-${encodedId(id)}.json"))
 

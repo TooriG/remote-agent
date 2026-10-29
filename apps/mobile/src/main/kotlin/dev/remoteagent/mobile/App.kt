@@ -40,6 +40,7 @@ import dev.remoteagent.core.Intent
 import dev.remoteagent.core.ListSessions
 import dev.remoteagent.core.LoadHostName
 import dev.remoteagent.core.OperationKey
+import dev.remoteagent.core.Outcome
 import dev.remoteagent.core.Snapshot
 import dev.remoteagent.core.ThreadList
 import dev.remoteagent.core.UploadAttachment
@@ -52,10 +53,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.SupervisorJob
-import dev.remoteagent.core.Outcome
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -190,10 +190,19 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
                 val invitation =
                     parseInvitation(contents, System.currentTimeMillis().milliseconds.inWholeSeconds.toULong())
                 val id = ticketIdentity(invitation.endpoint)
-                val store = ClientSession.pair(
-                    repository.sessionStorage(id), session, invitation.endpoint, invitation.invitation, true, 0uL
-                )
-                if (!isActive) { store.shutdown(); return@launch }
+                val store =
+                    ClientSession.pair(
+                        repository.sessionStorage(id),
+                        session,
+                        invitation.endpoint,
+                        invitation.invitation,
+                        true,
+                        0uL,
+                    )
+                if (!isActive) {
+                    store.shutdown()
+                    return@launch
+                }
                 observation?.cancel()
                 session?.shutdown()
                 profiles = profiles.filterNot { it.id == id } + HostProfile(id, id, invitation.endpoint)
@@ -321,7 +330,9 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     fun persist() {
         val selected = session ?: return
         scope.launch {
-            try { selected.flush() } catch (error: AgentException) {
+            try {
+                selected.flush()
+            } catch (error: AgentException) {
                 if (session === selected) notice = error.message
             }
         }
@@ -335,10 +346,13 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         owner = null
         selected?.retire()
         scope.launch {
-            try { selected?.shutdown() } finally { scope.cancel() }
+            try {
+                selected?.shutdown()
+            } finally {
+                scope.cancel()
+            }
         }
     }
-
 }
 
 internal fun AndroidAppModel.showThreads() {
