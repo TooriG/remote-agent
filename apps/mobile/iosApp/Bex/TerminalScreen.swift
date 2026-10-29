@@ -41,8 +41,8 @@ private struct NativeTerminalView: UIViewRepresentable {
     static func dismantleUIView(_ view: SwiftTerm.TerminalView, coordinator: Coordinator) {
         view.terminalDelegate = nil
         coordinator.dismantled = true
-        if coordinator.started, let session = coordinator.session {
-            _ = try? session.dispatch(intent: .detachTerminal(DetachTerminal(handle: coordinator.handle)))
+        if coordinator.started {
+            coordinator.dispatch(.detachTerminal(DetachTerminal(handle: coordinator.handle)))
         }
     }
 
@@ -60,8 +60,8 @@ private struct NativeTerminalView: UIViewRepresentable {
             coordinator.restoring = false
             coordinator.sequence = chunk.sequence
         }
-        if coordinator.sequence > previousSequence, let session = coordinator.session {
-            _ = try? session.dispatch(intent: .acknowledgeTerminal(handle: handle, sequence: coordinator.sequence))
+        if coordinator.sequence > previousSequence {
+            coordinator.dispatch(.acknowledgeTerminal(handle: handle, sequence: coordinator.sequence))
         }
     }
 
@@ -79,10 +79,17 @@ private struct NativeTerminalView: UIViewRepresentable {
             self.session = session; self.handle = handle; self.cwd = cwd
         }
 
+        func dispatch(_ intent: Intent) {
+            guard let session, let receipt = try? session.dispatch(intent: intent) else { return }
+            // Preserve input order and drain tracked receipts without publishing
+            // an AppViewModel snapshot from a UIKit lifecycle callback.
+            Task { _ = try? await receipt.wait() }
+        }
+
         func send(source _: SwiftTerm.TerminalView, data: ArraySlice<UInt8>) {
             guard !dismantled, let session,
                   session.snapshot().terminalView(handle: handle)?.acceptsInput == true else { return }
-            _ = try? session.dispatch(intent: .writeTerminal(WriteTerminal(handle: handle, data: Data(data))))
+            dispatch(.writeTerminal(WriteTerminal(handle: handle, data: Data(data))))
         }
 
         func sizeChanged(source _: SwiftTerm.TerminalView, newCols: Int, newRows: Int) {
@@ -95,13 +102,9 @@ private struct NativeTerminalView: UIViewRepresentable {
                 guard !dismantled, let session else { return }
                 if !started {
                     started = true
-                    _ = try? session.dispatch(intent: .startTerminal(StartTerminal(
-                        handle: handle,
-                        cwd: cwd,
-                        size: size
-                    )))
+                    dispatch(.startTerminal(StartTerminal(handle: handle, cwd: cwd, size: size)))
                 } else if session.snapshot().terminalView(handle: handle)?.acceptsInput == true {
-                    _ = try? session.dispatch(intent: .resizeTerminal(ResizeTerminal(handle: handle, size: size)))
+                    dispatch(.resizeTerminal(ResizeTerminal(handle: handle, size: size)))
                 }
             }
         }
