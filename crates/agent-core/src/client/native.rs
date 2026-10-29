@@ -577,7 +577,7 @@ mod tests {
                     assert!(requests.insert(request["method"].as_str().unwrap().to_owned(), request).is_none());
                 }
                 writer.reply(&requests["host/account/list"], json!({"result":{"accounts":[],"selected":{}}})).await.unwrap();
-                writer.reply(&requests["host/taskActivity/read"], json!({"result":{"revision":0,"statuses":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()}})).await.unwrap();
+                writer.reply(&requests["host/taskActivity/read"], json!({"result":{"revision":0,"statuses":[],"unread":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()}})).await.unwrap();
                 let list = &requests["host/session/list"];
                 assert_eq!(list["params"]["limit"], 60);
                 assert_eq!(list["params"]["searchTerm"], "retained search");
@@ -658,7 +658,7 @@ mod tests {
                             "host/session/scope" => json!("fixture-storage"),
                             "host/diagnostics/connection" => json!({}),
                             "host/account/list" => json!({"accounts":[],"selected":{}}),
-                            "host/taskActivity/read" => json!({"revision":u64::from(text == "after"),"statuses":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()}),
+                            "host/taskActivity/read" => json!({"revision":u64::from(text == "after"),"statuses":[],"unread":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()}),
                             "host/session/list" => json!({"data":[{"id":{"provider":"codex","id":"thread"},"name":text}],"projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,}),
                             "host/session/open" => json!({"session":{"provider":"codex","id":"thread"},"subscriptionId":uuid::Uuid::new_v4(),"revision":0,"response":{"thread":{"id":{"provider":"codex","id":"thread"},"turns":[{"id":"turn","items":[{"id":"answer","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":text,"phase":"unknown"}}}}}],"status":"unknown"}]}}}),
                             "host/model/list" => json!({"data":[],"nextCursor":null}),
@@ -1052,7 +1052,7 @@ mod tests {
                                 "host/session/open" => json!({"session":{"provider":"codex","id":"thread"},"subscriptionId":uuid::Uuid::new_v4(),"revision":0,"response":{"thread":{"id":{"provider":"codex","id":"thread"},"turns":[]}}}),
                                 "host/account/list" if round == 0 => json!({"accounts":[],"selected":{}}),
                                 "host/model/list" if round == 0 => json!({"data":[],"nextCursor":null}),
-                                "host/taskActivity/read" => json!({"revision":0,"statuses":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()}),
+                                "host/taskActivity/read" => json!({"revision":0,"statuses":[],"unread":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()}),
                                 method => panic!("unexpected refresh request {method}"),
                             };
                             if round == 2 && selected && request["method"] == "host/session/open" { pending.push(request); continue; }

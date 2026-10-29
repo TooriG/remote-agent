@@ -427,7 +427,6 @@ pub struct ScopedData {
         Arc<BTreeMap<agent_protocol::ids::ClientInputId, Arc<PendingSubmission>>>,
     pub file_drafts: Arc<BTreeMap<String, Arc<FileDraft>>>,
     pub navigation: Arc<Navigation>,
-    pub activity: Arc<Activity>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -463,6 +462,19 @@ pub fn reduce(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
         Event::SessionUpdate(update) => notifications::session_update(previous, *update),
         event => reduce_event(previous, event),
     };
+    if next.connected
+        && previous.navigation.thread_id != next.navigation.thread_id
+        && let Some(selected) = &next.navigation.thread_id
+        && let Some((session, turn_id)) = next
+            .task_activity
+            .as_ref()
+            .and_then(|state| state.unread.iter().find(|(id, _)| id == selected))
+    {
+        effects.push(Effect::execute(op::MarkSessionRead {
+            session: session.clone(),
+            turn_id: turn_id.clone(),
+        }));
+    }
     effects.extend(op::prefetch_composer_catalog(&mut next));
     effects.extend(op::prefetch_model_settings(
         next.connected,
@@ -1081,6 +1093,7 @@ fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
             next.terminals = Arc::default();
             next.observed_agents = None;
             next.task_activity = None;
+            next.activity = Arc::default();
             next.expanded_projects = Arc::default();
             next.project_threads = Arc::default();
             if !next.storage_scope.is_empty() {
@@ -1089,7 +1102,6 @@ fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
                     pending_submissions: std::mem::take(&mut next.pending_submissions),
                     file_drafts: std::mem::take(&mut next.file_drafts),
                     navigation: std::mem::take(&mut next.navigation),
-                    activity: std::mem::take(&mut next.activity),
                 };
                 Arc::make_mut(&mut next.archived_scopes)
                     .insert(next.storage_scope.clone(), Arc::new(archived));
@@ -1098,7 +1110,6 @@ fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
                     next.pending_submissions = saved.pending_submissions.clone();
                     next.file_drafts = saved.file_drafts.clone();
                     next.navigation = saved.navigation.clone();
-                    next.activity = saved.activity.clone();
                 }
                 next.conversations = Arc::default();
                 next.threads = None;

@@ -778,7 +778,7 @@ mod tests {
                     "host/session/list" => page.clone(),
                     "host/model/list" => json!({"data":[],"nextCursor":null}),
                     "host/account/list" => json!({"accounts":[],"selected":{}}),
-                    "host/taskActivity/read" => json!({"revision":0,"statuses":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()}),
+                    "host/taskActivity/read" => json!({"revision":0,"statuses":[],"unread":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()}),
                     method => panic!("unexpected {method}"),
                 };
                 writer
@@ -908,7 +908,7 @@ mod tests {
                 "host/session/list" => empty_list.clone(),
                 "host/account/list" => json!({"accounts":[],"selected":{}}),
                 "host/taskActivity/read" => {
-                    json!({"revision":0,"statuses":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()})
+                    json!({"revision":0,"statuses":[],"unread":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()})
                 }
                 "host/model/list" => json!({"data":[],"nextCursor":null}),
                 "host/session/open" => json!({"thread":{"id":parent}}),
@@ -969,7 +969,7 @@ mod tests {
         );
         let mut latest = read(&mut reader).await;
         if latest["method"] == "host/taskActivity/read" {
-            writer.reply(&latest, json!({"result":{"revision":0,"statuses":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()}})).await.unwrap();
+            writer.reply(&latest, json!({"result":{"revision":0,"statuses":[],"unread":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()}})).await.unwrap();
             latest = read(&mut reader).await;
         }
         assert_eq!(latest["method"], "host/session/agents");

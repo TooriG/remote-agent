@@ -117,7 +117,7 @@ impl Fixture {
                         }
                         "host/account/list" => json!({"accounts":[],"selected":{}}),
                         "host/taskActivity/read" => {
-                            json!({"revision":0,"statuses":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()})
+                            json!({"revision":0,"statuses":[],"unread":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()})
                         }
                         "host/model/list" => json!({"data":[],"nextCursor":null}),
                         "host/session/open" => {

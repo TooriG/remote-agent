@@ -37,6 +37,17 @@ impl Reader {
     }
     pub async fn read_request(&mut self) -> std::io::Result<Option<Request>> {
         while let Some(request) = self.incoming.recv().await {
+            if let Call::MarkSessionRead(_) = &request.call {
+                let mut send = request.send.lock().await.take().unwrap();
+                agent_transport::framing::write(
+                    &mut send,
+                    protocol::Response::Success {
+                        result: agent_protocol::models::Empty {},
+                    },
+                )
+                .await?;
+                continue;
+            }
             // Unrelated Store tests use an empty catalog. Catalog regressions
             // opt into scripted replies to control the actual RPC boundary.
             if !self.scripted_composer_catalog
@@ -80,6 +91,8 @@ impl Session {
 #[derive(Default)]
 struct State {
     sessions: HashMap<SessionRef, uuid::Uuid>,
+    unread: HashMap<SessionRef, agent_protocol::ids::TurnId>,
+    activity_revision: u64,
     threads: HashMap<SessionRef, Value>,
 }
 pub struct Writer {
@@ -308,24 +321,50 @@ impl Writer {
             match change {
                 SessionChange::Turn { turn, completed } => Some((
                     session,
-                    completed && turn.status == agent_protocol::execution::TurnStatus::Completed,
+                    (completed && turn.status == agent_protocol::execution::TurnStatus::Completed)
+                        .then_some(turn.id),
                 )),
-                SessionChange::Status { .. } => Some((session, false)),
+                SessionChange::Status { .. } => Some((session, None)),
                 _ => None,
             }
         } else {
             None
         };
         let prepared = self.prepare(None, value)?;
-        if let Some((id, finished)) = activity {
+        if let Some((id, completed_turn)) = activity {
             let active = self.current(&id)["thread"]["status"] == "running";
             agent_transport::framing::write(
                 &mut *self.events.lock().await,
                 protocol::Notification::Activity {
                     session: id.clone(),
                     active,
-                    finished: finished && !active,
                 },
+            )
+            .await?;
+            let state = {
+                let mut state = self.state.lock().unwrap();
+                if active {
+                    state.unread.remove(&id);
+                }
+                if !active && let Some(turn) = completed_turn {
+                    state.unread.insert(id, turn);
+                }
+                state.activity_revision += 1;
+                agent_protocol::live_activity::TaskActivityState {
+                    revision: state.activity_revision,
+                    statuses: Vec::new(),
+                    display: agent_protocol::live_activity::TaskActivitySummary::default()
+                        .display(),
+                    unread: state
+                        .unread
+                        .iter()
+                        .map(|(id, turn)| (id.clone(), turn.clone()))
+                        .collect(),
+                }
+            };
+            agent_transport::framing::write(
+                &mut *self.events.lock().await,
+                protocol::Notification::TaskActivity { state },
             )
             .await?;
         }

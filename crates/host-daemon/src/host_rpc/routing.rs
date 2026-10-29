@@ -21,6 +21,7 @@ use tokio::sync::mpsc;
 
 mod activity;
 mod connections;
+mod read_state;
 mod requests;
 #[cfg(test)]
 mod tests;
@@ -97,6 +98,7 @@ impl From<protocol::Response> for HostReply {
 struct State {
     apns: Option<Arc<crate::apns::Apns>>,
     tasks: HashMap<SessionRef, Task>,
+    reads: read_state::ReadState,
     task_revision: u64,
     list_revision: u64,
     next_session_id: SessionId,
@@ -569,7 +571,11 @@ impl SessionRouter {
             SessionChange::Status { .. } | SessionChange::Turn { .. }
         ) {
             let active = actor.timeline.status == agent_protocol::models::SessionStatus::Running;
-            let frame = protocol::encode(Notification::Activity { session: target.clone(), active, finished: !active && matches!(change, SessionChange::Turn { completed: true, turn } if turn.status == agent_protocol::execution::TurnStatus::Completed) }).expect("activity encodes");
+            let frame = protocol::encode(Notification::Activity {
+                session: target.clone(),
+                active,
+            })
+            .expect("activity encodes");
             failed.extend(self.broadcast_frames(frame));
         }
         let mut state = lock_state(&self.state);

@@ -1,6 +1,4 @@
-//! Named MessagePack records let clients and Hosts upgrade independently.
-//! Keep method/field names and meanings stable. Add optional/defaulted fields;
-//! incompatible operations need new method names. A QUIC stream owns each reply.
+//! Named MessagePack records for Host RPC. A QUIC stream owns each reply.
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use std::io;
@@ -22,7 +20,6 @@ pub enum Notification {
     Activity {
         session: crate::session::SessionRef,
         active: bool,
-        finished: bool,
     },
     #[serde(rename = "host/terminal/output")]
     Output {

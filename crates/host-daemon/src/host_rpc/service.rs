@@ -54,6 +54,8 @@ impl HostRpcService {
         let files = crate::workspace_files::WorkspaceFiles::new(
             projects.path().with_file_name("bex-attachments"),
         );
+        let router = SessionRouter::new()
+            .with_read_state(projects.path().with_file_name("bex-read-state.json"));
         let (providers, dictation) = crate::providers::Registry::new(backends);
         Self {
             inner: Arc::new(ServiceInner {
@@ -69,7 +71,7 @@ impl HostRpcService {
                 permission_settings_access: Default::default(),
                 terminals: Default::default(),
                 projects,
-                router: SessionRouter::new(),
+                router,
                 event_pumps: std::sync::Once::new(),
                 files,
             }),
@@ -327,6 +329,10 @@ impl HostRpcService {
                     "method_not_found",
                     "このHostはこの操作に対応していません。PC側のBEXを更新してください。",
                 ));
+            }
+            Call::MarkSessionRead(params) => {
+                self.inner.router.mark_session_read(params)?;
+                agent_protocol::models::Empty {}.into()
             }
             Call::ReadTaskActivity(_) => self.read_task_activity().await?.into(),
             Call::RegisterLiveActivity(params) => {

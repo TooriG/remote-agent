@@ -14,6 +14,15 @@ pub struct TaskActivityState {
     pub revision: u64,
     pub display: TaskActivityDisplay,
     pub statuses: Vec<(crate::session::SessionRef, crate::models::SessionStatus)>,
+    pub unread: Vec<(crate::session::SessionRef, crate::ids::TurnId)>,
+}
+
+/// A receipt covers only the completion the client actually observed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarkSessionRead {
+    pub session: crate::session::SessionRef,
+    pub turn_id: crate::ids::TurnId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

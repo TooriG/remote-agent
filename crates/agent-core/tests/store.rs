@@ -449,7 +449,7 @@ async fn setup(snapshot: Snapshot) -> (Arc<Store>, host_fixture::Reader, host_fi
                 .unwrap_or_else(|| json!({"accounts":[],"selected":{}})),
             "host/account/usage" => json!({"windows":[],"fetchedAt":1,"error":null}),
             "host/taskActivity/read" => {
-                json!({"revision":0,"statuses":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()})
+                json!({"revision":0,"statuses":[],"unread":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()})
             }
             "host/model/list" => json!({"data":snapshot.models,"nextCursor":null}),
             "host/session/open" => {
@@ -503,7 +503,7 @@ async fn read_after_status(
         if request["method"] != "host/taskActivity/read" {
             return request;
         }
-        writer.reply(&request, json!({"result":{"revision":0,"statuses":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()}})).await.unwrap();
+        writer.reply(&request, json!({"result":{"revision":0,"statuses":[],"unread":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()}})).await.unwrap();
     }
 }
 fn review() -> Value {
@@ -2937,7 +2937,7 @@ async fn initial_titles_wait_for_scope_verification_and_use_the_current_query() 
                         }
                         "host/model/list" => json!({"data":[],"nextCursor":null}),
                         "host/account/list" => json!({"accounts":[],"selected":{}}),
-                        "host/taskActivity/read" => json!({"revision":0,"statuses":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()}),
+                        "host/taskActivity/read" => json!({"revision":0,"statuses":[],"unread":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()}),
                         method => panic!("unexpected bootstrap: {method}"),
                     };
                     writer.reply(&request, json!({"result": result})).await.unwrap();
@@ -3081,7 +3081,7 @@ async fn reconnect_cancels_obsolete_pairing_and_retains_local_state() {
                     let result = match request["method"].as_str().unwrap() {
                         "host/session/list" => json!({"data":[{"id":{"provider":"codex","id":"replacement"},"name":"fresh"}],"projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,}),
                         "host/account/list" => json!({"accounts":[],"selected":{}}),
-                        "host/taskActivity/read" => json!({"revision":0,"statuses":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()}),
+                        "host/taskActivity/read" => json!({"revision":0,"statuses":[],"unread":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()}),
                         "host/model/list" => json!({"data":[],"nextCursor":null}),
                         other => panic!("unexpected bootstrap: {other}"),
                     };
@@ -3460,7 +3460,7 @@ async fn opening_a_draft_during_initial_catalog_reads_retries_and_selects_a_mode
         let request = read(&mut reader).await;
         pending.insert(request["method"].as_str().unwrap().to_owned(), request);
     }
-    writer.reply(&pending["host/taskActivity/read"], json!({"result":{"revision":0,"statuses":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()}})).await.unwrap();
+    writer.reply(&pending["host/taskActivity/read"], json!({"result":{"revision":0,"statuses":[],"unread":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()}})).await.unwrap();
     writer
         .reply(
             &pending["host/session/list"],
@@ -3553,7 +3553,7 @@ async fn connection_loads_workspace_and_lists_in_one_epoch() {
         ("host/account/list", json!({"accounts":[],"selected":{}})),
         (
             "host/taskActivity/read",
-            json!({"revision":0,"statuses":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()}),
+            json!({"revision":0,"statuses":[],"unread":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()}),
         ),
         (
             "host/model/list",
@@ -3651,7 +3651,7 @@ async fn item_transfer_releases_wire_order_and_preserves_newer_items() {
                         "host/session/list" => json!({"data":[],"projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,}),
                         "host/account/list" => json!({"accounts":[],"selected":{}}),
                         "host/model/list" => json!({"data":[],"nextCursor":null}),
-                        "host/taskActivity/read" => json!({"revision":0,"statuses":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()}),
+                        "host/taskActivity/read" => json!({"revision":0,"statuses":[],"unread":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()}),
                         "host/session/open" => {
                             let a = request["params"]["session"]["id"] == "A";
                             json!({"session":request["params"]["session"],"subscriptionId":if a {subscription_a} else {subscription_b},"response":{"thread":{"id":{"provider":"codex","id":if a {"A"} else {"B"}},"turns":[{"id":"turn","status":"running","items":[{"id":"item","status":"unknown","clientInputId":null,"body":if a {json!({"deferred":{"summary":{"commandExecution":{"command":"pwd","cwd":null,"output":"","exitCode":null}}}})} else {json!({"inline":{"body":{"assistantText":{"text":"B prefix","phase":"unknown"}}}})}}]}]}}})
@@ -4368,7 +4368,7 @@ async fn model_catalog_pages_keep_provider_identity_and_distinct_alias_entries()
         let request = read(&mut reader).await;
         pending.insert(request["method"].as_str().unwrap().to_owned(), request);
     }
-    writer.reply(&pending["host/taskActivity/read"], json!({"result":{"revision":0,"statuses":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()}})).await.unwrap();
+    writer.reply(&pending["host/taskActivity/read"], json!({"result":{"revision":0,"statuses":[],"unread":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()}})).await.unwrap();
     writer
         .reply(
             &pending["host/session/list"],

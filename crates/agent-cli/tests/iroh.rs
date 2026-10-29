@@ -52,7 +52,7 @@ async fn exercise(command: &[&str], expected: Value) {
                 Some("host/model/list") => json!({"data":[],"nextCursor":null}),
                 Some("host/account/list") => json!({"accounts":[], "selected":{}}),
                 Some("host/taskActivity/read") => {
-                    json!({"revision":0,"statuses":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()})
+                    json!({"revision":0,"statuses":[],"unread":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()})
                 }
                 Some("host/session/list") => {
                     lists += 1;

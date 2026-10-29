@@ -6,26 +6,13 @@ pub(super) fn notification(
     message: crate::protocol::Notification,
 ) -> (Snapshot, Vec<Effect>) {
     use crate::protocol::Notification;
-    if let Notification::Activity {
-        session,
-        active,
-        finished,
-    } = message
-    {
+    if let Notification::Activity { session, active } = message {
         let activity_changed = previous.activity.active.get(&session) != Some(&active);
-        let was_unread = previous.activity.unread.contains(&session);
-        let unread = !active
-            && (was_unread
-                || (finished && previous.navigation.thread_id.as_ref() != Some(&session)));
         let mut next = previous.clone();
-        if activity_changed || was_unread != unread {
-            let activity = Arc::make_mut(&mut next.activity);
-            activity.active.insert(session.clone(), active);
-            if unread {
-                activity.unread.insert(session.clone());
-            } else {
-                activity.unread.remove(&session);
-            }
+        if activity_changed {
+            Arc::make_mut(&mut next.activity)
+                .active
+                .insert(session.clone(), active);
         }
         let listed = previous
             .listed_threads()
@@ -65,8 +52,8 @@ pub(super) fn notification(
     match message {
         Notification::TaskActivity { state } => {
             let mut next = previous.clone();
-            next.accept_task_activity(state);
-            (next, Vec::new())
+            let effects = next.accept_task_activity(state);
+            (next, effects)
         }
         Notification::TerminalFailed { handle, reason } => {
             reduce(previous, Event::TerminalFailed { handle, reason })
@@ -420,11 +407,107 @@ pub(super) fn session_update(
     (next, effects)
 }
 
+impl Snapshot {
+    pub(crate) fn accept_task_activity(
+        &mut self,
+        state: agent_protocol::live_activity::TaskActivityState,
+    ) -> Vec<Effect> {
+        if self
+            .task_activity
+            .as_ref()
+            .is_none_or(|current| current.revision < state.revision)
+        {
+            let unread = state
+                .unread
+                .iter()
+                .map(|(id, _)| id.clone())
+                .filter(|id| self.navigation.thread_id.as_ref() != Some(id))
+                .collect();
+            if self.activity.unread != unread {
+                Arc::make_mut(&mut self.activity).unread = unread;
+            }
+            for (id, status) in &state.statuses {
+                let active = match status {
+                    crate::models::SessionStatus::Running => Some(true),
+                    crate::models::SessionStatus::Idle => Some(false),
+                    _ => None,
+                };
+                if self.activity.active.get(id).copied() != active {
+                    let activity = Arc::make_mut(&mut self.activity);
+                    if let Some(active) = active {
+                        activity.active.insert(id.clone(), active);
+                    } else {
+                        activity.active.remove(id);
+                    }
+                }
+            }
+            let statuses: std::collections::BTreeMap<_, _> = state
+                .statuses
+                .iter()
+                .map(|(id, status)| (id, status))
+                .collect();
+            let changed = |page: &crate::models::ThreadList| {
+                page.data.iter().any(|thread| {
+                    thread
+                        .id
+                        .as_ref()
+                        .and_then(|id| statuses.get(id))
+                        .is_some_and(|status| thread.status != **status)
+                })
+            };
+            let update = |page: &mut Arc<crate::models::ThreadList>| {
+                if changed(page) {
+                    for thread in &mut Arc::make_mut(page).data {
+                        if let Some(status) = thread.id.as_ref().and_then(|id| statuses.get(id)) {
+                            thread.status = **status;
+                        }
+                    }
+                }
+            };
+            if let Some(page) = &mut self.threads {
+                update(page);
+            }
+            if self.project_threads.values().any(|page| changed(page)) {
+                for page in Arc::make_mut(&mut self.project_threads).values_mut() {
+                    update(page);
+                }
+            }
+            let previous = self
+                .task_activity
+                .as_ref()
+                .map(|state| state.unread.as_slice())
+                .unwrap_or_default();
+            let receipt = self
+                .navigation
+                .thread_id
+                .as_ref()
+                .filter(|_| self.connected)
+                .and_then(|selected| {
+                    state
+                        .unread
+                        .iter()
+                        .find(|(id, _)| id == selected)
+                        .filter(|completion| !previous.contains(completion))
+                        .map(|(session, turn_id)| {
+                            Effect::execute(op::MarkSessionRead {
+                                session: session.clone(),
+                                turn_id: turn_id.clone(),
+                            })
+                        })
+                });
+            self.task_activity = Some(Arc::new(state));
+            return receipt.into_iter().collect();
+        }
+        Vec::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::protocol::Notification;
     use crate::session::{ProviderKind, SessionRef};
+    use crate::state::operations::Operation;
     use proptest::prelude::*;
     use serde_json::json;
 
@@ -461,13 +544,103 @@ mod tests {
             crate::protocol::Notification::Activity {
                 session: child.clone(),
                 active,
-                finished: !active,
             },
         );
         assert!(effects.is_empty());
         assert_eq!(next.activity.active[&child], active);
         assert_eq!(next.agent_panel()[0].active, active);
         assert_eq!(next.navigation, snapshot.navigation);
+    }
+
+    #[rstest::rstest]
+    fn shared_unread_reconciles_both_clients_and_acknowledges_each_visible_completion_once(
+        #[values(ProviderKind::Codex, ProviderKind::Claude)] provider: ProviderKind,
+    ) {
+        let id = SessionRef::new(provider, "task".into()).unwrap();
+        let activity = |revision, turn: Option<&str>| Notification::TaskActivity {
+            state: agent_protocol::live_activity::TaskActivityState {
+                revision,
+                display: agent_protocol::live_activity::TaskActivitySummary::default().display(),
+                statuses: Vec::new(),
+                unread: turn
+                    .map(|turn| (id.clone(), turn.into()))
+                    .into_iter()
+                    .collect(),
+            },
+        };
+        let initial = Snapshot {
+            connected: true,
+            composer_catalog: Some(Arc::new(
+                agent_protocol::composer::ComposerCatalog::default(),
+            )),
+            ..Default::default()
+        };
+        let (phone, effects) = reduce(&initial, Event::Notification(activity(1, Some("first"))));
+        assert!(effects.is_empty());
+        assert!(phone.activity.unread.contains(&id));
+        let (desktop, _) = reduce(&initial, Event::Notification(activity(1, Some("first"))));
+        assert_eq!(desktop.activity.unread, phone.activity.unread);
+
+        let (phone, effects) = reduce(
+            &phone,
+            Event::Intent(Intent::ReadThread(op::ReadThread::open(id.clone()))),
+        );
+        assert_eq!(
+            effects.len(),
+            2,
+            "opening the conversation reads history and sends a receipt"
+        );
+        assert!(phone.activity.unread.is_empty());
+        let (phone, effects) = reduce(&phone, Event::Notification(activity(2, Some("first"))));
+        assert!(
+            effects.is_empty(),
+            "unrelated Host revisions must not repeat a receipt"
+        );
+        let (phone, effects) = reduce(&phone, Event::Notification(activity(3, Some("second"))));
+        assert_eq!(
+            effects.len(),
+            1,
+            "a new visible completion needs its own receipt"
+        );
+        assert!(phone.activity.unread.is_empty());
+        let (phone, effects) = reduce(&phone, Event::Notification(activity(1, None)));
+        assert!(effects.is_empty());
+        assert_eq!(phone.task_activity.as_ref().unwrap().revision, 3);
+
+        let (desktop, effects) = reduce(&desktop, Event::Notification(activity(4, None)));
+        assert!(effects.is_empty());
+        assert!(desktop.activity.unread.is_empty());
+        let disconnected = reduce(&phone, Event::Disconnected("offline".into())).0;
+        let reconnected = reduce(&disconnected, Event::Connected).0;
+        let mut restored = reconnected;
+        let effects = op::ReadTaskActivity {}.apply(
+            &mut restored,
+            match activity(0, Some("second")) {
+                Notification::TaskActivity { state } => state,
+                _ => unreachable!(),
+            },
+        );
+        assert_eq!(
+            effects.len(),
+            1,
+            "an unconfirmed receipt is retried after reconnect"
+        );
+    }
+
+    fn host_unread(state: &mut Snapshot, id: &SessionRef, unread: bool) {
+        let _ = state.accept_task_activity(agent_protocol::live_activity::TaskActivityState {
+            revision: state
+                .task_activity
+                .as_ref()
+                .map_or(1, |state| state.revision + 1),
+            display: agent_protocol::live_activity::TaskActivitySummary::default().display(),
+            statuses: Vec::new(),
+            unread: if unread {
+                vec![(id.clone(), "turn".into())]
+            } else {
+                Vec::new()
+            },
+        });
     }
 
     fn snapshot(provider: ProviderKind) -> Snapshot {
@@ -502,7 +675,6 @@ mod tests {
             Notification::Activity {
                 session: unknown.clone(),
                 active,
-                finished: false,
             },
         );
         assert_eq!(effects.len(), usize::from(observing));
@@ -511,7 +683,6 @@ mod tests {
             Notification::Activity {
                 session: unknown,
                 active,
-                finished: false,
             },
         );
         assert!(effects.is_empty());
@@ -618,30 +789,34 @@ mod tests {
             let cached_list = state.threads.clone().unwrap();
             for _ in 0..2 {
                 let (running, effects) = notification(&state, Notification::Activity {
-                    session: id.clone(), active: true, finished: false,
+                    session: id.clone(), active: true,
                 });
                 prop_assert!(effects.is_empty());
                 prop_assert!(running.thread_list().unwrap().threads[0].active);
+                let mut running = running;
+                host_unread(&mut running, &id, false);
                 prop_assert!(!running.thread_list().unwrap().threads[0].unread);
                 state = running;
                 for _ in 0..repetitions {
                     let (repeated, effects) = notification(&state, Notification::Activity {
-                        session: id.clone(), active: true, finished: false,
+                        session: id.clone(), active: true,
                     });
                     prop_assert!(effects.is_empty());
                     prop_assert!(Arc::ptr_eq(&state.activity, &repeated.activity));
                     state = repeated;
                 }
                 let (idle, effects) = notification(&state, Notification::Activity {
-                    session: id.clone(), active: false, finished: false,
+                    session: id.clone(), active: false,
                 });
                 prop_assert_eq!(effects.len(), usize::from(connected));
                 state = idle;
                 for _ in 0..repetitions {
                     let (ended, effects) = notification(&state, Notification::Activity {
-                        session: id.clone(), active: false, finished,
+                        session: id.clone(), active: false,
                     });
                     prop_assert!(effects.is_empty());
+                    let mut ended = ended;
+                    host_unread(&mut ended, &id, finished);
                     let row = &ended.thread_list().unwrap().threads[0];
                     prop_assert!(!row.active);
                     prop_assert_eq!(row.unread, finished && !selected);
@@ -652,7 +827,7 @@ mod tests {
                 }
                 prop_assert!(Arc::ptr_eq(state.threads.as_ref().unwrap(), &cached_list));
                 let (repeated, effects) = notification(&state, Notification::Activity {
-                    session: id.clone(), active: false, finished,
+                    session: id.clone(), active: false,
                 });
                 prop_assert!(effects.is_empty());
                 prop_assert!(Arc::ptr_eq(&state.activity, &repeated.activity));
@@ -683,7 +858,6 @@ mod tests {
             Notification::Activity {
                 session: id.clone(),
                 active: true,
-                finished: false,
             },
         )
         .0;
@@ -736,7 +910,6 @@ mod tests {
             Notification::Activity {
                 session: id.clone(),
                 active: false,
-                finished: true,
             },
         );
         assert_eq!(
@@ -744,6 +917,8 @@ mod tests {
             1,
             "completion still refreshes Git and metadata"
         );
+        let mut ended = ended;
+        host_unread(&mut ended, &id, true);
         let row = &ended.thread_list().unwrap().threads[0];
         assert!(!row.active);
         assert!(row.unread);
@@ -892,7 +1067,6 @@ mod tests {
                 crate::protocol::Notification::Activity {
                     session: session.clone(),
                     active: true,
-                    finished: false,
                 },
             );
             assert!(effects.is_empty(), "activity alone must not read lists");

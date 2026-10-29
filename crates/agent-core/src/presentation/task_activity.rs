@@ -1,71 +1,10 @@
 //! System surfaces render authoritative Host task state, independently of list pagination.
 use crate::state::Snapshot;
-use agent_protocol::live_activity::{
-    TASK_ACTIVITY_DISMISS_SECONDS, TaskActivityDisplay, TaskActivityState,
-};
-use std::sync::Arc;
+use agent_protocol::live_activity::{TASK_ACTIVITY_DISMISS_SECONDS, TaskActivityDisplay};
 
 #[cfg_attr(feature = "bindings", uniffi::export)]
 pub fn task_activity_dismiss_seconds() -> u32 {
     TASK_ACTIVITY_DISMISS_SECONDS
-}
-
-impl Snapshot {
-    pub(crate) fn accept_task_activity(&mut self, state: TaskActivityState) {
-        if self
-            .task_activity
-            .as_ref()
-            .is_none_or(|current| current.revision < state.revision)
-        {
-            for (id, status) in &state.statuses {
-                let active = match status {
-                    crate::models::SessionStatus::Running => Some(true),
-                    crate::models::SessionStatus::Idle => Some(false),
-                    _ => None,
-                };
-                if self.activity.active.get(id).copied() != active {
-                    let activity = Arc::make_mut(&mut self.activity);
-                    if let Some(active) = active {
-                        activity.active.insert(id.clone(), active);
-                    } else {
-                        activity.active.remove(id);
-                    }
-                }
-            }
-            let statuses: std::collections::BTreeMap<_, _> = state
-                .statuses
-                .iter()
-                .map(|(id, status)| (id, status))
-                .collect();
-            let changed = |page: &crate::models::ThreadList| {
-                page.data.iter().any(|thread| {
-                    thread
-                        .id
-                        .as_ref()
-                        .and_then(|id| statuses.get(id))
-                        .is_some_and(|status| thread.status != **status)
-                })
-            };
-            let update = |page: &mut Arc<crate::models::ThreadList>| {
-                if changed(page) {
-                    for thread in &mut Arc::make_mut(page).data {
-                        if let Some(status) = thread.id.as_ref().and_then(|id| statuses.get(id)) {
-                            thread.status = **status;
-                        }
-                    }
-                }
-            };
-            if let Some(page) = &mut self.threads {
-                update(page);
-            }
-            if self.project_threads.values().any(|page| changed(page)) {
-                for page in Arc::make_mut(&mut self.project_threads).values_mut() {
-                    update(page);
-                }
-            }
-            self.task_activity = Some(Arc::new(state));
-        }
-    }
 }
 
 #[cfg_attr(feature = "bindings", uniffi::export)]
@@ -88,7 +27,8 @@ mod tests {
             reduce,
         },
     };
-    use agent_protocol::live_activity::TaskActivitySummary;
+    use agent_protocol::live_activity::{TaskActivityState, TaskActivitySummary};
+    use std::sync::Arc;
 
     #[test]
     fn status_sync_updates_received_closed_pages_without_reading_titles() {
@@ -111,9 +51,10 @@ mod tests {
             provider_errors: None,
         };
         state.project_threads = Arc::new([("closed".into(), Arc::new(page))].into());
-        state.accept_task_activity(TaskActivityState {
+        let _ = state.accept_task_activity(TaskActivityState {
             revision: 2,
             display: TaskActivitySummary::default().display(),
+            unread: Vec::new(),
             statuses: vec![(id.clone(), crate::models::SessionStatus::Idle)],
         });
         assert!(!state.activity.active[&id]);
@@ -124,20 +65,22 @@ mod tests {
         assert_eq!(state.project_threads["closed"].limit, 15);
         let received = state.project_threads.clone();
         let activity = state.activity.clone();
-        state.accept_task_activity(TaskActivityState {
+        let _ = state.accept_task_activity(TaskActivityState {
             revision: 3,
             display: TaskActivitySummary::default().display(),
+            unread: Vec::new(),
             statuses: vec![(id.clone(), crate::models::SessionStatus::Idle)],
         });
         assert!(Arc::ptr_eq(&state.project_threads, &received));
         assert!(Arc::ptr_eq(&state.activity, &activity));
-        state.accept_task_activity(TaskActivityState {
+        let _ = state.accept_task_activity(TaskActivityState {
             revision: 1,
             display: TaskActivitySummary {
                 running: 1,
                 ..Default::default()
             }
             .display(),
+            unread: Vec::new(),
             statuses: vec![(id.clone(), crate::models::SessionStatus::Running)],
         });
         assert!(!state.activity.active[&id]);
@@ -146,6 +89,7 @@ mod tests {
     #[test]
     fn delayed_read_cannot_replace_a_newer_completion_or_depend_on_visible_rows() {
         let running = TaskActivityState {
+            unread: Vec::new(),
             statuses: Vec::new(),
             revision: 1,
             display: TaskActivitySummary {
@@ -155,6 +99,7 @@ mod tests {
             .display(),
         };
         let completed = TaskActivityState {
+            unread: Vec::new(),
             statuses: Vec::new(),
             revision: 2,
             display: TaskActivitySummary::default().display(),
@@ -183,6 +128,7 @@ mod tests {
         ReadTaskActivity {}.apply(
             &mut reconnected,
             TaskActivityState {
+                unread: Vec::new(),
                 statuses: Vec::new(),
                 revision: 0,
                 display: TaskActivitySummary::default().display(),

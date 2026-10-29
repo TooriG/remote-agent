@@ -39,6 +39,7 @@ impl HostRpcService {
     pub(super) async fn read_task_activity(
         &self,
     ) -> Result<agent_protocol::live_activity::TaskActivityState, Failure> {
+        self.inner.router.check_read_state()?;
         let revision = self.inner.router.task_activity_revision();
         let agents = self.inner.providers.all();
         let has_sources =
@@ -108,6 +109,97 @@ impl HostRpcService {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::host_rpc::routing::HostSession;
+    use agent_protocol::live_activity::{MarkSessionRead, ReadTaskActivity, TaskActivityState};
+    use agent_protocol::session::SessionRef;
+
+    async fn next_activity(connection: &mut HostSession) -> TaskActivityState {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if let agent_protocol::protocol::Notification::TaskActivity { state } =
+                    agent_protocol::protocol::decode(&connection.recv().await.unwrap()).unwrap()
+                {
+                    return state;
+                }
+            }
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn reading_on_either_device_broadcasts_to_both_and_reconnect_reads_the_shared_state() {
+        let directory = tempfile::tempdir().unwrap();
+        let service = HostRpcService::new(
+            [],
+            ProjectStore::new(directory.path().join("projects.json")),
+        );
+        let mut phone = service.open_session();
+        let mut desktop = service.open_session();
+        let id = SessionRef::new(ProviderKind::Codex, "task".into()).unwrap();
+        for (index, reader) in [(0, phone.id()), (1, desktop.id())] {
+            let turn_id: agent_protocol::ids::TurnId = format!("turn-{index}").into();
+            service.inner.router.session_change(
+                &id,
+                agent_protocol::session::SessionChange::Turn {
+                    turn: agent_protocol::models::Turn {
+                        id: turn_id.clone(),
+                        status: agent_protocol::execution::TurnStatus::Completed,
+                        ..Default::default()
+                    },
+                    completed: true,
+                },
+            );
+            for connection in [&mut phone, &mut desktop] {
+                assert_eq!(
+                    next_activity(connection).await.unread,
+                    vec![(id.clone(), turn_id.clone())]
+                );
+            }
+            let reply = service
+                .dispatch(
+                    reader,
+                    &Call::MarkSessionRead(MarkSessionRead {
+                        session: id.clone(),
+                        turn_id,
+                    }),
+                )
+                .await
+                .unwrap();
+            assert!(matches!(
+                agent_protocol::protocol::decode::<Response<agent_protocol::models::Empty>>(
+                    &reply.initial
+                )
+                .unwrap(),
+                Response::Success { .. }
+            ));
+            for connection in [&mut phone, &mut desktop] {
+                assert!(next_activity(connection).await.unread.is_empty());
+            }
+        }
+        // A fresh client and a restarted Host must not restore device-local badges.
+        let restarted = HostRpcService::new(
+            [],
+            ProjectStore::new(directory.path().join("projects.json")),
+        );
+        let reconnected = restarted.open_session();
+        let reply = restarted
+            .dispatch(
+                reconnected.id(),
+                &Call::ReadTaskActivity(ReadTaskActivity {}),
+            )
+            .await
+            .unwrap();
+        let Response::Success { result } =
+            agent_protocol::protocol::decode::<Response<TaskActivityState>>(&reply.initial)
+                .unwrap()
+        else {
+            panic!("read shared activity")
+        };
+        assert!(result.unread.is_empty());
+    }
+
     #[tokio::test]
     async fn live_activity_registration_accepts_both_environments_and_rejects_malformed_tokens() {
         use super::*;

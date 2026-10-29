@@ -54,9 +54,10 @@ fn task_display(
     ))
     .display()
 }
-fn task_activity_state(
+pub(super) fn task_activity_state(
     revision: u64,
     tasks: &HashMap<SessionRef, Task>,
+    unread: Vec<(SessionRef, agent_protocol::ids::TurnId)>,
 ) -> agent_protocol::live_activity::TaskActivityState {
     let mut statuses: std::collections::BTreeMap<_, _> = tasks
         .iter()
@@ -77,9 +78,10 @@ fn task_activity_state(
         revision,
         display: task_display(&groups),
         statuses: statuses.into_iter().collect(),
+        unread,
     }
 }
-fn publish_task_activity(
+pub(super) fn publish_task_activity(
     apns: Option<&crate::apns::Apns>,
     sessions: &HashMap<SessionId, Outbound>,
     state: &agent_protocol::live_activity::TaskActivityState,
@@ -125,15 +127,29 @@ pub(super) fn record_task_facts(
             .map(|turn| turn.status)
             .or_else(|| previous.and_then(|task| task.latest)),
     };
-    if previous != Some(task)
-        && (task.phase().0 != "unknown" || previous.is_some_and(|task| task.phase().1))
-    {
+    let completed = match change {
+        SessionChange::Turn {
+            completed: true,
+            turn,
+        } if turn.status == agent_protocol::execution::TurnStatus::Completed => Some(&turn.id),
+        _ => None,
+    };
+    let read_changed = state.reads.record(
+        target,
+        task.session_status() == agent_protocol::models::SessionStatus::Running,
+        completed,
+    );
+    let facts_changed = previous != Some(task)
+        && (task.phase().0 != "unknown" || previous.is_some_and(|task| task.phase().1));
+    if read_changed || facts_changed {
         state.task_revision += 1;
         let revision = state.task_revision;
+        // A new completion is fresh evidence even when its phase is unchanged.
+        // An older running list must not clear that completion's unread badge.
         let owned = state.tasks.entry(target.clone()).or_default();
         owned.facts = Some(task);
         owned.facts_revision = revision;
-        let activity = task_activity_state(state.task_revision, &state.tasks);
+        let activity = task_activity_state(state.task_revision, &state.tasks, state.reads.unread());
         return publish_task_activity(state.apns.as_deref(), &state.sessions, &activity);
     }
     Vec::new()
@@ -163,7 +179,7 @@ impl SessionRouter {
         let revision = state.task_revision;
         let task = state.tasks.entry(session).or_default();
         task.parent = Some(parent);
-        let activity = task_activity_state(revision, &state.tasks);
+        let activity = task_activity_state(revision, &state.tasks, state.reads.unread());
         let failed = publish_task_activity(state.apns.as_deref(), &state.sessions, &activity);
         drop(state);
         self.close_failed(failed);
@@ -220,9 +236,15 @@ impl SessionRouter {
             } else {
                 previous_facts
             };
-            if previous_facts == facts
-                && previous.and_then(|old| old.parent.as_ref()) == parent.as_ref()
-            {
+            let unchanged = previous_facts == facts
+                && previous.and_then(|old| old.parent.as_ref()) == parent.as_ref();
+            let read_changed = accepts_facts
+                && state.reads.record(
+                    &session,
+                    task.session_status() == agent_protocol::models::SessionStatus::Running,
+                    None,
+                );
+            if unchanged && !read_changed {
                 continue;
             }
             state.task_revision += 1;
@@ -234,7 +256,7 @@ impl SessionRouter {
                 owned.facts_revision = revision;
             }
         }
-        let result = task_activity_state(state.task_revision, &state.tasks);
+        let result = task_activity_state(state.task_revision, &state.tasks, state.reads.unread());
         let failed = if state.task_revision != before {
             publish_task_activity(state.apns.as_deref(), &state.sessions, &result)
         } else {

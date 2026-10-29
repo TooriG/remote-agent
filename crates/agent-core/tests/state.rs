@@ -16,35 +16,68 @@ fn fixture_change(previous: &Snapshot, params: Value) -> (Snapshot, Vec<Effect>)
     let id: SessionRef = serde_json::from_value(params["session"].clone()).unwrap();
     let change: agent_protocol::session::SessionChange =
         serde_json::from_value(params["change"].clone()).unwrap();
-    if !previous.conversations.contains_key(&id) {
-        let active = match &change {
-            agent_protocol::session::SessionChange::Status { status } => {
-                *status == agent_protocol::models::SessionStatus::Running
-            }
-            agent_protocol::session::SessionChange::Turn { completed, .. } => !completed,
-            _ => return (previous.clone(), Vec::new()),
-        };
-        return agent_core::state::reduce(
-            previous,
-            Event::Notification(agent_protocol::protocol::Notification::Activity {
-                session: id.clone(),
-                active,
-                finished: matches!(&change, agent_protocol::session::SessionChange::Turn {completed:true, turn} if turn.status == agent_protocol::execution::TurnStatus::Completed),
-            }),
+    let mut next = previous.clone();
+    let mut effects = Vec::new();
+    if previous.conversations.contains_key(&id) {
+        let subscription = uuid::Uuid::nil();
+        Arc::make_mut(&mut next.subscriptions).insert(id.clone(), subscription);
+        (next, effects) = reduce(
+            &next,
+            Event::SessionUpdate(Box::new(agent_protocol::session::SessionUpdate {
+                subscription_id: subscription,
+                change: change.clone(),
+            })),
         );
+        next.subscriptions = previous.subscriptions.clone();
     }
-    let mut source = previous.clone();
-    let subscription = uuid::Uuid::nil();
-    Arc::make_mut(&mut source.subscriptions).insert(id.clone(), subscription);
-    let (mut next, effects) = agent_core::state::reduce(
-        &source,
-        Event::SessionUpdate(Box::new(agent_protocol::session::SessionUpdate {
-            subscription_id: subscription,
-            change,
-        })),
+    let active = match &change {
+        agent_protocol::session::SessionChange::Status { status } => {
+            *status == agent_protocol::models::SessionStatus::Running
+        }
+        agent_protocol::session::SessionChange::Turn { completed, .. } => !completed,
+        _ => return (next, effects),
+    };
+    let mut unread = previous
+        .task_activity
+        .as_ref()
+        .map(|state| state.unread.clone())
+        .unwrap_or_default();
+    if active {
+        unread.retain(|(session, _)| session != &id);
+    }
+    if let agent_protocol::session::SessionChange::Turn {
+        completed: true,
+        turn,
+    } = &change
+        && turn.status == TurnStatus::Completed
+    {
+        unread.retain(|(session, _)| session != &id);
+        unread.push((id.clone(), turn.id.clone()));
+    }
+    let (updated, changes) = reduce(
+        &next,
+        Event::Notification(agent_protocol::protocol::Notification::Activity {
+            session: id,
+            active,
+        }),
     );
-    next.subscriptions = previous.subscriptions.clone();
-    (next, effects)
+    effects.extend(changes);
+    let (updated, changes) = reduce(
+        &updated,
+        Event::Notification(agent_protocol::protocol::Notification::TaskActivity {
+            state: agent_protocol::live_activity::TaskActivityState {
+                revision: previous
+                    .task_activity
+                    .as_ref()
+                    .map_or(1, |state| state.revision + 1),
+                statuses: Vec::new(),
+                display: agent_protocol::live_activity::TaskActivitySummary::default().display(),
+                unread,
+            },
+        }),
+    );
+    effects.extend(changes);
+    (updated, effects)
 }
 
 fn initial(thread: Thread) -> Snapshot {
