@@ -95,7 +95,11 @@ private struct NativeTerminalView: UIViewRepresentable {
                 guard !dismantled, let session else { return }
                 if !started {
                     started = true
-                    _ = try? session.dispatch(intent: .startTerminal(StartTerminal(handle: handle, cwd: cwd, size: size)))
+                    _ = try? session.dispatch(intent: .startTerminal(StartTerminal(
+                        handle: handle,
+                        cwd: cwd,
+                        size: size
+                    )))
                 } else if session.snapshot().terminalView(handle: handle)?.acceptsInput == true {
                     _ = try? session.dispatch(intent: .resizeTerminal(ResizeTerminal(handle: handle, size: size)))
                 }
