@@ -1154,7 +1154,15 @@ async fn claude_authentication_and_inference_failures_are_visible_and_retry_pres
         );
         let snapshot = store.snapshot();
         let id = snapshot.navigation.thread_id.clone().unwrap();
-        assert!(snapshot.error.as_ref().unwrap().contains("サブスク認証"));
+        let submission = op::OperationKey::Submission {
+            draft_key: (&id).into(),
+        };
+        assert!(
+            snapshot
+                .operation_error(submission.clone())
+                .unwrap()
+                .contains("サブスク認証")
+        );
         assert_eq!(
             snapshot.drafts[&agent_core::state::DraftKey::from(&id)].text,
             "keep my draft"
@@ -1180,7 +1188,7 @@ async fn claude_authentication_and_inference_failures_are_visible_and_retry_pres
         assert!(
             store
                 .snapshot()
-                .error
+                .operation_error(submission.clone())
                 .as_ref()
                 .unwrap()
                 .contains("fixture initialization failed")
@@ -1210,6 +1218,7 @@ async fn claude_authentication_and_inference_failures_are_visible_and_retry_pres
         std::fs::write(&config, "{}").unwrap();
         send(&store, "retry", "retry").await;
         let snapshot = completed(&store, &id, 2, "completed").await;
+        assert!(snapshot.operation_error(submission).is_none());
         assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
         assert!(
             snapshot.drafts[&agent_core::state::DraftKey::from(&id)]

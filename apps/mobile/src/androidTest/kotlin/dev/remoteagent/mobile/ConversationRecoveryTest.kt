@@ -13,6 +13,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import dev.remoteagent.core.DownloadFile
 import dev.remoteagent.core.DraftKey
 import dev.remoteagent.core.Intent
+import dev.remoteagent.core.OperationKey
 import dev.remoteagent.core.Outcome
 import dev.remoteagent.core.ProviderKind
 import dev.remoteagent.core.ReadThread
@@ -37,7 +38,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class ConversationRecoveryTest {
     @Test
-    fun coreFailureClearsAfterRetryWithoutLosingDraft() = runBlocking {
+    fun coreHistoryFailureStaysWithItsConversationWithoutLosingDraft() = runBlocking {
         val base = InstrumentationRegistry.getInstrumentation().targetContext
         val invitation = File(base.cacheDir, "fixture-invitation.json").readText()
         val cwd = requireNotNull(InstrumentationRegistry.getArguments().getString("cwd"))
@@ -82,16 +83,13 @@ class ConversationRecoveryTest {
                     }
                     assertEquals("", model.snapshot.draft(DraftKey.Session(id)).text)
                     perform(Intent.SetDraftText(DraftKey.Session(id), "preserved draft")).getOrThrow()
-                    assertTrue(
-                        perform(
-                                Intent.ReadThread(
-                                    ReadThread(SessionRef(ProviderKind.CODEX, "missing-thread"), open = true)
-                                )
-                            )
-                            .isFailure
-                    )
-                    assertNotNull(model.snapshot.error())
+                    val missing = SessionRef(ProviderKind.CODEX, "missing-thread")
+                    assertTrue(perform(Intent.ReadThread(ReadThread(missing, open = true))).isFailure)
+                    assertNotNull(model.snapshot.operationError(OperationKey.History(missing)))
+                    assertNull(model.snapshot.error())
                     perform(Intent.ReadThread(ReadThread(id, open = true))).getOrThrow()
+                    assertNotNull(model.snapshot.operationError(OperationKey.History(missing)))
+                    assertNull(model.snapshot.operationError(OperationKey.History(id)))
                     assertNull(model.snapshot.error())
                     assertEquals("preserved draft", model.snapshot.draft(DraftKey.Session(id)).text)
                     assertNull("The recovered core error must not remain as a local notice", model.notice)

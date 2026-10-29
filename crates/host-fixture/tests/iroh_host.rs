@@ -537,7 +537,10 @@ async fn binary_transfers_use_the_issuing_iroh_session_and_preserve_bytes() {
             store.snapshot().drafts[&agent_core::state::DraftKey::from("transfer-draft")],
             retained
         );
-        assert!(store.snapshot().error.is_some());
+        let upload = op::OperationKey::Attachment {
+            draft_key: retry.draft_key.clone(),
+        };
+        assert!(store.snapshot().operation_error(upload.clone()).is_some());
         std::fs::write(&retry.attachment.path, &content).unwrap();
         store
             .dispatch(Intent::UploadAttachment(retry))
@@ -550,7 +553,7 @@ async fn binary_transfers_use_the_issuing_iroh_session_and_preserve_bytes() {
         assert_eq!(attachments[0], retained.attachments[0]);
         assert_eq!(std::fs::read(&attachments[1].path).unwrap(), content);
         assert!(
-            recovered.error.is_none(),
+            recovered.operation_error(upload).is_none(),
             "successful retry retained the upload error"
         );
 
@@ -2009,7 +2012,12 @@ async fn upstream_exit_keeps_host_management_connected() {
                 .await
                 .is_err()
         );
-        assert!(store.snapshot().error.is_some());
+        assert!(
+            store
+                .snapshot()
+                .operation_error(op::OperationKey::SessionList)
+                .is_some()
+        );
         let management = fixture
             .local()
             .await
