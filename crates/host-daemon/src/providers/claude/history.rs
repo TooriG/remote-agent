@@ -340,6 +340,40 @@ pub(super) fn read(path: &Path, limit: usize) -> Result<ThreadResponse> {
     read_with_summary(path, summary(path)?.thread, limit).map(|history| history.response)
 }
 
+pub(super) fn read_page(path: &Path, end: usize) -> Result<agent_protocol::session::HistoryPage> {
+    let response = read(path, usize::MAX)?;
+    anyhow::ensure!(
+        response
+            .thread
+            .history_read_state
+            .as_ref()
+            .is_some_and(|state| {
+                state.kind == agent_protocol::session::HistoryReadKind::Complete
+            }),
+        "Claude native history is incomplete"
+    );
+    page_turns(
+        response.thread.turns.as_deref().unwrap_or_default(),
+        end,
+        100,
+    )
+}
+
+fn page_turns(
+    turns: &[Arc<Turn>],
+    end: usize,
+    limit: usize,
+) -> Result<agent_protocol::session::HistoryPage> {
+    let start = end.saturating_sub(limit);
+    Ok(agent_protocol::session::HistoryPage {
+        turns: turns
+            .get(start..end)
+            .context("Claude history cursor is no longer valid")?
+            .to_vec(),
+        next_cursor: (start > 0).then(|| start.to_string()),
+    })
+}
+
 pub(super) fn read_related(
     home: &Path,
     session_id: Uuid,
@@ -641,13 +675,12 @@ fn convert(
         }
         block_indices.insert(message_id.into(), base + blocks.len());
     }
-    let has_more = turns.len() > limit;
-    if has_more {
-        turns.drain(..turns.len() - limit);
-    }
+    let page = page_turns(&turns, turns.len(), limit)?;
+    let has_more = page.next_cursor.is_some();
     warnings.sort_unstable();
     warnings.dedup();
     thread.history_has_more = Some(has_more);
+    thread.history_cursor = page.next_cursor;
     use agent_protocol::session::{HistoryReadKind, HistoryReadState};
     thread.history_read_state = Some(HistoryReadState::new(
         if warnings.is_empty() {
@@ -661,7 +694,7 @@ fn convert(
         },
         warnings.into_iter().map(str::to_owned).collect(),
     ));
-    thread.turns = Some(turns);
+    thread.turns = Some(page.turns);
     Ok(NativeHistory {
         response: ThreadResponse { thread, model },
         output_paths,
@@ -695,6 +728,28 @@ mod tests {
         fs::write(&path, bytes).unwrap();
         (root, path)
     }
+
+    #[test]
+    fn timeline_pages_fail_on_incomplete_history_and_recover_after_repair() {
+        let source = [
+            json!({"type":"user","uuid":"user","parentUuid":null,"message":{"content":"question"}}),
+            json!({"type":"assistant","uuid":"answer","parentUuid":"user","message":{"id":"reply","content":[{"type":"text","text":"answer"}]}}),
+        ].map(|row| row.to_string()).join("\n") + "\n";
+        let (_root, path) = fixture(&source);
+        let page = read_page(&path, 1).unwrap();
+        assert_eq!(page.turns.len(), 1);
+        assert_eq!(page.turns[0].id.as_str(), "user");
+        assert!(page.next_cursor.is_none());
+        assert!(read_page(&path, 2).is_err());
+
+        fs::write(&path, source.clone() + "{invalid JSON}\n").unwrap();
+        assert!(read_page(&path, 1).is_err());
+        fs::write(&path, &source).unwrap();
+        assert_eq!(read_page(&path, 1).unwrap().turns[0], page.turns[0]);
+        fs::remove_file(&path).unwrap();
+        assert!(read_page(&path, 1).is_err());
+    }
+
     #[test]
     fn metadata_pages_decode_only_the_requested_files_and_search_can_reach_old_titles() {
         let root = tempfile::tempdir().unwrap();

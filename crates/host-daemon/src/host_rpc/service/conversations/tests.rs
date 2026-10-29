@@ -969,6 +969,122 @@ async fn a_running_source_blocks_switching_and_a_failed_resume_gets_full_context
 }
 
 #[tokio::test]
+async fn claude_history_beyond_one_hundred_turns_opens_and_pages_in_order() {
+    let directory = tempfile::tempdir().unwrap();
+    let native_home = directory.path().join("native");
+    let project = native_home.join("projects/workspace");
+    std::fs::create_dir_all(&project).unwrap();
+    let root = SessionRef {
+        provider: ProviderKind::Claude,
+        id: uuid::Uuid::new_v4().to_string(),
+    };
+    let mut rows = Vec::new();
+    for index in 0usize..201 {
+        rows.push(
+            serde_json::json!({
+                "type": "user", "sessionId": root.id,
+                "cwd": directory.path(), "uuid": format!("user-{index}"),
+                "parentUuid": index.checked_sub(1).map(|previous| format!("answer-{previous}")),
+                "message": {"content": format!("request {index}")},
+            })
+            .to_string(),
+        );
+        rows.push(
+            serde_json::json!({
+                "type": "assistant", "sessionId": root.id,
+                "uuid": format!("answer-{index}"), "parentUuid": format!("user-{index}"),
+                "message": {"id": format!("reply-{index}"), "stop_reason": "end_turn",
+                    "content": [{"type": "text", "text": format!("response {index}")}]},
+            })
+            .to_string(),
+        );
+    }
+    let transcript = project.join(format!("{}.jsonl", root.id));
+    std::fs::write(&transcript, rows.join("\n") + "\n").unwrap();
+    let claude = crate::providers::Claude::load(
+        directory.path().join("unused-cli"),
+        directory.path().join("adapter"),
+        Some(native_home),
+    )
+    .await
+    .unwrap();
+    let host = HostRpcService::new(
+        [Backend {
+            provider: ProviderKind::Claude,
+            agent: Ok(Arc::new(claude)),
+            dictation: None,
+        }],
+        ProjectStore::new(directory.path().join("worktrees.json")),
+    );
+    let client = host.open_session();
+    let complete = host.native_history(&root, false).await.unwrap();
+    assert_eq!(complete.thread.turns.unwrap().len(), 201);
+    let opened: agent_protocol::session::OpenedSession = call(
+        &host,
+        client.id(),
+        Call::OpenSession(agent_protocol::session::OpenSession {
+            session: root.clone(),
+            limit: 5,
+            include_activity: true,
+        }),
+    )
+    .await
+    .unwrap();
+    let mut thread = opened.response.thread;
+    assert_eq!(thread.turns.as_ref().unwrap().len(), 5);
+    assert_eq!(thread.turns.as_ref().unwrap()[0].id.as_str(), "user-196");
+    // Appending a turn must not move the boundary of an already issued cursor.
+    rows.push(
+        serde_json::json!({
+            "type": "user", "sessionId": root.id, "uuid": "user-201",
+            "parentUuid": "answer-200", "message": {"content": "new request"},
+        })
+        .to_string(),
+    );
+    std::fs::write(&transcript, rows.join("\n") + "\n").unwrap();
+    while let Some(cursor) = thread.history_cursor.clone() {
+        let page: HistoryPage = call(
+            &host,
+            client.id(),
+            Call::ReadHistory(agent_protocol::session::ReadHistory {
+                session: root.clone(),
+                cursor,
+                include_activity: true,
+            }),
+        )
+        .await
+        .unwrap();
+        page.prepend_to(&mut thread);
+    }
+    assert_eq!(
+        thread
+            .turns
+            .unwrap()
+            .iter()
+            .map(|turn| turn.id.to_string())
+            .collect::<Vec<_>>(),
+        (0..201)
+            .map(|index| format!("user-{index}"))
+            .collect::<Vec<_>>()
+    );
+    for cursor in ["", "invalid", "0", "203"] {
+        assert!(
+            call::<HistoryPage>(
+                &host,
+                client.id(),
+                Call::ReadHistory(agent_protocol::session::ReadHistory {
+                    session: root.clone(),
+                    cursor: cursor.into(),
+                    include_activity: true,
+                }),
+            )
+            .await
+            .is_err()
+        );
+    }
+}
+
+#[tokio::test]
 async fn long_history_is_transferred_beyond_the_visible_page_and_older_pages_keep_order() {
     let directory = tempfile::tempdir().unwrap();
     let a = NativeAgent::new(ProviderKind::Codex, directory.path().join("a"));

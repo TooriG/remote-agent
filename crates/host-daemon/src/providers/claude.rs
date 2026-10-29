@@ -1853,14 +1853,24 @@ impl Agent for Claude {
     }
     async fn read_history(
         &self,
-        _id: &str,
-        _cursor: &str,
+        id: &str,
+        cursor: &str,
         _include_activity: bool,
     ) -> Result<agent_protocol::session::HistoryPage, Failure> {
-        Err(Failure::new(
-            "invalid_cursor",
-            "Claude history does not issue timeline cursors",
-        ))
+        let end = cursor
+            .parse::<usize>()
+            .ok()
+            .filter(|end| *end > 0)
+            .ok_or_else(|| Failure::new("invalid_cursor", "invalid Claude history cursor"))?;
+        let native =
+            Uuid::parse_str(id).map_err(|error| Failure::new("session_read_failed", error))?;
+        let home = self.native_home.clone();
+        tokio::task::spawn_blocking(move || {
+            history::read_page(&history::resolve(&home, native)?, end)
+        })
+        .await
+        .map_err(|error| Failure::new("session_read_failed", error))?
+        .map_err(|error| Failure::new("session_read_failed", error))
     }
     async fn read_item(&self, params: &op::ReadItem) -> Result<op::ItemResponse, Failure> {
         Claude::read_item(self, params).await.map_err(Into::into)
