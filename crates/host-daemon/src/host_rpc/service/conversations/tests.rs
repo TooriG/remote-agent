@@ -682,6 +682,61 @@ async fn round_trip_reuses_native_sessions_transfers_only_missing_history_and_re
 }
 
 #[tokio::test]
+async fn large_saved_history_and_new_requests_reach_the_same_native_session_for_compaction() {
+    for provider in [ProviderKind::Codex, ProviderKind::Claude] {
+        for (history_text, request_text) in [
+            ("history".repeat(25_000), "Continue".into()),
+            ("history".into(), "request".repeat(25_000)),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let a = NativeAgent::new(provider, directory.path().join("a"));
+            let other = if provider == ProviderKind::Codex {
+                ProviderKind::Claude
+            } else {
+                ProviderKind::Codex
+            };
+            let b = NativeAgent::new(other, directory.path().join("b"));
+            let root = a
+                .create(directory.path().to_str().unwrap(), Some("model"), None)
+                .await
+                .unwrap()
+                .thread
+                .id
+                .unwrap();
+            let host = service(directory.path(), &a, &b);
+            let client = host.open_session();
+            send(&host, client.id(), &root, provider, "first", &history_text)
+                .await
+                .unwrap();
+            send(&host, client.id(), &root, other, "switch", &request_text)
+                .await
+                .unwrap();
+            send(&host, client.id(), &root, provider, "return", &request_text)
+                .await
+                .unwrap();
+
+            assert_eq!(a.next.load(Ordering::SeqCst), 1);
+            assert_eq!(b.next.load(Ordering::SeqCst), 1);
+            for agent in [&a, &b] {
+                let inputs = agent.inputs.lock().unwrap();
+                let last = inputs.last().unwrap();
+                assert_eq!(
+                    last.input.last(),
+                    Some(&op::Input::Text {
+                        text: request_text.clone()
+                    })
+                );
+            }
+            let visible = history(&host, client.id(), &root).await;
+            assert_eq!(visible.thread.active_provider, Some(provider));
+            assert_eq!(visible.thread.turns.as_ref().unwrap().len(), 3);
+            let original = handoff::Message::from_turn(&visible.thread.turns.as_ref().unwrap()[0]);
+            assert_eq!(original[0].text, history_text);
+        }
+    }
+}
+
+#[tokio::test]
 async fn refused_inline_handoff_is_retryable_and_unknown_turn_delivery_is_not_replayed() {
     let directory = tempfile::tempdir().unwrap();
     let a = NativeAgent::new(ProviderKind::Codex, directory.path().join("a"));

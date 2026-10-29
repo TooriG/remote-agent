@@ -7,7 +7,6 @@ use crate::{
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_BUDGET: usize = 16_000;
-pub const HISTORY_BYTE_CAP: usize = 64_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadHistory {
@@ -181,25 +180,6 @@ impl Context {
     }
 }
 
-pub fn budget(
-    cap: usize,
-    window: Option<usize>,
-    used: usize,
-    request_bytes: usize,
-    images: usize,
-    files: usize,
-) -> usize {
-    let window = window.unwrap_or(128_000);
-    cap.min(HISTORY_BYTE_CAP).min(
-        window
-            .saturating_sub(used)
-            .saturating_sub(request_bytes)
-            .saturating_sub(images.saturating_mul(8_192))
-            .saturating_sub(files.saturating_mul(4_096))
-            .saturating_sub(16_000.max(window.div_ceil(4))),
-    )
-}
-
 pub fn select(
     messages: &[Message],
     coverage: &str,
@@ -224,9 +204,7 @@ pub fn select(
         omitted: messages.len() - selected.len(),
     };
     if make(&selected).cost() > budget {
-        return Err(
-            "Insufficient context allowance. Compact the target conversation or choose a larger context model.",
-        );
+        return Err("The history handoff metadata exceeds its size limit.");
     }
     let priority = [
         messages.iter().rposition(|m| m.role == Role::User),
@@ -286,30 +264,6 @@ mod tests {
         assert!(page(&messages, usize::MAX, 1, 0).items.is_empty());
     }
 
-    #[test]
-    fn context_budget_reserves_the_new_request_attachments_and_future_work() {
-        assert_eq!(
-            budget(DEFAULT_BUDGET, Some(32_000), 0, 0, 0, 0),
-            DEFAULT_BUDGET
-        );
-        assert_eq!(
-            budget(DEFAULT_BUDGET, Some(32_000), 8_000, 1_000, 0, 0),
-            7_000
-        );
-        assert_eq!(budget(DEFAULT_BUDGET, Some(32_000), 8_000, 1_000, 1, 0), 0);
-        assert_eq!(budget(usize::MAX, None, 0, 0, 0, 0), HISTORY_BYTE_CAP);
-        assert_eq!(
-            budget(
-                DEFAULT_BUDGET,
-                None,
-                usize::MAX,
-                usize::MAX,
-                usize::MAX,
-                usize::MAX
-            ),
-            0
-        );
-    }
     fn message(role: Role, text: &str) -> Message {
         Message {
             role,

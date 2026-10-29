@@ -410,7 +410,7 @@ impl HostRpcService {
             target = None;
         }
         let mut target_history = if let Some(target) = &target {
-            match self.native_history(target, true).await {
+            match self.native_history(target, false).await {
                 Ok(history) => history,
                 Err(_) => self.create_handoff_target(&row, selected).await?,
             }
@@ -455,51 +455,16 @@ impl HostRpcService {
             .flatten()
             .flat_map(|turn| handoff::Message::from_turn(turn))
             .collect::<Vec<_>>();
-        let native_used = target_history
-            .thread
-            .turns
-            .iter()
-            .flatten()
-            .flat_map(|turn| handoff::Message::from_turn(turn))
-            .map(|message| message.text.len())
-            .chain(
-                row.handoffs
-                    .iter()
-                    .filter(|handoff| {
-                        handoff.session == target && handoff.delivery == Delivery::Injected
-                    })
-                    .map(|handoff| handoff.context.render().len()),
-            )
-            .fold(0usize, usize::saturating_add);
-        let images = input
-            .input
-            .iter()
-            .filter(|part| matches!(part, op::Input::LocalImage { .. }))
-            .count();
-        let files = input
-            .input
-            .iter()
-            .filter(|part| matches!(part, op::Input::Mention { .. }))
-            .count();
-        let request_bytes = serde_json::to_vec(&input.input)?.len();
         let coverage = format!(
             "Provider context handoff. Conversation: {root}. Covered history segments: {last_seen}..{}.\nRead omitted history on this Host with the BEX history command shown below.\n{}",
             row.segments.len(),
             self.history_command(root)
         );
-        let context = handoff::select(
-            &messages,
-            &coverage,
-            handoff::budget(
-                handoff::DEFAULT_BUDGET,
-                None,
-                native_used,
-                request_bytes,
-                images,
-                files,
-            ),
-        )
-        .map_err(|error| Failure::new("handoff_context_limit", error))?;
+        // Bound only the history we add. Display history includes material the
+        // provider has already compacted; it cannot measure live model context.
+        // The native provider owns token accounting and automatic compaction.
+        let context = handoff::select(&messages, &coverage, handoff::DEFAULT_BUDGET)
+            .map_err(|error| Failure::new("handoff_context_limit", error))?;
         source_agent
             .unload(&active.id)
             .await
