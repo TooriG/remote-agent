@@ -1945,6 +1945,9 @@ async fn opening_selects_the_task_before_history_and_list_refresh_finish() {
 #[tokio::test]
 async fn a_failed_open_keeps_selection_and_draft_and_can_retry() {
     for cached in [false, true] {
+        let history = op::OperationKey::History {
+            session: SessionRef::new(ProviderKind::Codex, "thread".into()).unwrap(),
+        };
         let (store, mut reader, writer) = setup(if cached {
             snapshot()
         } else {
@@ -1988,7 +1991,7 @@ async fn a_failed_open_keeps_selection_and_draft_and_can_retry() {
         assert!(
             store
                 .snapshot()
-                .error
+                .operation_error(history.clone())
                 .as_ref()
                 .unwrap()
                 .contains("history unavailable")
@@ -1998,6 +2001,7 @@ async fn a_failed_open_keeps_selection_and_draft_and_can_retry() {
             id: "thread".into(),
         })));
         assert!(store.snapshot().error.is_none());
+        assert!(store.snapshot().operation_error(history.clone()).is_none());
         let request = read(&mut reader).await;
         writer
             .reply(&request, json!({"result":{"thread":thread("recovered")}}))
@@ -2015,6 +2019,7 @@ async fn a_failed_open_keeps_selection_and_draft_and_can_retry() {
             "Written while loading"
         );
         assert!(recovered.error.is_none());
+        assert!(recovered.operation_error(history).is_none());
         store.close().await.unwrap();
     }
 }
@@ -3838,11 +3843,18 @@ async fn session_update_gap_preserves_history_and_only_reports_failed_recovery(
             )
             .await
             .unwrap();
-        wait_for(&store, |state| state.error.is_some()).await;
+        let history = op::OperationKey::History {
+            session: id.clone(),
+        };
+        wait_for(&store, |state| {
+            state.operation_error(history.clone()).is_some()
+        })
+        .await;
+        assert!(store.snapshot().error.is_none());
         assert!(
             store
                 .snapshot()
-                .error
+                .operation_error(history)
                 .as_ref()
                 .unwrap()
                 .contains("history read failed")

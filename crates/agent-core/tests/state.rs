@@ -1349,8 +1349,11 @@ fn file_navigation_rejects_empty_and_relative_paths_before_rpc() {
             })),
         );
         assert!(effects.is_empty(), "sent an invalid path: {path:?}");
+        assert!(snapshot.error.is_none());
         assert_eq!(
-            snapshot.error.as_deref(),
+            snapshot
+                .operation_error(op::OperationKey::Directory)
+                .as_deref(),
             Some("絶対パスを入力してください。")
         );
     }
