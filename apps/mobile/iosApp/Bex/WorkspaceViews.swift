@@ -185,7 +185,7 @@ private struct WorkspaceDirectoryScreen: View {
                 error = failure.localizedDescription; return
             }
             guard let result = snapshot.directory(), result.path == directory else {
-                error = snapshot.error()
+                error = snapshot.operationError(key: .directory)
                 return
             }
             path = result.path
