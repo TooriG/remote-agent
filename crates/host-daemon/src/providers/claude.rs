@@ -138,7 +138,9 @@ struct Running {
 pub(crate) struct Command {
     pub(crate) value: SdkInput,
     pub(crate) user: Option<Item>,
-    pub(crate) delivered: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
+    /// Confirms the write and names the turn that received a user input.
+    pub(crate) delivered:
+        Option<tokio::sync::oneshot::Sender<Result<agent_protocol::ids::TurnId, String>>>,
 }
 
 impl Drop for Claude {
@@ -602,7 +604,6 @@ impl Claude {
             .as_ref()
             .ok_or("Claudeは実行中ではありません。")?;
         let sender = running.input.clone();
-        let turn_id = running.turn_id.clone();
         drop(state);
         let id = client_id.to_owned();
         let (delivered, receipt) = tokio::sync::oneshot::channel();
@@ -640,8 +641,7 @@ impl Claude {
             .map_err(|message| OperationError {
                 message,
                 delivery: agent_transport::peer::Delivery::Unknown,
-            })?;
-        Ok(turn_id)
+            })
     }
 
     async fn start_turn(
@@ -821,6 +821,40 @@ impl Worker {
             .find(|t| t.id == self.turn_id)
             .map(AsRef::as_ref)
     }
+    /// Settles the answered turn and continues in `turn_id`. Its background
+    /// items keep running; their notifications update this turn later.
+    async fn next_turn(&mut self, turn_id: agent_protocol::ids::TurnId) -> Result<(), String> {
+        let mut settled = self
+            .current_turn()
+            .cloned()
+            .ok_or("Claude execution state is unavailable")?;
+        settled.status = TurnStatus::Completed;
+        settled.completed_at_ms = Some(now_ms());
+        self.change(SessionChange::Turn {
+            turn: settled,
+            completed: true,
+        })
+        .await?;
+        self.record
+            .lock()
+            .await
+            .running
+            .as_mut()
+            .ok_or("Claude execution state is unavailable")?
+            .turn_id = turn_id.clone();
+        self.turn_id = turn_id.clone();
+        self.change(SessionChange::Turn {
+            turn: Turn {
+                id: turn_id,
+                status: TurnStatus::Running,
+                items: Some(Vec::new()),
+                started_at_ms: Some(now_ms()),
+                ..Default::default()
+            },
+            completed: false,
+        })
+        .await
+    }
     async fn change(&mut self, change: SessionChange) -> Result<(), String> {
         let (live, result) = change.apply_timeline(std::mem::take(&mut self.live));
         self.live = live;
@@ -867,6 +901,11 @@ impl Worker {
                         let command = command.ok_or("Claude input queue is closed")?;
                         let result = process.write(&command.value).await;
                         if result.is_ok() && let Some(user) = command.user {
+                            // Claude answered and only background work remains, so the
+                            // input opens its own turn, as in the transcript and T3 Code.
+                            if result_received && idle && pending_inputs.is_empty() && background && !interrupted {
+                                self.next_turn(user.id.as_str().into()).await?;
+                            }
                             result_received = false;
                             idle = false;
                             pending_inputs.insert(user.id.clone());
@@ -874,7 +913,9 @@ impl Worker {
                                 turn_id: self.turn_id.clone(), item: Arc::new(user),
                             }).await?;
                         }
-                        if let Some(delivered) = command.delivered { let _ = delivered.send(result.clone()); }
+                        if let Some(delivered) = command.delivered {
+                            let _ = delivered.send(result.clone().map(|()| self.turn_id.clone()));
+                        }
                         result?;
                         continue;
                     }
@@ -999,17 +1040,46 @@ impl Worker {
             TurnStatus::Failed
         };
         turn.completed_at_ms = Some(now_ms());
+        let unfinished = if interrupted {
+            ItemStatus::Interrupted
+        } else {
+            ItemStatus::Failed
+        };
         if let Some(items) = &mut turn.items {
             for item in items
                 .iter_mut()
                 .filter(|item| item.status == ItemStatus::Running)
             {
-                Arc::make_mut(item).status = if interrupted {
-                    ItemStatus::Interrupted
-                } else {
-                    ItemStatus::Failed
-                };
+                Arc::make_mut(item).status = unfinished;
             }
+        }
+        // Background work of earlier settled turns ends with this CLI.
+        let stopped: Vec<_> = self
+            .live
+            .turns
+            .iter()
+            .flatten()
+            .filter(|earlier| earlier.id != turn.id)
+            .flat_map(|earlier| {
+                earlier
+                    .items
+                    .iter()
+                    .flatten()
+                    .filter(|item| item.status == ItemStatus::Running)
+                    .map(|item| {
+                        let mut item = item.as_ref().clone();
+                        item.status = unfinished;
+                        (earlier.id.clone(), item)
+                    })
+            })
+            .collect();
+        for (turn_id, item) in stopped {
+            let _ = self
+                .change(SessionChange::Item {
+                    turn_id,
+                    item: Arc::new(item),
+                })
+                .await;
         }
         if let Err(error) = outcome {
             turn.error.get_or_insert(ExecutionError {
@@ -1155,19 +1225,19 @@ impl Worker {
         } else {
             None
         };
+        // Background work can finish after its turn settled for a later input.
         if let Some(outcome) = outcome
-            && let Some(item) = self
-                .current_turn()
-                .and_then(|turn| turn.items.as_ref())
-                .and_then(|items| {
-                    items
-                        .iter()
-                        .find(|item| item.id.as_str() == outcome.tool_id)
-                })
-            && let Some(item) = outcome.item(item.id.clone(), item.body())
+            && let Some((turn_id, item)) = self.live.turns.iter().flatten().rev().find_map(|turn| {
+                let item = turn
+                    .items
+                    .iter()
+                    .flatten()
+                    .find(|item| item.id.as_str() == outcome.tool_id)?;
+                Some((turn.id.clone(), outcome.item(item.id.clone(), item.body())?))
+            })
         {
             self.change(SessionChange::Item {
-                turn_id: self.turn_id.clone(),
+                turn_id,
                 item: Arc::new(item),
             })
             .await?;
@@ -1687,6 +1757,7 @@ impl crate::providers::AnswerSource for RequestSource {
                         "agent exited before confirming the answer write",
                     )
                 })?
+                .map(|_| ())
                 .map_err(|e| Failure::unknown("answer_delivery_unknown", e))
         }
         .boxed())
@@ -2293,8 +2364,8 @@ mod execution_tests {
             "message:0"
         );
     }
-    #[tokio::test]
-    async fn late_blocks_and_api_retry_preserve_only_valid_stream_items() {
+    /// A worker in turn `turn` whose changes reach `router`.
+    fn routed_worker() -> (crate::host_rpc::routing::SessionRouter, SessionRef, Worker) {
         let router = crate::host_rpc::routing::SessionRouter::new();
         let (events, mut receiver) = mpsc::channel::<AgentEvent>(256);
         let consumer = router.clone();
@@ -2319,8 +2390,8 @@ mod execution_tests {
             },
         );
         let (input, _receiver) = mpsc::channel(1);
-        let (interrupt, _) = watch::channel(None);
-        let mut worker = Worker {
+        let (interrupt, interrupted) = watch::channel(None);
+        let worker = Worker {
             instance: Uuid::new_v4(),
             auth_revision: 0,
             record: Arc::new(AsyncMutex::new(Record {
@@ -2328,7 +2399,11 @@ mod execution_tests {
                 model: "default".into(),
                 session_id: uuid,
                 resumable: false,
-                running: None,
+                running: Some(Running {
+                    turn_id: "turn".into(),
+                    input: input.clone(),
+                    interrupt: interrupted,
+                }),
                 idle: None,
             })),
             events,
@@ -2348,6 +2423,61 @@ mod execution_tests {
             model: "default".into(),
             effort: None,
         };
+        (router, session, worker)
+    }
+    #[tokio::test]
+    async fn background_work_reports_to_the_turn_it_ran_in_after_input_opens_another() {
+        let (router, session, mut worker) = routed_worker();
+        worker
+            .message(json!({"type":"assistant","message":{"id":"call","content":[
+                {"type":"tool_use","id":"work","name":"Bash","input":{"command":"work"}}]}}))
+            .await
+            .unwrap();
+        worker
+            .message(json!({"type":"user","message":{"content":[
+                {"type":"tool_result","tool_use_id":"work","content":"launched"}]},
+                "tool_use_result":{"backgroundTaskId":"work"}}))
+            .await
+            .unwrap();
+        worker.next_turn("next".into()).await.unwrap();
+        assert_eq!(
+            worker.record.lock().await.running.as_ref().unwrap().turn_id,
+            "next".into()
+        );
+        worker
+            .message(json!({"type":"system","subtype":"task_notification",
+                "tool_use_id":"work","status":"completed","summary":"done"}))
+            .await
+            .unwrap();
+        // The Host retains only running turns; clients apply this update to
+        // the settled turn in their history window.
+        let launched = worker
+            .live
+            .turns
+            .iter()
+            .flatten()
+            .find(|turn| turn.id == "turn".into())
+            .unwrap();
+        assert_eq!(launched.status, TurnStatus::Completed);
+        let work = launched
+            .items
+            .iter()
+            .flatten()
+            .find(|item| item.id == "work".into())
+            .unwrap();
+        assert_eq!(work.status, ItemStatus::Completed);
+        let next = router.current_turn(&session, "next").unwrap();
+        assert_eq!(next.status, TurnStatus::Running);
+        assert!(
+            next.items
+                .iter()
+                .flatten()
+                .all(|item| item.id != "work".into())
+        );
+    }
+    #[tokio::test]
+    async fn late_blocks_and_api_retry_preserve_only_valid_stream_items() {
+        let (router, session, mut worker) = routed_worker();
         for child in [
             json!({"type":"stream_event","event":{"type":"message_start","message":{"id":"child"}}}),
             json!({"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text"}}}),
@@ -2509,7 +2639,7 @@ mod execution_tests {
         worker.message(unmatched.clone()).await.unwrap();
         rows.push(unmatched);
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join(format!("{uuid}.jsonl"));
+        let path = root.path().join(format!("{}.jsonl", session.id));
         std::fs::write(
             &path,
             rows.iter()

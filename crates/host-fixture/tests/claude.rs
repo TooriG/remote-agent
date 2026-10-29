@@ -2037,6 +2037,113 @@ async fn claude_keeps_loading_until_it_answers_a_background_shell_and_interrupt_
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn input_while_only_a_background_shell_runs_opens_the_turn_history_shows() {
+    let root = tempfile::tempdir().unwrap();
+    let paused = root.path().join("background-shell-paused");
+    let memory = Arc::new(Memory::default());
+    let fixture = host(root.path(), memory.clone(), fixture_program()).await;
+    let (store, endpoint) = connect(&fixture, Snapshot::default()).await;
+    store
+        .dispatch(Intent::NewChat {
+            cwd: root.path().to_str().unwrap().into(),
+        })
+        .await
+        .unwrap();
+    store
+        .dispatch(Intent::SelectModel {
+            thread_id: store.snapshot().navigation.draft_key.clone(),
+            model: models::ModelRef {
+                provider: ProviderKind::Claude,
+                id: "default".into(),
+            },
+        })
+        .await
+        .unwrap();
+    let texts = |snapshot: &Snapshot, id: &agent_protocol::session::SessionRef| {
+        snapshot.conversations[id]
+            .turns
+            .iter()
+            .flatten()
+            .map(|turn| {
+                turn.items
+                    .iter()
+                    .flatten()
+                    .filter_map(|item| match item.body() {
+                        agent_protocol::items::ItemBody::AssistantText { text, .. } => {
+                            Some(text.clone())
+                        }
+                        agent_protocol::items::ItemBody::UserMessage { content, .. } => {
+                            content.iter().find_map(|part| match part {
+                                agent_protocol::items::MessagePart::Text { text } => {
+                                    Some(text.clone())
+                                }
+                                _ => None,
+                            })
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+    };
+    std::fs::write(&paused, "").unwrap();
+    let id = send(&store, "background-shell", "background-shell-answered").await;
+    until(&store, |snapshot| {
+        texts(snapshot, &id)
+            .first()
+            .is_some_and(|turn| turn.iter().any(|text| text == "あとで結果を報告します"))
+    })
+    .await;
+    send(&store, "next question", "while-background-shell").await;
+    let snapshot = until(&store, |snapshot| {
+        texts(snapshot, &id)
+            .get(1)
+            .is_some_and(|turn| turn.iter().any(|text| text == "reply 2: next question"))
+    })
+    .await;
+    let turns = snapshot.conversations[&id].turns.as_ref().unwrap();
+    assert_eq!(turns.len(), 2, "{:?}", texts(&snapshot, &id));
+    assert_eq!(turns[0].status.label(), "completed");
+    assert_eq!(turns[1].id, "while-background-shell".into());
+    std::fs::remove_file(&paused).unwrap();
+    let live = completed(&store, &id, 2, "completed").await;
+    assert_eq!(
+        texts(&live, &id),
+        [
+            vec![
+                "background-shell".to_owned(),
+                "あとで結果を報告します".into()
+            ],
+            vec![
+                "next question".into(),
+                "reply 2: next question".into(),
+                "結果を報告します".into()
+            ],
+        ],
+        "the shell's report belongs to the turn that is current when it arrives"
+    );
+    let saved: Snapshot =
+        serde_json::from_slice(&serde_json::to_vec(live.as_ref()).unwrap()).unwrap();
+    store.close().await.unwrap();
+    endpoint.close().await;
+    fixture.close().await.unwrap();
+    let fixture = host(root.path(), memory, fixture_program()).await;
+    let (store, endpoint) = connect(&fixture, saved).await;
+    store
+        .dispatch(Intent::ReadThread(op::ReadThread::open(id.clone())))
+        .await
+        .unwrap();
+    assert_eq!(
+        texts(&store.snapshot(), &id),
+        texts(&live, &id),
+        "saved history must show the turns the live conversation showed"
+    );
+    store.close().await.unwrap();
+    endpoint.close().await;
+    fixture.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn claude_accepts_running_input_and_reads_past_the_previous_result() {
     let root = tempfile::tempdir().unwrap();
     let fixture = host(root.path(), Arc::new(Memory::default()), fixture_program()).await;
