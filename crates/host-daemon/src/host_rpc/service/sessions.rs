@@ -719,7 +719,11 @@ mod tests {
                 assert!(
                     matches!(command.value, crate::providers::claude::SdkInput::Answer { request_id, .. } if request_id == native)
                 );
-                command.delivered.unwrap().send(Ok("turn".into())).unwrap();
+                command
+                    .delivered
+                    .unwrap()
+                    .send(Ok(Some("turn".into())))
+                    .unwrap();
                 operation.await.unwrap();
                 assert_eq!(delivery(&id), Some(RequestDelivery::Sent));
             }

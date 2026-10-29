@@ -18,6 +18,12 @@ pub(super) fn message_blocks(content: &Value) -> Option<Cow<'_, [Value]>> {
     }
 }
 
+pub(super) fn needs_background_report(kind: Option<&str>, background: bool, ambient: bool) -> bool {
+    // Bash and Monitor share local_bash; the SDK awaits agents and workflows.
+    // https://github.com/pingdotgg/t3code/blob/dac8b11ddc25bd5da62a367fdb6c3de777ae2986/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts#L2805
+    kind == Some("local_bash") && background && !ambient
+}
+
 fn input_parts(blocks: &[Value]) -> Vec<MessagePart> {
     blocks
         .iter()
@@ -489,6 +495,24 @@ pub(super) fn tool_result_body(body: &ItemBody, content: &Value, metadata: &Valu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_bash_tasks_are_outside_sdk_turn_ownership() {
+        assert!(needs_background_report(Some("local_bash"), true, false));
+        assert!(!needs_background_report(Some("local_bash"), false, false));
+        assert!(!needs_background_report(Some("local_bash"), true, true));
+        for kind in [
+            None,
+            Some("local_agent"),
+            Some("remote_agent"),
+            Some("in_process_teammate"),
+            Some("local_workflow"),
+            Some("monitor"),
+            Some("unknown"),
+        ] {
+            assert!(!needs_background_report(kind, true, false), "{kind:?}");
+        }
+    }
     use proptest::prelude::*;
 
     proptest! {

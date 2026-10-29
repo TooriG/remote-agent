@@ -5,7 +5,12 @@ use std::{
     fs,
     io::{self, BufRead, Write},
     path::Path,
+    sync::Mutex,
 };
+
+// Root partial-message frames have no message ID to multiplex two responses.
+// Background notifications may interleave, but their answer must wait its turn.
+static ROOT_RESPONSE: Mutex<()> = Mutex::new(());
 
 fn option(args: &[String], name: &str) -> Option<String> {
     args.iter().enumerate().find_map(|(index, arg)| {
@@ -263,6 +268,7 @@ fn main() {
     let mut waiting = None;
     for line in io::stdin().lock().lines() {
         let value: Value = serde_json::from_str(&line.unwrap()).unwrap();
+        let _response = ROOT_RESPONSE.lock().unwrap();
         match value["type"].as_str().unwrap() {
             "control_request" if value["request"]["subtype"] == "initialize" => {
                 let home = std::env::var_os("CLAUDE_SECURESTORAGE_CONFIG_DIR").unwrap();
@@ -411,6 +417,7 @@ fn main() {
                         emit(
                             json!({"type":"system","subtype":"task_notification","task_id":"shell-1","status":"completed","output_file":"","summary":"background shell done","session_id":session}),
                         );
+                        let _response = ROOT_RESPONSE.lock().unwrap();
                         emit(json!({"type":"system","subtype":"init","session_id":session}));
                         output(session_state(&session, "running"));
                         reply(

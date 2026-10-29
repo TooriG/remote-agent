@@ -408,13 +408,16 @@ impl Process {
             .env_remove("CLAUDE_CODE_OAUTH_REFRESH_TOKEN")
             .current_dir(cwd)
             .arg(bridge);
+        Self::spawn_command(command)
+            .map_err(|error| format!("Claude SDKを起動できません（{}）: {error}", node.display()))
+    }
+
+    pub(super) fn spawn_command(mut command: Command) -> Result<Self, String> {
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let mut child = command.spawn().map_err(|error| {
-            format!("Claude SDKを起動できません（{}）: {error}", node.display())
-        })?;
+        let mut child = command.spawn().map_err(|error| error.to_string())?;
         let mut stderr = child.stderr.take().ok_or("Claude SDK stderr is missing")?;
         let stderr = tokio::spawn(async move {
             let mut tail = Vec::new();
