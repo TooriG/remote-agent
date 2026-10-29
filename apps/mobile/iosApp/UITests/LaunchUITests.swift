@@ -23,6 +23,12 @@ final class LaunchUITests: XCTestCase {
         wait(for: [settled], timeout: 10)
     }
 
+    func tapWhenStable(_ element: XCUIElement) {
+        XCTAssertTrue(element.waitForExistence(timeout: 10))
+        waitForStableFrame(element)
+        element.tap()
+    }
+
     func waitForDraftText(_ input: XCUIElement, text: String, timeout: TimeInterval = 15) {
         let ready = expectation(
             for: NSPredicate(format: "exists == true AND value == %@", text), evaluatedWith: input
