@@ -1161,7 +1161,6 @@ impl Desktop {
             || !self.snapshot.connected
             || self.snapshot.account.login.is_some();
         let mut agents = v_flex()
-            .w(px(112.))
             .flex_shrink_0()
             .gap_2()
             .pr_2()
@@ -1174,24 +1173,16 @@ impl Desktop {
         ] {
             agents = agents.child(
                 Button::new(format!("model-agent-{label}"))
-                    .label(if value == ProviderKind::DeepSeek {
-                        "DSH"
+                    .icon(if value == ProviderKind::Claude {
+                        Icon::default()
+                            .path("icons/claude.svg")
+                            .text_color(rgb(0xd97757))
                     } else {
-                        label
+                        provider_icon(value)
                     })
-                    .icon(
-                        if value == ProviderKind::Claude {
-                            Icon::default()
-                                .path("icons/claude.svg")
-                                .text_color(rgb(0xd97757))
-                        } else {
-                            provider_icon(value)
-                        }
-                        .size(px(24.)),
-                    )
+                    .large()
                     .ghost()
-                    .w(px(104.))
-                    .h(px(44.))
+                    .size(px(44.))
                     .rounded(px(8.))
                     .selected(provider == Some(value))
                     .when(provider == Some(value), |button| {
