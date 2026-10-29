@@ -128,25 +128,7 @@ impl Desktop {
                 .border_b_1()
                 .border_color(rgb(appearance::BORDER)),
         );
-        if !self.error.is_empty() {
-            body = body.child(
-                h_flex()
-                    .gap_3()
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_color(rgb(0xff8e86))
-                            .child(error_message(&self.error)),
-                    )
-                    .child(Self::icon_button(
-                        "settings-dismiss-error",
-                        IconName::Close,
-                        "エラーを閉じる",
-                        cx,
-                        |s, _, _| s.error.clear(),
-                    )),
-            );
-        }
+        body = body.child(self.error_notices(ErrorScope::Settings, cx));
         body =
             match self.settings_page {
                 SettingsPage::Models => body.child(self.default_model_settings(cx)),
@@ -360,6 +342,7 @@ impl Desktop {
         }
         v_flex()
             .id("workspace-card")
+            .child(self.error_notices(ErrorScope::Workspace, cx))
             .w_full()
             .h_full()
             .p_4()

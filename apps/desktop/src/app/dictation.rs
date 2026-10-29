@@ -129,7 +129,7 @@ impl Desktop {
                     preparation: None,
                     levels: std::collections::VecDeque::from([0.; 40]),
                 });
-                self.error.clear();
+                self.local_errors.remove(&self.local_error_scope());
             }
             Err(error) => self.set_error(error),
         }

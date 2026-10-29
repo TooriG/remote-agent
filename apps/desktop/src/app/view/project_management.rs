@@ -207,13 +207,13 @@ impl Desktop {
                 .child(Button::new("save-project").label("保存").primary().on_click(cx.listener(|s, _, _, cx| {
                     let editor = s.project_editor.as_ref().unwrap();
                     if editor.scope != s.snapshot.storage_scope {
-                        s.error = "接続先が変わりました。プロジェクトを開き直してください".into();
+                        s.set_error("接続先が変わりました。プロジェクトを開き直してください".into());
                         s.project_editor = None; cx.notify(); return;
                     }
                     let name = editor.name.read(cx).value().to_string();
                     let section = editor.section.read(cx).value().to_string();
                     if name.trim().is_empty() || name.trim().chars().count()>100 || section.trim().chars().count()>60 {
-                        s.error = "表示名は1〜100文字、セクションは60文字以内で入力してください".into();
+                        s.set_error("表示名は1〜100文字、セクションは60文字以内で入力してください".into());
                     } else {
                         s.dispatch(Intent::EditProject { project_id: editor.id.clone(), name, section });
                         s.project_editor = None;
@@ -223,17 +223,17 @@ impl Desktop {
                 .child(Button::new("cancel-project").label("キャンセル").on_click(cx.listener(|s, _, _, cx| {
                     s.project_editor = None; cx.notify();
                 }))))
-            .when(!self.error.is_empty(), |view| view.child(self.error.clone()))
+            .child(self.error_notices(ErrorScope::Projects, cx))
             .into_any_element()
     }
     fn open_project_folder(&mut self, path: &str) {
         if self.remote.is_some() {
-            self.error = "接続先のフォルダはこの端末では開けません".into();
+            self.set_error("接続先のフォルダはこの端末では開けません".into());
             return;
         }
         let path = Path::new(path);
         if !path.is_absolute() || !path.is_dir() {
-            self.error = "プロジェクトのフォルダが見つかりません".into();
+            self.set_error("プロジェクトのフォルダが見つかりません".into());
             return;
         }
         #[cfg(target_os = "windows")]
@@ -250,7 +250,7 @@ impl Desktop {
             command.creation_flags(0x08000000);
         }
         if let Err(error) = command.spawn() {
-            self.error = format!("フォルダを開けません: {error}");
+            self.set_error(format!("フォルダを開けません: {error}"));
         }
     }
 }

@@ -1797,9 +1797,7 @@ impl Snapshot {
             .get(&session)
             .is_some_and(|thread| thread.history_has_more == Some(true));
         let key = crate::state::operations::OperationKey::History { session };
-        let error = self
-            .operation_error(key.clone())
-            .map(|message| super::error::error_message(&message));
+        let error = self.operation_error(key.clone());
         if !has_more && error.is_none() {
             return None;
         }

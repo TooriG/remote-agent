@@ -1090,7 +1090,9 @@ mod tests {
                     let before = store.snapshot();
                     assert!(refresh().await.is_err());
                     assert!(store.snapshot().connected());
-                    assert!(store.snapshot().error.as_ref().unwrap().contains("temporary read error"));
+                    assert!(store.snapshot().error.is_none());
+                    assert!(store.snapshot().operations.values().any(|state| matches!(&state.phase,
+                        crate::state::operations::OperationPhase::Failed { message } if message.contains("temporary read error"))));
                     if selected {
                         let refresh = refresh();
                         tokio::pin!(refresh);

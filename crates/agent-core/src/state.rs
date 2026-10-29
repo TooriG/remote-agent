@@ -364,7 +364,9 @@ impl Snapshot {
         self.operations
             .get(&key)
             .and_then(|state| match &state.phase {
-                operations::OperationPhase::Failed { message } => Some(message.clone()),
+                operations::OperationPhase::Failed { message } => {
+                    Some(crate::presentation::error::error_message(message))
+                }
                 _ => None,
             })
     }
@@ -473,9 +475,9 @@ pub fn reduce(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
     (next, effects)
 }
 macro_rules! prepare_operations {
-    ($intent:expr, $previous:expr, $next:ident, [$($variant:ident),* $(,)?], {$($local:tt)*}) => {
+    ($intent:expr, $next:ident, [$($variant:ident),* $(,)?], {$($local:tt)*}) => {
         match $intent {
-            $(Intent::$variant(operation) => return prepare($previous, $next, operation),)*
+            $(Intent::$variant(operation) => return prepare($next, operation),)*
             $($local)*
         }
     };
@@ -483,7 +485,7 @@ macro_rules! prepare_operations {
 
 fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>) {
     let mut next = previous.clone();
-    prepare_operations!(intent, previous, next, [
+    prepare_operations!(intent, next, [
         ReadTaskActivity, RegisterLiveActivity, UnregisterLiveActivity,
         ReadPermissionSettings, UpdatePermissionSettings,
         ManageCodexCli, ReadDshCredentials, UpdateDshCredential, ListAccounts, SelectAccount, SelectAccountForDraft, LogoutAccount, StartAccountLogin,
@@ -499,6 +501,18 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
         LoadHostName, LoadHostManagement, LoadModels, ReadModelSettings,
         Respond, Transcribe, UploadAttachment, PairRemoteHost,
     ], {
+        Intent::DismissError { id } => match id {
+            op::ErrorId::Operation { key, generation } => {
+                if next.operations.get(&key).is_some_and(|state| {
+                    state.generation == generation && matches!(state.phase, op::OperationPhase::Failed { .. })
+                }) { Arc::make_mut(&mut next.operations).remove(&key); }
+            }
+            op::ErrorId::Application { message } => {
+                if next.error.as_deref().map(crate::presentation::error::error_message).as_deref() == Some(message.as_str()) {
+                    next.error = None;
+                }
+            }
+        },
         Intent::WatchAgents { thread_id } => {
             let thread_id = thread_id.filter(|id| next.navigation.thread_id.as_ref() == Some(id));
             if next.observed_agents != thread_id {
@@ -529,20 +543,20 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 return (next, Vec::new());
             }
             if let Some(cursor) = previous.conversations.get(&thread_id).and_then(|thread| thread.history_cursor.clone()) {
-                return prepare(previous, next, op::ReadHistory { session: thread_id, cursor, include_activity: false });
+                return prepare(next, op::ReadHistory { session: thread_id, cursor, include_activity: false });
             }
             let limit = u32::try_from(previous.conversations.get(&thread_id).map_or(5, |thread| {
                 thread.history_limit
                     .unwrap_or_else(|| thread.turns.as_ref().map_or(5, |turns| turns.len() as u64))
             })).unwrap_or(u32::MAX).saturating_add(5);
-            return prepare(previous, next, op::ReadThread { limit, ..op::ReadThread::new(thread_id) });
+            return prepare(next, op::ReadThread { limit, ..op::ReadThread::new(thread_id) });
         }
         Intent::LoadTurnItems(params) => {
             if previous.conversations.get(&params.thread_id)
                 .and_then(|thread| thread.turns.as_ref())
                 .and_then(|turns| turns.iter().rfind(|turn| turn.id == params.turn_id))
                 .is_some_and(|turn| turn.items_summary) {
-                return prepare(previous, next, params);
+                return prepare(next, params);
             }
         }
         Intent::AcknowledgeTerminal { handle, sequence } => {
@@ -625,7 +639,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             let Some(limit) = previous.expanded_projects.get(&project_id).copied() else {
                 return (next, Vec::new());
             };
-            return prepare(previous, next, op::ListProjectSessions {
+            return prepare(next, op::ListProjectSessions {
                 project_id,
                 limit,
                 search_term: previous.list_query.search_term.clone(),
@@ -638,7 +652,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             if next.connected && next.expanded_projects.contains_key(&project_id)
                 && !next.project_threads.contains_key(&project_id)
                 && next.chat_placement(&thread_id) == Some(project_id.as_str()) {
-                return prepare(previous, next, op::ListProjectSessions {
+                return prepare(next, op::ListProjectSessions {
                     project_id, limit: 5, search_term: previous.list_query.search_term.clone(),
                 });
             }
@@ -680,7 +694,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 let limit = page.map_or(5, |page| page.limit);
                 Arc::make_mut(&mut next.expanded_projects).insert(project_id.clone(), limit);
                 if page.is_none() && next.connected {
-                    return prepare(previous, next, op::ListProjectSessions {
+                    return prepare(next, op::ListProjectSessions {
                         project_id,
                         limit,
                         search_term: previous.list_query.search_term.clone(),
@@ -695,7 +709,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 };
                 let limit = limit.saturating_add(10);
                 Arc::make_mut(&mut next.expanded_projects).insert(project_id.clone(), limit);
-                return prepare(previous, next, op::ListProjectSessions {
+                return prepare(next, op::ListProjectSessions {
                     project_id,
                     limit,
                     search_term: previous.list_query.search_term.clone(),
@@ -704,7 +718,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             let mut query = (*previous.list_query).clone();
             query.limit = query.limit.saturating_add(10);
             query.part = Some(crate::models::ListPart::Chats);
-            return prepare(previous, next, op::ListSessions::new(query));
+            return prepare(next, op::ListSessions::new(query));
         }
         Intent::ShowRecentChats | Intent::ExpandRecentChats => {
             let expanding = matches!(intent, Intent::ExpandRecentChats);
@@ -719,14 +733,14 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             query.project_limit = query.project_limit.max(query.limit);
             query.part = None;
             if next.connected {
-                return prepare(previous, next, op::ListSessions::new(query));
+                return prepare(next, op::ListSessions::new(query));
             }
         }
         Intent::ExpandProjects => {
             let mut query = (*previous.list_query).clone();
             query.project_limit = query.project_limit.saturating_add(10);
             query.part = Some(crate::models::ListPart::Projects);
-            return prepare(previous, next, op::ListSessions::new(query));
+            return prepare(next, op::ListSessions::new(query));
         }
 
         Intent::ShowThreadList => {
@@ -872,7 +886,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             set_draft_text(&mut next, thread_id, text);
             if load_catalog {
                 let cwd = next.navigation.cwd.clone();
-                return prepare(previous, next, op::LoadComposerCatalog { cwd });
+                return prepare(next, op::LoadComposerCatalog { cwd });
             }
         }
         Intent::InsertInvocation { thread_id, text, invocation } => {
@@ -966,6 +980,15 @@ fn set_draft_text(snapshot: &mut Snapshot, thread_id: DraftKey, text: String) {
 
 fn navigate(snapshot: &mut Snapshot, navigation: Navigation) {
     if snapshot.navigation.draft_key != navigation.draft_key {
+        Arc::make_mut(&mut snapshot.operations).retain(|key, _| {
+            !matches!(
+                key,
+                op::OperationKey::Directory
+                    | op::OperationKey::File
+                    | op::OperationKey::SaveFile { .. }
+                    | op::OperationKey::WorkspaceReview
+            )
+        });
         let workspaces = Arc::make_mut(&mut snapshot.workspaces);
         workspaces.insert(
             snapshot.navigation.draft_key.clone(),
@@ -1006,7 +1029,6 @@ fn navigate(snapshot: &mut Snapshot, navigation: Navigation) {
 }
 
 fn prepare<O: operations::Operation>(
-    previous: &Snapshot,
     mut next: Snapshot,
     mut operation: O,
 ) -> (Snapshot, Vec<Effect>) {
@@ -1014,9 +1036,27 @@ fn prepare<O: operations::Operation>(
         next.epoch += 1;
     }
     if let Err(error) = operation.prepare(&mut next) {
-        return reduce(previous, Event::Failed(error));
+        if let Some(key) = operation.key() {
+            next.fail_operation(key, error);
+        } else {
+            next.error = Some(error);
+        }
+        return (next, Vec::new());
     }
     (next, vec![Effect::execute(operation)])
+}
+
+impl Snapshot {
+    fn fail_operation(&mut self, key: op::OperationKey, message: String) {
+        self.operation_sequence += 1;
+        Arc::make_mut(&mut self.operations).insert(
+            key,
+            op::OperationState {
+                generation: self.operation_sequence,
+                phase: op::OperationPhase::Failed { message },
+            },
+        );
+    }
 }
 fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
     let mut next = previous.clone();
@@ -1490,11 +1530,15 @@ fn submission(
         .or_else(|| previous.model_provider_for_draft(draft_key.clone()));
     if thread_id.is_none() && provider.is_none() {
         let mut next = previous.clone();
-        next.error = Some("利用可能なエージェントを選択してください。".into());
+        next.fail_operation(
+            op::OperationKey::Submission {
+                draft_key: draft_key.clone(),
+            },
+            "利用可能なエージェントを選択してください。".into(),
+        );
         return (next, Vec::new());
     }
     let mut next = previous.clone();
-    next.error = None;
     if let Some(reason) = thread_id
         .as_ref()
         .and_then(|id| {
@@ -1504,7 +1548,12 @@ fn submission(
         })
         .and_then(crate::session::direct_input_unavailable_reason)
     {
-        next.error = Some(reason);
+        next.fail_operation(
+            op::OperationKey::Submission {
+                draft_key: draft_key.clone(),
+            },
+            reason,
+        );
         return (next, Vec::new());
     }
     let cleared = clear_draft.as_ref().unwrap_or(&draft);
@@ -1652,7 +1701,11 @@ mod submission_tests {
             assert_eq!(next.drafts[&key].text, "Keep my draft");
             assert!(next.pending_submissions.is_empty());
             assert!(effects.is_empty());
-            assert!(next.error.unwrap().contains("閲覧専用"));
+            assert!(
+                next.operation_error(op::OperationKey::Submission { draft_key: key })
+                    .unwrap()
+                    .contains("閲覧専用")
+            );
         } else {
             assert!(next.drafts[&key].text.is_empty());
             assert_eq!(next.pending_submissions.len(), 1);

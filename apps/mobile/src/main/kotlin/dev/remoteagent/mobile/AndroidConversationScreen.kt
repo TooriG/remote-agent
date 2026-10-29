@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -50,6 +49,7 @@ import dev.remoteagent.core.ActivityExpansion
 import dev.remoteagent.core.ActivityPresentation
 import dev.remoteagent.core.ConversationRow
 import dev.remoteagent.core.ConversationRowContent
+import dev.remoteagent.core.ErrorScope
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.Interrupt
 import dev.remoteagent.core.Outcome
@@ -74,13 +74,12 @@ internal fun ThreadDetailScreen(
 ) {
     val threadId = snapshot.navigation().threadId
     var recoveryExpanded by remember(threadId, snapshot.navigation().draftKey) { mutableStateOf(false) }
-    val unknown = remember(projection) { projection?.queued.orEmpty().filter { it.unknownSubmissionId() != null } }
-    val unknownIds = remember(unknown) { unknown.mapNotNull { it.unknownSubmissionId() } }
     val listState = rememberLazyListState()
     var activityExpansion by remember(threadId) { mutableStateOf(emptyMap<String, ActivityExpansion>()) }
     var following by remember(threadId) { mutableStateOf(true) }
     ObserveFollowing(listState, snapshot, following, { following = it }, older, scrollToTopRequest)
     Column(modifier.fillMaxSize()) {
+        ErrorNotices(snapshot, ErrorScope.Conversation(snapshot.navigation().draftKey), perform)
         Box(Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
                 state = listState,
@@ -88,6 +87,7 @@ internal fun ThreadDetailScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                historyControl(threadId, threadId?.let(snapshot::historyControl), perform)
                 threadId?.let(snapshot::conversation)?.historyNotice()?.let { notice ->
                     item(key = "history:read-state") { Text(notice) }
                 }
@@ -112,16 +112,8 @@ internal fun ThreadDetailScreen(
                     )
                 }
                 conversationRows(projection?.rows.orEmpty(), activityExpansion, renderRow)
-                if (unknownIds.isNotEmpty()) {
-                    item(key = "unknown-submission-summary") {
-                        UnknownSubmissionSummary(unknownIds, recoveryExpanded, { recoveryExpanded = it }, perform)
-                    }
-                }
-                items(
-                    projection?.queued.orEmpty().filter { recoveryExpanded || it.unknownSubmissionId() == null },
-                    key = { "queued:${it.id()}" },
-                ) {
-                    ThreadMessageCard(it, true, snapshot.navigation().cwd, perform)
+                pendingInputs(projection?.queued.orEmpty(), snapshot.navigation().cwd, perform, recoveryExpanded) {
+                    recoveryExpanded = it
                 }
                 conversationRows(projection?.requestRows.orEmpty(), activityExpansion, renderRow)
             }
@@ -218,11 +210,7 @@ private fun ConversationContent(
             RequestCard(content.request) { answer, complete ->
                 perform(Intent.Respond(Respond(content.request.id, answer))) { complete(it.exceptionOrNull()?.message) }
             }
-        is ConversationRowContent.Error -> {
-            Text(content.error.title, style = MaterialTheme.typography.labelLarge)
-            Text(content.error.message, color = MaterialTheme.colorScheme.error)
-            content.error.details?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-        }
+        is ConversationRowContent.Error -> TurnErrorCard(content.error)
         is ConversationRowContent.InProgress ->
             Button(
                 onClick = { if (threadId != null) perform(Intent.Interrupt(Interrupt(threadId, content.turnId))) {} }
@@ -383,7 +371,7 @@ private fun ObserveFollowing(
             val viewportHeight = listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset
             shouldLoadHistory(
                 hasMore,
-                older == null || snapshot.error() != null,
+                older == null || snapshot.navigation().threadId?.let(snapshot::historyControl)?.error != null,
                 viewportHeight > 0 &&
                     listState.firstVisibleItemIndex == 0 &&
                     listState.firstVisibleItemScrollOffset < viewportHeight * HISTORY_PREFETCH_FRACTION,

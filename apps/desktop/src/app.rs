@@ -11,7 +11,10 @@ mod view;
 use crate::{Runtime, appearance, diff::DiffView, platform, store_session::StoreSession};
 use agent_core::{
     panels::{PanelKind as Panel, PanelLayout, PanelScope, Panels},
-    presentation::conversation::{ActivityExpansion, ConversationRowContent},
+    presentation::{
+        conversation::{ActivityExpansion, ConversationRowContent},
+        error::ErrorScope,
+    },
     state::{Attachment, Draft, DraftKey, Intent, ModelDefaultsScope, PendingSubmission, Snapshot},
     store::Outcome,
 };
@@ -35,7 +38,7 @@ use gpui_kit::{
 };
 use hosts::{ConnectionLayout, HostEvent, Hosts};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     future::Future,
     path::{Path, PathBuf},
     rc::Rc,
@@ -76,6 +79,10 @@ enum Update {
     },
     Recording(uuid::Uuid, platform::RecordingEvent),
     PersistenceError(String),
+    LocalCompleted {
+        scope: ErrorScope,
+        result: Result<(), String>,
+    },
     OnboardingCompleted(Result<(), String>),
 }
 #[derive(Clone, Copy, PartialEq)]
@@ -136,7 +143,7 @@ pub(crate) struct Desktop {
     import_projects: bool,
     initial_cwd: Option<String>,
     busy: usize,
-    error: String,
+    local_errors: BTreeMap<ErrorScope, String>,
     composer: forms::ComposerInput,
     selection: Entity<selection::ConversationSelection>,
     pending_quote: Option<String>,
@@ -164,7 +171,7 @@ pub(crate) struct Desktop {
 impl Desktop {
     fn set_error(&mut self, error: String) {
         tracing::error!(target: "agent", operation = "desktop", message = %error);
-        self.error = error;
+        self.local_errors.insert(self.local_error_scope(), error);
     }
     pub(crate) fn new(mode: Mode, window: &mut Window, cx: &mut Context<Self>) -> Self {
         StoreSession::on_app_quit(cx, |view| &mut view.session);
@@ -364,7 +371,7 @@ impl Desktop {
             import_projects: false,
             initial_cwd,
             busy: 0,
-            error: String::new(),
+            local_errors: BTreeMap::new(),
             composer,
             selection,
             pending_quote: None,
@@ -403,7 +410,10 @@ impl Desktop {
         self.model_controls.provider = None;
         self.account.sign_out = None;
         self.account.login_draft = None;
-        self.error = self.runtime.logging_error.clone().unwrap_or_default();
+        self.local_errors.clear();
+        if let Some(error) = self.runtime.logging_error.clone() {
+            self.local_errors.insert(ErrorScope::Application, error);
+        }
         let epoch = self.epoch;
         let remote = self.remote.clone();
         let side = self.side_chat_mode;
@@ -556,13 +566,24 @@ impl Desktop {
                             self.dispatch(Intent::ListWorktrees(op::ListWorktrees {}));
                         }
                     }
-                    Err(error) => self.set_error(error),
+                    Err(error) => {
+                        self.local_errors.insert(ErrorScope::Application, error);
+                    }
                 }
             }
             Update::Snapshot => self.accept_snapshot(window, cx),
             Update::Completed(kind, result) => self.operation_completed(kind, result, window, cx),
             Update::Recording(id, event) => self.recording_update(id, event),
-            Update::PersistenceError(error) => self.set_error(error),
+            Update::LocalCompleted { scope, result } => {
+                self.busy = self.busy.saturating_sub(1);
+                if let Err(error) = result {
+                    self.local_errors.insert(scope, error);
+                }
+                self.accept_snapshot(window, cx);
+            }
+            Update::PersistenceError(error) => {
+                self.local_errors.insert(ErrorScope::Application, error);
+            }
             Update::OnboardingCompleted(result) => match result {
                 Ok(()) => {
                     self.onboarding = false;
@@ -624,8 +645,6 @@ impl Desktop {
                         .is_some_and(|result| result.errors.is_empty())
                 {
                     self.complete_onboarding();
-                } else if let Err(error) = result {
-                    self.set_error(error);
                 }
                 return;
             }
@@ -647,9 +666,6 @@ impl Desktop {
             }
             OperationCompletion::WorktreeSettings => {
                 self.worktrees.saving = false;
-                if let Err(error) = result {
-                    self.set_error(error);
-                }
                 self.accept_snapshot(window, cx);
                 self.worktrees.dirty = !self
                     .worktrees
@@ -661,11 +677,10 @@ impl Desktop {
                 return;
             }
             OperationCompletion::Request(key) => {
-                if let Err(error) = result {
-                    self.set_error(error);
-                    if let Some(inputs) = self.timeline.requests.get_mut(&key) {
-                        inputs.sent = false;
-                    }
+                if result.is_err()
+                    && let Some(inputs) = self.timeline.requests.get_mut(&key)
+                {
+                    inputs.sent = false;
                 }
                 self.accept_snapshot(window, cx);
                 self.timeline.list.remeasure();
@@ -673,9 +688,8 @@ impl Desktop {
             }
             OperationCompletion::Account => {
                 self.account.busy = false;
-                if let Err(error) = result {
+                if result.is_err() {
                     self.account.polling = false;
-                    self.set_error(error);
                     self.dispatch(Intent::ListAccounts(op::ListAccounts {}));
                 } else {
                     self.accept_snapshot(window, cx);
@@ -690,8 +704,7 @@ impl Desktop {
                 self.worktrees.removing = false;
                 match result {
                     Ok(_) => self.worktrees.removal = None,
-                    Err(error) => {
-                        self.set_error(error);
+                    Err(_) => {
                         self.dispatch(Intent::ListWorktrees(op::ListWorktrees {}));
                     }
                 }
@@ -738,9 +751,6 @@ impl Desktop {
                 return;
             }
         }
-        if let Err(error) = result {
-            self.set_error(error);
-        }
         self.accept_snapshot(window, cx);
     }
     fn accept_snapshot(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -774,11 +784,6 @@ impl Desktop {
         {
             tracing::error!(target: "agent", operation = "store", message = %error);
         }
-        sync_error_banner(
-            &mut self.error,
-            previous.error.as_deref(),
-            self.snapshot.error.as_deref(),
-        );
         let previous_draft = previous.drafts.get(&previous.navigation.draft_key);
         let sources_changed = previous_draft.map(|draft| &draft.attachments)
             != self
@@ -1068,7 +1073,7 @@ impl Desktop {
         let preferences = match preferences {
             Ok(preferences) => preferences,
             Err(error) => {
-                self.error = error.to_string();
+                self.set_error(error.to_string());
                 return;
             }
         };
@@ -1136,7 +1141,7 @@ impl Desktop {
             .snapshot
             .model_provider_for_draft(self.draft_key().clone())
         else {
-            self.error = "利用可能なエージェントを選択してください。".into();
+            self.set_error("利用可能なエージェントを選択してください。".into());
             return;
         };
         let prompt = format!("次の選択範囲について詳しく説明してください。\n\n{text}");
@@ -1424,6 +1429,9 @@ impl Desktop {
         let remote = self.remote.is_some();
         let directory = self.snapshot.navigation.cwd.clone();
         self.busy += 1;
+        let error_scope = ErrorScope::Conversation {
+            draft_key: key.clone(),
+        };
         self.effect(
             async move {
                 let paths = tokio::task::spawn_blocking(sources)
@@ -1457,14 +1465,16 @@ impl Desktop {
                             attachment,
                         }
                     };
-                    store
-                        .dispatch(intent)
-                        .await
-                        .map_err(|error| error.to_string())?;
+                    if store.dispatch(intent).await.is_err() {
+                        break;
+                    }
                 }
-                Ok(Outcome::Applied)
+                Ok(())
             },
-            |result| Update::Completed(OperationCompletion::Busy, result),
+            move |result| Update::LocalCompleted {
+                scope: error_scope,
+                result,
+            },
         );
     }
     fn download(&mut self, source: String) {
@@ -1472,6 +1482,9 @@ impl Desktop {
             return;
         };
         self.busy += 1;
+        let error_scope = ErrorScope::Conversation {
+            draft_key: self.draft_key().clone(),
+        };
         self.effect(
             async move {
                 let name = Path::new(&source)
@@ -1484,7 +1497,7 @@ impl Desktop {
                         .await
                         .map_err(|error| error.to_string())?;
                 if let Some(destination) = destination {
-                    store
+                    let _ = store
                         .dispatch(Intent::DownloadFile(op::DownloadFile {
                             source,
                             destination: destination
@@ -1492,12 +1505,14 @@ impl Desktop {
                                 .into_string()
                                 .map_err(|_| "download destination is not UTF-8")?,
                         }))
-                        .await
-                        .map_err(|error| error.to_string())?;
+                        .await;
                 }
-                Ok(Outcome::Applied)
+                Ok(())
             },
-            |result| Update::Completed(OperationCompletion::Busy, result),
+            move |result| Update::LocalCompleted {
+                scope: error_scope,
+                result,
+            },
         );
     }
     fn browse(&mut self, path: String) {
@@ -1598,16 +1613,6 @@ fn literal(text: &str) -> String {
     }
     result
 }
-fn sync_error_banner(banner: &mut String, previous: Option<&str>, next: Option<&str>) {
-    if previous != next {
-        if let Some(error) = next {
-            *banner = error.to_owned();
-        } else if previous == Some(banner.as_str()) {
-            banner.clear();
-        }
-    }
-}
-
 fn composer_should_submit(
     input: &TextareaState,
     action: &gpui_kit::component::input::Enter,
@@ -1656,40 +1661,6 @@ mod composer_tests {
                 assert!(composer_should_submit(input, &enter, window, cx));
             })
             .unwrap();
-    }
-}
-
-#[cfg(test)]
-mod error_tests {
-    use super::sync_error_banner;
-
-    #[test]
-    fn recovered_store_error_clears_its_banner() {
-        let mut banner = String::new();
-        sync_error_banner(&mut banner, None, Some("thread read failed"));
-        assert_eq!(banner, "thread read failed");
-        sync_error_banner(&mut banner, Some("thread read failed"), None);
-        assert!(banner.is_empty());
-    }
-
-    #[test]
-    fn recovery_preserves_a_newer_local_error_and_respects_dismissal() {
-        let mut banner = "draft save failed".to_owned();
-        sync_error_banner(&mut banner, Some("thread read failed"), None);
-        assert_eq!(banner, "draft save failed");
-        banner.clear();
-        sync_error_banner(
-            &mut banner,
-            Some("thread read failed"),
-            Some("thread read failed"),
-        );
-        assert!(banner.is_empty());
-        sync_error_banner(
-            &mut banner,
-            Some("thread read failed"),
-            Some("disconnected"),
-        );
-        assert_eq!(banner, "disconnected");
     }
 }
 
@@ -1748,7 +1719,7 @@ mod completion_tests {
                 cx,
             );
             assert_eq!(view.busy, 2);
-            assert!(view.error.is_empty());
+            assert!(view.local_errors.is_empty());
             deliver(
                 view,
                 3,

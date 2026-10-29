@@ -7,7 +7,11 @@ impl Desktop {
         control: agent_core::presentation::conversation::HistoryControl,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let label: SharedString = control.load_label.into();
+        let label: SharedString = if control.has_more {
+            control.load_label.into()
+        } else {
+            "再試行".into()
+        };
         h_flex()
             .w_full()
             .justify_center()
@@ -18,7 +22,7 @@ impl Desktop {
                     .w_full()
                     .max_w(px(CHAT_WIDTH))
                     .gap_1p5()
-                    .when(control.has_more, |body| {
+                    .when(control.has_more || control.error.is_some(), |body| {
                         body.child(
                             Button::new("conversation-history-load")
                                 .debug_selector(|| "conversation-history-load".into())
@@ -281,7 +285,15 @@ impl Desktop {
             .debug_selector(|| "conversation-chat".into())
             .flex_1()
             .min_w_0()
-            .h_full();
+            .h_full()
+            .child(div().w_full().max_w(px(CHAT_WIDTH)).mx_auto().px_4().child(
+                self.error_notices(
+                    ErrorScope::Conversation {
+                        draft_key: self.draft_key().clone(),
+                    },
+                    cx,
+                ),
+            ));
         if let Some(notice) = self
             .thread()
             .and_then(|thread| agent_protocol::session::input_unavailable_reason(thread))
@@ -295,6 +307,13 @@ impl Desktop {
             body = body.child(div().px_4().py_2().text_sm().child(notice));
         }
         if self.timeline.rendered.is_none() {
+            if let Some(control) = self
+                .selected()
+                .cloned()
+                .and_then(|session| self.snapshot.history_control(session))
+            {
+                body = body.child(self.history_control(control, cx));
+            }
             body = body.child(
                 v_flex()
                     .flex_1()

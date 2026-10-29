@@ -83,6 +83,7 @@ private fun ModelPickerDialog(
         title = { Text("モデルと実行設定") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                ErrorNotices(snapshot, dev.remoteagent.core.ErrorScope.Settings, perform)
                 OutlinedTextField(
                     query,
                     { query = it },

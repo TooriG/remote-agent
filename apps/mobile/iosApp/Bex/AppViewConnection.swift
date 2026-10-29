@@ -20,7 +20,7 @@ extension AppViewModel {
                 let elapsed = (ProcessInfo.processInfo.systemUptime - started) * 1_000_000
                 owner.recordConnectionEvent(phase: .uiConnectReady, value: UInt64(elapsed))
                 publish(owner.snapshot())
-                notice = snapshot.error()
+                notice = nil
                 isConnecting = false
             } catch {
                 owner.recordConnectionEvent(
@@ -46,7 +46,7 @@ extension AppViewModel {
                     publish(latest)
                     if latest.changes(previous: previous).reconnected {
                         liveActivities.resendTokens(hostID: host)
-                        notice = latest.error()
+                        notice = nil
                     }
                     previous = latest
                 } catch { return }

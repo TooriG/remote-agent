@@ -208,9 +208,6 @@ final class AppViewModel: ObservableObject {
                 guard let self else { return }
                 if selectedProfileId == host, session === owner {
                     publish(owner.snapshot())
-                    if case let .failure(error) = result {
-                        notice = snapshot.error() ?? error.localizedDescription
-                    }
                 }
                 completion(result)
             }
@@ -227,9 +224,6 @@ extension AppViewModel {
            profiles[index].name != name {
             profiles[index].name = name
             do { try HostProfile.save(profiles) } catch { notice = error.localizedDescription }
-        }
-        if changes.error {
-            notice = next.error()
         }
         if changes.list {
             list = next.threadList()

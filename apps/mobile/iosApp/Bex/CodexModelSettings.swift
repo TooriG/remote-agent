@@ -7,7 +7,7 @@ extension AppViewModel {
     }
 
     var accountError: String? {
-        snapshot.accounts()?.error ?? snapshot.error()
+        snapshot.accounts()?.error
     }
 
     var selectedModel: ModelRef? {

@@ -66,7 +66,6 @@ impl Operation for ReadHistory {
         }
         let details = item_details(&self.session, &page.turns);
         page.prepend_to(shared_mut(&mut snapshot.conversations, &self.session).unwrap());
-        snapshot.error = None;
         reconcile_pending(snapshot, &self.session);
         details
     }
@@ -259,7 +258,6 @@ impl Operation for ReadThread {
                 .unwrap_or_default();
             select_thread(snapshot, self.thread_id.clone(), cwd);
         }
-        snapshot.error = None;
         Ok(())
     }
     fn apply(self, snapshot: &mut Snapshot, mut output: Self::Output) -> Vec<Effect> {

@@ -261,7 +261,7 @@ impl Snapshot {
                                 summary.loading = true
                             }
                             crate::state::operations::OperationPhase::Failed { message } => {
-                                summary.error = Some(message.clone())
+                                summary.error = Some(super::error::error_message(message))
                             }
                         }
                     }

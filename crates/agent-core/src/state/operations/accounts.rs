@@ -102,7 +102,9 @@ fn apply_selection(snapshot: &mut Snapshot, output: rpc::AccountSelection) {
         let accounts = Arc::make_mut(accounts);
         accounts.selected.insert(provider, selected_id);
     }
-    snapshot.error = persistence_error;
+    if let Some(error) = persistence_error {
+        snapshot.error = Some(error);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

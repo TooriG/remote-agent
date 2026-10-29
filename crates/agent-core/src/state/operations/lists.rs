@@ -318,7 +318,6 @@ impl Operation for ListSessions {
         context.call(&Self::new(query)).await
     }
     fn prepare(&mut self, snapshot: &mut Snapshot) -> Result<(), String> {
-        snapshot.error = None;
         if snapshot.list_query.search_term != self.query.search_term {
             snapshot.expanded_projects = Arc::default();
             snapshot.project_threads = Arc::default();

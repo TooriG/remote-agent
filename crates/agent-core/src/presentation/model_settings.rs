@@ -541,7 +541,13 @@ mod tests {
             assert!(effects.is_empty());
             assert!(next.pending_submissions.is_empty());
             assert_eq!(next.drafts[&key].text, "keep this input");
-            assert!(next.error.is_some());
+            assert!(next.error.is_none());
+            assert!(
+                next.operation_error(crate::state::operations::OperationKey::Submission {
+                    draft_key: key
+                })
+                .is_some()
+            );
         }
     }
 

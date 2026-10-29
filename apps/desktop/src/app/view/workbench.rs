@@ -614,6 +614,7 @@ impl Desktop {
             .min_h_0()
             .min_w_0()
             .child(toolbar)
+            .child(self.error_notices(ErrorScope::Workspace, cx))
             .child(div().flex_1().min_h_0().flex().child(body))
             .into_any_element()
     }

@@ -9,7 +9,6 @@ pub struct SnapshotChanges {
     pub models: bool,
     pub conversation: bool,
     pub reconnected: bool,
-    pub error: bool,
 }
 
 #[cfg_attr(feature = "bindings", uniffi::export)]
@@ -81,7 +80,6 @@ impl Snapshot {
             conversation: !self.conversation_unchanged(previous.clone()),
             reconnected: self.connected
                 && self.connection_generation != previous.connection_generation,
-            error: self.error != previous.error,
         }
     }
 }
@@ -97,15 +95,15 @@ mod tests {
         assert!(
             !duplicate.changed && !duplicate.list && !duplicate.models && !duplicate.conversation
         );
-        assert!(!duplicate.error && !duplicate.reconnected);
+        assert!(!duplicate.reconnected);
         let mut next = (*before).clone();
         next.models = Arc::new(Vec::new());
         let catalog = next.changes(before.clone());
         assert!(catalog.changed && catalog.models);
-        assert!(!catalog.list && !catalog.conversation && !catalog.reconnected && !catalog.error);
+        assert!(!catalog.list && !catalog.conversation && !catalog.reconnected);
         next = (*before).clone();
         next.error = Some("failed".into());
-        assert!(next.changes(before.clone()).error);
+        assert!(next.changes(before.clone()).changed);
         next.connection_generation += 1;
         assert!(
             !next.changes(before.clone()).reconnected,
@@ -113,7 +111,7 @@ mod tests {
         );
         next.connected = true;
         let connected = next.changes(before);
-        assert!(connected.reconnected && connected.list && connected.error);
+        assert!(connected.reconnected && connected.list);
         assert!(!connected.models && !connected.conversation);
     }
 }

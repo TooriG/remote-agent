@@ -27,6 +27,7 @@ struct ThreadErrorRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
+            Text("この応答").font(.caption).foregroundStyle(.secondary)
             HStack(spacing: 6) {
                 if error.isReconnecting {
                     ProgressView().controlSize(.small)
@@ -35,13 +36,17 @@ struct ThreadErrorRow: View {
             }
             Text(error.message).textSelection(.enabled)
             if let details = error.details, !details.isEmpty {
-                Text(details).font(.caption).foregroundColor(.secondary).textSelection(.enabled)
+                DisclosureGroup("詳細を表示") {
+                    Text(details).font(.caption).foregroundColor(.secondary).textSelection(.enabled)
+                }.font(.caption)
             }
         }
-        .foregroundColor(error.isReconnecting ? .primary : .red)
+        .foregroundColor(error.isReconnecting ? .primary : error.isUsageLimit ? .orange : .red)
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.red.opacity(error.isReconnecting ? 0.06 : 0.12))
+        .background(Color(UIColor.secondarySystemBackground))
+        .overlay(RoundedRectangle(cornerRadius: 10)
+            .stroke((error.isUsageLimit ? Color.orange : .red).opacity(error.isReconnecting ? 0 : 0.2)))
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .accessibilityIdentifier("turn.error")
     }

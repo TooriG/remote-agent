@@ -355,10 +355,6 @@ impl Operation for UploadAttachment {
     no_input!();
     type Output = String;
     const STALE_POLICY: StalePolicy = StalePolicy::Apply;
-    fn prepare(&mut self, snapshot: &mut Snapshot) -> Result<(), String> {
-        snapshot.error = None;
-        Ok(())
-    }
     async fn run(
         &self,
         _: Self::Input,
@@ -467,6 +463,11 @@ mod dictation_tests {
             snapshot.drafts[&draft_key].text,
             "typed while recording\nrecognized speech"
         );
-        assert_eq!(snapshot.error.is_some(), send);
+        assert_eq!(
+            snapshot
+                .operation_error(OperationKey::Submission { draft_key })
+                .is_some(),
+            send
+        );
     }
 }

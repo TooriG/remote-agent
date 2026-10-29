@@ -633,10 +633,76 @@ impl Desktop {
             }
             ConversationRowContent::Error { error } => {
                 let provider = turn.provider.or_else(|| session.map(|s| s.provider));
+                let accent = if error.is_reconnecting {
+                    rgb(appearance::MUTED)
+                } else if error.is_usage_limit {
+                    rgb(0xe5b567)
+                } else {
+                    rgb(0xff8e86)
+                };
+                let copied = format!(
+                    "{}\n{}\n{}",
+                    error.title,
+                    error.message,
+                    error.details.as_deref().unwrap_or_default()
+                );
                 body = body.child(
                     v_flex()
+                        .debug_selector(|| "turn-error".into())
+                        .p_3()
+                        .rounded_lg()
+                        .bg(rgb(appearance::RAISED))
+                        .border_1()
+                        .border_color(accent.opacity(0.25))
                         .gap_2()
-                        .child(div().text_color(rgb(0xff8e86)).child(error.message.clone()))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(appearance::MUTED))
+                                .child("この応答"),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .when(error.is_reconnecting, |heading| {
+                                    heading.child(spinner::Spinner::new().small())
+                                })
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .font_semibold()
+                                        .text_color(accent)
+                                        .child(error.title.clone()),
+                                )
+                                .child(Self::icon_button(
+                                    format!("copy-turn-error-{}", turn.id),
+                                    IconName::Copy,
+                                    "エラーの詳細をコピー",
+                                    cx,
+                                    move |_, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            copied.clone(),
+                                        ))
+                                    },
+                                )),
+                        )
+                        .child(div().text_sm().child(error.message.clone()))
+                        .when_some(error.details.clone(), |card, details| {
+                            card.child(
+                                div()
+                                    .id(format!("turn-error-details-{}", turn.id))
+                                    .text_xs()
+                                    .line_clamp(3)
+                                    .text_color(rgb(appearance::MUTED))
+                                    .tooltip({
+                                        let details = details.clone();
+                                        move |window, cx| {
+                                            tooltip::Tooltip::new(details.clone()).build(window, cx)
+                                        }
+                                    })
+                                    .child(details),
+                            )
+                        })
                         .when(error.is_usage_limit, |card| {
                             card.child(
                                 h_flex()
@@ -719,12 +785,25 @@ impl Desktop {
                             .when_some(
                                 session.cloned().zip(fork_turn_id.clone()),
                                 |actions, (thread_id, turn_id)| {
+                                    let fork_error =
+                                        self.snapshot.operation_error(op::OperationKey::Fork {
+                                            session: thread_id.clone(),
+                                            turn: turn_id.clone(),
+                                        });
                                     let forking =
                                         self.snapshot.operation_running(op::OperationKey::Fork {
                                             session: thread_id.clone(),
                                             turn: turn_id.clone(),
                                         });
                                     actions
+                                        .when_some(fork_error, |row, error| {
+                                            row.child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(rgb(0xff8e86))
+                                                    .child(error_message(&error)),
+                                            )
+                                        })
                                         .child(
                                             Button::new(format!("fork-{}", item.data.id))
                                                 .small()
@@ -947,6 +1026,17 @@ impl Desktop {
                 !is_question || inputs.sent || !request.can_respond,
                 |body| body.child(request.body.clone()),
             );
+        if let Some(error) = self
+            .snapshot
+            .operation_error(op::OperationKey::Request { id: key.clone() })
+        {
+            body = body.child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(0xff8e86))
+                    .child(error_message(&error)),
+            );
+        }
         if !request.details.is_empty() {
             body = body.child(
                 TextView::markdown(

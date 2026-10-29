@@ -496,6 +496,7 @@ impl Desktop {
                 v_flex()
                     .w_full()
                     .gap_3()
+                    .child(self.error_notices(ErrorScope::Projects, cx))
                     .when_some(
                         list.as_ref().and_then(|list| list.notice.clone()),
                         |this, notice| this.child(div().px_3().py_2().text_sm().child(notice)),

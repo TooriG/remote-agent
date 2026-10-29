@@ -113,9 +113,11 @@ struct ThreadScreen: View {
     }
 
     private var chatContent: some View {
-        let history = conversation?.id.flatMap { model.snapshot.historyControl(session: $0) }
+        let history = model.selectedThreadId.flatMap { model.snapshot.historyControl(session: $0) }
         let followLatest = $isFollowingLatest
         return VStack(spacing: 0) {
+            ErrorNotices(model: model, scope: .conversation(draftKey: model.coreDraftKey))
+                .padding(.horizontal)
             if let notice = model.notice, notice != history?.error {
                 AppNotice(text: notice).padding(.horizontal).padding(.top, 8)
             }
@@ -224,7 +226,8 @@ struct ThreadScreen: View {
                 .padding(.vertical, 24)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .accessibilityIdentifier("task.empty")
-            } else if let id = model.selectedThreadId, model.notice != nil {
+            } else if let id = model.selectedThreadId, let error = history?.error {
+                AppNotice(text: error).padding(.horizontal)
                 Button("再試行") { model.openThread(id) }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .accessibilityIdentifier("task.retry")

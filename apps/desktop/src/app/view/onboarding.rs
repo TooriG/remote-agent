@@ -160,13 +160,10 @@ impl Desktop {
                     ),
             )
             .children(choices);
-        if !self.error.is_empty() {
-            body = body.child(
-                div()
-                    .text_color(rgb(0xff8e86))
-                    .child(error_message(&self.error)),
-            );
-        }
+        body = body
+            .child(self.error_notices(ErrorScope::Projects, cx))
+            .child(self.error_notices(ErrorScope::Settings, cx))
+            .child(self.error_notices(ErrorScope::Application, cx));
         let start_label = if self.connecting || !connected {
             "接続中…"
         } else if setup.can_start {
@@ -281,7 +278,7 @@ impl Desktop {
                                     cx,
                                     |view, _, cx| {
                                         if view.import_projects {
-                                            view.error.clear();
+                                            view.local_errors.remove(&ErrorScope::Projects);
                                             view.dispatch(Intent::ScanProjects(
                                                 op::ScanProjects {},
                                             ));
@@ -310,7 +307,7 @@ impl Desktop {
             return;
         }
         self.import_projects = true;
-        self.error.clear();
+        self.local_errors.remove(&ErrorScope::Projects);
         self.dispatch(Intent::ScanProjects(op::ScanProjects {}));
     }
 
@@ -334,13 +331,10 @@ impl Desktop {
         {
             body = body.child("既存のプロジェクトを探しています…");
         }
-        if !self.error.is_empty() {
-            body = body.child(
-                div()
-                    .text_color(rgb(0xff8e86))
-                    .child(error_message(&self.error)),
-            );
-        }
+        body = body
+            .child(self.error_notices(ErrorScope::Projects, cx))
+            .child(self.error_notices(ErrorScope::Settings, cx))
+            .child(self.error_notices(ErrorScope::Application, cx));
         if let Some(scan) = &state.scan {
             body = body.child(
                 h_flex()

@@ -821,6 +821,7 @@ fn finish(updates: &watch::Sender<Arc<Snapshot>>, completed: Completed) -> Vec<S
                 .current(snapshot.epoch, &snapshot.operations),
         };
         let global_error = current
+            && completed.scope.operation.is_none()
             && !matches!(
                 &completed.scheduling,
                 op::Scheduling::LatestProject(_) | op::Scheduling::LatestTaskActivity

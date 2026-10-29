@@ -652,13 +652,14 @@ impl Desktop {
                             .child(error_message(&error))
                     }),
             );
-        if !self.error.is_empty() && self.tab != Tab::Settings {
-            body = body.child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(0xff7777))
-                    .child(error_message(&self.error)),
-            );
+        if let Some(error) = self
+            .snapshot
+            .operation_error(op::OperationKey::AccountLogin { provider })
+        {
+            body = body.child(div().text_sm().text_color(rgb(0xff8e86)).child(error));
+        }
+        if !in_settings {
+            body = body.child(self.error_notices(ErrorScope::Settings, cx));
         }
         body.into_any_element()
     }
@@ -1393,14 +1394,6 @@ impl Desktop {
                             .child(error_message(&error))
                     }),
             )
-            .when(!self.error.is_empty(), |body| {
-                body.child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(0xff7777))
-                        .child(error_message(&self.error)),
-                )
-            })
             .when(
                 self.draft().model.as_ref().map(|model| model.provider) == provider,
                 |body| {

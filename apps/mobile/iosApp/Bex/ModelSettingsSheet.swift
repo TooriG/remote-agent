@@ -60,6 +60,13 @@ struct ModelSettingsScreen: View {
     }
 
     var body: some View {
+        VStack(spacing: 8) {
+            ErrorNotices(model: model, scope: .settings)
+            modelSettingsContent
+        }
+    }
+
+    private var modelSettingsContent: some View {
         HStack(alignment: .top, spacing: 16) {
             ModelAgentRail(provider: provider, disabled: disabled,
                            select: selectProvider)

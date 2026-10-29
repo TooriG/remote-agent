@@ -36,6 +36,7 @@ import androidx.lifecycle.ViewModel
 import dev.remoteagent.core.AgentException
 import dev.remoteagent.core.AgentStore
 import dev.remoteagent.core.ClientSession
+import dev.remoteagent.core.ErrorScope
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.ListSessions
 import dev.remoteagent.core.LoadHostName
@@ -309,14 +310,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
                     withContext(Dispatchers.IO) { importAttachment(context, uri).also { local = File(it.path) } }
                 if (selection != selectionKey) return@launch
                 uploading = true
-                perform(Intent.UploadAttachment(UploadAttachment(key, attachment, directory))) { result ->
-                    result.onFailure { error ->
-                        if (selection == selectionKey) {
-                            notice = error.message.orEmpty().ifEmpty { "添付のアップロードに失敗しました。もう一度お試しください。" }
-                        }
-                    }
-                    finish()
-                }
+                perform(Intent.UploadAttachment(UploadAttachment(key, attachment, directory))) { finish() }
             } catch (error: SecurityException) {
                 if (selection == selectionKey) notice = error.message
             } catch (error: IOException) {
@@ -397,16 +391,23 @@ internal fun RemoteAgentApp(
         ) { padding ->
             Column(Modifier.fillMaxSize().appContentInsets(padding)) {
                 ConnectionStatus(
-                    model.notice ?: model.snapshot.error(),
+                    model.notice,
                     model.busy,
                     !model.snapshot.connected() && model.profileId != null && model.screen != Screen.Pairing,
+                    model::connect,
+                )
+                ErrorNotices(
+                    model.snapshot,
+                    ErrorScope.Application,
+                    model::perform,
                     model::connect,
                 )
                 when (screen) {
                     Screen.Pairing -> PairingScreen(model.busy, model::pair, model::showHosts, requestQrScan)
                     Screen.Hosts ->
                         ProfilesScreen(model.profiles, model::selectProfile) { model.screen = Screen.Pairing }
-                    Screen.Threads ->
+                    Screen.Threads -> {
+                        ErrorNotices(model.snapshot, ErrorScope.Projects, model::perform)
                         Box(Modifier.weight(1f)) {
                             ThreadListScreen(
                                 model.list,
@@ -423,6 +424,7 @@ internal fun RemoteAgentApp(
                                 connected = model.snapshot.connected(),
                             )
                         }
+                    }
                     Screen.Conversation -> ConversationPane(model)
                 }
             }

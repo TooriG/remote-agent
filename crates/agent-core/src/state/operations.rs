@@ -39,6 +39,9 @@ macro_rules! rpc_operation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
 pub enum Intent {
+    DismissError {
+        id: ErrorId,
+    },
     ManageCodexCli(ManageCodexCli),
     ReadTaskActivity(ReadTaskActivity),
     RegisterLiveActivity(RegisterLiveActivity),
@@ -249,7 +252,7 @@ pub enum StalePolicy {
     Retry,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
 pub enum OperationKey {
     ProjectScan,
@@ -322,6 +325,13 @@ pub enum OperationKey {
     Request {
         id: agent_protocol::ids::RequestId,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
+pub enum ErrorId {
+    Application { message: String },
+    Operation { key: OperationKey, generation: u64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

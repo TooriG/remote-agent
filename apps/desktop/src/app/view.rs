@@ -1,6 +1,7 @@
 mod agents;
 mod composer;
 mod conversation;
+mod errors;
 mod markdown_diagram;
 mod media;
 mod model_settings;
@@ -216,6 +217,7 @@ impl Render for Desktop {
             }
         };
         h_flex()
+            .relative()
             .size_full()
             .items_stretch()
             .bg(rgb(appearance::BACKGROUND))
@@ -226,6 +228,15 @@ impl Render for Desktop {
                 body.child(self.sidebar(cx))
             })
             .child(main)
+            .child(
+                div()
+                    .absolute()
+                    .top_12()
+                    .right_4()
+                    .w(px(420.))
+                    .max_w_full()
+                    .child(self.error_notices(ErrorScope::Application, cx)),
+            )
     }
 }
 
@@ -364,29 +375,6 @@ impl Desktop {
             .flex_1()
             .min_w_0()
             .h_full()
-            .when(!self.error.is_empty(), |body| {
-                body.child(
-                    h_flex()
-                        .p_3()
-                        .gap_2()
-                        .bg(rgb(0x352523))
-                        .child(Icon::new(IconName::TriangleAlert).text_color(rgb(0xff8e86)))
-                        .child(
-                            div()
-                                .flex_1()
-                                .text_sm()
-                                .text_color(rgb(0xff8e86))
-                                .child(error_message(&self.error)),
-                        )
-                        .child(Self::icon_button(
-                            "dismiss-error",
-                            IconName::Close,
-                            "エラーを閉じる",
-                            cx,
-                            |s, _, _| s.error.clear(),
-                        )),
-                )
-            })
             .child(
                 div()
                     .flex_1()

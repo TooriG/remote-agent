@@ -10,15 +10,12 @@ struct ThreadsScreen: View {
         let projects = model.list?.projects ?? []
         let chats = model.list?.threads ?? []
         List {
+            ErrorNotices(model: model, scope: .projects).taskListRowStyle()
             if let notice = model.list?.notice {
                 AppNotice(text: notice).taskListRowStyle()
             }
             if model.threadLoadState == .failed {
                 Section {
-                    if let error = model.notice {
-                        AppNotice(text: error)
-                            .taskListRowStyle()
-                    }
                     Button("再試行") { model.refreshTaskList() }
                         .accessibilityIdentifier("tasks.retry")
                         .taskListRowStyle()

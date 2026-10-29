@@ -4,6 +4,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -18,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.Outcome
+import dev.remoteagent.core.RenderedItem
 import kotlin.coroutines.resume
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -104,5 +107,23 @@ internal fun UnknownSubmissionActions(submissionId: String, perform: (Intent, (R
             }
         }
         if (failed) Text("操作できませんでした。もう一度お試しください。", style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+internal fun LazyListScope.pendingInputs(
+    queued: List<RenderedItem>,
+    cwd: String,
+    perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
+    expanded: Boolean,
+    setExpanded: (Boolean) -> Unit,
+) {
+    val unknownIds = queued.mapNotNull { it.unknownSubmissionId() }
+    if (unknownIds.isNotEmpty()) {
+        item(key = "unknown-submission-summary") {
+            UnknownSubmissionSummary(unknownIds, expanded, setExpanded, perform)
+        }
+    }
+    items(queued.filter { expanded || it.unknownSubmissionId() == null }, key = { "queued:${it.id()}" }) {
+        ThreadMessageCard(it, true, cwd, perform)
     }
 }

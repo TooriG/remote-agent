@@ -49,6 +49,9 @@ struct SwiftUIRoot: View {
             }
             .navigationBarTitleDisplayMode(.inline)
         }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            ErrorNotices(model: model, scope: .application).padding(.horizontal)
+        }
         .preferredColorScheme(.dark)
         .onChange(of: model.screen) { screen in
             if screen != .thread {
