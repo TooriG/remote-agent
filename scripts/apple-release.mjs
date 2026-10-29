@@ -58,6 +58,14 @@ export async function listAll(request, path) {
   return result;
 }
 
+export async function appForBundleId(request, bundleId) {
+  // ASC's bundle filter also returns apps whose identifiers have this prefix.
+  const apps = await listAll(request, `/v1/apps?filter[bundleId]=${encodeURIComponent(bundleId)}`);
+  const app = apps.find(app => app.attributes.bundleId === bundleId);
+  if (!app) throw new Error(`App ${bundleId} is missing from App Store Connect.`);
+  return app;
+}
+
 export async function distributeBuild(request, appId, buildId, groupName, notes, locale) {
   const groups = await listAll(request, `/v1/betaGroups?filter[app]=${appId}`);
   const group = groups.find(group => group.attributes.name === groupName);
@@ -106,8 +114,7 @@ async function main(command) {
   const keyPath = required('AGENT_ASC_PRIVATE_KEY_FILE');
   const request = ascClient({ keyId, issuer, privateKey: readFileSync(keyPath) });
   if (command === 'plan') {
-    const app = (await request('/v1/apps?filter[bundleId]=dev.remoteagent.mobile.ios')).data[0];
-    if (!app) throw new Error('BEX is missing from App Store Connect.');
+    const app = await appForBundleId(request, 'dev.remoteagent.mobile.ios');
     const builds = await listAll(request, `/v1/builds?filter[app]=${app.id}&limit=200`);
     const source = readFileSync('apps/mobile/iosApp/Bex.xcodeproj/project.pbxproj', 'utf8');
     const versions = [...source.matchAll(/CURRENT_PROJECT_VERSION = (\d+);/g)].map(match => match[1]);

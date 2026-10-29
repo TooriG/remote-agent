@@ -6,7 +6,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { ascClient, deliveryId, distributeBuild, listAll, nextBuildNumber, parseBuildStatus } from './apple-release.mjs';
+import { appForBundleId, ascClient, deliveryId, distributeBuild, listAll, nextBuildNumber, parseBuildStatus } from './apple-release.mjs';
+
+test('production planning selects the exact bundle even when ASC returns Dev first', async () => {
+  const bundleId = 'dev.remoteagent.mobile.ios';
+  const dev = { id: 'dev-app', attributes: { bundleId: `${bundleId}.dev` } };
+  const production = { id: 'production-app', attributes: { bundleId } };
+  for (const data of [[dev, production], [production, dev]]) {
+    assert.equal(await appForBundleId(async () => ({ data }), bundleId), production);
+  }
+  await assert.rejects(appForBundleId(async () => ({ data: [dev] }), bundleId), /missing/);
+});
 
 test('build numbers advance past source, uploaded Apple builds and published releases', () => {
   assert.equal(nextBuildNumber(['76', '76'], ['75', '77'], ['android-preview-1000', 'prd-81']), '82');
