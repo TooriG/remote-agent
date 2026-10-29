@@ -19,15 +19,27 @@ use zeroize::Zeroizing;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Config {
-    pub key_id: String,
-    pub team_id: String,
-    pub bundle_id: String,
-    pub key_file: PathBuf,
+struct Config {
+    team_id: String,
+    bundle_id: String,
+    sandbox: Option<KeyConfig>,
+    production: Option<KeyConfig>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KeyConfig {
+    key_id: String,
+    key_file: PathBuf,
 }
 pub(super) struct Client {
     http: reqwest::Client,
-    config: Config,
+    team_id: String,
+    bundle_id: String,
+    sandbox: Option<Credential>,
+    production: Option<Credential>,
+}
+struct Credential {
+    key_id: String,
     key: EcdsaKeyPair,
     token: Mutex<Option<(u64, Zeroizing<String>)>>,
 }
@@ -48,6 +60,7 @@ enum Rejection {
     InvalidProviderToken,
     ExpiredProviderToken,
     TooManyProviderTokenUpdates,
+    BadEnvironmentKeyInToken,
     BadPriority,
     PayloadTooLarge,
     #[serde(other)]
@@ -75,11 +88,11 @@ impl Client {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error).context("cannot read APNs configuration"),
         };
-        let mut config: Config =
+        let config: Config =
             serde_json::from_slice(&bytes).context("invalid APNs configuration")?;
         anyhow::ensure!(
-            valid_id(&config.key_id) && valid_id(&config.team_id),
-            "APNs Key ID and Team ID must be 10 ASCII letters/digits"
+            valid_id(&config.team_id),
+            "APNs Team ID must be 10 ASCII letters/digits"
         );
         anyhow::ensure!(
             !config.bundle_id.is_empty()
@@ -89,18 +102,13 @@ impl Client {
                     .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-')),
             "invalid APNs bundle ID"
         );
-        if config.key_file.is_relative() {
-            config.key_file = path
-                .parent()
-                .unwrap_or(Path::new("."))
-                .join(&config.key_file);
-        }
-        let pem = Zeroizing::new(
-            tokio::fs::read_to_string(&config.key_file)
-                .await
-                .context("cannot read APNs private key file")?,
+        anyhow::ensure!(
+            config.sandbox.is_some() || config.production.is_some(),
+            "at least one APNs environment credential is required"
         );
-        let key = parse_key(&pem)?;
+        let directory = path.parent().unwrap_or(Path::new("."));
+        let sandbox = Credential::load(config.sandbox, directory).await?;
+        let production = Credential::load(config.production, directory).await?;
         if rustls::crypto::CryptoProvider::get_default().is_none() {
             let _ = rustls::crypto::ring::default_provider().install_default();
         }
@@ -112,36 +120,22 @@ impl Client {
             .context("cannot initialize APNs HTTP/2 client")?;
         Ok(Some(Self {
             http,
-            config,
-            key,
-            token: Mutex::new(None),
+            team_id: config.team_id,
+            bundle_id: config.bundle_id,
+            sandbox,
+            production,
         }))
     }
-    fn authentication(&self, now: u64) -> Result<Zeroizing<String>> {
-        let mut cached = self.token.lock().unwrap_or_else(|error| error.into_inner());
-        if let Some((issued, token)) = cached.as_ref()
-            && now >= *issued
-            && now - issued < 50 * 60
-        {
-            return Ok(token.clone());
+
+    pub(super) fn credential_available(&self, environment: PushEnvironment) -> bool {
+        self.credential(environment).is_some()
+    }
+
+    fn credential(&self, environment: PushEnvironment) -> Option<&Credential> {
+        match environment {
+            PushEnvironment::Sandbox => self.sandbox.as_ref(),
+            PushEnvironment::Production => self.production.as_ref(),
         }
-        let header = URL_SAFE_NO_PAD.encode(serde_json::to_vec(
-            &serde_json::json!({"alg":"ES256", "kid":self.config.key_id}),
-        )?);
-        let claims = URL_SAFE_NO_PAD.encode(serde_json::to_vec(
-            &serde_json::json!({"iss":self.config.team_id, "iat":now}),
-        )?);
-        let input = format!("{header}.{claims}");
-        let signature = self
-            .key
-            .sign(&SystemRandom::new(), input.as_bytes())
-            .map_err(|_| anyhow::anyhow!("cannot sign APNs authentication token"))?;
-        let token = Zeroizing::new(format!(
-            "{input}.{}",
-            URL_SAFE_NO_PAD.encode(signature.as_ref())
-        ));
-        *cached = Some((now, token.clone()));
-        Ok(token)
     }
 
     fn request(
@@ -152,8 +146,12 @@ impl Client {
         urgent: bool,
         now: u64,
     ) -> Result<reqwest::Request> {
-        let authentication = self.authentication(now)?;
-        // One key signs for both environments; each token belongs to the build that issued it.
+        let authentication = self
+            .credential(environment)
+            .context("APNs credentials are missing for the token's environment")?
+            .authentication(&self.team_id, now)?;
+        // Dev is an app variant, not an APNs environment. Development signatures
+        // use sandbox; Ad Hoc and TestFlight signatures use production.
         let endpoint = match environment {
             PushEnvironment::Sandbox => "https://api.sandbox.push.apple.com",
             PushEnvironment::Production => "https://api.push.apple.com",
@@ -168,7 +166,7 @@ impl Client {
             .bearer_auth(authentication.as_str())
             .header(
                 "apns-topic",
-                format!("{}.push-type.liveactivity", self.config.bundle_id),
+                format!("{}.push-type.liveactivity", self.bundle_id),
             )
             .header("apns-push-type", "liveactivity")
             .header("apns-priority", if urgent { "10" } else { "5" })
@@ -224,10 +222,61 @@ impl Client {
             .await
             .map_or(Rejection::Unknown, |failure| failure.reason);
         tracing::warn!(target: "agent", operation = "host.apns.delivery", error_code = u64::from(status.as_u16()),
-            message = %format_args!("APNs rejected a Live Activity update: {rejection:?}"));
+            message = %format_args!("APNs rejected a Live Activity update ({environment:?}): {rejection:?}"));
         rejection_result(status.as_u16(), rejection)
     }
 }
+
+impl Credential {
+    async fn load(config: Option<KeyConfig>, directory: &Path) -> Result<Option<Self>> {
+        let Some(config) = config else {
+            return Ok(None);
+        };
+        anyhow::ensure!(
+            valid_id(&config.key_id),
+            "APNs Key ID must be 10 ASCII letters/digits"
+        );
+        let path = directory.join(config.key_file);
+        let pem = Zeroizing::new(
+            tokio::fs::read_to_string(path)
+                .await
+                .context("cannot read APNs private key file")?,
+        );
+        Ok(Some(Self {
+            key_id: config.key_id,
+            key: parse_key(&pem)?,
+            token: Mutex::new(None),
+        }))
+    }
+
+    fn authentication(&self, team_id: &str, now: u64) -> Result<Zeroizing<String>> {
+        let mut cached = self.token.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some((issued, token)) = cached.as_ref()
+            && now >= *issued
+            && now - issued < 50 * 60
+        {
+            return Ok(token.clone());
+        }
+        let header = URL_SAFE_NO_PAD.encode(serde_json::to_vec(
+            &serde_json::json!({"alg":"ES256", "kid":self.key_id}),
+        )?);
+        let claims = URL_SAFE_NO_PAD.encode(serde_json::to_vec(
+            &serde_json::json!({"iss":team_id, "iat":now}),
+        )?);
+        let input = format!("{header}.{claims}");
+        let signature = self
+            .key
+            .sign(&SystemRandom::new(), input.as_bytes())
+            .map_err(|_| anyhow::anyhow!("cannot sign APNs authentication token"))?;
+        let token = Zeroizing::new(format!(
+            "{input}.{}",
+            URL_SAFE_NO_PAD.encode(signature.as_ref())
+        ));
+        *cached = Some((now, token.clone()));
+        Ok(token)
+    }
+}
+
 fn valid_id(value: &str) -> bool {
     value.len() == 10 && value.bytes().all(|byte| byte.is_ascii_alphanumeric())
 }
@@ -253,27 +302,30 @@ fn parse_key(pem: &str) -> Result<EcdsaKeyPair> {
 #[cfg(test)]
 impl Client {
     pub(super) fn testing() -> Self {
-        let random = SystemRandom::new();
-        let pkcs8 =
-            EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &random).unwrap();
         if rustls::crypto::CryptoProvider::get_default().is_none() {
             let _ = rustls::crypto::ring::default_provider().install_default();
         }
+        let credential = |key_id: &str| {
+            let random = SystemRandom::new();
+            let pkcs8 =
+                EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &random).unwrap();
+            Credential {
+                key_id: key_id.into(),
+                key: EcdsaKeyPair::from_pkcs8(
+                    &ECDSA_P256_SHA256_FIXED_SIGNING,
+                    pkcs8.as_ref(),
+                    &random,
+                )
+                .unwrap(),
+                token: Mutex::new(None),
+            }
+        };
         Self {
             http: reqwest::Client::new(),
-            config: Config {
-                key_id: "TESTKEY001".into(),
-                team_id: "TESTTEAM01".into(),
-                bundle_id: "dev.remoteagent.mobile.ios".into(),
-                key_file: PathBuf::new(),
-            },
-            key: EcdsaKeyPair::from_pkcs8(
-                &ECDSA_P256_SHA256_FIXED_SIGNING,
-                pkcs8.as_ref(),
-                &random,
-            )
-            .unwrap(),
-            token: Mutex::new(None),
+            team_id: "TESTTEAM01".into(),
+            bundle_id: "dev.remoteagent.mobile.ios".into(),
+            sandbox: Some(credential("TESTKEY001")),
+            production: Some(credential("TESTKEY002")),
         }
     }
 }
@@ -290,6 +342,7 @@ mod tests {
             Rejection::InvalidProviderToken,
             Rejection::ExpiredProviderToken,
             Rejection::TooManyProviderTokenUpdates,
+            Rejection::BadEnvironmentKeyInToken,
             Rejection::BadPriority,
             Rejection::PayloadTooLarge,
             Rejection::Unknown,
@@ -300,6 +353,10 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<Rejection>("\"unexpected-secret-response\"").unwrap(),
             Rejection::Unknown
+        );
+        assert_eq!(
+            serde_json::from_str::<Rejection>("\"BadEnvironmentKeyInToken\"").unwrap(),
+            Rejection::BadEnvironmentKeyInToken
         );
         for reason in [Rejection::BadDeviceToken, Rejection::DeviceTokenNotForTopic] {
             assert_eq!(rejection_result(400, reason), ResultKind::Expired);
@@ -359,7 +416,8 @@ mod tests {
     #[test]
     fn authentication_is_es256_with_apple_claims_and_reuses_a_token_for_fifty_minutes() {
         let client = Client::testing();
-        let token = client.authentication(10_000).unwrap();
+        let credential = client.sandbox.as_ref().unwrap();
+        let token = credential.authentication(&client.team_id, 10_000).unwrap();
         let parts: Vec<_> = token.split('.').collect();
         assert_eq!(parts.len(), 3);
         let decode = |part| {
@@ -374,14 +432,29 @@ mod tests {
             decode(parts[1]),
             serde_json::json!({"iss":"TESTTEAM01","iat":10000})
         );
-        UnparsedPublicKey::new(&ECDSA_P256_SHA256_FIXED, client.key.public_key().as_ref())
-            .verify(
-                format!("{}.{}", parts[0], parts[1]).as_bytes(),
-                &URL_SAFE_NO_PAD.decode(parts[2]).unwrap(),
-            )
-            .unwrap();
-        assert!(client.authentication(12_999).unwrap().as_str() == token.as_str());
-        assert!(client.authentication(13_000).unwrap().as_str() != token.as_str());
+        UnparsedPublicKey::new(
+            &ECDSA_P256_SHA256_FIXED,
+            credential.key.public_key().as_ref(),
+        )
+        .verify(
+            format!("{}.{}", parts[0], parts[1]).as_bytes(),
+            &URL_SAFE_NO_PAD.decode(parts[2]).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            credential
+                .authentication(&client.team_id, 12_999)
+                .unwrap()
+                .as_str()
+                == token.as_str()
+        );
+        assert!(
+            credential
+                .authentication(&client.team_id, 13_000)
+                .unwrap()
+                .as_str()
+                != token.as_str()
+        );
     }
     #[test]
     fn private_key_pem_accepts_apple_pkcs8_and_rejects_wrong_encoding_or_algorithm() {
@@ -407,6 +480,112 @@ mod tests {
         let path = directory.path().join("bex-apns.json");
         assert!(Client::load(&path).await.unwrap().is_none());
         tokio::fs::write(&path, b"{}").await.unwrap();
+        assert!(Client::load(&path).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn development_and_distribution_use_their_own_keys_without_falling_back() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("bex-apns.json");
+        let random = SystemRandom::new();
+        let mut keys = Vec::new();
+        for name in ["sandbox.p8", "production.p8"] {
+            let pkcs8 =
+                EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &random).unwrap();
+            tokio::fs::write(
+                directory.path().join(name),
+                format!(
+                    "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
+                    STANDARD.encode(pkcs8.as_ref())
+                ),
+            )
+            .await
+            .unwrap();
+            keys.push(
+                EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, pkcs8.as_ref(), &random)
+                    .unwrap(),
+            );
+        }
+        let configuration = serde_json::json!({
+            "team_id":"TESTTEAM01", "bundle_id":"dev.remoteagent.mobile.ios.dev",
+            "sandbox":{"key_id":"TESTKEY001","key_file":"sandbox.p8"},
+            "production":{"key_id":"TESTKEY002","key_file":"production.p8"}
+        });
+        tokio::fs::write(&path, serde_json::to_vec(&configuration).unwrap())
+            .await
+            .unwrap();
+        let client = Client::load(&path).await.unwrap().unwrap();
+        let environments = [PushEnvironment::Sandbox, PushEnvironment::Production];
+        let mut tokens = Vec::new();
+        for (index, environment) in environments.into_iter().enumerate() {
+            let request = client
+                .request(environment, &[1; 32], b"{}", true, 10000)
+                .unwrap();
+            assert_eq!(
+                request.headers()["apns-topic"],
+                "dev.remoteagent.mobile.ios.dev.push-type.liveactivity"
+            );
+            let token = request.headers()["authorization"]
+                .to_str()
+                .unwrap()
+                .strip_prefix("Bearer ")
+                .unwrap();
+            let parts: Vec<_> = token.split('.').collect();
+            let header: serde_json::Value =
+                serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[0]).unwrap()).unwrap();
+            assert_eq!(header["kid"], ["TESTKEY001", "TESTKEY002"][index]);
+            UnparsedPublicKey::new(&ECDSA_P256_SHA256_FIXED, keys[index].public_key().as_ref())
+                .verify(
+                    format!("{}.{}", parts[0], parts[1]).as_bytes(),
+                    &URL_SAFE_NO_PAD.decode(parts[2]).unwrap(),
+                )
+                .unwrap();
+            tokens.push(token.to_owned());
+        }
+        for (index, environment) in environments.into_iter().enumerate() {
+            let request = client
+                .request(environment, &[1; 32], b"{}", true, 12999)
+                .unwrap();
+            assert_eq!(
+                request.headers()["authorization"],
+                format!("Bearer {}", tokens[index])
+            );
+        }
+        for (missing, configured, environment, other) in [
+            (
+                "sandbox",
+                "production",
+                PushEnvironment::Production,
+                PushEnvironment::Sandbox,
+            ),
+            (
+                "production",
+                "sandbox",
+                PushEnvironment::Sandbox,
+                PushEnvironment::Production,
+            ),
+        ] {
+            let mut one = configuration.clone();
+            one.as_object_mut().unwrap().remove(missing);
+            tokio::fs::write(&path, serde_json::to_vec(&one).unwrap())
+                .await
+                .unwrap();
+            let client = Client::load(&path).await.unwrap().unwrap();
+            assert!(client.credential_available(environment), "{configured}");
+            assert!(
+                client
+                    .request(environment, &[1; 32], b"{}", true, 10000)
+                    .is_ok()
+            );
+            assert!(!client.credential_available(other));
+            assert!(client.request(other, &[1; 32], b"{}", true, 10000).is_err());
+        }
+        tokio::fs::write(
+            &path,
+            br#"{"team_id":"TESTTEAM01","bundle_id":"dev.remoteagent.mobile.ios.dev"}"#,
+        )
+        .await
+        .unwrap();
         assert!(Client::load(&path).await.is_err());
     }
 }

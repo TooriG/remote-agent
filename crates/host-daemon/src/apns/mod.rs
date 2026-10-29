@@ -187,6 +187,12 @@ impl Apns {
         if !self.is_ready() {
             return Err("Host task state is still initializing".into());
         }
+        if !self.client.credential_available(params.environment) {
+            return Err(format!(
+                "APNs {:?} credentials are not configured",
+                params.environment
+            ));
+        }
         let mut registry = self
             .registry
             .lock()
@@ -234,6 +240,49 @@ impl Apns {
 mod tests {
     use super::*;
     use agent_protocol::live_activity::{PushEnvironment, TaskActivitySummary};
+    #[tokio::test]
+    async fn unsupported_signature_environment_is_rejected_before_registration() {
+        use base64::Engine;
+        use ring::{
+            rand::SystemRandom,
+            signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair},
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let key =
+            EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &SystemRandom::new())
+                .unwrap();
+        let pem = format!(
+            "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
+            base64::engine::general_purpose::STANDARD.encode(key.as_ref())
+        );
+        tokio::fs::write(directory.path().join("sandbox.p8"), pem)
+            .await
+            .unwrap();
+        let path = directory.path().join("bex-apns.json");
+        tokio::fs::write(&path, br#"{"team_id":"TESTTEAM01","bundle_id":"dev.remoteagent.mobile.ios.dev","sandbox":{"key_id":"TESTKEY001","key_file":"sandbox.p8"}}"#).await.unwrap();
+        let mut service = Apns::testing();
+        Arc::get_mut(&mut service).unwrap().client = Client::load(&path).await.unwrap().unwrap();
+        let mut params = RegisterLiveActivity {
+            activity_id: Some("dev-activity".into()),
+            allow_start: false,
+            token: vec![1; 32],
+            environment: PushEnvironment::Production,
+        };
+        let display = TaskActivitySummary {
+            running: 1,
+            ..Default::default()
+        }
+        .display();
+        let error = service
+            .register("phone", &params, display.clone())
+            .unwrap_err();
+        assert!(error.contains("Production"));
+        assert!(service.test_payloads(now()).is_empty());
+        params.environment = PushEnvironment::Sandbox;
+        service.register("phone", &params, display).unwrap();
+        assert_eq!(service.test_payloads(now()).len(), 1);
+    }
+
     #[test]
     fn persisted_registrations_wait_for_fresh_host_state_and_retain_private_permissions() {
         let directory = tempfile::tempdir().unwrap();
