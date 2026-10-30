@@ -259,7 +259,7 @@ extension LaunchUITests {
 
     func chooseFixtureModel(_ app: XCUIApplication) {
         tapWhenStable(app.buttons["model.settings"])
-        openModelChoices(app)
+        selectFixtureProvider(app, "Codex")
         let choice = app.buttons["model.choice.fixture-model"]
         XCTAssertTrue(choice.waitForExistence(timeout: 10)); choice.tap()
         dismissModelSettings(app)

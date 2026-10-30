@@ -128,6 +128,7 @@ extension LaunchUITests {
         waitForStableFrame(models)
         models.tap()
         XCTAssertTrue(app.buttons["model.choice.automatic"].waitForExistence(timeout: 10))
+        selectFixtureProvider(app, "Codex")
     }
 
     private func defaultModelButton(_ app: XCUIApplication, _ id: String, towardTop: Bool = false) -> XCUIElement {

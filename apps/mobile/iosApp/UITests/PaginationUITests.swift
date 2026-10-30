@@ -253,7 +253,9 @@ extension LaunchUITests {
 
     func scrollToEarlierListElement(_ element: XCUIElement, in app: XCUIApplication, attempts: Int) {
         for _ in 0 ..< attempts {
-            if element.exists, element.isHittable {
+            // SwiftUI can report rows behind the navigation bar as hittable.
+            let visibleTop = app.navigationBars.allElementsBoundByIndex.map(\.frame.maxY).max() ?? app.frame.minY
+            if element.exists, element.isHittable, element.frame.minY >= visibleTop {
                 return
             }
             app.swipeDown()
