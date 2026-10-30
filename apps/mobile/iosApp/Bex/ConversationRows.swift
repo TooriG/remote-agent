@@ -161,9 +161,6 @@ struct ThreadMessageRow: View, Equatable {
                     Button { UIPasteboard.general.string = text; copied = true } label: {
                         Image(systemName: copied ? "checkmark" : "doc.on.doc")
                     }.accessibilityLabel(copied ? "コピーしました" : "回答をコピー")
-                    if let timestampMs {
-                        Text(Date(timeIntervalSince1970: Double(timestampMs) / 1000), style: .time).font(.caption)
-                    }
                     if let fork {
                         Button(action: fork) {
                             Image(systemName: "arrow.triangle.branch")
@@ -171,6 +168,9 @@ struct ThreadMessageRow: View, Equatable {
                         .disabled(forking)
                         .accessibilityLabel("ここから会話を分岐")
                         .accessibilityIdentifier("response.fork." + item.data.id)
+                    }
+                    if let timestampMs {
+                        Text(Date(timeIntervalSince1970: Double(timestampMs) / 1000), style: .time).font(.caption)
                     }
                 }
                 .font(.system(size: 19)).foregroundColor(.secondary).buttonStyle(.plain)

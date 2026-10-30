@@ -753,21 +753,6 @@ impl Desktop {
                     body = body.child(
                         h_flex()
                             .gap_2()
-                            .children(
-                                row.timestamp_ms
-                                    .and_then(|time| {
-                                        i64::try_from(time)
-                                            .ok()
-                                            .and_then(chrono::DateTime::from_timestamp_millis)
-                                    })
-                                    .map(|time| {
-                                        div().text_xs().text_color(rgb(appearance::MUTED)).child(
-                                            time.with_timezone(&chrono::Local)
-                                                .format("%H:%M")
-                                                .to_string(),
-                                        )
-                                    }),
-                            )
                             .child(
                                 Button::new(format!("copy-{}", item.data.id))
                                     .icon(IconName::Copy)
@@ -861,6 +846,21 @@ impl Desktop {
                                             )
                                         })
                                 },
+                            )
+                            .children(
+                                row.timestamp_ms
+                                    .and_then(|time| {
+                                        i64::try_from(time)
+                                            .ok()
+                                            .and_then(chrono::DateTime::from_timestamp_millis)
+                                    })
+                                    .map(|time| {
+                                        div().text_xs().text_color(rgb(appearance::MUTED)).child(
+                                            time.with_timezone(&chrono::Local)
+                                                .format("%H:%M")
+                                                .to_string(),
+                                        )
+                                    }),
                             ),
                     );
                 }
