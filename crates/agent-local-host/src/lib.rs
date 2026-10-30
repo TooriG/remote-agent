@@ -12,6 +12,21 @@ use agent_transport::transport::Identity;
 use anyhow::{Result, ensure};
 use std::path::{Path, PathBuf};
 
+/// The operating system's name for this machine, shared by Host and local clients.
+pub fn machine_name() -> String {
+    #[cfg(windows)]
+    let name = std::env::var("COMPUTERNAME").ok();
+    #[cfg(not(windows))]
+    let name = std::process::Command::new("/bin/hostname")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok());
+    name.map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "PC".into())
+}
+
 /// The Host provisions both identity keys here; local clients read only theirs.
 pub fn identity_path(directory: &Path) -> PathBuf {
     directory.join("identity.keys")

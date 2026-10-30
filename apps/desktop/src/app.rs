@@ -375,7 +375,11 @@ impl Desktop {
             );
         }
         if let Some(updates) = &app_updates {
-            subscriptions.push(cx.observe(updates, |_, _, cx| cx.notify()));
+            subscriptions.push(
+                cx.subscribe(updates, |view, _, _: &crate::updates::RefreshThreads, _| {
+                    view.refresh_threads()
+                }),
+            );
         }
         let mut view = Self {
             session: None,

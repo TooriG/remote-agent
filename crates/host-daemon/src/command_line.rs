@@ -33,7 +33,7 @@ pub(crate) struct StartupConfig {
     #[arg(long, requires = "state_dir")]
     pub(crate) isolated: bool,
     /// Name shown to paired clients. Defaults to this machine's hostname.
-    #[arg(long, default_value_t = machine_name())]
+    #[arg(long, default_value_t = agent_local_host::machine_name())]
     pub(crate) name: String,
     /// Lifetime of newly issued one-use pairing invitations (1–90 days).
     #[arg(long, default_value_t = 7, value_parser = clap::value_parser!(u64).range(1..=90))]
@@ -44,20 +44,6 @@ pub(crate) struct StartupConfig {
     /// Override the public iroh relay list.
     #[arg(long)]
     pub(crate) relay_url: Vec<String>,
-}
-
-fn machine_name() -> String {
-    #[cfg(windows)]
-    let name = std::env::var("COMPUTERNAME").ok();
-    #[cfg(not(windows))]
-    let name = std::process::Command::new("/bin/hostname")
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| String::from_utf8(output.stdout).ok());
-    name.map(|name| name.trim().to_owned())
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| "PC".into())
 }
 
 #[derive(clap::Subcommand)]

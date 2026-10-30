@@ -51,7 +51,7 @@ async fn connect(host: &HostFixture, snapshot: Snapshot) -> (Store, Endpoint) {
     let endpoint = Endpoint::bind(host.credentials.local_identity().await, Relays::Disabled)
         .await
         .unwrap();
-    let store = Store::connect(&endpoint, &host.ticket, snapshot, None)
+    let store = Store::connect(&endpoint, &host.ticket, snapshot, None, "Fixture device")
         .await
         .unwrap();
     store
@@ -545,7 +545,7 @@ async fn claude_approval_snapshot_after_disconnect_denial_is_effective_and_inter
         assert!(!Path::new(&cwd).join("approved.txt").exists());
         store.disconnect().await.unwrap();
         store
-            .reconnect(&endpoint, &fixture.ticket, None)
+            .reconnect(&endpoint, &fixture.ticket, None, "Fixture device")
             .await
             .unwrap();
         let snapshot = until(&store, |snapshot| snapshot.requests().next().is_some()).await;
@@ -1060,7 +1060,7 @@ async fn codex_exit_preserves_claude_approval_and_completes_after_reconnect() {
         );
         store.disconnect().await.unwrap();
         store
-            .reconnect(&endpoint, &fixture.ticket, None)
+            .reconnect(&endpoint, &fixture.ticket, None, "Fixture device")
             .await
             .unwrap();
         let snapshot = until(&store, |snapshot| snapshot.requests().next().is_some()).await;
@@ -1588,7 +1588,7 @@ async fn claude_accounts_login_switch_resume_cancel_and_logout_without_codex() {
         drop(store); endpoint.close().await; fixture.close().await.unwrap();
         let fixture = start().await.unwrap();
         let endpoint = Endpoint::bind(fixture.credentials.local_identity().await, Relays::Disabled).await.unwrap();
-        let store = Store::connect(&endpoint, &fixture.ticket, snapshot, None).await.unwrap();
+        let store = Store::connect(&endpoint, &fixture.ticket, snapshot, None, "Fixture device").await.unwrap();
         store.dispatch(Intent::LoadModels(op::LoadModels {})).await.unwrap();
         let logged_out = store.snapshot();
         assert!(logged_out.models.is_empty(), "logged-out Claude and unavailable Codex must not expose models");
@@ -1691,9 +1691,15 @@ async fn live_claude_account_login_url_and_cancellation() {
     let endpoint = Endpoint::bind(fixture.credentials.local_identity().await, Relays::Disabled)
         .await
         .unwrap();
-    let store = Store::connect(&endpoint, &fixture.ticket, Snapshot::default(), None)
-        .await
-        .unwrap();
+    let store = Store::connect(
+        &endpoint,
+        &fixture.ticket,
+        Snapshot::default(),
+        None,
+        "Fixture device",
+    )
+    .await
+    .unwrap();
     store
         .dispatch(Intent::StartAccountLogin(op::StartAccountLogin {
             provider: agent_protocol::session::ProviderKind::Claude,
@@ -1767,7 +1773,7 @@ async fn claude_keeps_loading_through_background_results_and_follow_up_after_rec
         until(&store, |snapshot| snapshot.requests().next().is_some()).await;
         store.disconnect().await.unwrap();
         store
-            .reconnect(&endpoint, &fixture.ticket, None)
+            .reconnect(&endpoint, &fixture.ticket, None, "Fixture device")
             .await
             .unwrap();
         until(&store, |snapshot| snapshot.requests().next().is_some()).await;

@@ -33,9 +33,15 @@ pub struct RemoteHost {
 pub struct HostStatus {
     pub node_id: String,
     pub name: String,
-    pub devices: Vec<String>,
+    pub devices: Vec<HostDevice>,
     #[serde(default)]
     pub provider_errors: Option<Map<String, Value>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HostDevice {
+    pub id: String,
+    pub name: Option<String>,
 }
 
 /// Provider membership before Host enrichment; null alone does not rule out cwd membership.

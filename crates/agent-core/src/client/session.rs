@@ -42,6 +42,7 @@ pub struct ClientSession {
     closing: Mutex<Option<Completion<()>>>,
     recent_chats: bool,
     client_build: u64,
+    device_name: String,
     phase: Mutex<Phase>,
     initialization: tokio::sync::Mutex<()>,
     operations: Mutex<Vec<Completion<Outcome>>>,
@@ -58,6 +59,7 @@ impl ClientSession {
         previous: Option<Arc<ClientSession>>,
         recent_chats: bool,
         client_build: u64,
+        device_name: String,
     ) -> Arc<Self> {
         if let Some(previous) = &previous {
             previous.retire();
@@ -72,6 +74,7 @@ impl ClientSession {
             closing: Default::default(),
             recent_chats,
             client_build,
+            device_name,
             phase: Mutex::new(Phase::Loading(Vec::new())),
             initialization: Default::default(),
             operations: Default::default(),
@@ -89,13 +92,14 @@ impl ClientSession {
         invitation: String,
         recent_chats: bool,
         client_build: u64,
+        device_name: String,
     ) -> Result<Arc<Self>, AgentError> {
         // Device-wide model preferences must include edits still waiting for I/O.
         // Keep the current Host usable if pairing subsequently fails.
         if let Some(previous) = previous {
             previous.flush().await?;
         }
-        let session = Self::open(storage, None, recent_chats, client_build);
+        let session = Self::open(storage, None, recent_chats, client_build, device_name);
         let store = session.restore(true).await?;
         store
             .reconnect(session.connection(ticket, Some(invitation)).await?)
@@ -310,6 +314,7 @@ impl ClientSession {
             identity,
             invitation,
             use_relays: true,
+            device_name: self.device_name.clone(),
         })
     }
 
@@ -553,7 +558,7 @@ mod tests {
             .clone()
     }
     fn open(storage: Arc<Storage>) -> Arc<ClientSession> {
-        ClientSession::open(storage, None, false, 42)
+        ClientSession::open(storage, None, false, 42, "Fixture device".into())
     }
 
     #[tokio::test]
@@ -568,7 +573,13 @@ mod tests {
             old_storage.fail_save.store(true, Ordering::SeqCst);
 
             let storage = Arc::new(Storage::default());
-            let next = ClientSession::open(storage.clone(), Some(old), false, 0);
+            let next = ClientSession::open(
+                storage.clone(),
+                Some(old),
+                false,
+                0,
+                "Fixture device".into(),
+            );
             let queued = next.dispatch(edit("new Host work")).unwrap();
             next.clone().ready().await.unwrap();
             assert_eq!(
@@ -608,6 +619,7 @@ mod tests {
                 "invalid invitation".into(),
                 false,
                 0,
+                "Fixture device".into(),
             ));
             gate.entered.notified().await;
             assert_eq!(storage.loads.load(Ordering::SeqCst), 0);
@@ -797,7 +809,13 @@ mod tests {
             let _release = scopeguard::guard(gate.clone(), |gate| gate.release());
             *old_storage.write_gate.lock().unwrap() = Some(gate.clone());
             let next_storage = Arc::new(Storage::default());
-            let next = ClientSession::open(next_storage.clone(), Some(old.clone()), true, 0);
+            let next = ClientSession::open(
+                next_storage.clone(),
+                Some(old.clone()),
+                true,
+                0,
+                "Fixture device".into(),
+            );
             gate.entered.notified().await;
             let opening = tokio::spawn(next.clone().ready());
             opening.abort();
@@ -866,7 +884,8 @@ mod tests {
                     "invalid ticket".into(),
                     "invalid invitation".into(),
                     false,
-                    0
+                    0,
+                    "Fixture device".into()
                 )
                 .await
                 .is_err()

@@ -132,6 +132,7 @@ contracts! {
     DetachTerminal, "host/terminal/detach" => (op::DetachTerminal, m::Empty) [clone],
     KillTerminal, "host/terminal/kill" => (op::TerminalKill, m::Empty),
     Pair, "host/pair" => (op::Pair, m::Empty) [clone],
+    IdentifyDevice, "host/device/identify" => (op::IdentifyDevice, m::Empty) [clone],
     HostName, "host/name" => (m::Empty, String),
     HostStatus, "host/status" => (m::Empty, m::HostStatus),
     PrepareHostUpdate, "host/update/prepare" => (op::PrepareHostUpdate, op::HostUpdate) [clone],

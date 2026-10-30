@@ -62,6 +62,11 @@ pub struct Pair {
     pub invitation: uuid::Uuid,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IdentifyDevice {
+    pub name: String,
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct ReadHostStatus {}
 rpc_method!(ReadHostStatus, HostStatus, |self| crate::models::Empty {});

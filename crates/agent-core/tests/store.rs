@@ -2907,7 +2907,7 @@ async fn initial_titles_wait_for_scope_verification_and_use_the_current_query() 
                 let store = store.clone();
                 let client = client.clone();
                 let ticket = host.ticket();
-                async move { store.reconnect(&client, &ticket, None).await }
+                async move { store.reconnect(&client, &ticket, None, "Fixture device").await }
             });
             let incoming = host.accept().await.unwrap().unwrap().authorize(&trust).unwrap();
             let (session, mut reader, writer) = host_fixture::accept(incoming).await;
@@ -2979,7 +2979,7 @@ async fn reconnect_preserves_edits_made_during_pairing() {
             let ticket = host.ticket();
             tokio::spawn(async move {
                 store
-                    .reconnect(&client, &ticket, Some(uuid::Uuid::new_v4()))
+                    .reconnect(&client, &ticket, Some(uuid::Uuid::new_v4()), "Fixture device")
                     .await
             })
         };
@@ -3006,6 +3006,23 @@ async fn reconnect_preserves_edits_made_during_pairing() {
             .unwrap();
         let drafts = store.snapshot().drafts.clone();
         let (session, _peer) = pairing.authorize(&trust).await.unwrap();
+        let agent_transport::transport::IncomingRequest::Call(mut identify) =
+            session.accept_request().await.unwrap()
+        else {
+            panic!("device identification expected")
+        };
+        assert!(matches!(
+            identify.call,
+            agent_protocol::protocol::Call::IdentifyDevice(params) if params.name == "Fixture device"
+        ));
+        agent_transport::framing::write(
+            &mut identify.send,
+            agent_protocol::protocol::Response::Success {
+                result: agent_protocol::models::Empty {},
+            },
+        )
+        .await
+        .unwrap();
         let agent_transport::transport::IncomingRequest::Call(mut call) =
             session.accept_request().await.unwrap()
         else {
@@ -3052,7 +3069,7 @@ async fn reconnect_cancels_obsolete_pairing_and_retains_local_state() {
                 let store = store.clone();
                 let client = client.clone();
                 let ticket = host.ticket();
-                tokio::spawn(async move { store.reconnect(&client, &ticket, Some(uuid::Uuid::new_v4())).await })
+                tokio::spawn(async move { store.reconnect(&client, &ticket, Some(uuid::Uuid::new_v4()), "Fixture device").await })
             };
             let pending = host.accept().await.unwrap().unwrap().pairing().await.unwrap();
             assert!(old_reader.read_request().await.unwrap().is_none(), "core must release the old connection before pairing");
@@ -3062,7 +3079,7 @@ async fn reconnect_cancels_obsolete_pairing_and_retains_local_state() {
             let replacement = match action {
                 "reconnect" => {
                     let ticket = host.ticket();
-                    let (result, incoming) = tokio::join!(store.reconnect(&client, &ticket, None), scoped_incoming(&host, &trust));
+                    let (result, incoming) = tokio::join!(store.reconnect(&client, &ticket, None, "Fixture device"), scoped_incoming(&host, &trust));
                     result.unwrap();
                     Some(incoming)
                 }
@@ -3311,7 +3328,13 @@ async fn stores_share_an_endpoint_without_closing_each_others_transport() {
         let mut sessions = Vec::new();
         for _ in 0..2 {
             let (store, incoming) = tokio::join!(
-                Store::connect(&client, &ticket, Snapshot::default(), None),
+                Store::connect(
+                    &client,
+                    &ticket,
+                    Snapshot::default(),
+                    None,
+                    "Fixture device"
+                ),
                 scoped_incoming(&host, &trust)
             );
             stores.push(store.unwrap());
@@ -3320,7 +3343,13 @@ async fn stores_share_an_endpoint_without_closing_each_others_transport() {
         stores[0].close().await.unwrap();
         // A new session proves the shared endpoint survived closing the first view.
         let (third, incoming) = tokio::join!(
-            Store::connect(&client, &ticket, Snapshot::default(), None),
+            Store::connect(
+                &client,
+                &ticket,
+                Snapshot::default(),
+                None,
+                "Fixture device"
+            ),
             scoped_incoming(&host, &trust)
         );
         let third = third.unwrap();
@@ -3635,7 +3664,7 @@ async fn item_transfer_releases_wire_order_and_preserves_newer_items() {
         let connecting = network.spawn({
             let store = store.clone();
             let client = client.clone();
-            async move { store.reconnect(&client, &ticket, None).await }
+            async move { store.reconnect(&client, &ticket, None, "Fixture device").await }
         });
         let accepting = network.spawn({
             let host = host.clone();

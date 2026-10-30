@@ -152,9 +152,15 @@ async fn initial_import_discovers_native_projects_and_continues_the_original_ses
     let endpoint = Endpoint::bind(host.credentials.local_identity().await, Relays::Disabled)
         .await
         .unwrap();
-    let store = Store::connect(&endpoint, &host.ticket, Snapshot::default(), None)
-        .await
-        .unwrap();
+    let store = Store::connect(
+        &endpoint,
+        &host.ticket,
+        Snapshot::default(),
+        None,
+        "Fixture device",
+    )
+    .await
+    .unwrap();
     store
         .dispatch(Intent::ScanProjects(core_op::ScanProjects {}))
         .await

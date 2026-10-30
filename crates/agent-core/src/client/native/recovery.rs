@@ -19,6 +19,7 @@ impl Recovery {
         store: Arc<Store>,
         endpoint: Endpoint,
         ticket: Ticket,
+        device_name: String,
         attempt: Arc<tokio::sync::Mutex<()>>,
         mut lifecycle: watch::Receiver<bool>,
     ) -> Self {
@@ -62,7 +63,7 @@ impl Recovery {
                     if store.snapshot().connected || !*lifecycle.borrow() {
                         continue;
                     }
-                    match store.resume(&endpoint, &ticket).await {
+                    match store.resume(&endpoint, &ticket, &device_name).await {
                         Ok(mut performance) => {
                             performance.client_revision = option_env!("AGENT_BUILD_REVISION")
                                 .unwrap_or("development")

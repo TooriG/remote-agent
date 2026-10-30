@@ -684,8 +684,8 @@ impl Render for Hosts {
                         .child("接続を許可した端末はありません。"),
                 );
             }
-            for (index, node) in status.devices.iter().enumerate() {
-                let node = node.clone();
+            for (index, device) in status.devices.iter().enumerate() {
+                let node = device.id.clone();
                 list = list.child(
                     h_flex()
                         .items_center()
@@ -700,7 +700,14 @@ impl Render for Hosts {
                                 .flex_1()
                                 .min_w_0()
                                 .gap_1()
-                                .child(format!("端末 {}", index + 1))
+                                .child(
+                                    div().text_ellipsis().child(
+                                        device
+                                            .name
+                                            .clone()
+                                            .unwrap_or_else(|| "名前未取得の端末".into()),
+                                    ),
+                                )
                                 .child(
                                     div()
                                         .text_xs()
