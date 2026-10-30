@@ -37,6 +37,8 @@ impl CredentialStore for FileKeyStore {
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub(crate) struct Record {
     pub trust: Trust,
+    #[serde(default)]
+    pub device_names: BTreeMap<NodeId, String>,
     pub remotes: BTreeMap<NodeId, RemoteHost>,
 }
 

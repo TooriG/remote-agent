@@ -5,7 +5,7 @@ use crate::{
     peer::PeerError,
     state::{Event, Intent, Snapshot, operations as op, reduce},
 };
-use agent_protocol::operations::{Pair, RpcMethod};
+use agent_protocol::operations::{IdentifyDevice, Pair, RpcMethod};
 use agent_transport::client::{Client, Updates};
 use futures_util::{StreamExt, stream::FuturesUnordered};
 use std::{
@@ -85,6 +85,7 @@ impl Connection {
         endpoint: &crate::transport::Endpoint,
         ticket: &crate::transport::Ticket,
         invitation: Option<uuid::Uuid>,
+        device_name: &str,
     ) -> Result<(Self, String, ConnectionPerformance), crate::transport::TransportError> {
         let (session, peer, events, scope, transport_ms, verification_ms) =
             tokio::time::timeout(std::time::Duration::from_secs(10), async {
@@ -99,6 +100,10 @@ impl Connection {
                 if let Some(invitation) = invitation {
                     peer.call(&Pair { invitation }).await?;
                 }
+                peer.call(&IdentifyDevice {
+                    name: device_name.to_owned(),
+                })
+                .await?;
                 let scope = read_storage_scope(&peer).await?;
                 Ok::<_, crate::transport::TransportError>((
                     scopeguard::ScopeGuard::into_inner(session),
@@ -373,9 +378,12 @@ impl Store {
         ticket: &crate::transport::Ticket,
         snapshot: Snapshot,
         invitation: Option<uuid::Uuid>,
+        device_name: &str,
     ) -> Result<Self, crate::transport::TransportError> {
         let store = Self::offline(snapshot);
-        store.reconnect(endpoint, ticket, invitation).await?;
+        store
+            .reconnect(endpoint, ticket, invitation, device_name)
+            .await?;
         Ok(store)
     }
     /// Reuse a responsive Host connection, then refresh without blocking interaction.
@@ -384,6 +392,7 @@ impl Store {
         &self,
         endpoint: &crate::transport::Endpoint,
         ticket: &crate::transport::Ticket,
+        device_name: &str,
     ) -> Result<ConnectionPerformance, crate::transport::TransportError> {
         let attempt = {
             let mut current = self.connection_attempt.lock().unwrap();
@@ -405,7 +414,7 @@ impl Store {
             let reusable = receiver.await.unwrap_or(None);
             let replacement = async {
                 let (connection, scope, performance) =
-                    Connection::open(endpoint, ticket, None).await?;
+                    Connection::open(endpoint, ticket, None, device_name).await?;
                 Ok::<_, crate::transport::TransportError>((Some((connection, scope)), performance))
             };
             let (prepared, performance) = if let Some(peer) = reusable {
@@ -502,6 +511,7 @@ impl Store {
         endpoint: &crate::transport::Endpoint,
         ticket: &crate::transport::Ticket,
         invitation: Option<uuid::Uuid>,
+        device_name: &str,
     ) -> Result<ConnectionPerformance, crate::transport::TransportError> {
         let (attempt, disconnected) = {
             let mut current = self.connection_attempt.lock().unwrap();
@@ -516,7 +526,7 @@ impl Store {
                 .await
                 .map_err(|_| PeerError::ConnectionClosed("store is closed".into()))??;
             let (connection, scope, performance) =
-                Connection::open(endpoint, ticket, invitation).await?;
+                Connection::open(endpoint, ticket, invitation, device_name).await?;
             self.attach_connection(connection, scope, attempt.clone())
                 .await?;
             Ok::<_, crate::transport::TransportError>(performance)

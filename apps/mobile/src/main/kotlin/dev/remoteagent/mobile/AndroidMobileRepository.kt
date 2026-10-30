@@ -2,7 +2,9 @@ package dev.remoteagent.mobile
 
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 import android.provider.OpenableColumns
+import android.provider.Settings
 import android.util.AtomicFile
 import dev.remoteagent.core.AgentException
 import dev.remoteagent.core.Attachment
@@ -23,6 +25,11 @@ import kotlinx.serialization.json.Json
 internal class AndroidMobileRepository(private val context: Context) {
     private val directory = context.filesDir
     private val preferences = context.getSharedPreferences("agent-hosts", Context.MODE_PRIVATE)
+    val deviceName: String
+        get() =
+            Settings.Global.getString(context.contentResolver, Settings.Global.DEVICE_NAME)?.takeIf { it.isNotBlank() }
+                ?: Build.MODEL
+
     var selected: String?
         get() = preferences.getString("selected", null)
         set(value) {

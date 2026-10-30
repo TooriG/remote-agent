@@ -10,6 +10,7 @@ agent-protocol = { path = "../agent-protocol" }
 agent-transport = { path = "../agent-transport" }
 anyhow.workspace = true
 agent-core = { path = "../agent-core" }
+agent-local-host = { path = "../agent-local-host" }
 clap = { version = "4.6", features = ["derive"] }
 serde_json.workspace = true
 tokio.workspace = true

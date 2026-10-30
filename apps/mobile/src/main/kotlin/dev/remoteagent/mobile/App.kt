@@ -161,7 +161,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         observation?.cancel()
         connection?.cancel()
         val old = session
-        val selected = ClientSession.open(repository.sessionStorage(id), old, true, 0uL)
+        val selected = ClientSession.open(repository.sessionStorage(id), old, true, 0uL, repository.deviceName)
         session = selected
         owner = null
         profileId = id
@@ -199,6 +199,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
                         invitation.invitation,
                         true,
                         0uL,
+                        repository.deviceName,
                     )
                 if (!isActive) {
                     store.shutdown()

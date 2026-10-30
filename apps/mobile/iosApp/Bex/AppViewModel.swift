@@ -72,7 +72,7 @@ final class AppViewModel: ObservableObject {
         UserDefaults.standard.set(id, forKey: "bex.selected-host")
         publish(AgentCore.Snapshot.empty())
         let owner = ClientSession.open(storage: MobileSessionStorage(host: id), previous: old, recentChats: false,
-                                       clientBuild: Self.clientBuild)
+                                       clientBuild: Self.clientBuild, deviceName: UIDevice.current.name)
         session = owner
         observation = Task { [weak self] in
             do {
@@ -164,7 +164,7 @@ final class AppViewModel: ObservableObject {
                     let owner = try await ClientSession.pair(
                         storage: MobileSessionStorage(host: id), previous: self?.session,
                         ticket: invitation.endpoint, invitation: invitation.invitation, recentChats: false,
-                        clientBuild: Self.clientBuild
+                        clientBuild: Self.clientBuild, deviceName: UIDevice.current.name
                     )
                     guard let self, !Task.isCancelled else { try? await owner.shutdown(); return }
                     observation?.cancel()

@@ -99,7 +99,13 @@ impl Fixture {
         };
         let ticket = host.ticket();
         let (store, (session, mut reader, writer)) = tokio::join!(
-            Store::connect(&client, &ticket, Snapshot::default(), None),
+            Store::connect(
+                &client,
+                &ticket,
+                Snapshot::default(),
+                None,
+                "Fixture device"
+            ),
             incoming
         );
         let store = store.unwrap();

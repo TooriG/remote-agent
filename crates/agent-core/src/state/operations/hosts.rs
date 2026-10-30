@@ -135,9 +135,36 @@ impl Operation for RevokeDevice {
     fn apply(self, snapshot: &mut Snapshot, _output: Self::Output) -> Vec<Effect> {
         let Self { id } = self;
         if let Some(status) = Arc::make_mut(&mut snapshot.management).status.as_mut() {
-            Arc::make_mut(status).devices.retain(|device| device != &id);
+            Arc::make_mut(status)
+                .devices
+                .retain(|device| device.id != id);
         }
         Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod device_tests {
+    use super::*;
+
+    #[test]
+    fn revocation_removes_only_the_selected_id_even_when_names_match() {
+        let devices = ["phone", "tablet"].map(|id| agent_protocol::models::HostDevice {
+            id: id.into(),
+            name: Some("My device".into()),
+        });
+        let mut snapshot = Snapshot::default();
+        Arc::make_mut(&mut snapshot.management).status = Some(Arc::new(HostStatus {
+            node_id: "host".into(),
+            name: "My PC".into(),
+            devices: devices.to_vec(),
+            provider_errors: None,
+        }));
+        RevokeDevice { id: "phone".into() }.apply(&mut snapshot, crate::models::Empty {});
+        assert_eq!(
+            snapshot.management.status.as_ref().unwrap().devices,
+            [devices[1].clone()]
+        );
     }
 }
 

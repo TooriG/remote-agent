@@ -1,6 +1,6 @@
 use crate::{HostCredentials, HostRpcService, SessionId};
 use agent_protocol::{
-    models::{HostStatus, Invitation, RemoteHost},
+    models::{HostDevice, HostStatus, Invitation, RemoteHost},
     protocol::{Body, Call, Response},
 };
 use agent_transport::transport::{
@@ -308,6 +308,7 @@ impl HostRuntime {
         let management = matches!(
             message,
             Call::Pair(_)
+                | Call::IdentifyDevice(_)
                 | Call::HostStatus(_)
                 | Call::PrepareHostUpdate(_)
                 | Call::Invite(_)
@@ -321,10 +322,10 @@ impl HostRuntime {
                 // Only authorized sessions reach dispatch; the invitation was
                 // already consumed at the transport gate.
                 Ok(agent_protocol::models::Empty {}.into())
-            } else if node != self.local_node {
+            } else if node != self.local_node && !matches!(message, Call::IdentifyDevice(_)) {
                 Err(anyhow::anyhow!("management requires the local node"))
             } else {
-                self.manage(message).await
+                self.manage(node, message).await
             };
             return Ok(Response::from_result(result.map_err(|message| {
                 agent_protocol::error::RpcFailure {
@@ -341,8 +342,23 @@ impl HostRuntime {
             .await
             .map_err(anyhow::Error::msg)
     }
-    async fn manage(&self, call: &Call) -> Result<Body> {
+    async fn manage(&self, node: NodeId, call: &Call) -> Result<Body> {
         match call {
+            Call::IdentifyDevice(params) => {
+                let name = params.name.trim();
+                anyhow::ensure!(!name.is_empty(), "device name is empty");
+                let mut record = self.credentials.record.lock().await;
+                anyhow::ensure!(
+                    record.trust.allowed.contains(&node),
+                    "peer is not authorized"
+                );
+                if record.device_names.get(&node).map(String::as_str) != Some(name) {
+                    let mut next = record.clone();
+                    next.device_names.insert(node, name.to_owned());
+                    *record = self.credentials.persist(next).await?;
+                }
+                Ok(agent_protocol::models::Empty {}.into())
+            }
             Call::PrepareHostUpdate(_) => {
                 let executable = std::env::current_exe()?
                     .into_os_string()
@@ -384,7 +400,10 @@ impl HostRuntime {
                         .trust
                         .allowed
                         .iter()
-                        .map(ToString::to_string)
+                        .map(|id| HostDevice {
+                            id: id.to_string(),
+                            name: record.device_names.get(id).cloned(),
+                        })
                         .collect(),
                     provider_errors: self.service.provider_errors().as_object().cloned(),
                 }
@@ -417,6 +436,7 @@ impl HostRuntime {
                 let mut record = self.credentials.record.lock().await;
                 let mut next = record.clone();
                 next.trust.allowed.remove(&node_id);
+                next.device_names.remove(&node_id);
                 *record = self.credentials.persist(next).await?;
                 self.service.revoke_device(&node_id.to_string());
                 for connection in self.active.lock().unwrap().values() {
@@ -481,6 +501,153 @@ mod tests {
     use agent_transport::transport::Relays;
     use serde_json::Value;
     use std::path::PathBuf;
+
+    async fn identify(runtime: &HostRuntime, node: NodeId, name: &str) -> Response<Empty> {
+        let reply = runtime
+            .dispatch(
+                node,
+                0,
+                &Call::IdentifyDevice(agent_protocol::operations::IdentifyDevice {
+                    name: name.into(),
+                }),
+            )
+            .await
+            .unwrap();
+        agent_protocol::protocol::decode(&reply.initial).unwrap()
+    }
+
+    #[tokio::test]
+    async fn device_names_are_owned_by_the_authenticated_node_and_survive_restart() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(crate::FileKeyStore(agent_local_host::identity_path(
+            directory.path(),
+        )));
+        let credentials = Arc::new(
+            HostCredentials::load(store.clone(), directory.path().to_owned())
+                .await
+                .unwrap(),
+        );
+        let endpoint = Endpoint::bind(credentials.host_identity().await, Relays::Loopback)
+            .await
+            .unwrap();
+        let runtime = HostRuntime::new(
+            HostRpcService::new(
+                [],
+                crate::ProjectStore::new(directory.path().join("projects.json")),
+            ),
+            endpoint.clone(),
+            credentials.clone(),
+            "Host".into(),
+            Duration::from_secs(60),
+        )
+        .await;
+        let phone = agent_transport::transport::Identity::generate().node_id();
+        let tablet = agent_transport::transport::Identity::generate().node_id();
+        credentials
+            .record
+            .lock()
+            .await
+            .trust
+            .allowed
+            .extend([phone, tablet]);
+        assert!(matches!(
+            identify(&runtime, phone, "  My device  ").await,
+            Response::Success { .. }
+        ));
+        assert!(matches!(
+            identify(&runtime, tablet, "My device").await,
+            Response::Success { .. }
+        ));
+        assert!(matches!(
+            identify(&runtime, phone, " \n ").await,
+            Response::Failure { .. }
+        ));
+
+        let path = directory.path().join("trust.json");
+        let backup = directory.path().join("trust-backup.json");
+        std::fs::rename(&path, &backup).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        // Repeating the same name needs no disk write; a failed rename preserves the published name.
+        assert!(matches!(
+            identify(&runtime, phone, "My device").await,
+            Response::Success { .. }
+        ));
+        assert!(matches!(
+            identify(&runtime, phone, "My iPhone").await,
+            Response::Failure { .. }
+        ));
+        assert_eq!(
+            credentials.record.lock().await.device_names[&phone],
+            "My device"
+        );
+        std::fs::remove_dir(&path).unwrap();
+        std::fs::rename(&backup, &path).unwrap();
+        assert!(matches!(
+            identify(&runtime, phone, "My iPhone").await,
+            Response::Success { .. }
+        ));
+
+        let restored = Arc::new(
+            HostCredentials::load(store.clone(), directory.path().to_owned())
+                .await
+                .unwrap(),
+        );
+        let runtime = HostRuntime::new(
+            HostRpcService::new(
+                [],
+                crate::ProjectStore::new(directory.path().join("projects.json")),
+            ),
+            endpoint.clone(),
+            restored,
+            "Host".into(),
+            Duration::from_secs(60),
+        )
+        .await;
+        let reply = runtime
+            .dispatch(runtime.local_node, 0, &Call::HostStatus(Empty {}))
+            .await
+            .unwrap();
+        let Response::Success { result: status } =
+            agent_protocol::protocol::decode::<Response<HostStatus>>(&reply.initial).unwrap()
+        else {
+            panic!("Host status failed")
+        };
+        assert!(status.devices.contains(&HostDevice {
+            id: phone.to_string(),
+            name: Some("My iPhone".into())
+        }));
+        assert!(status.devices.contains(&HostDevice {
+            id: tablet.to_string(),
+            name: Some("My device".into())
+        }));
+
+        let reply = runtime
+            .dispatch(
+                runtime.local_node,
+                0,
+                &Call::Revoke(agent_protocol::operations::RevokeDevice {
+                    id: phone.to_string(),
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            agent_protocol::protocol::decode::<Response<Empty>>(&reply.initial).unwrap(),
+            Response::Success { .. }
+        ));
+        assert!(matches!(
+            identify(&runtime, phone, "Revoked").await,
+            Response::Failure { .. }
+        ));
+        let restored = HostCredentials::load(store, directory.path().to_owned())
+            .await
+            .unwrap();
+        let record = restored.record.lock().await;
+        assert!(!record.device_names.contains_key(&phone));
+        assert_eq!(record.device_names[&tablet], "My device");
+        drop(record);
+        endpoint.close().await;
+    }
 
     #[tokio::test]
     async fn only_the_local_node_can_prepare_an_app_update() {

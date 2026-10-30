@@ -35,6 +35,7 @@ pub struct Connection {
     pub identity: Vec<u8>,
     pub invitation: Option<String>,
     pub use_relays: bool,
+    pub device_name: String,
 }
 
 #[uniffi::export]
@@ -112,13 +113,25 @@ impl AgentStore {
         let _attempt = self.connection_work.lock().await;
         let started = std::time::Instant::now();
         self.resume_connection(started, async {
-            let (endpoint, ticket, invitation) = self.connection_endpoint(connection).await?;
+            let Connection {
+                ticket,
+                identity,
+                invitation,
+                use_relays,
+                device_name,
+            } = connection;
+            let (endpoint, ticket, invitation) = self
+                .connection_endpoint(ticket, identity, invitation, use_relays)
+                .await?;
             let endpoint_ms = started.elapsed().as_millis() as u64;
             let result = if reuse && invitation.is_none() {
-                self.store.resume(&endpoint, &ticket).await.map_err(error)
+                self.store
+                    .resume(&endpoint, &ticket, &device_name)
+                    .await
+                    .map_err(error)
             } else {
                 self.store
-                    .reconnect(&endpoint, &ticket, invitation)
+                    .reconnect(&endpoint, &ticket, invitation, &device_name)
                     .await
                     .map_err(error)
             };
@@ -127,6 +140,7 @@ impl AgentStore {
                     self.store.clone(),
                     endpoint,
                     ticket,
+                    device_name,
                     self.connection_work.clone(),
                     self.connection_active.subscribe(),
                 ));
@@ -184,30 +198,32 @@ impl AgentStore {
 
     async fn connection_endpoint(
         &self,
-        connection: Connection,
+        ticket: String,
+        identity: Vec<u8>,
+        invitation: Option<String>,
+        use_relays: bool,
     ) -> Result<(Endpoint, Ticket, Option<uuid::Uuid>), AgentError> {
-        let secret = Zeroizing::new(connection.identity);
+        let secret = Zeroizing::new(identity);
         let bytes = Zeroizing::new(
             <[u8; 32]>::try_from(secret.as_slice())
                 .map_err(|_| error("identity must contain 32 bytes"))?,
         );
         let identity = Identity::from_bytes(*bytes);
-        let ticket = connection.ticket.parse::<Ticket>().map_err(error)?;
-        let invitation = connection
-            .invitation
+        let ticket = ticket.parse::<Ticket>().map_err(error)?;
+        let invitation = invitation
             .map(|value| value.parse())
             .transpose()
             .map_err(error)?;
         let mut cached = self.endpoint.lock().await;
         if let Some(cached) = cached.as_ref()
             && cached.endpoint.node_id() == identity.node_id()
-            && cached.use_relays == connection.use_relays
+            && cached.use_relays == use_relays
         {
             return Ok((cached.endpoint.clone(), ticket, invitation));
         }
         let endpoint = Endpoint::bind_recording(
             identity,
-            if connection.use_relays {
+            if use_relays {
                 Relays::Default
             } else {
                 Relays::Disabled
@@ -218,7 +234,7 @@ impl AgentStore {
         .map_err(error)?;
         *cached = Some(NativeEndpoint {
             endpoint: endpoint.clone(),
-            use_relays: connection.use_relays,
+            use_relays,
         });
         Ok((endpoint, ticket, invitation))
     }
@@ -469,6 +485,7 @@ mod tests {
                         identity: identity.to_bytes().to_vec(),
                         invitation: None,
                         use_relays: false,
+                        device_name: "Fixture device".into(),
                     })
                     .await?;
                 Ok::<_, AgentError>(store)
@@ -538,6 +555,7 @@ mod tests {
             let connection = || Connection {
                 ticket: host.ticket().to_string(), identity: identity.to_bytes().to_vec(),
                 invitation: None, use_relays: false,
+                device_name: "Fixture device".into(),
             };
             let cached = crate::state::Snapshot {
                 list_query: Arc::new(crate::models::ListQuery { limit: 60, project_limit: 5, search_term: "retained search".into(), ..Default::default() }),
@@ -642,6 +660,7 @@ mod tests {
                     let connection = || Connection {
                         ticket: host.local_ticket().to_string(), identity: identity.to_bytes().to_vec(),
                         invitation: None, use_relays: false,
+                        device_name: "Fixture device".into(),
                     };
                     let snapshot = Snapshot {
                         navigation: Arc::new(crate::state::Navigation {
@@ -860,14 +879,20 @@ mod tests {
             .unwrap();
         let replacement = Endpoint::bind(identity, Relays::Disabled).await.unwrap();
         let (store, (old, old_reader, old_writer)) = tokio::join!(
-            crate::store::Store::connect(&first, &ticket, Snapshot::default(), None),
+            crate::store::Store::connect(
+                &first,
+                &ticket,
+                Snapshot::default(),
+                None,
+                "Fixture device"
+            ),
             scoped_incoming(&host, &trust),
         );
         let store = Arc::new(store.unwrap());
         let (resumed, (next, mut reader, _writer)) =
             tokio::time::timeout(Duration::from_millis(500), async {
                 tokio::join!(
-                    store.resume(&replacement, &ticket),
+                    store.resume(&replacement, &ticket, "Fixture device"),
                     scoped_incoming(&host, &trust)
                 )
             })
@@ -893,7 +918,11 @@ mod tests {
         );
         let recovering = store.clone();
         let endpoint = replacement.clone();
-        let resume = tokio::spawn(async move { recovering.resume(&endpoint, &ticket).await });
+        let resume = tokio::spawn(async move {
+            recovering
+                .resume(&endpoint, &ticket, "Fixture device")
+                .await
+        });
         let request = tokio::time::timeout(Duration::from_secs(1), reader.read_request())
             .await
             .unwrap()
@@ -970,7 +999,11 @@ mod tests {
             let store = store.clone();
             let endpoint = endpoint.clone();
             let ticket = ticket.clone();
-            async move { store.reconnect(&endpoint, &ticket, None).await }
+            async move {
+                store
+                    .reconnect(&endpoint, &ticket, None, "Fixture device")
+                    .await
+            }
         });
         let incoming = host
             .accept()
@@ -1003,7 +1036,7 @@ mod tests {
         let (retried, (next, next_reader, next_writer)) =
             tokio::time::timeout(Duration::from_secs(2), async {
                 tokio::join!(
-                    store.resume(&endpoint, &ticket),
+                    store.resume(&endpoint, &ticket, "Fixture device"),
                     scoped_incoming(&host, &trust)
                 )
             })
@@ -1028,7 +1061,7 @@ mod tests {
                 let identity = Identity::generate();
                 let trust = Trust { allowed: [identity.node_id()].into(), ..Default::default() };
                 let host = Endpoint::bind(Identity::generate(), Relays::Disabled).await.unwrap();
-                let connection = || Connection { ticket: host.ticket().to_string(), identity: identity.to_bytes().to_vec(), invitation: None, use_relays: false };
+                let connection = || Connection { ticket: host.ticket().to_string(), identity: identity.to_bytes().to_vec(), invitation: None, use_relays: false, device_name: "Fixture device".into() };
                 let cached = Snapshot {
                     navigation: Arc::new(crate::state::Navigation { thread_id: selected.then(|| agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() }), draft_key: agent_protocol::session::SessionRef {provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into()}.into(), ..Default::default() }),
                     ..Default::default()

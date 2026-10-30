@@ -105,7 +105,8 @@ async fn run(args: Args) -> anyhow::Result<()> {
         .await
         .context("cannot bind client endpoint")?;
         let ticket: Ticket = args.ticket.parse().context("cannot parse Host ticket")?;
-        Store::connect(&endpoint, &ticket, snapshot, args.invitation)
+        let device_name = tokio::task::spawn_blocking(agent_local_host::machine_name).await?;
+        Store::connect(&endpoint, &ticket, snapshot, args.invitation, &device_name)
             .await
             .context("cannot connect to Host")?
     };
