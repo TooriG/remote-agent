@@ -264,16 +264,30 @@ async fn model_refresh_observes_catalog_changes_without_restarting_host() {
             .unwrap(),
         )
         .unwrap();
+        let claude_models = |snapshot: &Snapshot| {
+            snapshot
+                .models
+                .iter()
+                .filter(|model| model.model.provider == ProviderKind::Claude)
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        // Discovery answers from its last result at once and refreshes behind
+        // it, so a later read observes the change without restarting the Host.
         store
             .dispatch(Intent::LoadModels(op::LoadModels {}))
             .await
             .unwrap();
+        assert_eq!(claude_models(&store.snapshot()).len(), 6);
+        while claude_models(&store.snapshot()).len() == 6 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            store
+                .dispatch(Intent::LoadModels(op::LoadModels {}))
+                .await
+                .unwrap();
+        }
         let snapshot = store.snapshot();
-        let claude = snapshot
-            .models
-            .iter()
-            .filter(|model| model.model.provider == ProviderKind::Claude)
-            .collect::<Vec<_>>();
+        let claude = claude_models(&snapshot);
         assert_eq!(claude.len(), 2, "removed models must disappear");
         assert_eq!(claude[0].display_name, "Updated default");
         assert_eq!(claude[1].display_name, "New model");

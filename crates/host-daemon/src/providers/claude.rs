@@ -1,5 +1,6 @@
 //! Claude Code owns inference, credentials and its transcript. The Host owns
 //! the client-facing conversation and adapts official Agent SDK events.
+use super::refreshed::{DISCOVERY_FRESH, Refreshed};
 use agent_protocol::{execution::*, items::*};
 mod accounts;
 mod background;
@@ -14,7 +15,7 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use agent_protocol::operations as op;
@@ -102,6 +103,9 @@ pub struct Claude {
     event_receiver: std::sync::Mutex<Option<mpsc::Receiver<AgentEvent>>>,
     stop: CancellationToken,
     workers: AsyncMutex<tokio::task::JoinSet<()>>,
+    /// Discovery launches the CLI: models per account home, skills also per directory.
+    models: Refreshed<PathBuf, Vec<Model>>,
+    commands: Refreshed<(PathBuf, PathBuf), Vec<agent_protocol::composer::ComposerCandidate>>,
 }
 
 struct Record {
@@ -179,7 +183,15 @@ impl Claude {
             event_receiver: std::sync::Mutex::new(Some(event_receiver)),
             stop: CancellationToken::new(),
             workers: AsyncMutex::new(tokio::task::JoinSet::new()),
+            models: Refreshed::new(DISCOVERY_FRESH),
+            commands: Refreshed::new(DISCOVERY_FRESH),
         })
+    }
+
+    /// Replaces the freshness window of CLI discovery.
+    pub fn refresh_discovery_after(mut self, fresh: Duration) -> Self {
+        (self.models, self.commands) = (Refreshed::new(fresh), Refreshed::new(fresh));
+        self
     }
 
     async fn models(&self) -> Result<Vec<Model>, String> {
@@ -189,17 +201,23 @@ impl Claude {
         let Some(auth_home) = self.accounts.lock().await.selected_home()? else {
             return Ok(Vec::new());
         };
-        let cwd = tempfile::tempdir_in(&self.directory).map_err(|error| error.to_string())?;
-        let probe = Process::probe(
-            &self.program,
-            process::homes(&self.native_home, self.native_inherited, &auth_home),
-            cwd.path(),
-        )
-        .await?;
-        let entries = probe.initialized["models"]
-            .as_array()
-            .ok_or("Claude Code did not return a model catalog")?;
-        entries.iter().map(native::parse_model).collect()
+        let (program, directory) = (self.program.clone(), self.directory.clone());
+        let (native_home, native_inherited) = (self.native_home.clone(), self.native_inherited);
+        self.models
+            .read(auth_home.clone(), move || async move {
+                let cwd = tempfile::tempdir_in(&directory).map_err(|error| error.to_string())?;
+                let probe = Process::probe(
+                    &program,
+                    process::homes(&native_home, native_inherited, &auth_home),
+                    cwd.path(),
+                )
+                .await?;
+                let entries = probe.initialized["models"]
+                    .as_array()
+                    .ok_or("Claude Code did not return a model catalog")?;
+                entries.iter().map(native::parse_model).collect()
+            })
+            .await
     }
 
     async fn create(&self, cwd: &str, model: &str) -> anyhow::Result<ThreadResponse> {
@@ -2009,36 +2027,45 @@ impl Agent for Claude {
                 return Ok(Vec::new());
             };
             let directory = if cwd.is_empty() {
-                self.directory.as_path()
+                self.directory.clone()
             } else {
-                Path::new(cwd)
+                PathBuf::from(cwd)
             };
-            let _permit = self
-                .processes
-                .clone()
-                .try_acquire_owned()
-                .map_err(|error| error.to_string())?;
-            let probe = Process::probe(
-                &self.program,
-                process::homes(&self.native_home, self.native_inherited, &auth_home),
-                directory,
-            )
-            .await?;
-            let commands = probe.initialized["commands"]
-                .as_array()
-                .ok_or("スキル一覧を取得できませんでした。")?;
-            Ok::<_, String>(
-                commands
-                    .iter()
-                    .filter_map(|command| {
-                        let name = command["name"].as_str()?;
-                        Some(ComposerCandidate {
-                            invocation: skill_invocation(name, &format!("skill://claude/{name}")),
-                            description: command["description"].as_str().unwrap_or_default().into(),
+            let (program, processes) = (self.program.clone(), self.processes.clone());
+            let (native_home, native_inherited) = (self.native_home.clone(), self.native_inherited);
+            let key = (auth_home.clone(), directory.clone());
+            self.commands
+                .read(key, move || async move {
+                    let _permit = processes
+                        .try_acquire_owned()
+                        .map_err(|error| error.to_string())?;
+                    let probe = Process::probe(
+                        &program,
+                        process::homes(&native_home, native_inherited, &auth_home),
+                        &directory,
+                    )
+                    .await?;
+                    let commands = probe.initialized["commands"]
+                        .as_array()
+                        .ok_or("スキル一覧を取得できませんでした。")?;
+                    Ok(commands
+                        .iter()
+                        .filter_map(|command| {
+                            let name = command["name"].as_str()?;
+                            Some(ComposerCandidate {
+                                invocation: skill_invocation(
+                                    name,
+                                    &format!("skill://claude/{name}"),
+                                ),
+                                description: command["description"]
+                                    .as_str()
+                                    .unwrap_or_default()
+                                    .into(),
+                            })
                         })
-                    })
-                    .collect(),
-            )
+                        .collect())
+                })
+                .await
         }
         .await;
         match candidates {

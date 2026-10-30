@@ -3,6 +3,7 @@
 pub(crate) mod claude;
 pub mod codex;
 pub mod deepseek;
+mod refreshed;
 mod registry;
 pub(crate) mod requests;
 pub use claude::Claude;

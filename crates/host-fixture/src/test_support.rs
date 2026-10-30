@@ -86,7 +86,8 @@ impl HostFixture {
             )
             .await
             {
-                Ok(adapter) => adapter.into(),
+                // Every read also refreshes, so tests observe catalog changes without waiting.
+                Ok(adapter) => adapter.refresh_discovery_after(Duration::ZERO).into(),
                 Err(error) => {
                     eprintln!("Claude fixture adapter unavailable: {error:#}");
                     host_daemon::providers::Backend::unavailable(
