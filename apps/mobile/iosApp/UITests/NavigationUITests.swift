@@ -6,7 +6,9 @@ extension LaunchUITests {
     func testSimulatorRemovesHostAndRequiresPairingAfterRelaunch() throws {
         let app = try connectedSimulatorApp()
         app.navigationBars.buttons["BackButton"].tap()
-        let profile = prefixedButton(app, prefix: "profiles.")
+        let profile = app.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND identifier != %@", "profiles.", "profiles.add"
+        )).firstMatch
         XCTAssertTrue(profile.waitForExistence(timeout: 10))
         captureScreen(app, named: "Redesigned saved PC screen")
         profile.press(forDuration: 1)
