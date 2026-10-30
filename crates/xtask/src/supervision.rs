@@ -189,8 +189,9 @@ fn live_group(processes: &str, group: i32) -> Result<bool> {
     for line in processes.lines().filter(|line| !line.trim().is_empty()) {
         let mut fields = line.split_whitespace();
         let id: i32 = fields.next().ok_or("missing process group")?.parse()?;
-        let state = fields.next().ok_or("missing process state")?;
-        if id == group && !state.starts_with('Z') {
+        // macOS 26 ps omits the run state, leaving only flags or nothing.
+        // Only a reported zombie proves that a member has exited.
+        if id == group && !fields.next().is_some_and(|state| state.starts_with('Z')) {
             return Ok(true);
         }
     }
@@ -260,7 +261,9 @@ mod tests {
         assert!(!live_group("42 Z+\n42 Z\n7 S\n", 42).unwrap());
         assert!(live_group("42 Z\n42 S+\n", 42).unwrap());
         assert!(!live_group("7 R\n", 42).unwrap());
-        assert!(live_group("42\n", 42).is_err());
+        assert!(!live_group("7\n42 ZN\n", 42).unwrap());
+        assert!(live_group("7\n42 N\n", 42).unwrap());
+        assert!(live_group("42\n", 42).unwrap());
         assert!(live_group("unknown S\n", 42).is_err());
     }
 
