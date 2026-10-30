@@ -291,7 +291,7 @@ private struct ThreadListRow: View {
                 Text(thread.title).font(.title3).foregroundColor(.primary).lineLimit(1)
                 Spacer()
                 if thread.active {
-                    ProgressView().controlSize(.small)
+                    RunningIndicator().controlSize(.small)
                         .accessibilityIdentifier("tasks.running.\(accessibilityID)")
                 } else if thread.unread {
                     Circle().fill(Color.primary).frame(width: 8, height: 8)
@@ -316,5 +316,24 @@ private struct ThreadListRow: View {
         .accessibilityIdentifier("tasks.row.\(accessibilityID)")
         .accessibilityValue(thread.active ? "実行中" : thread.unread ? "完了・未確認" : "")
         .taskListRowStyle()
+    }
+}
+
+/// On iOS 26.6 devices a running row kept the indicator's layout space while the
+/// indicator stayed stopped and invisible, and refreshing the unchanged row did not
+/// restart it. A new indicator on each appearance and foreground return starts animating.
+private struct RunningIndicator: View {
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var generation = 0
+
+    var body: some View {
+        ProgressView()
+            .id(generation)
+            .onAppear { generation += 1 }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active {
+                    generation += 1
+                }
+            }
     }
 }
