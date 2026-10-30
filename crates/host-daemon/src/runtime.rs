@@ -48,7 +48,7 @@ pub(crate) async fn run(config: StartupConfig) -> Result<()> {
     } else {
         Relays::Custom(config.relay_url)
     };
-    let endpoint = Endpoint::bind(credentials.host_identity().await, relays)
+    let endpoint = Endpoint::bind_host(credentials.host_identity().await, relays)
         .await
         .context("cannot bind Host endpoint")?;
     let account_directory = config.account_state_dir.as_deref().unwrap_or(&directory);
