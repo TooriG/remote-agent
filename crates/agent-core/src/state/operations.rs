@@ -248,8 +248,6 @@ pub enum Intent {
 pub enum StalePolicy {
     Discard,
     Apply,
-    /// Fetch current data again instead of publishing a response from an older epoch.
-    Retry,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -357,18 +355,23 @@ impl OperationKey {
 pub enum Scheduling {
     Concurrent,
     Control,
-    LatestTaskActivity,
+    /// Host-owned state for the whole connection: navigation never makes it
+    /// stale, and only the newest read of the key runs.
+    LatestHostState(OperationKey),
     LatestList(Option<crate::models::ListPart>),
     LatestAgents(crate::session::SessionRef),
     LatestProject(String),
     LatestReview,
     Item(ReadItem),
-    Terminal { handle: String, starts: bool },
+    Terminal {
+        handle: String,
+        starts: bool,
+    },
 }
 impl Scheduling {
     pub(crate) fn latest_key(&self) -> Option<OperationKey> {
         match self {
-            Self::LatestTaskActivity => Some(OperationKey::TaskActivity),
+            Self::LatestHostState(key) => Some(key.clone()),
             Self::LatestList(part) => Some(OperationKey::list(*part)),
             Self::LatestProject(project_id) => Some(OperationKey::ProjectList {
                 project_id: project_id.clone(),
@@ -435,8 +438,7 @@ pub trait Operation: Send + Sync + std::fmt::Debug + Sized + 'static {
     fn stale(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
         match Self::STALE_POLICY {
             StalePolicy::Apply => self.apply(snapshot, output),
-            StalePolicy::Retry if snapshot.connected => vec![Effect::execute(self)],
-            StalePolicy::Discard | StalePolicy::Retry => Vec::new(),
+            StalePolicy::Discard => Vec::new(),
         }
     }
     fn complete(

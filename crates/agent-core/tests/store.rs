@@ -482,9 +482,14 @@ async fn setup(snapshot: Snapshot) -> (Arc<Store>, host_fixture::Reader, host_fi
             .unwrap();
         opening.await.unwrap();
     }
+    // Host state applies whenever it arrives, so tests start after the connection's reads.
     wait_for(&store, |current| {
         current.threads.is_some()
             && current.task_activity.is_some()
+            && current.account.accounts.is_some()
+            && [op::OperationKey::Models, op::OperationKey::Accounts]
+                .iter()
+                .all(|key| !current.operations.contains_key(key))
             && (cwd.is_empty() || current.workspace.review.is_some())
     })
     .await;
@@ -3442,10 +3447,6 @@ async fn navigation_invalidates_all_view_reads_and_their_errors() {
             Intent::ReadWorktreeSettings(op::ReadWorktreeSettings {}),
             json!({"createOnNewSession":false,"copyOnCreate":false,"copyPaths":[],"worktreeDirectory":"old"}),
         ),
-        (
-            Intent::ListAccounts(op::ListAccounts {}),
-            json!({"accounts":[],"selected":{},"error":null}),
-        ),
     ] {
         let (store, mut reader, writer) = setup(Snapshot::default()).await;
         let loading = store.dispatch(intent);
@@ -3533,7 +3534,7 @@ async fn saving_after_navigation_rebases_newer_edits_without_restoring_the_old_f
 }
 
 #[tokio::test]
-async fn opening_a_draft_during_initial_catalog_reads_retries_and_selects_a_model() {
+async fn host_catalogs_read_during_navigation_apply_without_another_request() {
     let (store, mut reader, writer) = connected(Snapshot::default()).await;
     let mut pending = BTreeMap::new();
     for _ in 0..4 {
@@ -3550,38 +3551,28 @@ async fn opening_a_draft_during_initial_catalog_reads_retries_and_selects_a_mode
         .await
         .unwrap();
     wait_for(&store, |state| state.threads.is_some()).await;
+    // Navigation does not change the Host's catalogs, so their reads stay valid.
     store
         .dispatch(Intent::NewChat { cwd: String::new() })
         .await
         .unwrap();
     writer
-        .reply(&pending["host/model/list"], json!({"result":{"data":[]}}))
+        .reply(
+            &pending["host/model/list"],
+            json!({"result":{"data":[{
+                "id":"fresh","model":{"provider": "codex", "id": "fresh"},"displayName":"Fresh model",
+                "isDefault":true, "settings": {"defaultReasoningEffort":"medium","supportedReasoningEfforts":[]
+            }}]}}),
+        )
         .await
         .unwrap();
     writer
         .reply(
             &pending["host/account/list"],
-            json!({"result":{"accounts":[],"selected":{}}}),
+            json!({"result":authenticated_snapshot().account.accounts.as_ref().unwrap()}),
         )
         .await
         .unwrap();
-    for _ in 0..2 {
-        let request = read(&mut reader).await;
-        let result = match request["method"].as_str().unwrap() {
-            "host/model/list" => json!({"data":[{
-                "id":"fresh","model":{"provider": "codex", "id": "fresh"},"displayName":"Fresh model",
-                "isDefault":true, "settings": {"defaultReasoningEffort":"medium","supportedReasoningEfforts":[]
-            }}]}),
-            "host/account/list" => {
-                json!(authenticated_snapshot().account.accounts.as_ref().unwrap())
-            }
-            method => panic!("unexpected retry: {method}"),
-        };
-        writer
-            .reply(&request, json!({"result":result}))
-            .await
-            .unwrap();
-    }
     wait_for(&store, |state| {
         state.drafts[&state.navigation.draft_key].model.as_ref()
             == Some(&agent_protocol::models::ModelRef {
@@ -3592,6 +3583,20 @@ async fn opening_a_draft_during_initial_catalog_reads_retries_and_selects_a_mode
     })
     .await;
     assert_eq!(store.snapshot().models[0].display_name, "Fresh model");
+    while let Ok(Some(request)) =
+        tokio::time::timeout(Duration::from_millis(100), reader.read_request())
+            .await
+            .unwrap_or(Ok(None))
+    {
+        assert!(
+            !matches!(
+                request["method"].as_str(),
+                Some("host/model/list" | "host/account/list")
+            ),
+            "a catalog read during navigation must not be requested again"
+        );
+        let _ = writer.reply(&request, json!({"result":{}})).await;
+    }
     store.close().await.unwrap();
 }
 

@@ -10,8 +10,10 @@ impl Operation for ListAccounts {
     fn key(&self) -> Option<OperationKey> {
         Some(OperationKey::Accounts)
     }
+    fn scheduling(&self) -> Scheduling {
+        Scheduling::LatestHostState(OperationKey::Accounts)
+    }
     rpc_operation!();
-    const STALE_POLICY: StalePolicy = StalePolicy::Retry;
     fn apply(self, snapshot: &mut Snapshot, mut output: Self::Output) -> Vec<Effect> {
         let effects = output
             .accounts

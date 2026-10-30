@@ -908,11 +908,12 @@ fn finish(updates: &watch::Sender<Arc<Snapshot>>, completed: Completed) -> Vec<S
     let mut result = Ok(Outcome::Applied);
     updates.send_if_modified(|snapshot| {
         // Dispatch and completion share this lock. List results and failures
-        // belong to their query; view work belongs to the navigation epoch.
+        // belong to their query, Host state to the connection, and view work
+        // to the navigation epoch.
         let current = match &completed.scheduling {
             op::Scheduling::LatestList(_)
             | op::Scheduling::LatestProject(_)
-            | op::Scheduling::LatestTaskActivity => {
+            | op::Scheduling::LatestHostState(_) => {
                 generation_current(completed.scope.operation.as_ref(), &snapshot.operations)
             }
             _ => completed
@@ -923,7 +924,7 @@ fn finish(updates: &watch::Sender<Arc<Snapshot>>, completed: Completed) -> Vec<S
             && completed.scope.operation.is_none()
             && !matches!(
                 &completed.scheduling,
-                op::Scheduling::LatestProject(_) | op::Scheduling::LatestTaskActivity
+                op::Scheduling::LatestProject(_) | op::Scheduling::LatestHostState(_)
             );
         let mut next = snapshot.as_ref().clone();
         result = match completed.result {
@@ -1213,7 +1214,7 @@ async fn run(
                 }
                 op::Scheduling::Control => MAX_RPC_JOBS + CONTROL_RESERVE,
                 op::Scheduling::Concurrent
-                | op::Scheduling::LatestTaskActivity
+                | op::Scheduling::LatestHostState(_)
                 | op::Scheduling::LatestList(_)
                 | op::Scheduling::LatestAgents(_)
                 | op::Scheduling::LatestProject(_)

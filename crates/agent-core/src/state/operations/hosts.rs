@@ -10,7 +10,7 @@ impl Operation for ReadTaskActivity {
         Some(OperationKey::TaskActivity)
     }
     fn scheduling(&self) -> Scheduling {
-        Scheduling::LatestTaskActivity
+        Scheduling::LatestHostState(OperationKey::TaskActivity)
     }
     fn apply(self, snapshot: &mut Snapshot, state: Self::Output) -> Vec<Effect> {
         snapshot.accept_task_activity(state)

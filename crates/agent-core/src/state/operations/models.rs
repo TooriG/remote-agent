@@ -9,12 +9,14 @@ impl Operation for LoadModels {
     fn key(&self) -> Option<OperationKey> {
         Some(OperationKey::Models)
     }
+    fn scheduling(&self) -> Scheduling {
+        Scheduling::LatestHostState(OperationKey::Models)
+    }
     no_input!();
     type Output = rpc::ModelPage;
     async fn run(&self, _: (), context: &mut Execution<'_>) -> Result<Self::Output, PeerError> {
         context.client.models().await
     }
-    const STALE_POLICY: StalePolicy = StalePolicy::Retry;
     fn apply(self, snapshot: &mut Snapshot, catalog: Self::Output) -> Vec<Effect> {
         let models = catalog.data;
         let errors = catalog
