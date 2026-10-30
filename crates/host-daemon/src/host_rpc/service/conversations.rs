@@ -339,15 +339,30 @@ impl HostRpcService {
             .ok_or_else(|| {
                 Failure::new("model_required", "Select a model for the target provider.")
             })?;
-        let observed = self
-            .inner
-            .router
-            .overlay_execution(root, source.thread.clone());
+        // Receipts and live events use public IDs, including after a handoff.
+        // Compare the native history in that same namespace.
+        let mut observed = source.thread.clone();
+        if let Some(row) = &previous {
+            for turn in observed.turns.iter_mut().flatten() {
+                Arc::make_mut(turn).id = row.identity(&active, &turn.id).into();
+            }
+        }
+        let observed = self.inner.router.overlay_execution(root, observed);
         let unfinished = observed
             .submissions
             .iter()
             .filter(|(id, _)| *id != &input.client_user_message_id)
-            .map(|(_, delivery)| delivery);
+            .map(|(_, delivery)| delivery)
+            .filter(|delivery| match delivery {
+                // Earlier switches already checked and released their source.
+                // Replayed receipts from those bindings cannot own current work.
+                agent_protocol::session::SubmissionDelivery::Accepted {
+                    turn_id: Some(turn),
+                } => !previous
+                    .as_ref()
+                    .is_some_and(|row| row.source(turn).is_ok_and(|(source, _)| source != active)),
+                _ => true,
+            });
         if worktree_active(
             observed.status,
             observed.turns.as_deref().unwrap_or_default(),

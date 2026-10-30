@@ -917,6 +917,120 @@ async fn round_trip_reuses_native_sessions_transfers_only_missing_history_and_re
 }
 
 #[tokio::test]
+async fn replayed_handoff_receipts_do_not_block_later_provider_switches() {
+    use agent_protocol::session::SubmissionDelivery;
+
+    let directory = tempfile::tempdir().unwrap();
+    let a = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));
+    let b = NativeAgent::new(ProviderKind::Claude, directory.path().join("claude"));
+    let root = b
+        .create(directory.path().to_str().unwrap(), None, None)
+        .await
+        .unwrap()
+        .thread
+        .id
+        .unwrap();
+    let host = service(directory.path(), &a, &b);
+    let client = host.open_session();
+    send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Claude,
+        "b1",
+        "Original",
+    )
+    .await
+    .unwrap();
+    let receipt = send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "a1",
+        "Continue",
+    )
+    .await
+    .unwrap();
+    // A retry replays the persisted acknowledgement without another native
+    // completion event. Its public turn ID still identifies finished history.
+    let replayed = send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "a1",
+        "Continue",
+    )
+    .await
+    .unwrap();
+    assert_eq!(receipt.turn_id, replayed.turn_id);
+    assert_eq!(a.inputs.lock().unwrap().len(), 1);
+    let opened = history(&host, client.id(), &root).await;
+    assert!(opened.thread.active_turn_id().is_none());
+    assert!(opened.thread.submissions.contains_key("a1"));
+    let row = host.inner.conversations.get(&root).unwrap().unwrap();
+    host.inner
+        .router
+        .begin_submission(&root, "pending")
+        .unwrap();
+    for delivery in [
+        SubmissionDelivery::Sending,
+        SubmissionDelivery::Unknown,
+        SubmissionDelivery::Accepted { turn_id: None },
+        SubmissionDelivery::Accepted {
+            turn_id: Some(row.identity(&row.active, "unconfirmed").into()),
+        },
+        SubmissionDelivery::Accepted {
+            turn_id: Some("bex:invalid".into()),
+        },
+    ] {
+        host.inner
+            .router
+            .finish_submission(&root, "pending", delivery);
+        assert_eq!(
+            send(
+                &host,
+                client.id(),
+                &root,
+                ProviderKind::Claude,
+                "b2",
+                "Review"
+            )
+            .await
+            .unwrap_err()
+            .code,
+            "provider_switch_busy"
+        );
+    }
+    host.inner
+        .router
+        .finish_submission(&root, "pending", SubmissionDelivery::Rejected);
+    send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Claude,
+        "b2",
+        "Review",
+    )
+    .await
+    .unwrap();
+    send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "a2",
+        "Finish",
+    )
+    .await
+    .unwrap();
+    assert_eq!(a.inputs.lock().unwrap().len(), 2);
+    assert_eq!(b.inputs.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
 async fn large_saved_history_and_new_requests_reach_the_same_native_session_for_compaction() {
     for provider in [ProviderKind::Codex, ProviderKind::Claude] {
         for (history_text, request_text) in [
