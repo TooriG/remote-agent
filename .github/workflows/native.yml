@@ -426,7 +426,13 @@ jobs:
           "GPUI_FXC_PATH=$compiler" >> $env:GITHUB_ENV
       - name: Build desktop, Host and CLI
         if: ${{ !inputs.desktop-release-tag }}
-        run: cargo build --locked --features agent-core/bindings -p codex-app-server -p agent-process -p agent-desktop -p host-daemon -p agent-cli
+        run: |
+          cargo build --locked --features agent-core/bindings -p codex-app-server -p agent-process -p agent-desktop -p host-daemon -p agent-cli
+          if ($LASTEXITCODE -ne 0) { throw "Windows build failed." }
+          $desktopBuildNumber = & ./target/debug/agent-desktop.exe --bex-build-number
+          if ($LASTEXITCODE -ne 0 -or "$desktopBuildNumber".Trim() -ne "0") {
+            throw "The desktop updater could not read the development build number."
+          }
       - name: Install the SDK runtime beside the Host
         if: ${{ !inputs.desktop-release-tag }}
         run: node scripts/install-claude-sdk.mjs target/debug
