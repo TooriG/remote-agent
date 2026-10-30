@@ -66,6 +66,16 @@ pub struct Pair {
 pub struct ReadHostStatus {}
 rpc_method!(ReadHostStatus, HostStatus, |self| crate::models::Empty {});
 
+/// Local updater only: persist interrupted work before shutting down this Host.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrepareHostUpdate {}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostUpdate {
+    pub executable: String,
+    pub arguments: Vec<String>,
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct ListRemoteHosts {}
 rpc_method!(ListRemoteHosts, ListRemotes, |self| crate::models::Empty {});

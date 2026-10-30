@@ -542,33 +542,35 @@ impl Desktop {
                 add_project: None,
             })
             .footer(
-                h_flex()
-                    .w_full()
-                    .gap_2()
-                    .justify_between()
-                    .py_2()
-                    .child(
-                        Self::icon_button(
-                            "sidebar-settings",
-                            IconName::Settings,
-                            "設定を開く",
-                            cx,
-                            |s, _, cx| {
-                                s.open_settings();
-                                if let Some(hosts) = &s.hosts {
-                                    hosts.update(cx, |hosts, _| hosts.refresh());
-                                }
-                            },
+                v_flex().w_full().children(self.app_updates.clone()).child(
+                    h_flex()
+                        .w_full()
+                        .gap_2()
+                        .justify_between()
+                        .py_2()
+                        .child(
+                            Self::icon_button(
+                                "sidebar-settings",
+                                IconName::Settings,
+                                "設定を開く",
+                                cx,
+                                |s, _, cx| {
+                                    s.open_settings();
+                                    if let Some(hosts) = &s.hosts {
+                                        hosts.update(cx, |hosts, _| hosts.refresh());
+                                    }
+                                },
+                            )
+                            .debug_selector(|| "sidebar-settings".into()),
                         )
-                        .debug_selector(|| "sidebar-settings".into()),
-                    )
-                    .child(Self::icon_button(
-                        "refresh-threads",
-                        IconName::RotateCw,
-                        "会話を更新",
-                        cx,
-                        |s, _, _| s.refresh_threads(),
-                    )),
+                        .child(Self::icon_button(
+                            "refresh-threads",
+                            IconName::RotateCw,
+                            "会話を更新",
+                            cx,
+                            |s, _, _| s.refresh_threads(),
+                        )),
+                ),
             )
     }
     fn draggable_chat(

@@ -23,6 +23,7 @@ pub struct HostRuntime {
     name: String,
     invitation_lifetime: Duration,
     active: Mutex<BTreeMap<SessionId, Session>>,
+    update_shutdown: CancellationToken,
 }
 impl HostRuntime {
     pub async fn new(
@@ -41,6 +42,7 @@ impl HostRuntime {
             name,
             invitation_lifetime,
             active: Mutex::new(BTreeMap::new()),
+            update_shutdown: CancellationToken::new(),
         }
     }
     pub fn ticket(&self) -> Ticket {
@@ -79,6 +81,7 @@ impl HostRuntime {
             loop {
                 tokio::select! {
                     _ = shutdown.cancelled() => break Ok(()),
+                    _ = self.update_shutdown.cancelled() => break Ok(()),
                     incoming = &mut accept => {
                         accept.set(self.endpoint.accept());
                         match incoming {
@@ -306,6 +309,7 @@ impl HostRuntime {
             message,
             Call::Pair(_)
                 | Call::HostStatus(_)
+                | Call::PrepareHostUpdate(_)
                 | Call::Invite(_)
                 | Call::Revoke(_)
                 | Call::ListRemotes(_)
@@ -339,6 +343,33 @@ impl HostRuntime {
     }
     async fn manage(&self, call: &Call) -> Result<Body> {
         match call {
+            Call::PrepareHostUpdate(_) => {
+                let executable = std::env::current_exe()?
+                    .into_os_string()
+                    .into_string()
+                    .map_err(|_| anyhow::anyhow!("Host executable path must be UTF-8"))?;
+                let arguments = std::env::args_os()
+                    .skip(1)
+                    .map(|value| {
+                        value
+                            .into_string()
+                            .map_err(|_| anyhow::anyhow!("Host arguments must be UTF-8"))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                self.service.prepare_update().await?;
+                let stop = self.update_shutdown.clone();
+                // Allow the acknowledged preparation response to flush before
+                // closing connections. The updater also waits for the lease.
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    stop.cancel();
+                });
+                Ok(agent_protocol::operations::HostUpdate {
+                    executable,
+                    arguments,
+                }
+                .into())
+            }
             Call::HostStatus(_) => {
                 let record = self.credentials.record.lock().await;
                 Ok(HostStatus {
@@ -444,6 +475,59 @@ mod tests {
     };
     use agent_transport::transport::Relays;
     use serde_json::Value;
+
+    #[tokio::test]
+    async fn only_the_local_node_can_prepare_an_app_update() {
+        let directory = tempfile::tempdir().unwrap();
+        let credentials = Arc::new(
+            HostCredentials::load(
+                Arc::new(crate::FileKeyStore(agent_local_host::identity_path(
+                    directory.path(),
+                ))),
+                directory.path().to_owned(),
+            )
+            .await
+            .unwrap(),
+        );
+        let endpoint = Endpoint::bind(credentials.host_identity().await, Relays::Loopback)
+            .await
+            .unwrap();
+        let service = HostRpcService::new(
+            [],
+            crate::ProjectStore::new(directory.path().join("projects.json")),
+        );
+        service.set_history_scope(directory.path().to_owned(), true);
+        let runtime = HostRuntime::new(
+            service,
+            endpoint.clone(),
+            credentials,
+            "update-host".into(),
+            Duration::from_secs(60),
+        )
+        .await;
+        let remote = agent_transport::transport::Identity::generate().node_id();
+        let reply = runtime
+            .dispatch(
+                remote,
+                0,
+                &Call::PrepareHostUpdate(agent_protocol::operations::PrepareHostUpdate {}),
+            )
+            .await
+            .unwrap();
+        let response: Response<agent_protocol::operations::HostUpdate> =
+            agent_protocol::protocol::decode(&reply.initial).unwrap();
+        assert!(
+            matches!(response, Response::Failure { error } if error.code == "management_failed" && error.delivery == Delivery::NotSent)
+        );
+        assert!(!runtime.update_shutdown.is_cancelled());
+        assert!(
+            !directory
+                .path()
+                .join(agent_local_host::update::RECOVERY_FILE)
+                .exists()
+        );
+        endpoint.close().await;
+    }
 
     #[tokio::test]
     async fn an_unsupported_operation_does_not_disconnect_an_authenticated_client() {

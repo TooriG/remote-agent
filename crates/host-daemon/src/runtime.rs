@@ -108,6 +108,9 @@ pub(crate) async fn run(config: StartupConfig) -> Result<()> {
         .await
         .map_err(anyhow::Error::msg)?;
     service.start();
+    if let Err(error) = service.resume_after_update(&directory).await {
+        tracing::error!(target: "agent", operation = "host.update.resume", message = %error);
+    }
     let local_ticket = endpoint.local_ticket();
     let runtime = Arc::new(
         HostRuntime::new(

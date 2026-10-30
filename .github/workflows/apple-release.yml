@@ -22,7 +22,7 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 150
     permissions:
-      actions: read
+      actions: write # Dispatch Windows packaging after publishing this exact release.
       contents: write
     env:
       AGENT_XCODE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
@@ -91,6 +91,10 @@ jobs:
             target/apple-release/bex-macOS-arm64.zip.sha256 --repo "$GITHUB_REPOSITORY" \
             --target "$AGENT_RELEASE_SHA" --title "BEX ${AGENT_BUILD_NUMBER}" \
             --notes-file target/apple-release/release-notes.txt
+          # GITHUB_TOKEN release events do not trigger Native clients. Dispatch
+          # the existing Windows packager explicitly for the same verified tag.
+          gh workflow run native.yml --repo "$GITHUB_REPOSITORY" --ref main \
+            -f "desktop-release-tag=$AGENT_RELEASE_TAG"
       - name: Remove signing credentials
         if: always()
         run: scripts/dev-env.sh node scripts/apple-signing.mjs cleanup

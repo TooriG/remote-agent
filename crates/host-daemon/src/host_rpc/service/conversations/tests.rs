@@ -439,6 +439,167 @@ fn service(path: &Path, a: &Arc<NativeAgent>, b: &Arc<NativeAgent>) -> HostRpcSe
     )
 }
 
+#[tokio::test]
+async fn app_update_resumes_each_interrupted_conversation_once_with_its_settings() {
+    use agent_local_host::update::{ContinuationDelivery, RECOVERY_FILE, Recovery};
+    let directory = tempfile::tempdir().unwrap();
+    let a = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));
+    let b = NativeAgent::new(ProviderKind::Claude, directory.path().join("claude"));
+    let mut ids = Vec::new();
+    for agent in [&a, &b] {
+        let mut response = agent
+            .create(
+                directory.path().to_str().unwrap(),
+                Some("selected-model"),
+                None,
+            )
+            .await
+            .unwrap();
+        let id = response.thread.id.clone().unwrap();
+        response.thread.status = SessionStatus::Running;
+        response.thread.turns = Some(vec![Arc::new(Turn {
+            id: "interrupted-turn".into(),
+            status: TurnStatus::Running,
+            ..Default::default()
+        })]);
+        response.effort = Some("high".into());
+        response.service_tier = Some("priority".into());
+        agent
+            .records
+            .lock()
+            .unwrap()
+            .insert(id.id.clone(), response);
+        ids.push(id);
+    }
+    let host = service(directory.path(), &a, &b);
+    host.set_history_scope(directory.path().to_owned(), true);
+    host.prepare_update().await.unwrap();
+    let recovery_path = directory.path().join(RECOVERY_FILE);
+    let recovery: Recovery =
+        serde_json::from_slice(&std::fs::read(&recovery_path).unwrap()).unwrap();
+    assert_eq!(recovery.tasks.len(), 2);
+    assert!(
+        recovery
+            .tasks
+            .iter()
+            .all(
+                |task| task.last_turn.as_ref().unwrap().as_str() == "interrupted-turn"
+                    && task.cwd.as_deref() == directory.path().to_str()
+            )
+    );
+    let connection = host.open_session();
+    assert_eq!(
+        send(
+            &host,
+            connection.id(),
+            &ids[0],
+            ProviderKind::Codex,
+            "during-update",
+            "new input"
+        )
+        .await
+        .unwrap_err()
+        .code,
+        "host_updating"
+    );
+    assert!(host.prepare_update().await.is_err());
+    drop(host);
+    let (a, b) = (a.restarted(), b.restarted());
+    for agent in [&a, &b] {
+        for response in agent.records.lock().unwrap().values_mut() {
+            response.thread.status = SessionStatus::Idle;
+            Arc::make_mut(&mut response.thread.turns.as_mut().unwrap()[0]).status =
+                TurnStatus::Interrupted;
+        }
+    }
+    let host = service(directory.path(), &a, &b);
+    host.resume_after_update(directory.path()).await.unwrap();
+    host.resume_after_update(directory.path()).await.unwrap();
+    for (agent, id) in [&a, &b].into_iter().zip(ids) {
+        let inputs = agent.inputs.lock().unwrap();
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].thread_id, id);
+        assert_eq!(inputs[0].model.as_ref().unwrap().id, "selected-model");
+        assert_eq!(inputs[0].effort.as_deref(), Some("high"));
+        assert_eq!(inputs[0].service_tier.as_deref(), Some("priority"));
+        assert!(
+            matches!(&inputs[0].input[0], op::Input::Text { text } if text.contains("中断したところから"))
+        );
+    }
+    let recovery: Recovery =
+        serde_json::from_slice(&std::fs::read(recovery_path).unwrap()).unwrap();
+    assert!(recovery.tasks.iter().all(|task| matches!(&task.delivery, ContinuationDelivery::Accepted(turn) if turn.as_str() == "turn-1")));
+}
+
+#[tokio::test]
+async fn app_update_does_not_repeat_uncertain_failed_or_finished_continuations() {
+    use agent_local_host::update::{
+        ContinuationDelivery, InterruptedTask, RECOVERY_FILE, Recovery,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let a = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));
+    let b = NativeAgent::new(ProviderKind::Claude, directory.path().join("claude"));
+    let mut tasks = Vec::new();
+    for (delivery, finished) in [
+        (ContinuationDelivery::Pending, false),
+        (ContinuationDelivery::Sending, false),
+        (ContinuationDelivery::Failed("already failed".into()), false),
+        (ContinuationDelivery::Pending, true),
+    ] {
+        let mut response = a
+            .create(directory.path().to_str().unwrap(), None, None)
+            .await
+            .unwrap();
+        if finished {
+            response.thread.turns = Some(vec![Arc::new(Turn {
+                id: "finished-during-shutdown".into(),
+                status: TurnStatus::Completed,
+                ..Default::default()
+            })]);
+            a.records.lock().unwrap().insert(
+                response.thread.id.as_ref().unwrap().id.clone(),
+                response.clone(),
+            );
+        }
+        let last_turn = finished.then(|| "finished-during-shutdown".into());
+        let session = response.thread.id.unwrap();
+        tasks.push(InterruptedTask {
+            native_session: session.clone(),
+            submission: op::Submission {
+                thread_id: session,
+                client_user_message_id: uuid::Uuid::new_v4().to_string().into(),
+                input: vec![op::Input::Text {
+                    text: "Continue".into(),
+                }],
+                model: None,
+                effort: None,
+                service_tier: None,
+            },
+            cwd: None,
+            last_turn,
+            delivery,
+        });
+    }
+    let path = directory.path().join(RECOVERY_FILE);
+    agent_local_host::save_private_json(&path, &Recovery { tasks }).unwrap();
+    a.fail_submit.store(1, Ordering::SeqCst);
+    let host = service(directory.path(), &a, &b);
+    host.resume_after_update(directory.path()).await.unwrap();
+    host.resume_after_update(directory.path()).await.unwrap();
+    assert!(a.inputs.lock().unwrap().is_empty());
+    let recovery: Recovery = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert!(matches!(
+        recovery.tasks[0].delivery,
+        ContinuationDelivery::Failed(_)
+    ));
+    assert_eq!(recovery.tasks[1].delivery, ContinuationDelivery::Sending);
+    assert!(matches!(
+        recovery.tasks[2].delivery,
+        ContinuationDelivery::Failed(_)
+    ));
+    assert_eq!(recovery.tasks[3].delivery, ContinuationDelivery::Completed);
+}
+
 async fn call<T: DeserializeOwned>(
     service: &HostRpcService,
     session: SessionId,

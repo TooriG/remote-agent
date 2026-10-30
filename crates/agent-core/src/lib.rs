@@ -13,6 +13,7 @@ pub mod presentation;
 pub mod privacy;
 pub mod state;
 pub mod store;
+pub mod updates;
 
 #[cfg(feature = "bindings")]
 pub mod bindings;

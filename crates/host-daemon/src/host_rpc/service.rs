@@ -6,6 +6,7 @@ mod model_selections;
 mod project_import;
 mod sessions;
 mod titles;
+mod update;
 mod worktrees;
 
 use super::routing::{HostReply, HostSession, SessionId, SessionRouter};
@@ -49,6 +50,7 @@ struct ServiceInner {
     conversations: super::conversations::Conversations,
     model_selections: model_selections::ModelSelections,
     history_scope: OnceLock<(std::path::PathBuf, bool)>,
+    updating: std::sync::atomic::AtomicBool,
 }
 
 impl HostRpcService {
@@ -62,6 +64,7 @@ impl HostRpcService {
         Self {
             inner: Arc::new(ServiceInner {
                 history_scope: OnceLock::new(),
+                updating: std::sync::atomic::AtomicBool::new(false),
                 conversations: super::conversations::Conversations::new(
                     projects.path().with_file_name("bex-conversations.json"),
                 ),
@@ -241,6 +244,17 @@ impl HostRpcService {
             } else {
                 None
             };
+            if _workspace_read.is_some()
+                && self
+                    .inner
+                    .updating
+                    .load(std::sync::atomic::Ordering::Acquire)
+            {
+                return Err(Failure::new(
+                    "host_updating",
+                    "Bexを更新しています。再接続後にもう一度お試しください。",
+                ));
+            }
             if let Some((target, id)) = submission {
                 if matches!(message, Call::Submit(_))
                     && let Some(receipt) = self.inner.router.submission_receipt(target, id)
@@ -339,7 +353,7 @@ impl HostRpcService {
                 self.inner.router.mark_session_read(params)?;
                 agent_protocol::models::Empty {}.into()
             }
-            Call::ReadTaskActivity(_) => self.read_task_activity().await?.into(),
+            Call::ReadTaskActivity(_) => self.read_task_activity(false).await?.into(),
             Call::RegisterLiveActivity(params) => {
                 self.register_live_activity(session, params)?.into()
             }
@@ -572,7 +586,7 @@ impl HostRpcService {
                         if apns.is_ready() {
                             break;
                         }
-                        let _ = service.read_task_activity().await;
+                        let _ = service.read_task_activity(false).await;
                         if apns.is_ready() {
                             break;
                         }

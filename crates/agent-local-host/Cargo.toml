@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+agent-protocol = { path = "../agent-protocol" }
 agent-transport = { path = "../agent-transport" }
 anyhow.workspace = true
 atomicwrites = "0.4.4"

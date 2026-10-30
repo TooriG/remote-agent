@@ -217,6 +217,7 @@ dependencies = [
  "qrcode",
  "raw-window-handle",
  "rfd",
+ "ring",
  "rubato",
  "rust-embed",
  "serde",
@@ -243,6 +244,7 @@ dependencies = [
 name = "agent-local-host"
 version = "0.1.0"
 dependencies = [
+ "agent-protocol",
  "agent-transport",
  "anyhow",
  "atomicwrites",

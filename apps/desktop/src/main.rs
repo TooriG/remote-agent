@@ -6,6 +6,7 @@ mod diff;
 mod platform;
 mod store_session;
 mod terminal;
+mod updates;
 use futures_util::FutureExt;
 use gpui_kit::{component::Root, *};
 const WINDOW_HEADER_HEIGHT: f32 = 44.;
@@ -130,6 +131,9 @@ fn open_main_window(cx: &mut App) {
 }
 
 fn main() {
+    if updates::run_command() {
+        return;
+    }
     #[cfg(target_os = "macos")]
     let _ = std::thread::Builder::new()
         .name("microphone-prepare".into())

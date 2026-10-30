@@ -241,7 +241,7 @@ impl Connections {
     }
 }
 
-fn isolated_host() -> anyhow::Result<bool> {
+pub(crate) fn isolated_host() -> anyhow::Result<bool> {
     match std::env::var("AGENT_ISOLATED_HOST").as_deref() {
         Err(std::env::VarError::NotPresent) | Ok("0") => Ok(false),
         Ok("1") if std::env::var_os("AGENT_STATE_DIR").is_some() => Ok(true),

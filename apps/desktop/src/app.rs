@@ -138,6 +138,7 @@ pub(crate) struct Desktop {
     connecting: bool,
     remote: Option<RemoteHost>,
     hosts: Option<Entity<Hosts>>,
+    app_updates: Option<Entity<crate::updates::Updates>>,
     side_chat_mode: bool,
     onboarding: bool,
     import_projects: bool,
@@ -231,6 +232,9 @@ impl Desktop {
         let path = cx.new(|cx| InputState::new(window, cx).placeholder("絶対パス"));
         let worktrees = forms::WorktreeForm::new(window, cx);
         let hosts = (!side_chat_mode).then(|| cx.new(|cx| Hosts::new(window, cx)));
+        let app_updates = (!side_chat_mode
+            && cfg!(any(target_os = "macos", target_os = "windows")))
+        .then(|| cx.new(crate::updates::Updates::new));
         let selection = cx.new(|_| selection::ConversationSelection::new(!side_chat_mode));
         let mut subscriptions = vec![
             cx.subscribe_in(
@@ -355,6 +359,9 @@ impl Desktop {
                 }),
             );
         }
+        if let Some(updates) = &app_updates {
+            subscriptions.push(cx.observe(updates, |_, _, cx| cx.notify()));
+        }
         let mut view = Self {
             session: None,
             snapshot: Arc::default(),
@@ -364,6 +371,7 @@ impl Desktop {
             connecting: false,
             remote,
             hosts,
+            app_updates,
             side_chat_mode,
             onboarding: !side_chat_mode
                 && !platform::state_dir()

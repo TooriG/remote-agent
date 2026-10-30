@@ -38,12 +38,15 @@ impl HostRpcService {
 
     pub(super) async fn read_task_activity(
         &self,
+        require_complete: bool,
     ) -> Result<agent_protocol::live_activity::TaskActivityState, Failure> {
         self.inner.router.check_read_state()?;
         let revision = self.inner.router.task_activity_revision();
         let agents = self.inner.providers.all();
-        let has_sources =
-            !agents.is_empty() || self.inner.providers.startup_errors().next().is_some();
+        // An unavailable provider has no Host-owned process to interrupt. A
+        // broken provider installation must not prevent updating the app.
+        let has_sources = !agents.is_empty()
+            || (!require_complete && self.inner.providers.startup_errors().next().is_some());
         let listings =
             futures_util::future::join_all(agents.into_iter().map(|(_, agent)| async move {
                 tokio::time::timeout(
@@ -64,7 +67,7 @@ impl HostRpcService {
             .await;
         let mut native = Vec::new();
         let mut successful = false;
-        let mut complete = self.inner.providers.startup_errors().next().is_none();
+        let mut complete = true;
         for result in listings {
             if let Ok(Ok(pages)) = result {
                 let fresh = pages
@@ -89,7 +92,16 @@ impl HostRpcService {
                 "タスクの状態を取得できません。",
             ));
         }
-        if complete && let Some(apns) = self.inner.router.apns() {
+        if require_complete && !complete {
+            return Err(Failure::new(
+                "task_activity_incomplete",
+                "実行中のタスクをすべて確認できません。時間をおいて再試行してください。",
+            ));
+        }
+        if complete
+            && self.inner.providers.startup_errors().next().is_none()
+            && let Some(apns) = self.inner.router.apns()
+        {
             apns.activate(state.display.clone());
         }
         Ok(state)

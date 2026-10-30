@@ -30,6 +30,8 @@ When a new major becomes generally available, verify the vendor release, update 
 
 ## Run the Host
 
+Released Mac and Windows apps check for new versions automatically. Click **更新をダウンロード** in the sidebar, then **再起動して更新** when the download finishes. You can keep working during the download. Applying an update also restarts this computer's bundled Host and continues interrupted work in the same conversations with the same settings.
+
 On desktop, first-run setup checks the selected computer and agents, then lets you import existing Codex and Claude Code projects. Recent Git repositories with at least three conversations are selected by default. Import registers selected folders and keeps native conversations and session IDs intact. You can defer agent setup, skip import, or reopen import from Settings → Computers and connections. Discovery retains healthy providers' results when another provider fails. The flow and Claude capability-probe isolation reference [T3 Code's welcome wizard](https://github.com/pingdotgg/t3code/blob/4fef307dd0a0e9eb1a7bd610ed390b6764295a65/docs/user/welcome-wizard.md).
 
 The Host needs Git and at least one available agent for conversations. Codex is optional; the Host uses `codex` on PATH, falling back to Codex bundled with ChatGPT Desktop on macOS; `--codex <path>` is authoritative.
