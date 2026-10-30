@@ -505,6 +505,33 @@ pub(crate) fn parse_turn(mut value: Value) -> Result<Turn, serde_json::Error> {
     Ok(turn)
 }
 
+/// Codex's summary view omits generated images. Read full bounded pages, then
+/// keep the conversation content here while leaving work details on demand.
+pub(super) fn summary_items(items: Vec<Arc<Item>>) -> Vec<Arc<Item>> {
+    let user = items
+        .iter()
+        .position(|item| matches!(item.body(), ItemBody::UserMessage { .. }));
+    let answer = items.iter().rposition(|item| {
+        matches!(
+            item.body(),
+            ItemBody::AssistantText {
+                phase: AssistantPhase::Final | AssistantPhase::Unknown,
+                ..
+            }
+        )
+    });
+    items
+        .into_iter()
+        .enumerate()
+        .filter(|(index, item)| {
+            Some(*index) == user
+                || Some(*index) == answer
+                || matches!(item.body(), ItemBody::ImageGeneration { .. })
+        })
+        .map(|(_, item)| item)
+        .collect()
+}
+
 pub(crate) fn parse_thread(mut value: Value) -> Result<Thread, serde_json::Error> {
     let parent_id = field::<Option<String>>(&value, "parentThreadId")?
         .map(|id| SessionRef::new(ProviderKind::Codex, id))
@@ -718,6 +745,44 @@ mod tests {
         assert!(
             matches!(parse_item(future.clone()).unwrap().body(),ItemBody::Custom {value,..} if value == &future)
         );
+    }
+
+    #[test]
+    fn history_summary_keeps_every_image_in_order_without_work_details() {
+        for phase in [Value::Null, json!("final_answer")] {
+            let turn = parse_turn(json!({"id":"turn","items":[
+                {"id":"user","type":"userMessage","content":[]},
+                {"id":"commentary","type":"agentMessage","phase":"commentary","text":"Working"},
+                {"id":"command","type":"commandExecution","command":"generate","aggregatedOutput":"large output"},
+                {"id":"pending","type":"imageGeneration","status":"inProgress","result":""},
+                {"id":"later-user","type":"userMessage","content":[]},
+                {"id":"saved","type":"imageGeneration","status":"completed","savedPath":"/saved.png","result":"original"},
+                {"id":"old-answer","type":"agentMessage","text":"Earlier answer"},
+                {"id":"inline","type":"imageGeneration","status":"completed","result":"base64"},
+                {"id":"failed","type":"imageGeneration","status":"failed"},
+                {"id":"answer","type":"agentMessage","phase":phase,"text":"Here are the images"},
+                {"id":"tail-commentary","type":"agentMessage","phase":"commentary","text":"Activity"}
+            ]})).unwrap();
+            let summary = summary_items(turn.items.unwrap());
+            assert_eq!(
+                summary
+                    .iter()
+                    .map(|item| item.id.as_str())
+                    .collect::<Vec<_>>(),
+                ["user", "pending", "saved", "inline", "failed", "answer"]
+            );
+            assert_eq!(summary[1].status, ItemStatus::Running);
+            assert!(
+                matches!(summary[2].body(), ItemBody::ImageGeneration {saved_path:Some(path), data:Some(data), ..} if path == "/saved.png" && data == "original")
+            );
+            assert!(
+                matches!(summary[3].body(), ItemBody::ImageGeneration {saved_path:None, data:Some(data), ..} if data == "base64")
+            );
+            assert_eq!(summary[4].status, ItemStatus::Failed);
+        }
+        assert!(summary_items(vec![]).is_empty());
+        let image = Arc::new(parse_item(json!({"id":"image","type":"imageGeneration"})).unwrap());
+        assert_eq!(summary_items(vec![image.clone()]), vec![image]);
     }
     #[test]
     fn codex_errors_preserve_native_evidence_without_inventing_periodic_limits() {

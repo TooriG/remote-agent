@@ -212,7 +212,7 @@ impl Codex {
             .request(
                 "thread/turns/list",
                 &serde_json::json!({"threadId":id,"cursor":cursor,"limit":5,
-                "sortDirection":"desc","itemsView":if include_activity { "full" } else { "summary" }}),
+                "sortDirection":"desc","itemsView":"full"}),
             )
             .await
         {
@@ -251,21 +251,16 @@ impl Codex {
                 "history cursor repeated",
             ));
         }
-        if page
-            .data
-            .iter()
-            .any(|turn| turn["itemsView"] != if include_activity { "full" } else { "summary" })
-        {
+        if page.data.iter().any(|turn| turn["itemsView"] != "full") {
             return Err(Failure::new(
                 "invalid_thread_history",
                 "turn summary is missing",
             ));
         }
-        let mut turns = page
+        let turns = page
             .data
             .into_iter()
             .map(native::parse_turn)
-            .map(|turn| turn.map(Arc::new))
             .collect::<Result<Vec<_>, _>>()?;
         if turns.iter().any(|turn| {
             turn.id.is_empty()
@@ -277,7 +272,17 @@ impl Codex {
                 "turn summary is missing",
             ));
         }
-        turns.reverse();
+        let turns = turns
+            .into_iter()
+            .rev()
+            .map(|mut turn| {
+                if !include_activity {
+                    turn.items = turn.items.map(native::summary_items);
+                    turn.items_summary = true;
+                }
+                Arc::new(turn)
+            })
+            .collect();
         Ok(agent_protocol::session::HistoryPage { turns, next_cursor })
     }
 

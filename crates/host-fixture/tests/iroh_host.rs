@@ -1392,15 +1392,74 @@ async fn refreshed_history_pages_recover_every_turn_and_item_through_store() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn generated_images_are_visible_on_open_reopen_and_older_pages_without_expanding_work() {
+    use agent_core::presentation::conversation::{
+        ConversationRowContent, activity_is_expanded, project_conversation,
+    };
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let directory = tempfile::tempdir().unwrap();
+        let data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=";
+        let turns = (0..6).map(|index| json!({"id":format!("turn-{index}"),"status":"completed","items":[
+            {"id":format!("user-{index}"),"type":"userMessage","content":[{"type":"text","text":"Generate images"}]},
+            {"id":format!("command-{index}"),"type":"commandExecution","command":"generate","status":"completed","aggregatedOutput":"hidden output\n".repeat(1000)},
+            {"id":format!("saved-{index}"),"type":"imageGeneration","status":"completed","savedPath":format!("/generated-{index}.png"),"result":data},
+            {"id":format!("inline-{index}"),"type":"imageGeneration","status":"completed","result":data},
+            {"id":format!("answer-{index}"),"type":"agentMessage","phase":"final_answer","text":"Here are the images"}
+        ]})).collect::<Vec<_>>();
+        std::fs::write(directory.path().join("list-fixture.json"), serde_json::to_vec(&json!([{
+            "id":"images","cwd":directory.path(),"historyMode":"paginated","turns":turns
+        }])).unwrap()).unwrap();
+        let program = host_fixture::fixture::Config { trace: true, ..Default::default() }
+            .install(Path::new(env!("CARGO_BIN_EXE_agent-codex-fixture")), directory.path()).unwrap();
+        let fixture = HostFixture::start(directory.path(), AppServerConfig { program, ..Default::default() },
+            Arc::new(Memory::default()), "isolated Host", false, None).await.unwrap();
+        let local = fixture.local().await.unwrap();
+        local.peer.call(&op::ListSessions::new(Default::default())).await.unwrap();
+        let session = SessionRef::new(ProviderKind::Codex, "images".into()).unwrap();
+        for _ in 0..2 {
+            let (opened, _updates) = open_session(&local.peer, &json!(session), 5).await;
+            let mut response: models::ThreadResponse = serde_json::from_value(opened["response"].clone()).unwrap();
+            assert_eq!(response.thread.turns.as_ref().unwrap().len(), 5);
+            let cursor = response.thread.history_cursor.clone().unwrap();
+            local.peer.call(&agent_protocol::session::ReadHistory {
+                session: session.clone(), cursor, include_activity: false,
+            }).await.unwrap().prepend_to(&mut response.thread);
+            let rendered = project_conversation(&Default::default(), Arc::new(response.thread), &None);
+            assert_eq!(rendered.turns.len(), 6);
+            for (index, turn) in rendered.turns.iter().enumerate() {
+                assert!(turn.source.items_summary);
+                let images: Vec<_> = turn.rows.iter().filter_map(|row| match &row.content {
+                    ConversationRowContent::Response { item, .. } if !item.data.image_sources.is_empty() => Some(item),
+                    ConversationRowContent::ActivityHeader { activity } => {
+                        assert!(!activity_is_expanded(activity, None));
+                        None
+                    }
+                    ConversationRowContent::Activity { .. } => panic!("work details were loaded"),
+                    _ => None,
+                }).collect();
+                assert_eq!(images.len(), 2, "images must be visible before work is expanded");
+                assert_eq!(images[0].data.image_sources, [format!("/generated-{index}.png")]);
+                assert_eq!(images[1].data.image_sources, [format!("data:image/png;base64,{data}")]);
+            }
+        }
+        let trace = std::fs::read_to_string(directory.path().join("rpc-trace.jsonl")).unwrap();
+        assert!(trace.lines().all(|line| serde_json::from_str::<Value>(line).unwrap()["method"] != "thread/items/list"),
+            "showing images must not require expanding or hydrating work");
+        local.close().await;
+        fixture.close().await.unwrap();
+    }).await.expect("generated image history exceeded its deadline");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn summary_history_rejects_repeated_cursors_and_oversized_pages() {
     tokio::time::timeout(Duration::from_secs(30), async {
         let directory = tempfile::tempdir().unwrap();
-        let valid = |id: &str| json!({"id":id,"status":"completed","itemsView":"summary","items":[]});
+        let valid = |id: &str| json!({"id":id,"status":"completed","itemsView":"full","items":[]});
         let cases = [
             ("oversized", 5, json!({"data":(0..6).map(|id| valid(&id.to_string())).collect::<Vec<_>>(),"nextCursor":null}), "turn page exceeds requested size"),
-            ("not-summary", 5, json!({"data":[{"id":"turn","itemsView":"full","items":[]}],"nextCursor":null}), "turn summary is missing"),
+            ("not-full", 5, json!({"data":[{"id":"turn","itemsView":"summary","items":[]}],"nextCursor":null}), "turn summary is missing"),
             ("missing-turn", 5, json!({"data":[valid("")],"nextCursor":null}), "turn summary is missing"),
-            ("missing-item", 5, json!({"data":[{"id":"turn","itemsView":"summary","items":[{"id":"","type":"agentMessage","text":"answer"}]}],"nextCursor":null}), "turn summary is missing"),
+            ("missing-item", 5, json!({"data":[{"id":"turn","itemsView":"full","items":[{"id":"","type":"agentMessage","text":"answer"}]}],"nextCursor":null}), "turn summary is missing"),
         ];
         let mut threads: Vec<_> = cases.iter().map(|(id, _, response, _)| json!({
             "id":id,"cwd":directory.path(),"historyMode":"paginated","fixtureHistoryResponse":response,
