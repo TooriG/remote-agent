@@ -904,7 +904,7 @@ impl Desktop {
         };
         let snapshot = session.store.snapshot();
         let changed = !Arc::ptr_eq(&snapshot, &self.snapshot);
-        let general_changed = general_snapshot_changed(&self.snapshot, &snapshot);
+        let general_changed = changed && general_snapshot_changed(&self.snapshot, &snapshot);
         if changed {
             session.save(snapshot.clone());
         }
@@ -1058,8 +1058,12 @@ impl Desktop {
         true
     }
     fn sync_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let text = self.draft().text.clone();
-        if let Some(value) = self.composer.text.adopt(&text) {
+        let text = self
+            .snapshot
+            .drafts
+            .get(&self.snapshot.navigation.draft_key)
+            .map_or("", |draft| draft.text.as_str());
+        if let Some(value) = self.composer.text.adopt(text) {
             self.composer
                 .input
                 .update(cx, |input, cx| input.set_value(value, window, cx));
