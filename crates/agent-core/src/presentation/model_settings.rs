@@ -40,7 +40,7 @@ pub(crate) fn automatic_provider(
         .map(|model| model.model.provider)
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ModelQuickControls {
     pub efforts: Vec<String>,
@@ -51,7 +51,7 @@ pub struct ModelQuickControls {
     pub fast_service_tier: Option<String>,
     pub speed_choices: Vec<ModelSpeedChoice>,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ModelSpeedChoice {
     pub id: String,

@@ -3,7 +3,7 @@ use agent_core::composer::{ComposerSuggestions, candidate_label, insert_invocati
 use agent_protocol::composer::Invocation;
 
 impl Desktop {
-    fn completion_suggestions(&self, cx: &App) -> Option<ComposerSuggestions> {
+    pub(super) fn completion_suggestions(&self, cx: &App) -> Option<ComposerSuggestions> {
         let input = self.composer.input.read(cx);
         if self.composer.completion_dismissed
             || !input.selected_range().is_empty()
@@ -104,11 +104,15 @@ impl Desktop {
         self.composer.completion_dismissed = false;
         cx.notify();
     }
-    pub(super) fn completion_menu(&self, cx: &Context<Self>) -> AnyElement {
-        let Some(suggestions) = self.completion_suggestions(cx) else {
+    pub(super) fn completion_menu(
+        suggestions: Option<&ComposerSuggestions>,
+        selected_index: usize,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let Some(suggestions) = suggestions else {
             return div().into_any_element();
         };
-        let candidates = suggestions.candidates;
+        let candidates = &suggestions.candidates;
         let mut menu = v_flex()
             .id("composer-invocations")
             .max_h(px(230.))
@@ -116,11 +120,7 @@ impl Desktop {
             .gap_1()
             .p_2();
         for (index, candidate) in candidates.iter().enumerate() {
-            let selected = index
-                == self
-                    .composer
-                    .completion_index
-                    .min(candidates.len().saturating_sub(1));
+            let selected = index == selected_index.min(candidates.len().saturating_sub(1));
             let candidate = candidate.clone();
             menu = menu.child(
                 div()
@@ -168,8 +168,8 @@ impl Desktop {
                     })),
             );
         }
-        if let Some(status) = suggestions.status {
-            menu = menu.child(div().text_xs().child(status));
+        if let Some(status) = &suggestions.status {
+            menu = menu.child(div().text_xs().child(status.clone()));
         }
         menu.into_any_element()
     }
@@ -191,9 +191,13 @@ mod tests {
     struct CompletionView(Entity<Desktop>, f32);
     impl Render for CompletionView {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-            div()
-                .w(px(self.1))
-                .child(self.0.update(cx, |view, cx| view.completion_menu(cx)))
+            div().w(px(self.1)).child(self.0.update(cx, |view, cx| {
+                Desktop::completion_menu(
+                    view.completion_suggestions(cx).as_ref(),
+                    view.composer.completion_index,
+                    cx,
+                )
+            }))
         }
     }
 

@@ -45,8 +45,10 @@ use std::{
     sync::Arc,
 };
 use timeline::{
-    ConversationRow, ImageGallery, ImageState, MarkdownContent, Question, RequestInputs, Timeline,
+    ConversationRow, ImageGallery, ImageState, MarkdownContent, Media, Question, RequestInputs,
+    Timeline,
 };
+use view::icon_button;
 
 struct ProjectEditor {
     id: String,
@@ -166,7 +168,9 @@ pub(crate) struct Desktop {
     review_expanded: bool,
     source_paths: Vec<String>,
     source_items: Vec<Arc<Item>>,
-    timeline: Timeline,
+    conversation: Entity<view::ConversationView>,
+    composer_view: Entity<view::ComposerView>,
+    media: Media,
     /// Absent in side chats, which have no sidebar.
     sidebar_view: Option<Entity<view::SidebarView>>,
     _subscriptions: Vec<Subscription>,
@@ -238,7 +242,16 @@ impl Desktop {
             && cfg!(any(target_os = "macos", target_os = "windows")))
         .then(|| cx.new(crate::updates::Updates::new));
         let selection = cx.new(|_| selection::ConversationSelection::new(!side_chat_mode));
+        let owner = cx.entity();
+        let conversation =
+            cx.new(|cx| view::ConversationView::new(&owner, selection.clone(), window, cx));
+        let composer_view =
+            cx.new(|cx| view::ComposerView::new(&owner, composer.input.clone(), cx));
         let mut subscriptions = vec![
+            cx.subscribe_in(&conversation, window, |view, _, action, window, cx| {
+                view.conversation_action(action, window, cx);
+                cx.notify();
+            }),
             cx.subscribe_in(
                 &selection,
                 window,
@@ -403,7 +416,9 @@ impl Desktop {
             review_expanded: false,
             source_paths: Vec::new(),
             source_items: Vec::new(),
-            timeline: Timeline::new(),
+            conversation,
+            composer_view,
+            media: Media::new(),
             sidebar_view: None,
             _subscriptions: subscriptions,
         };
@@ -413,6 +428,7 @@ impl Desktop {
             view.sidebar_view = Some(sidebar);
         }
         view.connect(None);
+        cx.notify();
         view
     }
     fn connect(&mut self, preferences: Option<Vec<u8>>) {
@@ -622,7 +638,7 @@ impl Desktop {
                 }
             }
             Update::Image { key, result } => {
-                if let Some(image) = self.timeline.images.get_mut(&key) {
+                if let Some(image) = self.media.images.get_mut(&key) {
                     match result {
                         Ok(path) => {
                             image.path = Some(if Path::new(&path).is_absolute() {
@@ -637,7 +653,15 @@ impl Desktop {
                         }
                     }
                 }
-                self.timeline.list.remeasure();
+                self.composer_view
+                    .read(cx)
+                    .content
+                    .clone()
+                    .update(cx, |_, cx| cx.notify());
+                self.conversation.update(cx, |view, cx| {
+                    view.timeline.list.remeasure();
+                    cx.notify();
+                });
             }
         }
         cx.notify();
@@ -677,7 +701,10 @@ impl Desktop {
                     return;
                 }
                 self.accept_snapshot(window, cx);
-                self.timeline.remeasure_item(item_id.as_str());
+                self.conversation.update(cx, |view, cx| {
+                    view.timeline.remeasure_item(item_id.as_str());
+                    cx.notify();
+                });
                 return;
             }
             OperationCompletion::WorktreeSettings => {
@@ -693,13 +720,19 @@ impl Desktop {
                 return;
             }
             OperationCompletion::Request(key) => {
-                if result.is_err()
-                    && let Some(inputs) = self.timeline.requests.get_mut(&key)
-                {
-                    inputs.sent = false;
+                if result.is_err() {
+                    self.conversation.update(cx, |view, cx| {
+                        if let Some(inputs) = view.timeline.requests.get_mut(&key) {
+                            inputs.sent = false;
+                        }
+                        cx.notify();
+                    });
                 }
                 self.accept_snapshot(window, cx);
-                self.timeline.list.remeasure();
+                self.conversation.update(cx, |view, cx| {
+                    view.timeline.list.remeasure();
+                    cx.notify();
+                });
                 return;
             }
             OperationCompletion::Account => {
@@ -734,7 +767,7 @@ impl Desktop {
             }
             OperationCompletion::Gallery(id) => {
                 let Some(gallery) = self
-                    .timeline
+                    .media
                     .gallery
                     .as_mut()
                     .filter(|gallery| gallery.id == id)
@@ -844,7 +877,6 @@ impl Desktop {
                 .update(cx, |selection, cx| selection.clear(cx));
             self.cancel_recording();
             self.composer.text.pending = None;
-            self.timeline.forget_rendering();
         }
         let text = self.draft().text.clone();
         if let Some(value) = self.composer.text.adopt(&text) {
@@ -870,23 +902,6 @@ impl Desktop {
             && let Some(settings) = &self.snapshot.workspace.settings
         {
             self.worktrees.show(settings, window, cx);
-        }
-        let conversations_changed =
-            !Arc::ptr_eq(&previous.conversations, &self.snapshot.conversations);
-        if conversations_changed {
-            self.sync_request_inputs(window, cx);
-        }
-        if navigated
-            || conversations_changed
-            || self.history_key().is_some_and(|key| {
-                previous.operations.get(&key) != self.snapshot.operations.get(&key)
-            })
-            || !Arc::ptr_eq(
-                &previous.pending_submissions,
-                &self.snapshot.pending_submissions,
-            )
-        {
-            self.timeline.sync(&self.snapshot, navigated);
         }
         let user_items_changed = {
             let mut current = self.user_items();
@@ -996,11 +1011,6 @@ impl Desktop {
             self.snapshot.navigation.cwd
         )
     }
-    fn history_key(&self) -> Option<op::OperationKey> {
-        self.selected()
-            .cloned()
-            .map(|session| op::OperationKey::History { session })
-    }
     fn user_items(&self) -> impl Iterator<Item = &Arc<Item>> {
         self.thread()
             .and_then(|thread| thread.turns.as_deref())
@@ -1105,7 +1115,12 @@ impl Desktop {
         self.worktrees.dirty = false;
         self.worktrees.saving = false;
         self.worktrees.save_pending = false;
-        self.timeline.clear();
+        self.media.images.clear();
+        self.media.gallery = None;
+        self.conversation.update(cx, |view, cx| {
+            view.timeline.clear();
+            cx.notify();
+        });
         let value = self.composer.text.replace("");
         self.composer
             .input
@@ -1589,9 +1604,6 @@ impl Desktop {
         );
     }
     fn respond(&mut self, id: RequestId, answer: Answer) {
-        if let Some(inputs) = self.timeline.requests.get_mut(&id) {
-            inputs.sent = true;
-        }
         self.perform(
             Intent::Respond(op::Respond {
                 request_id: id.clone(),

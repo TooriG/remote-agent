@@ -366,6 +366,8 @@ pub(in crate::app) struct SidebarView {
     search: Entity<InputState>,
     app_updates: Option<Entity<crate::updates::Updates>>,
     _observation: Subscription,
+    #[cfg(test)]
+    pub(in crate::app) renders: usize,
 }
 
 impl SidebarView {
@@ -379,6 +381,8 @@ impl SidebarView {
             model: state.sidebar_model(),
             search: state.search.clone(),
             app_updates: state.app_updates.clone(),
+            #[cfg(test)]
+            renders: 0,
             _observation: cx.observe(desktop, |sidebar, desktop, cx| {
                 let model = desktop.read(cx).sidebar_model();
                 if model != sidebar.model {
@@ -392,6 +396,10 @@ impl SidebarView {
 
 impl Render for SidebarView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(test)]
+        {
+            self.renders += 1;
+        }
         // The Desktop's context only creates its listeners; the model is the
         // sole source of what is shown.
         self.desktop
@@ -616,7 +624,7 @@ impl Desktop {
                                 ),
                             )
                             .child(
-                                Self::icon_button(
+                                icon_button(
                                     "new-chat",
                                     new_chat_icon(),
                                     "新しいチャット",
@@ -647,7 +655,7 @@ impl Desktop {
                         .justify_between()
                         .py_2()
                         .child(
-                            Self::icon_button(
+                            icon_button(
                                 "sidebar-settings",
                                 IconName::Settings,
                                 "設定を開く",
@@ -661,7 +669,7 @@ impl Desktop {
                             )
                             .debug_selector(|| "sidebar-settings".into()),
                         )
-                        .child(Self::icon_button(
+                        .child(icon_button(
                             "refresh-threads",
                             IconName::RotateCw,
                             "会話を更新",

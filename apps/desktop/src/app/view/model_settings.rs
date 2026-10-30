@@ -257,7 +257,7 @@ impl Desktop {
                 |view| {
                     let scope = self.model_controls.settings_scope.clone();
                     view.child(
-                        Self::button(
+                        button(
                             "model-defaults-inherit",
                             "共通設定を使う",
                             cx,
@@ -293,7 +293,11 @@ impl Desktop {
         }
     }
 
-    pub(super) fn model_menu(&self, cx: &Context<Self>) -> AnyElement {
+    pub(super) fn model_menu(
+        label: String,
+        render_owner: EntityId,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let entity = cx.entity().downgrade();
         let opening = entity.clone();
         popover::Popover::new("model-controls")
@@ -305,12 +309,7 @@ impl Desktop {
             .anchor(Anchor::BottomRight)
             .trigger(
                 Button::new("model-select")
-                    .label(
-                        self.selected_model()
-                            .map_or("モデルを選択".to_owned(), |model| {
-                                model.display_name.clone()
-                            }),
-                    )
+                    .label(label)
                     .debug_selector(|| "model-select".into())
                     .accessibility_label("モデルとアカウント")
                     .tooltip("モデルとアカウント")
@@ -337,7 +336,8 @@ impl Desktop {
                     });
                 }
             })
-            .content(move |_, _, cx| {
+            .content(move |_, window, cx| {
+                observe_popup_desktop(&entity, render_owner, window, cx);
                 entity
                     .update(cx, |s, cx| {
                         v_flex()
@@ -366,7 +366,7 @@ impl Desktop {
             (ProviderKind::DeepSeek, "DeepSeek"),
         ] {
             services = services.child(
-                Self::button(
+                button(
                     format!("model-provider-{label}"),
                     if value == ProviderKind::DeepSeek {
                         "DSH"
@@ -418,10 +418,10 @@ impl Desktop {
                 .child(div().text_sm().text_color(rgb(appearance::MUTED))
                     .child("選択中の環境のCLIを更新します。更新後は実行中の会話が終わってからHostを再起動してください。モデル一覧は再接続時に再取得します。"))
                 .child(h_flex().gap_2()
-                    .child(Self::button("codex-cli-update", if updating { "確認・更新中…" } else { "最新版に更新" }, cx, |s, _, _| {
+                    .child(button("codex-cli-update", if updating { "確認・更新中…" } else { "最新版に更新" }, cx, |s, _, _| {
                         s.dispatch(Intent::ManageCodexCli(op::ManageCodexCli { update: true }));
                     }).disabled(disabled || updating).debug_selector(|| "codex-cli-update".into()))
-                    .child(Self::button("codex-cli-refresh", "状態を確認", cx, |s, _, _| {
+                    .child(button("codex-cli-refresh", "状態を確認", cx, |s, _, _| {
                         s.dispatch(Intent::ManageCodexCli(op::ManageCodexCli { update: false }));
                         s.refresh_accounts_and_models();
                     }).disabled(disabled || updating)));
@@ -507,7 +507,7 @@ impl Desktop {
                         })
                         .when(manage && provider == ProviderKind::Codex, |row| {
                             row.child(
-                                Self::button(format!("account-usage-manage-{index}"), "追加クレジット・上限を管理", cx, |s, _, cx| {
+                                button(format!("account-usage-manage-{index}"), "追加クレジット・上限を管理", cx, |s, _, cx| {
                                     s.open_browser(s.panel_scope(), "https://chatgpt.com/settings/usage", cx);
                                 }).small().ghost()
                             ).child(div().text_xs().text_color(rgb(appearance::MUTED))
@@ -522,7 +522,7 @@ impl Desktop {
                                 h_flex()
                                     .gap_2()
                                     .child(
-                                        Self::button(
+                                        button(
                                             format!("account-logout-confirm-{index}"),
                                             "サインアウト",
                                             cx,
@@ -539,7 +539,7 @@ impl Desktop {
                                         .disabled(disabled),
                                     )
                                     .child(
-                                        Self::button(
+                                        button(
                                             format!("account-logout-cancel-{index}"),
                                             "キャンセル",
                                             cx,
@@ -551,7 +551,7 @@ impl Desktop {
                                     ),
                             );
                     } else if manage {
-                        let logout = Self::button(
+                        let logout = button(
                             format!("account-logout-{index}"),
                             "サインアウト",
                             cx,
@@ -579,7 +579,7 @@ impl Desktop {
                         .justify_between()
                         .gap_2()
                         .child(
-                            Self::button(
+                            button(
                                 "account-start-login",
                                 "アカウントを追加",
                                 cx,
@@ -591,7 +591,7 @@ impl Desktop {
                             .disabled(disabled),
                         )
                         .child(
-                            Self::button(
+                            button(
                                 "accounts-refresh",
                                 "使用量を再取得",
                                 cx,
@@ -605,7 +605,7 @@ impl Desktop {
                 );
             } else {
                 body = body.child(
-                    Self::button(
+                    button(
                         "model-accounts-manage",
                         "アカウントを管理",
                         cx,
@@ -732,7 +732,7 @@ impl Desktop {
                     .gap_2()
                     .children(controls.iter().map(|route| {
                         let provider = route.provider;
-                        Self::button(
+                        button(
                             format!("dsh-key-{}", provider.reference()),
                             route.label.clone(),
                             cx,
@@ -751,7 +751,7 @@ impl Desktop {
             )
             .child(selected.status.clone())
             .child(
-                Self::button(
+                button(
                     "account-open-login",
                     "APIキーを取得",
                     cx,
@@ -769,7 +769,7 @@ impl Desktop {
                             .child(Input::new(&self.account.code).aria_label("APIキー")),
                     )
                     .child(
-                        Self::button("account-submit-code", "保存", cx, |s, window, cx| {
+                        button("account-submit-code", "保存", cx, |s, window, cx| {
                             let key = s.account.code.read(cx).value().to_string();
                             if key.trim().is_empty() {
                                 return;
@@ -789,7 +789,7 @@ impl Desktop {
                     ),
             )
             .child(
-                Self::button(
+                button(
                     "dsh-credentials-refresh",
                     "設定状態を取得",
                     cx,
@@ -800,7 +800,7 @@ impl Desktop {
             );
         if selected.can_remove {
             form = form.child(
-                Self::button(
+                button(
                     "dsh-key-remove",
                     "この接続先のキーを削除",
                     cx,
@@ -820,7 +820,7 @@ impl Desktop {
         if selected.provider == agent_protocol::dsh::KeyProvider::OpenRouter && selected.can_remove
         {
             form = form.child(
-                Self::button(
+                button(
                     "dsh-openrouter-models",
                     "OpenRouterのモデル一覧を開く",
                     cx,
@@ -852,7 +852,7 @@ impl Desktop {
         let url = login.verification_url.clone();
         let cancel_id = login.login_id.clone();
         let provider = login.provider;
-        let cancel = Self::button(
+        let cancel = button(
             "account-cancel-login",
             "キャンセル",
             cx,
@@ -876,7 +876,7 @@ impl Desktop {
                 "ブラウザでログインし、次のコードを入力してください。"
             })
             .child(
-                Self::button(
+                button(
                     "account-open-login",
                     "ブラウザでログイン",
                     cx,
@@ -899,7 +899,7 @@ impl Desktop {
                             .child(Input::new(&self.account.code).aria_label("認証コード")),
                     )
                     .child(
-                        Self::button("account-submit-code", "接続", cx, move |s, window, cx| {
+                        button("account-submit-code", "接続", cx, move |s, window, cx| {
                             let code = s.account.code.read(cx).value().to_string();
                             if code.trim().is_empty() {
                                 return;
@@ -926,7 +926,7 @@ impl Desktop {
                     .gap_3()
                     .child(div().text_xl().child(login.user_code.clone()))
                     .child(
-                        Self::button(
+                        button(
                             "account-copy-code",
                             "コードをコピー",
                             cx,
@@ -948,7 +948,7 @@ impl Desktop {
             )
             .when(!self.account.polling && !self.account.busy, |form| {
                 form.child(
-                    Self::button(
+                    button(
                         "account-retry-login",
                         "接続状態を再確認",
                         cx,
@@ -1118,7 +1118,7 @@ impl Desktop {
                 .gap_2()
                 .h(px(44.))
                 .child(
-                    Self::icon_button(
+                    icon_button(
                         "model-panel-back",
                         IconName::ArrowLeft,
                         "戻る",
@@ -1379,8 +1379,20 @@ impl Desktop {
                             .gap_3()
                             .border_t_1()
                             .border_color(rgb(appearance::BORDER))
-                            .child(self.effort_control("model-picker-effort", true, cx))
-                            .child(self.fast_control("model-picker-speed", true, cx)),
+                            .child(Self::effort_control(
+                                self.snapshot.model_quick_controls(self.draft_key().clone()),
+                                self.model_controls_enabled(),
+                                "model-picker-effort",
+                                true,
+                                cx,
+                            ))
+                            .child(Self::fast_control(
+                                self.snapshot.model_quick_controls(self.draft_key().clone()),
+                                self.model_controls_enabled(),
+                                "model-picker-speed",
+                                true,
+                                cx,
+                            )),
                     )
                 },
             );
@@ -1394,12 +1406,12 @@ impl Desktop {
     }
 
     pub(super) fn fast_control(
-        &self,
+        controls: agent_core::presentation::model_settings::ModelQuickControls,
+        enabled: bool,
         id: &'static str,
         expanded: bool,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let controls = self.snapshot.model_quick_controls(self.draft_key().clone());
         let (Some(next), Some(_)) = (controls.toggle_fast_to, controls.fast_service_tier) else {
             return div().into_any_element();
         };
@@ -1426,12 +1438,7 @@ impl Desktop {
             } else {
                 rgb(appearance::MUTED)
             })
-            .disabled(
-                !self.snapshot.connected
-                    || self.account.busy
-                    || self.busy > 0
-                    || self.snapshot.account.login.is_some(),
-            );
+            .disabled(!enabled);
         if expanded {
             let entity = cx.entity().downgrade();
             button
@@ -1475,12 +1482,12 @@ impl Desktop {
     }
 
     pub(super) fn effort_control(
-        &self,
+        controls: agent_core::presentation::model_settings::ModelQuickControls,
+        enabled: bool,
         id: &'static str,
         expanded: bool,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let controls = self.snapshot.model_quick_controls(self.draft_key().clone());
         if controls.efforts.is_empty() {
             return div().into_any_element();
         }
@@ -1515,12 +1522,7 @@ impl Desktop {
             .debug_selector(move || id.into())
             .tooltip(label.clone())
             .accessibility_label(label)
-            .disabled(
-                !self.snapshot.connected
-                    || self.account.busy
-                    || self.busy > 0
-                    || self.snapshot.account.login.is_some(),
-            )
+            .disabled(!enabled)
             .dropdown_menu_with_anchor(Anchor::BottomRight, move |mut menu, _, _| {
                 for effort in &controls.efforts {
                     let value = effort.clone();
@@ -1631,9 +1633,28 @@ mod tests {
                     .gap_3()
                     .child(
                         h_flex()
-                            .child(view.fast_control("model-fast", false, cx))
-                            .child(view.model_menu(cx))
-                            .child(view.effort_control("model-effort", false, cx)),
+                            .child(Desktop::fast_control(
+                                view.snapshot.model_quick_controls(view.draft_key().clone()),
+                                view.model_controls_enabled(),
+                                "model-fast",
+                                false,
+                                cx,
+                            ))
+                            .child(Desktop::model_menu(
+                                view.selected_model()
+                                    .map_or("モデルを選択".to_owned(), |model| {
+                                        model.display_name.clone()
+                                    }),
+                                cx.entity().entity_id(),
+                                cx,
+                            ))
+                            .child(Desktop::effort_control(
+                                view.snapshot.model_quick_controls(view.draft_key().clone()),
+                                view.model_controls_enabled(),
+                                "model-effort",
+                                false,
+                                cx,
+                            )),
                     )
                     .child(view.model_panel_content(cx))
             })

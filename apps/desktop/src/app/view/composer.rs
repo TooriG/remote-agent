@@ -2,92 +2,27 @@ use super::*;
 use gpui_kit::component::button::ButtonCustomVariant;
 
 impl Desktop {
-    fn history_control(
-        &self,
-        control: agent_core::presentation::conversation::HistoryControl,
-        cx: &Context<Self>,
-    ) -> AnyElement {
-        let label: SharedString = if control.has_more {
-            control.load_label.into()
-        } else {
-            "再試行".into()
-        };
-        h_flex()
-            .w_full()
-            .justify_center()
-            .px_6()
-            .py_2()
-            .child(
-                v_flex()
-                    .w_full()
-                    .max_w(px(CHAT_WIDTH))
-                    .gap_1p5()
-                    .when(control.has_more || control.error.is_some(), |body| {
-                        body.child(
-                            Button::new("conversation-history-load")
-                                .debug_selector(|| "conversation-history-load".into())
-                                .accessibility_label(label.clone())
-                                .small()
-                                .ghost()
-                                .w_full()
-                                .disabled(control.loading)
-                                .child(
-                                    h_flex()
-                                        .w_full()
-                                        .gap_3()
-                                        .child(div().flex_1().h(px(1.)).bg(rgb(appearance::BORDER)))
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(rgb(appearance::MUTED))
-                                                .child(label),
-                                        )
-                                        .child(
-                                            div().flex_1().h(px(1.)).bg(rgb(appearance::BORDER)),
-                                        ),
-                                )
-                                .on_click(cx.listener(|view, _, _, cx| {
-                                    if let Some(thread_id) = view.selected().cloned() {
-                                        view.timeline.pause_tail();
-                                        view.dispatch(Intent::ReadOlder { thread_id });
-                                        cx.notify();
-                                    }
-                                })),
-                        )
-                    })
-                    .when_some(control.error, |body, error| {
-                        body.child(
-                            div()
-                                .debug_selector(|| "conversation-history-error".into())
-                                .text_xs()
-                                .text_center()
-                                .text_color(rgb(appearance::MUTED))
-                                .child(error),
-                        )
-                    }),
-            )
-            .into_any_element()
-    }
-    fn composer_context(&self, cx: &Context<Self>) -> AnyElement {
+    fn composer_context(model: &ComposerModel, cx: &Context<Self>) -> AnyElement {
         let mut row = h_flex()
             .w_full()
             .min_w_0()
             .gap_2()
             .px_2()
-            .child(self.composer_folder(cx));
-        if let Some(hosts) = &self.hosts {
+            .child(Self::composer_folder(model, cx));
+        if let Some(hosts) = &model.hosts {
             row = row.child(Hosts::menu(
                 hosts,
                 "composer-host",
-                self.remote.as_ref().map(|remote| remote.id.as_str()),
-                self.remote
+                model.remote.as_ref().map(|remote| remote.id.as_str()),
+                model
+                    .remote
                     .as_ref()
                     .map_or("Local", |remote| remote.name.as_str()),
-                self.busy > 0 || self.dictation.is_some(),
+                model.busy || model.phase.is_some(),
                 cx,
             ));
         } else {
-            let name = self
+            let name = model
                 .remote
                 .as_ref()
                 .map_or("Local", |remote| remote.name.as_str())
@@ -110,9 +45,7 @@ impl Desktop {
                     .child(div().min_w_0().text_ellipsis().child(name)),
             );
         }
-        if let Some(review) = self
-            .snapshot
-            .workspace
+        if let Some(review) = model
             .review
             .as_ref()
             .filter(|review| !review.branch.is_empty())
@@ -131,7 +64,7 @@ impl Desktop {
                     .max_w(px(260.))
                     .flex_shrink_1()
                     .ghost()
-                    .disabled(!self.snapshot.connected || self.dictation.is_some())
+                    .disabled(!model.connected || model.phase.is_some())
                     .dropdown_menu(move |menu, _, _| {
                         let refresh = entity.clone();
                         let changes = entity.clone();
@@ -150,8 +83,8 @@ impl Desktop {
         row.into_any_element()
     }
 
-    fn composer_folder(&self, cx: &Context<Self>) -> AnyElement {
-        let selected_directory = self.snapshot.selected_directory();
+    fn composer_folder(model: &ComposerModel, cx: &Context<Self>) -> AnyElement {
+        let selected_directory = model.selected_directory.clone();
         let entity = cx.entity().downgrade();
         Button::new("composer-folder")
             .debug_selector(|| "composer-folder".into())
@@ -176,7 +109,7 @@ impl Desktop {
             .max_w(px(260.))
             .flex_shrink_1()
             .ghost()
-            .disabled(self.busy > 0 || self.dictation.is_some())
+            .disabled(model.busy || model.phase.is_some())
             .dropdown_menu(move |mut menu, _, cx| {
                 let Some(owner) = entity.upgrade() else {
                     return menu;
@@ -243,135 +176,34 @@ impl Desktop {
             })
             .into_any_element()
     }
-    pub(super) fn conversation_list(&self, cx: &Context<Self>) -> List {
-        let entity = cx.entity().downgrade();
-        list(self.timeline.list.clone(), move |index, window, cx| {
-            entity
-                .update(cx, |view, cx| {
-                    match view.timeline.rows.get(index).cloned() {
-                        Some(ConversationRow::History(control)) => {
-                            view.history_control(control, cx)
-                        }
-                        Some(ConversationRow::Turn { turn, index, last }) => {
-                            let session = view
-                                .timeline
-                                .rendered
-                                .as_ref()
-                                .and_then(|conversation| conversation.source.id.clone());
-                            view.turn_row(session.as_ref(), &turn, index, last, window, cx)
-                        }
-                        Some(ConversationRow::Pending(id, pending)) => {
-                            let row = view.pending_item(&id, &pending, cx);
-                            h_flex()
-                                .justify_center()
-                                .w_full()
-                                .px_6()
-                                .pb_8()
-                                .child(v_flex().w_full().max_w(px(CHAT_WIDTH)).gap_4().child(row))
-                                .into_any_element()
-                        }
-                        Some(ConversationRow::Request(request)) => view.request_card(&request, cx),
-                        None => div().into_any_element(),
-                    }
-                })
-                .unwrap_or_else(|_| div().into_any_element())
-        })
-        .flex_1()
-        .min_h_0()
-    }
-    pub(super) fn chat(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let history = self.conversation_list(cx);
-        let mut body = v_flex()
+    pub(super) fn chat(&self) -> AnyElement {
+        v_flex()
             .debug_selector(|| "conversation-chat".into())
             .flex_1()
             .min_w_0()
             .h_full()
-            .child(div().w_full().max_w(px(CHAT_WIDTH)).mx_auto().px_4().child(
-                self.error_notices(
-                    ErrorScope::Conversation {
-                        draft_key: self.draft_key().clone(),
-                    },
-                    cx,
-                ),
-            ));
-        if let Some(notice) = self
-            .thread()
-            .and_then(|thread| agent_protocol::session::input_unavailable_reason(thread))
-        {
-            body = body.child(div().px_4().py_2().text_sm().child(notice));
-        }
-        if let Some(notice) = self
-            .thread()
-            .and_then(|thread| agent_core::presentation::conversation::history_notice(thread))
-        {
-            body = body.child(div().px_4().py_2().text_sm().child(notice));
-        }
-        if self.timeline.rendered.is_none() {
-            if let Some(control) = self
-                .selected()
-                .cloned()
-                .and_then(|session| self.snapshot.history_control(session))
-            {
-                body = body.child(self.history_control(control, cx));
-            }
-            body = body.child(
-                v_flex()
-                    .flex_1()
-                    .items_center()
-                    .justify_center()
-                    .gap_4()
-                    .child(div().text_2xl().child("何から始めましょうか？"))
-                    .child(if self.snapshot.navigation.cwd.is_empty() {
-                        "メッセージを入力して、作業を始めましょう。".into()
-                    } else {
-                        file_name(&self.snapshot.navigation.cwd)
-                    }),
-            );
-        } else {
-            let mut viewport = div()
-                .relative()
-                .pl_4()
-                .flex_1()
-                .min_h_0()
-                .flex()
-                .child(selection::ConversationSelection::wrap(
-                    &self.selection,
-                    history,
-                ))
-                .child(deferred(self.conversation_navigation(cx)));
-            if !self.timeline.list.is_following_tail() {
-                viewport = viewport.child(deferred(
-                    h_flex()
-                        .absolute()
-                        .bottom_2()
-                        .left_0()
-                        .w_full()
-                        .justify_center()
-                        .child(
-                            Self::icon_button(
-                                "conversation-latest",
-                                IconName::ArrowDown,
-                                "最新のメッセージへ",
-                                cx,
-                                |view, _, _| {
-                                    view.timeline.list.set_follow_mode(FollowMode::Tail);
-                                },
-                            )
-                            .debug_selector(|| "conversation-latest".into())
-                            .rounded_full()
-                            .bg(rgb(appearance::RAISED))
-                            .size(px(36.)),
-                        ),
-                ));
-            }
-            body = body.child(viewport);
-        }
-        let key = self.draft_key().to_owned();
-        let attachments = self.draft().attachments.clone();
+            .child(
+                self.conversation
+                    .clone()
+                    .cached(StyleRefinement::default().flex_1().min_h_0().w_full()),
+            )
+            .child(self.composer_view.clone())
+            .into_any_element()
+    }
+
+    fn render_composer(
+        &mut self,
+        model: &ComposerModel,
+        input: &Entity<TextareaState>,
+        render_owner: EntityId,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let key = model.key.clone();
+        let attachments = &model.attachments;
         let mut files = h_flex().gap_3().p_2().flex_wrap();
         for (i, file) in attachments.iter().enumerate() {
             let key = key.clone();
-            let remove = Self::icon_button(
+            let remove = icon_button(
                 format!("attachment-{i}"),
                 IconName::Close,
                 format!("{}を外す", file.name),
@@ -429,13 +261,12 @@ impl Desktop {
                     .into_any_element()
             });
         }
-        let running = self.thread().and_then(|thread| thread.active_turn_id());
-        let empty =
-            self.composer.input.read(cx).value().trim().is_empty() && attachments.is_empty();
+        let running = model.running.clone();
+        let empty = model.empty;
         let inactive = empty && running.is_none();
-        let phase = self.dictation.as_ref().map(|d| d.phase);
+        let phase = model.phase;
         let send = if let Some(id) = running.filter(|_| empty) {
-            Self::icon_button(
+            icon_button(
                 "stop",
                 Icon::default().path("icons/stop.svg"),
                 "停止",
@@ -447,25 +278,17 @@ impl Desktop {
                     }));
                 },
             )
-            .disabled(!self.snapshot.connected || self.busy > 0)
+            .disabled(!model.connected || model.busy)
         } else {
-            Self::icon_button("send", IconName::ArrowUp, "送信", cx, |s, _, cx| {
+            icon_button("send", IconName::ArrowUp, "送信", cx, |s, _, cx| {
                 s.send(cx)
             })
             .disabled(
-                !self.snapshot.connected
-                    || self
-                        .snapshot
-                        .model_provider_for_draft(self.snapshot.navigation.draft_key.clone())
-                        .is_none()
-                    || self.busy > 0
+                !model.connected
+                    || !model.provider_available
+                    || model.busy
                     || empty
-                    || self
-                        .thread()
-                        .and_then(|thread| {
-                            agent_protocol::session::input_unavailable_reason(thread)
-                        })
-                        .is_some(),
+                    || model.input_unavailable,
             )
         };
         let microphone = Button::new("dictation-toggle")
@@ -476,7 +299,7 @@ impl Desktop {
             .large()
             .tooltip("音声をCodexで文字起こし")
             .accessibility_label("音声をCodexで文字起こし")
-            .disabled(!self.snapshot.connected || self.busy > 0)
+            .disabled(!model.connected || model.busy)
             .on_click(cx.listener(|s, _, window, cx| {
                 s.composer.input.read(cx).focus_handle(cx).focus(window, cx);
                 s.start_dictation();
@@ -484,7 +307,7 @@ impl Desktop {
             }));
         let composer = v_flex()
             .key_context("ChatComposer")
-            .track_focus(&self.composer.input.read(cx).focus_handle(cx))
+            .track_focus(&input.read(cx).focus_handle(cx))
             .capture_key_down(cx.listener(|s, event: &KeyDownEvent, window, cx| {
                 let modifiers = event.keystroke.modifiers;
                 if !(modifiers.shift || modifiers.control || modifiers.alt || modifiers.platform)
@@ -519,7 +342,11 @@ impl Desktop {
             .p(px(7.))
             .gap_2()
             .rounded(px(22.))
-            .child(self.completion_menu(cx))
+            .child(Self::completion_menu(
+                model.suggestions.as_ref(),
+                model.completion_index,
+                cx,
+            ))
             .when(!attachments.is_empty(), |composer| composer.child(files))
             .bg(rgb(appearance::SURFACE))
             .border_1()
@@ -527,12 +354,12 @@ impl Desktop {
             .when(phase.is_none(), |composer| {
                 composer.child(
                     div().px_2().pt(px(10.)).pb_1().child(
-                        Textarea::new(&self.composer.input)
+                        Textarea::new(input)
                             .appearance(false)
                             .bordered(false)
                             .text_size(px(14.))
                             .aria_label("AI に依頼する")
-                            .readonly(!self.snapshot.connected),
+                            .readonly(!model.connected),
                     ),
                 )
             })
@@ -540,7 +367,7 @@ impl Desktop {
                 composer.child(
                     h_flex()
                         .child(
-                            Self::icon_button(
+                            icon_button(
                                 "attach",
                                 IconName::Plus,
                                 "ファイルを添付",
@@ -552,18 +379,39 @@ impl Desktop {
                             .h(px(40.))
                             .large()
                             .disabled(
-                                !self.snapshot.connected
-                                    || (!self.remote.is_none()
-                                        && self.snapshot.navigation.cwd.is_empty())
-                                    || self.busy > 0
+                                !model.connected
+                                    || (!model.remote.is_none() && model.cwd.is_empty())
+                                    || model.busy
                                     || phase.is_some(),
                             ),
                         )
-                        .child(self.permission_menu(cx))
+                        .child(Self::permission_menu(
+                            model.permission_label,
+                            model.permission_mode,
+                            model.connected && model.provider_available,
+                            render_owner,
+                            cx,
+                        ))
                         .child(div().flex_1())
-                        .child(self.fast_control("model-fast", false, cx))
-                        .child(self.model_menu(cx))
-                        .child(self.effort_control("model-effort", false, cx))
+                        .child(Self::fast_control(
+                            model.quick_controls.clone(),
+                            model.controls_enabled,
+                            "model-fast",
+                            false,
+                            cx,
+                        ))
+                        .child(Self::model_menu(
+                            model.model_label.clone(),
+                            render_owner,
+                            cx,
+                        ))
+                        .child(Self::effort_control(
+                            model.quick_controls.clone(),
+                            model.controls_enabled,
+                            "model-effort",
+                            false,
+                            cx,
+                        ))
                         .child(microphone)
                         .child(
                             send.large().rounded_full().w(px(40.)).h(px(40.)).custom(
@@ -591,33 +439,234 @@ impl Desktop {
                 )
             })
             .when(phase.is_some(), |composer| {
-                composer.child(self.dictation_bar(cx))
+                composer.child(Self::dictation_bar(
+                    model.phase,
+                    &model.levels,
+                    model.connected,
+                    cx,
+                ))
             });
         let controls = v_flex()
             .w_full()
             .max_w(px(CHAT_WIDTH))
             .gap_1()
-            .when(
-                !self.selected().is_none()
-                    && self
-                        .snapshot
-                        .workspace
-                        .review
-                        .as_ref()
-                        .is_some_and(|review| !review.files.is_empty()),
-                |column| column.child(self.review_card(cx)),
+            .when_some(
+                model
+                    .review
+                    .as_deref()
+                    .filter(|review| model.has_session && !review.files.is_empty()),
+                |column, review| {
+                    column.child(Self::review_card(
+                        review,
+                        model.review_expanded,
+                        model.connected,
+                        cx,
+                    ))
+                },
             )
-            .child(self.composer_context(cx))
+            .child(Self::composer_context(model, cx))
             .child(composer);
-        body.child(
-            h_flex()
-                .justify_center()
-                .px_6()
-                .pt_2()
-                .pb_4()
-                .child(controls),
-        )
-        .into_any_element()
+        h_flex()
+            .justify_center()
+            .px_6()
+            .pt_2()
+            .pb_4()
+            .child(controls)
+            .into_any_element()
+    }
+}
+
+#[derive(PartialEq)]
+struct ComposerModel {
+    key: DraftKey,
+    attachments: Vec<Attachment>,
+    running: Option<TurnId>,
+    empty: bool,
+    connected: bool,
+    busy: bool,
+    provider_available: bool,
+    input_unavailable: bool,
+    phase: Option<Phase>,
+    levels: std::collections::VecDeque<f32>,
+    remote: Option<RemoteHost>,
+    hosts: Option<Entity<Hosts>>,
+    cwd: String,
+    selected_directory: String,
+    has_session: bool,
+    review: Option<Arc<agent_protocol::models::WorkspaceReview>>,
+    review_expanded: bool,
+    model_label: String,
+    permission_label: &'static str,
+    permission_mode: Option<agent_protocol::permissions::PermissionMode>,
+    quick_controls: agent_core::presentation::model_settings::ModelQuickControls,
+    controls_enabled: bool,
+    suggestions: Option<agent_core::composer::ComposerSuggestions>,
+    completion_index: usize,
+}
+impl Desktop {
+    pub(super) fn model_controls_enabled(&self) -> bool {
+        self.snapshot.connected
+            && !self.account.busy
+            && self.busy == 0
+            && self.snapshot.account.login.is_none()
+    }
+    fn composer_model(&self, cx: &App) -> ComposerModel {
+        let permission = self.snapshot.permission_control(self.draft_key());
+        ComposerModel {
+            key: self.draft_key().clone(),
+            attachments: self.draft().attachments.clone(),
+            running: self.thread().and_then(|thread| thread.active_turn_id()),
+            empty: self.composer.input.read(cx).value().trim().is_empty()
+                && self.draft().attachments.is_empty(),
+            connected: self.snapshot.connected,
+            busy: self.busy > 0,
+            provider_available: permission.provider.is_some(),
+            input_unavailable: self
+                .thread()
+                .and_then(|thread| agent_protocol::session::input_unavailable_reason(thread))
+                .is_some(),
+            phase: self.dictation.as_ref().map(|state| state.phase),
+            levels: self
+                .dictation
+                .as_ref()
+                .map(|state| state.levels.clone())
+                .unwrap_or_default(),
+            remote: self.remote.clone(),
+            hosts: self.hosts.clone(),
+            cwd: self.snapshot.navigation.cwd.clone(),
+            selected_directory: self.snapshot.selected_directory(),
+            has_session: self.selected().is_some(),
+            review: self.snapshot.workspace.review.clone(),
+            review_expanded: self.review_expanded,
+            model_label: self
+                .selected_model()
+                .map_or("モデルを選択".to_owned(), |model| {
+                    model.display_name.clone()
+                }),
+            permission_label: permission.label,
+            permission_mode: permission.mode,
+            quick_controls: self.snapshot.model_quick_controls(self.draft_key().clone()),
+            controls_enabled: self.model_controls_enabled(),
+            suggestions: self.completion_suggestions(cx),
+            completion_index: self.composer.completion_index,
+        }
+    }
+}
+
+/// The outer view measures natural height; only the fixed-size content is cached.
+/// GPUI's cached views cannot measure their contents to determine their own size.
+pub(in crate::app) struct ComposerView {
+    pub(in crate::app) content: Entity<ComposerContent>,
+    pub(super) height: Option<Pixels>,
+    _measurement: Subscription,
+}
+pub(in crate::app) struct ComposerContent {
+    desktop: WeakEntity<Desktop>,
+    input: Entity<TextareaState>,
+    model: Option<ComposerModel>,
+    _observations: Vec<Subscription>,
+    #[cfg(test)]
+    pub(super) renders: usize,
+}
+struct ComposerHeight(Pixels);
+impl EventEmitter<ComposerHeight> for ComposerContent {}
+impl ComposerView {
+    pub(in crate::app) fn new(
+        desktop: &Entity<Desktop>,
+        input: Entity<TextareaState>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let content = cx.new(|cx| {
+            let owner = desktop.downgrade();
+            ComposerContent {
+                desktop: owner.clone(),
+                input: input.clone(),
+                model: None,
+                _observations: vec![
+                    cx.observe(desktop, |view: &mut ComposerContent, desktop, cx| {
+                        let model = desktop.read(cx).composer_model(cx);
+                        if view.model.as_ref() != Some(&model) {
+                            view.model = Some(model);
+                            cx.notify();
+                        }
+                    }),
+                    cx.observe(&input, move |view: &mut ComposerContent, _, cx| {
+                        if let Some(desktop) = owner.upgrade() {
+                            let model = desktop.read(cx).composer_model(cx);
+                            if view.model.as_ref() != Some(&model) {
+                                view.model = Some(model);
+                                cx.notify();
+                            }
+                        }
+                    }),
+                ],
+                #[cfg(test)]
+                renders: 0,
+            }
+        });
+        Self {
+            _measurement: cx.subscribe(&content, |view, _, height: &ComposerHeight, cx| {
+                if view.height != Some(height.0) {
+                    view.height = Some(height.0);
+                    cx.notify();
+                }
+            }),
+            content,
+            height: None,
+        }
+    }
+}
+impl Render for ComposerView {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        match self.height {
+            Some(height) => self
+                .content
+                .clone()
+                .cached(
+                    StyleRefinement::default()
+                        .w_full()
+                        .h(height)
+                        .flex_shrink_0(),
+                )
+                .into_any_element(),
+            None => self.content.clone().into_any_element(),
+        }
+    }
+}
+impl Render for ComposerContent {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(test)]
+        {
+            self.renders += 1;
+        }
+        let render_owner = cx.entity().entity_id();
+        let owner = cx.entity().downgrade();
+        let content = self
+            .desktop
+            .update(cx, |desktop, cx| {
+                // Initialize before the first layout so the conversation never
+                // sees an empty composer and incorrectly resumes tail-following.
+                let model = self.model.get_or_insert_with(|| desktop.composer_model(cx));
+                desktop.render_composer(model, &self.input, render_owner, cx)
+            })
+            .unwrap_or_else(|_| div().into_any_element());
+        div()
+            .relative()
+            .w_full()
+            .flex_shrink_0()
+            .child(content)
+            .child(
+                canvas(
+                    move |bounds, _, cx| {
+                        let _ =
+                            owner.update(cx, |_, cx| cx.emit(ComposerHeight(bounds.size.height)));
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
+            .into_any_element()
     }
 }
 
@@ -631,7 +680,7 @@ mod composer_tests {
     struct ComposerView(Entity<Desktop>);
     impl Render for ComposerView {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-            self.0.update(cx, |view, cx| view.chat(cx))
+            self.0.update(cx, |view, _| view.chat())
         }
     }
 
@@ -694,7 +743,7 @@ mod composer_tests {
                     cx,
                 )
             });
-            desktop.update(cx, |view, _| {
+            desktop.update(cx, |view, cx| {
                 let snapshot = Arc::make_mut(&mut view.snapshot);
                 let navigation = Arc::make_mut(&mut snapshot.navigation);
                 navigation.thread_id = Some(session.clone());
@@ -713,8 +762,11 @@ mod composer_tests {
                         ..Default::default()
                     }),
                 );
-                view.timeline.sync(&view.snapshot, true);
-                view.timeline.list.scroll_to(ListOffset::default());
+                view.sync_conversation(window, cx);
+                view.conversation.update(cx, |view, cx| {
+                    view.timeline.list.scroll_to(ListOffset::default());
+                    cx.notify();
+                });
             });
             handle = Some(desktop.clone());
             ComposerView(desktop)
@@ -727,9 +779,15 @@ mod composer_tests {
             .expect("older-history control at the top");
         window.simulate_click(button.center(), Modifiers::default());
         let top = window.update(|_, cx| {
-            desktop.update(cx, |view, _| {
-                assert!(!view.timeline.list.is_following_tail());
-                view.timeline.list.bounds_for_item(1).unwrap().top()
+            desktop.update(cx, |view, cx| {
+                assert!(!view.conversation.read(cx).timeline.list.is_following_tail());
+                view.conversation
+                    .read(cx)
+                    .timeline
+                    .list
+                    .bounds_for_item(1)
+                    .unwrap()
+                    .top()
             })
         });
         window.update(|_, cx| {
@@ -740,18 +798,31 @@ mod composer_tests {
                         .unwrap(),
                 );
                 thread.turns = Some(turns(0..8));
-                view.timeline.sync(&view.snapshot, false);
+
                 cx.notify();
             })
         });
         window.run_until_parked();
         window.update(|_, cx| {
-            desktop.update(cx, |view, _| {
+            desktop.update(cx, |view, cx| {
                 assert!(
-                    (view.timeline.list.bounds_for_item(3).unwrap().top() - top).abs() < px(1.),
+                    (view
+                        .conversation
+                        .read(cx)
+                        .timeline
+                        .list
+                        .bounds_for_item(3)
+                        .unwrap()
+                        .top()
+                        - top)
+                        .abs()
+                        < px(1.),
                     "prepending history must keep the old first answer at the same screen position"
                 );
-                view.timeline.list.scroll_to(ListOffset::default());
+                view.conversation.update(cx, |view, cx| {
+                    view.timeline.list.scroll_to(ListOffset::default());
+                    cx.notify();
+                });
             })
         });
         let key = op::OperationKey::History {
@@ -777,7 +848,7 @@ mod composer_tests {
                     receive.recv().await.unwrap().unwrap().unwrap()
                 }));
                 store_handle = Some(store);
-                view.timeline.sync(&view.snapshot, false);
+
                 cx.notify();
             })
         });
@@ -840,7 +911,7 @@ mod composer_tests {
                 );
                 thread.history_has_more = Some(false);
                 thread.history_cursor = None;
-                view.timeline.sync(&view.snapshot, false);
+
                 cx.notify();
             })
         });
@@ -903,7 +974,7 @@ mod composer_tests {
                         ..Default::default()
                     }),
                 );
-                view.timeline.images.insert(
+                view.media.images.insert(
                     view.image_key(&source, false),
                     ImageState {
                         source: Arc::new(source.clone()),
@@ -939,18 +1010,17 @@ mod composer_tests {
         window.update(|_, cx| {
             desktop.update(cx, |view, _| {
                 assert!(
-                    view.timeline.gallery.is_some(),
+                    view.media.gallery.is_some(),
                     "the thumbnail still opens the gallery"
                 );
-                view.timeline.gallery = None;
+                view.media.gallery = None;
             })
         });
         window.simulate_mouse_move(bounds.center(), None, Modifiers::default());
         window.run_until_parked();
         let remove = window.debug_bounds("attachment-remove-0").unwrap().center();
         window.simulate_click(remove, Modifiers::default());
-        window
-            .update(|_, cx| desktop.update(cx, |view, _| assert!(view.timeline.gallery.is_none())));
+        window.update(|_, cx| desktop.update(cx, |view, _| assert!(view.media.gallery.is_none())));
         let snapshot = store_handle.unwrap().snapshot();
         let draft = &snapshot.drafts[&draft_key.unwrap()];
         assert!(draft.attachments.is_empty());

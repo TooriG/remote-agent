@@ -35,7 +35,7 @@ pub(crate) fn query(
     Some((start..cursor, kind, filter))
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ComposerSuggestions {
     pub candidates: Vec<ComposerCandidate>,

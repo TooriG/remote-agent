@@ -2,7 +2,9 @@ use super::*;
 use agent_core::presentation::markdown::MarkdownDiagram;
 use gpui_kit::base::text::MarkdownNode;
 
-impl Desktop {
+use super::conversation::ConversationView;
+
+impl ConversationView {
     pub(super) fn markdown_diagram(
         &mut self,
         message: &str,

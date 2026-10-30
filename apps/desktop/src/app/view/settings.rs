@@ -48,7 +48,7 @@ impl Desktop {
             })
             .footer(
                 v_flex().w_full().gap_2().children(app_updates).child(
-                    Self::button("settings-back", "会話に戻る", cx, |s, _, _| {
+                    button("settings-back", "会話に戻る", cx, |s, _, _| {
                         s.tab = Tab::Chat
                     })
                     .icon(IconName::ArrowLeft)
@@ -147,7 +147,7 @@ impl Desktop {
                         "このPCや、自分のクラウドVMを選びます。",
                     );
                     body = body.child(
-                        Self::button(
+                        button(
                             "settings-import-projects",
                             "既存のプロジェクトを取り込む",
                             cx,
@@ -327,7 +327,7 @@ impl Desktop {
         for (i, path) in self.source_paths.iter().enumerate() {
             let path = path.clone();
             sources = sources.child(
-                Self::button(
+                button(
                     format!("source-{i}"),
                     file_name(&path),
                     cx,
@@ -370,7 +370,7 @@ impl Desktop {
                                     .child("ワークスペース"),
                             )
                             .child(
-                                Self::icon_button(
+                                icon_button(
                                     "refresh-context",
                                     IconName::RotateCw,
                                     "変更を更新",
@@ -381,7 +381,7 @@ impl Desktop {
                             ),
                     )
                     .child(
-                        Self::button(
+                        button(
                             "context-files",
                             if self.snapshot.navigation.cwd.is_empty() {
                                 "フォルダを選択".into()
@@ -426,7 +426,7 @@ impl Desktop {
                         },
                     )
                     .child(
-                        Self::button(
+                        button(
                             "context-changes",
                             format!(
                                 "変更  +{}  −{}",
@@ -459,7 +459,7 @@ impl Desktop {
                                     .child("ソース"),
                             )
                             .child(
-                                Self::icon_button(
+                                icon_button(
                                     "context-attach",
                                     IconName::Plus,
                                     "ソースを追加",
@@ -471,7 +471,7 @@ impl Desktop {
                     )
                     .child(sources)
                     .child(
-                        Self::button("all-files", "すべてのファイル", cx, |s, _, _| {
+                        button("all-files", "すべてのファイル", cx, |s, _, _| {
                             s.browse(s.snapshot.navigation.cwd.clone())
                         })
                         .icon(IconName::Folder)
@@ -495,7 +495,7 @@ impl Desktop {
                         .child("作成済みのワークツリー"),
                 )
                 .child(
-                    Self::icon_button(
+                    icon_button(
                         "refresh-worktrees",
                         IconName::RotateCw,
                         "ワークツリー一覧を更新",
@@ -545,7 +545,7 @@ impl Desktop {
                             worktree.branch
                         )))
                         .child(
-                            Self::button(
+                            button(
                                 format!("remove-worktree-{index}"),
                                 "削除…",
                                 cx,
@@ -569,7 +569,7 @@ impl Desktop {
             for (thread_index, thread) in worktree.threads.iter().enumerate() {
                 let id = thread.id.clone();
                 entry = entry.child(
-                    Self::button(
+                    button(
                         format!("worktree-thread-{index}-{thread_index}"),
                         format!(
                             "{}{}",
@@ -595,8 +595,8 @@ impl Desktop {
                 let path = worktree.path.clone();
                 entry = entry.child(div().text_sm().child("この作業ディレクトリを削除します。ブランチと会話履歴は残ります。次のメッセージ送信時に、元プロジェクトの main から同じ場所に作り直します。"))
                     .child(h_flex().gap_2()
-                        .child(Self::button(format!("cancel-remove-worktree-{index}"), "取消", cx, |s, _, _| s.worktrees.removal = None).disabled(self.worktrees.removing))
-                        .child(Self::button(format!("confirm-remove-worktree-{index}"), "ワークツリーを削除", cx, move |s, _, _| s.remove_worktree(path.clone()))
+                        .child(button(format!("cancel-remove-worktree-{index}"), "取消", cx, |s, _, _| s.worktrees.removal = None).disabled(self.worktrees.removing))
+                        .child(button(format!("confirm-remove-worktree-{index}"), "ワークツリーを削除", cx, move |s, _, _| s.remove_worktree(path.clone()))
                             .disabled(reason.is_some() || !self.snapshot.connected || self.worktrees.removing)));
             }
             body = body.child(entry);

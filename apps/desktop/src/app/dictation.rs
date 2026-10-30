@@ -20,24 +20,29 @@ pub(super) struct Dictation {
     pub(super) levels: std::collections::VecDeque<f32>,
 }
 impl Desktop {
-    pub(super) fn dictation_bar(&self, cx: &Context<Self>) -> AnyElement {
-        let Some(state) = &self.dictation else {
+    pub(super) fn dictation_bar(
+        phase: Option<Phase>,
+        levels: &std::collections::VecDeque<f32>,
+        connected: bool,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let Some(phase) = phase else {
             return div().into_any_element();
         };
-        let recording = state.phase == Phase::Recording;
+        let recording = phase == Phase::Recording;
         h_flex()
             .h(px(88.))
             .px_2()
             .gap_3()
             .child(
-                Self::icon_button(
+                icon_button(
                     "cancel-dictation",
                     IconName::Close,
                     "録音を取り消す (Esc)",
                     cx,
                     |s, _, _| s.cancel_recording(),
                 )
-                .disabled(state.phase == Phase::Transcribing),
+                .disabled(phase == Phase::Transcribing),
             )
             .child(if recording {
                 h_flex()
@@ -49,7 +54,7 @@ impl Desktop {
                     .justify_center()
                     .gap(px(3.))
                     .overflow_hidden()
-                    .children(state.levels.iter().map(|level| {
+                    .children(levels.iter().map(|level| {
                         div()
                             .w(px(3.))
                             .flex_shrink_0()
@@ -63,7 +68,7 @@ impl Desktop {
                     .flex_1()
                     .gap_2()
                     .child(crate::activity::indicator())
-                    .child(match state.phase {
+                    .child(match phase {
                         Phase::Preparing => "録音を準備中…",
                         #[cfg(target_os = "macos")]
                         Phase::Permission => "マイクの許可を確認中…",
@@ -72,7 +77,7 @@ impl Desktop {
                     .into_any_element()
             })
             .child(
-                Self::icon_button(
+                icon_button(
                     "stop-dictation",
                     Icon::default().path("icons/stop.svg"),
                     "録音を終了して文字起こし",
@@ -82,7 +87,7 @@ impl Desktop {
                 .disabled(!recording),
             )
             .child(
-                Self::icon_button(
+                icon_button(
                     "send-dictation",
                     IconName::ArrowUp,
                     "文字起こしして送信",
@@ -94,7 +99,7 @@ impl Desktop {
                 .rounded_full()
                 .w(px(44.))
                 .h(px(44.))
-                .disabled(!recording || !self.snapshot.connected),
+                .disabled(!recording || !connected),
             )
             .into_any_element()
     }

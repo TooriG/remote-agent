@@ -46,6 +46,23 @@ pub(super) struct MarkdownContent {
     pub(super) wrap_code: bool,
     pub(super) compact_tables: bool,
 }
+pub(super) struct Media {
+    pub(super) images: HashMap<String, ImageState>,
+    pub(super) gallery: Option<ImageGallery>,
+    pub(super) image_dir: tempfile::TempDir,
+}
+impl Media {
+    pub(super) fn new() -> Self {
+        Self {
+            images: HashMap::new(),
+            gallery: None,
+            image_dir: tempfile::Builder::new()
+                .prefix("agent-images-")
+                .tempdir()
+                .expect("image temporary directory"),
+        }
+    }
+}
 #[derive(Clone)]
 pub(super) enum ConversationRow {
     History(agent_core::presentation::conversation::HistoryControl),
@@ -156,9 +173,6 @@ pub(super) struct Timeline {
     pub(super) expanded_items: HashSet<String>,
     pub(super) expanded_work: HashMap<String, ActivityExpansion>,
     pub(super) requests: HashMap<RequestId, RequestInputs>,
-    pub(super) images: HashMap<String, ImageState>,
-    pub(super) gallery: Option<ImageGallery>,
-    pub(super) image_dir: tempfile::TempDir,
 }
 
 impl Timeline {
@@ -175,19 +189,11 @@ impl Timeline {
             expanded_items: HashSet::new(),
             expanded_work: HashMap::new(),
             requests: HashMap::new(),
-            images: HashMap::new(),
-            gallery: None,
-            image_dir: tempfile::Builder::new()
-                .prefix("agent-images-")
-                .tempdir()
-                .expect("image temporary directory"),
         }
     }
 
     /// Drops what was rendered from another Host's snapshot.
     pub(super) fn clear(&mut self) {
-        self.images.clear();
-        self.gallery = None;
         self.rows.clear();
         self.list.reset(0);
         self.forget_rendering();
@@ -202,21 +208,23 @@ impl Timeline {
     }
 
     /// Reconciles rows with the snapshot, keeping the visible row in place.
-    pub(super) fn sync(&mut self, snapshot: &Snapshot, reset: bool) {
-        self.rendered = snapshot.conversation_thread().map(|thread| {
-            agent_core::presentation::conversation::project_conversation(
-                snapshot,
-                thread,
-                &self.rendered,
-            )
-        });
+    pub(super) fn sync(
+        &mut self,
+        rendered: Option<Arc<agent_core::presentation::conversation::RenderedConversation>>,
+        history: Option<agent_core::presentation::conversation::HistoryControl>,
+        reset: bool,
+    ) {
+        self.rendered = rendered;
+        self.rebuild_rows(history, reset);
+    }
+
+    pub(super) fn rebuild_rows(
+        &mut self,
+        history: Option<agent_core::presentation::conversation::HistoryControl>,
+        reset: bool,
+    ) {
         let mut rows = conversation_rows(&self.rendered, &self.expanded_work);
-        if let Some(control) = snapshot
-            .navigation
-            .thread_id
-            .clone()
-            .and_then(|session| snapshot.history_control(session))
-        {
+        if let Some(control) = history {
             rows.insert(0, ConversationRow::History(control));
         }
         if reset {

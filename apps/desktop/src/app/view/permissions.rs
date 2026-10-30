@@ -3,8 +3,13 @@ use agent_core::presentation::permissions::PERMISSION_CHOICES;
 use agent_protocol::{permissions::PermissionMode, session::ProviderKind};
 
 impl Desktop {
-    pub(super) fn permission_menu(&self, cx: &Context<Self>) -> AnyElement {
-        let control = self.snapshot.permission_control(self.draft_key());
+    pub(super) fn permission_menu(
+        label: &'static str,
+        mode: Option<PermissionMode>,
+        enabled: bool,
+        render_owner: EntityId,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let entity = cx.entity().downgrade();
         let opening = entity.clone();
         popover::Popover::new("permission-controls")
@@ -16,14 +21,14 @@ impl Desktop {
                 Button::new("composer-permissions")
                     .debug_selector(|| "composer-permissions".into())
                     .icon(Icon::default().path("icons/shield.svg"))
-                    .label(control.label)
+                    .label(label)
                     .accessibility_label("承認方法を変更")
                     .ghost()
                     .h(px(40.))
-                    .when(control.mode == Some(PermissionMode::FullAccess), |button| {
+                    .when(mode == Some(PermissionMode::FullAccess), |button| {
                         button.text_color(rgb(0xf58b42))
                     })
-                    .disabled(!self.snapshot.connected || control.provider.is_none()),
+                    .disabled(!enabled),
             )
             .on_open_change(move |open, _, cx| {
                 if *open {
@@ -38,7 +43,8 @@ impl Desktop {
                     });
                 }
             })
-            .content(move |_, _, cx| {
+            .content(move |_, window, cx| {
+                observe_popup_desktop(&entity, render_owner, window, cx);
                 entity
                     .update(cx, |view, cx| view.permission_menu_content(cx))
                     .unwrap_or_else(|_| div().into_any_element())
@@ -113,7 +119,7 @@ impl Desktop {
         if let Some(error) = control.error {
             body = body
                 .child(div().text_sm().whitespace_normal().child(error.to_owned()))
-                .child(Self::button(
+                .child(button(
                     "permissions-retry",
                     "再読み込み",
                     cx,
@@ -142,7 +148,7 @@ mod tests {
     struct ComposerView(Entity<Desktop>);
     impl Render for ComposerView {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-            self.0.update(cx, |view, cx| view.chat(cx))
+            self.0.update(cx, |view, _| view.chat())
         }
     }
 

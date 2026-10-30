@@ -30,12 +30,14 @@ impl Desktop {
         cx.notify();
     }
 
-    pub(super) fn review_card(&self, cx: &Context<Self>) -> AnyElement {
-        let review = self.snapshot.workspace.review.as_deref();
-        let files = review
-            .map(|review| review.files.as_slice())
-            .unwrap_or_default();
-        let visible = if self.review_expanded {
+    pub(super) fn review_card(
+        review: &agent_protocol::models::WorkspaceReview,
+        expanded: bool,
+        connected: bool,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let files = &review.files;
+        let visible = if expanded {
             files.len()
         } else {
             files.len().min(3)
@@ -78,18 +80,18 @@ impl Desktop {
                                     .child(format!("{} 件のファイルを変更", files.len())),
                             )
                             .child(review_counts(
-                                Some(review.map_or(0, |review| review.additions)),
-                                Some(review.map_or(0, |review| review.deletions)),
+                                Some(review.additions),
+                                Some(review.deletions),
                             )),
                     )
                     .child(
-                        Self::button("review-changes", "レビューする", cx, |s, _, cx| {
+                        button("review-changes", "レビューする", cx, |s, _, cx| {
                             cx.stop_propagation();
                             s.open_review(None, cx);
                         })
                         .border_1()
                         .rounded(px(8.))
-                        .disabled(!self.snapshot.connected),
+                        .disabled(!connected),
                     ),
             )
             .child(
@@ -125,9 +127,9 @@ impl Desktop {
             .when(files.len() > 3, |card| {
                 card.child(
                     div().px_2().py_1().bg(rgb(appearance::RAISED)).child(
-                        Self::button(
+                        button(
                             "expand-review-files",
-                            if self.review_expanded {
+                            if expanded {
                                 "折りたたむ".to_owned()
                             } else {
                                 format!("あと {} 個のファイルを表示", files.len() - 3)
@@ -135,7 +137,7 @@ impl Desktop {
                             cx,
                             |s, _, _| s.review_expanded = !s.review_expanded,
                         )
-                        .icon(if self.review_expanded {
+                        .icon(if expanded {
                             IconName::ChevronUp
                         } else {
                             IconName::ChevronDown
@@ -165,7 +167,7 @@ impl Desktop {
                     .w_full()
                     .gap_1()
                     .child(
-                        Self::button(
+                        button(
                             format!("file-{i}"),
                             entry.name.clone(),
                             cx,
@@ -209,7 +211,7 @@ impl Desktop {
             .child(
                 h_flex()
                     .gap_2()
-                    .child(Self::icon_button(
+                    .child(icon_button(
                         "parent-directory",
                         IconName::ArrowUp,
                         "親フォルダ",
@@ -226,7 +228,7 @@ impl Desktop {
                         },
                     ))
                     .child(Input::new(&self.path).small().aria_label("フォルダのパス"))
-                    .child(Self::icon_button(
+                    .child(icon_button(
                         "browse",
                         IconName::ArrowRight,
                         "フォルダを開く",
@@ -284,11 +286,11 @@ impl Desktop {
                         .gap_2()
                         .flex_wrap()
                         .child(
-                            Self::button("save-file", "保存", cx, |s, _, _| s.save_file())
+                            button("save-file", "保存", cx, |s, _, _| s.save_file())
                                 .primary()
                                 .disabled(self.busy > 0),
                         )
-                        .child(Self::icon_button(
+                        .child(icon_button(
                             "reload-file",
                             IconName::RotateCw,
                             "再読み込み・下書きを破棄",
@@ -300,7 +302,7 @@ impl Desktop {
                             },
                         ))
                         .child(
-                            Self::button("ai-edit", "AI に編集を依頼", cx, |s, _, _| {
+                            button("ai-edit", "AI に編集を依頼", cx, |s, _, _| {
                                 if let Some(file) = &s.snapshot.workspace.file {
                                     s.dispatch(Intent::SetDraftText {
                                         thread_id: s.draft_key().clone(),
@@ -368,7 +370,7 @@ impl Desktop {
                             })),
                     )
                     .child(
-                        Self::icon_button(
+                        icon_button(
                             format!("close-surface-{id}"),
                             IconName::Close,
                             "タブを閉じる",
@@ -434,7 +436,7 @@ impl Desktop {
             )
             .when(!self.side_chat_mode, |bar| {
                 bar.child(
-                    Self::icon_button(
+                    icon_button(
                         "panel-expand",
                         if layout == PanelLayout::Expanded {
                             IconName::Minimize
@@ -457,7 +459,7 @@ impl Desktop {
                     .debug_selector(|| "panel-expand".into()),
                 )
                 .child(
-                    Self::icon_button(
+                    icon_button(
                         "panel-bottom",
                         IconName::PanelBottom,
                         "下・右の配置を切り替え",
@@ -478,7 +480,7 @@ impl Desktop {
             })
             .when(self.side_chat_mode, |bar| {
                 bar.child(
-                    Self::icon_button(
+                    icon_button(
                         "back-side-chat",
                         IconName::ArrowLeft,
                         "サイドチャットに戻る",
@@ -498,7 +500,7 @@ impl Desktop {
                 for (ix, tool) in self.panel_tools().into_iter().enumerate() {
                     let panel = tool.kind;
                     chooser = chooser.child(
-                        Self::button(
+                        button(
                             format!("tool-{ix}"),
                             tool.label,
                             cx,
@@ -572,7 +574,7 @@ impl Desktop {
                                     .as_ref()
                                     .map_or(0, |review| review.deletions)
                             )))
-                        .child(Self::icon_button(
+                        .child(icon_button(
                             "refresh-diff",
                             IconName::RotateCw,
                             "変更を更新",

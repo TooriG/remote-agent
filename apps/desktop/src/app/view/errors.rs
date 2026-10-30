@@ -114,7 +114,7 @@ impl Desktop {
                                     .child(notice.message),
                             )
                             .when_some(row.recovery.clone(), |body, label| {
-                                body.child(Self::button(
+                                body.child(button(
                                     format!("recover-error-{index}"),
                                     label,
                                     cx,
@@ -129,7 +129,7 @@ impl Desktop {
                             })
                             .when_some(reconnect, |body, connecting| {
                                 body.child(
-                                    Self::button(
+                                    button(
                                         format!("reconnect-error-{index}"),
                                         "再接続",
                                         cx,
@@ -141,7 +141,7 @@ impl Desktop {
                                 )
                             }),
                     )
-                    .child(Self::icon_button(
+                    .child(icon_button(
                         format!("copy-error-{}-{index}", scope.label()),
                         IconName::Copy,
                         "エラーの詳細をコピー",
@@ -151,7 +151,7 @@ impl Desktop {
                         },
                     ))
                     .child(
-                        Self::icon_button(
+                        icon_button(
                             format!("dismiss-error-{}-{index}", scope.label()),
                             IconName::Close,
                             "エラーを閉じる",
