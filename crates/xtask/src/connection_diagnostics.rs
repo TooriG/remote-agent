@@ -3,7 +3,7 @@
 //! Missing boundaries remain unknown, never zero. Residual time after Host work
 //! includes client scheduling and transport; it cannot identify relay latency.
 //! RuntimePulse delays do not identify a blocking thread, and UI publication is
-//! not GPU presentation. ReadWake-to-poll is application wakeup, not kernel receipt.
+//! not GPU presentation.
 use crate::Result;
 use serde_json::{Map, Value, json};
 use std::{
@@ -265,20 +265,6 @@ fn analyze(
         };
         let first = phase_at("ResponseFirstRead");
         let complete = phase_at("ResponseReceived");
-        let wakes = app
-            .iter()
-            .filter(|event| text(event, "phase") == Some("ReadWake"))
-            .filter_map(|wake| {
-                let wake = number(wake, "at_us")?;
-                app.iter()
-                    .find(|event| {
-                        text(event, "phase") == Some("ReadPolled")
-                            && number(event, "at_us").is_some_and(|at| at >= wake)
-                    })
-                    .and_then(|poll| number(poll, "at_us"))
-                    .map(|poll| poll - wake)
-            })
-            .collect::<Vec<_>>();
         let host_us = server
             .map(|server| {
                 ["decode_us", "queue_us", "handle_encode_us", "write_us"]
@@ -306,7 +292,7 @@ fn analyze(
         requests.push(json!({"stream": stream, "method": server.and_then(|server| server.get("method")), "host": server, "request_bytes": sent.get("value"),
             "slot_wait_us": value_at(&app, "RequestSlotWait"), "opened_to_sent_us": interval(&app, "RequestOpened", "RequestSent"), "encode_us": value_at(&app, "RequestEncoded"),
             "first_read_after_send_us": first_after_send, "response_after_send_us": response_after_send, "opened_to_response_us": round_trip,
-            "read_to_complete_us": interval(&app, "ResponseFirstRead", "ResponseReceived"), "decode_us": value_at(&app, "ResponseDecoded"), "max_observed_wake_to_poll_us": wakes.into_iter().max(),
+            "read_to_complete_us": interval(&app, "ResponseFirstRead", "ResponseReceived"), "decode_us": value_at(&app, "ResponseDecoded"),
             "host_local_us": host_us, "outside_host_interval_us": residual, "timing_consistent": timing_consistent}));
     }
     let mut relays = Vec::new();
@@ -499,7 +485,6 @@ mod tests {
         assert_eq!(request["method"], "scope");
         assert_eq!(request["first_read_after_send_us"], 90);
         assert_eq!(request["outside_host_interval_us"], 92);
-        assert!(request["max_observed_wake_to_poll_us"].is_null());
         assert!(result["ui_to_list_state_us"].is_null());
         assert_eq!(result["metadata"]["client_revision"], "123");
     }
@@ -574,7 +559,7 @@ mod tests {
     }
 
     #[test]
-    fn earlier_attempt_has_its_own_connection_ui_window_and_observed_wake_delays() {
+    fn earlier_attempt_has_its_own_connection_ui_window() {
         let mut rows = vec![
             row(
                 "client.connection.timeline",
@@ -607,8 +592,6 @@ mod tests {
             ("RequestOpened", 4, 8, 12, 0),
             ("RequestSent", 4, 8, 13, 40),
             ("ResponseReceived", 9, 8, 14, 0),
-            ("ReadWake", 4, 8, 15, 0),
-            ("ReadPolled", 4, 8, 18, 0),
             ("ResponseFirstRead", 4, 8, 19, 0),
             ("ResponseReceived", 4, 8, 22, 0),
             ("RuntimePulse", 0, 0, 23, 6),
@@ -634,7 +617,6 @@ mod tests {
         assert_eq!(result["metadata"]["connection"], 4);
         assert_eq!(result["ui_connect_us"], 19);
         assert_eq!(result["ui_to_list_state_us"], 21);
-        assert_eq!(result["requests"][0]["max_observed_wake_to_poll_us"], 3);
         assert_eq!(result["requests"][0]["outside_host_interval_us"], -90);
         assert_eq!(result["requests"][0]["timing_consistent"], false);
         assert_eq!(result["max_client_runtime_gap_us"], 6);

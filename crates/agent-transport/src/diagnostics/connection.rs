@@ -9,6 +9,9 @@ use tracing_subscriber::{Layer, layer::SubscriberExt, registry::LookupSpan};
 
 pub(crate) const CAPACITY: usize = 768;
 pub(crate) const WINDOW: Duration = Duration::from_secs(30);
+const PULSE: Duration = Duration::from_millis(250);
+/// A pulse this late means the runtime stalled for at least 100 ms.
+const STALLED_PULSE_US: u64 = 350_000;
 static TRACES: LazyLock<Mutex<HashMap<u64, Weak<Trace>>>> = LazyLock::new(Default::default);
 
 pub use agent_protocol::diagnostics::{ConnectionEvent, ConnectionPhase, ConnectionTimeline};
@@ -114,7 +117,7 @@ impl Trace {
         *sampler = Some(tokio_util::task::AbortOnDropHandle::new(runtime.spawn(
             async move {
                 loop {
-                    tokio::time::sleep(Duration::from_millis(250)).await;
+                    tokio::time::sleep(PULSE).await;
                     let Some(trace) = weak.upgrade() else {
                         break;
                     };
@@ -126,6 +129,7 @@ impl Trace {
                         now.duration_since(previous).as_micros() as u64,
                     );
                     if !trace.active() {
+                        trace.checkpoint();
                         break;
                     }
                     previous = now;
@@ -169,19 +173,22 @@ impl Trace {
             value,
         });
         drop(state);
-        if matches!(
-            phase,
-            ConnectionPhase::RuntimePulse
-                | ConnectionPhase::ResumeStart
-                | ConnectionPhase::ResumeReady
-                | ConnectionPhase::ResumeConnection
-                | ConnectionPhase::UiConnectReady
-                | ConnectionPhase::ResumeFailed
-                | ConnectionPhase::ResumeCancelled
-                | ConnectionPhase::UiConnectFailed
-                | ConnectionPhase::UiConnectCancelled
-                | ConnectionPhase::AppScene
-        ) {
+        // Milestones and stalls persist at once; the sampler saves the rest
+        // when the window ends instead of rewriting the journal every pulse.
+        if phase == ConnectionPhase::RuntimePulse && value >= STALLED_PULSE_US
+            || matches!(
+                phase,
+                ConnectionPhase::ResumeStart
+                    | ConnectionPhase::ResumeReady
+                    | ConnectionPhase::ResumeConnection
+                    | ConnectionPhase::UiConnectReady
+                    | ConnectionPhase::ResumeFailed
+                    | ConnectionPhase::ResumeCancelled
+                    | ConnectionPhase::UiConnectFailed
+                    | ConnectionPhase::UiConnectCancelled
+                    | ConnectionPhase::AppScene
+            )
+        {
             self.checkpoint();
         }
     }
@@ -462,12 +469,9 @@ mod tests {
         trace.activate();
         std::thread::sleep(Duration::from_millis(350));
         tokio::time::timeout(Duration::from_secs(2), async {
-            while !trace
-                .snapshot()
-                .events
-                .iter()
-                .any(|event| event.phase == ConnectionPhase::RuntimePulse && event.value >= 350_000)
-            {
+            while !trace.snapshot().events.iter().any(|event| {
+                event.phase == ConnectionPhase::RuntimePulse && event.value >= STALLED_PULSE_US
+            }) {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
