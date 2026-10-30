@@ -199,7 +199,12 @@ pub fn launch(plan: &Plan) -> Result<File> {
         .join(format!("updater{}", std::env::consts::EXE_SUFFIX));
     fs::copy(std::env::current_exe()?, &worker)?;
     let mut command = Command::new(worker);
-    command.arg("--bex-apply-update").arg(&path);
+    // Windows keeps the current directory open. The worker must leave the
+    // installed directory before replacing it, even when launched by a shortcut.
+    command
+        .arg("--bex-apply-update")
+        .arg(&path)
+        .current_dir(&plan.directory);
     detached(&mut command);
     command.spawn()?;
     let deadline = Instant::now() + Duration::from_secs(10);
