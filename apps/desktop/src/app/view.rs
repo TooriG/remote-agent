@@ -632,14 +632,16 @@ mod cache_tests {
             let view = cx.new(|cx| {
                 let mut view = Desktop::new(Mode::Main, window, cx);
                 view.onboarding = false;
+                // Host discovery and updater tasks are independent of this
+                // input/Store boundary and can notify while Tokio is pumped.
+                view.hosts = None;
+                view.app_updates = None;
                 view.panels.open(view.panel_scope(), Panel::Files, None);
                 let snapshot = Arc::make_mut(&mut view.snapshot);
-                snapshot.connected = true;
-                snapshot.composer_catalog = Some(Arc::new(agent_protocol::composer::ComposerCatalog::default()));
                 Arc::make_mut(&mut snapshot.navigation).thread_id = Some(session.clone());
                 Arc::make_mut(&mut snapshot.navigation).draft_key = session.clone().into();
                 snapshot.threads = Some(Arc::new(serde_json::from_value(serde_json::json!({
-                    "data":[{"id":{"provider":"codex","id":"selected"},"name":"Task","status":"running"}],
+                    "data":[{"id":{"provider":"codex","id":"selected"},"name":"Task"}],
                     "projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,
                 })).unwrap()));
                 Arc::make_mut(&mut snapshot.conversations).insert(session.clone(), Arc::new(serde_json::from_value(serde_json::json!({
@@ -649,6 +651,7 @@ mod cache_tests {
                 let store = runtime.block_on(async {
                     Arc::new(agent_core::store::Store::offline((*view.snapshot).clone()))
                 });
+                view.snapshot = store.snapshot();
                 view.epoch += 1;
                 let epoch = view.epoch;
                 let updates = view.updates.clone();
