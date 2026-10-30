@@ -274,9 +274,12 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         val changes = next.changes(snapshot)
         if (!changes.changed) return
         if (changes.reconnected) notice = null
-        val name = next.hostName()
-        if (name != null && profiles.any { it.id == profileId && it.name != name }) {
-            profiles = profiles.map { if (it.id == profileId) it.copy(name = name) else it }
+        // The Host's latest addresses let the next cold connection dial it directly.
+        val current = profiles.firstOrNull { it.id == profileId }
+        val refreshed =
+            current?.copy(name = next.hostName() ?: current.name, ticket = next.hostTicket() ?: current.ticket)
+        if (refreshed != null && refreshed != current) {
+            profiles = profiles.map { if (it.id == profileId) refreshed else it }
             repository.saveProfiles(profiles)
         }
         if (changes.list) list = next.recentThreadList()

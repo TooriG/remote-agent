@@ -86,6 +86,11 @@ impl HostRpcService {
         }
     }
 
+    /// Clients compare this with cached state at the start of every connection.
+    pub(crate) fn storage_scope(&self) -> Result<String, serde_json::Error> {
+        self.inner.providers.storage_scope()
+    }
+
     async fn account_request(&self, request: Call) -> Result<Body, Failure> {
         if matches!(request, Call::ListAccounts(_)) {
             return Ok(self.inner.providers.accounts().await.into());
@@ -434,13 +439,6 @@ impl HostRpcService {
                     Failure::new("request_unavailable", "request is no longer pending")
                 })?)
             .into(),
-            Call::SessionScope(_) => {
-                let started = std::time::Instant::now();
-                let scope = self.inner.providers.storage_scope()?;
-                tracing::info!(target: "agent", operation = "host.connection.scope",
-                    message = %format_args!("elapsed_ms={}", started.elapsed().as_millis()));
-                scope.into()
-            }
             Call::ConnectionPerformance(performance) => {
                 let performance = performance.clone();
                 tokio::task::spawn_blocking(move || {
@@ -851,14 +849,7 @@ mod tests {
             [claude.into()],
             crate::ProjectStore::new(root.path().join("projects.json")),
         );
-        let request =
-            agent_protocol::protocol::Call::SessionScope(agent_protocol::models::Empty {});
-        let session = service.open_session();
-        let before = service
-            .dispatch(session.id(), &request)
-            .await
-            .unwrap()
-            .initial;
+        let before = service.storage_scope().unwrap();
         let claude = crate::providers::claude::Claude::load(
             "claude".into(),
             root.path().join("accounts"),
@@ -874,12 +865,7 @@ mod tests {
             [claude.into(), harness.into()],
             crate::ProjectStore::new(root.path().join("projects.json")),
         );
-        let session = service.open_session();
-        let after = service
-            .dispatch(session.id(), &request)
-            .await
-            .unwrap()
-            .initial;
+        let after = service.storage_scope().unwrap();
         assert_eq!(
             before, after,
             "Adding Harness must not archive existing drafts or navigation"

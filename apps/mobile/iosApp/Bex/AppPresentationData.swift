@@ -4,10 +4,10 @@ import Foundation
 // These values contain rendered rows, never mutable conversation state.
 enum AppScreen: Hashable { case pairing, profiles, threads, thread }
 enum LoadState { case idle, loading, ready, failed }
-struct HostProfile: Codable, Identifiable {
+struct HostProfile: Codable, Identifiable, Equatable {
     let id: String
     var name: String
-    let ticket: String
+    var ticket: String
 
     static func load() throws -> [HostProfile] {
         guard let data = UserDefaults.standard.data(forKey: "bex.hosts.iroh") else { return [] }

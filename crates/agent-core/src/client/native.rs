@@ -458,9 +458,12 @@ mod tests {
             .unwrap();
         let (session, mut reader, writer) = host_fixture::accept(session).await;
         let request = reader.read_request().await.unwrap().unwrap();
-        assert_eq!(request["method"], "host/session/scope");
+        assert_eq!(request["method"], "host/device/identify");
         writer
-            .reply(&request, serde_json::json!({"result":"fixture-storage"}))
+            .reply(
+                &request,
+                serde_json::json!({"result":{"storageScope":"fixture-storage","ticket":""}}),
+            )
             .await
             .unwrap();
         (session, reader, writer)
@@ -674,7 +677,7 @@ mod tests {
                     let old_identity = store.endpoint.lock().await.as_ref().unwrap().endpoint.node_id();
                     let response = |request: &Value, text: &str| {
                         let result = match request["method"].as_str().unwrap() {
-                            "host/session/scope" => json!("fixture-storage"),
+                            "host/device/identify" => json!({"storageScope":"fixture-storage","ticket":""}),
                             "host/diagnostics/connection" => json!({}),
                             "host/account/list" => json!({"accounts":[],"selected":{}}),
                             "host/taskActivity/read" => json!({"revision":u64::from(text == "after"),"statuses":[],"unread":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()}),
@@ -691,7 +694,7 @@ mod tests {
                             writer.reply(&request, response(&request, "before")).await.unwrap();
                         }
                         let request = reader.read_request().await.unwrap().unwrap();
-                        assert_eq!(request["method"], "host/session/scope");
+                        assert_eq!(request["method"], "host/device/identify");
                         if silent {
                             // Do not answer the Host check. Recovery must replace this
                             // transport without waiting for the normal 30-second deadline.
@@ -710,7 +713,7 @@ mod tests {
                                 let incoming = host.accept().await.unwrap().unwrap().authorize(&trust).unwrap();
                                 let (candidate, mut candidate_reader, candidate_writer) = host_fixture::accept(incoming).await;
                                 let check = candidate_reader.read_request().await.unwrap().unwrap();
-                                assert_eq!(check["method"], "host/session/scope");
+                                assert_eq!(check["method"], "host/device/identify");
                                 candidate_writer.reply(&check, json!({"error":{"code":"request_failed","message":"candidate rejected"}})).await.unwrap();
                                 assert!(!matches!(candidate_reader.read_request().await, Ok(Some(_))), "failed replacement must close before old connection succeeds");
                                 candidate.close();
@@ -928,7 +931,7 @@ mod tests {
             .unwrap()
             .unwrap()
             .unwrap();
-        assert_eq!(request["method"], "host/session/scope");
+        assert_eq!(request["method"], "host/device/identify");
         let candidate = host
             .accept()
             .await
@@ -944,7 +947,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .unwrap();
-        assert_eq!(check["method"], "host/session/scope");
+        assert_eq!(check["method"], "host/device/identify");
         tokio::time::timeout(Duration::from_millis(500), store.disconnect())
             .await
             .unwrap()
@@ -1014,7 +1017,7 @@ mod tests {
             .unwrap();
         let (incoming, mut reader, _writer) = host_fixture::accept(incoming).await;
         let scope = reader.read_request().await.unwrap().unwrap();
-        assert_eq!(scope["method"], "host/session/scope");
+        assert_eq!(scope["method"], "host/device/identify");
         let result = tokio::time::timeout(Duration::from_secs(12), connecting)
             .await
             .unwrap()

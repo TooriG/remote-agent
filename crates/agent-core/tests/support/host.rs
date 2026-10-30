@@ -37,10 +37,7 @@ impl Reader {
     }
     pub async fn read_request(&mut self) -> std::io::Result<Option<Request>> {
         while let Some(request) = self.incoming.recv().await {
-            if matches!(
-                &request.call,
-                Call::MarkSessionRead(_) | Call::IdentifyDevice(_)
-            ) {
+            if matches!(&request.call, Call::MarkSessionRead(_)) {
                 let mut send = request.send.lock().await.take().unwrap();
                 agent_transport::framing::write(
                     &mut send,

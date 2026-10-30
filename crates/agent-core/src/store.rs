@@ -7,7 +7,7 @@ use crate::{
 };
 use agent_protocol::operations::{IdentifyDevice, Pair, RpcMethod};
 use agent_transport::client::{Client, Updates};
-use futures_util::{StreamExt, stream::FuturesUnordered};
+use futures_util::{FutureExt, StreamExt, stream::FuturesUnordered};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     sync::{Arc, Mutex},
@@ -79,6 +79,50 @@ struct Connection {
     peer: Arc<Client>,
     events: Updates,
     session: Option<crate::transport::Session>,
+    /// Until the Host answers, cached storage may belong to an older Host
+    /// configuration, so only the connection's own refresh reads run.
+    introduction: Option<Introducing>,
+}
+
+/// Host facts that confirm or replace state cached from an earlier connection.
+struct Introduction {
+    storage_scope: String,
+    ticket: Option<String>,
+}
+type Introducing = futures_util::future::BoxFuture<'static, Result<Introduction, PeerError>>;
+
+fn introduce(
+    peer: Arc<Client>,
+    node: crate::transport::NodeId,
+    device_name: String,
+) -> Introducing {
+    async move {
+        let identity = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            peer.call(&IdentifyDevice { name: device_name }),
+        )
+        .await
+        .map_err(|_| PeerError::RequestTimeout {
+            method: "host/device/identify".into(),
+        })??;
+        if identity.storage_scope.is_empty() || identity.storage_scope.len() > 256 {
+            return Err(PeerError::InvalidMessage(
+                "invalid provider storage scope".into(),
+            ));
+        }
+        // Only addresses of the authenticated Host may replace a saved ticket.
+        let ticket = identity
+            .ticket
+            .parse::<crate::transport::Ticket>()
+            .ok()
+            .filter(|ticket| ticket.node_id() == node)
+            .map(|ticket| ticket.to_string());
+        Ok(Introduction {
+            storage_scope: format!("{node}:{}", identity.storage_scope),
+            ticket,
+        })
+    }
+    .boxed()
 }
 
 /// Cancellation and superseded attempts must finish only their own notice state.
@@ -116,13 +160,16 @@ impl Drop for ConnectionAttempt<'_> {
 }
 
 impl Connection {
+    /// A scope cached from this Host lets attach start before the Host confirms it.
     async fn open(
         endpoint: &crate::transport::Endpoint,
         ticket: &crate::transport::Ticket,
         invitation: Option<uuid::Uuid>,
         device_name: &str,
+        cached_scope: &str,
     ) -> Result<(Self, String, ConnectionPerformance), crate::transport::TransportError> {
-        let (session, peer, events, scope, transport_ms, verification_ms) =
+        let node = ticket.node_id();
+        let (session, peer, events, introduction, scope, transport_ms, verification_ms) =
             tokio::time::timeout(std::time::Duration::from_secs(10), async {
                 let started = std::time::Instant::now();
                 let session =
@@ -135,15 +182,25 @@ impl Connection {
                 if let Some(invitation) = invitation {
                     peer.call(&Pair { invitation }).await?;
                 }
-                peer.call(&IdentifyDevice {
-                    name: device_name.to_owned(),
-                })
-                .await?;
-                let scope = read_storage_scope(&peer).await?;
+                let peer = Arc::new(peer);
+                let mut introduction = introduce(peer.clone(), node, device_name.to_owned());
+                let scope = if cached_scope.starts_with(&format!("{node}:")) {
+                    // Write the request now so it precedes the connection's own reads.
+                    if let std::task::Poll::Ready(result) = futures_util::poll!(&mut introduction) {
+                        introduction = futures_util::future::ready(result).boxed();
+                    }
+                    cached_scope.to_owned()
+                } else {
+                    let introduced = (&mut introduction).await?;
+                    let scope = introduced.storage_scope.clone();
+                    introduction = futures_util::future::ready(Ok(introduced)).boxed();
+                    scope
+                };
                 Ok::<_, crate::transport::TransportError>((
                     scopeguard::ScopeGuard::into_inner(session),
                     peer,
                     events,
+                    introduction,
                     scope,
                     transport_ms,
                     started.elapsed().as_millis() as u64,
@@ -165,11 +222,12 @@ impl Connection {
         };
         Ok((
             Self {
-                peer: Arc::new(peer),
+                peer,
                 events,
                 session: Some(session),
+                introduction: Some(introduction),
             },
-            format!("{}:{scope}", ticket.node_id()),
+            scope,
             performance,
         ))
     }
@@ -346,6 +404,7 @@ impl Store {
                     peer: Arc::new(peer),
                     events,
                     session: None,
+                    introduction: None,
                 },
                 apply(&writer, Event::Connected),
             )
@@ -447,9 +506,15 @@ impl Store {
                 })
                 .map_err(command_error)?;
             let reusable = receiver.await.unwrap_or(None);
+            // Racing a live session, only a verified replacement may retire it.
+            let cached_scope = if reusable.is_some() {
+                String::new()
+            } else {
+                self.snapshot().storage_scope.clone()
+            };
             let replacement = async {
                 let (connection, scope, performance) =
-                    Connection::open(endpoint, ticket, None, device_name).await?;
+                    Connection::open(endpoint, ticket, None, device_name, &cached_scope).await?;
                 Ok::<_, crate::transport::TransportError>((Some((connection, scope)), performance))
             };
             let (prepared, performance) = if let Some(peer) = reusable {
@@ -460,22 +525,21 @@ impl Store {
                     let started = std::time::Instant::now();
                     match tokio::time::timeout(
                         std::time::Duration::from_secs(1),
-                        read_storage_scope(&peer),
+                        introduce(peer.clone(), ticket.node_id(), device_name.to_owned()),
                     )
                     .await
                     {
-                        Ok(Ok(current)) => Ok((scope == format!("{}:{current}", ticket.node_id()))
-                            .then(|| {
-                                let (route, rtt_ms) = peer.connection_path();
-                                ConnectionPerformance {
-                                    reused: true,
-                                    connection_id: peer.diagnostic_id,
-                                    verification_ms: started.elapsed().as_millis() as u64,
-                                    route,
-                                    rtt_ms,
-                                    ..Default::default()
-                                }
-                            })),
+                        Ok(Ok(current)) => Ok((scope == current.storage_scope).then(|| {
+                            let (route, rtt_ms) = peer.connection_path();
+                            ConnectionPerformance {
+                                reused: true,
+                                connection_id: peer.diagnostic_id,
+                                verification_ms: started.elapsed().as_millis() as u64,
+                                route,
+                                rtt_ms,
+                                ..Default::default()
+                            }
+                        })),
                         Ok(Err(
                             error @ (PeerError::Remote { .. } | PeerError::InvalidResponse { .. }),
                         )) => Err(error),
@@ -558,8 +622,14 @@ impl Store {
             disconnected
                 .await
                 .map_err(|_| PeerError::ConnectionClosed("store is closed".into()))??;
-            let (connection, scope, performance) =
-                Connection::open(endpoint, ticket, invitation, device_name).await?;
+            let (connection, scope, performance) = Connection::open(
+                endpoint,
+                ticket,
+                invitation,
+                device_name,
+                &self.snapshot().storage_scope,
+            )
+            .await?;
             self.attach_connection(connection, scope, attempt.token.clone())
                 .await?;
             Ok::<_, crate::transport::TransportError>(performance)
@@ -708,20 +778,6 @@ impl Store {
     }
 }
 
-async fn read_storage_scope(peer: &Client) -> Result<String, PeerError> {
-    let scope = peer
-        .request::<String>(&crate::protocol::Call::SessionScope(
-            crate::models::Empty {},
-        ))
-        .await?;
-    if scope.is_empty() || scope.len() > 256 {
-        return Err(PeerError::InvalidMessage(
-            "invalid provider storage scope".into(),
-        ));
-    }
-    Ok(scope)
-}
-
 fn apply(updates: &watch::Sender<Arc<Snapshot>>, event: Event) -> Vec<Scheduled> {
     let mut effects = Vec::new();
     updates.send_if_modified(|current| {
@@ -766,6 +822,7 @@ fn publish_locked(current: &mut Arc<Snapshot>, next: Snapshot) -> bool {
         permission_settings,
         composer_catalog,
         host_name,
+        host_ticket,
         task_activity,
         storage_scope,
         archived_scopes,
@@ -808,6 +865,7 @@ fn publish_locked(current: &mut Arc<Snapshot>, next: Snapshot) -> bool {
         && Arc::ptr_eq(&current.project_preferences, project_preferences)
         && Arc::ptr_eq(&current.scoped_model_defaults, scoped_model_defaults)
         && current.host_name == *host_name
+        && current.host_ticket == *host_ticket
         && current.task_activity == *task_activity
         && current.permission_settings == *permission_settings
         && current.composer_catalog == *composer_catalog
@@ -1084,6 +1142,8 @@ async fn run(
     let mut terminal_running = BTreeSet::new();
     let mut latest_reads: BTreeMap<op::OperationKey, Option<Scheduled>> = BTreeMap::new();
     let mut disconnected = None;
+    let mut introduction = connection.introduction.take();
+    let mut held = Vec::new();
     let reason = loop {
         let unused: Vec<_> = subscriptions
             .keys()
@@ -1232,10 +1292,31 @@ async fn run(
                 let mut complete = Some(Receipt::new(command.complete));
                 for mut scheduled in command.effects {
                     scheduled.complete = if scheduled.effect.receipt == ReceiptPolicy::Background { None } else { complete.take() };
-                    effects.push(scheduled);
+                    if introduction.is_some() { held.push(scheduled) } else { effects.push(scheduled) }
                 }
                 if let Some(complete) = complete {
                     complete.send(Ok(Outcome::Applied));
+                }
+            }
+            introduced = async { introduction.as_mut().unwrap().await }, if introduction.is_some() => {
+                introduction = None;
+                let introduced = match introduced {
+                    Ok(introduced) => introduced,
+                    Err(error) => break Some(error.to_string()),
+                };
+                if introduced.storage_scope == updates.borrow().storage_scope {
+                    effects.append(&mut held);
+                } else {
+                    // Work started against the cached storage must not reach the Host's new one.
+                    for scheduled in held.drain(..) {
+                        let error = PeerError::InvalidMessage("Hostの保存先が変わったため、操作を取り消しました。".into());
+                        effects.extend(finish(&updates, rejected(scheduled, error)));
+                    }
+                    apply(&updates, Event::StorageScope(introduced.storage_scope));
+                    effects.extend(apply(&updates, Event::Connected));
+                }
+                if let Some(ticket) = introduced.ticket {
+                    apply(&updates, Event::HostTicket(ticket));
                 }
             }
             _ = browser_jobs.next(), if !browser_jobs.is_empty() => {},
@@ -1613,7 +1694,7 @@ mod tests {
                 .unwrap();
             let (session, mut reader, writer) = host_fixture::accept(incoming).await;
             let scope = reader.read_request().await.unwrap().unwrap();
-            assert_eq!(scope["method"], "host/session/scope");
+            assert_eq!(scope["method"], "host/device/identify");
             assert!(store.snapshot().connection_attempt.is_some());
             assert!(
                 store
@@ -1625,7 +1706,10 @@ mod tests {
             match outcome {
                 "ready" => {
                     writer
-                        .reply(&scope, json!({"result":"restored-storage"}))
+                        .reply(
+                            &scope,
+                            json!({"result":{"storageScope":"restored-storage","ticket":""}}),
+                        )
                         .await
                         .unwrap();
                     recovering.await.unwrap().unwrap();

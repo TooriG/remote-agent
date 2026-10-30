@@ -219,11 +219,15 @@ extension AppViewModel {
     func publish(_ next: AgentCore.Snapshot) {
         let changes = next.changes(previous: snapshot)
         guard changes.changed else { return }
-        if let name = next.hostName(),
-           let index = profiles.firstIndex(where: { $0.id == selectedProfileId }),
-           profiles[index].name != name {
-            profiles[index].name = name
-            do { try HostProfile.save(profiles) } catch { notice = error.localizedDescription }
+        // The Host's latest addresses let the next cold connection dial it directly.
+        if let index = profiles.firstIndex(where: { $0.id == selectedProfileId }) {
+            var profile = profiles[index]
+            profile.name = next.hostName() ?? profile.name
+            profile.ticket = next.hostTicket() ?? profile.ticket
+            if profile != profiles[index] {
+                profiles[index] = profile
+                do { try HostProfile.save(profiles) } catch { notice = error.localizedDescription }
+            }
         }
         if changes.list {
             list = next.threadList()

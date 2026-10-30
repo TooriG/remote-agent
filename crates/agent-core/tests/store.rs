@@ -19,9 +19,12 @@ async fn scoped_incoming(
         .unwrap();
     let (session, mut reader, writer) = host_fixture::accept(session).await;
     let request = reader.read_request().await.unwrap().unwrap();
-    assert_eq!(request["method"], "host/session/scope");
+    assert_eq!(request["method"], "host/device/identify");
     writer
-        .reply(&request, serde_json::json!({"result":"fixture-storage"}))
+        .reply(
+            &request,
+            serde_json::json!({"result":{"storageScope":"fixture-storage","ticket":""}}),
+        )
         .await
         .unwrap();
     (session, reader, writer)
@@ -2912,7 +2915,7 @@ async fn initial_titles_wait_for_scope_verification_and_use_the_current_query() 
             let incoming = host.accept().await.unwrap().unwrap().authorize(&trust).unwrap();
             let (session, mut reader, writer) = host_fixture::accept(incoming).await;
             let scope = read(&mut reader).await;
-            assert_eq!(scope["method"], "host/session/scope");
+            assert_eq!(scope["method"], "host/device/identify");
             assert!(tokio::time::timeout(Duration::from_millis(40), reader.read_request()).await.is_err(),
                 "an unverified candidate must not load titles");
             assert!(!store.snapshot().connected);
@@ -2921,7 +2924,7 @@ async fn initial_titles_wait_for_scope_verification_and_use_the_current_query() 
             if mode == "changed-query" {
                 let _ = store.dispatch(Intent::ListSessions(op::ListSessions::new(ListQuery { search_term: "new query".into(), ..Default::default() }))).await;
             }
-            writer.reply(&scope, json!({"result":if mode == "rejected" { "" } else { "verified-storage" }})).await.unwrap();
+            writer.reply(&scope, json!({"result":{"storageScope":if mode == "rejected" { "" } else { "verified-storage" },"ticket":""}})).await.unwrap();
             let connected = connecting.await.unwrap();
             if mode == "rejected" {
                 assert!(connected.is_err());
@@ -2955,6 +2958,62 @@ async fn initial_titles_wait_for_scope_verification_and_use_the_current_query() 
             client.close().await;
             host.close().await;
         }).await.unwrap_or_else(|_| panic!("pipeline timed out: {mode}"));
+    }
+}
+
+#[tokio::test]
+async fn cached_scope_starts_reads_before_the_host_confirms_it_and_holds_user_work() {
+    use agent_transport::transport::{Endpoint, Identity, Relays, Trust};
+    for changed in [false, true] {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let host = Endpoint::bind(Identity::generate(), Relays::Disabled).await.unwrap();
+            let client = Endpoint::bind(Identity::generate(), Relays::Disabled).await.unwrap();
+            let trust = Trust { allowed: [client.node_id()].into(), ..Default::default() };
+            let cached = format!("{}:cached", host.node_id());
+            let store = Arc::new(Store::offline(Snapshot { storage_scope: cached.clone(), ..Default::default() }));
+            let connecting = tokio::spawn({
+                let (store, client, ticket) = (store.clone(), client.clone(), host.ticket());
+                async move { store.reconnect(&client, &ticket, None, "Fixture device").await }
+            });
+            let incoming = host.accept().await.unwrap().unwrap().authorize(&trust).unwrap();
+            let (session, mut reader, writer) = host_fixture::accept(incoming).await;
+            let identify = read(&mut reader).await;
+            assert_eq!(identify["method"], "host/device/identify");
+            assert_eq!(identify["params"]["name"], "Fixture device");
+            connecting.await.unwrap().unwrap();
+            assert!(store.snapshot().connected);
+            // The connection's own reads do not wait for the Host's answer.
+            let refresh = read(&mut reader).await;
+            assert_ne!(refresh["method"], "host/worktree/settings/read");
+            let settings = store.dispatch(Intent::ReadWorktreeSettings(op::ReadWorktreeSettings {}));
+            let mut held = true;
+            while let Ok(request) = tokio::time::timeout(Duration::from_millis(100), reader.read_request()).await {
+                held &= request.unwrap().unwrap()["method"] != "host/worktree/settings/read";
+            }
+            assert!(held, "user work must wait for the Host to confirm the cached storage");
+            let ticket = if changed { Endpoint::bind(Identity::generate(), Relays::Disabled).await.unwrap().ticket() } else { host.ticket() }.to_string();
+            writer.reply(&identify, json!({"result":{"storageScope":if changed { "changed" } else { "cached" },"ticket":ticket}})).await.unwrap();
+            if changed {
+                assert!(settings.await.is_err(), "work started against the old storage must not reach the new one");
+                wait_for(&store, |state| state.storage_scope == format!("{}:changed", host.node_id())).await;
+                assert_eq!(store.snapshot().host_ticket, None, "another Host's addresses must not replace the ticket");
+            } else {
+                let request = loop {
+                    let request = read(&mut reader).await;
+                    if request["method"] == "host/worktree/settings/read" { break request; }
+                };
+                writer.reply(&request, json!({"result":{"createOnNewSession":false,"copyOnCreate":false,"copyPaths":[],"worktreeDirectory":"fixture"}})).await.unwrap();
+                settings.await.unwrap();
+                assert_eq!(store.snapshot().storage_scope, cached);
+                assert_eq!(store.snapshot().host_ticket, Some(host.ticket().to_string()));
+            }
+            session.close();
+            store.close().await.unwrap();
+            client.close().await;
+            host.close().await;
+        })
+        .await
+        .unwrap_or_else(|_| panic!("cached scope connection timed out: changed={changed}"));
     }
 }
 
@@ -3006,36 +3065,23 @@ async fn reconnect_preserves_edits_made_during_pairing() {
             .unwrap();
         let drafts = store.snapshot().drafts.clone();
         let (session, _peer) = pairing.authorize(&trust).await.unwrap();
+        // The device names itself in the request that also reads the storage scope.
         let agent_transport::transport::IncomingRequest::Call(mut identify) =
             session.accept_request().await.unwrap()
         else {
             panic!("device identification expected")
         };
         assert!(matches!(
-            identify.call,
+            &identify.call,
             agent_protocol::protocol::Call::IdentifyDevice(params) if params.name == "Fixture device"
         ));
         agent_transport::framing::write(
             &mut identify.send,
             agent_protocol::protocol::Response::Success {
-                result: agent_protocol::models::Empty {},
-            },
-        )
-        .await
-        .unwrap();
-        let agent_transport::transport::IncomingRequest::Call(mut call) =
-            session.accept_request().await.unwrap()
-        else {
-            panic!("scope request expected")
-        };
-        assert!(matches!(
-            call.call,
-            agent_protocol::protocol::Call::SessionScope(_)
-        ));
-        agent_transport::framing::write(
-            &mut call.send,
-            agent_protocol::protocol::Response::Success {
-                result: Box::new("fixture-storage".to_owned()),
+                result: agent_protocol::operations::HostIdentity {
+                    storage_scope: "fixture-storage".into(),
+                    ticket: String::new(),
+                },
             },
         )
         .await

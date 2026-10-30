@@ -266,6 +266,9 @@ pub struct Snapshot {
     pub composer_catalog: Option<Arc<agent_protocol::composer::ComposerCatalog>>,
     #[serde(skip)]
     pub host_name: Option<String>,
+    /// The Host's latest reachable addresses; platforms save them for cold connections.
+    #[serde(skip)]
+    pub host_ticket: Option<String>,
     #[serde(skip)]
     pub task_activity: Option<Arc<agent_protocol::live_activity::TaskActivityState>>,
     pub storage_scope: String,
@@ -439,6 +442,7 @@ pub struct ScopedData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Event {
     StorageScope(String),
+    HostTicket(String),
     TerminalFailed {
         handle: String,
         reason: String,
@@ -1102,6 +1106,9 @@ fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
             }
         }
 
+        Event::HostTicket(ticket) => {
+            next.host_ticket = Some(ticket);
+        }
         Event::StorageScope(scope) => {
             if next.storage_scope == scope {
                 return (next, Vec::new());

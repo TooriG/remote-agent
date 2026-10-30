@@ -62,9 +62,20 @@ pub struct Pair {
     pub invitation: uuid::Uuid,
 }
 
+/// The first request of every connection: the device names itself and learns
+/// what it needs before trusting cached state from an earlier connection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IdentifyDevice {
     pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostIdentity {
+    /// Identifies the native storage the Host's providers read.
+    pub storage_scope: String,
+    /// The Host's currently reachable addresses for the next cold connection.
+    pub ticket: String,
 }
 
 #[derive(Debug, Serialize, Clone)]

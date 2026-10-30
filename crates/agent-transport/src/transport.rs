@@ -457,7 +457,7 @@ impl Session {
                             continue;
                         }
                     };
-                    if matches!(call, crate::protocol::Call::SessionScope(_)) {
+                    if matches!(call, crate::protocol::Call::IdentifyDevice(_)) {
                         self._endpoint.1.activate();
                     }
                     return Ok(IncomingRequest::Call(HostRequest {

@@ -90,9 +90,12 @@ impl Fixture {
                 .unwrap();
             let (session, mut reader, writer) = host_fixture::accept(session).await;
             let request = reader.read_request().await.unwrap().unwrap();
-            assert_eq!(request["method"], "host/session/scope");
+            assert_eq!(request["method"], "host/device/identify");
             writer
-                .reply(&request, json!({"result":"grant-fixture"}))
+                .reply(
+                    &request,
+                    json!({"result":{"storageScope":"grant-fixture","ticket":""}}),
+                )
                 .await
                 .unwrap();
             (session, reader, writer)

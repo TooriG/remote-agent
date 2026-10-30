@@ -35,7 +35,9 @@ async fn exercise(command: &[&str], expected: Value) {
         // Connected owns initial reads; the command consumes that same state.
         while let Ok(Some(request)) = reader.read_request().await {
             let result = match request["method"].as_str() {
-                Some("host/session/scope") => json!("fixture-storage"),
+                Some("host/device/identify") => {
+                    json!({"storageScope":"fixture-storage","ticket":""})
+                }
                 Some("host/session/request") => {
                     assert_eq!(request["params"]["requestId"], *approval.as_ref().unwrap());
                     json!({"provider":"codex","id":"fixture-thread"})

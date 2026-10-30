@@ -357,7 +357,12 @@ impl HostRuntime {
                     next.device_names.insert(node, name.to_owned());
                     *record = self.credentials.persist(next).await?;
                 }
-                Ok(agent_protocol::models::Empty {}.into())
+                drop(record);
+                Ok(agent_protocol::operations::HostIdentity {
+                    storage_scope: self.service.storage_scope()?,
+                    ticket: self.ticket().to_string(),
+                }
+                .into())
             }
             Call::PrepareHostUpdate(_) => {
                 let executable = std::env::current_exe()?
@@ -502,7 +507,11 @@ mod tests {
     use serde_json::Value;
     use std::path::PathBuf;
 
-    async fn identify(runtime: &HostRuntime, node: NodeId, name: &str) -> Response<Empty> {
+    async fn identify(
+        runtime: &HostRuntime,
+        node: NodeId,
+        name: &str,
+    ) -> Response<agent_protocol::operations::HostIdentity> {
         let reply = runtime
             .dispatch(
                 node,
@@ -550,10 +559,12 @@ mod tests {
             .trust
             .allowed
             .extend([phone, tablet]);
-        assert!(matches!(
-            identify(&runtime, phone, "  My device  ").await,
-            Response::Success { .. }
-        ));
+        let Response::Success { result } = identify(&runtime, phone, "  My device  ").await else {
+            panic!("an authorized device must be identified");
+        };
+        // The answer carries what the device needs before trusting its cached state.
+        assert_eq!(result.ticket, runtime.ticket().to_string());
+        assert!(!result.storage_scope.is_empty());
         assert!(matches!(
             identify(&runtime, tablet, "My device").await,
             Response::Success { .. }

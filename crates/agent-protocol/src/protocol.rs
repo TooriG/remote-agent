@@ -117,7 +117,7 @@ macro_rules! results {
     }
 }
 results! {
-    HostUpdate(crate::operations::HostUpdate),
+    HostUpdate(crate::operations::HostUpdate), HostIdentity(crate::operations::HostIdentity),
     HandoffHistory(crate::handoff::Page),
     TaskActivity(crate::live_activity::TaskActivityState),
     LiveActivity(crate::live_activity::LiveActivityRegistration),

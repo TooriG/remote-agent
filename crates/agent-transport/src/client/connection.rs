@@ -591,7 +591,7 @@ mod tests {
             let (remote, events) = tokio::join!(session.open_peer(Duration::from_secs(2), 1), incoming.accept_peer());
             let (remote, _updates) = remote.unwrap();
             let _events = events.unwrap();
-            let call = Call::SessionScope(crate::models::Empty {});
+            let call = Call::HostName(crate::models::Empty {});
             let mut pending = remote.start_call(&call).await.unwrap();
             let crate::transport::IncomingRequest::Call(mut request) = incoming.accept_request().await.unwrap() else { panic!("call expected") };
             let stream = u64::from(request.send.id());
