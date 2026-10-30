@@ -280,7 +280,9 @@ pub async fn apply(path: &Path) -> Result<()> {
                     PathBuf::from(launch.executable)
                 };
                 let mut command = Command::new(program);
-                command.args(launch.arguments);
+                command
+                    .args(launch.arguments)
+                    .current_dir(launch.working_directory);
                 detached(&mut command);
                 command.spawn()?;
             }

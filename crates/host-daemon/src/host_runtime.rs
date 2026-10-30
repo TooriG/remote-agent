@@ -356,6 +356,10 @@ impl HostRuntime {
                             .map_err(|_| anyhow::anyhow!("Host arguments must be UTF-8"))
                     })
                     .collect::<Result<Vec<_>>>()?;
+                let working_directory = std::env::current_dir()?
+                    .into_os_string()
+                    .into_string()
+                    .map_err(|_| anyhow::anyhow!("Host working directory must be UTF-8"))?;
                 self.service.prepare_update().await?;
                 let stop = self.update_shutdown.clone();
                 // Allow the acknowledged preparation response to flush before
@@ -367,6 +371,7 @@ impl HostRuntime {
                 Ok(agent_protocol::operations::HostUpdate {
                     executable,
                     arguments,
+                    working_directory,
                 }
                 .into())
             }
@@ -475,6 +480,7 @@ mod tests {
     };
     use agent_transport::transport::Relays;
     use serde_json::Value;
+    use std::path::PathBuf;
 
     #[tokio::test]
     async fn only_the_local_node_can_prepare_an_app_update() {
@@ -525,6 +531,31 @@ mod tests {
                 .path()
                 .join(agent_local_host::update::RECOVERY_FILE)
                 .exists()
+        );
+        let reply = runtime
+            .dispatch(
+                runtime.local_node,
+                0,
+                &Call::PrepareHostUpdate(agent_protocol::operations::PrepareHostUpdate {}),
+            )
+            .await
+            .unwrap();
+        let response: Response<agent_protocol::operations::HostUpdate> =
+            agent_protocol::protocol::decode(&reply.initial).unwrap();
+        let Response::Success { result } = response else {
+            panic!("local updater could not prepare the Host");
+        };
+        assert_eq!(
+            PathBuf::from(result.executable),
+            std::env::current_exe().unwrap()
+        );
+        assert_eq!(
+            result.arguments,
+            std::env::args().skip(1).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            PathBuf::from(result.working_directory),
+            std::env::current_dir().unwrap()
         );
         endpoint.close().await;
     }

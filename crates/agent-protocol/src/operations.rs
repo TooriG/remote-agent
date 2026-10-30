@@ -74,6 +74,7 @@ pub struct PrepareHostUpdate {}
 pub struct HostUpdate {
     pub executable: String,
     pub arguments: Vec<String>,
+    pub working_directory: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
