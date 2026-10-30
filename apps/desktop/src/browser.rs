@@ -93,57 +93,7 @@ impl Browser {
                             result.unwrap_or_else(|_| Err("ブラウザとの接続が切れました。".into()));
                         if view
                             .update_in(cx, |view, window, cx| {
-                                match result {
-                                    Ok((mut frame, image)) => {
-                                        if !view
-                                            .address
-                                            .read(cx)
-                                            .focus_handle(cx)
-                                            .is_focused(window)
-                                        {
-                                            let url = frame
-                                                .tabs
-                                                .iter()
-                                                .find(|tab| tab.id == frame.tab_id)
-                                                .map(|tab| {
-                                                    if tab.url == "about:blank" {
-                                                        String::new()
-                                                    } else {
-                                                        tab.url.clone()
-                                                    }
-                                                })
-                                                .unwrap_or_default();
-                                            if view.address.read(cx).value().as_ref() != url {
-                                                view.address.update(cx, |input, cx| {
-                                                    input.set_value(url, window, cx)
-                                                });
-                                            }
-                                        }
-                                        if image.is_some() {
-                                            view.image = image;
-                                        }
-                                        if let Some(metadata) = frame.credentials.take() {
-                                            view.credentials = Some(metadata);
-                                        }
-                                        if !frame.value.is_empty() {
-                                            view.notice = Some(std::mem::take(&mut frame.value));
-                                        }
-                                        view.set_frame(frame, cx);
-                                        if let Some(url) = view.initial_url.take() {
-                                            view.send(BrowserAction::Navigate { url }, cx);
-                                        }
-                                        view.connection_error = None;
-                                    }
-                                    Err(error) => {
-                                        if reading {
-                                            view.connection_error = Some(error);
-                                        } else {
-                                            view.error = Some(error);
-                                            view.notice = None;
-                                        }
-                                    }
-                                }
-                                cx.notify();
+                                view.apply_result(result, reading, window, cx);
                             })
                             .is_err()
                         {
@@ -177,6 +127,74 @@ impl Browser {
                 _subscription: subscription,
             }
         })
+    }
+
+    fn apply_result(
+        &mut self,
+        result: Result<(BrowserFrame, Option<Arc<RenderImage>>), String>,
+        reading: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let changed = match result {
+            Ok((mut frame, image)) => {
+                if !self.address.read(cx).focus_handle(cx).is_focused(window) {
+                    let url = frame
+                        .tabs
+                        .iter()
+                        .find(|tab| tab.id == frame.tab_id)
+                        .map(|tab| {
+                            if tab.url == "about:blank" {
+                                ""
+                            } else {
+                                &tab.url
+                            }
+                        })
+                        .unwrap_or_default();
+                    if self.address.read(cx).value().as_ref() != url {
+                        self.address
+                            .update(cx, |input, cx| input.set_value(url.to_owned(), window, cx));
+                    }
+                }
+                let mut changed = self.connection_error.take().is_some();
+                if image.is_some() {
+                    self.image = image;
+                    changed = true;
+                }
+                if let Some(metadata) = frame.credentials.take() {
+                    changed |= self.credentials.as_ref() != Some(&metadata);
+                    self.credentials = Some(metadata);
+                }
+                if !frame.value.is_empty() {
+                    let notice = std::mem::take(&mut frame.value);
+                    changed |= self.notice.as_ref() != Some(&notice);
+                    self.notice = Some(notice);
+                }
+                // Only the decoded image is used by the UI. Transport identity
+                // is retained even when no visible field changed.
+                frame.image.clear();
+                changed |= self.set_frame(frame, cx);
+                if let Some(url) = self.initial_url.take() {
+                    self.send(BrowserAction::Navigate { url }, cx);
+                }
+                changed
+            }
+            Err(error) => {
+                if reading {
+                    let changed = self.connection_error.as_ref() != Some(&error);
+                    self.connection_error = Some(error);
+                    changed
+                } else {
+                    let changed = self.error.as_ref() != Some(&error) || self.notice.is_some();
+                    self.error = Some(error);
+                    self.notice = None;
+                    changed
+                }
+            }
+        };
+        if changed {
+            cx.notify();
+        }
     }
 
     fn next_request(&mut self) -> Option<(Runtime, Arc<Store>, BrowserRequest)> {
@@ -459,13 +477,21 @@ impl Browser {
         panel
     }
 
-    fn set_frame(&mut self, frame: BrowserFrame, cx: &mut Context<Self>) {
+    fn set_frame(&mut self, frame: BrowserFrame, cx: &mut Context<Self>) -> bool {
+        let changed = self.frame.tabs != frame.tabs
+            || self.frame.tab_id != frame.tab_id
+            || self.frame.width != frame.width
+            || self.frame.height != frame.height
+            || self.frame.dialog != frame.dialog
+            || self.frame.can_go_back != frame.can_go_back
+            || self.frame.can_go_forward != frame.can_go_forward;
         let previous = self.title();
         self.frame = frame;
         let title = self.title();
         if title != previous {
             cx.emit(BrowserTitle(title));
         }
+        changed
     }
 
     pub(crate) fn title(&self) -> String {
@@ -873,6 +899,110 @@ mod tests {
     use super::*;
     use core::prelude::v1::test;
     use std::{cell::RefCell, rc::Rc};
+
+    #[gpui::test]
+    fn unchanged_polls_preserve_transport_state_without_notifying(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        cx.update(|cx| {
+            crate::appearance::init(cx);
+            cx.set_global(Runtime {
+                handle: runtime.handle().clone(),
+                connections: Arc::default(),
+                closing: tokio_util::task::TaskTracker::new(),
+                logging_error: None,
+            });
+        });
+        let store = runtime.block_on(async { Arc::new(Store::offline(Default::default())) });
+        let window = cx.add_empty_window();
+        let browser = window.update(|window, cx| {
+            Browser::new(
+                store,
+                SessionRef {
+                    provider: agent_protocol::session::ProviderKind::Codex,
+                    id: "fixture".into(),
+                },
+                None,
+                window,
+                cx,
+            )
+        });
+        let notifications = Rc::new(std::cell::Cell::new(0));
+        let _observation = window.update(|_, cx| {
+            let notifications = notifications.clone();
+            cx.observe(&browser, move |_, _| {
+                notifications.set(notifications.get() + 1)
+            })
+        });
+        let apply = |window: &mut VisualTestContext, result, reading| {
+            window.update(|window, cx| {
+                browser.update(cx, |view, cx| {
+                    view.apply_result(result, reading, window, cx)
+                })
+            });
+        };
+        let mut frame = BrowserFrame::default();
+        apply(window, Ok((frame.clone(), None)), true);
+        assert_eq!(notifications.get(), 0);
+        frame.generation = 42;
+        frame.image_id = "latest".into();
+        frame.page_text = "read-only extraction".into();
+        frame.loading = true;
+        apply(window, Ok((frame.clone(), None)), true);
+        assert_eq!(
+            notifications.get(),
+            0,
+            "transport-only fields must not redraw"
+        );
+        browser.read_with(window, |view, _| {
+            let request = view.request(BrowserAction::Read);
+            assert_eq!(request.generation, 42);
+            assert_eq!(request.image_id, "latest");
+        });
+        frame.can_go_back = true;
+        apply(window, Ok((frame.clone(), None)), true);
+        assert_eq!(notifications.get(), 1);
+        apply(window, Ok((frame.clone(), None)), true);
+        assert_eq!(notifications.get(), 1);
+        apply(window, Err("disconnected".into()), true);
+        assert_eq!(notifications.get(), 2);
+        apply(window, Err("disconnected".into()), true);
+        assert_eq!(
+            notifications.get(),
+            2,
+            "the same connection error must stay cached"
+        );
+        apply(window, Ok((frame.clone(), None)), true);
+        assert_eq!(
+            notifications.get(),
+            3,
+            "recovery must remove the connection error"
+        );
+        frame.value = "done".into();
+        apply(window, Ok((frame.clone(), None)), false);
+        assert_eq!(notifications.get(), 4);
+        apply(window, Ok((frame.clone(), None)), false);
+        assert_eq!(notifications.get(), 4);
+        apply(window, Err("action failed".into()), false);
+        assert_eq!(
+            notifications.get(),
+            5,
+            "action errors must replace the notice"
+        );
+        apply(window, Err("action failed".into()), false);
+        assert_eq!(notifications.get(), 5);
+        let image = Arc::new(RenderImage::new(vec![image::Frame::new(
+            image::RgbaImage::new(1, 1),
+        )]));
+        apply(window, Ok((BrowserFrame::default(), Some(image))), true);
+        assert_eq!(
+            notifications.get(),
+            6,
+            "a decoded image must redraw even if metadata is unchanged"
+        );
+    }
 
     #[gpui::test]
     fn page_title_events_only_report_changes_to_the_active_tab(cx: &mut TestAppContext) {

@@ -337,14 +337,14 @@ impl ListQuery {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileList {
     pub path: String,
     pub entries: Vec<FileEntry>,
     pub truncated: bool,
 }
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileEntry {
     pub name: String,
     pub path: String,
@@ -384,7 +384,7 @@ pub struct WorktreeThread {
     pub name: String,
     pub active: bool,
 }
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceReview {
     pub branch: String,
     pub additions: u64,
@@ -392,7 +392,7 @@ pub struct WorkspaceReview {
     pub files: Vec<ChangedFile>,
     pub diff: String,
 }
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChangedFile {
     pub path: String,
     pub status: String,

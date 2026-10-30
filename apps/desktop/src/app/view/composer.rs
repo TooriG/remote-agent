@@ -243,7 +243,7 @@ impl Desktop {
                             .overflow_hidden()
                             .child(self.image(&file.path, false, 120., true, cx)),
                     )
-                    .child(
+                    .child(deferred(
                         div()
                             .id(format!("attachment-remove-hitbox-{i}"))
                             .occlude()
@@ -262,7 +262,7 @@ impl Desktop {
                                     )
                                     .bg(rgb(0xffffff)),
                             ),
-                    )
+                    ))
                     .into_any_element()
             } else {
                 h_flex()
@@ -1013,7 +1013,8 @@ mod composer_tests {
                 store_handle = Some(store);
             });
             desktop_handle = Some(desktop.clone());
-            ComposerView(desktop)
+            let content = cx.new(|_| ComposerView(desktop));
+            crate::activity::ActivityWindow::new(content, window, cx)
         });
         window.simulate_resize(size(px(700.), px(700.)));
         window.run_until_parked();
@@ -1029,9 +1030,45 @@ mod composer_tests {
                 view.media.gallery = None;
             })
         });
+        window.update(|_, cx| {
+            desktop.update(cx, |view, cx| {
+                let key = view.image_key(&source, false);
+                view.media.images.get_mut(&key).unwrap().path = None;
+                view.composer_view
+                    .read(cx)
+                    .content
+                    .clone()
+                    .update(cx, |_, cx| cx.notify());
+            })
+        });
         window.simulate_mouse_move(bounds.center(), None, Modifiers::default());
         window.run_until_parked();
         let remove = window.debug_bounds("attachment-remove-0").unwrap().center();
+        window.update(|window, _| {
+            let scale = window.scale_factor();
+            let point = remove.scale(scale);
+            let quads = window.painted_quads();
+            let pulse = quads
+                .iter()
+                .filter(|quad| {
+                    quad.bounds.size == size(px(120.), px(120.)).scale(scale)
+                        && quad.bounds.contains(&point)
+                })
+                .max_by_key(|quad| quad.order)
+                .expect("loading image pulse must be painted");
+            let button = quads
+                .iter()
+                .find(|quad| {
+                    quad.bounds.size == size(px(18.), px(18.)).scale(scale)
+                        && quad.bounds.contains(&point)
+                        && quad.background == rgb(0xffffff).into()
+                })
+                .expect("remove button must be painted");
+            assert!(
+                button.order > pulse.order,
+                "the remove button must paint above the image loading pulse"
+            );
+        });
         window.simulate_click(remove, Modifiers::default());
         window.update(|_, cx| desktop.update(cx, |view, _| assert!(view.media.gallery.is_none())));
         let snapshot = store_handle.unwrap().snapshot();

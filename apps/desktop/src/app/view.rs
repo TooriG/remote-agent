@@ -157,65 +157,6 @@ fn conversation_file_path(source: &str, cwd: &str) -> Result<PathBuf, String> {
 
 impl Render for Desktop {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let panel = self.panels.get(self.panel_scope());
-        let panel_open = panel.open;
-        let panel_kind = panel.kind();
-        let panel_layout = panel.layout;
-        let active_surface = panel.active;
-        let active = self.project_editor.is_none()
-            && self.media.gallery.is_none()
-            && !self.onboarding
-            && !self.import_projects
-            && panel_open
-            && self.tab == Tab::Chat;
-        let thread_id = (active && panel_kind == Panel::Agents)
-            .then(|| self.snapshot.navigation.thread_id.clone())
-            .flatten();
-        if self.snapshot.observed_agents != thread_id {
-            self.dispatch(Intent::WatchAgents { thread_id });
-        }
-        let composer_visible = self.project_editor.is_none()
-            && self.media.gallery.is_none()
-            && self.tab == Tab::Chat
-            && (!panel_open
-                || (!self.side_chat_mode
-                    && panel_layout != PanelLayout::Expanded
-                    && (panel_layout == PanelLayout::Bottom
-                        || window.viewport_size().width >= px(1080.))));
-        if !composer_visible {
-            self.cancel_recording();
-        }
-        if active
-            && let Some(id) = active_surface
-            && let Some(connection) = self.session.as_ref()
-            && let Some(PanelScope {
-                draft: DraftKey::Session { session: thread },
-                ..
-            }) = self.panels.scope(id)
-            && let Some(SurfaceResource::Pending { url }) = self.surface_resources.get(&id)
-        {
-            let browser = crate::browser::Browser::new(
-                connection.store.clone(),
-                thread,
-                url.clone(),
-                window,
-                cx,
-            );
-            self.surface_resources
-                .insert(id, SurfaceResource::Browser(browser));
-            self.sync_workbench(cx);
-        }
-        for (id, resource) in &self.surface_resources {
-            match resource {
-                SurfaceResource::Browser(view) => view.update(cx, |view, _| {
-                    view.set_visible(active && Some(*id) == active_surface);
-                }),
-                SurfaceResource::SideChat(chat) if !active || Some(*id) != active_surface => {
-                    chat.update(cx, |chat, cx| chat.hide_surfaces(cx));
-                }
-                _ => (),
-            }
-        }
         if self.media.gallery.is_some() {
             let gallery = self.image_gallery_view(window, cx);
             return h_flex()
@@ -316,16 +257,12 @@ impl Desktop {
         let wide = width >= px(1080.);
         let content = if self.side_chat_mode {
             if panel_open {
-                self.workbench(false, cx)
+                self.workbench()
             } else {
                 self.chat()
             }
         } else if panel_open {
-            let right = self.workbench(
-                panel_layout == PanelLayout::Expanded
-                    || (panel_layout == PanelLayout::Right && !wide),
-                cx,
-            );
+            let right = self.workbench();
             if panel_layout == PanelLayout::Bottom {
                 v_resizable(SharedString::from(format!(
                     "chat-workbench-bottom-split:{:?}",
@@ -698,6 +635,7 @@ mod cache_tests {
                 view.panels.open(view.panel_scope(), Panel::Files, None);
                 let snapshot = Arc::make_mut(&mut view.snapshot);
                 snapshot.connected = true;
+                snapshot.composer_catalog = Some(Arc::new(agent_protocol::composer::ComposerCatalog::default()));
                 Arc::make_mut(&mut snapshot.navigation).thread_id = Some(session.clone());
                 Arc::make_mut(&mut snapshot.navigation).draft_key = session.clone().into();
                 snapshot.threads = Some(Arc::new(serde_json::from_value(serde_json::json!({
@@ -708,6 +646,25 @@ mod cache_tests {
                     "id":{"provider":"codex","id":"selected"},
                     "turns":[{"id":"turn","status":"completed","items":[{"id":"answer","body":{"inline":{"body":{"assistantText":{"text":"Original answer","phase":"final"}}}}}]}]
                 })).unwrap()));
+                let store = runtime.block_on(async {
+                    Arc::new(agent_core::store::Store::offline((*view.snapshot).clone()))
+                });
+                view.epoch += 1;
+                let epoch = view.epoch;
+                let updates = view.updates.clone();
+                let app_runtime = view.runtime.clone();
+                view.session = Some(runtime.block_on(async {
+                    let (connected, receive) = async_channel::bounded(1);
+                    tokio::spawn(StoreSession::publish(
+                        Ok(store), app_runtime, updates,
+                        move |session| {
+                            connected.send_blocking(session).unwrap();
+                            (epoch, Update::Snapshot)
+                        },
+                        move |_| (epoch, Update::Snapshot),
+                    ));
+                    receive.recv().await.unwrap().unwrap()
+                }));
                 cx.notify();
                 view
             });
@@ -724,19 +681,37 @@ mod cache_tests {
             })
         });
         let before = desktop.read_with(cx, renders);
-        for text in ["typing", "typing more"] {
+        for text in ["typing", "typing more", "typing more日本語🙂"] {
             window
                 .update(cx, |_, window, cx| {
                     desktop.update(cx, |view, cx| {
-                        // Simulate the native input change while treating persistence as acknowledged.
-                        view.composer.text.replace(text);
-                        view.composer
-                            .input
-                            .update(cx, |input, cx| input.set_value(text, window, cx));
+                        view.composer.input.update(cx, |input, cx| {
+                            input.set_value(text, window, cx);
+                            // Deliver the same change event as typing. The offline
+                            // fixture makes the rendered control read-only.
+                            cx.emit(InputEvent::Change);
+                        });
                     })
                 })
                 .unwrap();
-            cx.run_until_parked();
+            for _ in 0..20 {
+                runtime.block_on(tokio::task::yield_now());
+                cx.run_until_parked();
+                if desktop.read_with(cx, |view, _| view.composer.text.pending.is_none()) {
+                    break;
+                }
+            }
+            desktop.read_with(cx, |view, _| {
+                assert!(
+                    view.composer.text.pending.is_none(),
+                    "the real save completion must arrive"
+                );
+                assert_eq!(
+                    view.draft().text,
+                    text,
+                    "the Store snapshot must contain the native input"
+                );
+            });
             let after = desktop.read_with(cx, renders);
             assert_eq!(
                 after[0], before[0],
@@ -758,9 +733,18 @@ mod cache_tests {
             assert_eq!(
                 notifications.get(),
                 0,
-                "local input must not notify Desktop observers"
+                "native input, Store publication, and save completion must not notify Desktop observers"
             );
         }
+        // Offline restoration clears running status. Supply the live status
+        // fixture separately before checking streaming and animation reuse.
+        desktop.update(cx, |view, cx| {
+            let snapshot = Arc::make_mut(&mut view.snapshot);
+            Arc::make_mut(snapshot.threads.as_mut().unwrap()).data[0].status =
+                agent_protocol::models::SessionStatus::Running;
+            cx.notify();
+        });
+        cx.run_until_parked();
         let before = desktop.read_with(cx, renders);
         desktop.update(cx, |view, cx| {
             let snapshot = Arc::make_mut(&mut view.snapshot);
@@ -830,6 +814,35 @@ mod cache_tests {
         assert!(
             new_height > old_height,
             "the cached composer must grow with multiline input"
+        );
+        let before = notifications.get();
+        let store = desktop.read_with(cx, |view, _| view.session.as_ref().unwrap().store.clone());
+        runtime
+            .block_on(store.dispatch(Intent::NewChat {
+                cwd: "/next-project".into(),
+            }))
+            .unwrap();
+        for _ in 0..20 {
+            runtime.block_on(tokio::task::yield_now());
+            cx.run_until_parked();
+            if desktop.read_with(cx, |view, _| {
+                view.snapshot.navigation.cwd == "/next-project"
+            }) {
+                break;
+            }
+        }
+        desktop.read_with(cx, |view, cx| {
+            assert_eq!(view.snapshot.navigation.cwd, "/next-project");
+            assert!(view.composer.input.read(cx).value().is_empty());
+        });
+        assert!(
+            notifications.get() > before,
+            "Store navigation must still notify Desktop observers"
+        );
+        assert!(
+            VisualTestContext::from_window(window.into(), cx)
+                .debug_bounds("workbench-header")
+                .is_none()
         );
     }
 }

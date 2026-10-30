@@ -5,6 +5,7 @@ use errors::ErrorRow;
 
 #[derive(PartialEq)]
 struct WorkbenchModel {
+    standalone: bool,
     panel: PanelState,
     titles: Vec<String>,
     browsers: Vec<(u64, Entity<crate::browser::Browser>)>,
@@ -15,7 +16,7 @@ struct WorkbenchModel {
     directory: Option<Arc<agent_protocol::models::FileList>>,
     file: Option<String>,
     saving: bool,
-    review: Option<Arc<agent_protocol::models::WorkspaceReview>>,
+    review: Option<(u64, u64, usize)>,
     agents: Vec<AgentSummary>,
     resource: Option<AnyView>,
     resource_message: &'static str,
@@ -27,23 +28,16 @@ struct WorkbenchModel {
 pub(in crate::app) struct WorkbenchView {
     desktop: WeakEntity<Desktop>,
     model: Option<WorkbenchModel>,
-    standalone: bool,
-    _observation: Subscription,
     _browsers: Vec<Subscription>,
     #[cfg(test)]
     pub(in crate::app) renders: usize,
 }
 
 impl WorkbenchView {
-    pub(in crate::app) fn new(desktop: &Entity<Desktop>, cx: &mut Context<Self>) -> Self {
+    pub(in crate::app) fn new(desktop: &Entity<Desktop>) -> Self {
         Self {
             desktop: desktop.downgrade(),
             model: None,
-            standalone: false,
-            _observation: cx.observe(desktop, |view, desktop, cx| {
-                let model = desktop.update(cx, |desktop, cx| desktop.workbench_model(cx));
-                view.set_model(model, cx);
-            }),
             _browsers: Vec::new(),
             #[cfg(test)]
             renders: 0,
@@ -99,7 +93,7 @@ impl Render for WorkbenchView {
             .update(cx, |_, cx| {
                 self.model
                     .as_ref()
-                    .map(|model| Desktop::render_workbench(model, self.standalone, cx))
+                    .map(|model| Desktop::render_workbench(model, cx))
                     .unwrap_or_else(|| div().into_any_element())
             })
             .unwrap_or_else(|_| div().into_any_element())
@@ -107,32 +101,103 @@ impl Render for WorkbenchView {
 }
 
 impl Desktop {
-    pub(super) fn sync_workbench(&mut self, cx: &mut Context<Self>) {
-        let model = self.workbench_model(cx);
+    fn workbench_visible(&self, open: bool) -> bool {
+        self.visible
+            && open
+            && self.tab == Tab::Chat
+            && self.project_editor.is_none()
+            && self.media.gallery.is_none()
+            && !self.onboarding
+            && !self.import_projects
+    }
+
+    // Resource ownership and visibility are reconciled before drawing, including
+    // Desktop state changes and window resizes. Rendering only reads the result.
+    pub(in crate::app) fn sync_surfaces(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = self.panels.get(self.panel_scope());
+        let panel_open = panel.open;
+        let panel_kind = panel.kind();
+        let panel_layout = panel.layout;
+        let active_surface = panel.active;
+        let active = self.workbench_visible(panel_open);
+        let thread_id = (active && panel_kind == Panel::Agents)
+            .then(|| self.snapshot.navigation.thread_id.clone())
+            .flatten();
+        if self.snapshot.observed_agents != thread_id {
+            self.dispatch(Intent::WatchAgents { thread_id });
+        }
+        let composer_visible = self.visible
+            && self.project_editor.is_none()
+            && self.media.gallery.is_none()
+            && self.tab == Tab::Chat
+            && (!panel_open
+                || (!self.side_chat_mode
+                    && panel_layout != PanelLayout::Expanded
+                    && (panel_layout == PanelLayout::Bottom
+                        || window.viewport_size().width >= px(1080.))));
+        if !composer_visible && self.dictation.is_some() {
+            self.cancel_recording();
+            self.sync_composer(cx);
+        }
+        if active
+            && let Some(id) = active_surface
+            && let Some(connection) = self.session.as_ref()
+            && let Some(PanelScope {
+                draft: DraftKey::Session { session: thread },
+                ..
+            }) = self.panels.scope(id)
+            && let Some(SurfaceResource::Pending { url }) = self.surface_resources.get(&id)
+        {
+            let browser = crate::browser::Browser::new(
+                connection.store.clone(),
+                thread,
+                url.clone(),
+                window,
+                cx,
+            );
+            self.surface_resources
+                .insert(id, SurfaceResource::Browser(browser));
+        }
+        if active
+            && panel_kind == Panel::Diff
+            && let Some(id) = active_surface
+        {
+            self.workspace_diff(id, cx);
+        }
+        for (id, resource) in &self.surface_resources {
+            match resource {
+                SurfaceResource::Browser(view) => view.update(cx, |view, _| {
+                    view.set_visible(active && Some(*id) == active_surface);
+                }),
+                SurfaceResource::SideChat(chat) => {
+                    chat.update(cx, |chat, cx| {
+                        chat.set_visible(active && Some(*id) == active_surface, window, cx)
+                    });
+                }
+                _ => (),
+            }
+        }
+        let model = self.workbench_model(window.viewport_size().width, cx);
         self.workbench_view
             .update(cx, |view, cx| view.set_model(model, cx));
     }
 
-    fn workbench_model(&mut self, cx: &mut Context<Self>) -> Option<WorkbenchModel> {
+    fn workbench_model(&self, width: Pixels, cx: &App) -> Option<WorkbenchModel> {
         let panel = self.panels.get(self.panel_scope());
-        if !panel.open {
+        if !self.workbench_visible(panel.open) {
             return None;
         }
         let kind = panel.kind();
-        let resource = if kind == Panel::Diff {
-            panel.active.map(|id| self.workspace_diff(id, cx).into())
-        } else {
-            panel
-                .active
-                .and_then(|id| self.surface_resources.get(&id))
-                .and_then(|resource| match resource {
-                    SurfaceResource::Browser(view) => Some(view.clone().into()),
-                    SurfaceResource::Terminal(view) => Some(view.clone().into()),
-                    SurfaceResource::SideChat(view) => Some(view.clone().into()),
-                    SurfaceResource::Diff(view) => Some(view.clone().into()),
-                    SurfaceResource::Pending { .. } => None,
-                })
-        };
+        let resource = panel
+            .active
+            .and_then(|id| self.surface_resources.get(&id))
+            .and_then(|resource| match resource {
+                SurfaceResource::Browser(view) => Some(view.clone().into()),
+                SurfaceResource::Terminal(view) => Some(view.clone().into()),
+                SurfaceResource::SideChat(view) => Some(view.clone().into()),
+                SurfaceResource::Diff { view, .. } => Some(view.clone().into()),
+                SurfaceResource::Pending { .. } => None,
+            });
         let pending = panel.active.is_some_and(|id| {
             matches!(
                 self.surface_resources.get(&id),
@@ -174,6 +239,9 @@ impl Desktop {
             })
             .map(|file| file.path.clone());
         Some(WorkbenchModel {
+            standalone: !self.side_chat_mode
+                && (panel.layout == PanelLayout::Expanded
+                    || (panel.layout == PanelLayout::Right && width < px(1080.))),
             panel,
             titles,
             browsers,
@@ -197,8 +265,9 @@ impl Desktop {
             file,
             saving: kind == Panel::File && self.busy > 0,
             review: (kind == Panel::Diff)
-                .then(|| self.snapshot.workspace.review.clone())
-                .flatten(),
+                .then(|| self.snapshot.workspace.review.as_ref())
+                .flatten()
+                .map(|review| (review.additions, review.deletions, review.files.len())),
             agents: if kind == Panel::Agents {
                 self.snapshot.agent_panel()
             } else {
@@ -210,17 +279,7 @@ impl Desktop {
         })
     }
 
-    pub(super) fn workbench(&mut self, standalone: bool, cx: &mut Context<Self>) -> AnyElement {
-        // The initial render can precede the first Desktop notification.
-        if self.workbench_view.read(cx).model.is_none() {
-            self.sync_workbench(cx);
-        }
-        self.workbench_view.update(cx, |view, cx| {
-            if view.standalone != standalone {
-                view.standalone = standalone;
-                cx.notify();
-            }
-        });
+    pub(super) fn workbench(&self) -> AnyElement {
         self.workbench_view
             .clone()
             .cached(StyleRefinement::default().size_full())
@@ -560,11 +619,7 @@ impl Desktop {
         }
         editor.p_4().into_any_element()
     }
-    fn render_workbench(
-        model: &WorkbenchModel,
-        standalone: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn render_workbench(model: &WorkbenchModel, cx: &mut Context<Self>) -> AnyElement {
         let panel = &model.panel;
         let layout = panel.layout;
         let active = panel.active;
@@ -643,7 +698,7 @@ impl Desktop {
             .px_2()
             .gap_1()
             .flex_shrink_0()
-            .when(standalone && !model.sidebar, |bar| {
+            .when(model.standalone && !model.sidebar, |bar| {
                 bar.pl_0().child(sidebar_header(false, cx))
             })
             .child(
@@ -787,8 +842,8 @@ impl Desktop {
                     h_flex()
                         .child(div().flex_1().child(format!(
                             "変更  +{} −{}",
-                            model.review.as_ref().map_or(0, |review| review.additions),
-                            model.review.as_ref().map_or(0, |review| review.deletions)
+                            model.review.map_or(0, |review| review.0),
+                            model.review.map_or(0, |review| review.1)
                         )))
                         .child(icon_button(
                             "refresh-diff",
@@ -799,7 +854,7 @@ impl Desktop {
                         )),
                 )
                 .child(Self::diff_file_menu(
-                    model.review.as_ref().map_or(0, |review| review.files.len()),
+                    model.review.map_or(0, |review| review.2),
                     cx,
                 ))
                 .child(
@@ -839,19 +894,27 @@ impl Desktop {
 
 impl Desktop {
     fn workspace_diff(&mut self, id: u64, cx: &mut Context<Self>) -> Entity<DiffView> {
-        let source = self
-            .snapshot
-            .workspace
-            .review
-            .as_ref()
-            .map_or("", |review| review.diff.as_str());
-        if let Some(SurfaceResource::Diff(view)) = self.surface_resources.get(&id) {
-            view.update(cx, |view, cx| view.set_source(source, cx));
+        let review = &self.snapshot.workspace.review;
+        let source = review.as_ref().map_or("", |review| review.diff.as_str());
+        if let Some(SurfaceResource::Diff {
+            view,
+            source: previous,
+        }) = self.surface_resources.get_mut(&id)
+        {
+            if previous.as_ref().map(Weak::as_ptr) != review.as_ref().map(Arc::as_ptr) {
+                view.update(cx, |view, cx| view.set_source(source, cx));
+                *previous = review.as_ref().map(Arc::downgrade);
+            }
             return view.clone();
         }
         let view = cx.new(|_| DiffView::new(source.to_owned().into(), true));
-        self.surface_resources
-            .insert(id, SurfaceResource::Diff(view.clone()));
+        self.surface_resources.insert(
+            id,
+            SurfaceResource::Diff {
+                view: view.clone(),
+                source: review.as_ref().map(Arc::downgrade),
+            },
+        );
         view
     }
     fn diff_file_menu(files: usize, cx: &Context<Self>) -> AnyElement {
@@ -886,6 +949,157 @@ impl Desktop {
 mod tests {
     use super::*;
     use core::prelude::v1::test;
+
+    #[gpui::test]
+    fn hidden_workbench_defers_resources_and_reconciles_before_drawing(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        cx.update(|cx| {
+            crate::appearance::init(cx);
+            cx.set_global(Runtime {
+                handle: runtime.handle().clone(),
+                connections: Arc::default(),
+                closing: tokio_util::task::TaskTracker::new(),
+                logging_error: None,
+            });
+        });
+        let review = Arc::new(agent_protocol::models::WorkspaceReview {
+            branch: "main".into(),
+            additions: 1,
+            deletions: 0,
+            files: Vec::new(),
+            diff: "+first".into(),
+        });
+        let (desktop, window) = cx.add_window_view(|window, cx| {
+            let mut desktop = Desktop::new(Mode::Main, window, cx);
+            desktop.onboarding = false;
+            desktop.tab = Tab::Settings;
+            desktop
+                .panels
+                .open(desktop.panel_scope(), Panel::Diff, None);
+            Arc::make_mut(&mut Arc::make_mut(&mut desktop.snapshot).workspace).review =
+                Some(review.clone());
+            desktop
+        });
+        window.simulate_resize(size(px(1600.), px(900.)));
+        window.run_until_parked();
+        desktop.read_with(window, |desktop, cx| {
+            assert!(
+                desktop.surface_resources.is_empty(),
+                "settings must not prepare a hidden Diff"
+            );
+            assert!(desktop.workbench_view.read(cx).model.is_none());
+        });
+        desktop.update(window, |desktop, cx| {
+            desktop.tab = Tab::Chat;
+            cx.notify();
+        });
+        let (diff, workbench) = desktop.read_with(window, |desktop, cx| {
+            let id = desktop.panels.get(desktop.panel_scope()).active.unwrap();
+            let SurfaceResource::Diff { view, source } = &desktop.surface_resources[&id] else {
+                panic!("Diff must be prepared before drawing")
+            };
+            assert!(Arc::ptr_eq(
+                &source.as_ref().unwrap().upgrade().unwrap(),
+                &review
+            ));
+            assert!(
+                desktop
+                    .workbench_view
+                    .read(cx)
+                    .model
+                    .as_ref()
+                    .unwrap()
+                    .resource
+                    .is_some()
+            );
+            (view.clone(), desktop.workbench_view.clone())
+        });
+        window.run_until_parked();
+        window.simulate_resize(size(px(800.), px(900.)));
+        assert!(workbench.read_with(window, |view, _| view.model.as_ref().unwrap().standalone));
+        window.simulate_resize(size(px(1600.), px(900.)));
+        assert!(!workbench.read_with(window, |view, _| view.model.as_ref().unwrap().standalone));
+        let changes = Rc::new(std::cell::Cell::new(0));
+        let _observation = window.update(|_, cx| {
+            let changes = changes.clone();
+            cx.observe(&workbench, move |_, _| changes.set(changes.get() + 1))
+        });
+        let diff_changes = Rc::new(std::cell::Cell::new(0));
+        let _diff_observation = window.update(|_, cx| {
+            let changes = diff_changes.clone();
+            cx.observe(&diff, move |_, _| changes.set(changes.get() + 1))
+        });
+        desktop.update(window, |desktop, cx| {
+            let workspace = Arc::make_mut(&mut Arc::make_mut(&mut desktop.snapshot).workspace);
+            Arc::make_mut(workspace.review.as_mut().unwrap()).diff = "+second".into();
+            cx.notify();
+        });
+        window.run_until_parked();
+        assert_eq!(
+            changes.get(),
+            0,
+            "Diff text must not invalidate the toolbar model"
+        );
+        assert_eq!(
+            diff_changes.get(),
+            1,
+            "the Diff itself must receive its changed source"
+        );
+        desktop.update(window, |desktop, cx| {
+            desktop.tab = Tab::Settings;
+            cx.notify();
+        });
+        window.run_until_parked();
+        let notifications = diff_changes.get();
+        desktop.update(window, |desktop, cx| {
+            let workspace = Arc::make_mut(&mut Arc::make_mut(&mut desktop.snapshot).workspace);
+            Arc::make_mut(workspace.review.as_mut().unwrap()).diff = "+third".into();
+            cx.notify();
+        });
+        window.run_until_parked();
+        assert_eq!(
+            diff_changes.get(),
+            notifications,
+            "hidden resources must not synchronize"
+        );
+        desktop.update(window, |desktop, cx| {
+            desktop.tab = Tab::Chat;
+            cx.notify();
+        });
+        assert_eq!(
+            diff_changes.get(),
+            notifications + 1,
+            "reopening must synchronize before drawing"
+        );
+        window.run_until_parked();
+        assert!(window.debug_bounds("diff-file-navigation").is_some());
+        window.update(|window, cx| {
+            desktop.update(cx, |desktop, cx| desktop.set_visible(false, window, cx))
+        });
+        let before = diff_changes.get();
+        desktop.update(window, |desktop, cx| {
+            let workspace = Arc::make_mut(&mut Arc::make_mut(&mut desktop.snapshot).workspace);
+            Arc::make_mut(workspace.review.as_mut().unwrap()).diff = "+hidden side chat".into();
+            cx.notify();
+        });
+        window.run_until_parked();
+        assert_eq!(
+            diff_changes.get(),
+            before,
+            "a hidden side chat must stay inactive during its own updates"
+        );
+        window.update(|window, cx| {
+            desktop.update(cx, |desktop, cx| desktop.set_visible(true, window, cx))
+        });
+        assert_eq!(
+            diff_changes.get(),
+            before + 1,
+            "restoring a side chat must resume its surface"
+        );
+    }
 
     #[gpui::test]
     fn surface_tabs_and_layout_follow_the_conversation_and_last_close_returns_to_the_launcher(

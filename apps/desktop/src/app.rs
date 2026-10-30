@@ -42,7 +42,7 @@ use std::{
     future::Future,
     path::{Path, PathBuf},
     rc::Rc,
-    sync::Arc,
+    sync::{Arc, Weak},
 };
 use timeline::{
     ConversationRow, ImageGallery, ImageState, MarkdownContent, Media, Question, RequestInputs,
@@ -111,8 +111,13 @@ enum ModelPanel {
     Manage,
 }
 enum SurfaceResource {
-    Diff(Entity<DiffView>),
-    Pending { url: Option<String> },
+    Diff {
+        view: Entity<DiffView>,
+        source: Option<Weak<agent_protocol::models::WorkspaceReview>>,
+    },
+    Pending {
+        url: Option<String>,
+    },
     Browser(Entity<crate::browser::Browser>),
     Terminal(Entity<crate::terminal::Terminal>),
     SideChat(Entity<Desktop>),
@@ -137,6 +142,7 @@ pub(crate) struct Desktop {
     hosts: Option<Entity<Hosts>>,
     app_updates: Option<Entity<crate::updates::Updates>>,
     side_chat_mode: bool,
+    visible: bool,
     onboarding: bool,
     import_projects: bool,
     initial_cwd: Option<String>,
@@ -172,6 +178,65 @@ pub(crate) struct Desktop {
     sidebar_view: Option<Entity<view::SidebarView>>,
     _subscriptions: Vec<Subscription>,
 }
+// Input text/catalog updates have their own owner. Other snapshot changes still
+// reach Desktop observers (including open menus) without comparing conversation,
+// file, or diff contents on each keystroke. Exhaustive matching keeps new fields
+// from being silently omitted from this routing decision.
+fn general_snapshot_changed(before: &Snapshot, after: &Snapshot) -> bool {
+    macro_rules! changed {
+        (shared: [$($shared:ident),*], optional: [$($optional:ident),*], values: [$($value:ident),*]) => {{
+            let Snapshot {
+                $($shared: _,)* $($optional: _,)* $($value: _,)*
+                drafts: _, file_drafts: _, composer_catalog: _,
+            } = after;
+            false
+                $(|| !Arc::ptr_eq(&before.$shared, &after.$shared))*
+                $(|| before.$optional.as_ref().map(Arc::as_ptr) != after.$optional.as_ref().map(Arc::as_ptr))*
+                $(|| before.$value != after.$value)*
+        }};
+    }
+    let changed = changed!(
+        shared: [project_import, project_preferences, operations, scoped_model_defaults,
+            archived_scopes, account, terminals, conversations, expanded_projects,
+            project_threads, models, model_errors, draft_sessions, pending_submissions,
+            workspace, workspaces, navigation, activity, management, list_query, subscriptions],
+        optional: [permission_settings, task_activity, threads],
+        values: [recent_chats, operation_sequence, model_defaults, host_name, host_ticket, storage_scope,
+            observed_agents, epoch, connected, connection_generation, connection_attempt, error]
+    );
+    let empty = Draft::default();
+    macro_rules! controls {
+        ($draft:expr) => {{
+            let Draft {
+                text: _,
+                attachments,
+                invocations,
+                model,
+                effort,
+                service_tier,
+                model_settings_changed,
+            } = $draft;
+            (
+                attachments,
+                invocations,
+                model,
+                effort,
+                service_tier,
+                model_settings_changed,
+            )
+        }};
+    }
+    let before = before
+        .drafts
+        .get(&before.navigation.draft_key)
+        .map_or(&empty, Arc::as_ref);
+    let after = after
+        .drafts
+        .get(&after.navigation.draft_key)
+        .map_or(&empty, Arc::as_ref);
+    changed || controls!(before) != controls!(after)
+}
+
 impl Desktop {
     fn set_error(&mut self, error: String) {
         tracing::error!(target: "agent", operation = "desktop", message = %error);
@@ -244,9 +309,13 @@ impl Desktop {
             cx.new(|cx| view::ConversationView::new(&owner, selection.clone(), window, cx));
         let composer_view =
             cx.new(|cx| view::ComposerView::new(&owner, composer.input.clone(), cx));
-        let workbench_view = cx.new(|cx| view::WorkbenchView::new(&owner, cx));
+        let workbench_view = cx.new(|_| view::WorkbenchView::new(&owner));
         let header_view = cx.new(|cx| view::HeaderView::new(&owner, cx));
         let mut subscriptions = vec![
+            cx.observe_in(&owner, window, |view, _, window, cx| {
+                view.sync_surfaces(window, cx)
+            }),
+            cx.observe_window_bounds(window, |view, window, cx| view.sync_surfaces(window, cx)),
             cx.subscribe_in(&conversation, window, |view, _, action, window, cx| {
                 view.conversation_action(action, window, cx);
                 cx.notify();
@@ -391,6 +460,7 @@ impl Desktop {
             hosts,
             app_updates,
             side_chat_mode,
+            visible: true,
             onboarding: !side_chat_mode
                 && !platform::state_dir()
                     .is_ok_and(|directory| directory.join("onboarding.completed").is_file()),
@@ -608,8 +678,18 @@ impl Desktop {
                     }
                 }
             }
-            Update::Snapshot => self.accept_snapshot(window, cx),
-            Update::Completed(kind, result) => self.operation_completed(kind, result, window, cx),
+            Update::Snapshot => {
+                if !self.accept_snapshot(window, cx) {
+                    self.sync_composer(cx);
+                    return;
+                }
+            }
+            Update::Completed(kind, result) => {
+                if !self.operation_completed(kind, result, window, cx) {
+                    self.sync_composer(cx);
+                    return;
+                }
+            }
             Update::Recording(id, event) => {
                 let level = matches!(event, platform::RecordingEvent::Level(_));
                 self.recording_update(id, event);
@@ -684,7 +764,11 @@ impl Desktop {
         result: Result<Outcome, String>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
+        let input_save = matches!(
+            kind,
+            OperationCompletion::Composer(_) | OperationCompletion::Editor(_)
+        );
         match kind {
             OperationCompletion::ProjectImport => {
                 self.accept_snapshot(window, cx);
@@ -698,7 +782,7 @@ impl Desktop {
                 {
                     self.complete_onboarding();
                 }
-                return;
+                return true;
             }
             OperationCompletion::Composer(revision) => self.composer.text.saved(revision),
             OperationCompletion::Editor(revision) => self.editor.text.saved(revision),
@@ -710,14 +794,14 @@ impl Desktop {
                 item_id,
             } => {
                 if self.snapshot.epoch != generation {
-                    return;
+                    return true;
                 }
                 self.accept_snapshot(window, cx);
                 self.conversation.update(cx, |view, cx| {
                     view.timeline.remeasure_item(item_id.as_str());
                     cx.notify();
                 });
-                return;
+                return true;
             }
             OperationCompletion::WorktreeSettings => {
                 self.worktrees.saving = false;
@@ -729,7 +813,7 @@ impl Desktop {
                 if std::mem::take(&mut self.worktrees.save_pending) {
                     self.save_worktree_settings(None, cx);
                 }
-                return;
+                return true;
             }
             OperationCompletion::Request(key) => {
                 if result.is_err() {
@@ -745,7 +829,7 @@ impl Desktop {
                     view.timeline.list.remeasure();
                     cx.notify();
                 });
-                return;
+                return true;
             }
             OperationCompletion::Account => {
                 self.account.busy = false;
@@ -759,7 +843,7 @@ impl Desktop {
                 if self.snapshot.account.login.is_none() {
                     self.account.login_draft = None;
                 }
-                return;
+                return true;
             }
             OperationCompletion::RemoveWorktree => {
                 self.worktrees.removing = false;
@@ -770,7 +854,7 @@ impl Desktop {
                     }
                 }
                 self.accept_snapshot(window, cx);
-                return;
+                return true;
             }
             OperationCompletion::Dictation(id) => {
                 if self.dictation.as_ref().is_some_and(|state| state.id == id) {
@@ -784,7 +868,7 @@ impl Desktop {
                     .as_mut()
                     .filter(|gallery| gallery.id == id)
                 else {
-                    return;
+                    return true;
                 };
                 gallery.loading = false;
                 match result {
@@ -809,18 +893,28 @@ impl Desktop {
                     }
                     _ => unreachable!("session image outcome"),
                 }
-                return;
+                return true;
             }
         }
-        self.accept_snapshot(window, cx);
+        self.accept_snapshot(window, cx) || !input_save
     }
-    fn accept_snapshot(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(store) = self.session.as_ref().map(|session| &session.store) else {
-            return;
+    fn accept_snapshot(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(session) = &self.session else {
+            return false;
         };
-        let snapshot = store.snapshot();
+        let snapshot = session.store.snapshot();
         let changed = !Arc::ptr_eq(&snapshot, &self.snapshot);
+        let general_changed = general_snapshot_changed(&self.snapshot, &snapshot);
+        if changed {
+            session.save(snapshot.clone());
+        }
         let previous = std::mem::replace(&mut self.snapshot, snapshot);
+        if !general_changed {
+            // A save acknowledgment can make the same snapshot adoptable, so
+            // input reconciliation also runs when the snapshot Arc is unchanged.
+            self.sync_inputs(window, cx);
+            return false;
+        }
         if previous.account.login.as_ref().map(|login| &login.login_id)
             != self
                 .snapshot
@@ -890,24 +984,7 @@ impl Desktop {
             self.cancel_recording();
             self.composer.text.pending = None;
         }
-        let text = self.draft().text.clone();
-        if let Some(value) = self.composer.text.adopt(&text) {
-            self.composer
-                .input
-                .update(cx, |input, cx| input.set_value(value, window, cx));
-        }
-        let file = self.snapshot.workspace.file.as_ref();
-        let text = file.map_or("", |file| {
-            self.snapshot
-                .file_drafts
-                .get(&file.path)
-                .map_or(file.text.as_str(), |draft| draft.text.as_str())
-        });
-        if let Some(value) = self.editor.show(file.map(|file| file.path.as_str()), text) {
-            self.editor
-                .input
-                .update(cx, |input, cx| input.set_value(value, window, cx));
-        }
+        self.sync_inputs(window, cx);
         if !self.worktrees.dirty
             && !self.worktrees.saving
             && previous.workspace.settings != self.snapshot.workspace.settings
@@ -969,9 +1046,6 @@ impl Desktop {
             self.path
                 .update(cx, |input, cx| input.set_value(cwd, window, cx));
         }
-        if changed && let Some(session) = &self.session {
-            session.save(self.snapshot.clone());
-        }
         if navigated {
             let panel = self.panels.get(self.panel_scope());
             if panel.open
@@ -980,6 +1054,27 @@ impl Desktop {
             {
                 self.activate_surface(id, window, cx);
             }
+        }
+        true
+    }
+    fn sync_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.draft().text.clone();
+        if let Some(value) = self.composer.text.adopt(&text) {
+            self.composer
+                .input
+                .update(cx, |input, cx| input.set_value(value, window, cx));
+        }
+        let file = self.snapshot.workspace.file.as_ref();
+        let text = file.map_or("", |file| {
+            self.snapshot
+                .file_drafts
+                .get(&file.path)
+                .map_or(file.text.as_str(), |draft| draft.text.as_str())
+        });
+        if let Some(value) = self.editor.show(file.map(|file| file.path.as_str()), text) {
+            self.editor
+                .input
+                .update(cx, |input, cx| input.set_value(value, window, cx));
         }
     }
     fn draft_key(&self) -> &DraftKey {
@@ -1249,18 +1344,11 @@ impl Desktop {
         self.tab = Tab::Chat;
         self.activate_surface(id, window, cx);
     }
-    fn hide_surfaces(&mut self, cx: &mut App) {
-        self.cancel_recording();
-        for resource in self.surface_resources.values() {
-            match resource {
-                SurfaceResource::Browser(view) => {
-                    view.update(cx, |view, _| view.set_visible(false))
-                }
-                SurfaceResource::SideChat(view) => {
-                    view.update(cx, |view, cx| view.hide_surfaces(cx))
-                }
-                _ => (),
-            }
+    fn set_visible(&mut self, visible: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.visible != visible {
+            self.visible = visible;
+            self.sync_surfaces(window, cx);
+            cx.notify();
         }
     }
     fn open_browser(&mut self, scope: PanelScope, url: &str, cx: &mut Context<Self>) {
@@ -1355,7 +1443,7 @@ impl Desktop {
             }
             Some(SurfaceResource::Terminal(view)) => view.update(cx, |view, _| view.close()),
             Some(SurfaceResource::SideChat(view)) => {
-                view.update(cx, |view, cx| view.hide_surfaces(cx))
+                view.update(cx, |view, cx| view.set_visible(false, window, cx))
             }
             _ => (),
         }
