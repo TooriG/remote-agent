@@ -26,6 +26,7 @@ struct MarkdownTests {
         reportedTable(table)
         formattedCells()
         surroundingContent(table)
+        disclosureImage()
         streaming(table)
         try sharedDocument(String(contentsOfFile: CommandLine.arguments[2], encoding: .utf8))
         print("Markdown regressions passed: cells, boundaries, alignment, formatting, images, links, streaming")
@@ -100,6 +101,28 @@ struct MarkdownTests {
                 $0.link == "https://example.com/reference"
             }, "whole document reference resolution")
         }
+    }
+
+    private static func disclosureImage() {
+        let parts = ConversationMarkdownContent.parse("""
+        解約できました。
+
+        <details>
+        <summary>東映の解約完了画面</summary>
+
+        ![完了画面][receipt]
+
+        </details>
+
+        続きの説明。
+
+        [receipt]: https://example.com/receipt.png
+        """)
+        check(parts.compactMap { $0.image?.imageURL?.absoluteString } == ["https://example.com/receipt.png"],
+              "disclosure image must remain visible exactly once")
+        let displayed = text(parts.flatMap(\.blocks))
+        check(displayed == "解約できました。東映の解約完了画面完了画面続きの説明。",
+              "disclosure caption and surrounding text survive without raw HTML tags")
     }
 
     private static func streaming(_ table: String) {
