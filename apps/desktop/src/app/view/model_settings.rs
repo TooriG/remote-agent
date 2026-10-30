@@ -1210,11 +1210,6 @@ impl Desktop {
                     })),
             );
         }
-        if self.selected().is_none() {
-            body = body.child(div().text_xs().text_color(rgb(appearance::MUTED)).child(
-                "Codex・Claude・DSH（DeepSeek / OpenRouterなど）を選んで会話を始められます。",
-            ));
-        }
         let account = self
             .snapshot
             .account
