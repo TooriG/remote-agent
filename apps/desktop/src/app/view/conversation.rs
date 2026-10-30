@@ -612,7 +612,7 @@ impl Desktop {
                         .gap_2()
                         .child(header)
                         .when(activity.is_in_progress, |row| {
-                            row.child(spinner::Spinner::new().small())
+                            row.child(crate::activity::indicator())
                         }),
                 );
             }
@@ -665,7 +665,7 @@ impl Desktop {
                             h_flex()
                                 .gap_2()
                                 .when(error.is_reconnecting, |heading| {
-                                    heading.child(spinner::Spinner::new().small())
+                                    heading.child(crate::activity::indicator())
                                 })
                                 .child(
                                     div()
@@ -872,7 +872,7 @@ impl Desktop {
                         .gap_2()
                         .text_sm()
                         .text_color(rgb(appearance::MUTED))
-                        .child(spinner::Spinner::new().small())
+                        .child(crate::activity::indicator())
                         .child(WorkProgressView::view(
                             &row.id,
                             projected.work_progress(false),

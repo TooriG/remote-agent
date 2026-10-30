@@ -427,7 +427,7 @@ impl Desktop {
                             cx.notify();
                         }));
                     if project.loading {
-                        more = more.suffix(|_, _| spinner::Spinner::new().small());
+                        more = more.suffix(|_, _| crate::activity::indicator());
                     }
                     projects.push(more.disable(project.loading).into());
                 }
@@ -441,7 +441,7 @@ impl Desktop {
                 },
             ));
             if list.as_ref().is_some_and(|page| page.loading_projects) {
-                more = more.suffix(|_, _| spinner::Spinner::new().small());
+                more = more.suffix(|_, _| crate::activity::indicator());
             }
             projects.push(
                 more.disable(
@@ -482,7 +482,7 @@ impl Desktop {
                     cx.notify();
                 }));
             if list.as_ref().is_some_and(|page| page.loading_chats) {
-                more = more.suffix(|_, _| spinner::Spinner::new().small());
+                more = more.suffix(|_, _| crate::activity::indicator());
             }
             chats.push(
                 more.disable(
@@ -617,7 +617,7 @@ impl Desktop {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .when(active, |row| row.child(spinner::Spinner::new().small()))
+                    .when(active, |row| row.child(crate::activity::indicator()))
                     .when(!active && unread, |row| {
                         row.child(div().size(px(8.)).rounded_full().bg(rgb(0xffffff)))
                     })
@@ -931,6 +931,60 @@ mod tests {
             assert_eq!(view.selected().unwrap().id, "fixture");
             assert_eq!(view.draft().text, "Keep my draft");
         });
+    }
+
+    #[gpui::test]
+    fn running_tasks_spin_without_rebuilding_the_window(cx: &mut TestAppContext) {
+        struct Counted(Entity<Desktop>, std::rc::Rc<std::cell::Cell<usize>>);
+        impl Render for Counted {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                self.1.set(self.1.get() + 1);
+                self.0.clone()
+            }
+        }
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        cx.update(|cx| {
+            crate::appearance::init(cx);
+            cx.set_global(Runtime {
+                handle: runtime.handle().clone(),
+                connections: Arc::default(),
+                closing: tokio_util::task::TaskTracker::new(),
+                logging_error: None,
+            });
+        });
+        let renders = std::rc::Rc::new(std::cell::Cell::new(0));
+        let window = cx.open_window(size(px(1000.), px(700.)), |window, cx| {
+            let desktop = cx.new(|cx| {
+                let mut desktop = Desktop::new(Mode::Main, window, cx);
+                desktop.onboarding = false;
+                Arc::make_mut(&mut desktop.snapshot).threads = Some(Arc::new(
+                    serde_json::from_value(serde_json::json!({
+                        "data":[{"id":{"provider":"codex","id":"running"},"name":"Running task","status":"running"}],
+                        "projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,}))
+                    .unwrap(),
+                ));
+                desktop
+            });
+            let content = cx.new(|_| Counted(desktop, renders.clone()));
+            crate::activity::ActivityWindow::new(content, window, cx)
+        });
+        cx.run_until_parked();
+        let rendered = renders.get();
+        for _ in 0..3 {
+            let frames = window
+                .update(cx, |_, window, cx| window.simulate_next_frame(cx))
+                .unwrap();
+            cx.run_until_parked();
+            assert!(frames > 0, "the running task's indicator keeps spinning");
+        }
+        assert_eq!(
+            renders.get(),
+            rendered,
+            "spinning must not rebuild the window content"
+        );
     }
 
     #[gpui::test]

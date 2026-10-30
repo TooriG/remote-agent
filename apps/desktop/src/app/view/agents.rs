@@ -55,7 +55,7 @@ impl Desktop {
                                             .h(px(20.))
                                             .gap_2()
                                             .when(agent.active, |row| {
-                                                row.child(spinner::Spinner::new().small())
+                                                row.child(crate::activity::indicator())
                                             })
                                             .child(
                                                 div()

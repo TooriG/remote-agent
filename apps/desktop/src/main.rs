@@ -1,3 +1,4 @@
+mod activity;
 mod app;
 mod appearance;
 mod browser;
@@ -122,7 +123,8 @@ fn open_main_window(cx: &mut App) {
                 #[cfg(target_os = "windows")]
                 appearance::style_native_titlebar(window);
                 let desktop = cx.new(|cx| app::Desktop::new(app::Mode::Main, window, cx));
-                cx.new(|cx| Root::new(desktop, window, cx))
+                let content = cx.new(|cx| activity::ActivityWindow::new(desktop, window, cx));
+                cx.new(|cx| Root::new(content, window, cx))
             },
         )
         .expect("open Bex window");

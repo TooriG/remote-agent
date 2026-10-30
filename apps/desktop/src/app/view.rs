@@ -228,7 +228,7 @@ impl Render for Desktop {
                 body.child(self.sidebar(cx))
             })
             .child(main)
-            .child(
+            .child(deferred(
                 div()
                     .absolute()
                     .top_12()
@@ -236,7 +236,7 @@ impl Render for Desktop {
                     .w(px(420.))
                     .max_w_full()
                     .child(self.error_notices(ErrorScope::Application, cx)),
-            )
+            ))
     }
 }
 

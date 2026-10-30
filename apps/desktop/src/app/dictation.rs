@@ -62,7 +62,7 @@ impl Desktop {
                 h_flex()
                     .flex_1()
                     .gap_2()
-                    .child(spinner::Spinner::new().small())
+                    .child(crate::activity::indicator())
                     .child(match state.phase {
                         Phase::Preparing => "録音を準備中…",
                         #[cfg(target_os = "macos")]

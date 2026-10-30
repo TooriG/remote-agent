@@ -338,9 +338,9 @@ impl Desktop {
                     &self.selection,
                     history,
                 ))
-                .child(self.conversation_navigation(cx));
+                .child(deferred(self.conversation_navigation(cx)));
             if !self.timeline.list.is_following_tail() {
-                viewport = viewport.child(
+                viewport = viewport.child(deferred(
                     h_flex()
                         .absolute()
                         .bottom_2()
@@ -362,7 +362,7 @@ impl Desktop {
                             .bg(rgb(appearance::RAISED))
                             .size(px(36.)),
                         ),
-                );
+                ));
             }
             body = body.child(viewport);
         }
