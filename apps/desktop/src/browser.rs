@@ -18,6 +18,8 @@ use gpui_kit::{
 };
 use std::{collections::VecDeque, ops::Range, sync::Arc, time::Duration};
 
+pub(crate) struct BrowserTitle(pub(crate) String);
+
 pub(crate) struct Browser {
     store: Arc<Store>,
     thread: SessionRef,
@@ -39,6 +41,7 @@ pub(crate) struct Browser {
     initial_url: Option<String>,
     _subscription: Subscription,
 }
+impl EventEmitter<BrowserTitle> for Browser {}
 
 impl Browser {
     pub(crate) fn new(
@@ -110,9 +113,11 @@ impl Browser {
                                                     }
                                                 })
                                                 .unwrap_or_default();
-                                            view.address.update(cx, |input, cx| {
-                                                input.set_value(url, window, cx)
-                                            });
+                                            if view.address.read(cx).value().as_ref() != url {
+                                                view.address.update(cx, |input, cx| {
+                                                    input.set_value(url, window, cx)
+                                                });
+                                            }
                                         }
                                         if image.is_some() {
                                             view.image = image;
@@ -123,7 +128,7 @@ impl Browser {
                                         if !frame.value.is_empty() {
                                             view.notice = Some(std::mem::take(&mut frame.value));
                                         }
-                                        view.frame = frame;
+                                        view.set_frame(frame, cx);
                                         if let Some(url) = view.initial_url.take() {
                                             view.send(BrowserAction::Navigate { url }, cx);
                                         }
@@ -452,6 +457,15 @@ impl Browser {
             );
         }
         panel
+    }
+
+    fn set_frame(&mut self, frame: BrowserFrame, cx: &mut Context<Self>) {
+        let previous = self.title();
+        self.frame = frame;
+        let title = self.title();
+        if title != previous {
+            cx.emit(BrowserTitle(title));
+        }
     }
 
     pub(crate) fn title(&self) -> String {
@@ -851,5 +865,79 @@ impl EntityInputHandler for Browser {
         _: &mut Context<Self>,
     ) -> Option<usize> {
         Some(0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::prelude::v1::test;
+    use std::{cell::RefCell, rc::Rc};
+
+    #[gpui::test]
+    fn page_title_events_only_report_changes_to_the_active_tab(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        cx.update(|cx| {
+            crate::appearance::init(cx);
+            cx.set_global(Runtime {
+                handle: runtime.handle().clone(),
+                connections: Arc::default(),
+                closing: tokio_util::task::TaskTracker::new(),
+                logging_error: None,
+            });
+        });
+        let store = runtime.block_on(async { Arc::new(Store::offline(Default::default())) });
+        let window = cx.add_empty_window();
+        let browser = window.update(|window, cx| {
+            Browser::new(
+                store,
+                SessionRef {
+                    provider: agent_protocol::session::ProviderKind::Codex,
+                    id: "fixture".into(),
+                },
+                None,
+                window,
+                cx,
+            )
+        });
+        let titles = Rc::new(RefCell::new(Vec::new()));
+        let _subscription = window.update(|_, cx| {
+            let titles = titles.clone();
+            cx.subscribe(&browser, move |_, title: &BrowserTitle, _| {
+                titles.borrow_mut().push(title.0.clone())
+            })
+        });
+        let mut frame = BrowserFrame {
+            tab_id: "active".into(),
+            tabs: vec![
+                agent_protocol::browser::BrowserTab {
+                    id: "background".into(),
+                    title: "Background".into(),
+                    url: "https://example.com/background".into(),
+                },
+                agent_protocol::browser::BrowserTab {
+                    id: "active".into(),
+                    title: "Page".into(),
+                    url: "https://example.com".into(),
+                },
+            ],
+            ..Default::default()
+        };
+        browser.update(window, |browser, cx| browser.set_frame(frame.clone(), cx));
+        frame.generation += 1;
+        frame.image_id = "another-frame".into();
+        browser.update(window, |browser, cx| browser.set_frame(frame.clone(), cx));
+        frame.tab_id = "background".into();
+        browser.update(window, |browser, cx| browser.set_frame(frame.clone(), cx));
+        frame.tabs[0].url = "about:blank".into();
+        browser.update(window, |browser, cx| browser.set_frame(frame.clone(), cx));
+        browser.update(window, |browser, cx| {
+            browser.set_frame(BrowserFrame::default(), cx)
+        });
+        window.run_until_parked();
+        assert_eq!(*titles.borrow(), ["Page", "Background", "ブラウザ"]);
     }
 }

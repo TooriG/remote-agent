@@ -219,7 +219,8 @@ struct WorkProgressView {
 impl WorkProgressView {
     fn view(id: &str, progress: WorkProgress, window: &mut Window, cx: &mut App) -> Entity<Self> {
         // use_keyed_state observes its entity and notifies the parent view.
-        // Retain the clock without forwarding each tick to the conversation.
+        // Retain the clock without forwarding each tick as an entity notification.
+        // Its changing text width still requires GPUI to lay out the ancestors.
         let view = window.with_global_id(
             SharedString::from(format!("work-progress-{id}")).into(),
             |id, window| {
@@ -1017,7 +1018,12 @@ impl ConversationView {
                                             Button::new(format!("fork-{}", item.data.id))
                                                 .small()
                                                 .ghost()
-                                                .loading(forking)
+                                                .when(forking, |button| {
+                                                    button
+                                                        .child(crate::activity::indicator())
+                                                        .size_6()
+                                                        .px_0()
+                                                })
                                                 .tooltip(if forking {
                                                     "分岐を作成中…"
                                                 } else {
@@ -1035,7 +1041,11 @@ impl ConversationView {
                                                     ));
                                                     cx.notify();
                                                 }))
-                                                .icon(Icon::default().path("icons/branch.svg"))
+                                                .when(!forking, |button| {
+                                                    button.icon(
+                                                        Icon::default().path("icons/branch.svg"),
+                                                    )
+                                                })
                                                 .debug_selector(|| "response-fork".into())
                                                 .disabled(
                                                     !self.model.connected
@@ -2294,7 +2304,7 @@ mod rendering_tests {
         assert_eq!(
             parent_notifications.get(),
             0,
-            "a clock tick must not invalidate the conversation"
+            "a clock tick must not notify conversation observers"
         );
     }
 
@@ -2354,7 +2364,7 @@ mod rendering_tests {
         assert_eq!(
             notifications.get(),
             0,
-            "elapsed time must not notify Desktop or remeasure the whole active turn"
+            "elapsed time must not notify Desktop observers"
         );
         view.update(window, |view, cx| {
             view.desktop.update(cx, |desktop, cx| {
@@ -2475,6 +2485,11 @@ mod rendering_tests {
             assert_eq!(
                 window.debug_bounds("response-fork-progress").is_some(),
                 visible
+            );
+            assert_eq!(
+                window.debug_bounds("response-fork").unwrap().size,
+                size(px(24.), px(24.)),
+                "pending and idle fork buttons must keep the same icon-button dimensions"
             );
         }
     }

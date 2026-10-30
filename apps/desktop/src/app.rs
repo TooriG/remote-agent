@@ -112,13 +112,8 @@ enum ModelPanel {
 }
 enum SurfaceResource {
     Diff(Entity<DiffView>),
-    Pending {
-        url: Option<String>,
-    },
-    Browser {
-        view: Entity<crate::browser::Browser>,
-        _observation: Subscription,
-    },
+    Pending { url: Option<String> },
+    Browser(Entity<crate::browser::Browser>),
     Terminal(Entity<crate::terminal::Terminal>),
     SideChat(Entity<Desktop>),
 }
@@ -170,6 +165,8 @@ pub(crate) struct Desktop {
     source_items: Vec<Arc<Item>>,
     conversation: Entity<view::ConversationView>,
     composer_view: Entity<view::ComposerView>,
+    workbench_view: Entity<view::WorkbenchView>,
+    header_view: Entity<view::HeaderView>,
     media: Media,
     /// Absent in side chats, which have no sidebar.
     sidebar_view: Option<Entity<view::SidebarView>>,
@@ -247,6 +244,8 @@ impl Desktop {
             cx.new(|cx| view::ConversationView::new(&owner, selection.clone(), window, cx));
         let composer_view =
             cx.new(|cx| view::ComposerView::new(&owner, composer.input.clone(), cx));
+        let workbench_view = cx.new(|cx| view::WorkbenchView::new(&owner, cx));
+        let header_view = cx.new(|cx| view::HeaderView::new(&owner, cx));
         let mut subscriptions = vec![
             cx.subscribe_in(&conversation, window, |view, _, action, window, cx| {
                 view.conversation_action(action, window, cx);
@@ -301,7 +300,7 @@ impl Desktop {
                             OperationCompletion::Composer(revision),
                         );
                     }
-                    cx.notify();
+                    view.sync_composer(cx);
                 }
             }),
             cx.subscribe(&editor.input, |view, input, event, cx| {
@@ -422,6 +421,8 @@ impl Desktop {
             source_items: Vec::new(),
             conversation,
             composer_view,
+            workbench_view,
+            header_view,
             media: Media::new(),
             sidebar_view: None,
             _subscriptions: subscriptions,
@@ -609,7 +610,14 @@ impl Desktop {
             }
             Update::Snapshot => self.accept_snapshot(window, cx),
             Update::Completed(kind, result) => self.operation_completed(kind, result, window, cx),
-            Update::Recording(id, event) => self.recording_update(id, event),
+            Update::Recording(id, event) => {
+                let level = matches!(event, platform::RecordingEvent::Level(_));
+                self.recording_update(id, event);
+                if level {
+                    self.sync_composer(cx);
+                    return;
+                }
+            }
             Update::LocalCompleted { scope, result } => {
                 self.busy = self.busy.saturating_sub(1);
                 if let Err(error) = result {
@@ -1245,7 +1253,7 @@ impl Desktop {
         self.cancel_recording();
         for resource in self.surface_resources.values() {
             match resource {
-                SurfaceResource::Browser { view, .. } => {
+                SurfaceResource::Browser(view) => {
                     view.update(cx, |view, _| view.set_visible(false))
                 }
                 SurfaceResource::SideChat(view) => {
@@ -1342,7 +1350,7 @@ impl Desktop {
         }
         self.panels.close(self.panel_scope(), id);
         match self.surface_resources.remove(&id) {
-            Some(SurfaceResource::Browser { view, .. }) => {
+            Some(SurfaceResource::Browser(view)) => {
                 view.update(cx, |view, _| view.set_visible(false));
             }
             Some(SurfaceResource::Terminal(view)) => view.update(cx, |view, _| view.close()),

@@ -1,8 +1,9 @@
 use super::*;
 
 impl Desktop {
-    pub(super) fn agents_panel(&self) -> AnyElement {
-        let agents = self.snapshot.agent_panel();
+    pub(super) fn agents_panel(
+        agents: &[agent_core::presentation::agents::AgentSummary],
+    ) -> AnyElement {
         let working = agents.iter().filter(|agent| agent.active).count();
         v_flex()
             .debug_selector(|| "agents-panel".into())
@@ -39,9 +40,9 @@ impl Desktop {
                                         .child("サブエージェントが起動するとここに表示されます。"),
                                 )
                             })
-                            .children(agents.into_iter().map(|agent| {
+                            .children(agents.iter().map(|agent| {
                                 v_flex()
-                                    .id(SharedString::from(agent.key))
+                                    .id(SharedString::from(agent.key.clone()))
                                     .debug_selector(|| "agent-row".into())
                                     .ml(px(agent.depth as f32 * 16.))
                                     .gap_1()
@@ -63,7 +64,7 @@ impl Desktop {
                                                     .min_w_0()
                                                     .text_sm()
                                                     .text_ellipsis()
-                                                    .child(agent.title),
+                                                    .child(agent.title.clone()),
                                             )
                                             .when(agent.unread, |row| {
                                                 row.child(
@@ -77,7 +78,7 @@ impl Desktop {
                                                 div()
                                                     .text_xs()
                                                     .text_color(rgb(appearance::MUTED))
-                                                    .child(agent.status),
+                                                    .child(agent.status.clone()),
                                             ),
                                     )
                                     .child(
@@ -86,14 +87,14 @@ impl Desktop {
                                             .text_sm()
                                             .text_ellipsis()
                                             .text_color(rgb(appearance::MUTED))
-                                            .child(agent.detail.unwrap_or_default()),
+                                            .child(agent.detail.clone().unwrap_or_default()),
                                     )
                                     .child(
                                         div()
                                             .h(px(16.))
                                             .text_xs()
                                             .text_color(rgb(appearance::MUTED))
-                                            .child(agent.model.unwrap_or_default()),
+                                            .child(agent.model.clone().unwrap_or_default()),
                                     )
                             })),
                     ),

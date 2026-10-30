@@ -2,6 +2,7 @@ mod agents;
 mod composer;
 mod conversation;
 mod errors;
+mod header;
 mod markdown_diagram;
 mod media;
 mod model_settings;
@@ -20,8 +21,10 @@ use gpui_kit::component::{
     resizable::{h_resizable, resizable_panel, v_resizable},
     sidebar::{Sidebar, SidebarItem, SidebarMenuItem},
 };
+pub(super) use header::HeaderView;
 pub(super) use sidebar::SidebarView;
 use std::path::PathBuf;
+pub(super) use workbench::WorkbenchView;
 
 // Popup contents can change while their trigger remains identical. The
 // observation belongs to the open popup and is dropped with its element state.
@@ -118,12 +121,7 @@ fn image_skeleton(height: f32, background: Hsla) -> Div {
         .max_w(px(height))
         .h(px(height))
         .flex_shrink_0()
-        .child(
-            skeleton::Skeleton::new()
-                .size_full()
-                .rounded_lg()
-                .bg(background),
-        )
+        .child(crate::activity::pulse(background))
 }
 
 fn user_message_bubble() -> Div {
@@ -203,18 +201,13 @@ impl Render for Desktop {
                 window,
                 cx,
             );
-            let observation = cx.observe(&browser, |_, _, cx| cx.notify());
-            self.surface_resources.insert(
-                id,
-                SurfaceResource::Browser {
-                    view: browser,
-                    _observation: observation,
-                },
-            );
+            self.surface_resources
+                .insert(id, SurfaceResource::Browser(browser));
+            self.sync_workbench(cx);
         }
         for (id, resource) in &self.surface_resources {
             match resource {
-                SurfaceResource::Browser { view, .. } => view.update(cx, |view, _| {
+                SurfaceResource::Browser(view) => view.update(cx, |view, _| {
                     view.set_visible(active && Some(*id) == active_surface);
                 }),
                 SurfaceResource::SideChat(chat) if !active || Some(*id) != active_surface => {
@@ -275,47 +268,6 @@ impl Render for Desktop {
 }
 
 impl Desktop {
-    fn conversation_header(&self, cx: &Context<Self>) -> Div {
-        let panel_open = self.panels.get(self.panel_scope()).open;
-        let title = self
-            .thread()
-            .and_then(|thread| thread.name.as_deref())
-            .or_else(|| {
-                self.snapshot
-                    .threads
-                    .as_ref()
-                    .and_then(|page| {
-                        page.data
-                            .iter()
-                            .find(|thread| thread.id.as_ref() == self.selected())
-                    })
-                    .and_then(|thread| thread.name.as_deref())
-            })
-            .unwrap_or("新しいチャット")
-            .to_owned();
-        let mut header = h_flex()
-            .debug_selector(|| "conversation-header".into())
-            .h(px(crate::WINDOW_HEADER_HEIGHT))
-            .flex_shrink_0()
-            .px_4()
-            .gap_2();
-        if !self.sidebar {
-            header = header.pl_0().child(sidebar_header(false, cx));
-        }
-        header
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_sm()
-                    .text_ellipsis()
-                    .child(title),
-            )
-            .when(!panel_open, |header| {
-                header.child(Self::panel_toggle(false, cx))
-            })
-    }
-
     fn panel_toggle(open: bool, cx: &Context<Self>) -> Button {
         icon_button(
             "panel-toggle",
@@ -487,12 +439,169 @@ mod cache_tests {
     use core::prelude::v1::test;
     use gpui_kit as gpui;
 
-    fn renders(desktop: &Desktop, cx: &App) -> [usize; 3] {
+    #[gpui::test]
+    fn loading_images_pulse_without_rebuilding_their_content(cx: &mut TestAppContext) {
+        struct Loading(std::rc::Rc<std::cell::Cell<usize>>);
+        impl Render for Loading {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                self.0.set(self.0.get() + 1);
+                div()
+                    .size_full()
+                    .child(image_skeleton(320., rgb(appearance::RAISED).into()))
+            }
+        }
+        let renders = std::rc::Rc::new(std::cell::Cell::new(0));
+        let window = cx.open_window(size(px(400.), px(400.)), |window, cx| {
+            let content = cx.new(|_| Loading(renders.clone()));
+            crate::activity::ActivityWindow::new(content, window, cx)
+        });
+        cx.run_until_parked();
+        let initial = renders.get();
+        for _ in 0..3 {
+            assert!(
+                window
+                    .update(cx, |_, window, cx| window.simulate_next_frame(cx))
+                    .unwrap()
+                    > 0
+            );
+            cx.run_until_parked();
+        }
+        assert_eq!(
+            renders.get(),
+            initial,
+            "image loading must not rebuild its surrounding view on animation frames"
+        );
+    }
+
+    fn renders(desktop: &Desktop, cx: &App) -> [usize; 5] {
         [
             desktop.sidebar_view.as_ref().unwrap().read(cx).renders,
             desktop.conversation.read(cx).renders,
             desktop.composer_view.read(cx).content.read(cx).renders,
+            desktop.workbench_view.read(cx).renders,
+            desktop.header_view.read(cx).renders,
         ]
+    }
+
+    #[gpui::test]
+    fn browser_frames_do_not_broadcast_desktop_notifications(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let app_runtime = Runtime {
+            handle: runtime.handle().clone(),
+            connections: Arc::default(),
+            closing: tokio_util::task::TaskTracker::new(),
+            logging_error: None,
+        };
+        cx.update(|cx| {
+            crate::appearance::init(cx);
+            cx.set_global(app_runtime.clone());
+        });
+        let mut snapshot = Snapshot {
+            connected: true,
+            ..Default::default()
+        };
+        Arc::make_mut(&mut snapshot.navigation).draft_key = DraftKey::Session {
+            session: SessionRef {
+                provider: agent_protocol::session::ProviderKind::Codex,
+                id: "browser-fixture".into(),
+            },
+        };
+        let store =
+            runtime.block_on(async { Arc::new(agent_core::store::Store::offline(snapshot)) });
+        let mut session = Some(runtime.block_on(async {
+            let (updates, receive) = async_channel::unbounded();
+            tokio::spawn(StoreSession::publish(
+                Ok(store.clone()),
+                app_runtime,
+                updates,
+                Some,
+                |_| None,
+            ));
+            receive.recv().await.unwrap().unwrap().unwrap()
+        }));
+        let (desktop, window) = cx.add_window_view(|window, cx| {
+            let mut desktop = Desktop::new(Mode::Main, window, cx);
+            desktop.onboarding = false;
+            desktop.snapshot = store.snapshot();
+            desktop.session = session.take();
+            desktop.open_panel(Panel::Browser, window, cx);
+            desktop
+        });
+        window.simulate_resize(size(px(1600.), px(900.)));
+        window.run_until_parked();
+        let (id, browser) = desktop.read_with(window, |desktop, _| {
+            let id = desktop.panels.get(desktop.panel_scope()).active.unwrap();
+            let SurfaceResource::Browser(browser) = &desktop.surface_resources[&id] else {
+                panic!("the production renderer must create the browser")
+            };
+            (id, browser.clone())
+        });
+        let before = desktop.read_with(window, renders);
+        let notifications = std::rc::Rc::new(std::cell::Cell::new(0));
+        let _observation = window.update(|_, cx| {
+            let count = notifications.clone();
+            cx.observe(&desktop, move |_, _| count.set(count.get() + 1))
+        });
+        for _ in 0..3 {
+            browser.update(window, |_, cx| cx.notify());
+            window.run_until_parked();
+            assert_eq!(
+                notifications.get(),
+                0,
+                "browser frames must stay in the workbench"
+            );
+            let after = desktop.read_with(window, renders);
+            for index in [0, 1, 2, 4] {
+                assert_eq!(
+                    after[index], before[index],
+                    "browser frames must reuse other regions"
+                );
+            }
+        }
+        let before_title = desktop.read_with(window, renders);
+        browser.update(window, |_, cx| {
+            cx.emit(crate::browser::BrowserTitle("Updated page".into()))
+        });
+        window.run_until_parked();
+        let after_title = desktop.read_with(window, renders);
+        assert!(
+            after_title[3] > before_title[3],
+            "a changed page title must redraw the workbench tab"
+        );
+        assert_eq!(
+            notifications.get(),
+            0,
+            "title changes must stay in the workbench too"
+        );
+        browser.update(window, |_, cx| {
+            cx.emit(crate::browser::BrowserTitle("Updated page".into()))
+        });
+        window.run_until_parked();
+        assert_eq!(
+            desktop.read_with(window, renders),
+            after_title,
+            "identical titles must reuse the workbench"
+        );
+        window.update(|window, cx| {
+            desktop.update(cx, |desktop, cx| {
+                desktop.close_surface(id, window, cx);
+            })
+        });
+        window.run_until_parked();
+        let before = desktop.read_with(window, renders);
+        browser.update(window, |_, cx| {
+            cx.emit(crate::browser::BrowserTitle("Closed page".into()));
+            cx.notify();
+        });
+        window.run_until_parked();
+        assert_eq!(
+            desktop.read_with(window, renders),
+            before,
+            "closed browser tabs must release their workbench observation"
+        );
     }
 
     #[gpui::test]
@@ -582,11 +691,11 @@ mod cache_tests {
             id: "selected".into(),
         };
         let mut desktop = None;
-        let window = cx.open_window(size(px(1000.), px(700.)), |window, cx| {
+        let window = cx.open_window(size(px(1600.), px(700.)), |window, cx| {
             let view = cx.new(|cx| {
                 let mut view = Desktop::new(Mode::Main, window, cx);
                 view.onboarding = false;
-                view.panels.set_open(view.panel_scope(), false);
+                view.panels.open(view.panel_scope(), Panel::Files, None);
                 let snapshot = Arc::make_mut(&mut view.snapshot);
                 snapshot.connected = true;
                 Arc::make_mut(&mut snapshot.navigation).thread_id = Some(session.clone());
@@ -607,6 +716,13 @@ mod cache_tests {
         });
         let desktop = desktop.unwrap();
         cx.run_until_parked();
+        let notifications = std::rc::Rc::new(std::cell::Cell::new(0));
+        let _observation = cx.update(|cx| {
+            let notifications = notifications.clone();
+            cx.observe(&desktop, move |_, _| {
+                notifications.set(notifications.get() + 1)
+            })
+        });
         let before = desktop.read_with(cx, renders);
         for text in ["typing", "typing more"] {
             window
@@ -633,6 +749,16 @@ mod cache_tests {
             assert!(
                 after[2] > before[2],
                 "the composer must reflect native input changes"
+            );
+            assert_eq!(
+                &after[3..],
+                &before[3..],
+                "typing must reuse the open panel and header"
+            );
+            assert_eq!(
+                notifications.get(),
+                0,
+                "local input must not notify Desktop observers"
             );
         }
         let before = desktop.read_with(cx, renders);
@@ -662,6 +788,11 @@ mod cache_tests {
             "streaming must redraw the conversation"
         );
         assert_eq!(after[2], before[2], "streaming must reuse the composer");
+        assert_eq!(
+            &after[3..],
+            &before[3..],
+            "streaming must reuse the open panel and header"
+        );
         // Markdown finishes its own asynchronous measurement on the next frame.
         window
             .update(cx, |_, window, cx| window.simulate_next_frame(cx))

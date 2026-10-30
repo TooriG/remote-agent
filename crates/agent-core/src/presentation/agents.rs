@@ -7,6 +7,7 @@ use crate::{
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
+#[derive(PartialEq)]
 pub struct AgentSummary {
     pub key: String,
     pub title: String,

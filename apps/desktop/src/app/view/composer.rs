@@ -2,6 +2,17 @@ use super::*;
 use gpui_kit::component::button::ButtonCustomVariant;
 
 impl Desktop {
+    pub(in crate::app) fn sync_composer(&self, cx: &mut App) {
+        let model = self.composer_model(cx);
+        self.composer_view
+            .read(cx)
+            .content
+            .clone()
+            .update(cx, |view, cx| {
+                view.set_model(model, cx);
+            });
+    }
+
     fn composer_context(model: &ComposerModel, cx: &Context<Self>) -> AnyElement {
         let mut row = h_flex()
             .w_full()
@@ -566,7 +577,7 @@ pub(in crate::app) struct ComposerContent {
     model: Option<ComposerModel>,
     _observations: Vec<Subscription>,
     #[cfg(test)]
-    pub(super) renders: usize,
+    pub(in crate::app) renders: usize,
 }
 struct ComposerHeight(Pixels);
 impl EventEmitter<ComposerHeight> for ComposerContent {}
@@ -585,18 +596,12 @@ impl ComposerView {
                 _observations: vec![
                     cx.observe(desktop, |view: &mut ComposerContent, desktop, cx| {
                         let model = desktop.read(cx).composer_model(cx);
-                        if view.model.as_ref() != Some(&model) {
-                            view.model = Some(model);
-                            cx.notify();
-                        }
+                        view.set_model(model, cx);
                     }),
                     cx.observe(&input, move |view: &mut ComposerContent, _, cx| {
                         if let Some(desktop) = owner.upgrade() {
                             let model = desktop.read(cx).composer_model(cx);
-                            if view.model.as_ref() != Some(&model) {
-                                view.model = Some(model);
-                                cx.notify();
-                            }
+                            view.set_model(model, cx);
                         }
                     }),
                 ],
@@ -613,6 +618,14 @@ impl ComposerView {
             }),
             content,
             height: None,
+        }
+    }
+}
+impl ComposerContent {
+    fn set_model(&mut self, model: ComposerModel, cx: &mut Context<Self>) {
+        if self.model.as_ref() != Some(&model) {
+            self.model = Some(model);
+            cx.notify();
         }
     }
 }

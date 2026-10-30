@@ -9,6 +9,7 @@ pub(super) enum Phase {
     Recording,
     Transcribing,
 }
+
 pub(super) struct Dictation {
     pub(super) id: uuid::Uuid,
     key: DraftKey,
@@ -205,5 +206,104 @@ impl Desktop {
                 self.perform(intent, OperationCompletion::Dictation(id));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::prelude::v1::test;
+    use std::{cell::Cell, rc::Rc};
+
+    #[gpui::test]
+    fn recording_levels_only_redraw_the_composer_and_failures_restore_the_normal_ui(
+        cx: &mut TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        cx.update(|cx| {
+            crate::appearance::init(cx);
+            cx.set_global(Runtime {
+                handle: runtime.handle().clone(),
+                connections: Arc::default(),
+                closing: tokio_util::task::TaskTracker::new(),
+                logging_error: None,
+            });
+        });
+        let id = uuid::Uuid::new_v4();
+        let (view, window) = cx.add_window_view(|window, cx| {
+            let mut view = Desktop::new(Mode::Main, window, cx);
+            view.onboarding = false;
+            Arc::make_mut(&mut view.snapshot).connected = true;
+            view.panels.open(view.panel_scope(), Panel::Files, None);
+            view.dictation = Some(Dictation {
+                id,
+                key: view.draft_key().clone(),
+                generation: view.snapshot.epoch,
+                phase: Phase::Recording,
+                send: false,
+                control: None,
+                preparation: None,
+                levels: std::collections::VecDeque::from([0.; 40]),
+            });
+            view
+        });
+        window.simulate_resize(size(px(1600.), px(900.)));
+        window.run_until_parked();
+        let counts = |view: &Desktop, cx: &App| {
+            [
+                view.sidebar_view.as_ref().unwrap().read(cx).renders,
+                view.conversation.read(cx).renders,
+                view.workbench_view.read(cx).renders,
+                view.composer_view.read(cx).content.read(cx).renders,
+            ]
+        };
+        let before = view.read_with(window, counts);
+        let notifications = Rc::new(Cell::new(0));
+        let _observation = window.update(|_, cx| {
+            let count = notifications.clone();
+            cx.observe(&view, move |_, _| count.set(count.get() + 1))
+        });
+        let receive = |event, window: &mut VisualTestContext| {
+            window.update(|window, cx| {
+                view.update(cx, |view, cx| {
+                    view.receive((view.epoch, Update::Recording(id, event)), window, cx);
+                })
+            });
+            window.run_until_parked();
+        };
+        receive(platform::RecordingEvent::Level(0.25), window);
+        let after = view.read_with(window, counts);
+        assert_eq!(
+            &after[..3],
+            &before[..3],
+            "audio samples must reuse the conversation and panels"
+        );
+        assert!(after[3] > before[3], "the visible waveform must update");
+        assert_eq!(
+            notifications.get(),
+            0,
+            "audio samples must not broadcast Desktop notifications"
+        );
+        view.read_with(window, |view, _| {
+            assert_eq!(view.dictation.as_ref().unwrap().levels.back(), Some(&0.25))
+        });
+        receive(platform::RecordingEvent::Level(f32::NAN), window);
+        assert_eq!(
+            view.read_with(window, counts),
+            after,
+            "invalid samples must not change the waveform"
+        );
+        receive(
+            platform::RecordingEvent::Finished(Err("recording failed".into())),
+            window,
+        );
+        assert!(
+            notifications.get() > 0,
+            "recording failures must update the surrounding UI"
+        );
+        view.read_with(window, |view, _| assert!(view.dictation.is_none()));
     }
 }

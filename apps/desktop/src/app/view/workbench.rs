@@ -1,4 +1,232 @@
 use super::*;
+use agent_core::panels::{PanelState, PanelTool};
+use agent_core::presentation::agents::AgentSummary;
+use errors::ErrorRow;
+
+#[derive(PartialEq)]
+struct WorkbenchModel {
+    panel: PanelState,
+    titles: Vec<String>,
+    browsers: Vec<(u64, Entity<crate::browser::Browser>)>,
+    sidebar: bool,
+    side_chat_mode: bool,
+    tools: Vec<PanelTool>,
+    errors: Vec<ErrorRow>,
+    directory: Option<Arc<agent_protocol::models::FileList>>,
+    file: Option<String>,
+    saving: bool,
+    review: Option<Arc<agent_protocol::models::WorkspaceReview>>,
+    agents: Vec<AgentSummary>,
+    resource: Option<AnyView>,
+    resource_message: &'static str,
+    path_input: Entity<InputState>,
+    editor_input: Entity<gpui_kit::component::input::EditorState>,
+    focus: FocusHandle,
+}
+
+pub(in crate::app) struct WorkbenchView {
+    desktop: WeakEntity<Desktop>,
+    model: Option<WorkbenchModel>,
+    standalone: bool,
+    _observation: Subscription,
+    _browsers: Vec<Subscription>,
+    #[cfg(test)]
+    pub(in crate::app) renders: usize,
+}
+
+impl WorkbenchView {
+    pub(in crate::app) fn new(desktop: &Entity<Desktop>, cx: &mut Context<Self>) -> Self {
+        Self {
+            desktop: desktop.downgrade(),
+            model: None,
+            standalone: false,
+            _observation: cx.observe(desktop, |view, desktop, cx| {
+                let model = desktop.update(cx, |desktop, cx| desktop.workbench_model(cx));
+                view.set_model(model, cx);
+            }),
+            _browsers: Vec::new(),
+            #[cfg(test)]
+            renders: 0,
+        }
+    }
+
+    fn set_model(&mut self, model: Option<WorkbenchModel>, cx: &mut Context<Self>) {
+        if self.model == model {
+            return;
+        }
+        if self.model.as_ref().map(|model| &model.browsers)
+            != model.as_ref().map(|model| &model.browsers)
+        {
+            self._browsers = model
+                .as_ref()
+                .into_iter()
+                .flat_map(|model| &model.browsers)
+                .map(|(id, browser)| {
+                    let id = *id;
+                    cx.subscribe(
+                        browser,
+                        move |view, _, title: &crate::browser::BrowserTitle, cx| {
+                            let Some(model) = &mut view.model else { return };
+                            let Some(index) = model
+                                .panel
+                                .surfaces
+                                .iter()
+                                .position(|surface| surface.id == id)
+                            else {
+                                return;
+                            };
+                            if model.titles[index] != title.0 {
+                                model.titles[index] = title.0.clone();
+                                cx.notify();
+                            }
+                        },
+                    )
+                })
+                .collect();
+        }
+        self.model = model;
+        cx.notify();
+    }
+}
+
+impl Render for WorkbenchView {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(test)]
+        {
+            self.renders += 1;
+        }
+        self.desktop
+            .update(cx, |_, cx| {
+                self.model
+                    .as_ref()
+                    .map(|model| Desktop::render_workbench(model, self.standalone, cx))
+                    .unwrap_or_else(|| div().into_any_element())
+            })
+            .unwrap_or_else(|_| div().into_any_element())
+    }
+}
+
+impl Desktop {
+    pub(super) fn sync_workbench(&mut self, cx: &mut Context<Self>) {
+        let model = self.workbench_model(cx);
+        self.workbench_view
+            .update(cx, |view, cx| view.set_model(model, cx));
+    }
+
+    fn workbench_model(&mut self, cx: &mut Context<Self>) -> Option<WorkbenchModel> {
+        let panel = self.panels.get(self.panel_scope());
+        if !panel.open {
+            return None;
+        }
+        let kind = panel.kind();
+        let resource = if kind == Panel::Diff {
+            panel.active.map(|id| self.workspace_diff(id, cx).into())
+        } else {
+            panel
+                .active
+                .and_then(|id| self.surface_resources.get(&id))
+                .and_then(|resource| match resource {
+                    SurfaceResource::Browser(view) => Some(view.clone().into()),
+                    SurfaceResource::Terminal(view) => Some(view.clone().into()),
+                    SurfaceResource::SideChat(view) => Some(view.clone().into()),
+                    SurfaceResource::Diff(view) => Some(view.clone().into()),
+                    SurfaceResource::Pending { .. } => None,
+                })
+        };
+        let pending = panel.active.is_some_and(|id| {
+            matches!(
+                self.surface_resources.get(&id),
+                Some(SurfaceResource::Pending { .. })
+            )
+        });
+        let browsers: Vec<_> = panel
+            .surfaces
+            .iter()
+            .filter_map(|surface| match self.surface_resources.get(&surface.id) {
+                Some(SurfaceResource::Browser(view)) => Some((surface.id, view.clone())),
+                _ => None,
+            })
+            .collect();
+        let titles = panel
+            .surfaces
+            .iter()
+            .map(|surface| {
+                browsers
+                    .iter()
+                    .find(|(id, _)| *id == surface.id)
+                    .map_or_else(
+                        || {
+                            surface.path.as_ref().map_or_else(
+                                || agent_core::panels::panel_title(surface.kind),
+                                |path| file_name(path),
+                            )
+                        },
+                        |(_, view)| view.read(cx).title(),
+                    )
+            })
+            .collect();
+        let file = (kind == Panel::File)
+            .then(|| self.snapshot.workspace.file.as_ref())
+            .flatten()
+            .filter(|file| {
+                panel.selected().and_then(|surface| surface.path.as_deref())
+                    == Some(file.path.as_str())
+            })
+            .map(|file| file.path.clone());
+        Some(WorkbenchModel {
+            panel,
+            titles,
+            browsers,
+            resource,
+            resource_message: if pending {
+                if matches!(self.draft_key(), DraftKey::Session { .. }) {
+                    "ブラウザを起動中…"
+                } else {
+                    "会話を始めると、AIと同じブラウザを利用できます。"
+                }
+            } else {
+                "機能を開けませんでした。「＋」から再試行してください。"
+            },
+            sidebar: self.sidebar,
+            side_chat_mode: self.side_chat_mode,
+            tools: self.panel_tools(),
+            errors: self.error_rows(&ErrorScope::Workspace),
+            directory: (kind == Panel::Files)
+                .then(|| self.snapshot.workspace.directory.clone())
+                .flatten(),
+            file,
+            saving: kind == Panel::File && self.busy > 0,
+            review: (kind == Panel::Diff)
+                .then(|| self.snapshot.workspace.review.clone())
+                .flatten(),
+            agents: if kind == Panel::Agents {
+                self.snapshot.agent_panel()
+            } else {
+                Vec::new()
+            },
+            path_input: self.path.clone(),
+            editor_input: self.editor.input.clone(),
+            focus: self.panel_focus.clone(),
+        })
+    }
+
+    pub(super) fn workbench(&mut self, standalone: bool, cx: &mut Context<Self>) -> AnyElement {
+        // The initial render can precede the first Desktop notification.
+        if self.workbench_view.read(cx).model.is_none() {
+            self.sync_workbench(cx);
+        }
+        self.workbench_view.update(cx, |view, cx| {
+            if view.standalone != standalone {
+                view.standalone = standalone;
+                cx.notify();
+            }
+        });
+        self.workbench_view
+            .clone()
+            .cached(StyleRefinement::default().size_full())
+            .into_any_element()
+    }
+}
 
 fn panel_icon(kind: Panel) -> IconName {
     match kind {
@@ -147,13 +375,13 @@ impl Desktop {
             })
             .into_any_element()
     }
-    pub(super) fn files(&self, cx: &Context<Self>) -> AnyElement {
+    fn files(
+        directory: Option<&agent_protocol::models::FileList>,
+        path_input: &Entity<InputState>,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let mut entries = v_flex().gap_1();
-        for (i, entry) in self
-            .snapshot
-            .workspace
-            .directory
-            .as_ref()
+        for (i, entry) in directory
             .map(|directory| directory.entries.as_slice())
             .unwrap_or_default()
             .iter()
@@ -227,7 +455,7 @@ impl Desktop {
                             );
                         },
                     ))
-                    .child(Input::new(&self.path).small().aria_label("フォルダのパス"))
+                    .child(Input::new(path_input).small().aria_label("フォルダのパス"))
                     .child(icon_button(
                         "browse",
                         IconName::ArrowRight,
@@ -247,22 +475,19 @@ impl Desktop {
             )
             .into_any_element()
     }
-    fn file_editor(&self, cx: &Context<Self>) -> AnyElement {
+    fn file_editor(
+        path: Option<&str>,
+        input: &Entity<gpui_kit::component::input::EditorState>,
+        saving: bool,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let mut editor = v_flex()
             .debug_selector(|| "conversation-file".into())
-            .flex_1()
+            .size_full()
             .min_h_0()
             .min_w_0()
             .gap_2();
-        let panel = self.panels.get(self.panel_scope());
-        let selected = panel.selected().and_then(|surface| surface.path.as_deref());
-        if let Some(file) = self
-            .snapshot
-            .workspace
-            .file
-            .as_ref()
-            .filter(|file| selected == Some(file.path.as_str()))
-        {
+        if let Some(path) = path {
             editor = editor
                 .child(
                     h_flex().gap_2().child(IconName::FileText).child(
@@ -271,15 +496,14 @@ impl Desktop {
                             .min_w_0()
                             .text_sm()
                             .text_ellipsis()
-                            .child(file.path.clone()),
+                            .child(path.to_owned()),
                     ),
                 )
                 .child(
-                    div().flex_1().min_h_0().child(
-                        Editor::new(&self.editor.input)
-                            .h_full()
-                            .aria_label("ファイル編集"),
-                    ),
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .child(Editor::new(input).h_full().aria_label("ファイル編集")),
                 )
                 .child(
                     h_flex()
@@ -288,7 +512,7 @@ impl Desktop {
                         .child(
                             button("save-file", "保存", cx, |s, _, _| s.save_file())
                                 .primary()
-                                .disabled(self.busy > 0),
+                                .disabled(saving),
                         )
                         .child(icon_button(
                             "reload-file",
@@ -336,30 +560,28 @@ impl Desktop {
         }
         editor.p_4().into_any_element()
     }
-    pub(super) fn workbench(&mut self, standalone: bool, cx: &mut Context<Self>) -> AnyElement {
-        let panel = self.panels.get(self.panel_scope());
+    fn render_workbench(
+        model: &WorkbenchModel,
+        standalone: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let panel = &model.panel;
         let layout = panel.layout;
         let active = panel.active;
         let kind = panel.kind();
         let tabs = panel
             .surfaces
             .iter()
-            .map(|surface| {
+            .zip(&model.titles)
+            .map(|(surface, title)| {
                 let id = surface.id;
-                let title = match self.surface_resources.get(&id) {
-                    Some(SurfaceResource::Browser { view, .. }) => view.read(cx).title(),
-                    _ => surface.path.as_ref().map_or_else(
-                        || agent_core::panels::panel_title(surface.kind),
-                        |path| file_name(path),
-                    ),
-                };
                 h_flex()
                     .gap_1()
                     .rounded_md()
                     .when(Some(id) == active, |tab| tab.bg(rgb(appearance::RAISED)))
                     .child(
                         Button::new(("surface-tab", id as usize))
-                            .label(title)
+                            .label(title.clone())
                             .icon(panel_icon(surface.kind))
                             .small()
                             .ghost()
@@ -421,7 +643,7 @@ impl Desktop {
             .px_2()
             .gap_1()
             .flex_shrink_0()
-            .when(standalone && !self.sidebar, |bar| {
+            .when(standalone && !model.sidebar, |bar| {
                 bar.pl_0().child(sidebar_header(false, cx))
             })
             .child(
@@ -434,7 +656,7 @@ impl Desktop {
                     .children(tabs)
                     .child(add),
             )
-            .when(!self.side_chat_mode, |bar| {
+            .when(!model.side_chat_mode, |bar| {
                 bar.child(
                     icon_button(
                         "panel-expand",
@@ -478,7 +700,7 @@ impl Desktop {
                 )
                 .child(Self::panel_toggle(true, cx))
             })
-            .when(self.side_chat_mode, |bar| {
+            .when(model.side_chat_mode, |bar| {
                 bar.child(
                     icon_button(
                         "back-side-chat",
@@ -497,12 +719,12 @@ impl Desktop {
                     .max_w(px(300.))
                     .gap_1()
                     .child(div().text_sm().mb_3().text_center().child("機能を開く"));
-                for (ix, tool) in self.panel_tools().into_iter().enumerate() {
+                for (ix, tool) in model.tools.iter().enumerate() {
                     let panel = tool.kind;
                     chooser = chooser.child(
                         button(
                             format!("tool-{ix}"),
-                            tool.label,
+                            tool.label.clone(),
                             cx,
                             move |view, window, cx| {
                                 view.open_panel(panel, window, cx);
@@ -517,7 +739,7 @@ impl Desktop {
                             div()
                                 .text_xs()
                                 .text_color(rgb(appearance::MUTED))
-                                .child(tool.shortcut),
+                                .child(tool.shortcut.clone()),
                         )
                         .disabled(!tool.enabled),
                     );
@@ -529,7 +751,7 @@ impl Desktop {
                     .p_6()
                     .items_center()
                     .justify_center()
-                    .track_focus(&self.panel_focus)
+                    .track_focus(&model.focus)
                     .on_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
                         if event.keystroke.modifiers.control
                             || event.keystroke.modifiers.platform
@@ -551,9 +773,11 @@ impl Desktop {
                     .child(chooser)
                     .into_any_element()
             }
-            Panel::Agents => self.agents_panel(),
-            Panel::Files => self.files(cx),
-            Panel::File => self.file_editor(cx),
+            Panel::Agents => Self::agents_panel(&model.agents),
+            Panel::Files => Self::files(model.directory.as_deref(), &model.path_input, cx),
+            Panel::File => {
+                Self::file_editor(model.file.as_deref(), &model.editor_input, model.saving, cx)
+            }
             Panel::Diff => v_flex()
                 .size_full()
                 .min_h_0()
@@ -562,18 +786,10 @@ impl Desktop {
                 .child(
                     h_flex()
                         .child(div().flex_1().child(format!(
-                                "変更  +{} −{}",
-                                self.snapshot
-                                    .workspace
-                                    .review
-                                    .as_ref()
-                                    .map_or(0, |review| review.additions),
-                                self.snapshot
-                                    .workspace
-                                    .review
-                                    .as_ref()
-                                    .map_or(0, |review| review.deletions)
-                            )))
+                            "変更  +{} −{}",
+                            model.review.as_ref().map_or(0, |review| review.additions),
+                            model.review.as_ref().map_or(0, |review| review.deletions)
+                        )))
                         .child(icon_button(
                             "refresh-diff",
                             IconName::RotateCw,
@@ -582,32 +798,26 @@ impl Desktop {
                             |s, _, _| s.refresh_review(),
                         )),
                 )
-                .child(self.diff_file_menu(cx))
+                .child(Self::diff_file_menu(
+                    model.review.as_ref().map_or(0, |review| review.files.len()),
+                    cx,
+                ))
                 .child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .child(self.workspace_diff(active.unwrap(), cx)),
+                    div().flex_1().min_h_0().children(
+                        model
+                            .resource
+                            .clone()
+                            .map(|view| view.cached(StyleRefinement::default().size_full())),
+                    ),
                 )
                 .into_any_element(),
             Panel::SideChat | Panel::Terminal | Panel::Browser => {
-                match active.and_then(|id| self.surface_resources.get(&id)) {
-                    Some(SurfaceResource::SideChat(view)) => view.clone().into_any_element(),
-                    Some(SurfaceResource::Terminal(view)) => view.clone().into_any_element(),
-                    Some(SurfaceResource::Diff(view)) => view.clone().into_any_element(),
-                    Some(SurfaceResource::Browser { view, .. }) => view.clone().into_any_element(),
-                    Some(SurfaceResource::Pending { .. }) => div()
-                        .p_4()
-                        .child(if matches!(self.draft_key(), DraftKey::Session { .. }) {
-                            "ブラウザを起動中…"
-                        } else {
-                            "会話を始めると、AIと同じブラウザを利用できます。"
-                        })
-                        .into_any_element(),
-                    None => div()
-                        .p_4()
-                        .child("機能を開けませんでした。「＋」から再試行してください。")
-                        .into_any_element(),
+                if let Some(view) = &model.resource {
+                    view.clone()
+                        .cached(StyleRefinement::default().size_full())
+                        .into_any_element()
+                } else {
+                    div().p_4().child(model.resource_message).into_any_element()
                 }
             }
         };
@@ -616,7 +826,12 @@ impl Desktop {
             .min_h_0()
             .min_w_0()
             .child(toolbar)
-            .child(self.error_notices(ErrorScope::Workspace, cx))
+            .child(Self::error_list(
+                &model.errors,
+                ErrorScope::Workspace,
+                None,
+                cx,
+            ))
             .child(div().flex_1().min_h_0().flex().child(body))
             .into_any_element()
     }
@@ -639,18 +854,11 @@ impl Desktop {
             .insert(id, SurfaceResource::Diff(view.clone()));
         view
     }
-    fn diff_file_menu(&self, cx: &Context<Self>) -> AnyElement {
+    fn diff_file_menu(files: usize, cx: &Context<Self>) -> AnyElement {
         let entity = cx.entity().downgrade();
         Button::new("diff-file-navigation")
             .debug_selector(|| "diff-file-navigation".into())
-            .label(format!(
-                "ファイルを選択 ({})",
-                self.snapshot
-                    .workspace
-                    .review
-                    .as_ref()
-                    .map_or(0, |review| review.files.len())
-            ))
+            .label(format!("ファイルを選択 ({})", files))
             .accessibility_label("差分のファイルを選択")
             .dropdown_caret(true)
             .ghost()

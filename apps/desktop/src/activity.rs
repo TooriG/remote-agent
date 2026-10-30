@@ -1,4 +1,4 @@
-//! Activity indicators spin in a layer above the cached window content.
+//! Activity indicators animate in a layer above the cached window content.
 //!
 //! GPUI re-renders every view between an animating element and the window
 //! root on each frame. A spinner inside the content would rebuild the whole
@@ -19,6 +19,13 @@ use std::{
 
 /// The rotation of the `Spinner` that indicators replace.
 const TURN: Duration = Duration::from_millis(800);
+const PULSE: Duration = Duration::from_secs(2);
+
+#[derive(Clone, Copy)]
+enum Effect {
+    Spinner,
+    Pulse,
+}
 
 /// Element state keeps each place alive, including when GPUI reuses a cached
 /// subtree. A window-wide reset would lose indicators in unchanged subviews.
@@ -28,44 +35,51 @@ impl Global for Places {}
 
 struct Place {
     element_id: GlobalElementId,
+    effect: Effect,
     bounds: Bounds<Pixels>,
     mask: ContentMask<Pixels>,
     color: Hsla,
 }
 
 /// Reserves the place of a spinning activity indicator.
-pub(crate) fn indicator() -> impl IntoElement {
+pub(crate) fn indicator() -> Stateful<Div> {
+    placeholder(Effect::Spinner, None).flex_none().size_3p5()
+}
+
+/// The same two-second, half-opacity pulse as an image Skeleton, drawn without
+/// invalidating the image, conversation, or composer that reserves its space.
+pub(crate) fn pulse(background: Hsla) -> Stateful<Div> {
+    placeholder(Effect::Pulse, Some(background)).size_full()
+}
+
+fn placeholder(effect: Effect, color: Option<Hsla>) -> Stateful<Div> {
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    div()
-        .id(("activity-indicator", id))
-        .child(
-            canvas(
-                |bounds, window, cx| {
-                    window.with_global_id("place".into(), |id, window| {
-                        let place = Rc::new(Place {
-                            element_id: id.clone(),
-                            bounds,
-                            mask: window.content_mask(),
-                            color: window.text_style().color,
-                        });
-                        if let Some(places) = cx
-                            .default_global::<Places>()
-                            .0
-                            .get_mut(&window.window_handle().window_id())
-                        {
-                            places.push(Rc::downgrade(&place));
-                        }
-                        window.with_element_state(id, |_: Option<Rc<Place>>, _| ((), place));
+    div().id(("activity-indicator", id)).child(
+        canvas(
+            move |bounds, window, cx| {
+                window.with_global_id("place".into(), |id, window| {
+                    let place = Rc::new(Place {
+                        element_id: id.clone(),
+                        effect,
+                        bounds,
+                        mask: window.content_mask(),
+                        color: color.unwrap_or_else(|| window.text_style().color),
                     });
-                },
-                |_, _, _, _| {},
-            )
-            .size_full(),
+                    if let Some(places) = cx
+                        .default_global::<Places>()
+                        .0
+                        .get_mut(&window.window_handle().window_id())
+                    {
+                        places.push(Rc::downgrade(&place));
+                    }
+                    window.with_element_state(id, |_: Option<Rc<Place>>, _| ((), place));
+                });
+            },
+            |_, _, _, _| {},
         )
-        // The size of a small `Spinner`.
-        .flex_none()
-        .size_3p5()
+        .size_full(),
+    )
 }
 
 /// Window root that keeps its content cached while the indicators spin.
@@ -138,30 +152,43 @@ fn spin(started: Instant, window: &mut Window, cx: &mut App) {
     if places.is_empty() {
         return;
     }
-    let turn = (started.elapsed().as_secs_f32() / TURN.as_secs_f32()).fract();
+    let elapsed = if cx.reduce_motion() {
+        Duration::ZERO
+    } else {
+        started.elapsed()
+    };
+    let turn = (elapsed.as_secs_f32() / TURN.as_secs_f32()).fract();
     let angle = radians(ease_in_out(turn) * std::f32::consts::TAU);
     let scale = window.scale_factor();
     for place in places {
-        let center = place.bounds.center();
-        let transformation = TransformationMatrix::unit()
-            .translate(center.scale(scale))
-            .rotate(angle)
-            .translate(center.scale(-scale));
-        window.with_content_mask(Some(place.mask), |window| {
-            if let Err(error) = window.paint_svg(
-                place.bounds,
-                IconName::Loader.path(),
-                None,
-                transformation,
-                place.color,
-                cx,
-            ) {
-                tracing::error!(target: "agent", operation = "activity.paint", message = %error);
+        window.with_content_mask(Some(place.mask), |window| match place.effect {
+            Effect::Spinner => {
+                let center = place.bounds.center();
+                let transformation = TransformationMatrix::unit()
+                    .translate(center.scale(scale))
+                    .rotate(angle)
+                    .translate(center.scale(-scale));
+                if let Err(error) = window.paint_svg(
+                    place.bounds, IconName::Loader.path(), None, transformation, place.color, cx,
+                ) {
+                    tracing::error!(target: "agent", operation = "activity.paint", message = %error);
+                }
+            }
+            Effect::Pulse => {
+                window.paint_quad(fill(place.bounds, place.color.opacity(pulse_opacity(elapsed)))
+                    .corner_radii(window.rem_size() * 0.5));
             }
         });
     }
     // Only this view is notified, so the cached content is reused next frame.
-    window.request_animation_frame();
+    if !cx.reduce_motion() {
+        window.request_animation_frame();
+    }
+}
+
+fn pulse_opacity(elapsed: Duration) -> f32 {
+    let phase = (elapsed.as_secs_f64() / PULSE.as_secs_f64()).fract() as f32;
+    1.0 - bounce(ease_in_out)(phase) * 0.5
 }
 
 #[cfg(test)]
@@ -170,6 +197,28 @@ mod tests {
     use core::prelude::v1::test;
     use gpui_kit::{self as gpui, prelude::FluentBuilder};
     use std::{cell::Cell, rc::Rc};
+
+    #[test]
+    fn image_pulse_preserves_its_two_second_half_opacity_cycle() {
+        for (milliseconds, opacity) in [(0, 1.), (500, 0.75), (1000, 0.5), (1500, 0.75), (2000, 1.)]
+        {
+            assert_eq!(pulse_opacity(Duration::from_millis(milliseconds)), opacity);
+        }
+    }
+
+    #[gpui::test]
+    fn reduced_motion_keeps_activity_static_without_requesting_frames(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let window = cx.open_window(size(px(100.), px(100.)), |window, cx| {
+            let content = cx.new(|_| Content {
+                active: true,
+                renders: Rc::new(Cell::new(0)),
+            });
+            ActivityWindow::new(content, window, cx)
+        });
+        cx.run_until_parked();
+        assert_eq!(next_frame(&window, cx), 0);
+    }
 
     struct Content {
         active: bool,
