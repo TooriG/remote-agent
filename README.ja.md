@@ -118,7 +118,7 @@ Rustのソースを変更したら、iOS用ライブラリも再ビルドして�
 
 編集中は`scripts/dev-env.sh just check -p agent-core`で、実行ファイルを生成せずにRustを確認できます。`-p`には変更したクレートを指定してください。
 
-`scripts/dev-env.sh just dev`は、Hostとデスクトップを同じdebugビルドで`target/debug/bex.app`にまとめ、プロバイダーのアカウントと会話履歴を共有する別のローカルHostを起動します。配布用は`target/release/bex.app`に保存します。Macの両ビルドコマンドは`dev`または`release`を指定でき、既定は`release`です。再ビルド前に実行中タスクを確認し、古い開発Hostを停止してください。ウィンドウを閉じるだけではHostは停止しません。同じ会話を2つのHostで同時に実行しないでください。
+`scripts/dev-env.sh just dev`は、Hostとデスクトップを同じdebugビルドで`target/debug/bex.app`にまとめ、プロバイダーのアカウントと会話履歴を共有する別のローカルHostを起動します。MacのBex DevはFinderから開いても`app.bex.BEX-Dev`のデータと専用Hostを使います。配布用は`target/release/bex.app`に保存します。Macの両ビルドコマンドは`dev`または`release`を指定でき、既定は`release`です。再ビルド前に実行中タスクを確認し、古い開発Hostを停止してください。ウィンドウを閉じるだけではHostは停止しません。同じ会話を2つのHostで同時に実行しないでください。
 
 ## 会話の操作
 

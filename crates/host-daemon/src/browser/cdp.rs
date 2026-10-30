@@ -54,7 +54,6 @@ pub(super) struct Chrome {
     sessions: HashMap<String, String>,
     sizes: HashMap<String, (u32, u32)>,
     refs: HashMap<String, (u64, HashMap<String, i64>)>,
-    pub broken: bool,
 }
 
 impl Drop for Chrome {
@@ -134,7 +133,6 @@ impl Chrome {
             sessions: HashMap::new(),
             sizes: HashMap::new(),
             refs: HashMap::new(),
-            broken: false,
         }
     }
 
@@ -152,13 +150,11 @@ impl Chrome {
             .map_err(|e| e.to_string())?
             .arg(format!("--user-data-dir={}", profile.display()))
             .args([
-                "--headless=new",
                 "--remote-debugging-address=127.0.0.1",
                 "--remote-debugging-port=0",
                 "--no-first-run",
                 "--no-default-browser-check",
                 "--no-startup-window",
-                "--disable-background-networking",
                 "--window-size=1280,800",
             ])
             .stdin(Stdio::piped())
@@ -228,7 +224,7 @@ impl Chrome {
         method: &str,
         params: Value,
     ) -> Result<Value, String> {
-        if self.broken {
+        if self.disconnected() {
             return Err("BEXブラウザとの接続が切れました。".into());
         }
         self.next_id += 1;
@@ -263,13 +259,23 @@ impl Chrome {
                     "ブラウザ操作を完了できません（{method}）。画面を確認して再試行してください。"
                 ))
             }
-            _ => {
+            Err(_) => {
+                tracing::warn!(target: "agent", operation = "browser.cdp",
+                    message = %format_args!("{method} timed out after {} ms", started.elapsed().as_millis()));
+                // The command may still complete. Keep the transport and tabs,
+                // and never replay an operation whose outcome is uncertain.
+                Err("ブラウザ操作の応答がタイムアウトしました。操作が完了している可能性があるため、画面を確認してください。".into())
+            }
+            Ok(Err(())) => {
                 tracing::warn!(target: "agent", operation = "browser.cdp",
                     message = %format_args!("{method} interrupted after {} ms", started.elapsed().as_millis()));
-                self.broken = true;
                 Err("BEXブラウザとの通信が中断しました。再接続してください。".into())
             }
         }
+    }
+
+    pub fn disconnected(&self) -> bool {
+        self.commands.is_closed()
     }
 
     #[cfg(any(target_os = "macos", test))]
@@ -500,7 +506,7 @@ impl Chrome {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
             let result = self.call(Some(session), method, params.clone()).await;
-            if result.is_ok() || self.broken || tokio::time::Instant::now() >= deadline {
+            if result.is_ok() || self.disconnected() || tokio::time::Instant::now() >= deadline {
                 return result;
             }
             // A navigation can briefly leave no active page for history or
@@ -846,10 +852,15 @@ fn redact(value: Value, secrets: &[Zeroizing<String>]) -> Value {
 mod tests {
     use super::*;
 
+    enum Failure {
+        Reject(usize),
+        Disconnect,
+        Defer,
+    }
+
     async fn fixture(
         failure_method: &'static str,
-        failures: usize,
-        disconnect: bool,
+        failure: Failure,
     ) -> (
         Chrome,
         tokio::task::JoinHandle<Vec<String>>,
@@ -881,10 +892,11 @@ mod tests {
                 methods.push(method.to_owned());
                 let failure = if method == failure_method {
                     attempts += 1;
-                    if disconnect {
-                        break;
+                    match failure {
+                        Failure::Disconnect => break,
+                        Failure::Defer => continue,
+                        Failure::Reject(count) => attempts <= count,
                     }
-                    attempts <= failures
                 } else {
                     false
                 };
@@ -936,7 +948,7 @@ mod tests {
 
     #[tokio::test]
     async fn closed_targets_release_frames_dialogs_and_element_references() {
-        let (mut chrome, server, _) = fixture("Page.captureScreenshot", 0, false).await;
+        let (mut chrome, server, _) = fixture("Page.captureScreenshot", Failure::Reject(0)).await;
         chrome.sessions.insert("closed".into(), "page".into());
         chrome
             .refs
@@ -957,7 +969,8 @@ mod tests {
 
     #[tokio::test]
     async fn streamed_frames_replace_idle_cache_without_polling_screenshots() {
-        let (mut chrome, server, events) = fixture("Page.captureScreenshot", 0, false).await;
+        let (mut chrome, server, events) =
+            fixture("Page.captureScreenshot", Failure::Reject(0)).await;
         assert_eq!(
             chrome.latest_image("page").await.unwrap(),
             [0xff, 0xd8, 0xff, 0xd9]
@@ -1018,7 +1031,8 @@ mod tests {
             Some(BrowserAction::Back),
             Some(BrowserAction::Forward),
         ] {
-            let (mut chrome, server, _) = fixture("Page.getNavigationHistory", 3, false).await;
+            let (mut chrome, server, _) =
+                fixture("Page.getNavigationHistory", Failure::Reject(3)).await;
             chrome
                 .action(
                     "page",
@@ -1063,7 +1077,7 @@ mod tests {
 
     #[tokio::test]
     async fn screenshot_waits_for_a_frame_without_replaying_navigation() {
-        let (mut chrome, server, _) = fixture("Page.captureScreenshot", 3, false).await;
+        let (mut chrome, server, _) = fixture("Page.captureScreenshot", Failure::Reject(3)).await;
         chrome
             .action(
                 "page",
@@ -1098,12 +1112,13 @@ mod tests {
 
     #[tokio::test]
     async fn screenshot_retries_end_without_discarding_a_healthy_transport() {
-        let (mut chrome, server, _) = fixture("Page.captureScreenshot", usize::MAX, false).await;
+        let (mut chrome, server, _) =
+            fixture("Page.captureScreenshot", Failure::Reject(usize::MAX)).await;
         let result = tokio::time::timeout(Duration::from_secs(15), chrome.screenshot("page"))
             .await
             .expect("frame retries must be bounded");
         assert!(result.is_err());
-        assert!(!chrome.broken);
+        assert!(!chrome.disconnected());
         chrome
             .call(None, "Browser.getVersion", json!({}))
             .await
@@ -1119,10 +1134,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn uncertain_navigation_and_input_keep_the_connection_without_replaying() {
+        for (method, action) in [
+            (
+                "Page.navigate",
+                BrowserAction::Navigate {
+                    url: "https://example.invalid/".into(),
+                },
+            ),
+            (
+                "Input.insertText",
+                BrowserAction::Type {
+                    text: "once".into(),
+                },
+            ),
+        ] {
+            let (mut chrome, server, events) = fixture(method, Failure::Defer).await;
+            chrome.sessions.insert("tab".into(), "page".into());
+            chrome.sizes.insert("page".into(), (390, 844));
+            let error = chrome.action("page", &action).await.err().unwrap();
+            assert!(error.contains("タイムアウト"));
+            assert!(!chrome.disconnected());
+            assert_eq!(chrome.sessions["tab"], "page");
+            assert_eq!(chrome.sizes["page"], (390, 844));
+            // A response arriving after its caller timed out must never answer
+            // another operation or require rebuilding the connection.
+            events
+                .send(json!({"id":chrome.next_id,"result":{"late":true}}))
+                .unwrap();
+            assert_eq!(
+                chrome
+                    .call(None, "Browser.getVersion", json!({}))
+                    .await
+                    .unwrap(),
+                json!({})
+            );
+            chrome.shutdown().await;
+            let methods = server.await.unwrap();
+            assert_eq!(methods.iter().filter(|sent| *sent == method).count(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn idle_transport_exit_is_detected_without_a_failed_command() {
+        let (chrome, server, _) = fixture("unused", Failure::Reject(0)).await;
+        assert!(!chrome.disconnected());
+        server.abort();
+        tokio::time::timeout(Duration::from_secs(1), chrome.commands.closed())
+            .await
+            .unwrap();
+        assert!(chrome.disconnected());
+    }
+
+    #[tokio::test]
     async fn screenshot_does_not_retry_a_disconnected_transport() {
-        let (mut chrome, server, _) = fixture("Page.captureScreenshot", 0, true).await;
+        let (mut chrome, server, _) = fixture("Page.captureScreenshot", Failure::Disconnect).await;
         assert!(chrome.screenshot("page").await.is_err());
-        assert!(chrome.broken);
+        assert!(chrome.disconnected());
         chrome.shutdown().await;
         assert_eq!(
             server

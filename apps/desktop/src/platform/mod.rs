@@ -32,10 +32,25 @@ pub(crate) fn state_dir() -> Result<PathBuf, String> {
     std::env::var_os("AGENT_STATE_DIR")
         .map(PathBuf::from)
         .or_else(|| {
-            directories::ProjectDirs::from("app", "bex", "BEX")
-                .map(|project| project.data_local_dir().to_path_buf())
+            directories::ProjectDirs::from(
+                "app",
+                "bex",
+                if development_app() { "BEX-Dev" } else { "BEX" },
+            )
+            .map(|project| project.data_local_dir().to_path_buf())
         })
         .ok_or_else(|| "application data directory unavailable".into())
+}
+
+fn development_app() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        objc2_foundation::NSBundle::mainBundle()
+            .bundleIdentifier()
+            .is_some_and(|id| id.to_string() == "app.bex.dev.desktop")
+    }
+    #[cfg(not(target_os = "macos"))]
+    false
 }
 
 pub(crate) async fn ssh_invitation(
@@ -243,10 +258,28 @@ impl Connections {
 }
 
 pub(crate) fn isolated_host() -> anyhow::Result<bool> {
-    match std::env::var("AGENT_ISOLATED_HOST").as_deref() {
-        Err(std::env::VarError::NotPresent) | Ok("0") => Ok(false),
-        Ok("1") if std::env::var_os("AGENT_STATE_DIR").is_some() => Ok(true),
-        Ok("1") => Err(anyhow::anyhow!(
+    let value = match std::env::var("AGENT_ISOLATED_HOST") {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(_) => anyhow::bail!("AGENT_ISOLATED_HOST must be 0 or 1"),
+    };
+    isolation_setting(
+        value.as_deref(),
+        std::env::var_os("AGENT_STATE_DIR").is_some(),
+        development_app(),
+    )
+}
+
+fn isolation_setting(
+    value: Option<&str>,
+    has_directory: bool,
+    development: bool,
+) -> anyhow::Result<bool> {
+    match value {
+        None => Ok(development),
+        Some("0") => Ok(false),
+        Some("1") if has_directory || development => Ok(true),
+        Some("1") => Err(anyhow::anyhow!(
             "AGENT_ISOLATED_HOST=1 requires AGENT_STATE_DIR"
         )),
         _ => Err(anyhow::anyhow!("AGENT_ISOLATED_HOST must be 0 or 1")),
@@ -286,7 +319,14 @@ fn start_host(directory: &std::path::Path, isolated: bool) -> anyhow::Result<std
     if isolated {
         command.arg("--isolated");
     }
-    if let Some(directory) = std::env::var_os("AGENT_ACCOUNT_STATE_DIR") {
+    let accounts = std::env::var_os("AGENT_ACCOUNT_STATE_DIR").map(PathBuf::from);
+    let accounts = if accounts.is_none() && development_app() {
+        let registry = LocalHostRegistry::for_user()?;
+        Some(registry.resolve(registry.directory())?.directory)
+    } else {
+        accounts
+    };
+    if let Some(directory) = accounts {
         command.arg("--account-state-dir").arg(directory);
     }
     os::prepare_host(&mut command);
@@ -301,4 +341,35 @@ pub(crate) fn choose_folder() -> Option<PathBuf> {
 }
 pub(crate) fn choose_destination(name: &str) -> Option<PathBuf> {
     rfd::FileDialog::new().set_file_name(name).save_file()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::isolation_setting;
+
+    #[test]
+    fn dev_launch_is_isolated_without_environment_and_explicit_settings_are_validated() {
+        for (value, directory, development, expected) in [
+            (None, false, false, false),
+            (None, true, false, false),
+            (None, false, true, true),
+            (None, true, true, true),
+            (Some("0"), false, false, false),
+            (Some("0"), true, false, false),
+            (Some("0"), false, true, false),
+            (Some("0"), true, true, false),
+            (Some("1"), true, false, true),
+            (Some("1"), false, true, true),
+            (Some("1"), true, true, true),
+        ] {
+            assert_eq!(
+                isolation_setting(value, directory, development).unwrap(),
+                expected
+            );
+        }
+        assert!(isolation_setting(Some("1"), false, false).is_err());
+        for invalid in ["", "true", "2"] {
+            assert!(isolation_setting(Some(invalid), true, true).is_err());
+        }
+    }
 }

@@ -114,7 +114,7 @@ scripts/dev-env.sh ./gradlew :apps:mobile:assembleDebug
 
 The separate iOS development app has its own [distribution procedure](docs/qa/IOS_DEV_RELEASE.md).
 
-Rerun the iOS library build after changing Rust sources. Desktop drafts and logs use `AGENT_STATE_DIR`; Host discovery may select a different credential directory. An isolated desktop requires both `AGENT_ISOLATED_HOST=1` and `AGENT_STATE_DIR`; use a separate Codex home or fixture executable as well so tests cannot read personal provider state.
+Rerun the iOS library build after changing Rust sources. Desktop drafts and logs use `AGENT_STATE_DIR`; Host discovery may select a different credential directory. Bex Dev on Mac uses `app.bex.BEX-Dev` and its isolated Host even when opened from Finder. Other isolated desktops require both `AGENT_ISOLATED_HOST=1` and `AGENT_STATE_DIR`; use a separate Codex home or fixture executable as well so tests cannot read personal provider state.
 
 Use `scripts/dev-env.sh just check -p agent-core` for quick Rust feedback without
 generating executables; select the crate you changed with `-p`.
@@ -136,7 +136,7 @@ and files.
 On iPhone, open the workspace from the conversation's grid button and use **＋**
 or the centered list to open tools. Only opened tools appear as tabs, as on desktop.
 Closing the terminal view or disconnecting retains its shell; choose **終了** to
-end it. Host restart ends shells. The browser shares the conversation's tabs with
+end it. Host restart ends shells. The browser runs regular Chrome on the Host and shares the conversation's tabs with
 the agent on desktop, iPhone and Android. Login storage is separate for each
 conversation and is discarded when the Host restarts.
 

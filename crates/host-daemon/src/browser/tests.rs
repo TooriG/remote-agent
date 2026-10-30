@@ -100,6 +100,9 @@ async fn shared_browser_live() {
                 let mut bytes = [0; 8192];
                 let length = socket.read(&mut bytes).await.unwrap();
                 let request = String::from_utf8_lossy(&bytes[..length]);
+                if request.starts_with("GET /slow ") {
+                    tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+                }
                 let body = if request.starts_with("GET /popup ") {
                     "<title>Popup</title>Popup"
                 } else if request.starts_with("GET /authenticated ") {
@@ -156,6 +159,29 @@ async fn shared_browser_live() {
             .unwrap();
     }
     assert!(initial.tabs.iter().any(|tab| tab.title == "Fixture"));
+    {
+        let mut state = browser.state.lock().await;
+        let chrome = state.chrome.as_mut().unwrap();
+        let session = chrome.attach(&initial.tab_id).await.unwrap();
+        let user_agent = chrome
+            .evaluate(&session, "navigator.userAgent")
+            .await
+            .unwrap();
+        assert!(user_agent.as_str().unwrap().contains("Chrome/"));
+        assert!(!user_agent.as_str().unwrap().contains("HeadlessChrome"));
+        let window = chrome
+            .call(
+                None,
+                "Browser.getWindowForTarget",
+                serde_json::json!({"targetId":initial.tab_id}),
+            )
+            .await
+            .unwrap();
+        assert!(
+            window["windowId"].as_i64().is_some(),
+            "tabs must belong to a normal Chrome window"
+        );
+    }
     let clicked = browser
         .request(&request(
             &thread_a,
@@ -310,6 +336,29 @@ async fn shared_browser_live() {
     assert!(
         isolated.tabs.iter().any(|tab| tab.title.trim() == "null"),
         "agent conversations must not share cookies or local storage"
+    );
+    let delayed = browser
+        .agent(
+            &scope_a,
+            BrowserAction::Navigate {
+                url: format!("http://{address}/slow"),
+            },
+        )
+        .await;
+    assert!(delayed.err().unwrap().contains("タイムアウト"));
+    let recovered = browser
+        .request(&request(&thread_a, &popup, BrowserAction::Read))
+        .await
+        .unwrap();
+    assert_eq!(recovered.tab_id, popup.tab_id);
+    assert_eq!(
+        recovered.tabs.iter().map(|tab| &tab.id).collect::<Vec<_>>(),
+        popup.tabs.iter().map(|tab| &tab.id).collect::<Vec<_>>()
+    );
+    let other = browser.agent(&scope_b, BrowserAction::Read).await.unwrap();
+    assert_eq!(
+        other.tabs, isolated.tabs,
+        "a slow page must preserve every conversation's tabs"
     );
     {
         let mut state = browser.state.lock().await;

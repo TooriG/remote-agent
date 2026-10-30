@@ -119,7 +119,7 @@ impl Browser {
         if thread.is_empty() || thread.len() > 8192 {
             return Err("browser scope is required".into());
         }
-        if state.chrome.as_ref().is_some_and(|chrome| chrome.broken) {
+        if state.chrome.as_ref().is_some_and(cdp::Chrome::disconnected) {
             if let Some(chrome) = state.chrome.take() {
                 chrome.shutdown().await;
             }

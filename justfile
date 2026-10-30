@@ -47,14 +47,8 @@ build-desktop-macos profile="release":
 dev: (build-desktop-macos "dev")
     #!/usr/bin/env bash
     set -euo pipefail
-    accounts="$HOME/Library/Application Support/app.bex.BEX"
-    if [[ -f "$accounts/host-instance.json" ]]; then
-        accounts=$(/usr/bin/plutil -extract directory raw -o - "$accounts/host-instance.json")
-    fi
     target=$(cargo metadata --no-deps --format-version 1 | jq -er .target_directory)
-    open -n "$target/debug/bex.app" --env AGENT_ISOLATED_HOST=1 \
-        --env "AGENT_STATE_DIR=$HOME/Library/Application Support/app.bex.BEX-Dev" \
-        --env "AGENT_ACCOUNT_STATE_DIR=$accounts"
+    open -n "$target/debug/bex.app"
 
 # Run isolated iOS Simulator tests; reject skipped and missing results.
 ios-e2e *tests:
