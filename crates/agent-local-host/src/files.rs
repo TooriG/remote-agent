@@ -1,6 +1,20 @@
 //! Owner-only state files written atomically.
 use anyhow::{Context, Result};
-use std::{fs, io, path::Path};
+use std::{
+    fs::{self, File},
+    io,
+    path::Path,
+};
+
+pub(crate) fn open_lock(path: &Path) -> Result<File> {
+    File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .map_err(Into::into)
+}
 
 /// Unix state is owner-only; Windows directories inherit the parent DACL.
 /// The default state parent is the current user's local application data folder.
@@ -36,6 +50,17 @@ pub fn private_file_options() -> fs::OpenOptions {
 pub fn save_private_json(path: &Path, value: &impl serde::Serialize) -> Result<()> {
     let parent = path.parent().context("state path has no parent")?;
     create_state_directory(parent)?;
+    #[cfg(windows)]
+    let _writer = {
+        // Windows cannot replace a destination while a competing replacement
+        // is still deleting its old file. Coordinate publishers across both
+        // threads and processes; readers still see an atomic complete file.
+        let mut lock_path = path.as_os_str().to_owned();
+        lock_path.push(".lock");
+        let file = open_lock(Path::new(&lock_path))?;
+        file.lock()?;
+        file
+    };
     save_private_json_inner(path, value)
         .with_context(|| format!("could not save state {}", path.display()))
 }
@@ -51,10 +76,10 @@ fn save_private_json_inner(path: &Path, value: &impl serde::Serialize) -> Result
                 },
                 private_file_options(),
             );
-        // MoveFileExW can report ACCESS_DENIED while another process is
-        // replacing this same destination (including another BEX window).
-        // Retry only OS failures, never serialization errors. Each attempt
-        // still atomically replaces the complete, flushed JSON document.
+        // A reader outside this writer lock can temporarily hold the Windows
+        // destination without delete sharing. Retry only OS failures, never
+        // serialization errors. Every attempt atomically replaces the complete,
+        // flushed JSON document.
         if cfg!(windows)
             && let Err(atomicwrites::Error::Internal(error)) = &result
             && matches!(error.raw_os_error(), Some(5 | 32 | 33))

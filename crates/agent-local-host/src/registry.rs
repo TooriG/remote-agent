@@ -1,6 +1,7 @@
 //! Local discovery shares one normal Host across credential directories. The
 //! short registry lock serializes discovery/startup; host.lock owns the process
 //! lifetime. A stale registry survives crashes without reviving a stale ticket.
+use crate::files::open_lock;
 use agent_transport::transport::Ticket;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -188,16 +189,6 @@ impl HostLease {
             ready: true,
         })
     }
-}
-
-fn open_lock(path: &Path) -> Result<File> {
-    File::options()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(path)
-        .map_err(Into::into)
 }
 
 fn running(directory: &Path) -> Result<bool> {
