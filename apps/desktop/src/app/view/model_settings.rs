@@ -2023,11 +2023,7 @@ mod tests {
             self.0.update(cx, |view, cx| {
                 h_flex()
                     .size_full()
-                    .child(Desktop::settings_sidebar(
-                        view.settings_page,
-                        view.app_updates.clone(),
-                        cx,
-                    ))
+                    .child(Desktop::settings_sidebar(view.settings_page, cx))
                     .child(view.settings(cx))
             })
         }
