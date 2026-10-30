@@ -267,12 +267,30 @@ mod tests {
                 )
             }
         }
-        struct Parent(Entity<Child>);
+        struct Parent {
+            child: Entity<Child>,
+            reset_fonts: bool,
+        }
         impl Render for Parent {
             fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-                self.0
-                    .clone()
-                    .cached(StyleRefinement::default().size_full())
+                let reset_fonts = std::mem::take(&mut self.reset_fonts);
+                div()
+                    .relative()
+                    .size_full()
+                    .when(reset_fonts, |body| {
+                        body.child(
+                            canvas(
+                                |_, window, _| window.text_system().add_fonts(Vec::new()).unwrap(),
+                                |_, _, _, _| {},
+                            )
+                            .absolute(),
+                        )
+                    })
+                    .child(
+                        self.child
+                            .clone()
+                            .cached(StyleRefinement::default().size_full()),
+                    )
             }
         }
         struct Scene {
@@ -302,45 +320,47 @@ mod tests {
                     )
             }
         }
-        let renders = Rc::new(Cell::new(0));
-        let clicks = Rc::new(Cell::new(0));
-        let (scene, window) = cx.add_window_view(|_, cx| {
-            let child = cx.new(|_| Child {
-                renders: renders.clone(),
-                clicks: clicks.clone(),
+        for reset_fonts in [false, true] {
+            let renders = Rc::new(Cell::new(0));
+            let clicks = Rc::new(Cell::new(0));
+            let (scene, window) = cx.add_window_view(|_, cx| {
+                let child = cx.new(|_| Child {
+                    renders: renders.clone(),
+                    clicks: clicks.clone(),
+                });
+                Scene {
+                    prefix: 12,
+                    parent: cx.new(|_| Parent { child, reset_fonts }),
+                }
             });
-            Scene {
-                prefix: 12,
-                parent: cx.new(|_| Parent(child)),
+            window.run_until_parked();
+            let parent = scene.read_with(window, |scene, _| scene.parent.clone());
+            for prefix in [0, 16, 2] {
+                let before = renders.get();
+                scene.update(window, |scene, cx| {
+                    scene.prefix = prefix;
+                    cx.notify();
+                });
+                window.run_until_parked();
+                // The parent was replayed at a different position in the frame's
+                // resources. Its unchanged child must still be reusable next frame.
+                parent.update(window, |_, cx| cx.notify());
+                window.run_until_parked();
+                assert_eq!(
+                    renders.get(),
+                    before,
+                    "replaying a parent must preserve child caching"
+                );
+                let bounds = window.debug_bounds("cached-action").unwrap();
+                window.simulate_click(bounds.center(), Modifiers::default());
+                window.run_until_parked();
             }
-        });
-        window.run_until_parked();
-        let parent = scene.read_with(window, |scene, _| scene.parent.clone());
-        for prefix in [0, 16, 2] {
-            let before = renders.get();
-            scene.update(window, |scene, cx| {
-                scene.prefix = prefix;
-                cx.notify();
-            });
-            window.run_until_parked();
-            // The parent was replayed at a different position in the frame's
-            // resources. Its unchanged child must still be reusable next frame.
-            parent.update(window, |_, cx| cx.notify());
-            window.run_until_parked();
             assert_eq!(
-                renders.get(),
-                before,
-                "replaying a parent must preserve child caching"
+                clicks.get(),
+                3,
+                "replayed input must reach the cached child"
             );
-            let bounds = window.debug_bounds("cached-action").unwrap();
-            window.simulate_click(bounds.center(), Modifiers::default());
-            window.run_until_parked();
         }
-        assert_eq!(
-            clicks.get(),
-            3,
-            "replayed input must reach the cached child"
-        );
     }
 
     #[gpui::test]

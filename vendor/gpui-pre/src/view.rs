@@ -330,6 +330,7 @@ struct ViewElementCacheKey {
     bounds: Bounds<Pixels>,
     content_mask: ContentMask<Pixels>,
     text_style: TextStyle,
+    font_generation: usize,
 }
 
 #[cfg(not(gpui_hot_reload))]
@@ -541,11 +542,13 @@ fn prepaint_view(
             |element_state, window| {
                 let content_mask = window.content_mask();
                 let text_style = window.text_style();
+                let font_generation = window.text_system().font_generation();
 
                 if let Some(mut element_state) = element_state
                     && element_state.cache_key.bounds == bounds
                     && element_state.cache_key.content_mask == content_mask
                     && element_state.cache_key.text_style == text_style
+                    && element_state.cache_key.font_generation == font_generation
                     && !window.dirty_views.contains(&entity_id)
                     && !window.refreshing
                 {
@@ -581,6 +584,7 @@ fn prepaint_view(
                             bounds,
                             content_mask,
                             text_style,
+                            font_generation,
                         },
                     },
                 )
