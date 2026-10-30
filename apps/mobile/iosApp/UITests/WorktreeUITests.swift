@@ -88,7 +88,7 @@ extension LaunchUITests {
         _ = try connectedSimulatorApp()
         openWorktreeSettings(app)
         XCTAssertEqual(create.value as? String, "1", "The saved setting must survive app restart")
-        app.buttons["worktree.cancel"].tap()
+        app.navigationBars.buttons["BackButton"].tap()
     }
 
     func testSimulatorEditsHostWorktreeSettingsFromTaskMenu() throws {
@@ -166,7 +166,7 @@ extension LaunchUITests {
         toggle(create)
         scrollToListElement(deleteMerged, in: app)
         toggle(deleteMerged)
-        app.buttons["worktree.cancel"].tap()
+        app.navigationBars.buttons["BackButton"].tap()
         openWorktreeSettings(app)
         XCTAssertEqual(create.value as? String, "1", "Cancel must not update Host preferences")
         scrollToListElement(deleteMerged, in: app)
@@ -190,7 +190,7 @@ extension LaunchUITests {
         XCTAssertEqual(directory.value as? String, directory.placeholderValue)
         scrollToListElement(deleteMerged, in: app)
         XCTAssertEqual(deleteMerged.value as? String, "0")
-        app.buttons["worktree.cancel"].tap()
+        app.navigationBars.buttons["BackButton"].tap()
     }
 
     private func toggle(_ control: XCUIElement) {

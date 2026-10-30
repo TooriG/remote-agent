@@ -6,7 +6,7 @@ name: testSimulatorUsesNativeHostNavigationAndPairingDismissal
     visible: 検証 Host、.*
     timeout: 10000
 - tapOn:
-    id: tasks.hosts
+    id: BackButton
 - tapOn:
     id: profiles.add
 - extendedWaitUntil:
@@ -47,7 +47,7 @@ name: testSimulatorUsesNativeHostNavigationAndPairingDismissal
       id: tasks.list
     timeout: 15000
 - tapOn:
-    id: tasks.hosts
+    id: BackButton
 - tapOn:
     id: profiles.add
 - tapOn:

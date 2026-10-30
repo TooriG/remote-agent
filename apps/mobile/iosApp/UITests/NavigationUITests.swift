@@ -5,7 +5,7 @@ import XCTest
 extension LaunchUITests {
     func testSimulatorRemovesHostAndRequiresPairingAfterRelaunch() throws {
         let app = try connectedSimulatorApp()
-        app.buttons["tasks.hosts"].tap()
+        app.navigationBars.buttons["BackButton"].tap()
         let profile = prefixedButton(app, prefix: "profiles.")
         XCTAssertTrue(profile.waitForExistence(timeout: 10))
         captureScreen(app, named: "Redesigned saved PC screen")
@@ -88,7 +88,7 @@ extension LaunchUITests {
 
     func testSimulatorOpensQrScannerWhileAddingHost() throws {
         let app = try connectedSimulatorApp()
-        app.buttons["tasks.hosts"].tap()
+        app.navigationBars.buttons["BackButton"].tap()
         let addHost = app.buttons["profiles.add"]
         XCTAssertTrue(addHost.waitForExistence(timeout: 10)); addHost.tap()
         assertUnavailableScannerCanBeCancelled(app)
@@ -126,7 +126,7 @@ extension LaunchUITests {
         XCTAssertTrue(host.label.contains("検証 Host")); host.tap()
         XCTAssertTrue(app.descendants(matching: .any)["tasks.list"].waitForExistence(timeout: 15))
 
-        app.buttons["tasks.hosts"].tap()
+        app.navigationBars.buttons["BackButton"].tap()
         addHost.tap()
         app.buttons["pairing.manual"].tap()
         let contents = app.secureTextFields["pairing.contents"]
@@ -235,33 +235,15 @@ extension LaunchUITests {
     }
 
     func openModelChoices(_ app: XCUIApplication) {
-        if app.buttons["model.back"].exists {
-            app.buttons["model.back"].tap()
+        if app.navigationBars["エージェント"].exists {
+            app.navigationBars.buttons["BackButton"].tap()
         }
-        XCTAssertTrue(app.textFields["model.search"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.searchFields.firstMatch.waitForExistence(timeout: 15))
     }
 
     func dismissModelSettings(_ app: XCUIApplication) {
-        let surface: XCUIElement
-        if app.buttons["model.close"].exists {
-            surface = app.buttons["model.close"]
-            surface.tap()
-        } else if app.buttons["settings.scope.projects"].exists {
-            let back = app.navigationBars.buttons["BackButton"]
-            XCTAssertTrue(back.waitForExistence(timeout: 10))
-            back.tap()
-            surface = app.buttons["settings.close"]
-            XCTAssertTrue(surface.waitForExistence(timeout: 10))
-            surface.tap()
-        } else {
-            surface = app.descendants(matching: .any)["model.picker"]
-            XCTAssertTrue(surface.waitForExistence(timeout: 10))
-            let handle = surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05))
-            handle.press(
-                forDuration: 0.1,
-                thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98))
-            )
-        }
+        let surface = app.buttons["model.close"]
+        tapWhenStable(surface)
         let dismissed = expectation(for: NSPredicate(format: "exists == false"),
                                     evaluatedWith: surface)
         wait(for: [dismissed], timeout: 10)

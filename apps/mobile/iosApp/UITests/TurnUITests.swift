@@ -145,7 +145,9 @@ extension LaunchUITests {
             sideMessage.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.95)).tap()
             sideMessage.typeText("Keep my side draft")
             openWorkbenchTool(app, "terminal")
+            tapWhenStable(workbenchTitle(app))
             XCTAssertTrue(workbenchTab(app, "sideChat").exists)
+            dismissWorkbenchMenu(app)
             openWorkbenchTool(app, "sideChat")
             waitForDraftText(sideMessage, text: "> Needle\n\nKeep my side draft")
             closeWorkbench(app)
@@ -178,9 +180,9 @@ extension LaunchUITests {
             XCTAssertTrue(forward.waitForExistence(timeout: 5)); forward.tap()
         }
         XCTAssertTrue(side.waitForExistence(timeout: 5)); side.tap()
-        XCTAssertTrue(workbenchTab(app, "sideChat").waitForExistence(timeout: 15), app.debugDescription)
+        XCTAssertTrue(app.navigationBars["サイドチャット"].waitForExistence(timeout: 15), app.debugDescription)
         XCTAssertTrue(app.buttons["workbench.add"].exists)
-        XCTAssertFalse(app.navigationBars.firstMatch.exists)
+        XCTAssertTrue(app.navigationBars.buttons["BackButton"].exists)
     }
 
     private func verifySideChatSubmissionAndRestore(

@@ -30,71 +30,16 @@ struct WorkspaceBrowserScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if (frame?.tabs.count ?? 0) > 1 {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 4) {
-                        ForEach(frame?.tabs ?? [], id: \.id) { tab in
-                            HStack(spacing: 8) {
-                                Button(tab.url == "about:blank" ? "新しいタブ" : (tab.title.isEmpty ? tab.url : tab.title)) {
-                                    send(.selectTab(id: tab.id))
-                                }.lineLimit(1)
-                                    .accessibilityIdentifier(tab.id == frame?
-                                        .tabId ? "browser.title" : "browser.tab.\(tab.id)")
-                                Button { send(.closeTab(id: tab.id)) } label: {
-                                    Image(systemName: "xmark").font(.caption2)
-                                }
-                                .accessibilityLabel("タブを閉じる")
-                            }
-                            .font(.caption).padding(.horizontal, 10).padding(.vertical, 8)
-                            .background(
-                                tab.id == frame?.tabId ? Color.primary.opacity(0.08) : .clear,
-                                in: RoundedRectangle(cornerRadius: 8)
-                            )
-                        }
-                        Button { send(.openTab(url: "about:blank")) } label: { Image(systemName: "plus") }
-                            .padding(8).accessibilityLabel("新しいタブ")
-                    }.disabled(!acceptsInput).padding(.horizontal, 8)
-                }
-            }
             HStack(spacing: 0) {
-                Button { send(.back) } label: { Image(systemName: "arrow.left").frame(width: 36, height: 44) }
-                    .accessibilityLabel("前のページ").disabled(frame?.canGoBack != true)
-                Button { send(.forward) } label: { Image(systemName: "arrow.right").frame(width: 36, height: 44) }
-                    .accessibilityLabel("次のページ").disabled(frame?.canGoForward != true)
-                Button { send(.reload) } label: { Image(systemName: "arrow.clockwise").frame(width: 36, height: 44) }
-                    .accessibilityLabel("再読み込み")
                 TextField("検索または URL", text: $address)
                     .keyboardType(.webSearch).textInputAutocapitalization(.never).disableAutocorrection(true)
-                    .textFieldStyle(.plain).focused($addressFocused).submitLabel(.go).onSubmit(open)
+                    .textFieldStyle(.roundedBorder).focused($addressFocused).submitLabel(.go).onSubmit(open)
                     .accessibilityIdentifier("browser.address")
-                Menu {
-                    Button("ログイン状態・保存パスワード") { send(.credentials) }
-                        .accessibilityIdentifier("browser.credentials")
-                    Divider()
-                    Button("新しいタブ") { send(.openTab(url: "about:blank")) }
-                    Button("タブを閉じる") {
-                        if let currentTab {
-                            send(.closeTab(id: currentTab.id))
-                        }
-                    }
-
-                    Divider()
-                    Button("画面に合わせる") {
-                        if let action = browserFitAction(width: viewportSize.width, height: viewportSize.height,
-                                                         currentWidth: frame?.width ?? 0,
-                                                         currentHeight: frame?.height ?? 0) {
-                            send(action)
-                        }
-                    }
-                    Button("デスクトップ · 1280 × 800") { send(.resize(width: 1280, height: 800)) }
-
-                    Button("モバイル · 390 × 844") { send(.resize(width: 390, height: 844)) }
-
-                    Button("URL をコピー") { UIPasteboard.general.string = currentTab?.url }
-                    Button("文字入力") { showKeyboard.toggle() }
-                } label: { Image(systemName: "ellipsis").frame(width: 36, height: 44) }
-                    .accessibilityLabel("ブラウザのメニュー").accessibilityIdentifier("browser.menu")
-            }.font(.system(size: 14)).foregroundStyle(.secondary).padding(.horizontal, 4).disabled(!acceptsInput)
+                Button { send(.reload) } label: {
+                    Image(systemName: "arrow.clockwise").frame(width: 44, height: 44)
+                }
+                .accessibilityLabel("再読み込み")
+            }.font(.body).padding(.horizontal, 8).padding(.vertical, 4).disabled(!acceptsInput)
             Divider().opacity(0.6)
             if let message = error ?? connectionError ?? notice {
                 AppNotice(text: message).padding(.horizontal)
@@ -116,17 +61,8 @@ struct WorkspaceBrowserScreen: View {
                     RemoteBrowserCanvas(image: image, acceptsInput: acceptsInput, send: send)
                         .accessibilityIdentifier("browser.content")
                 } else if frame != nil {
-                    VStack(spacing: 24) {
-                        Image(systemName: "globe").font(.system(size: 18))
-                            .foregroundStyle(.secondary).frame(width: 36, height: 36)
-                            .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 6))
-                            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.primary.opacity(0.12)))
-                            .padding(.bottom, 24)
-                        Text("プレビューはまだありません").font(.system(size: 20, weight: .semibold))
-                        Text("上の欄に URL を入力するか、AI にブラウザ操作を依頼してください。")
-                            .font(.system(size: 14)).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    }.frame(maxWidth: 384).padding(.horizontal, 24).padding(.top, 48)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    ContentUnavailableView("プレビューはまだありません", systemImage: "globe",
+                                           description: Text("URLを入力するか、AIにブラウザ操作を依頼してください。"))
                 } else {
                     ProgressView("Host のブラウザに接続中…")
                 }
@@ -154,6 +90,17 @@ struct WorkspaceBrowserScreen: View {
                 }.padding(.horizontal).padding(.bottom, 8)
             }
         }
+        .toolbar {
+            ToolbarItemGroup(placement: .bottomBar) {
+                Button { send(.back) } label: { Label("前のページ", systemImage: "chevron.left") }
+                    .disabled(!acceptsInput || frame?.canGoBack != true)
+                Spacer()
+                Button { send(.forward) } label: { Label("次のページ", systemImage: "chevron.right") }
+                    .disabled(!acceptsInput || frame?.canGoForward != true)
+                Spacer()
+                browserMenu.disabled(!acceptsInput)
+            }
+        }
         .sheet(isPresented: Binding(get: { credentials != nil }, set: {
             if !$0 {
                 credentials = nil
@@ -172,6 +119,44 @@ struct WorkspaceBrowserScreen: View {
             }
         }
         .onDisappear { commands.removeAll(); text = "" }
+    }
+
+    private var browserMenu: some View {
+        Menu {
+            Button("ログイン状態・保存パスワード") { send(.credentials) }
+                .accessibilityIdentifier("browser.credentials")
+            Section("開いているタブ") {
+                ForEach(frame?.tabs ?? [], id: \.id) { tab in
+                    Button { send(.selectTab(id: tab.id)) } label: {
+                        Label(tab.url == "about:blank" ? "新しいタブ" : (tab.title.isEmpty ? tab.url : tab.title),
+                              systemImage: tab.id == frame?.tabId ? "checkmark" : "globe")
+                    }
+                    .accessibilityIdentifier(tab.id == frame?.tabId ? "browser.title" : "browser.tab.\(tab.id)")
+                }
+            }
+            Button("新しいタブ") { send(.openTab(url: "about:blank")) }
+            Button("タブを閉じる") {
+                if let currentTab {
+                    send(.closeTab(id: currentTab.id))
+                }
+            }
+
+            Divider()
+            Button("画面に合わせる") {
+                if let action = browserFitAction(width: viewportSize.width, height: viewportSize.height,
+                                                 currentWidth: frame?.width ?? 0,
+                                                 currentHeight: frame?.height ?? 0) {
+                    send(action)
+                }
+            }
+            Button("デスクトップ · 1280 × 800") { send(.resize(width: 1280, height: 800)) }
+
+            Button("モバイル · 390 × 844") { send(.resize(width: 390, height: 844)) }
+
+            Button("URL をコピー") { UIPasteboard.general.string = currentTab?.url }
+            Button("文字入力") { showKeyboard.toggle() }
+        } label: { Label("ブラウザのメニュー", systemImage: "ellipsis") }
+            .accessibilityLabel("ブラウザのメニュー").accessibilityIdentifier("browser.menu")
     }
 
     private func open() {

@@ -1,8 +1,6 @@
 import AgentCore
 import SwiftUI
 
-private let modelSettingsBackground = Color(red: 0.08, green: 0.09, blue: 0.11)
-
 struct ModelSettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var model: AppViewModel
@@ -11,10 +9,8 @@ struct ModelSettingsSheet: View {
         NavigationStack {
             ModelSettingsScreen(model: model, close: { dismiss() })
         }
-        .presentationDetents([.height(520), .large])
+        .presentationDetents([.large])
         .presentationDragIndicator(.visible)
-        .presentationBackground(modelSettingsBackground)
-        .presentationCornerRadius(24)
     }
 }
 
@@ -60,71 +56,14 @@ struct ModelSettingsScreen: View {
     }
 
     var body: some View {
-        VStack(spacing: 8) {
+        Form {
             ErrorNotices(model: model, scope: .settings)
-            modelSettingsContent
-        }
-    }
-
-    private var modelSettingsContent: some View {
-        HStack(alignment: .top, spacing: 16) {
-            ModelAgentRail(provider: provider, disabled: disabled,
-                           select: selectProvider)
-            Divider().padding(.vertical, 8)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    let identity = selectedAccount?.email ?? selectedAccount?.id ?? "未選択"
-                    NavigationLink {
-                        AgentSettingsScreen(model: model, provider: provider, close: close)
-                            .toolbar(.visible, for: .navigationBar)
-                    } label: {
-                        HStack {
-                            Text(identity)
-                                .lineLimit(1).font(.system(size: 13)).foregroundStyle(.secondary)
-                            Spacer(minLength: 8)
-                            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
-                        }
-                        .padding(.horizontal, 12)
-                        .frame(minHeight: 44).contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("アカウント " + identity)
-                    .accessibilityIdentifier("model.accounts.manage")
-                    if let account = selectedAccount {
-                        WeeklyUsageView(windows: model.snapshot.accountWeeklyUsage(
-                            provider: account.provider, id: account.id
-                        ))
-                        .accessibilityIdentifier("model.account.usage").padding(.horizontal, 12)
-                        .padding(.bottom, 12)
-                    }
-                    Divider()
-                    if defaults, let provider {
-                        Text(provider.bexName + " のデフォルト")
-                            .font(.headline).padding(.horizontal, 12).padding(.vertical, 8)
-                    }
-                    modelSection
-                    quickControls
-                    if let scope, model.snapshot.hasModelDefaultsOverride(scope: scope) {
-                        Divider()
-                        Button("共通設定を使う") { model.perform(.inheritModelDefaults(scope: scope)) }
-                            .buttonStyle(.plain).frame(minHeight: 44).padding(.horizontal, 12)
-                            .accessibilityIdentifier("model.defaults.inherit").disabled(disabled)
-                    }
-                }
-            }
-        }
-        .padding(.horizontal, 32).padding(.vertical, 12)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("model.picker")
-        .font(.system(size: 14))
-        .background(modelSettingsBackground)
-        .safeAreaInset(edge: .top, spacing: 0) {
             if let scope {
-                VStack(spacing: 0) {
-                    ModelDefaultsScopeBar(projects: model.snapshot.modelProjectScopeChoices(scope: scope),
-                                          environments: model.snapshot.modelEnvironmentScopeChoices(scope: scope),
-                                          selected: scope, disabled: model.store == nil || model.sending,
-                                          select: selectScope)
+                Section("適用範囲") {
+                    ModelDefaultsScopeFields(projects: model.snapshot.modelProjectScopeChoices(scope: scope),
+                                             environments: model.snapshot.modelEnvironmentScopeChoices(scope: scope),
+                                             selected: scope, disabled: model.store == nil || model.sending,
+                                             select: selectScope)
                     NewChatDefaultModelMenu(selected: model.snapshot.modelDefaults(scope: scope).newChatModel,
                                             choices: model.snapshot.modelsMatching(provider: nil, query: ""),
                                             disabled: disabled) { value in
@@ -132,9 +71,60 @@ struct ModelSettingsScreen: View {
                     }
                 }
             }
+            Section("エージェント") {
+                Picker("エージェント", selection: Binding<ProviderKind?>(
+                    get: { provider }, set: {
+                        if let value = $0 {
+                            selectProvider(value)
+                        }
+                    }
+                )) {
+                    ForEach([ProviderKind.codex, .claude, .deepSeek], id: \.self) { value in
+                        Text(value == .deepSeek ? "DeepSeek" : value.bexName).tag(Optional(value))
+                    }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("model.provider")
+                .disabled(disabled)
+            }
+            Section("アカウント") {
+                let identity = selectedAccount?.email ?? selectedAccount?.id ?? "未選択"
+                NavigationLink {
+                    AgentSettingsScreen(model: model, provider: provider, close: close)
+                } label: {
+                    LabeledContent("アカウント", value: identity)
+                }
+                .accessibilityIdentifier("model.accounts.manage")
+                if let account = selectedAccount {
+                    WeeklyUsageView(windows: model.snapshot.accountWeeklyUsage(
+                        provider: account.provider,
+                        id: account.id
+                    ))
+                    .accessibilityIdentifier("model.account.usage")
+                }
+            }
+            Section("モデル") {
+                modelSection
+            }
+            Section("応答") {
+                quickControls
+            }
+            if let scope, model.snapshot.hasModelDefaultsOverride(scope: scope) {
+                Section {
+                    Button("共通設定を使う") { model.perform(.inheritModelDefaults(scope: scope)) }
+                        .accessibilityIdentifier("model.defaults.inherit").disabled(disabled)
+                }
+            }
         }
-        .tint(.primary)
-        .toolbar(defaults ? .visible : .hidden, for: .navigationBar)
+        .accessibilityIdentifier("model.picker")
+        .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "モデルを検索")
+        .navigationTitle(defaults ? "モデルのデフォルト" : "モデル設定")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                Button("完了", action: close).accessibilityIdentifier("model.close")
+            }
+        }
         .onAppear {
             model.perform(.listAccounts(ListAccounts()))
             loadingModels = true
@@ -157,128 +147,96 @@ extension ModelSettingsScreen {
                 : model.snapshot.modelQuickControls(threadId: model.coreDraftKey)
             if defaults || selectedModel?.provider == provider,
                !controls.efforts.isEmpty || controls.toggleFastTo != nil {
-                Divider()
-                HStack(spacing: 16) {
-                    if !controls.efforts.isEmpty {
-                        let effort = defaults ? preferences.effort ?? "自動" : controls.effort
-                        Menu {
-                            Picker("思考の深さ", selection: Binding<String?>(get: {
-                                defaults ? preferences.effort : controls.effort
-                            }, set: { value in
-                                if let scope {
-                                    model.perform(.selectDefaultEffort(scope: scope, provider: provider, effort: value))
-                                } else if let value {
-                                    model.chooseEffort(value)
-                                }
-                            })) {
-                                if defaults {
-                                    Text("自動").tag(String?.none)
-                                }
-                                ForEach(controls.efforts, id: \.self) { Text($0).tag(Optional($0)) }
-                            }
-                            .pickerStyle(.inline).labelsHidden()
-                        } label: {
-                            ModelControlLabel(value: effort, icon: ReasoningStrengthIcon(level: controls.effortLevel,
-                                                                                         count: controls.efforts.count))
+                if !controls.efforts.isEmpty {
+                    let effort = defaults ? preferences.effort ?? "自動" : controls.effort
+                    Picker("思考の深さ", selection: Binding<String?>(get: {
+                        defaults ? preferences.effort : controls.effort
+                    }, set: { value in
+                        if let scope {
+                            model.perform(.selectDefaultEffort(scope: scope, provider: provider, effort: value))
+                        } else if let value {
+                            model.chooseEffort(value)
                         }
-                        .accessibilityLabel("思考の深さ")
-                        .accessibilityIdentifier("model.sheet.effort")
-                        .accessibilityValue(effort)
-                        .disabled(disabled)
-                    }
-                    if let tier = controls.fastServiceTier {
-                        let value = defaults && preferences.serviceTier == nil ? "自動" : controls.fast ? "高速" : "通常"
-                        Menu {
-                            Picker("速度", selection: Binding<String?>(get: {
-                                defaults ? preferences.serviceTier : controls.fast ? tier : "default"
-                            }, set: { value in
-                                if let scope {
-                                    model.perform(.selectDefaultServiceTier(
-                                        scope: scope,
-                                        provider: provider,
-                                        serviceTier: value
-                                    ))
-                                } else if let value {
-                                    model.chooseServiceTier(value)
-                                }
-                            })) {
-                                if defaults {
-                                    Text("自動").tag(String?.none)
-                                }
-                                Text("通常").tag(Optional("default"))
-                                Text("高速").tag(Optional(tier))
-                            }
-                            .pickerStyle(.inline).labelsHidden()
-                        } label: {
-                            ModelControlLabel(
-                                value: value,
-                                icon: Image(systemName: controls.fast ? "bolt.fill" : "bolt")
-                            )
+                    })) {
+                        if defaults {
+                            Text("自動").tag(String?.none)
                         }
-                        .accessibilityLabel("速度")
-                        .accessibilityIdentifier(defaults ? "model.defaults.speed" : "model.sheet.fast")
-                        .accessibilityValue(value).disabled(disabled)
+                        ForEach(controls.efforts, id: \.self) { Text($0).tag(Optional($0)) }
                     }
+                    .pickerStyle(.menu)
+                    .accessibilityIdentifier("model.sheet.effort")
+                    .accessibilityValue(effort)
+                    .disabled(disabled)
                 }
-                .buttonStyle(.plain)
-                .padding(.horizontal, 12).padding(.top, 4)
+                if let tier = controls.fastServiceTier {
+                    let value = defaults && preferences.serviceTier == nil ? "自動" : controls.fast ? "高速" : "通常"
+                    Picker("速度", selection: Binding<String?>(get: {
+                        defaults ? preferences.serviceTier : controls.fast ? tier : "default"
+                    }, set: { value in
+                        if let scope {
+                            model.perform(.selectDefaultServiceTier(
+                                scope: scope,
+                                provider: provider,
+                                serviceTier: value
+                            ))
+                        } else if let value {
+                            model.chooseServiceTier(value)
+                        }
+                    })) {
+                        if defaults {
+                            Text("自動").tag(String?.none)
+                        }
+                        Text("通常").tag(Optional("default"))
+                        Text("高速").tag(Optional(tier))
+                    }
+                    .pickerStyle(.menu)
+                    .accessibilityIdentifier(defaults ? "model.defaults.speed" : "model.sheet.fast")
+                    .accessibilityValue(value).disabled(disabled)
+                }
             }
         }
     }
 
     @ViewBuilder
     private var modelSection: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("モデルを検索", text: $search)
-                .textInputAutocapitalization(.never).autocorrectionDisabled()
-                .accessibilityIdentifier("model.search")
-        }
-        .padding(.horizontal, 12).frame(minHeight: 44)
-        .overlay(alignment: .bottom) { Divider() }
-        .padding(.bottom, 8)
         let choices = model.snapshot.modelsMatching(provider: provider, query: search)
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                if defaults, let provider {
-                    Button {
-                        if let scope {
-                            model.perform(.selectDefaultModel(scope: scope, provider: provider, model: nil))
-                        }
-                    } label: {
-                        ModelChoiceRow(label: "自動", selected: selectedModel == nil)
+        Group {
+            if defaults, let provider {
+                Button {
+                    if let scope {
+                        model.perform(.selectDefaultModel(scope: scope, provider: provider, model: nil))
                     }
-                    .accessibilityIdentifier("model.choice.automatic")
-                    .accessibilityValue(selectedModel == nil ? "選択中" : "")
-                    .disabled(disabled)
+                } label: {
+                    ModelChoiceRow(label: "自動", selected: selectedModel == nil)
                 }
-                if choices.isEmpty {
-                    Text(loadingModels ? "モデルを読み込み中…" : "利用可能なモデルがありません")
-                        .foregroundStyle(.secondary).padding(.horizontal, 12)
-                }
-                ForEach(choices, id: \.model) { choice in
-                    Button {
-                        if let scope {
-                            model.perform(.selectDefaultModel(
-                                scope: scope,
-                                provider: choice.model.provider,
-                                model: choice.model
-                            ))
-                        } else {
-                            model.chooseModel(choice.model)
-                        }
-                    } label: {
-                        ModelChoiceRow(label: choice.displayName, selected: selectedModel == choice.model)
-                    }
-                    .accessibilityIdentifier("model.choice." + choice.id)
-                    .accessibilityValue(selectedModel == choice.model ? "選択中" : "")
-                    .disabled(disabled)
-                }
+                .accessibilityIdentifier("model.choice.automatic")
+                .accessibilityValue(selectedModel == nil ? "選択中" : "")
+                .disabled(disabled)
             }
-            .buttonStyle(.plain).foregroundStyle(.primary)
+            if choices.isEmpty {
+                Text(loadingModels ? "モデルを読み込み中…" : "利用可能なモデルがありません")
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(choices, id: \.model) { choice in
+                Button {
+                    if let scope {
+                        model.perform(.selectDefaultModel(
+                            scope: scope,
+                            provider: choice.model.provider,
+                            model: choice.model
+                        ))
+                    } else {
+                        model.chooseModel(choice.model)
+                    }
+                } label: {
+                    ModelChoiceRow(label: choice.displayName, selected: selectedModel == choice.model)
+                }
+                .accessibilityIdentifier("model.choice." + choice.id)
+                .accessibilityValue(selectedModel == choice.model ? "選択中" : "")
+                .disabled(disabled)
+            }
         }
-        .frame(height: min(CGFloat(max(choices.count + (defaults ? 1 : 0), 1)) * 44, 264))
-        .padding(.bottom, 8)
+        .foregroundStyle(.primary)
         ForEach(model.snapshot.modelErrorMessages(provider: provider), id: \.self) { error in
             Text(accountErrorMessage(message: error)).font(.caption).foregroundStyle(.red)
                 .accessibilityIdentifier("model.error")
@@ -300,40 +258,6 @@ extension ModelSettingsScreen {
     }
 }
 
-private struct ModelAgentRail: View {
-    let provider: ProviderKind?
-    let disabled: Bool
-    let select: (ProviderKind) -> Void
-
-    var body: some View {
-        VStack(spacing: 8) {
-            ForEach([ProviderKind.codex, .claude, .deepSeek], id: \.self) { value in
-                Button { select(value) } label: {
-                    Image(value.bexIcon)
-                        .resizable().scaledToFit().frame(width: 24, height: 24)
-                        .foregroundStyle(value == .claude ? Color(red: 0.85, green: 0.47, blue: 0.34) : .primary)
-                        .frame(width: 44, height: 44).contentShape(Rectangle())
-                        .background(provider == value ? Color(white: 0.15) : .clear,
-                                    in: RoundedRectangle(cornerRadius: 8))
-                        .overlay(alignment: .leading) {
-                            if provider == value {
-                                Capsule().fill(Color.accentColor).frame(width: 2, height: 24).offset(x: -4)
-                            }
-                        }
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(value.bexName)
-                .accessibilityIdentifier("model.provider." + value.bexKey)
-                .accessibilityValue(provider == value ? "選択中" : "")
-                .accessibilityAddTraits(provider == value ? .isSelected : [])
-                .disabled(disabled)
-            }
-            Spacer(minLength: 0)
-        }
-        .frame(width: 44)
-    }
-}
-
 private struct ModelChoiceRow: View {
     let label: String
     let selected: Bool
@@ -346,24 +270,6 @@ private struct ModelChoiceRow: View {
                 Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
             }
         }
-        .padding(.horizontal, 12)
-        .frame(minHeight: 44)
         .contentShape(Rectangle())
-        .background(selected ? Color.accentColor.opacity(0.14) : .clear,
-                    in: RoundedRectangle(cornerRadius: 10))
-    }
-}
-
-private struct ModelControlLabel<Icon: View>: View {
-    let value: String
-    let icon: Icon
-
-    var body: some View {
-        HStack(spacing: 6) {
-            icon
-            Text(value)
-            Image(systemName: "chevron.down").font(.caption).foregroundStyle(.secondary)
-        }
-        .frame(minHeight: 44).contentShape(Rectangle())
     }
 }

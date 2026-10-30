@@ -1,6 +1,5 @@
 import AgentCore
 import SwiftUI
-import UIKit
 
 struct SwiftUIRoot: View {
     @ObservedObject var model: AppViewModel
@@ -52,7 +51,6 @@ struct SwiftUIRoot: View {
         .safeAreaInset(edge: .top, spacing: 0) {
             ErrorNotices(model: model, scope: .application).padding(.horizontal)
         }
-        .preferredColorScheme(.dark)
         .onChange(of: model.screen) { screen in
             if screen != .thread {
                 model.sideChatRequest = nil
@@ -88,140 +86,87 @@ private struct PairingScreen: View {
     @FocusState private var editingContents: Bool
 
     var body: some View {
-        GeometryReader { geometry in
-            ScrollView {
-                VStack(spacing: hostName == nil ? 16 : 12) {
-                    if hostName == nil {
-                        Spacer(minLength: 0)
+        Form {
+            Section {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("どこでも、これひとつで。", systemImage: "text.bubble")
+                        .font(.title2.bold())
+                        .accessibilityIdentifier("pairing.welcome")
+                    Text("AIとの会話も、ファイルも、ターミナルも。いつもの作業を、手元から。")
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 8)
+            }
+            if let hostName {
+                Section("接続先") {
+                    LabeledContent {
+                        Text(hostName).accessibilityIdentifier("pairing.host")
+                    } label: {
+                        Label("PC", systemImage: "laptopcomputer")
                     }
-                    VStack(spacing: hostName == nil ? 18 : 8) {
-                        Image(systemName: "text.bubble")
-                            .font(.system(size: hostName == nil ? 36 : 24, weight: .medium))
-                            .foregroundStyle(Color.accentColor)
-                            .frame(width: hostName == nil ? 72 : 32, height: hostName == nil ? 72 : 32)
-                            .background(Color(UIColor.secondarySystemGroupedBackground))
-                            .clipShape(RoundedRectangle(cornerRadius: 28))
-                        Text("どこでも、\nこれひとつで。")
-                            .font(.system(size: hostName == nil ? 34 : 28, weight: .bold))
-                            .accessibilityIdentifier("pairing.welcome")
-                        Text("AIとの会話も、ファイルも、ターミナルも。\nいつもの作業を、手元から。")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                    Button("変更") {
+                        contents = ""
+                        showsManualPairing = false
+                        change()
                     }
-                    .multilineTextAlignment(.center)
-                    if hostName == nil {
-                        Spacer(minLength: 0)
+                    .disabled(connecting)
+                    .accessibilityIdentifier("pairing.change")
+                }
+                Section {
+                    Text("メッセージ・添付ファイル・作業に必要なプロジェクトの内容を、このPCと利用するAIサービスに送信します。")
+                    Text("AI処理：" + (aiRecipients.isEmpty ? "未設定" : aiRecipients.joined(separator: "、")))
+                        .accessibilityIdentifier("pairing.recipients")
+                    if let recipient = transcriptionRecipient {
+                        Text("音声入力：\(recipient)（文字起こし）")
                     }
-                    if let hostName {
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack(spacing: 16) {
-                                Image(systemName: "laptopcomputer").font(.system(size: 28))
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("接続先").font(.caption).foregroundStyle(.secondary)
-                                    Text(hostName).font(.headline)
-                                        .accessibilityIdentifier("pairing.host")
-                                }
-                                Spacer()
-                                Button("変更") {
-                                    contents = ""
-                                    showsManualPairing = false
-                                    change()
-                                }
-                                .disabled(connecting)
-                                .accessibilityIdentifier("pairing.change")
-                            }
-                            Divider()
-                            Text("送信する内容").font(.subheadline.bold())
-                            Text("メッセージ・添付ファイル・作業に必要なプロジェクトの内容を、このPCと利用するAIサービスに送信します。")
-                                .foregroundStyle(.secondary)
-                            Divider()
-                            Text("このPCの送信先").font(.subheadline.bold())
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("AI処理：" +
-                                    (aiRecipients.isEmpty ? "未設定" : aiRecipients
-                                        .joined(separator: "、")))
-                                    .accessibilityIdentifier("pairing.recipients")
-                                if let recipient = transcriptionRecipient {
-                                    Text("音声入力：\(recipient)（文字起こし）")
-                                }
-                            }
-                            .foregroundStyle(.secondary)
-                            Divider()
-                            Text("共有PCでは、管理者などが内容を閲覧できる場合があります。")
-                                .foregroundStyle(.secondary)
-                        }
-                        .font(.footnote)
-                        .padding(16)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color(UIColor.secondarySystemGroupedBackground))
-                        .clipShape(RoundedRectangle(cornerRadius: 20))
-                    } else {
-                        VStack(spacing: 16) {
-                            Image(systemName: "laptopcomputer")
-                                .font(.system(size: 36)).foregroundStyle(.secondary)
-                            Text("まずはPCとつなぐ").font(.title3.bold())
-                            Text("PCでBexを開き、表示されたQRコードを読み取ってください。")
-                                .font(.subheadline).foregroundStyle(.secondary)
-                                .multilineTextAlignment(.center)
-                            Button { isScanning = true } label: {
-                                Label("QRコードを読み取る", systemImage: "qrcode.viewfinder")
-                                    .font(.headline)
-                                    .frame(maxWidth: .infinity, minHeight: 24)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.large)
-                            .accessibilityIdentifier("pairing.scan")
-                            Button("接続情報を入力") { showsManualPairing.toggle() }
-                                .accessibilityIdentifier("pairing.manual")
-                            if showsManualPairing {
-                                SecureField("接続情報を貼り付け", text: $contents)
-                                    .focused($editingContents)
-                                    .font(.system(.footnote, design: .monospaced))
-                                    .frame(minHeight: 44)
-                                    .textFieldStyle(.roundedBorder)
-                                    .accessibilityIdentifier("pairing.contents")
-                                Button("接続先を確認") {
-                                    editingContents = false
-                                    prepare(contents)
-                                    contents = ""
-                                }
-                                .buttonStyle(.bordered)
-                                .disabled(contents.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                                .accessibilityIdentifier("pairing.submit")
-                            }
-                        }
-                        .padding(16)
-                        .background(Color(UIColor.secondarySystemGroupedBackground))
-                        .clipShape(RoundedRectangle(cornerRadius: 20))
-                    }
-                    if connecting {
-                        ProgressView("接続中…").accessibilityIdentifier("pairing.progress")
-                    } else if let error {
-                        AppNotice(text: error)
-                    }
-                    PrivacyPolicyButton()
-                        .font(.footnote)
-                        .tint(.secondary)
-                    if hostName != nil {
-                        Button(action: confirm) {
-                            Text("同意して接続")
-                                .font(.headline)
-                                .frame(maxWidth: .infinity, minHeight: 24)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
+                } header: {
+                    Text("送信する内容")
+                } footer: {
+                    Text("共有PCでは、管理者などが内容を閲覧できる場合があります。")
+                }
+                Section {
+                    Button("同意して接続", action: confirm)
                         .disabled(connecting)
                         .accessibilityIdentifier("pairing.confirm")
-                    }
                 }
-                .padding(.horizontal, 24)
-                .padding(.vertical, 16)
-                .frame(minHeight: geometry.size.height)
+            } else {
+                Section {
+                    Button { isScanning = true } label: {
+                        Label("QRコードを読み取る", systemImage: "qrcode.viewfinder")
+                    }
+                    .accessibilityIdentifier("pairing.scan")
+                    DisclosureGroup("接続情報を入力", isExpanded: $showsManualPairing) {
+                        SecureField("接続情報を貼り付け", text: $contents)
+                            .focused($editingContents)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                            .accessibilityIdentifier("pairing.contents")
+                        Button("接続先を確認") {
+                            editingContents = false
+                            prepare(contents)
+                            contents = ""
+                        }
+                        .disabled(contents.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .accessibilityIdentifier("pairing.submit")
+                    }
+                    .accessibilityIdentifier("pairing.manual")
+                } header: {
+                    Text("PCと接続")
+                } footer: {
+                    Text("PCでBexを開き、表示されたQRコードを読み取ってください。")
+                }
             }
-            .scrollDismissesKeyboard(.interactively)
+            if connecting {
+                ProgressView("接続中…").accessibilityIdentifier("pairing.progress")
+            } else if let error {
+                AppNotice(text: error)
+            }
+            Section {
+                PrivacyPolicyButton()
+            }
         }
-        .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
-        .navigationTitle("bex")
+        .scrollDismissesKeyboard(.interactively)
+        .navigationTitle(canCancel ? "PCを追加" : "Bex")
+        .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $isScanning) {
             QrScannerSheet {
                 isScanning = false
@@ -251,63 +196,48 @@ private struct ProfilesScreen: View {
     @State private var removing: HostProfile?
 
     var body: some View {
-        GeometryReader { geometry in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("接続するPC").font(.largeTitle.bold())
-                        Text("いつもの作業を、ここから。")
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.vertical, 20)
-                    if let notice {
-                        AppNotice(text: notice)
-                    }
-                    ForEach(profiles, id: \.id) { profile in
-                        Button { select(profile.id) } label: {
-                            HStack(spacing: 16) {
-                                Image(systemName: "laptopcomputer")
-                                    .font(.system(size: 30)).foregroundStyle(.secondary)
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text(profile.name).font(.headline)
-                                    Text("登録済みのPC").font(.subheadline).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Image(systemName: "chevron.right").foregroundStyle(.secondary)
-                            }
-                            .padding(20)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color(UIColor.secondarySystemGroupedBackground))
-                            .clipShape(RoundedRectangle(cornerRadius: 18))
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("profiles.\(profile.id)")
-                        .contextMenu {
-                            Button("接続を解除", role: .destructive) { removing = profile }
-                                .accessibilityIdentifier("connection.remove.\(profile.id)")
+        List {
+            if let notice {
+                AppNotice(text: notice)
+            }
+            Section {
+                ForEach(profiles, id: \.id) { profile in
+                    Button { select(profile.id) } label: {
+                        HStack {
+                            Label(profile.name, systemImage: "laptopcomputer")
+                                .foregroundStyle(.primary)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
                         }
                     }
-                    Button(action: add) {
-                        Label("PCを追加", systemImage: "plus")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity, minHeight: 52)
-                            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.accentColor))
+                    .accessibilityIdentifier("profiles.\(profile.id)")
+                    .swipeActions(allowsFullSwipe: false) {
+                        Button("接続を解除", role: .destructive) { removing = profile }
                     }
-                    .accessibilityIdentifier("profiles.add")
-                    Spacer(minLength: 32)
-                    PrivacyPolicyButton()
-                        .font(.footnote).tint(.secondary)
-                        .frame(maxWidth: .infinity)
+                    .contextMenu {
+                        Button("接続を解除", role: .destructive) { removing = profile }
+                            .accessibilityIdentifier("connection.remove.\(profile.id)")
+                    }
                 }
-                .padding(24)
-                .frame(minHeight: geometry.size.height, alignment: .top)
+            } header: {
+                Text("このiPhone")
+            } footer: {
+                Text("接続先を選んで、タスクを続けられます。")
+            }
+            Section {
+                PrivacyPolicyButton()
             }
         }
-        .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
-        .safeAreaInset(edge: .top, spacing: 0) {
-            SettingsScopeBar { Text("すべてのプロジェクト") } environment: { Text("このiPhone") }
+        .listStyle(.insetGrouped)
+        .navigationTitle("PC")
+        .navigationBarTitleDisplayMode(.large)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button(action: add) { Label("PCを追加", systemImage: "plus") }
+                    .accessibilityIdentifier("profiles.add")
+            }
         }
-        .navigationTitle("bex")
         .alert("このPCとの接続を解除しますか？", isPresented: Binding(
             get: { removing != nil }, set: {
                 if !$0 {

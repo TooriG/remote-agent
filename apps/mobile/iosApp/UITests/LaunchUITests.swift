@@ -36,33 +36,6 @@ final class LaunchUITests: XCTestCase {
         wait(for: [ready], timeout: timeout)
     }
 
-    func openFiles(_ app: XCUIApplication) {
-        app.buttons["task.tools"].tap()
-        openWorkbenchTool(app, "files")
-    }
-
-    func workbenchTab(_ app: XCUIApplication, _ kind: String) -> XCUIElement {
-        let tabs = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "workbench.tab.\(kind)."))
-        return tabs.element(boundBy: max(0, tabs.count - 1))
-    }
-
-    func openWorkbenchTool(_ app: XCUIApplication, _ kind: String) {
-        let tab = workbenchTab(app, kind)
-        if tab.exists {
-            tab.tap(); return
-        }
-        let tool = app.buttons["workbench.\(kind)"]
-        if !tool.exists {
-            app.buttons["workbench.add"].tap()
-        }
-        XCTAssertTrue(tool.waitForExistence(timeout: 5)); tool.tap()
-    }
-
-    func closeWorkbench(_ app: XCUIApplication) {
-        app.buttons["workbench.close"].tap()
-        XCTAssertTrue(app.textFields["task.message"].waitForExistence(timeout: 5))
-    }
-
     func expandSimulatorProject(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
         let project = app.buttons["tasks.project.simulator-project"]
         guard project.waitForExistence(timeout: 10) else {
@@ -274,4 +247,49 @@ final class LaunchUITests: XCTestCase {
 
 private enum PairingPayloadError: Error {
     case invalidResponse
+}
+
+extension LaunchUITests {
+    func openFiles(_ app: XCUIApplication) {
+        app.buttons["task.tools"].tap()
+        openWorkbenchTool(app, "files")
+    }
+
+    func workbenchTab(_ app: XCUIApplication, _ kind: String) -> XCUIElement {
+        let tabs = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "workbench.tab.\(kind)."))
+        return tabs.element(boundBy: max(0, tabs.count - 1))
+    }
+
+    func workbenchTitle(_ app: XCUIApplication) -> XCUIElement {
+        app.navigationBars.buttons.matching(NSPredicate(format: "label IN %@", [
+            "ツール", "ブラウザ", "ターミナル", "ファイル", "差分", "サイドチャット", "エージェント"
+        ])).firstMatch
+    }
+
+    func dismissWorkbenchMenu(_ app: XCUIApplication) {
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+    }
+
+    func openWorkbenchTool(_ app: XCUIApplication, _ kind: String) {
+        let tool = app.buttons["workbench.\(kind)"]
+        if app.descendants(matching: .any)["workbench.launcher"].exists {
+            tool.tap(); return
+        }
+        tapWhenStable(workbenchTitle(app))
+        let tab = workbenchTab(app, kind)
+        if tab.exists {
+            tab.tap(); return
+        }
+        dismissWorkbenchMenu(app)
+        app.buttons["workbench.add"].tap()
+        XCTAssertTrue(tool.waitForExistence(timeout: 5)); tool.tap()
+    }
+
+    func closeWorkbench(_ app: XCUIApplication) {
+        for _ in 0 ..< 10 where !app.buttons["task.tools"].exists {
+            tapWhenStable(app.navigationBars.buttons["BackButton"].firstMatch)
+        }
+        XCTAssertTrue(app.buttons["task.tools"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.textFields["task.message"].exists)
+    }
 }

@@ -8,59 +8,6 @@ extension FileEntry: @retroactive Identifiable {
     }
 }
 
-/// Own directory navigation independently of the conversation's navigation stack.
-private struct WorkspaceNavigation: UIViewControllerRepresentable {
-    let root: String
-    let content: (String, @escaping (String) -> Void) -> WorkspaceDirectoryScreen
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(content: content)
-    }
-
-    func makeUIViewController(context: Context) -> UINavigationController {
-        context.coordinator.open(root)
-        return context.coordinator.navigation
-    }
-
-    func updateUIViewController(_ controller: UINavigationController, context: Context) {
-        let coordinator = context.coordinator
-        coordinator.content = content
-        for case let page as UIHostingController<WorkspaceDirectoryScreen> in controller.viewControllers {
-            page.rootView = coordinator.screen(page.rootView.directory)
-        }
-    }
-
-    final class Coordinator: NSObject, UINavigationControllerDelegate {
-        let navigation = UINavigationController()
-        var content: (String, @escaping (String) -> Void) -> WorkspaceDirectoryScreen
-
-        init(content: @escaping (String, @escaping (String) -> Void) -> WorkspaceDirectoryScreen) {
-            self.content = content
-            super.init()
-            navigation.delegate = self
-        }
-
-        func navigationController(_ navigationController: UINavigationController,
-                                  willShow viewController: UIViewController, animated: Bool) {
-            navigationController.setNavigationBarHidden(
-                viewController === navigationController.viewControllers.first, animated: animated
-            )
-        }
-
-        func screen(_ directory: String) -> WorkspaceDirectoryScreen {
-            content(directory) { [weak self] in self?.open($0) }
-        }
-
-        func open(_ directory: String) {
-            let page = UIHostingController(rootView: screen(directory))
-            page.edgesForExtendedLayout = []
-            page.title = URL(fileURLWithPath: directory).lastPathComponent
-            page.navigationItem.largeTitleDisplayMode = .never
-            navigation.pushViewController(page, animated: !navigation.viewControllers.isEmpty)
-        }
-    }
-}
-
 struct WorkspaceScreen: View {
     @ObservedObject var model: AppViewModel
     let root: String
@@ -68,18 +15,15 @@ struct WorkspaceScreen: View {
     let close: () -> Void
 
     var body: some View {
-        WorkspaceNavigation(root: root) { directory, openDirectory in
-            WorkspaceDirectoryScreen(snapshot: model.snapshot, directory: directory,
-                                     perform: request, fileDraft: fileDraft,
-                                     downloadFile: model.download,
-                                     aiEdit: { model.perform(.setDraftText(
-                                         threadId: draft,
-                                         text: "このファイルを編集してください: \($0)\n変更内容: "
-                                     )) },
-                                     close: close, openDirectory: openDirectory)
-        }
-        .background(Color(uiColor: .systemGroupedBackground))
-        .onDisappear { model.perform(.reviewWorkspace(ReviewWorkspace(cwd: root))) }
+        WorkspaceDirectoryScreen(snapshot: model.snapshot, directory: root, title: "ファイル",
+                                 perform: request, fileDraft: fileDraft,
+                                 downloadFile: model.download,
+                                 aiEdit: { model.perform(.setDraftText(
+                                     threadId: draft,
+                                     text: "このファイルを編集してください: \($0)\n変更内容: "
+                                 )) }, close: close)
+            .background(Color(uiColor: .systemGroupedBackground))
+            .onDisappear { model.perform(.reviewWorkspace(ReviewWorkspace(cwd: root))) }
     }
 
     private func request(_ intent: Intent, completion: @escaping (AgentCore.Snapshot, Result<Outcome, Error>) -> Void) {
@@ -100,12 +44,13 @@ struct WorkspaceScreen: View {
 private struct WorkspaceDirectoryScreen: View {
     let snapshot: AgentCore.Snapshot
     let directory: String
+    let title: String
     let perform: SnapshotRequest
     let fileDraft: (String) -> Binding<String>
     let downloadFile: @MainActor (String) async throws -> URL
     let aiEdit: (String) -> Void
     let close: () -> Void
-    let openDirectory: (String) -> Void
+    @State private var openedDirectory: String?
     @State private var path = ""
     @State private var entries: [FileEntry] = []
     @State private var error: String?
@@ -114,28 +59,37 @@ private struct WorkspaceDirectoryScreen: View {
     @State private var sharedFile: SharedFile?
 
     var body: some View {
-        VStack(spacing: 0) {
+        List {
             if let error {
-                AppNotice(text: error).padding()
+                AppNotice(text: error)
             }
             if busy {
-                ProgressView().padding()
+                ProgressView()
             }
-            HStack {
-                TextField("絶対パス", text: $path)
-                    .textInputAutocapitalization(.never).disableAutocorrection(true)
-                    .textFieldStyle(.roundedBorder)
-                Button("開く") { openDirectory(path) }
-                    .accessibilityIdentifier("files.open-path")
-            }.padding(.horizontal).padding(.vertical, 8)
-            List {
-                Button("親ディレクトリ") { openDirectory((directory as NSString).deletingLastPathComponent) }
-                    .disabled(directory == "/")
+            Section {
+                HStack {
+                    TextField("絶対パス", text: $path)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .submitLabel(.go).onSubmit { openedDirectory = path }
+                    Button("開く") { openedDirectory = path }
+                        .accessibilityIdentifier("files.open-path")
+                }
+                Button { openedDirectory = (directory as NSString).deletingLastPathComponent } label: {
+                    Label("親ディレクトリ", systemImage: "arrow.up")
+                }
+                .disabled(directory == "/")
+            }
+            Section {
                 ForEach(entries) { entry in
                     HStack {
                         if entry.directory {
-                            Button { openDirectory(entry.path) } label: {
-                                Label(entry.name, systemImage: "folder")
+                            Button { openedDirectory = entry.path } label: {
+                                HStack {
+                                    Label(entry.name, systemImage: "folder")
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                                }
                             }
                             .accessibilityIdentifier("file.\(entry.name)")
                         } else {
@@ -151,7 +105,15 @@ private struct WorkspaceDirectoryScreen: View {
                     }
                 }
             }
-            .listStyle(.plain)
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(item: $openedDirectory) { directory in
+            WorkspaceDirectoryScreen(snapshot: snapshot, directory: directory,
+                                     title: URL(fileURLWithPath: directory).lastPathComponent,
+                                     perform: perform, fileDraft: fileDraft, downloadFile: downloadFile,
+                                     aiEdit: aiEdit, close: close)
         }
         .onAppear {
             if path.isEmpty {
@@ -327,7 +289,6 @@ struct WorkspaceAgentsScreen: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                Text("エージェント").font(.headline)
                 if agents.isEmpty {
                     Text("サブエージェントが起動するとここに表示されます。")
                         .foregroundStyle(.secondary)

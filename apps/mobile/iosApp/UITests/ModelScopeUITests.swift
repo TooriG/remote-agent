@@ -51,7 +51,7 @@ extension LaunchUITests {
         XCTAssertEqual(app.buttons["model.sheet.effort"].value as? String, "medium")
     }
 
-    func testSimulatorModelPickerUsesAgentRailAndCompactControls() throws {
+    func testSimulatorModelPickerUsesNativeFormAndAgentPicker() throws {
         let app = try connectedSimulatorApp()
         app.buttons["tasks.new.project.simulator-project"].tap()
         chooseFixtureModel(app)
@@ -62,26 +62,19 @@ extension LaunchUITests {
             .firstMatch
         XCTAssertTrue(weekly.waitForExistence(timeout: 15)); XCTAssertTrue(weekly.isHittable)
         XCTAssertFalse(app.staticTexts["5時間枠"].exists || app.staticTexts["72%"].exists)
-        let codex = app.buttons["model.provider.codex"]
-        let claude = app.buttons["model.provider.claude"]
-        XCTAssertLessThanOrEqual(codex.frame.maxX, app.buttons["model.accounts.manage"].frame.minX)
-        XCTAssertLessThanOrEqual(codex.frame.maxY, claude.frame.minY)
-        XCTAssertEqual(codex.value as? String, "選択中")
-        XCTAssertFalse(app.buttons["model.close"].exists)
-        XCTAssertFalse(app.staticTexts["思考の深さ"].exists || app.staticTexts["速度"].exists)
-        XCTAssertLessThan(weekly.frame.maxY, app.textFields["model.search"].frame.minY)
-        XCTAssertLessThan(app.buttons["model.choice.fixture-model"].frame.maxY,
-                          app.buttons["model.sheet.effort"].frame.minY)
-        XCTAssertEqual(
-            app.buttons["model.sheet.effort"].frame.midY,
-            app.buttons["model.sheet.fast"].frame.midY,
-            accuracy: 1
-        )
-        XCTAssertLessThanOrEqual(
-            app.buttons["model.sheet.effort"].frame.maxX,
-            app.buttons["model.sheet.fast"].frame.minX
-        )
-        captureScreen(app, named: "Agent icon rail with account weekly quota models and compact controls")
+        let picker = app.segmentedControls["model.provider"]
+        let codex = picker.buttons["Codex"]
+        let claude = picker.buttons["Claude Code"]
+        XCTAssertTrue(codex.isSelected)
+        XCTAssertEqual(codex.frame.midY, claude.frame.midY, accuracy: 1)
+        XCTAssertTrue(app.navigationBars["モデル設定"].exists)
+        XCTAssertTrue(app.buttons["model.close"].exists)
+        XCTAssertTrue(app.searchFields.firstMatch.exists)
+        XCTAssertTrue(app.buttons["model.sheet.effort"].exists)
+        XCTAssertTrue(app.buttons["model.sheet.fast"].exists)
+        XCTAssertLessThan(app.buttons["model.sheet.effort"].frame.maxY,
+                          app.buttons["model.sheet.fast"].frame.minY)
+        captureScreen(app, named: "Native model form with agent picker and account usage")
         dismissModelSettings(app)
     }
 
@@ -163,10 +156,10 @@ extension LaunchUITests {
             option: "model.defaults.new-chat.fixture-model"
         )
         XCTAssertEqual(newChat.value as? String, "Fixture Model")
-        app.buttons["model.provider.claude"].tap()
+        app.segmentedControls["model.provider"].buttons["Claude Code"].tap()
         XCTAssertEqual(app.buttons["model.choice.automatic"].value as? String, "選択中")
         XCTAssertEqual(newChat.value as? String, "Fixture Model")
-        app.buttons["model.provider.codex"].tap()
+        app.segmentedControls["model.provider"].buttons["Codex"].tap()
         XCTAssertEqual(choice.value as? String, "選択中")
     }
 }

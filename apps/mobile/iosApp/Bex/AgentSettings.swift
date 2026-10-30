@@ -2,7 +2,6 @@ import AgentCore
 import SwiftUI
 
 struct AgentSettingsScreen: View {
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @ObservedObject var model: AppViewModel
     @State var provider: ProviderKind?
@@ -47,6 +46,11 @@ struct AgentSettingsScreen: View {
 
     var body: some View {
         List {
+            Section("適用範囲") {
+                SettingsScopeFields { Text("すべてのプロジェクト") } environment: {
+                    EnvironmentScopeMenu(model: model).disabled(changingAccount || loginInProgress)
+                }
+            }
             if let login {
                 AccountLoginSection(
                     login: login, providerName: providerName, loginCode: $loginCode,
@@ -79,25 +83,16 @@ struct AgentSettingsScreen: View {
                 }
             }
         }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            SettingsScopeBar { Text("すべてのプロジェクト") } environment: {
-                EnvironmentScopeMenu(model: model).disabled(changingAccount || loginInProgress)
-            }
-        }
         .navigationTitle("エージェント")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(true)
+        .navigationBarBackButtonHidden(loginInProgress)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("戻る", systemImage: "chevron.left") {
-                    if loginInProgress {
-                        cancelLogin()
-                    } else {
-                        dismiss()
-                    }
+                if loginInProgress {
+                    Button("キャンセル", action: cancelLogin)
+                        .disabled(cancellingLogin)
+                        .accessibilityIdentifier("model.back")
                 }
-                .disabled(cancellingLogin)
-                .accessibilityIdentifier("model.back")
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button("完了", action: close).disabled(loginInProgress)

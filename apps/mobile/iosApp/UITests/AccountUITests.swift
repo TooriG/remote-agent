@@ -136,7 +136,7 @@ extension LaunchUITests {
 
     func selectFixtureProvider(_ app: XCUIApplication, _ name: String) {
         openModelChoices(app)
-        let provider = app.buttons["model.provider." + (name == "Codex" ? "codex" : "claude")]
+        let provider = app.segmentedControls["model.provider"].buttons[name == "Codex" ? "Codex" : "Claude Code"]
         XCTAssertTrue(provider.waitForExistence(timeout: 10)); provider.tap()
     }
 
@@ -191,7 +191,7 @@ extension LaunchUITests {
         XCTAssertFalse(app.buttons["model.account.desktop"].exists)
         app.segmentedControls["account.provider"].buttons["Codex"].tap()
         captureScreen(app, named: "Agent account settings")
-        app.buttons["model.back"].tap()
+        app.navigationBars.buttons["BackButton"].tap()
         app.buttons["settings.connections"].tap()
         XCTAssertTrue(app.buttons["profiles.add"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["このiPhone"].exists)
@@ -201,7 +201,7 @@ extension LaunchUITests {
         app.buttons["tasks.new.project.simulator-project"].tap()
         chooseFixtureModel(app)
         app.buttons["model.settings"].tap()
-        XCTAssertTrue(app.buttons["model.provider.codex"].isEnabled)
+        XCTAssertTrue(app.segmentedControls["model.provider"].buttons["Codex"].isEnabled)
         XCTAssertFalse(app.buttons["settings.scope.projects"].exists || app.buttons["settings.scope.environment"]
             .exists)
         XCTAssertFalse(app.buttons["model.account.desktop"].exists)
@@ -218,7 +218,7 @@ extension LaunchUITests {
         app.buttons["task.send"].tap()
         XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 25))
         app.buttons["model.settings"].tap()
-        XCTAssertFalse(app.buttons["model.provider.codex"].isEnabled)
+        XCTAssertFalse(app.segmentedControls["model.provider"].buttons["Codex"].isEnabled)
         XCTAssertTrue(app.buttons["model.choice.fixture-model"].exists)
         XCTAssertFalse(app.buttons["model.choice.default"].exists)
         captureScreen(app, named: "Existing conversation fixes the agent")
@@ -295,7 +295,7 @@ extension LaunchUITests {
         model.tap()
         selectFixtureProvider(app, "Codex")
         app.buttons["model.choice.fixture-model"].tap()
-        let search = app.textFields["model.search"]
+        let search = app.searchFields.firstMatch
         search.tap(); search.typeText("no matching model")
         XCTAssertFalse(app.buttons["model.choice.fixture-model"].exists)
         dismissModelSettings(app)

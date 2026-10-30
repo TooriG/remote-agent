@@ -111,7 +111,7 @@ conversation-ui:
         testSimulatorCanStartAConversationInAProject \
         testSimulatorOpensTasksBeforeHistoryReadFinishes \
         testSimulatorGroupsLiveCommandsBetweenCommentaryAndExpandsOnTap \
-        testSimulatorModelPickerUsesAgentRailAndCompactControls \
+        testSimulatorModelPickerUsesNativeFormAndAgentPicker \
         testSimulatorKeepsResponsesFromRepeatedTurnIDsWhenReopeningHistory \
         testSimulatorNativeTerminalDoesNotDuplicateQueryResponses \
         testSimulatorShowsAcceptedAdditionalInputBeforeCodexProcessesIt \

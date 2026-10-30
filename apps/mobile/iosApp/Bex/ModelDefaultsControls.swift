@@ -9,36 +9,22 @@ struct NewChatDefaultModelMenu: View {
 
     var body: some View {
         let label = choices.first { $0.model == selected }?.displayName ?? selected?.id ?? "自動"
-        Menu {
-            Button("自動（利用可能なエージェントのデフォルト）") { select(nil) }
+        Picker("新規チャットのモデル", selection: Binding<ModelRef?>(get: { selected }, set: select)) {
+            Text("自動（利用可能なエージェントのデフォルト）").tag(ModelRef?.none)
                 .accessibilityIdentifier("model.defaults.new-chat.automatic")
             ForEach(choices, id: \.model) { choice in
-                Button { select(choice.model) } label: {
-                    let name = choice.model.provider.bexName + " · " + choice.displayName
-                    if selected == choice.model {
-                        Label(name, systemImage: "checkmark")
-                    } else {
-                        Text(name)
-                    }
-                }
-                .accessibilityIdentifier("model.defaults.new-chat." + choice.id)
+                Text(choice.model.provider.bexName + " · " + choice.displayName).tag(Optional(choice.model))
+                    .accessibilityIdentifier("model.defaults.new-chat." + choice.id)
             }
-        } label: {
-            HStack {
-                Text("新規チャットのモデル")
-                Spacer()
-                Text(label).lineLimit(1).foregroundStyle(.secondary)
-                Image(systemName: "chevron.down").font(.caption)
-            }
-            .frame(minHeight: 44).padding(.horizontal, 32)
         }
+        .pickerStyle(.menu)
         .accessibilityIdentifier("model.defaults.new-chat")
         .accessibilityValue(label)
         .disabled(disabled)
     }
 }
 
-struct ModelDefaultsScopeBar: View {
+struct ModelDefaultsScopeFields: View {
     let projects: [ModelScopeChoice]
     let environments: [ModelScopeChoice]
     let selected: ModelDefaultsScope
@@ -46,7 +32,7 @@ struct ModelDefaultsScopeBar: View {
     let select: (ModelDefaultsScope) -> Void
 
     var body: some View {
-        SettingsScopeBar {
+        SettingsScopeFields {
             menu(projects, fallback: "すべてのプロジェクト", id: "settings.scope.projects")
         } environment: {
             menu(environments, fallback: "この環境", id: "settings.scope.environment")

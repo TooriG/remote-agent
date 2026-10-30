@@ -10,99 +10,87 @@ struct ThreadsScreen: View {
         let projects = model.list?.projects ?? []
         let chats = model.list?.threads ?? []
         List {
-            ErrorNotices(model: model, scope: .projects).taskListRowStyle()
+            ErrorNotices(model: model, scope: .projects)
             if let notice = model.list?.notice {
-                AppNotice(text: notice).taskListRowStyle()
+                AppNotice(text: notice)
             }
             if model.threadLoadState == .failed {
                 Section {
                     Button("再試行") { model.refreshTaskList() }
                         .accessibilityIdentifier("tasks.retry")
-                        .taskListRowStyle()
                 }
-                .listSectionSeparator(.hidden)
             }
             if let notice = model.notice {
                 Section {
                     AppNotice(text: notice)
-                        .taskListRowStyle()
                 }
-                .listSectionSeparator(.hidden)
             }
 
             Section {
-                Text("プロジェクト")
-                    .font(.title2.weight(.bold))
-                    .textCase(nil)
-                    .foregroundColor(.primary)
-                    .accessibilityIdentifier("tasks.projects")
-                    .taskListRowStyle()
-            }
-            .listSectionSeparator(.hidden)
-
-            ForEach(projects, id: \.id) { project in
-                Section {
-                    HStack(spacing: 16) {
-                        Button {
-                            model.perform(.setProjectExpanded(projectId: project.id, expanded: !project.expanded))
-                        } label: {
-                            HStack(spacing: 16) {
-                                ProjectIcon(
-                                    png: project.iconPng,
-                                    monogram: project.monogram,
-                                    colorRGB: project.iconColor
-                                )
-                                Text(project.name).font(.title3).lineLimit(1)
-                                Spacer(minLength: 0)
-                            }
-                            .frame(minHeight: 44)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("tasks.project.\(project.id)")
-                        .accessibilityValue(project.expanded ? "開いています" : "閉じています")
-                        Button { model.openNewThread(cwd: project.roots.first?.path ?? "") } label: {
-                            Image(systemName: "square.and.pencil").font(.title3)
-                                .foregroundColor(.secondary).frame(width: 44, height: 44)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("\(project.name)で新しいタスク")
-                        .accessibilityIdentifier("tasks.new.project.\(project.id)")
-                    }
-                    .taskListRowStyle()
-                    if project.expanded {
-                        if project.loading, !project.hasMore {
-                            ProgressView().taskListRowStyle()
-                        }
-                        if let error = project.error {
-                            AppNotice(text: error).taskListRowStyle()
-                            Button("再試行") {
-                                model.perform(.refreshProject(projectId: project.id))
-                            }.taskListRowStyle()
-                        }
-                        let threads = project.threads
-                        ForEach(threads, id: \.id) { thread in
-                            ThreadListRow(thread: thread, indented: true) { model.openThread(thread.id) }
-                        }
-                        if project.hasMore {
-                            Button {
-                                model.expandTaskList(projectId: project.id)
-                            } label: {
-                                HStack(spacing: 8) {
-                                    if project.loading {
-                                        ProgressView().controlSize(.mini)
-                                    }
-                                    Text("もっと見る")
-                                }
-                            }
-                            .padding(.leading, 40)
-                            .disabled(project.loading)
-                            .accessibilityIdentifier("tasks.project.\(project.id).more")
-                            .taskListRowStyle()
-                        }
+                HStack {
+                    Label(model.selectedProfileName ?? "PC Host", systemImage: "laptopcomputer")
+                    Spacer()
+                    if model.isConnecting || model.threadLoadState == .loading {
+                        ProgressView().controlSize(.small)
+                            .accessibilityIdentifier("connection.progress")
+                    } else {
+                        Text(model.isConnected ? "接続済み" : "未接続")
+                            .foregroundStyle(.secondary)
                     }
                 }
-                .listSectionSeparator(.hidden)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(
+                    "\(model.selectedProfileName ?? "PC Host")、\(model.isConnected ? "接続済み" : "未接続")"
+                )
+            }
+
+            Section {
+                ForEach(projects, id: \.id) { project in
+                    DisclosureGroup(isExpanded: Binding(
+                        get: { project.expanded },
+                        set: { model.perform(.setProjectExpanded(projectId: project.id, expanded: $0)) }
+                    )) {
+                        if project.loading, !project.hasMore {
+                            ProgressView()
+                        }
+                        if let error = project.error {
+                            AppNotice(text: error)
+                            Button("再試行") { model.perform(.refreshProject(projectId: project.id)) }
+                        }
+                        ForEach(project.threads, id: \.id) { thread in
+                            ThreadListRow(thread: thread) { model.openThread(thread.id) }
+                        }
+                        if project.hasMore {
+                            Button { model.expandTaskList(projectId: project.id) } label: {
+                                HStack {
+                                    Text("もっと見る")
+                                    if project.loading {
+                                        ProgressView().controlSize(.small)
+                                    }
+                                }
+                            }
+                            .disabled(project.loading)
+                            .accessibilityIdentifier("tasks.project.\(project.id).more")
+                        }
+                    } label: {
+                        HStack {
+                            ProjectIcon(png: project.iconPng, monogram: project.monogram, colorRGB: project.iconColor)
+                            Text(project.name).foregroundStyle(.primary).lineLimit(1)
+                            Spacer(minLength: 0)
+                            Button { model.openNewThread(cwd: project.roots.first?.path ?? "") } label: {
+                                Image(systemName: "square.and.pencil")
+                                    .frame(minWidth: 44, minHeight: 44)
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel("\(project.name)で新しいタスク")
+                            .accessibilityIdentifier("tasks.new.project.\(project.id)")
+                        }
+                    }
+                    .accessibilityIdentifier("tasks.project.\(project.id)")
+                    .accessibilityValue(project.expanded ? "開いています" : "閉じています")
+                }
+            } header: {
+                Text("プロジェクト").accessibilityIdentifier("tasks.projects")
             }
 
             if model.list?.hasMoreProjects == true {
@@ -119,9 +107,7 @@ struct ThreadsScreen: View {
                     }
                     .disabled(model.loadingThreads || model.list?.loadingProjects == true)
                     .accessibilityIdentifier("tasks.projects.more")
-                    .taskListRowStyle()
                 }
-                .listSectionSeparator(.hidden)
             }
 
             if model.threadLoadState == .ready, (model.list?.projects ?? []).isEmpty {
@@ -129,9 +115,7 @@ struct ThreadsScreen: View {
                     Text("登録されたプロジェクトはありません")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
-                        .taskListRowStyle()
                 }
-                .listSectionSeparator(.hidden)
             }
 
             Section {
@@ -140,7 +124,6 @@ struct ThreadsScreen: View {
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                         .accessibilityIdentifier("tasks.empty")
-                        .taskListRowStyle()
                 }
                 ForEach(chats, id: \.id) { thread in
                     ThreadListRow(thread: thread) { model.openThread(thread.id) }
@@ -158,15 +141,10 @@ struct ThreadsScreen: View {
                     }
                     .disabled(model.loadingThreads || model.list?.loadingChats == true)
                     .accessibilityIdentifier("tasks.chats.more")
-                    .taskListRowStyle()
                 }
             } header: {
                 Text("チャット")
-                    .font(.title3.weight(.semibold))
-                    .textCase(nil)
-                    .foregroundColor(.primary)
             }
-            .listSectionSeparator(.hidden)
         }
         .onChange(of: model.threadLoadState) { _, state in
             if state == .ready {
@@ -178,9 +156,7 @@ struct ThreadsScreen: View {
                 model.recordListViewUpdate()
             }
         }
-        .listStyle(.plain)
-        .environment(\.defaultMinListRowHeight, 52)
-        .background(Color(UIColor.systemBackground))
+        .listStyle(.insetGrouped)
         .accessibilityIdentifier("tasks.list")
         .searchable(text: $search, placement: .toolbar, prompt: "チャットを検索")
         .refreshable { model.refreshTaskList() }
@@ -188,48 +164,17 @@ struct ThreadsScreen: View {
             do { try await Task.sleep(nanoseconds: 200_000_000) } catch { return }
             model.searchTaskList(search)
         }
-        .navigationBarBackButtonHidden(true)
-        .navigationTitle("リモート")
-        .navigationBarTitleDisplayMode(.inline)
+        .navigationTitle("タスク")
+        .navigationBarTitleDisplayMode(.large)
         .toolbar {
             DefaultToolbarItem(kind: .search, placement: .bottomBar)
             ToolbarSpacer(.flexible, placement: .bottomBar)
-            ToolbarItem(placement: .principal) {
-                VStack(spacing: 1) {
-                    Text("リモート").font(.headline)
-                    HStack(spacing: 5) {
-                        if model.isConnecting || model.threadLoadState == .loading {
-                            ProgressView().controlSize(.mini)
-                                .tint(model.isConnecting ? .red : .green)
-                                .accessibilityLabel(model.isConnecting ? "接続中" : "読み込み中")
-                                .accessibilityIdentifier("connection.progress")
-                        } else {
-                            Circle().fill(model.isConnected ? Color.blue : Color.red).frame(width: 6, height: 6)
-                        }
-                        Image(systemName: "laptopcomputer")
-                        Text(model.selectedProfileName ?? "PC Host").lineLimit(1)
-                    }
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .accessibilityElement(children: .combine)
-                    .accessibilityLabel(
-                        "\(model.selectedProfileName ?? "PC Host")、\(model.isConnected ? "接続済み" : "未接続")"
-                    )
-                }
-            }
             ToolbarItem(placement: .bottomBar) {
                 Button { model.openNewThread(cwd: "") } label: {
                     Image(systemName: "square.and.pencil")
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.primary)
                 .accessibilityLabel("プロジェクトなしで新しいタスク")
                 .accessibilityIdentifier("tasks.new.chat")
-            }
-            ToolbarItem(placement: .navigationBarLeading) {
-                Button { model.showProfiles() } label: { Image(systemName: "line.3.horizontal") }
-                    .accessibilityLabel("PC一覧")
-                    .accessibilityIdentifier("tasks.hosts")
             }
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
@@ -275,17 +220,8 @@ private struct ProjectIcon: View {
     }
 }
 
-extension View {
-    func taskListRowStyle() -> some View {
-        listRowSeparator(.hidden)
-            .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
-            .listRowBackground(Color.clear)
-    }
-}
-
 private struct ThreadListRow: View {
     let thread: ThreadSummary
-    var indented = false
     let open: () -> Void
 
     private var accessibilityID: String {
@@ -295,13 +231,13 @@ private struct ThreadListRow: View {
     var body: some View {
         Button(action: open) {
             HStack(spacing: 10) {
-                Text(thread.title).font(.title3).foregroundColor(.primary).lineLimit(1)
+                Text(thread.title).foregroundStyle(.primary).lineLimit(2)
                 Spacer()
                 if thread.active {
                     ProgressView().controlSize(.small)
                         .accessibilityIdentifier("tasks.running.\(accessibilityID)")
                 } else if thread.unread {
-                    Circle().fill(Color.white).frame(width: 8, height: 8)
+                    Circle().fill(Color.accentColor).frame(width: 8, height: 8)
                         .accessibilityLabel("完了・未確認")
                         .accessibilityIdentifier("tasks.completed.\(accessibilityID)")
                 }
@@ -316,12 +252,12 @@ private struct ThreadListRow: View {
                             "tasks.\(unmerged ? "unmerged" : "merged").\(accessibilityID)"
                         )
                 }
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
             }
-            .padding(.leading, indented ? 40 : 0)
             .contentShape(Rectangle())
         }
         .accessibilityIdentifier("tasks.row.\(accessibilityID)")
         .accessibilityValue(thread.active ? "実行中" : thread.unread ? "完了・未確認" : "")
-        .taskListRowStyle()
     }
 }
