@@ -10,6 +10,7 @@ use crate::{
 };
 use iroh::{
     EndpointAddr, RelayMode, SecretKey, TransportAddr,
+    address_lookup::{DnsAddressLookup, PkarrResolver},
     endpoint::{BindOpts, presets},
 };
 use iroh_tickets::endpoint::EndpointTicket;
@@ -147,6 +148,16 @@ fn host_port(node: NodeId) -> u16 {
     HOST_PORTS.start + u16::from_le_bytes([first, second]) % HOST_PORTS.len() as u16
 }
 
+/// Clients only dial. Hosts are dialed, so their addresses must be findable.
+#[derive(Clone, Copy)]
+enum Role {
+    Client,
+    /// Port 0 binds ephemeral ports.
+    Host {
+        port: u16,
+    },
+}
+
 #[derive(Clone)]
 pub struct Endpoint(Arc<iroh::Endpoint>, Arc<Trace>);
 impl Endpoint {
@@ -160,12 +171,18 @@ impl Endpoint {
     pub async fn bind_host(identity: Identity, relays: Relays) -> Result<Self, TransportError> {
         let trace = Trace::new();
         let port = host_port(identity.node_id());
-        match Self::bind_port(Identity(identity.0.clone()), relays.clone(), trace.clone(), port)
-            .await
+        let host = |port| Role::Host { port };
+        match Self::bind_as(
+            Identity(identity.0.clone()),
+            relays.clone(),
+            trace.clone(),
+            host(port),
+        )
+        .await
         {
             Err(error) => {
                 tracing::warn!(target: "agent", operation = "host.endpoint.port", message = %error);
-                Self::bind_recording(identity, relays, trace).await
+                Self::bind_as(identity, relays, trace, host(0)).await
             }
             bound => bound,
         }
@@ -175,13 +192,13 @@ impl Endpoint {
         relays: Relays,
         trace: Arc<Trace>,
     ) -> Result<Self, TransportError> {
-        Self::bind_port(identity, relays, trace, 0).await
+        Self::bind_as(identity, relays, trace, Role::Client).await
     }
-    async fn bind_port(
+    async fn bind_as(
         identity: Identity,
         relays: Relays,
         trace: Arc<Trace>,
-        port: u16,
+        role: Role,
     ) -> Result<Self, TransportError> {
         crate::diagnostics::connection::initialize_mobile();
         trace.activate();
@@ -194,7 +211,9 @@ impl Endpoint {
                 .clear_ip_transports()
                 .bind_addr("127.0.0.1:0")
                 .map_err(connection)?;
-        } else if port != 0 {
+        } else if let Role::Host { port } = role
+            && port != 0
+        {
             builder = builder
                 .bind_addr(SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)))
                 .map_err(connection)?
@@ -204,6 +223,13 @@ impl Endpoint {
                     BindOpts::default().set_is_required(false),
                 )
                 .map_err(connection)?;
+        }
+        if matches!(role, Role::Client) && matches!(relays, Relays::Default | Relays::Custom(_)) {
+            // A client looks Hosts up but never publishes its own addresses.
+            builder = builder
+                .clear_address_lookup()
+                .address_lookup(PkarrResolver::n0_dns())
+                .address_lookup(DnsAddressLookup::n0_dns());
         }
         builder = match relays {
             Relays::Default => builder,
