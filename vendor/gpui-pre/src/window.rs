@@ -4391,6 +4391,18 @@ impl Window {
         )
     }
 
+    /// Element-state IDs used in the current frame's prepaint, including state
+    /// replayed from cached views. Overlays can use these during paint to avoid
+    /// drawing elements retained only by the previous frame.
+    pub fn prepainted_element_state_ids<S: 'static>(&self) -> impl Iterator<Item = &GlobalElementId> {
+        self.invalidator.debug_assert_paint_or_prepaint();
+        let state_type = TypeId::of::<S>();
+        self.next_frame
+            .accessed_element_states
+            .iter()
+            .filter_map(move |(id, ty)| (*ty == state_type).then_some(id))
+    }
+
     /// Updates or initializes state for an element with the given id that lives across multiple
     /// frames. If an element with this ID existed in the rendered frame, its state will be passed
     /// to the given closure. The state returned by the closure will be stored so it can be referenced
