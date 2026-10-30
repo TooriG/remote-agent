@@ -32,32 +32,21 @@ struct ModelDefaultsScopeFields: View {
     let select: (ModelDefaultsScope) -> Void
 
     var body: some View {
-        SettingsScopeFields {
-            menu(projects, fallback: "すべてのプロジェクト", id: "settings.scope.projects")
-        } environment: {
-            menu(environments, fallback: "この環境", id: "settings.scope.environment")
+        Group {
+            picker("環境", choices: environments, id: "settings.scope.environment")
+            picker("プロジェクト", choices: projects, id: "settings.scope.projects")
         }
         .disabled(disabled)
     }
 
-    private func menu(_ choices: [ModelScopeChoice], fallback: String, id: String) -> some View {
-        Menu {
+    private func picker(_ title: String, choices: [ModelScopeChoice], id: String) -> some View {
+        Picker(title, selection: Binding(get: { selected }, set: select)) {
             ForEach(choices, id: \.id) { choice in
-                Button { select(choice.scope) } label: {
-                    if choice.scope == selected {
-                        Label(choice.label, systemImage: "checkmark")
-                    } else {
-                        Text(choice.label)
-                    }
-                }
-                .accessibilityIdentifier(id + "." + choice.id)
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Text(choices.first { $0.scope == selected }?.label ?? fallback).lineLimit(1)
-                Image(systemName: "chevron.down")
+                Text(choice.label).tag(choice.scope)
+                    .accessibilityIdentifier(id + "." + choice.id)
             }
         }
+        .pickerStyle(.menu)
         .accessibilityIdentifier(id)
     }
 }

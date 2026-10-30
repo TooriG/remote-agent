@@ -47,9 +47,8 @@ struct AgentSettingsScreen: View {
     var body: some View {
         List {
             Section("適用範囲") {
-                SettingsScopeFields { Text("すべてのプロジェクト") } environment: {
-                    EnvironmentScopeMenu(model: model).disabled(changingAccount || loginInProgress)
-                }
+                SettingsScopeFields(profiles: model.profiles, selectedProfileId: model.selectedProfileId,
+                                    disabled: changingAccount || loginInProgress, select: model.selectProfile)
             }
             if let login {
                 AccountLoginSection(

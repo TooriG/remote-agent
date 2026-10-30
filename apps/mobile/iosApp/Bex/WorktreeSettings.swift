@@ -9,9 +9,8 @@ struct SettingsSheet: View {
         NavigationStack {
             List {
                 Section("適用範囲") {
-                    SettingsScopeFields { Text("すべてのプロジェクト") } environment: {
-                        EnvironmentScopeMenu(model: model)
-                    }
+                    SettingsScopeFields(profiles: model.profiles, selectedProfileId: model.selectedProfileId,
+                                        disabled: model.snapshot.accountLogin() != nil, select: model.selectProfile)
                 }
                 Section {
                     NavigationLink {
@@ -68,9 +67,8 @@ struct WorktreeSettingsScreen: View {
     var body: some View {
         Form {
             Section("適用範囲") {
-                SettingsScopeFields { Text("すべてのプロジェクト") } environment: {
-                    EnvironmentScopeMenu(model: model).disabled(busy)
-                }
+                SettingsScopeFields(profiles: model.profiles, selectedProfileId: model.selectedProfileId,
+                                    disabled: busy || model.snapshot.accountLogin() != nil, select: model.selectProfile)
             }
             Section {
                 Text("この環境に保存し、新しい会話に適用します。")
@@ -173,37 +171,28 @@ struct WorktreeSettingsScreen: View {
     }
 }
 
-struct SettingsScopeFields<Projects: View, Environment: View>: View {
-    @ViewBuilder let projects: () -> Projects
-    @ViewBuilder let environment: () -> Environment
+struct SettingsScopeFields: View {
+    let profiles: [HostProfile]
+    let selectedProfileId: String?
+    let disabled: Bool
+    let select: (String) -> Void
 
     var body: some View {
-        LabeledContent("環境") { environment() }
-        LabeledContent("プロジェクト") { projects() }
-    }
-}
-
-struct EnvironmentScopeMenu: View {
-    @ObservedObject var model: AppViewModel
-
-    var body: some View {
-        Menu {
-            ForEach(model.profiles) { profile in
-                Button { model.selectProfile(profile.id) } label: {
-                    if profile.id == model.selectedProfileId {
-                        Label(profile.name, systemImage: "checkmark")
-                    } else {
-                        Text(profile.name)
-                    }
-                }
+        Picker("環境", selection: Binding<String?>(get: { selectedProfileId }, set: {
+            if let id = $0 {
+                select(id)
             }
-        } label: {
-            HStack(spacing: 4) {
-                Text(model.selectedProfileName ?? "環境を選択").lineLimit(1)
-                Image(systemName: "chevron.down")
+        })) {
+            if selectedProfileId == nil {
+                Text("環境を選択").tag(String?.none)
+            }
+            ForEach(profiles) { profile in
+                Text(profile.name).tag(Optional(profile.id))
             }
         }
+        .pickerStyle(.menu)
         .accessibilityIdentifier("settings.scope.environment")
-        .disabled(model.snapshot.accountLogin() != nil)
+        .disabled(disabled)
+        LabeledContent("プロジェクト", value: "すべてのプロジェクト")
     }
 }

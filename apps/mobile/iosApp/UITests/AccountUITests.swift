@@ -225,10 +225,10 @@ extension LaunchUITests {
         app.buttons["task.send"].tap()
         XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 25))
         app.buttons["model.settings"].tap()
-        XCTAssertFalse(app.segmentedControls["model.provider"].buttons["Codex"].isEnabled)
+        XCTAssertTrue(app.segmentedControls["model.provider"].buttons["Codex"].isSelected)
         XCTAssertTrue(app.buttons["model.choice.fixture-model"].exists)
         XCTAssertFalse(app.buttons["model.choice.default"].exists)
-        captureScreen(app, named: "Existing conversation fixes the agent")
+        captureScreen(app, named: "Existing conversation retains the selected agent")
     }
 
     func testSimulatorAutomaticallyShowsModelControlsInExistingAndRunningConversations() throws {
