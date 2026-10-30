@@ -34,18 +34,20 @@ pub struct UpdateResult {
     pub error: Option<String>,
 }
 
-pub fn cleanup_workers(directory: &Path) {
-    let Ok(lock) = File::options()
+fn try_update_lock(directory: &Path) -> Result<File> {
+    let lock = File::options()
         .create(true)
         .truncate(false)
         .write(true)
-        .open(directory.join("app-update.lock"))
-    else {
+        .open(directory.join("app-update.lock"))?;
+    lock.try_lock().context("別の更新が実行中です。")?;
+    Ok(lock)
+}
+
+pub fn cleanup_workers(directory: &Path) {
+    let Ok(_lock) = try_update_lock(directory) else {
         return;
     };
-    if lock.try_lock().is_err() {
-        return;
-    }
     let Ok(entries) = fs::read_dir(directory) else {
         return;
     };
@@ -240,12 +242,7 @@ fn detached(command: &mut Command) {
 pub async fn apply(path: &Path) -> Result<()> {
     let plan: Plan = serde_json::from_slice(&fs::read(path)?)?;
     let job = path.parent().context("updater directory unavailable")?;
-    let update_lock = File::options()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(plan.directory.join("app-update.lock"))?;
-    update_lock.try_lock().context("別の更新が実行中です。")?;
+    let _update_lock = try_update_lock(&plan.directory)?;
     let lease = File::options()
         .read(true)
         .write(true)
@@ -274,8 +271,7 @@ pub async fn apply(path: &Path) -> Result<()> {
             if matches!(host.state, LocalHostState::Stopped) {
                 let launch: HostUpdate = serde_json::from_slice(&bytes)?;
                 let program = if verify_build(&plan.executable, plan.build).is_ok() {
-                    plan.executable
-                        .with_file_name(format!("host-daemon{}", std::env::consts::EXE_SUFFIX))
+                    agent_local_host::bundled_host_path(&plan.executable)
                 } else {
                     PathBuf::from(launch.executable)
                 };

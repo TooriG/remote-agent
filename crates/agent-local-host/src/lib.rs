@@ -34,6 +34,13 @@ pub fn load_local_identity(directory: &Path) -> Result<Identity> {
     Ok(Identity::from_bytes(bytes[32..].try_into().unwrap()))
 }
 
+/// The Host executable supplied beside a local client executable.
+pub fn bundled_host_path(executable: impl AsRef<Path>) -> PathBuf {
+    executable
+        .as_ref()
+        .with_file_name(format!("host-daemon{}", std::env::consts::EXE_SUFFIX))
+}
+
 /// The Mac runtime has its own background-only identity instead of inheriting
 /// the desktop app's foreground identity when npm or an MCP tool uses it.
 pub fn bundled_node_path(executable: &Path) -> Option<PathBuf> {

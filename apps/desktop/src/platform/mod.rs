@@ -270,11 +270,7 @@ fn start_host(directory: &std::path::Path, isolated: bool) -> anyhow::Result<std
     let executable = std::env::var_os("AGENT_HOST_DAEMON")
         .map(PathBuf::from)
         .map(Ok)
-        .unwrap_or_else(|| {
-            std::env::current_exe().map(|path| {
-                path.with_file_name(format!("host-daemon{}", std::env::consts::EXE_SUFFIX))
-            })
-        })?;
+        .unwrap_or_else(|| std::env::current_exe().map(agent_local_host::bundled_host_path))?;
     let mut command = Command::new(executable);
     command
         .arg("--state-dir")
