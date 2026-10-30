@@ -243,6 +243,107 @@ mod tests {
     }
 
     #[gpui::test]
+    fn cached_children_remain_drawable_and_interactive_after_parent_replay(
+        cx: &mut TestAppContext,
+    ) {
+        struct Child {
+            renders: Rc<Cell<usize>>,
+            clicks: Rc<Cell<usize>>,
+        }
+        impl Render for Child {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                self.renders.set(self.renders.get() + 1);
+                let clicks = self.clicks.clone();
+                div().size_full().child(
+                    div()
+                        .id("cached-action")
+                        .debug_selector(|| "cached-action".into())
+                        .w(px(200.))
+                        .h(px(60.))
+                        .child("共有ブラウザのキャッシュされた操作ボタン")
+                        .on_mouse_down(MouseButton::Left, move |_, _, _| {
+                            clicks.set(clicks.get() + 1);
+                        }),
+                )
+            }
+        }
+        struct Parent(Entity<Child>);
+        impl Render for Parent {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                self.0
+                    .clone()
+                    .cached(StyleRefinement::default().size_full())
+            }
+        }
+        struct Scene {
+            prefix: usize,
+            parent: Entity<Parent>,
+        }
+        impl Render for Scene {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div()
+                    .relative()
+                    .size_full()
+                    .child(
+                        div()
+                            .absolute()
+                            .w(px(200.))
+                            .children((0..self.prefix).map(|i| {
+                                div()
+                                    .id(format!("prefix-{i}"))
+                                    .child(format!("prefix {i}"))
+                                    .on_mouse_down(MouseButton::Left, |_, _, _| {})
+                            })),
+                    )
+                    .child(
+                        self.parent
+                            .clone()
+                            .cached(StyleRefinement::default().size_full()),
+                    )
+            }
+        }
+        let renders = Rc::new(Cell::new(0));
+        let clicks = Rc::new(Cell::new(0));
+        let (scene, window) = cx.add_window_view(|_, cx| {
+            let child = cx.new(|_| Child {
+                renders: renders.clone(),
+                clicks: clicks.clone(),
+            });
+            Scene {
+                prefix: 12,
+                parent: cx.new(|_| Parent(child)),
+            }
+        });
+        window.run_until_parked();
+        let parent = scene.read_with(window, |scene, _| scene.parent.clone());
+        for prefix in [0, 16, 2] {
+            let before = renders.get();
+            scene.update(window, |scene, cx| {
+                scene.prefix = prefix;
+                cx.notify();
+            });
+            window.run_until_parked();
+            // The parent was replayed at a different position in the frame's
+            // resources. Its unchanged child must still be reusable next frame.
+            parent.update(window, |_, cx| cx.notify());
+            window.run_until_parked();
+            assert_eq!(
+                renders.get(),
+                before,
+                "replaying a parent must preserve child caching"
+            );
+            let bounds = window.debug_bounds("cached-action").unwrap();
+            window.simulate_click(bounds.center(), Modifiers::default());
+            window.run_until_parked();
+        }
+        assert_eq!(
+            clicks.get(),
+            3,
+            "replayed input must reach the cached child"
+        );
+    }
+
+    #[gpui::test]
     fn indicators_spin_without_rendering_the_content_again(cx: &mut TestAppContext) {
         let renders = Rc::new(Cell::new(0));
         let mut content = None;

@@ -27,6 +27,7 @@ use crate::{
 
 use crate::gestures::{GestureTuning, RecognizedTouchGesture, TouchGestureRecognizer};
 use crate::interactive::TouchEvent;
+use crate::view::ViewElementState;
 use anyhow::{Context as _, Result, anyhow};
 use collections::{FxHashMap, FxHashSet};
 use derive_more::{Deref, DerefMut};
@@ -1088,6 +1089,50 @@ pub(crate) struct PaintIndex {
     accessed_element_states_index: usize,
     tab_handle_index: usize,
     line_layout_index: LineLayoutIndex,
+}
+
+impl PrepaintStateIndex {
+    fn relocated(&self, previous: &Self, current: &Self) -> Self {
+        Self {
+            hitboxes_index: self.hitboxes_index - previous.hitboxes_index + current.hitboxes_index,
+            tooltips_index: self.tooltips_index - previous.tooltips_index + current.tooltips_index,
+            deferred_draws_index: self.deferred_draws_index - previous.deferred_draws_index
+                + current.deferred_draws_index,
+            dispatch_tree_index: self.dispatch_tree_index - previous.dispatch_tree_index
+                + current.dispatch_tree_index,
+            accessed_element_states_index: self.accessed_element_states_index
+                - previous.accessed_element_states_index
+                + current.accessed_element_states_index,
+            line_layout_index: self
+                .line_layout_index
+                .relocated(&previous.line_layout_index, &current.line_layout_index),
+        }
+    }
+}
+
+impl PaintIndex {
+    fn relocated(&self, previous: &Self, current: &Self) -> Self {
+        Self {
+            scene_index: self.scene_index - previous.scene_index + current.scene_index,
+            #[cfg(any(test, feature = "test-support"))]
+            debug_bounds_index: self.debug_bounds_index - previous.debug_bounds_index
+                + current.debug_bounds_index,
+            mouse_listeners_index: self.mouse_listeners_index - previous.mouse_listeners_index
+                + current.mouse_listeners_index,
+            input_handlers_index: self.input_handlers_index - previous.input_handlers_index
+                + current.input_handlers_index,
+            cursor_styles_index: self.cursor_styles_index - previous.cursor_styles_index
+                + current.cursor_styles_index,
+            accessed_element_states_index: self.accessed_element_states_index
+                - previous.accessed_element_states_index
+                + current.accessed_element_states_index,
+            tab_handle_index: self.tab_handle_index - previous.tab_handle_index
+                + current.tab_handle_index,
+            line_layout_index: self
+                .line_layout_index
+                .relocated(&previous.line_layout_index, &current.line_layout_index),
+        }
+    }
 }
 
 impl Frame {
@@ -4012,6 +4057,26 @@ impl Window {
     }
 
     pub(crate) fn reuse_prepaint(&mut self, range: Range<PrepaintStateIndex>) {
+        let current = self.prepaint_index();
+        // Replaying an ancestor bypasses its descendants' prepaint methods.
+        // Their saved ranges must follow the resources into the new frame.
+        for key in &self.rendered_frame.accessed_element_states
+            [range.start.accessed_element_states_index..range.end.accessed_element_states_index]
+        {
+            if key.1 == TypeId::of::<ViewElementState>() {
+                let state = self
+                    .rendered_frame
+                    .element_states
+                    .get_mut(key)
+                    .and_then(|state| state.inner.downcast_mut::<Option<ViewElementState>>())
+                    .and_then(Option::as_mut);
+                if let Some(state) = state {
+                    state.prepaint_range =
+                        state.prepaint_range.start.relocated(&range.start, &current)
+                            ..state.prepaint_range.end.relocated(&range.start, &current);
+                }
+            }
+        }
         self.next_frame.hitboxes.extend(
             self.rendered_frame.hitboxes[range.start.hitboxes_index..range.end.hitboxes_index]
                 .iter()
@@ -4077,6 +4142,23 @@ impl Window {
     }
 
     pub(crate) fn reuse_paint(&mut self, range: Range<PaintIndex>) {
+        let current = self.paint_index();
+        for key in &self.rendered_frame.accessed_element_states
+            [range.start.accessed_element_states_index..range.end.accessed_element_states_index]
+        {
+            if key.1 == TypeId::of::<ViewElementState>() {
+                let state = self
+                    .rendered_frame
+                    .element_states
+                    .get_mut(key)
+                    .and_then(|state| state.inner.downcast_mut::<Option<ViewElementState>>())
+                    .and_then(Option::as_mut);
+                if let Some(state) = state {
+                    state.paint_range = state.paint_range.start.relocated(&range.start, &current)
+                        ..state.paint_range.end.relocated(&range.start, &current);
+                }
+            }
+        }
         // Cached elements still exist in the frame even when their paint methods don't run.
         #[cfg(any(test, feature = "test-support"))]
         for (selector, bounds) in &self.rendered_frame.debug_bounds_records
@@ -4394,7 +4476,9 @@ impl Window {
     /// Element-state IDs used in the current frame's prepaint, including state
     /// replayed from cached views. Overlays can use these during paint to avoid
     /// drawing elements retained only by the previous frame.
-    pub fn prepainted_element_state_ids<S: 'static>(&self) -> impl Iterator<Item = &GlobalElementId> {
+    pub fn prepainted_element_state_ids<S: 'static>(
+        &self,
+    ) -> impl Iterator<Item = &GlobalElementId> {
         self.invalidator.debug_assert_paint_or_prepaint();
         let state_type = TypeId::of::<S>();
         self.next_frame
