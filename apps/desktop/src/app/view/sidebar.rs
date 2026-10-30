@@ -542,35 +542,39 @@ impl Desktop {
                 add_project: None,
             })
             .footer(
-                v_flex().w_full().children(self.app_updates.clone()).child(
-                    h_flex()
-                        .w_full()
-                        .gap_2()
-                        .justify_between()
-                        .py_2()
-                        .child(
-                            Self::icon_button(
-                                "sidebar-settings",
-                                IconName::Settings,
-                                "設定を開く",
-                                cx,
-                                |s, _, cx| {
-                                    s.open_settings();
-                                    if let Some(hosts) = &s.hosts {
-                                        hosts.update(cx, |hosts, _| hosts.refresh());
-                                    }
-                                },
-                            )
-                            .debug_selector(|| "sidebar-settings".into()),
+                h_flex()
+                    .w_full()
+                    .gap_2()
+                    .justify_between()
+                    .py_2()
+                    .child(
+                        Self::icon_button(
+                            "sidebar-settings",
+                            IconName::Settings,
+                            "設定を開く",
+                            cx,
+                            |s, _, cx| {
+                                s.open_settings();
+                                if let Some(hosts) = &s.hosts {
+                                    hosts.update(cx, |hosts, _| hosts.refresh());
+                                }
+                            },
                         )
-                        .child(Self::icon_button(
+                        .debug_selector(|| "sidebar-settings".into()),
+                    )
+                    .child(if let Some(updates) = &self.app_updates {
+                        updates.clone().into_any_element()
+                    } else {
+                        Self::icon_button(
                             "refresh-threads",
                             IconName::RotateCw,
                             "会話を更新",
                             cx,
                             |s, _, _| s.refresh_threads(),
-                        )),
-                ),
+                        )
+                        .debug_selector(|| "refresh-threads".into())
+                        .into_any_element()
+                    }),
             )
     }
     fn draggable_chat(
@@ -872,6 +876,12 @@ mod tests {
         window.simulate_resize(size(px(1000.), px(700.)));
         window.run_until_parked();
         let original = window.debug_bounds("desktop-sidebar-shell").unwrap();
+        let settings_button = window.debug_bounds("sidebar-settings").unwrap();
+        let refresh_button = window.debug_bounds("refresh-threads").unwrap();
+        assert_eq!(refresh_button.size, settings_button.size);
+        assert_eq!(refresh_button.center().y, settings_button.center().y);
+        assert!(refresh_button.left() > settings_button.right());
+        assert!(window.debug_bounds("app-update").is_none());
         let project = window.debug_bounds("project-brand").unwrap().center();
         let icon = window.debug_bounds("project-monogram").unwrap();
         assert_eq!(icon.size, size(px(16.), px(16.)));
@@ -893,6 +903,8 @@ mod tests {
         let settings = window.debug_bounds("sidebar-settings").unwrap().center();
         window.simulate_click(settings, Modifiers::default());
         window.run_until_parked();
+        assert!(window.debug_bounds("refresh-threads").is_none());
+        assert!(window.debug_bounds("app-update").is_none());
         assert_eq!(
             window.debug_bounds("desktop-sidebar-shell").unwrap(),
             original
@@ -922,6 +934,10 @@ mod tests {
         let back = window.debug_bounds("settings-back").unwrap().center();
         window.simulate_click(back, Modifiers::default());
         window.run_until_parked();
+        assert_eq!(
+            window.debug_bounds("refresh-threads").unwrap(),
+            refresh_button
+        );
         assert_eq!(
             window.debug_bounds("desktop-sidebar-shell").unwrap(),
             original

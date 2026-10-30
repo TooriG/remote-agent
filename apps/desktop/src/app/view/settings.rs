@@ -43,19 +43,13 @@ impl Desktop {
                 add_project: None,
             })
             .footer(
-                v_flex()
-                    .w_full()
-                    .gap_2()
-                    .children(self.app_updates.clone())
-                    .child(
-                        self.button("settings-back", "会話に戻る", cx, |s, _, _| {
-                            s.tab = Tab::Chat
-                        })
-                        .icon(IconName::ArrowLeft)
-                        .debug_selector(|| "settings-back".into())
-                        .w_full()
-                        .h(px(40.)),
-                    ),
+                self.button("settings-back", "会話に戻る", cx, |s, _, _| {
+                    s.tab = Tab::Chat
+                })
+                .icon(IconName::ArrowLeft)
+                .debug_selector(|| "settings-back".into())
+                .w_full()
+                .h(px(40.)),
             )
     }
 

@@ -6,6 +6,8 @@ use gpui_kit::http_client::{AsyncBody, HttpClient, HttpRequestExt, Request};
 use gpui_kit::{
     component::{
         button::{Button, ButtonVariants},
+        progress::ProgressCircle,
+        spinner::Spinner,
         *,
     },
     prelude::FluentBuilder,
@@ -27,6 +29,9 @@ enum State {
 pub struct Updates {
     state: State,
 }
+
+pub struct RefreshThreads;
+impl EventEmitter<RefreshThreads> for Updates {}
 
 pub fn build_number() -> u64 {
     option_env!("AGENT_BUILD_NUMBER")
@@ -96,9 +101,7 @@ impl Updates {
             loop {
                 if view
                     .update(cx, |view, cx| {
-                        if build_number() != 0
-                            && matches!(view.state, State::Current | State::Available(_))
-                        {
+                        if matches!(view.state, State::Current | State::Available(_)) {
                             view.check(cx);
                         }
                     })
@@ -116,15 +119,11 @@ impl Updates {
     }
 
     fn check(&mut self, cx: &mut Context<Self>) {
+        if build_number() == 0 {
+            return;
+        }
         if let Ok(directory) = crate::platform::state_dir() {
             let _ = std::fs::remove_file(directory.join(install::RESULT_FILE));
-        }
-        if build_number() == 0 {
-            self.state = State::Failed(
-                "開発版ではアプリ内更新を利用できません。配布版のBexから更新してください。".into(),
-            );
-            cx.notify();
-            return;
         }
         self.state = State::Checking;
         cx.notify();
@@ -250,7 +249,10 @@ impl Updates {
                 })
                 .detach();
             }
-            State::Current | State::Failed(_) => self.check(cx),
+            State::Current | State::Failed(_) => {
+                cx.emit(RefreshThreads);
+                self.check(cx);
+            }
             _ => {}
         }
     }
@@ -258,65 +260,103 @@ impl Updates {
 
 impl Render for Updates {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (label, tooltip, disabled) = match &self.state {
-            State::Checking => (
-                "更新を確認中…".into(),
-                "最新版を確認しています。".into(),
-                true,
-            ),
-            State::Current => (
-                "更新を確認".into(),
-                "Bexの最新版を確認します。".into(),
-                false,
-            ),
+        let (icon, tooltip, disabled) = match &self.state {
+            State::Checking => (Icon::new(IconName::RotateCw), "更新を確認中…".into(), true),
+            State::Current => (Icon::new(IconName::RotateCw), "会話を更新".into(), false),
             State::Available(download) => (
-                "更新をダウンロード".into(),
+                Icon::default().path("icons/download.svg"),
                 format!("Bex {}をダウンロードします。", download.build),
                 false,
             ),
             State::Downloading(percent) => (
+                Icon::default().path("icons/download.svg"),
                 format!("ダウンロード中 {percent}%"),
-                "ダウンロードと検証が完了するまで、このまま作業できます。".into(),
                 true,
             ),
             State::Ready(plan) => (
-                "再起動して更新".into(),
+                Icon::new(IconName::RotateCw),
                 format!(
-                    "Bex {}に更新します。中断した会話は同じ会話で再開します。",
+                    "再起動してBex {}に更新します。中断した会話は同じ会話で再開します。",
                     plan.build
                 ),
                 false,
             ),
             State::Installing => (
+                Icon::new(IconName::RotateCw),
                 "再起動の準備中…".into(),
-                "会話と設定を保存しています。".into(),
                 true,
             ),
-            State::Failed(error) => ("更新を再試行".into(), error.clone(), false),
+            State::Failed(error) => (
+                Icon::new(IconName::RotateCw),
+                format!("更新を再試行: {error}"),
+                false,
+            ),
         };
-        v_flex()
-            .w_full()
-            .gap_1()
-            .child(
-                Button::new("app-update")
-                    .debug_selector(|| "app-update".into())
-                    .small()
-                    .ghost()
-                    .w_full()
-                    .icon(IconName::RotateCw)
-                    .label(label.clone())
-                    .accessibility_label(label)
-                    .tooltip(tooltip)
-                    .disabled(disabled)
-                    .on_click(cx.listener(|view, _, _, cx| view.activate(cx))),
-            )
+        let icon = if matches!(self.state, State::Checking | State::Installing) {
+            Spinner::new().icon(icon).small().into_any_element()
+        } else {
+            icon.small().into_any_element()
+        };
+        let foreground = cx.theme().foreground;
+        let background = cx.theme().sidebar;
+        let content = h_flex()
+            .relative()
+            .size_6()
+            .justify_center()
+            .child(icon)
+            .when(matches!(self.state, State::Available(_)), |content| {
+                content.child(
+                    div()
+                        .absolute()
+                        .top(px(2.))
+                        .right(px(2.))
+                        .size(px(5.))
+                        .rounded_full()
+                        .bg(foreground),
+                )
+            })
+            .when(matches!(self.state, State::Ready(_)), |content| {
+                content.child(
+                    h_flex()
+                        .absolute()
+                        .bottom_0()
+                        .right_0()
+                        .size(px(9.))
+                        .justify_center()
+                        .rounded_full()
+                        .bg(foreground)
+                        .text_color(background)
+                        .child(Icon::new(IconName::Check).size(px(7.))),
+                )
+            })
             .when_some(
-                match &self.state {
-                    State::Failed(error) => Some(error.clone()),
+                match self.state {
+                    State::Downloading(percent) => Some(percent),
                     _ => None,
                 },
-                |view, error| view.child(div().text_xs().px_2().child(error)),
-            )
+                |content, percent| {
+                    content.child(
+                        ProgressCircle::new("update-download-progress")
+                            .absolute()
+                            .inset_0()
+                            .size_full()
+                            .color(foreground)
+                            .value(f32::from(percent))
+                            .accessibility_label("更新のダウンロード進捗"),
+                    )
+                },
+            );
+        Button::new("refresh-threads")
+            .debug_selector(|| "refresh-threads".into())
+            .small()
+            .ghost()
+            .size_6()
+            .p_0()
+            .child(content)
+            .accessibility_label(tooltip.clone())
+            .tooltip(tooltip)
+            .disabled(disabled)
+            .on_click(cx.listener(|view, _, _, cx| view.activate(cx)))
     }
 }
 
@@ -375,24 +415,41 @@ async fn download(
 
 #[cfg(test)]
 mod tests {
-    use super::{Download, State, Updates, download};
+    use super::{Download, RefreshThreads, State, Updates, build_number, download, install};
     use gpui_kit as gpui;
     use gpui_kit::{
         Modifiers,
         http_client::{AsyncBody, FakeHttpClient, Response},
     };
+    use std::{cell::Cell, rc::Rc, sync::Arc};
 
-    #[tokio::test]
-    async fn downloads_are_checked_before_they_can_be_installed_and_can_be_retried() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("update.zip");
-        let release = Download {
+    fn release() -> Download {
+        Download {
             build: 95,
             file_name: "update.zip".into(),
             url: "https://example.test/update.zip".into(),
             size: 3,
             sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into(),
-        };
+        }
+    }
+
+    fn plan(directory: std::path::PathBuf) -> install::Plan {
+        install::Plan {
+            build: 95,
+            payload: "payload".into(),
+            destination: "destination".into(),
+            backup: "backup".into(),
+            executable: "executable".into(),
+            directory,
+            isolated: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn downloads_are_checked_before_they_can_be_installed_and_can_be_retried() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("update.zip");
+        let release = release();
         for (body, status, success) in [
             ("ab", 200, false),
             ("abcd", 200, false),
@@ -417,13 +474,116 @@ mod tests {
     }
 
     #[gpui::test]
+    fn the_refresh_control_keeps_its_size_through_update_states(cx: &mut gpui::TestAppContext) {
+        cx.update(crate::appearance::init);
+        let (view, window) = cx.add_window_view(|_, _| Updates {
+            state: State::Current,
+        });
+        window.run_until_parked();
+        let original = window.debug_bounds("refresh-threads").unwrap();
+        assert_eq!(original.size, gpui::size(gpui::px(24.), gpui::px(24.)));
+        for state in [
+            State::Checking,
+            State::Available(release()),
+            State::Downloading(50),
+            State::Ready(plan("directory".into())),
+            State::Installing,
+            State::Failed("Download failed".into()),
+        ] {
+            view.update(window, |view, cx| {
+                view.state = state;
+                cx.notify();
+            });
+            window.run_until_parked();
+            assert_eq!(window.debug_bounds("refresh-threads").unwrap(), original);
+            assert!(window.debug_bounds("app-update").is_none());
+        }
+    }
+
+    #[gpui::test]
+    fn the_same_button_refreshes_chats_then_downloads_an_available_update(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        // Keep network work parked; this test exercises click dispatch only.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        cx.update(|cx| {
+            crate::appearance::init(cx);
+            cx.set_global(crate::Runtime {
+                handle: runtime.handle().clone(),
+                connections: Arc::default(),
+                closing: tokio_util::task::TaskTracker::new(),
+                logging_error: None,
+            });
+        });
+        let (view, window) = cx.add_window_view(|_, _| Updates {
+            state: State::Current,
+        });
+        let refreshes = Rc::new(Cell::new(0));
+        let received = refreshes.clone();
+        let _subscription = window.update(|_, cx| {
+            cx.subscribe(&view, move |_, _: &RefreshThreads, _| {
+                received.set(received.get() + 1);
+            })
+        });
+        window.run_until_parked();
+        let bounds = window.debug_bounds("refresh-threads").unwrap();
+        window.simulate_click(bounds.center(), Modifiers::default());
+        window.run_until_parked();
+        assert_eq!(refreshes.get(), 1);
+        if build_number() == 0 {
+            view.update(window, |view, _| {
+                assert!(matches!(view.state, State::Current))
+            });
+        }
+        view.update(window, |view, cx| {
+            view.state = State::Failed("Connection interrupted".into());
+            cx.notify();
+        });
+        window.run_until_parked();
+        window.simulate_click(bounds.center(), Modifiers::default());
+        window.run_until_parked();
+        assert_eq!(refreshes.get(), 2);
+
+        view.update(window, |view, cx| {
+            view.state = State::Available(release());
+            cx.notify();
+        });
+        window.run_until_parked();
+        window.simulate_click(bounds.center(), Modifiers::default());
+        window.run_until_parked();
+        view.update(window, |view, _| {
+            assert!(matches!(view.state, State::Downloading(0)));
+        });
+        assert_eq!(refreshes.get(), 2);
+
+        // A failed restart leaves the same control usable for a retry. The
+        // missing directory prevents launching a worker or touching an app.
+        let directory = tempfile::tempdir().unwrap();
+        view.update(window, |view, cx| {
+            view.state = State::Ready(plan(directory.path().join("missing")));
+            cx.notify();
+        });
+        window.run_until_parked();
+        window.simulate_click(bounds.center(), Modifiers::default());
+        window.run_until_parked();
+        view.update(window, |view, _| {
+            assert!(matches!(view.state, State::Failed(_)));
+        });
+        assert_eq!(window.debug_bounds("refresh-threads").unwrap(), bounds);
+        assert_eq!(refreshes.get(), 2);
+    }
+
+    #[gpui::test]
     fn progress_buttons_ignore_repeated_clicks(cx: &mut gpui_kit::TestAppContext) {
         cx.update(crate::appearance::init);
         let (view, window) = cx.add_window_view(|_, _| Updates {
             state: State::Downloading(50),
         });
         window.run_until_parked();
-        let bounds = window.debug_bounds("app-update").unwrap();
+        let bounds = window.debug_bounds("refresh-threads").unwrap();
         window.simulate_click(bounds.center(), Modifiers::default());
         window.run_until_parked();
         view.update(window, |view, cx| {
@@ -432,7 +592,7 @@ mod tests {
             cx.notify();
         });
         window.run_until_parked();
-        let bounds = window.debug_bounds("app-update").unwrap();
+        let bounds = window.debug_bounds("refresh-threads").unwrap();
         window.simulate_click(bounds.center(), Modifiers::default());
         window.run_until_parked();
         view.update(window, |view, _| {
