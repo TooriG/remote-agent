@@ -1,5 +1,5 @@
 // Separate iPhone app for the development Host. APNs environment follows signing.
-CURRENT_PROJECT_VERSION = 105
+CURRENT_PROJECT_VERSION = 106
 AGENT_DEV_BUNDLE_Bex = dev.remoteagent.mobile.ios.dev
 AGENT_DEV_BUNDLE_TaskActivityExtension = dev.remoteagent.mobile.ios.dev.TaskActivity
 AGENT_DEV_BUNDLE_UITests = dev.remoteagent.mobile.ios.dev.uitests

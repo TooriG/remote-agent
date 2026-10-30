@@ -47,10 +47,11 @@ extension ThreadScreen {
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
                                 .overlay(alignment: .topTrailing) {
                                     Button { model.removeAttachment(index) } label: {
-                                        Image(systemName: "xmark.circle.fill")
-                                            .font(.title3)
-                                            .symbolRenderingMode(.hierarchical)
-                                            .foregroundStyle(.secondary)
+                                        Image(systemName: "xmark")
+                                            .font(.system(size: 9, weight: .semibold))
+                                            .foregroundStyle(.black)
+                                            .frame(width: 18, height: 18)
+                                            .background(.white, in: Circle())
                                             .frame(width: 44, height: 44, alignment: .topTrailing)
                                             .contentShape(Rectangle())
                                     }
@@ -85,7 +86,7 @@ extension ThreadScreen {
                             .accessibilityIdentifier("dictation.processing")
                     } else {
                         messageField
-                            .font(.body)
+                            .font(.system(size: 18))
                     }
                 }
                 .padding(.horizontal, 8)
@@ -176,10 +177,10 @@ extension ThreadScreen {
                             ProgressView().frame(width: 40, height: 40)
                         } else {
                             Image(systemName: dictation.isRecording ? "stop.fill" : "mic")
-                                .font(dictation.isRecording ? .body : .title2)
-                                .foregroundStyle(dictation.isRecording ? .red : .primary)
+                                .font(.system(size: dictation.isRecording ? 13 : 23))
+                                .foregroundColor(dictation.isRecording ? .white : .primary)
                                 .frame(width: 34, height: 34)
-                                .background(dictation.isRecording ? Color.red.opacity(0.12) : .clear, in: Circle())
+                                .background(dictation.isRecording ? Color(white: 0.2) : .clear, in: Circle())
                                 .frame(width: 44, height: 44)
                         }
                     }
@@ -196,9 +197,7 @@ extension ThreadScreen {
                         Button { model.interrupt(runningTurnId) } label: {
                             Image(systemName: "stop.fill").font(.system(size: 15))
                         }
-                        .buttonStyle(.borderedProminent)
-                        .buttonBorderShape(.circle)
-                        .controlSize(.large)
+                        .buttonStyle(ComposerSendButtonStyle())
                         .disabled(model.interruptingTurnId == runningTurnId)
                         .accessibilityLabel(model.interruptingTurnId == runningTurnId ? "停止中" : "停止")
                         .accessibilityIdentifier("turn.interrupt.\(runningTurnId)")
@@ -221,9 +220,7 @@ extension ThreadScreen {
                         } label: {
                             Image(systemName: "arrow.up").font(.system(size: 20, weight: .semibold))
                         }
-                        .buttonStyle(.borderedProminent)
-                        .buttonBorderShape(.circle)
-                        .controlSize(.large)
+                        .buttonStyle(ComposerSendButtonStyle())
                         .accessibilityLabel(dictation.isRecording ? "文字起こしして送信" : "送信")
                         .disabled(!model.isConnected || (!model.isNewThread && conversation == nil) || model
                             .snapshot.modelProviderForDraft(threadId: model.coreDraftKey) == nil || model
@@ -237,7 +234,8 @@ extension ThreadScreen {
             }
             .buttonStyle(.plain)
             .padding(7)
-            .glassEffect(.regular, in: .rect(cornerRadius: 26))
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 30))
+            .overlay(RoundedRectangle(cornerRadius: 30).stroke(Color.primary.opacity(0.12)))
         }
         .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 8)
         .background(LinearGradient(
@@ -315,6 +313,18 @@ extension ThreadScreen {
             }
         }
         .id(model.draftKey)
+    }
+}
+
+private struct ComposerSendButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundColor(.primary)
+            .opacity(isEnabled ? (configuration.isPressed ? 0.7 : 1) : 0.3)
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
     }
 }
 

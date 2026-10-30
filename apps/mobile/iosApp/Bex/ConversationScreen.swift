@@ -220,10 +220,11 @@ struct ThreadScreen: View {
                             withAnimation { scrollPosition.scrollTo(edge: .bottom) }
                         } label: {
                             Image(systemName: "arrow.down").font(.title3.weight(.medium))
+                                .foregroundStyle(.white)
                                 .frame(width: 44, height: 44)
+                                .background(Color(white: 0.19), in: Circle())
                         }
-                        .buttonStyle(.glass)
-                        .buttonBorderShape(.circle)
+                        .buttonStyle(.plain)
                         .accessibilityLabel("最新のメッセージへ")
                         .accessibilityIdentifier("task.latest")
                         .padding(.bottom, 6)
@@ -274,7 +275,7 @@ extension ThreadScreen {
 
     var conversationTitle: some View {
         let directory = model.selectedDirectory
-        return VStack(spacing: 2) {
+        return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
                 Text(conversation?.title ?? (model.isNewThread ? "チャット" : "タスク"))
                     .font(.headline).lineLimit(1)
@@ -289,9 +290,9 @@ extension ThreadScreen {
                 project?.name ?? (directory.isEmpty ? "" : URL(fileURLWithPath: directory).lastPathComponent),
                 model.selectedProfileName ?? "Mac"
             ].filter { !$0.isEmpty }.joined(separator: " · "))
-                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                .font(.subheadline).foregroundColor(.secondary).lineLimit(1)
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     var conversationActions: some View {
@@ -341,6 +342,7 @@ extension ThreadScreen {
                 } label: {
                     Text(project?
                         .name ?? (directory.isEmpty ? "チャット" : URL(fileURLWithPath: directory).lastPathComponent))
+                        .underline()
                         .lineLimit(2)
                         .truncationMode(.middle)
                         .frame(minWidth: 44, minHeight: 44)
@@ -348,7 +350,7 @@ extension ThreadScreen {
                 .accessibilityLabel("フォルダ: \(project?.name ?? (directory.isEmpty ? "チャット" : directory))")
                 .accessibilityIdentifier("task.folder")
             }
-            .font(.title2)
+            .font(.largeTitle.weight(.medium))
             Menu {
                 ForEach(model.profiles, id: \.id) { profile in
                     Button { model.openNewThread(on: profile.id) } label: {
