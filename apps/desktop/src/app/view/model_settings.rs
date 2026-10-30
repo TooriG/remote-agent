@@ -257,7 +257,7 @@ impl Desktop {
                 |view| {
                     let scope = self.model_controls.settings_scope.clone();
                     view.child(
-                        self.button(
+                        Self::button(
                             "model-defaults-inherit",
                             "共通設定を使う",
                             cx,
@@ -366,7 +366,7 @@ impl Desktop {
             (ProviderKind::DeepSeek, "DeepSeek"),
         ] {
             services = services.child(
-                self.button(
+                Self::button(
                     format!("model-provider-{label}"),
                     if value == ProviderKind::DeepSeek {
                         "DSH"
@@ -418,10 +418,10 @@ impl Desktop {
                 .child(div().text_sm().text_color(rgb(appearance::MUTED))
                     .child("選択中の環境のCLIを更新します。更新後は実行中の会話が終わってからHostを再起動してください。モデル一覧は再接続時に再取得します。"))
                 .child(h_flex().gap_2()
-                    .child(self.button("codex-cli-update", if updating { "確認・更新中…" } else { "最新版に更新" }, cx, |s, _, _| {
+                    .child(Self::button("codex-cli-update", if updating { "確認・更新中…" } else { "最新版に更新" }, cx, |s, _, _| {
                         s.dispatch(Intent::ManageCodexCli(op::ManageCodexCli { update: true }));
                     }).disabled(disabled || updating).debug_selector(|| "codex-cli-update".into()))
-                    .child(self.button("codex-cli-refresh", "状態を確認", cx, |s, _, _| {
+                    .child(Self::button("codex-cli-refresh", "状態を確認", cx, |s, _, _| {
                         s.dispatch(Intent::ManageCodexCli(op::ManageCodexCli { update: false }));
                         s.refresh_accounts_and_models();
                     }).disabled(disabled || updating)));
@@ -507,7 +507,7 @@ impl Desktop {
                         })
                         .when(manage && provider == ProviderKind::Codex, |row| {
                             row.child(
-                                self.button(format!("account-usage-manage-{index}"), "追加クレジット・上限を管理", cx, |s, _, cx| {
+                                Self::button(format!("account-usage-manage-{index}"), "追加クレジット・上限を管理", cx, |s, _, cx| {
                                     s.open_browser(s.panel_scope(), "https://chatgpt.com/settings/usage", cx);
                                 }).small().ghost()
                             ).child(div().text_xs().text_color(rgb(appearance::MUTED))
@@ -522,7 +522,7 @@ impl Desktop {
                                 h_flex()
                                     .gap_2()
                                     .child(
-                                        self.button(
+                                        Self::button(
                                             format!("account-logout-confirm-{index}"),
                                             "サインアウト",
                                             cx,
@@ -539,7 +539,7 @@ impl Desktop {
                                         .disabled(disabled),
                                     )
                                     .child(
-                                        self.button(
+                                        Self::button(
                                             format!("account-logout-cancel-{index}"),
                                             "キャンセル",
                                             cx,
@@ -551,15 +551,14 @@ impl Desktop {
                                     ),
                             );
                     } else if manage {
-                        let logout = self
-                            .button(
-                                format!("account-logout-{index}"),
-                                "サインアウト",
-                                cx,
-                                move |s, _, _| s.account.sign_out = Some(logout_id.clone()),
-                            )
-                            .debug_selector(move || format!("account-logout-{index}"))
-                            .disabled(disabled);
+                        let logout = Self::button(
+                            format!("account-logout-{index}"),
+                            "サインアウト",
+                            cx,
+                            move |s, _, _| s.account.sign_out = Some(logout_id.clone()),
+                        )
+                        .debug_selector(move || format!("account-logout-{index}"))
+                        .disabled(disabled);
                         row = if in_settings {
                             row.child(h_flex().justify_end().child(logout))
                         } else {
@@ -580,7 +579,7 @@ impl Desktop {
                         .justify_between()
                         .gap_2()
                         .child(
-                            self.button(
+                            Self::button(
                                 "account-start-login",
                                 "アカウントを追加",
                                 cx,
@@ -592,7 +591,7 @@ impl Desktop {
                             .disabled(disabled),
                         )
                         .child(
-                            self.button(
+                            Self::button(
                                 "accounts-refresh",
                                 "使用量を再取得",
                                 cx,
@@ -606,7 +605,7 @@ impl Desktop {
                 );
             } else {
                 body = body.child(
-                    self.button(
+                    Self::button(
                         "model-accounts-manage",
                         "アカウントを管理",
                         cx,
@@ -733,7 +732,7 @@ impl Desktop {
                     .gap_2()
                     .children(controls.iter().map(|route| {
                         let provider = route.provider;
-                        self.button(
+                        Self::button(
                             format!("dsh-key-{}", provider.reference()),
                             route.label.clone(),
                             cx,
@@ -752,7 +751,7 @@ impl Desktop {
             )
             .child(selected.status.clone())
             .child(
-                self.button(
+                Self::button(
                     "account-open-login",
                     "APIキーを取得",
                     cx,
@@ -770,7 +769,7 @@ impl Desktop {
                             .child(Input::new(&self.account.code).aria_label("APIキー")),
                     )
                     .child(
-                        self.button("account-submit-code", "保存", cx, |s, window, cx| {
+                        Self::button("account-submit-code", "保存", cx, |s, window, cx| {
                             let key = s.account.code.read(cx).value().to_string();
                             if key.trim().is_empty() {
                                 return;
@@ -790,7 +789,7 @@ impl Desktop {
                     ),
             )
             .child(
-                self.button(
+                Self::button(
                     "dsh-credentials-refresh",
                     "設定状態を取得",
                     cx,
@@ -801,7 +800,7 @@ impl Desktop {
             );
         if selected.can_remove {
             form = form.child(
-                self.button(
+                Self::button(
                     "dsh-key-remove",
                     "この接続先のキーを削除",
                     cx,
@@ -821,7 +820,7 @@ impl Desktop {
         if selected.provider == agent_protocol::dsh::KeyProvider::OpenRouter && selected.can_remove
         {
             form = form.child(
-                self.button(
+                Self::button(
                     "dsh-openrouter-models",
                     "OpenRouterのモデル一覧を開く",
                     cx,
@@ -853,22 +852,21 @@ impl Desktop {
         let url = login.verification_url.clone();
         let cancel_id = login.login_id.clone();
         let provider = login.provider;
-        let cancel = self
-            .button(
-                "account-cancel-login",
-                "キャンセル",
-                cx,
-                move |s, _, _| {
-                    s.account_operation(Intent::CancelAccountLogin(op::CancelAccountLogin {
-                        provider,
-                        id: cancel_id.clone(),
-                    }));
-                },
-            )
-            .debug_selector(|| "account-cancel-login".into())
-            .small()
-            .ghost()
-            .disabled(disabled);
+        let cancel = Self::button(
+            "account-cancel-login",
+            "キャンセル",
+            cx,
+            move |s, _, _| {
+                s.account_operation(Intent::CancelAccountLogin(op::CancelAccountLogin {
+                    provider,
+                    id: cancel_id.clone(),
+                }));
+            },
+        )
+        .debug_selector(|| "account-cancel-login".into())
+        .small()
+        .ghost()
+        .disabled(disabled);
         let mut form = v_flex()
             .gap_3()
             .text_sm()
@@ -878,7 +876,7 @@ impl Desktop {
                 "ブラウザでログインし、次のコードを入力してください。"
             })
             .child(
-                self.button(
+                Self::button(
                     "account-open-login",
                     "ブラウザでログイン",
                     cx,
@@ -901,7 +899,7 @@ impl Desktop {
                             .child(Input::new(&self.account.code).aria_label("認証コード")),
                     )
                     .child(
-                        self.button("account-submit-code", "接続", cx, move |s, window, cx| {
+                        Self::button("account-submit-code", "接続", cx, move |s, window, cx| {
                             let code = s.account.code.read(cx).value().to_string();
                             if code.trim().is_empty() {
                                 return;
@@ -928,7 +926,7 @@ impl Desktop {
                     .gap_3()
                     .child(div().text_xl().child(login.user_code.clone()))
                     .child(
-                        self.button(
+                        Self::button(
                             "account-copy-code",
                             "コードをコピー",
                             cx,
@@ -950,7 +948,7 @@ impl Desktop {
             )
             .when(!self.account.polling && !self.account.busy, |form| {
                 form.child(
-                    self.button(
+                    Self::button(
                         "account-retry-login",
                         "接続状態を再確認",
                         cx,
@@ -2009,7 +2007,11 @@ mod tests {
             self.0.update(cx, |view, cx| {
                 h_flex()
                     .size_full()
-                    .child(view.settings_sidebar(cx))
+                    .child(Desktop::settings_sidebar(
+                        view.settings_page,
+                        view.app_updates.clone(),
+                        cx,
+                    ))
                     .child(view.settings(cx))
             })
         }

@@ -49,7 +49,7 @@ impl Desktop {
             ) {
                 let id = format!("connection-agent-{}", agent.name);
                 row = row.child(
-                    self.button(id.clone(), "ログイン", cx, move |view, window, cx| {
+                    Self::button(id.clone(), "ログイン", cx, move |view, window, cx| {
                         view.start_provider_setup(provider, window, cx);
                     })
                     .debug_selector(move || id.clone())
@@ -72,7 +72,7 @@ impl Desktop {
                                 .child(error_message(detail)),
                         )
                         .child(
-                            self.button(
+                            Self::button(
                                 format!("connection-agent-retry-{}", provider.key()),
                                 "再確認",
                                 cx,
@@ -190,7 +190,7 @@ impl Desktop {
                     .child("次に、既存のプロジェクトを選んで取り込めます。"),
             )
             .children((!setup.can_start).then(|| {
-                self.button(
+                Self::button(
                     "onboarding-skip-agents",
                     "AIは後で設定",
                     cx,
@@ -203,7 +203,7 @@ impl Desktop {
                 .disabled(self.connecting || !connected)
             }))
             .child(
-                self.button("onboarding-start", start_label, cx, |view, _, _| {
+                Self::button("onboarding-start", start_label, cx, |view, _, _| {
                     view.open_project_import();
                 })
                 .debug_selector(|| "onboarding-start".into())
@@ -340,7 +340,7 @@ impl Desktop {
                 h_flex()
                     .gap_2()
                     .child(
-                        self.button("import-select-all", "すべて選択", cx, |view, _, _| {
+                        Self::button("import-select-all", "すべて選択", cx, |view, _, _| {
                             view.dispatch(Intent::SelectAllImportProjects { selected: true })
                         })
                         .ghost()
@@ -348,7 +348,7 @@ impl Desktop {
                         .disabled(busy),
                     )
                     .child(
-                        self.button("import-select-none", "選択を解除", cx, |view, _, _| {
+                        Self::button("import-select-none", "選択を解除", cx, |view, _, _| {
                             view.dispatch(Intent::SelectAllImportProjects { selected: false })
                         })
                         .ghost()
@@ -454,7 +454,7 @@ impl Desktop {
             .border_t_1()
             .border_color(rgb(appearance::BORDER))
             .child(
-                self.button("import-back", "戻る", cx, |view, _, _| {
+                Self::button("import-back", "戻る", cx, |view, _, _| {
                     view.import_projects = false
                 })
                 .ghost()
@@ -463,7 +463,7 @@ impl Desktop {
             )
             .child(div().flex_1())
             .child(
-                self.button(
+                Self::button(
                     "import-skip",
                     if self.onboarding {
                         "今はスキップ"
@@ -478,7 +478,7 @@ impl Desktop {
                 .disabled(importing),
             )
             .child(
-                self.button(
+                Self::button(
                     "import-selected",
                     if busy {
                         "読み込み中…".into()

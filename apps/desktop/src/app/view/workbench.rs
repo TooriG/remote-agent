@@ -83,7 +83,7 @@ impl Desktop {
                             )),
                     )
                     .child(
-                        self.button("review-changes", "レビューする", cx, |s, _, cx| {
+                        Self::button("review-changes", "レビューする", cx, |s, _, cx| {
                             cx.stop_propagation();
                             s.open_review(None, cx);
                         })
@@ -125,7 +125,7 @@ impl Desktop {
             .when(files.len() > 3, |card| {
                 card.child(
                     div().px_2().py_1().bg(rgb(appearance::RAISED)).child(
-                        self.button(
+                        Self::button(
                             "expand-review-files",
                             if self.review_expanded {
                                 "折りたたむ".to_owned()
@@ -165,7 +165,7 @@ impl Desktop {
                     .w_full()
                     .gap_1()
                     .child(
-                        self.button(
+                        Self::button(
                             format!("file-{i}"),
                             entry.name.clone(),
                             cx,
@@ -284,7 +284,7 @@ impl Desktop {
                         .gap_2()
                         .flex_wrap()
                         .child(
-                            self.button("save-file", "保存", cx, |s, _, _| s.save_file())
+                            Self::button("save-file", "保存", cx, |s, _, _| s.save_file())
                                 .primary()
                                 .disabled(self.busy > 0),
                         )
@@ -300,7 +300,7 @@ impl Desktop {
                             },
                         ))
                         .child(
-                            self.button("ai-edit", "AI に編集を依頼", cx, |s, _, _| {
+                            Self::button("ai-edit", "AI に編集を依頼", cx, |s, _, _| {
                                 if let Some(file) = &s.snapshot.workspace.file {
                                     s.dispatch(Intent::SetDraftText {
                                         thread_id: s.draft_key().clone(),
@@ -498,7 +498,7 @@ impl Desktop {
                 for (ix, tool) in self.panel_tools().into_iter().enumerate() {
                     let panel = tool.kind;
                     chooser = chooser.child(
-                        self.button(
+                        Self::button(
                             format!("tool-{ix}"),
                             tool.label,
                             cx,

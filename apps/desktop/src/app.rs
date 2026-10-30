@@ -167,6 +167,8 @@ pub(crate) struct Desktop {
     source_paths: Vec<String>,
     source_items: Vec<Arc<Item>>,
     timeline: Timeline,
+    /// Absent in side chats, which have no sidebar.
+    sidebar_view: Option<Entity<view::SidebarView>>,
     _subscriptions: Vec<Subscription>,
 }
 impl Desktop {
@@ -402,8 +404,14 @@ impl Desktop {
             source_paths: Vec::new(),
             source_items: Vec::new(),
             timeline: Timeline::new(),
+            sidebar_view: None,
             _subscriptions: subscriptions,
         };
+        if !side_chat_mode {
+            let desktop = cx.entity();
+            let sidebar = cx.new(|cx| view::SidebarView::new(&desktop, &view, cx));
+            view.sidebar_view = Some(sidebar);
+        }
         view.connect(None);
         view
     }

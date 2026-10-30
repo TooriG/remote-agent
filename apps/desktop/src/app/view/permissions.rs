@@ -113,7 +113,7 @@ impl Desktop {
         if let Some(error) = control.error {
             body = body
                 .child(div().text_sm().whitespace_normal().child(error.to_owned()))
-                .child(self.button(
+                .child(Self::button(
                     "permissions-retry",
                     "再読み込み",
                     cx,

@@ -54,6 +54,7 @@ pub(super) enum SidebarRow {
         root: String,
         expanded: bool,
         connected: bool,
+        scope: String,
         desktop: WeakEntity<Desktop>,
     },
 }
@@ -108,6 +109,7 @@ impl SidebarRow {
                 root,
                 expanded,
                 connected,
+                scope,
                 desktop,
             } => {
                 let icon = if let Some(png) = icon_png {
@@ -138,10 +140,6 @@ impl SidebarRow {
                 let menu_id = project_id.clone();
                 let menu_owner = desktop.clone();
                 let selector = format!("project-{project_id}");
-                let scope = desktop
-                    .upgrade()
-                    .map(|s| s.read(cx).snapshot.storage_scope.clone())
-                    .unwrap_or_default();
                 let drag = SidebarDrag {
                     scope: scope.clone(),
                     label: name.clone(),
@@ -321,36 +319,124 @@ impl SidebarItem for SidebarSection {
     }
 }
 
-impl Desktop {
-    pub(super) fn sidebar(&self, cx: &Context<Self>) -> AnyElement {
-        let sidebar = match self.tab {
-            Tab::Chat => self.conversation_sidebar(cx),
-            Tab::Settings => self.settings_sidebar(cx),
-        }
-        .w_full()
-        .h_auto()
-        .flex_1()
-        .min_h_0()
-        .border_r_0()
-        .bg(rgb(appearance::SIDEBAR));
-        v_flex()
-            .debug_selector(|| "desktop-sidebar-shell".into())
-            .w(px(272.))
-            .h_full()
-            .flex_shrink_0()
-            .bg(rgb(appearance::SIDEBAR))
-            .border_r_1()
-            .border_color(cx.theme().sidebar_border)
-            .child(sidebar_header(true, cx))
-            .child(sidebar)
-            .into_any_element()
-    }
+/// Everything the sidebar shows. [`SidebarView`] renders only from this value,
+/// so it re-renders exactly when the value changes.
+#[derive(PartialEq)]
+pub(in crate::app) enum SidebarModel {
+    Conversations(Conversations),
+    Settings(SettingsPage),
+}
 
-    fn conversation_sidebar(&self, cx: &Context<Self>) -> Sidebar<SidebarSection> {
-        let list = self.snapshot.thread_list();
-        let loading_session_list = self
-            .snapshot
-            .operation_running(op::OperationKey::SessionList);
+#[derive(PartialEq)]
+pub(in crate::app) struct Conversations {
+    list: Option<agent_core::presentation::list::ThreadList>,
+    selected: Option<SessionRef>,
+    storage_scope: String,
+    connected: bool,
+    /// Folders can only be picked on this computer.
+    local: bool,
+    loading_session_list: bool,
+    errors: Vec<super::errors::ErrorRow>,
+}
+
+impl Desktop {
+    pub(in crate::app) fn sidebar_model(&self) -> SidebarModel {
+        match self.tab {
+            Tab::Settings => SidebarModel::Settings(self.settings_page),
+            Tab::Chat => SidebarModel::Conversations(Conversations {
+                list: self.snapshot.thread_list(),
+                selected: self.selected().cloned(),
+                storage_scope: self.snapshot.storage_scope.clone(),
+                connected: self.snapshot.connected,
+                local: self.remote.is_none(),
+                loading_session_list: self
+                    .snapshot
+                    .operation_running(op::OperationKey::SessionList),
+                errors: self.error_rows(&ErrorScope::Projects),
+            }),
+        }
+    }
+}
+
+/// The sidebar is its own cached view, so typing, scrolling and conversation
+/// updates elsewhere in the window do not rebuild it.
+pub(in crate::app) struct SidebarView {
+    desktop: WeakEntity<Desktop>,
+    model: SidebarModel,
+    search: Entity<InputState>,
+    app_updates: Option<Entity<crate::updates::Updates>>,
+    _observation: Subscription,
+}
+
+impl SidebarView {
+    pub(in crate::app) fn new(
+        desktop: &Entity<Desktop>,
+        state: &Desktop,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self {
+            desktop: desktop.downgrade(),
+            model: state.sidebar_model(),
+            search: state.search.clone(),
+            app_updates: state.app_updates.clone(),
+            _observation: cx.observe(desktop, |sidebar, desktop, cx| {
+                let model = desktop.read(cx).sidebar_model();
+                if model != sidebar.model {
+                    sidebar.model = model;
+                    cx.notify();
+                }
+            }),
+        }
+    }
+}
+
+impl Render for SidebarView {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The Desktop's context only creates its listeners; the model is the
+        // sole source of what is shown.
+        self.desktop
+            .update(cx, |_, cx| {
+                let sidebar = match &self.model {
+                    SidebarModel::Conversations(model) => Desktop::conversation_sidebar(
+                        model,
+                        &self.search,
+                        self.app_updates.clone(),
+                        cx,
+                    ),
+                    SidebarModel::Settings(page) => {
+                        Desktop::settings_sidebar(*page, self.app_updates.clone(), cx)
+                    }
+                };
+                v_flex()
+                    .debug_selector(|| "desktop-sidebar-shell".into())
+                    .size_full()
+                    .bg(rgb(appearance::SIDEBAR))
+                    .border_r_1()
+                    .border_color(cx.theme().sidebar_border)
+                    .child(sidebar_header(true, cx))
+                    .child(
+                        sidebar
+                            .w_full()
+                            .h_auto()
+                            .flex_1()
+                            .min_h_0()
+                            .border_r_0()
+                            .bg(rgb(appearance::SIDEBAR)),
+                    )
+            })
+            .unwrap_or_else(|_| v_flex())
+    }
+}
+
+impl Desktop {
+    fn conversation_sidebar(
+        model: &Conversations,
+        search: &Entity<InputState>,
+        app_updates: Option<Entity<crate::updates::Updates>>,
+        cx: &Context<Self>,
+    ) -> Sidebar<SidebarSection> {
+        let list = &model.list;
+        let loading_session_list = model.loading_session_list;
         let mut projects = Vec::new();
         let mut last_section = Some("プロジェクト".to_string());
         let mut pinned_heading = false;
@@ -390,14 +476,17 @@ impl Desktop {
                 color: project.icon_color,
                 root: new_root,
                 expanded,
-                connected: self.snapshot.connected,
-                desktop: cx.entity().downgrade(),
+                connected: model.connected,
+                scope: model.storage_scope.clone(),
+                desktop: cx.weak_entity(),
             });
             if expanded {
                 for thread in &project.threads {
-                    projects.push(self.draggable_chat(
+                    let selected = model.selected.as_ref() == Some(&thread.id);
+                    projects.push(Self::draggable_chat(
+                        &model.storage_scope,
                         thread,
-                        self.thread_button(thread, cx).icon(Icon::empty().size_4()),
+                        Self::thread_button(thread, selected, cx).icon(Icon::empty().size_4()),
                     ));
                 }
                 if project.loading && !project.has_more {
@@ -471,7 +560,14 @@ impl Desktop {
             .map(|page| {
                 page.threads
                     .iter()
-                    .map(|thread| self.draggable_chat(thread, self.thread_button(thread, cx)))
+                    .map(|thread| {
+                        let selected = model.selected.as_ref() == Some(&thread.id);
+                        Self::draggable_chat(
+                            &model.storage_scope,
+                            thread,
+                            Self::thread_button(thread, selected, cx),
+                        )
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -496,7 +592,12 @@ impl Desktop {
                 v_flex()
                     .w_full()
                     .gap_3()
-                    .child(self.error_notices(ErrorScope::Projects, cx))
+                    .child(Self::error_list(
+                        &model.errors,
+                        ErrorScope::Projects,
+                        None,
+                        cx,
+                    ))
                     .when_some(
                         list.as_ref().and_then(|list| list.notice.clone()),
                         |this, notice| this.child(div().px_3().py_2().text_sm().child(notice)),
@@ -507,7 +608,7 @@ impl Desktop {
                             .gap_1()
                             .child(
                                 div().flex_1().min_w_0().child(
-                                    Input::new(&self.search)
+                                    Input::new(search)
                                         .small()
                                         .prefix(IconName::Search)
                                         .appearance(false)
@@ -522,7 +623,7 @@ impl Desktop {
                                     cx,
                                     |s, window, cx| s.new_chat(String::new(), window, cx),
                                 )
-                                .disabled(!self.snapshot.connected),
+                                .disabled(!model.connected),
                             ),
                     ),
             )
@@ -530,10 +631,7 @@ impl Desktop {
                 label: "プロジェクト",
                 menu: projects,
                 collapsed: false,
-                add_project: Some((
-                    cx.entity().downgrade(),
-                    self.snapshot.connected && self.remote.is_none(),
-                )),
+                add_project: Some((cx.weak_entity(), model.connected && model.local)),
             })
             .child(SidebarSection {
                 label: "チャット",
@@ -542,7 +640,7 @@ impl Desktop {
                 add_project: None,
             })
             .footer(
-                v_flex().w_full().children(self.app_updates.clone()).child(
+                v_flex().w_full().children(app_updates).child(
                     h_flex()
                         .w_full()
                         .gap_2()
@@ -574,14 +672,14 @@ impl Desktop {
             )
     }
     fn draggable_chat(
-        &self,
+        scope: &str,
         thread: &agent_core::presentation::list::ThreadSummary,
         item: SidebarMenuItem,
     ) -> SidebarRow {
         SidebarRow::Chat {
             item: Box::new(item),
             drag: SidebarDrag {
-                scope: self.snapshot.storage_scope.clone(),
+                scope: scope.into(),
                 label: thread.title.clone(),
                 kind: SidebarDragKind::Chat(thread.id.clone()),
             },
@@ -589,8 +687,8 @@ impl Desktop {
     }
 
     fn thread_button(
-        &self,
         thread: &agent_core::presentation::list::ThreadSummary,
+        selected: bool,
         cx: &Context<Self>,
     ) -> SidebarMenuItem {
         let id = thread.id.clone();
@@ -611,7 +709,7 @@ impl Desktop {
             ),
         });
         SidebarMenuItem::new(thread.title.clone())
-            .active(self.selected() == Some(&id) && self.tab != Tab::Settings)
+            .active(selected)
             .suffix(move |_, _| {
                 div()
                     .flex()
@@ -665,7 +763,8 @@ mod tests {
                 v_flex()
                     .w(px(272.))
                     .children(page.threads.iter().enumerate().map(|(index, thread)| {
-                        let button = desktop.thread_button(thread, cx);
+                        let selected = desktop.selected() == Some(&thread.id);
+                        let button = Desktop::thread_button(thread, selected, cx);
                         div()
                             .debug_selector(move || format!("task-{index}"))
                             .child(button.render(format!("task-button-{index}"), window, cx))
@@ -674,11 +773,10 @@ mod tests {
         }
     }
 
-    struct ProjectNavigation(Entity<Desktop>);
+    struct ProjectNavigation(Entity<Desktop>, Entity<super::SidebarView>);
     impl Render for ProjectNavigation {
-        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-            self.0
-                .update(cx, |desktop, cx| desktop.conversation_sidebar(cx))
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            self.1.clone()
         }
     }
 
@@ -733,11 +831,13 @@ mod tests {
                     cx,
                 )
             });
-            desktop.update(cx, |desktop, _| {
+            let sidebar = desktop.update(cx, |desktop, cx| {
                 desktop.snapshot = store.snapshot();
                 desktop.session = Some(session);
+                let entity = cx.entity();
+                cx.new(|cx| super::SidebarView::new(&entity, desktop, cx))
             });
-            ProjectNavigation(desktop)
+            ProjectNavigation(desktop, sidebar)
         });
         window.simulate_resize(size(px(320.), px(700.)));
         window.run_until_parked();
@@ -756,9 +856,10 @@ mod tests {
         window.simulate_mouse_up(to, gpui::MouseButton::Left, Modifiers::default());
         assert_eq!(store.snapshot().thread_list().unwrap().projects[0].id, "b");
         view.update(window, |view, cx| {
-            view.0
-                .update(cx, |desktop, _| desktop.snapshot = store.snapshot());
-            cx.notify();
+            view.0.update(cx, |desktop, cx| {
+                desktop.snapshot = store.snapshot();
+                cx.notify();
+            })
         });
         window.run_until_parked();
         let from = window.debug_bounds("drag-chat-moving").unwrap().center();
@@ -782,9 +883,10 @@ mod tests {
             ("drag-chat-moving", "project-a", true),
         ] {
             view.update(window, |view, cx| {
-                view.0
-                    .update(cx, |desktop, _| desktop.snapshot = store.snapshot());
-                cx.notify();
+                view.0.update(cx, |desktop, cx| {
+                    desktop.snapshot = store.snapshot();
+                    cx.notify();
+                })
             });
             window.run_until_parked();
             let from = window.debug_bounds(source).unwrap().center();
@@ -867,6 +969,7 @@ mod tests {
                 receive.recv().await.unwrap().unwrap().unwrap()
             }));
             desktop.snapshot = store.snapshot();
+            cx.notify();
             desktop
         });
         window.simulate_resize(size(px(1000.), px(700.)));
@@ -934,6 +1037,68 @@ mod tests {
     }
 
     #[gpui::test]
+    fn sidebar_renders_again_only_when_what_it_shows_changes(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        cx.update(|cx| {
+            crate::appearance::init(cx);
+            cx.set_global(Runtime {
+                handle: runtime.handle().clone(),
+                connections: Arc::default(),
+                closing: tokio_util::task::TaskTracker::new(),
+                logging_error: None,
+            });
+        });
+        let session = agent_protocol::session::SessionRef {
+            provider: agent_protocol::session::ProviderKind::Codex,
+            id: "listed".into(),
+        };
+        let (view, window) = cx.add_window_view(|window, cx| {
+            let mut desktop = Desktop::new(Mode::Main, window, cx);
+            desktop.onboarding = false;
+            Arc::make_mut(&mut desktop.snapshot).threads = Some(Arc::new(
+                serde_json::from_value(serde_json::json!({
+                    "data":[{"id":{"provider":"codex","id":"listed"},"name":"Listed task"}],
+                    "projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,}))
+                .unwrap(),
+            ));
+            cx.notify();
+            desktop
+        });
+        window.run_until_parked();
+        let renders = std::rc::Rc::new(std::cell::Cell::new(0));
+        let _observation = view.update(window, |view, cx| {
+            let renders = renders.clone();
+            cx.observe(view.sidebar_view.as_ref().unwrap(), move |_, _, _| {
+                renders.set(renders.get() + 1)
+            })
+        });
+        view.update(window, |view, cx| {
+            let snapshot = Arc::make_mut(&mut view.snapshot);
+            let draft = snapshot.navigation.draft_key.clone();
+            Arc::make_mut(&mut snapshot.drafts).insert(
+                draft,
+                Arc::new(Draft {
+                    text: "typing".into(),
+                    ..Default::default()
+                }),
+            );
+            cx.notify();
+        });
+        window.run_until_parked();
+        assert_eq!(renders.get(), 0, "typing must not rebuild the sidebar");
+        view.update(window, |view, cx| {
+            let snapshot = Arc::make_mut(&mut view.snapshot);
+            Arc::make_mut(&mut snapshot.navigation).thread_id = Some(session);
+            cx.notify();
+        });
+        window.run_until_parked();
+        assert_eq!(renders.get(), 1, "selecting a task highlights it");
+    }
+
+    #[gpui::test]
     fn running_tasks_spin_without_rebuilding_the_window(cx: &mut TestAppContext) {
         struct Counted(Entity<Desktop>, std::rc::Rc<std::cell::Cell<usize>>);
         impl Render for Counted {
@@ -966,6 +1131,7 @@ mod tests {
                         "projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,}))
                     .unwrap(),
                 ));
+                cx.notify();
                 desktop
             });
             let content = cx.new(|_| Counted(desktop, renders.clone()));

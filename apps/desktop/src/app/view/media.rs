@@ -601,7 +601,7 @@ impl Desktop {
                     .justify_center()
                     .gap_3()
                     .child(
-                        self.button("gallery-zoom-out", "−", cx, |s, _, _| {
+                        Self::button("gallery-zoom-out", "−", cx, |s, _, _| {
                             if let Some(gallery) = &mut s.timeline.gallery {
                                 gallery.zoom = (gallery.zoom - 0.25).max(0.25);
                             }
@@ -610,7 +610,7 @@ impl Desktop {
                         .disabled(zoom <= 0.25),
                     )
                     .child(
-                        self.button(
+                        Self::button(
                             "gallery-zoom-reset",
                             format!("{:.0}%", zoom * 100.),
                             cx,
@@ -623,7 +623,7 @@ impl Desktop {
                         .accessibility_label("倍率をリセット"),
                     )
                     .child(
-                        self.button("gallery-zoom-in", "+", cx, |s, _, _| {
+                        Self::button("gallery-zoom-in", "+", cx, |s, _, _| {
                             if let Some(gallery) = &mut s.timeline.gallery {
                                 gallery.zoom = (gallery.zoom + 0.25).min(4.);
                             }

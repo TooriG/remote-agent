@@ -257,7 +257,7 @@ impl Desktop {
             let toggle = id.clone();
             return v_flex()
                 .gap_2()
-                .child(self.button(
+                .child(Self::button(
                     format!("collapse-{id}"),
                     format!("⌄ {title}"),
                     cx,
@@ -266,12 +266,15 @@ impl Desktop {
                         s.timeline.remeasure_item(&toggle);
                     },
                 ))
-                .child(
-                    self.button(format!("detail-{id}"), label, cx, move |s, _, _| {
+                .child(Self::button(
+                    format!("detail-{id}"),
+                    label,
+                    cx,
+                    move |s, _, _| {
                         s.detail(key.0.clone(), key.1.clone());
                         s.timeline.remeasure_item(key.1.as_str());
-                    }),
-                )
+                    },
+                ))
                 .into_any_element();
         }
         let turn_id = turn.map(|turn| turn.id.clone()).unwrap_or_default();
@@ -307,7 +310,7 @@ impl Desktop {
                             MessagePart::Attachment { name, path }
                             | MessagePart::Invocation { name, path } => {
                                 let path = path.clone();
-                                self.button(
+                                Self::button(
                                     format!("{id}-{i}"),
                                     if path.is_empty() {
                                         name.clone()
@@ -343,7 +346,7 @@ impl Desktop {
                 );
                 let text = body_text.expect("user message has text");
                 let copied = text.to_owned();
-                let edit = self.button(format!("edit-{id}"), "", cx, move |s, window, cx| {
+                let edit = Self::button(format!("edit-{id}"), "", cx, move |s, window, cx| {
                     selection::set_composer_text(
                         &s.composer.input,
                         copied.clone().into(),
@@ -364,7 +367,7 @@ impl Desktop {
                 let label = title.expect("command has a title");
                 let toggle = id.clone();
                 let mut body = v_flex().gap_2().child(
-                    self.button(
+                    Self::button(
                         format!("expand-{id}"),
                         format!("{label} {}", if expanded { "⌄" } else { "›" }),
                         cx,
@@ -437,7 +440,7 @@ impl Desktop {
                     let row = h_flex()
                         .debug_selector(move || selector.clone())
                         .gap_2()
-                        .child(self.button(
+                        .child(Self::button(
                             format!("change-{id}-{i}"),
                             format!("{} {}", if expanded { "⌄" } else { "›" }, file_name(&path)),
                             cx,
@@ -450,7 +453,7 @@ impl Desktop {
                                 s.timeline.remeasure_item(&toggle);
                             },
                         ))
-                        .child(self.button(
+                        .child(Self::button(
                             format!("download-{id}-{i}"),
                             "ダウンロード",
                             cx,
@@ -509,7 +512,7 @@ impl Desktop {
                 let toggle = id.clone();
                 v_flex()
                     .gap_2()
-                    .child(self.button(
+                    .child(Self::button(
                         format!("unknown-{id}"),
                         format!(
                             "{} {}",
@@ -709,7 +712,7 @@ impl Desktop {
                                     .gap_2()
                                     .flex_wrap()
                                     .child(
-                                        self.button(
+                                        Self::button(
                                             format!("usage-settings-{}", turn.id),
                                             "使用量・リセット時刻",
                                             cx,
@@ -726,7 +729,7 @@ impl Desktop {
                                             == Some(agent_protocol::session::ProviderKind::Codex),
                                         |actions| {
                                             actions.child(
-                                                self.button(
+                                                Self::button(
                                                     format!("usage-manage-{}", turn.id),
                                                     "追加クレジット・上限を管理",
                                                     cx,
@@ -927,7 +930,7 @@ impl Desktop {
         for (index, attachment) in draft.attachments.iter().enumerate() {
             if !attachment.is_image {
                 let path = attachment.path.clone();
-                body = body.child(self.button(
+                body = body.child(Self::button(
                     format!("pending-{id}-file-{index}"),
                     attachment.name.clone(),
                     cx,
@@ -1151,7 +1154,7 @@ impl Desktop {
                     }
                 }
                 let key = key.to_owned();
-                body = body.child(self.button(
+                body = body.child(Self::button(
                     format!("respond-{key}"),
                     "回答を送信",
                     cx,
@@ -1183,7 +1186,7 @@ impl Desktop {
                 for choice in choices {
                     let key = key.to_owned();
                     let choice_id = choice.id.clone();
-                    row = row.child(self.button(
+                    row = row.child(Self::button(
                         format!("decision-{key}-{}", choice.id),
                         choice.label.clone(),
                         cx,
@@ -1211,7 +1214,7 @@ impl Desktop {
             RequestBody::Elicitation { input, .. } => {
                 if let ElicitationInput::Url { url } = input {
                     let url = url.clone();
-                    body = body.child(self.button(
+                    body = body.child(Self::button(
                         format!("elicitation-url-{key}"),
                         "リンクを開く",
                         cx,
@@ -1224,7 +1227,7 @@ impl Desktop {
                 }
                 let accept_key = key.to_owned();
                 let request_body = request.request_body.clone();
-                body = body.child(self.button(
+                body = body.child(Self::button(
                     format!("elicitation-accept-{accept_key}"),
                     "確認して送信",
                     cx,
@@ -1246,7 +1249,7 @@ impl Desktop {
                     (ElicitationAnswer::Cancel, "キャンセル"),
                 ] {
                     let key = key.to_owned();
-                    body = body.child(self.button(
+                    body = body.child(Self::button(
                         format!("elicitation-{label}-{key}"),
                         label,
                         cx,
@@ -1266,7 +1269,7 @@ impl Desktop {
                 let request_body = request.request_body.clone();
                 body = body
                     .child(Textarea::new(&inputs.response))
-                    .child(self.button(
+                    .child(Self::button(
                         format!("tool-answer-{key}"),
                         "実行結果を送信",
                         cx,

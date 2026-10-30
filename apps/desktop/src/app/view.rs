@@ -18,6 +18,7 @@ use gpui_kit::component::{
     resizable::{h_resizable, resizable_panel, v_resizable},
     sidebar::{Sidebar, SidebarItem, SidebarMenuItem},
 };
+pub(super) use sidebar::SidebarView;
 use std::path::PathBuf;
 
 fn file_name(path: &str) -> String {
@@ -224,8 +225,15 @@ impl Render for Desktop {
             .text_color(rgb(appearance::FOREGROUND))
             .text_size(px(14.))
             .font_weight(FontWeight::NORMAL)
-            .when(self.sidebar && !self.side_chat_mode, |body| {
-                body.child(self.sidebar(cx))
+            .when(self.sidebar, |body| {
+                body.children(self.sidebar_view.clone().map(|sidebar| {
+                    sidebar.cached(
+                        StyleRefinement::default()
+                            .w(px(272.))
+                            .h_full()
+                            .flex_shrink_0(),
+                    )
+                }))
             })
             .child(main)
             .child(deferred(
@@ -389,7 +397,6 @@ impl Desktop {
 
 impl Desktop {
     fn button(
-        &self,
         id: impl Into<SharedString>,
         label: impl Into<SharedString>,
         cx: &Context<Self>,

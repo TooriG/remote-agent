@@ -5,6 +5,7 @@ use crate::{
 };
 use base64::Engine;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+#[derive(PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ProjectSummary {
     pub id: String,
@@ -81,6 +82,7 @@ fn coordinator_url(project_id: &str) -> Option<String> {
     (!id.is_empty() && id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_'))
         .then(|| format!("https://claude.ai/code/project/chan_{id}"))
 }
+#[derive(PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ThreadSummary {
     pub id: crate::session::SessionRef,
@@ -90,6 +92,7 @@ pub struct ThreadSummary {
     pub unread: bool,
     pub worktree_status: Option<crate::models::WorktreeStatus>,
 }
+#[derive(PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ThreadList {
     pub loading_projects: bool,
