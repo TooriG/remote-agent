@@ -153,6 +153,7 @@ impl Snapshot {
     pub fn error_notices(&self, scope: ErrorScope) -> Vec<ErrorNotice> {
         let mut notices = Vec::new();
         if scope == ErrorScope::Application
+            && (self.connected || self.connection_attempt.is_none())
             && let Some(error) = &self.error
         {
             notices.push(ErrorNotice {
@@ -511,6 +512,36 @@ mod notice_tests {
         assert_eq!(next.error, newer.error);
         let (next, _) = reduce(&next, Event::Connected);
         assert!(next.error_notices(ErrorScope::Application).is_empty());
+    }
+
+    #[test]
+    fn superseded_connection_checks_cannot_reveal_a_previous_disconnect_error() {
+        let previous = Snapshot {
+            error: Some("background timeout".into()),
+            ..Default::default()
+        };
+        let first = uuid::Uuid::new_v4();
+        let second = uuid::Uuid::new_v4();
+        let (checking, _) = reduce(&previous, Event::Connecting(first));
+        let (checking, _) = reduce(&checking, Event::Connecting(second));
+        let (checking, _) = reduce(&checking, Event::ConnectionFinished(first));
+        assert_eq!(checking.connection_attempt, Some(second));
+        assert!(checking.error_notices(ErrorScope::Application).is_empty());
+        let (finished, _) = reduce(&checking, Event::ConnectionFinished(second));
+        assert!(finished.connection_attempt.is_none());
+        assert_eq!(
+            finished.error_notices(ErrorScope::Application),
+            previous.error_notices(ErrorScope::Application)
+        );
+        let connected = Snapshot {
+            connected: true,
+            error: Some("save failed".into()),
+            ..checking
+        };
+        assert_eq!(
+            connected.error_notices(ErrorScope::Application)[0].message,
+            "save failed"
+        );
     }
 
     #[tokio::test]

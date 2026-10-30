@@ -314,6 +314,8 @@ pub struct Snapshot {
     #[serde(skip)]
     pub connection_generation: u64,
     #[serde(skip)]
+    pub connection_attempt: Option<uuid::Uuid>,
+    #[serde(skip)]
     pub subscriptions: Arc<BTreeMap<crate::session::SessionRef, uuid::Uuid>>,
     #[serde(skip)]
     pub error: Option<String>,
@@ -447,6 +449,8 @@ pub enum Event {
 
     Notification(crate::protocol::Notification),
     SessionUpdate(Box<crate::session::SessionUpdate>),
+    Connecting(uuid::Uuid),
+    ConnectionFinished(uuid::Uuid),
     Connected,
     /// Initial offline state and intentional shutdown have no failure reason.
     Disconnected(Option<String>),
@@ -1167,6 +1171,12 @@ fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
                         draft.attachments.push(attachment.clone());
                     }
                 }
+            }
+        }
+        Event::Connecting(attempt) => next.connection_attempt = Some(attempt),
+        Event::ConnectionFinished(attempt) => {
+            if next.connection_attempt == Some(attempt) {
+                next.connection_attempt = None;
             }
         }
         Event::Connected => {
