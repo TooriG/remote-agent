@@ -13,6 +13,7 @@ members = [
     "crates/xtask",
     "crates/host-fixture",
 ]
+exclude = ["vendor/gpui-pre"]
 resolver = "2"
 
 [workspace.package]
@@ -46,6 +47,8 @@ url = "2.5.8"
 zeroize = "1.9.1"
 
 [patch.crates-io]
+# Keep nested cached views reusable when an ancestor is notified.
+gpui-pre = { path = "vendor/gpui-pre" }
 # UDP rebind recovery: https://github.com/n0-computer/net-tools/pull/235
 netwatch = { git = "https://github.com/ttizze/net-tools", rev = "1d54cca14f47ebfa20a75234e8a08351d9f5a8d4" }
 alacritty_terminal = { path = "vendor/alacritty_terminal" }

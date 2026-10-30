@@ -12,15 +12,18 @@ use gpui_kit::{
 };
 use std::{
     collections::HashMap,
+    rc::{Rc, Weak},
+    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
 };
 
 /// The rotation of the `Spinner` that indicators replace.
 const TURN: Duration = Duration::from_millis(800);
 
-/// Places reserved by each window's latest content render, in paint order.
+/// Element state keeps each place alive, including when GPUI reuses a cached
+/// subtree. A window-wide reset would lose indicators in unchanged subviews.
 #[derive(Default)]
-struct Places(HashMap<WindowId, Vec<Place>>);
+struct Places(HashMap<WindowId, Vec<Weak<Place>>>);
 impl Global for Places {}
 
 struct Place {
@@ -31,44 +34,42 @@ struct Place {
 
 /// Reserves the place of a spinning activity indicator.
 pub(crate) fn indicator() -> impl IntoElement {
-    canvas(
-        |bounds, window, cx| {
-            let place = Place {
-                bounds,
-                mask: window.content_mask(),
-                color: window.text_style().color,
-            };
-            if let Some(places) = cx
-                .default_global::<Places>()
-                .0
-                .get_mut(&window.window_handle().window_id())
-            {
-                places.push(place);
-            }
-        },
-        |_, _, _, _| {},
-    )
-    // The size of a small `Spinner`.
-    .flex_none()
-    .size_3p5()
+    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    div()
+        .id(("activity-indicator", id))
+        .child(
+            canvas(
+                |bounds, window, cx| {
+                    let place = Rc::new(Place {
+                        bounds,
+                        mask: window.content_mask(),
+                        color: window.text_style().color,
+                    });
+                    if let Some(places) = cx
+                        .default_global::<Places>()
+                        .0
+                        .get_mut(&window.window_handle().window_id())
+                    {
+                        places.push(Rc::downgrade(&place));
+                    }
+                    window.with_global_id("place".into(), |id, window| {
+                        window.with_element_state(id, |_: Option<Rc<Place>>, _| ((), place));
+                    });
+                },
+                |_, _, _, _| {},
+            )
+            .size_full(),
+        )
+        // The size of a small `Spinner`.
+        .flex_none()
+        .size_3p5()
 }
 
 /// Window root that keeps its content cached while the indicators spin.
 pub(crate) struct ActivityWindow {
-    content: Entity<Content>,
+    content: AnyView,
     started: Instant,
-}
-
-/// Caching boundary whose render replaces the places reserved by the last one.
-struct Content(AnyView);
-
-impl Render for Content {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        cx.default_global::<Places>()
-            .0
-            .insert(window.window_handle().window_id(), Vec::new());
-        self.0.clone()
-    }
 }
 
 impl ActivityWindow {
@@ -78,13 +79,13 @@ impl ActivityWindow {
         cx: &mut Context<Self>,
     ) -> Self {
         let id = window.window_handle().window_id();
+        cx.default_global::<Places>().0.insert(id, Vec::new());
         cx.on_release(move |_, cx| {
             cx.default_global::<Places>().0.remove(&id);
         })
         .detach();
-        let content = content.into();
         Self {
-            content: cx.new(|_| Content(content)),
+            content: content.into(),
             started: Instant::now(),
         }
     }
@@ -112,7 +113,14 @@ impl Render for ActivityWindow {
     }
 }
 
-fn spin(started: Instant, window: &mut Window, cx: &App) {
+fn spin(started: Instant, window: &mut Window, cx: &mut App) {
+    if let Some(places) = cx
+        .default_global::<Places>()
+        .0
+        .get_mut(&window.window_handle().window_id())
+    {
+        places.retain(|place| place.strong_count() > 0);
+    }
     let Some(places) = cx
         .try_global::<Places>()
         .and_then(|places| places.0.get(&window.window_handle().window_id()))
@@ -124,12 +132,15 @@ fn spin(started: Instant, window: &mut Window, cx: &App) {
     let angle = radians(ease_in_out(turn) * std::f32::consts::TAU);
     let scale = window.scale_factor();
     for place in places {
+        let Some(place) = place.upgrade() else {
+            continue;
+        };
         let center = place.bounds.center();
         let transformation = TransformationMatrix::unit()
             .translate(center.scale(scale))
             .rotate(angle)
             .translate(center.scale(-scale));
-        window.with_content_mask(Some(place.mask.clone()), |window| {
+        window.with_content_mask(Some(place.mask), |window| {
             if let Err(error) = window.paint_svg(
                 place.bounds,
                 IconName::Loader.path(),
@@ -209,6 +220,81 @@ mod tests {
             next_frame(&window, cx),
             0,
             "a removed indicator stops requesting frames"
+        );
+    }
+
+    #[gpui::test]
+    fn cached_indicators_survive_parent_updates_and_disappear_with_their_view(
+        cx: &mut TestAppContext,
+    ) {
+        struct Parent {
+            child: Entity<Content>,
+            visible: bool,
+        }
+        impl Render for Parent {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().size_full().when(self.visible, |body| {
+                    body.child(
+                        self.child
+                            .clone()
+                            .cached(StyleRefinement::default().size_full()),
+                    )
+                })
+            }
+        }
+        let renders = Rc::new(Cell::new(0));
+        let mut parent = None;
+        let window = cx.open_window(size(px(100.), px(100.)), |window, cx| {
+            let child = cx.new(|_| Content {
+                active: true,
+                renders: renders.clone(),
+            });
+            let view = cx.new(|_| Parent {
+                child,
+                visible: true,
+            });
+            parent = Some(view.clone());
+            ActivityWindow::new(view, window, cx)
+        });
+        let parent = parent.unwrap();
+        cx.run_until_parked();
+        for _ in 0..3 {
+            parent.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+            let places = cx.read(|cx| {
+                cx.global::<Places>().0[&window.window_id()]
+                    .iter()
+                    .filter_map(Weak::upgrade)
+                    .collect::<Vec<_>>()
+            });
+            assert_eq!(
+                places.len(),
+                1,
+                "the cached indicator must remain registered exactly once"
+            );
+            assert!(places[0].bounds.size.width > px(0.));
+            assert!(next_frame(&window, cx) > 0);
+        }
+        assert_eq!(renders.get(), 1, "parent updates reuse the child");
+        parent.update(cx, |parent, cx| {
+            parent.visible = false;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        next_frame(&window, cx);
+        assert_eq!(
+            next_frame(&window, cx),
+            0,
+            "hidden cached views must stop spinning"
+        );
+        parent.update(cx, |parent, cx| {
+            parent.visible = true;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(
+            next_frame(&window, cx) > 0,
+            "showing the view restores its indicator"
         );
     }
 }
