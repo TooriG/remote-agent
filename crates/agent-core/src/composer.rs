@@ -371,7 +371,7 @@ mod tests {
                 .candidates
                 .is_empty()
         );
-        let (disconnected, _) = reduce(&other, Event::Disconnected("offline".into()));
+        let (disconnected, _) = reduce(&other, Event::Disconnected(Some("offline".into())));
         assert!(disconnected.composer_catalog.is_none());
         let (reconnected, _) = reduce(&disconnected, Event::Connected);
         assert_eq!(reconnected.composer_catalog.as_ref().unwrap().cwd, "/other");

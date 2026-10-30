@@ -514,18 +514,25 @@ mod notice_tests {
     }
 
     #[tokio::test]
-    async fn asynchronous_operation_failure_does_not_replace_the_connection_notice() {
+    async fn offline_operation_failure_stays_with_its_operation() {
         let store = crate::store::Store::offline(Snapshot::default());
-        let global = store.snapshot().error_notices(ErrorScope::Application);
+        assert!(
+            store
+                .snapshot()
+                .error_notices(ErrorScope::Application)
+                .is_empty()
+        );
         assert!(
             store
                 .dispatch(Intent::LoadModels(crate::state::operations::LoadModels {}))
                 .await
                 .is_err()
         );
-        assert_eq!(
-            store.snapshot().error_notices(ErrorScope::Application),
-            global
+        assert!(
+            store
+                .snapshot()
+                .error_notices(ErrorScope::Application)
+                .is_empty()
         );
         assert_eq!(
             store.snapshot().error_notices(ErrorScope::Settings).len(),

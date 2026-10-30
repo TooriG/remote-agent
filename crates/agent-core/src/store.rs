@@ -294,7 +294,7 @@ impl Store {
         Self::start(Some(peer), snapshot)
     }
     pub fn offline(snapshot: Snapshot) -> Self {
-        let (snapshot, _) = reduce(&snapshot, Event::Disconnected("Host not connected".into()));
+        let (snapshot, _) = reduce(&snapshot, Event::Disconnected(None));
         Self::start(None, snapshot)
     }
     fn start(peer: Option<(Client, Updates)>, snapshot: Snapshot) -> Self {
@@ -333,7 +333,7 @@ impl Store {
                     break;
                 }
             }
-            apply(&publications, Event::Disconnected("store closed".into()));
+            apply(&publications, Event::Disconnected(None));
             finished_tx.send_replace(true);
         });
         Self {
@@ -1144,9 +1144,9 @@ async fn run(
             jobs.push(perform(Some(peer), session.as_ref(), scheduled));
         }
         tokio::select! {
-            _ = stop.cancelled() => break "store closed".into(),
+            _ = stop.cancelled() => break None,
             command = commands.recv() => {
-                let Some(command) = command else { break "store closed".into() };
+                let Some(command) = command else { break None };
                 let command = match command {
                     Command::PrepareDictation { id, cancel } => {
                         if preparation_jobs.len() < MAX_RPC_JOBS {
@@ -1180,7 +1180,7 @@ async fn run(
                     }
                     Command::Disconnect(complete) => {
                         disconnected = Some(complete);
-                        break "Host disconnected".into();
+                        break None;
                     }
                     Command::Attach { connection, complete, .. } => {
                         drop(connection);
@@ -1217,13 +1217,13 @@ async fn run(
             Some((id, update)) = subscriptions.next(), if !subscriptions.is_empty() => {
                 match update {
                     Ok(change) => effects.extend(apply(&updates, Event::SessionUpdate(Box::new(crate::session::SessionUpdate { subscription_id: id, change })))),
-                    Err(error) => break error.to_string(),
+                    Err(error) => break Some(error.to_string()),
                 }
             }
             event = events.read::<crate::protocol::Notification>() => match event {
                 Ok(Some(notification)) => effects.extend(apply(&updates, Event::Notification(notification))),
-                Ok(None) => break "Host event stream ended".into(),
-                Err(error) => break error.to_string(),
+                Ok(None) => break Some("Host event stream ended".into()),
+                Err(error) => break Some(error.to_string()),
             }
         }
     };
@@ -1511,6 +1511,75 @@ mod tests {
     #[allow(dead_code)]
     mod host_fixture {
         include!("../tests/support/host.rs");
+    }
+
+    #[tokio::test]
+    async fn restoring_offline_does_not_report_a_connection_failure() {
+        use crate::presentation::error::ErrorScope;
+        let initial = Snapshot {
+            connected: true,
+            error: Some("previous runtime error".into()),
+            ..Default::default()
+        };
+        let store = Store::offline(initial);
+        assert!(!store.snapshot().connected);
+        assert!(
+            store
+                .snapshot()
+                .error_notices(ErrorScope::Application)
+                .is_empty()
+        );
+        store.close().await.unwrap();
+        assert!(
+            store
+                .snapshot()
+                .error_notices(ErrorScope::Application)
+                .is_empty()
+        );
+    }
+
+    #[rstest::rstest]
+    #[case("disconnect")]
+    #[case("close")]
+    #[case("transport loss")]
+    #[tokio::test]
+    async fn only_unexpected_connection_loss_reports_a_failure(#[case] action: &str) {
+        use crate::presentation::error::ErrorScope;
+        let initial = Snapshot::default();
+        let (peer, _reader, writer) = host_fixture::connect(&initial).await;
+        let store = Store::new(peer, initial);
+        let mut snapshots = store.subscribe();
+        match action {
+            "disconnect" => store.disconnect().await.unwrap(),
+            "close" => store.close().await.unwrap(),
+            "transport loss" => drop(writer),
+            _ => unreachable!(),
+        }
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            snapshots.wait_for(|snapshot| !snapshot.connected),
+        )
+        .await
+        .expect("the disconnection must be published")
+        .unwrap();
+        let notices = store.snapshot().error_notices(ErrorScope::Application);
+        if action == "transport loss" {
+            assert_eq!(notices.len(), 1);
+            assert!(!notices[0].message.is_empty());
+            assert!(
+                store
+                    .dispatch(Intent::LoadModels(op::LoadModels {}))
+                    .await
+                    .is_err()
+            );
+            assert_eq!(
+                store.snapshot().error_notices(ErrorScope::Application),
+                notices
+            );
+        } else {
+            assert!(notices.is_empty());
+        }
+        store.close().await.unwrap();
     }
 
     #[tokio::test(flavor = "current_thread")]

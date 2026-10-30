@@ -966,7 +966,7 @@ mod tests {
                 .can_accept_direct_input,
             Some(false)
         );
-        let (disconnected, _) = reduce(&snapshot, Event::Disconnected("offline".into()));
+        let (disconnected, _) = reduce(&snapshot, Event::Disconnected(Some("offline".into())));
         assert_eq!(
             disconnected.thread_metadata(&id).unwrap().status,
             crate::models::SessionStatus::Unknown

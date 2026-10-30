@@ -437,7 +437,10 @@ pub struct ScopedData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Event {
     StorageScope(String),
-    TerminalFailed { handle: String, reason: String },
+    TerminalFailed {
+        handle: String,
+        reason: String,
+    },
     Intent(Intent),
     SubmissionFailed(agent_protocol::ids::ClientInputId),
     SubmissionUnknown(agent_protocol::ids::ClientInputId),
@@ -445,7 +448,8 @@ pub enum Event {
     Notification(crate::protocol::Notification),
     SessionUpdate(Box<crate::session::SessionUpdate>),
     Connected,
-    Disconnected(String),
+    /// Initial offline state and intentional shutdown have no failure reason.
+    Disconnected(Option<String>),
     Failed(String),
 }
 pub use crate::store::Effect;
@@ -1245,7 +1249,7 @@ fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
                     Arc::make_mut(terminal).phase = TerminalPhase::Suspended;
                 }
             }
-            next.error = Some(reason);
+            next.error = reason;
         }
         Event::Failed(error) => next.error = Some(error),
         Event::Intent(_) | Event::Notification(_) | Event::SessionUpdate(_) => {

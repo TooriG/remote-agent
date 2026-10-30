@@ -806,7 +806,7 @@ fn serialized_events_preserve_operation_inputs_and_replay_state() {
                 choice_id: "fixture-choice".into(),
             },
         })),
-        Event::Disconnected("fixture disconnect".into()),
+        Event::Disconnected(Some("fixture disconnect".into())),
     ];
     let encoded = serde_json::to_vec(&events).unwrap();
     let decoded: Vec<Event> = serde_json::from_slice(&encoded).unwrap();
@@ -1059,7 +1059,7 @@ fn terminal_disconnect_keeps_resumption_and_host_switch_drops_old_handles() {
         })),
     );
     assert!(starting.terminal_view("test".into()).unwrap().accepts_input);
-    let (disconnected, _) = reduce(&starting, Event::Disconnected("offline".into()));
+    let (disconnected, _) = reduce(&starting, Event::Disconnected(Some("offline".into())));
     assert!(
         !disconnected
             .terminal_view("test".into())

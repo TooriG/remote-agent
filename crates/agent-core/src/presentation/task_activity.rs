@@ -118,7 +118,7 @@ mod tests {
         assert_eq!(state.task_activity_display(), Some(completed.display));
         assert!(state.threads.is_none());
         assert!(state.conversations.is_empty());
-        let disconnected = reduce(&state, Event::Disconnected("offline".into())).0;
+        let disconnected = reduce(&state, Event::Disconnected(Some("offline".into()))).0;
         assert_eq!(
             disconnected.task_activity_display(),
             state.task_activity_display()

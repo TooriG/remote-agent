@@ -610,7 +610,7 @@ mod tests {
         let (desktop, effects) = reduce(&desktop, Event::Notification(activity(4, None)));
         assert!(effects.is_empty());
         assert!(desktop.activity.unread.is_empty());
-        let disconnected = reduce(&phone, Event::Disconnected("offline".into())).0;
+        let disconnected = reduce(&phone, Event::Disconnected(Some("offline".into()))).0;
         let reconnected = reduce(&disconnected, Event::Connected).0;
         let mut restored = reconnected;
         let effects = op::ReadTaskActivity {}.apply(
