@@ -223,7 +223,7 @@ private struct ProfilesScreen: View {
                     }
                 }
             } header: {
-                Text("このiPhone")
+                Text("このiPhone").textCase(nil)
             } footer: {
                 Text("接続先を選んで、タスクを続けられます。")
             }

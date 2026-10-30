@@ -260,12 +260,6 @@ extension LaunchUITests {
         return tabs.element(boundBy: max(0, tabs.count - 1))
     }
 
-    func workbenchTitle(_ app: XCUIApplication) -> XCUIElement {
-        app.navigationBars.buttons.matching(NSPredicate(format: "label IN %@", [
-            "ツール", "ブラウザ", "ターミナル", "ファイル", "差分", "サイドチャット", "エージェント"
-        ])).firstMatch
-    }
-
     func dismissWorkbenchMenu(_ app: XCUIApplication) {
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
     }
@@ -275,7 +269,7 @@ extension LaunchUITests {
         if app.descendants(matching: .any)["workbench.launcher"].exists {
             tool.tap(); return
         }
-        tapWhenStable(workbenchTitle(app))
+        tapWhenStable(app.buttons["workbench.tabs"])
         let tab = workbenchTab(app, kind)
         if tab.exists {
             tab.tap(); return

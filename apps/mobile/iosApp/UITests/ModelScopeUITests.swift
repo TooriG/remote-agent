@@ -6,26 +6,26 @@ extension LaunchUITests {
         openDefaultModelSettings(app)
         let choice = app.buttons["model.choice.fixture-model"]
         XCTAssertTrue(choice.waitForExistence(timeout: 15)); choice.tap()
-        chooseIndependentNewChatModel(app, choice: choice)
+        chooseIndependentNewChatModel(app)
         chooseDefaultModelMenuOption(app, menu: "model.sheet.effort", option: "medium")
         chooseDefaultModelMenuOption(
             app,
             menu: "settings.scope.environment",
-            option: "settings.scope.environment.current"
+            option: "settings.scope.environment.current", towardTop: true
         )
         chooseDefaultModelMenuOption(app, menu: "model.sheet.effort", option: "high")
         chooseDefaultModelMenuOption(app, menu: "model.defaults.speed", option: "高速")
         chooseDefaultModelMenuOption(
             app,
             menu: "settings.scope.projects",
-            option: "settings.scope.projects.simulator-project"
+            option: "settings.scope.projects.simulator-project", towardTop: true
         )
-        XCTAssertEqual(app.buttons["model.sheet.effort"].value as? String, "high")
+        XCTAssertEqual(defaultModelButton(app, "model.sheet.effort").value as? String, "high")
         chooseDefaultModelMenuOption(app, menu: "model.sheet.effort", option: "medium")
-        XCTAssertTrue(app.buttons["model.defaults.inherit"].exists)
+        XCTAssertTrue(defaultModelButton(app, "model.defaults.inherit").exists)
         captureScreen(app, named: "Project model defaults with environment inheritance")
-        app.buttons["model.defaults.inherit"].tap()
-        XCTAssertEqual(app.buttons["model.sheet.effort"].value as? String, "high")
+        defaultModelButton(app, "model.defaults.inherit").tap()
+        XCTAssertEqual(defaultModelButton(app, "model.sheet.effort").value as? String, "high")
         XCTAssertFalse(app.buttons["model.defaults.inherit"].exists)
         dismissModelSettings(app); app.buttons["tasks.new.project.simulator-project"].tap()
         XCTAssertEqual(app.buttons["model.effort"].value as? String, "high")
@@ -35,20 +35,23 @@ extension LaunchUITests {
         chooseDefaultModelMenuOption(
             app,
             menu: "settings.scope.projects",
-            option: "settings.scope.projects.simulator-project"
+            option: "settings.scope.projects.simulator-project", towardTop: true
         )
         chooseDefaultModelMenuOption(app, menu: "model.sheet.effort", option: "medium")
         dismissModelSettings(app); app.buttons["tasks.new.project.simulator-project"].tap()
-        app.buttons["model.settings"].tap(); XCTAssertEqual(app.buttons["model.sheet.effort"].value as? String, "high")
+        app.buttons["model.settings"].tap(); XCTAssertEqual(
+            defaultModelButton(app, "model.sheet.effort").value as? String,
+            "high"
+        )
         app.terminate(); app.launch()
         XCTAssertTrue(app.buttons["tasks.menu"].waitForExistence(timeout: 20))
         openDefaultModelSettings(app)
         chooseDefaultModelMenuOption(
             app,
             menu: "settings.scope.projects",
-            option: "settings.scope.projects.simulator-project"
+            option: "settings.scope.projects.simulator-project", towardTop: true
         )
-        XCTAssertEqual(app.buttons["model.sheet.effort"].value as? String, "medium")
+        XCTAssertEqual(defaultModelButton(app, "model.sheet.effort").value as? String, "medium")
     }
 
     func testSimulatorModelPickerUsesNativeFormAndAgentPicker() throws {
@@ -94,7 +97,7 @@ extension LaunchUITests {
         openDefaultModelSettings(app)
         let choice = app.buttons["model.choice.fixture-model"]
         XCTAssertTrue(choice.waitForExistence(timeout: 15)); choice.tap()
-        chooseIndependentNewChatModel(app, choice: choice)
+        chooseIndependentNewChatModel(app)
         XCTAssertFalse(app.descendants(matching: .any)["model.error"].exists)
         chooseDefaultModelMenuOption(app, menu: "model.sheet.effort", option: "high")
         chooseDefaultModelMenuOption(app, menu: "model.defaults.speed", option: "高速")
@@ -127,39 +130,51 @@ extension LaunchUITests {
         XCTAssertTrue(app.buttons["model.choice.automatic"].waitForExistence(timeout: 10))
     }
 
-    private func chooseDefaultModelMenuOption(_ app: XCUIApplication, menu: String, option: String) {
-        let control = app.buttons[menu]
-        XCTAssertTrue(control.waitForExistence(timeout: 10))
-        waitForStableFrame(control)
-        control.tap()
-        let choice = app.buttons[option]
-        XCTAssertTrue(choice.waitForExistence(timeout: 10))
-        waitForStableFrame(choice)
-        choice.tap()
+    private func defaultModelButton(_ app: XCUIApplication, _ id: String, towardTop: Bool = false) -> XCUIElement {
+        let control = app.buttons[id]
+        if towardTop {
+            scrollToEarlierListElement(control, in: app, attempts: 6)
+        } else {
+            scrollToListElement(control, in: app, bottomMargin: 0)
+        }
+        return control
+    }
+
+    private func chooseDefaultModelMenuOption(
+        _ app: XCUIApplication, menu: String, option: String, towardTop: Bool = false
+    ) {
+        tapWhenStable(defaultModelButton(app, menu, towardTop: towardTop))
+        tapWhenStable(app.buttons[option])
     }
 
     private func assertPersistedIndependentModelDefaults(_ app: XCUIApplication) {
         XCTAssertEqual(app.buttons["model.choice.fixture-model"].value as? String, "選択中")
-        XCTAssertEqual(app.buttons["model.sheet.effort"].value as? String, "high")
-        XCTAssertEqual(app.buttons["model.defaults.speed"].value as? String, "高速")
-        XCTAssertEqual(app.buttons["model.defaults.new-chat"].value as? String, "Fixture Model")
+        XCTAssertEqual(defaultModelButton(app, "model.sheet.effort").value as? String, "high")
+        XCTAssertEqual(defaultModelButton(app, "model.defaults.speed").value as? String, "高速")
+        XCTAssertEqual(
+            defaultModelButton(app, "model.defaults.new-chat", towardTop: true).value as? String,
+            "Fixture Model"
+        )
         app.buttons["model.choice.automatic"].tap()
         XCTAssertEqual(app.buttons["model.choice.automatic"].value as? String, "選択中")
-        XCTAssertEqual(app.buttons["model.defaults.new-chat"].value as? String, "Fixture Model")
+        XCTAssertEqual(
+            defaultModelButton(app, "model.defaults.new-chat", towardTop: true).value as? String,
+            "Fixture Model"
+        )
     }
 
-    private func chooseIndependentNewChatModel(_ app: XCUIApplication, choice: XCUIElement) {
-        let newChat = app.buttons["model.defaults.new-chat"]
+    private func chooseIndependentNewChatModel(_ app: XCUIApplication) {
+        let newChat = defaultModelButton(app, "model.defaults.new-chat", towardTop: true)
         chooseDefaultModelMenuOption(
             app,
             menu: "model.defaults.new-chat",
-            option: "model.defaults.new-chat.fixture-model"
+            option: "model.defaults.new-chat.fixture-model", towardTop: true
         )
         XCTAssertEqual(newChat.value as? String, "Fixture Model")
         app.segmentedControls["model.provider"].buttons["Claude Code"].tap()
         XCTAssertEqual(app.buttons["model.choice.automatic"].value as? String, "選択中")
         XCTAssertEqual(newChat.value as? String, "Fixture Model")
         app.segmentedControls["model.provider"].buttons["Codex"].tap()
-        XCTAssertEqual(choice.value as? String, "選択中")
+        XCTAssertEqual(defaultModelButton(app, "model.choice.fixture-model").value as? String, "選択中")
     }
 }

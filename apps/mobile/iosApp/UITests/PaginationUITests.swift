@@ -239,9 +239,9 @@ extension LaunchUITests {
         captureScreen(app, named: "Oldest chat opened after separate project and chat pagination")
     }
 
-    func scrollToListElement(_ element: XCUIElement, in app: XCUIApplication) {
+    func scrollToListElement(_ element: XCUIElement, in app: XCUIApplication, bottomMargin: CGFloat = 100) {
         for _ in 0 ..< 60 {
-            if element.exists, element.isHittable, element.frame.midY < app.frame.maxY - 100 {
+            if element.exists, element.isHittable, element.frame.midY < app.frame.maxY - bottomMargin {
                 return
             }
             let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.65))

@@ -145,7 +145,7 @@ extension LaunchUITests {
             sideMessage.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.95)).tap()
             sideMessage.typeText("Keep my side draft")
             openWorkbenchTool(app, "terminal")
-            tapWhenStable(workbenchTitle(app))
+            tapWhenStable(app.buttons["workbench.tabs"])
             XCTAssertTrue(workbenchTab(app, "sideChat").exists)
             dismissWorkbenchMenu(app)
             openWorkbenchTool(app, "sideChat")

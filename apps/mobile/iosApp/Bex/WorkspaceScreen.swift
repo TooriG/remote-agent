@@ -127,6 +127,10 @@ private struct WorkspaceToolsScreen: View {
         panel.surfaces.first { $0.id == panel.active }
     }
 
+    private var title: String {
+        selected.map { panelTitle(kind: $0.kind) } ?? "ツール"
+    }
+
     var body: some View {
         Group {
             if let selected {
@@ -145,28 +149,49 @@ private struct WorkspaceToolsScreen: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(uiColor: .systemBackground))
-        .navigationTitle(selected.map { panelTitle(kind: $0.kind) } ?? "ツール")
+        .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
-        .toolbarTitleMenu {
-            Section("開いているツール") {
-                ForEach(panel.surfaces, id: \.id) { surface in
-                    Button { model.activateWorkbench(surface.id, scope: scope) } label: {
-                        Label(panelTitle(kind: surface.kind),
-                              systemImage: surface.id == panel.active ? "checkmark" : surface.kind.icon)
-                    }
-                    .accessibilityIdentifier("workbench.tab.\(surface.kind).\(surface.id)")
-                    .accessibilityAddTraits(surface.id == panel.active ? [.isSelected] : [])
-                }
-            }
-            if let selected {
-                Button(role: .destructive) { model.closeWorkbench(selected, scope: scope) } label: {
-                    Label("このツールを閉じる", systemImage: "xmark")
-                }
-                .accessibilityIdentifier("workbench.close.\(selected.id)")
-            }
-        }
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                if panel.surfaces.isEmpty {
+                    Text(title).font(.headline)
+                } else {
+                    Menu {
+                        Section("開いているツール") {
+                            Picker("開いているツール", selection: Binding<UInt64?>(
+                                get: { panel.active },
+                                set: {
+                                    if let id = $0 {
+                                        model.activateWorkbench(id, scope: scope)
+                                    }
+                                }
+                            )) {
+                                ForEach(panel.surfaces, id: \.id) { surface in
+                                    Label(panelTitle(kind: surface.kind), systemImage: surface.kind.icon)
+                                        .tag(Optional(surface.id))
+                                        .accessibilityIdentifier("workbench.tab.\(surface.kind).\(surface.id)")
+                                }
+                            }
+                            .pickerStyle(.inline).labelsHidden()
+                        }
+                        if let selected {
+                            Button(role: .destructive) { model.closeWorkbench(selected, scope: scope) } label: {
+                                Label("このツールを閉じる", systemImage: "xmark")
+                            }
+                            .accessibilityIdentifier("workbench.close.\(selected.id)")
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(title).font(.headline)
+                            Image(systemName: "chevron.down").font(.caption).foregroundStyle(.secondary)
+                                .accessibilityHidden(true)
+                        }
+                        .foregroundStyle(.primary)
+                    }
+                    .accessibilityIdentifier("workbench.tabs")
+                }
+            }
             ToolbarItem(placement: .primaryAction) {
                 Menu {
                     ForEach(tools, id: \.key) { tool in

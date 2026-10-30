@@ -97,9 +97,22 @@ struct ThreadScreen: View {
             .navigationTitle(isSideChat ? "サイドチャット" : conversation?.title ?? (model.isNewThread ? "新しいタスク" : "タスク"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                // Keep each control a native toolbar item with its own accessibility identity.
-                ToolbarItemGroup(placement: .navigationBarTrailing) {
-                    if !isSideChat {
+                if !isSideChat {
+                    if !model.isNewThread {
+                        ToolbarItem(placement: .principal) {
+                            Button {
+                                scrollController.cancelHistoryRestoration()
+                                isFollowingLatest = false
+                                withAnimation { scrollPosition.scrollTo(edge: .top) }
+                            } label: {
+                                conversationTitle
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("会話の先頭へ")
+                            .accessibilityIdentifier("task.top")
+                        }
+                    }
+                    ToolbarItemGroup(placement: .navigationBarTrailing) {
                         Button { composerFocused = false; openTools?(nil) } label: {
                             Image(systemName: "square.grid.2x2")
                         }
@@ -239,22 +252,6 @@ struct ThreadScreen: View {
         }
         .background(Color(UIColor.systemBackground))
         .safeAreaInset(edge: .bottom, spacing: 0) { composer }
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                if !isSideChat, !model.isNewThread {
-                    Button {
-                        scrollController.cancelHistoryRestoration()
-                        isFollowingLatest = false
-                        withAnimation { scrollPosition.scrollTo(edge: .top) }
-                    } label: {
-                        conversationTitle
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("会話の先頭へ")
-                    .accessibilityIdentifier("task.top")
-                }
-            }
-        }
     }
 }
 

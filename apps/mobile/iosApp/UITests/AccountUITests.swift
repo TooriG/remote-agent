@@ -183,7 +183,10 @@ extension LaunchUITests {
         captureScreen(app, named: "Settings navigation list")
         app.buttons["settings.agents"].tap()
         XCTAssertTrue(app.buttons["account.actions.desktop"].waitForExistence(timeout: 15))
-        XCTAssertTrue(app.staticTexts["すべてのプロジェクト"].exists)
+        let scope = app.descendants(matching: .any).matching(NSPredicate(
+            format: "label CONTAINS %@ OR value == %@", "すべてのプロジェクト", "すべてのプロジェクト"
+        )).firstMatch
+        XCTAssertTrue(scope.exists && scope.isHittable)
         assertAccountQuota(app, label: "5時間枠", remaining: 72)
         assertAccountQuota(app, label: "週間枠", remaining: 86)
         XCTAssertTrue(app.buttons["model.account.add"].isHittable)
@@ -191,13 +194,17 @@ extension LaunchUITests {
         XCTAssertFalse(app.buttons["model.account.desktop"].exists)
         app.segmentedControls["account.provider"].buttons["Codex"].tap()
         captureScreen(app, named: "Agent account settings")
-        app.navigationBars.buttons["BackButton"].tap()
+        app.navigationBars["エージェント"].buttons["BackButton"].tap()
         app.buttons["settings.connections"].tap()
         XCTAssertTrue(app.buttons["profiles.add"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["このiPhone"].exists)
         app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'profiles.' AND identifier != 'profiles.add'"))
             .firstMatch.tap()
         XCTAssertTrue(app.buttons["tasks.new.project.simulator-project"].waitForExistence(timeout: 10))
+        verifyConversationAccountControls(app)
+    }
+
+    private func verifyConversationAccountControls(_ app: XCUIApplication) {
         app.buttons["tasks.new.project.simulator-project"].tap()
         chooseFixtureModel(app)
         app.buttons["model.settings"].tap()
