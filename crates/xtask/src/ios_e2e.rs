@@ -144,6 +144,12 @@ fn needs_media_fixtures(tests: &[String]) -> bool {
     })
 }
 
+fn needs_browser_fixture(tests: &[String]) -> bool {
+    tests
+        .iter()
+        .any(|test| test == "testSimulatorBrowserUsesOneSharedImportMenu")
+}
+
 /// Select the newest stable iOS 26 runtime: its identifier and root file system.
 fn runtime(runtimes: &Value) -> Result<(String, PathBuf)> {
     let mut selected = None;
@@ -639,6 +645,9 @@ async fn worker(
         .stdin(std::process::Stdio::null())
         .stdout(host_log.try_clone()?)
         .stderr(host_log);
+    if needs_browser_fixture(&tests) {
+        command.arg("--prepare-browser");
+    }
     let mut host = Child::spawn(command)?;
     let result: Result<_> = async {
             let deadline = Instant::now() + Duration::from_secs(30);
@@ -1217,6 +1226,22 @@ mod tests {
             mixed.push(test.to_owned());
             assert!(needs_media_fixtures(&mixed));
         }
+    }
+
+    #[test]
+    fn only_browser_tests_prepare_chrome_before_booting_simulator() {
+        let mut tests = vec![
+            "testSimulatorOpensOnlyTheTappedImageAndSavesIt".to_owned(),
+            "testSimulatorRendersMarkdownTableAndReopensIt".to_owned(),
+        ];
+        assert!(!needs_browser_fixture(&[]));
+        assert!(!needs_browser_fixture(&tests));
+        tests.push("testSimulatorBrowserUsesOneSharedImportMenuExtra".to_owned());
+        assert!(!needs_browser_fixture(&tests));
+        tests.push("testSimulatorBrowserUsesOneSharedImportMenu".to_owned());
+        assert!(needs_browser_fixture(&tests));
+        tests.reverse();
+        assert!(needs_browser_fixture(&tests));
     }
 
     #[test]

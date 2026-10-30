@@ -1,3 +1,7 @@
+use agent_protocol::{
+    browser::{BrowserAction, BrowserRequest},
+    session::{ProviderKind, SessionRef},
+};
 use host_fixture::{
     pairing::PairingServer,
     test_support::{HostFixture, Memory},
@@ -82,6 +86,27 @@ async fn main() {
     )
     .await
     .unwrap();
+    if let Some(argument) = std::env::args_os().nth(6) {
+        assert_eq!(argument, "--prepare-browser");
+        // Prepare Chrome before booting a fresh Simulator on small hosted Macs,
+        // using the same Host/browser RPC that the UI will call.
+        println!("Preparing browser dependency before Simulator startup");
+        let connection = host.local().await.unwrap();
+        let ready = connection
+            .peer
+            .call(&BrowserRequest {
+                thread_id: SessionRef::new(ProviderKind::Codex, "browser-preflight".into())
+                    .unwrap(),
+                tab_id: String::new(),
+                image_id: String::new(),
+                generation: 0,
+                action: BrowserAction::Read,
+            })
+            .await;
+        connection.close().await;
+        ready.expect("isolated browser dependency must be ready before Simulator startup");
+        println!("Browser dependency ready");
+    }
     let pairing = PairingServer::start(
         &directory,
         host.ticket.clone(),
