@@ -11,7 +11,7 @@ use gpui_kit::{
     prelude::FluentBuilder,
     *,
 };
-use std::{fs::File, path::Path, sync::Arc, time::Duration};
+use std::{path::Path, sync::Arc, time::Duration};
 use tokio::io::AsyncWriteExt;
 
 enum State {
@@ -26,9 +26,6 @@ enum State {
 
 pub struct Updates {
     state: State,
-    // The detached worker waits for this lock to be released at process exit,
-    // after GPUI's quit handlers have saved drafts and closed Store sessions.
-    handoff: Option<File>,
 }
 
 pub fn build_number() -> u64 {
@@ -115,10 +112,7 @@ impl Updates {
             }
         })
         .detach();
-        Self {
-            state,
-            handoff: None,
-        }
+        Self { state }
     }
 
     fn check(&mut self, cx: &mut Context<Self>) {
@@ -241,7 +235,11 @@ impl Updates {
                     let result = work.await;
                     let _ = view.update(cx, |view, cx| match result {
                         Ok(lease) => {
-                            view.handoff = Some(lease);
+                            // GPUI drops views before main finishes shutting down.
+                            // Keep this single lock open until the OS exits the
+                            // process, so the worker also waits for Windows to
+                            // release the installed executable and directory.
+                            std::mem::forget(lease);
                             cx.quit();
                         }
                         Err(error) => {
@@ -423,7 +421,6 @@ mod tests {
         cx.update(crate::appearance::init);
         let (view, window) = cx.add_window_view(|_, _| Updates {
             state: State::Downloading(50),
-            handoff: None,
         });
         window.run_until_parked();
         let bounds = window.debug_bounds("app-update").unwrap();
@@ -440,7 +437,6 @@ mod tests {
         window.run_until_parked();
         view.update(window, |view, _| {
             assert!(matches!(view.state, State::Installing));
-            assert!(view.handoff.is_none());
         });
     }
 }
