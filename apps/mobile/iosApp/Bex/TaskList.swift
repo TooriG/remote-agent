@@ -46,10 +46,11 @@ struct ThreadsScreen: View {
 
             Section {
                 ForEach(projects, id: \.id) { project in
-                    DisclosureGroup(isExpanded: Binding(
+                    let expanded = Binding(
                         get: { project.expanded },
                         set: { model.perform(.setProjectExpanded(projectId: project.id, expanded: $0)) }
-                    )) {
+                    )
+                    DisclosureGroup(isExpanded: expanded) {
                         if project.loading, !project.hasMore {
                             ProgressView()
                         }
@@ -74,9 +75,22 @@ struct ThreadsScreen: View {
                         }
                     } label: {
                         HStack {
-                            ProjectIcon(png: project.iconPng, monogram: project.monogram, colorRGB: project.iconColor)
-                            Text(project.name).foregroundStyle(.primary).lineLimit(1)
-                            Spacer(minLength: 0)
+                            // Identify the header control so expanded rows keep their accessibility identities.
+                            Button { expanded.wrappedValue.toggle() } label: {
+                                HStack {
+                                    ProjectIcon(
+                                        png: project.iconPng,
+                                        monogram: project.monogram,
+                                        colorRGB: project.iconColor
+                                    )
+                                    Text(project.name).foregroundStyle(.primary).lineLimit(1)
+                                    Spacer(minLength: 0)
+                                }
+                                .frame(minHeight: 44).contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("tasks.project.\(project.id)")
+                            .accessibilityValue(project.expanded ? "開いています" : "閉じています")
                             Button { model.openNewThread(cwd: project.roots.first?.path ?? "") } label: {
                                 Image(systemName: "square.and.pencil")
                                     .frame(minWidth: 44, minHeight: 44)
@@ -86,8 +100,6 @@ struct ThreadsScreen: View {
                             .accessibilityIdentifier("tasks.new.project.\(project.id)")
                         }
                     }
-                    .accessibilityIdentifier("tasks.project.\(project.id)")
-                    .accessibilityValue(project.expanded ? "開いています" : "閉じています")
                 }
             } header: {
                 Text("プロジェクト").accessibilityIdentifier("tasks.projects")

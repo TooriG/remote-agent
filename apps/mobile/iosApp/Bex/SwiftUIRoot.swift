@@ -104,6 +104,7 @@ private struct PairingScreen: View {
                     } label: {
                         Label("PC", systemImage: "laptopcomputer")
                     }
+                    .accessibilityElement(children: .contain)
                     Button("変更") {
                         contents = ""
                         showsManualPairing = false
@@ -135,7 +136,9 @@ private struct PairingScreen: View {
                         Label("QRコードを読み取る", systemImage: "qrcode.viewfinder")
                     }
                     .accessibilityIdentifier("pairing.scan")
-                    DisclosureGroup("接続情報を入力", isExpanded: $showsManualPairing) {
+                    Button("接続情報を入力") { showsManualPairing.toggle() }
+                        .accessibilityIdentifier("pairing.manual")
+                    if showsManualPairing {
                         SecureField("接続情報を貼り付け", text: $contents)
                             .focused($editingContents)
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -148,7 +151,6 @@ private struct PairingScreen: View {
                         .disabled(contents.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         .accessibilityIdentifier("pairing.submit")
                     }
-                    .accessibilityIdentifier("pairing.manual")
                 } header: {
                     Text("PCと接続")
                 } footer: {
