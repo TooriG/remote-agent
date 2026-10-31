@@ -16,7 +16,7 @@ Verified on **2026-09-13**:
 
 | Platform | Supported major | Build / test baseline |
 | --- | --- | --- |
-| iPhone / iPad | iOS / iPadOS 26 | Xcode 26 stable, deployment target 26.0 in the app, UI tests, Rust and Swift bindings; iOS 26 Simulator |
+| iPhone | iOS 26 | Xcode 26 stable, deployment target 26.0 in the app, UI tests, Rust and Swift bindings; iOS 26 Simulator |
 | macOS desktop, Host and CLI | macOS Tahoe 26 | Rust deployment target and app/helper bundle minimum 26.0; Swift helper target 26.0 |
 | Android | Android 8.0+ (API 26+) | Minimum SDK 26; compile/target SDK 37; Nix build and test SDK platform 37 |
 | Windows desktop, Host and CLI | Windows 11; Windows Server 2025 | Existing `windows-2025` CI builds/tests on Server 2025, not a Windows 11 UI acceptance test |

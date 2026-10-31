@@ -16,7 +16,7 @@ Linux（CIの基準はUbuntu 24.04）とAndroid（最小はAndroid 8.0・API 26�
 
 | プラットフォーム | 対応メジャー | ビルド・テストの基準 |
 | --- | --- | --- |
-| iPhone / iPad | iOS / iPadOS 26 | 安定版Xcode 26。アプリ、UIテスト、Rust・Swiftバインディングの配置先は26.0。iOS 26 Simulatorを使用 |
+| iPhone | iOS 26 | 安定版Xcode 26。アプリ、UIテスト、Rust・Swiftバインディングの配置先は26.0。iOS 26 Simulatorを使用 |
 | macOSのデスクトップ・Host・CLI | macOS Tahoe 26 | Rustの配置先、アプリ・ヘルパーバンドルの最小OS、Swiftヘルパーの対象は26.0 |
 | Android | Android 8.0以降（API 26以降） | 最小SDKは26、コンパイル・対象SDKは37。Nixのビルド・テストSDKも37 |
 | Windowsのデスクトップ・Host・CLI | Windows 11、Windows Server 2025 | `windows-2025` CIでServer 2025上のビルド・テストを実行。Windows 11のUI受け入れテストは別途必要 |
