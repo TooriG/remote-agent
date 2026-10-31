@@ -2913,6 +2913,11 @@ async fn merged_worktree_cleanup_defers_live_work_and_rechecks_new_commits() {
             std::fs::read_to_string(dirty_path.join("untracked.txt")).unwrap(),
             "preserve local data"
         );
+        // Empty commits have no unmerged file changes. Create real work while
+        // the turn still owns the checkout, before cleanup can remove it.
+        std::fs::write(active_path.join("new-work.txt"), "new work after merge").unwrap();
+        git(active_path, &["add", "new-work.txt"]);
+        git(active_path, &["commit", "-m", "new work after merge"]);
         local
             .peer
             .call(&rpc::Interrupt {
@@ -2922,10 +2927,6 @@ async fn merged_worktree_cleanup_defers_live_work_and_rechecks_new_commits() {
             .await
             .unwrap();
         assert_eq!(completed_turn(&mut events).await["status"], "interrupted");
-        git(
-            active_path,
-            &["commit", "--allow-empty", "-m", "new work after merge"],
-        );
         local
             .peer
             .call(&rpc::StartTerminal {
