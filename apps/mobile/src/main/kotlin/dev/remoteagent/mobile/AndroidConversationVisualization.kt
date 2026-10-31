@@ -55,8 +55,7 @@ internal fun ConversationVisualization(
     if (document != null) VisualizationWebView(document)
     else
         Text(
-            error?.let { localizedUiFormat(language, "表示できません: {0}", listOf(it)) }
-                ?: language.text("インタラクティブ表示を読み込み中…")
+            error?.let { localizedUiFormat(language, "表示できません: {0}", listOf(it)) } ?: language.text("インタラクティブ表示を読み込み中…")
         )
 }
 
