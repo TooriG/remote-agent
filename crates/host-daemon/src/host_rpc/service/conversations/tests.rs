@@ -658,6 +658,195 @@ async fn history(
 }
 
 #[tokio::test]
+async fn native_fork_rejects_an_unsupported_provider_before_execution() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));
+    let b = NativeAgent::new(ProviderKind::Claude, directory.path().join("claude"));
+    let root = b
+        .create(directory.path().to_str().unwrap(), None, None)
+        .await
+        .unwrap()
+        .thread
+        .id
+        .unwrap();
+    let host = service(directory.path(), &a, &b);
+    let client = host.open_session();
+    let turn = send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Claude,
+        "native",
+        "Native task",
+    )
+    .await
+    .unwrap()
+    .turn_id
+    .unwrap();
+    let denied = call::<ThreadResponse>(
+        &host,
+        client.id(),
+        Call::ForkSession(op::ForkSession::new(root, turn)),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(denied.code, "unsupported_operation");
+    assert_eq!(
+        denied.message,
+        "host/session/fork is unsupported by this provider"
+    );
+}
+
+#[tokio::test]
+async fn unavailable_current_provider_does_not_block_earlier_segments_or_local_rename() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));
+    let b = NativeAgent::new(ProviderKind::Claude, directory.path().join("claude"));
+    let root = a
+        .create(directory.path().to_str().unwrap(), None, None)
+        .await
+        .unwrap()
+        .thread
+        .id
+        .unwrap();
+    let host = service(directory.path(), &a, &b);
+    let client = host.open_session();
+    let original = send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "original",
+        "Original task",
+    )
+    .await
+    .unwrap()
+    .turn_id
+    .unwrap();
+    let current = send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Claude,
+        "review",
+        "Review the task",
+    )
+    .await
+    .unwrap()
+    .turn_id
+    .unwrap();
+    let cached = history(&host, client.id(), &root).await;
+    drop(client);
+    drop(host);
+
+    // The saved handoff survives a restart, while only its current provider fails.
+    let host = HostRpcService::new(
+        [
+            a.restarted().backend(),
+            Backend::unavailable(ProviderKind::Claude, "Claude failed to start"),
+        ],
+        ProjectStore::new(directory.path().join("worktrees.json")),
+    );
+    let mut client = host.open_session();
+    // Detail reads hydrate the established stream, independently of provider startup.
+    let lease = host.inner.router.retain_execution(root.clone()).unwrap();
+    let mut updates = host
+        .inner
+        .router
+        .finish_session_read(lease, client.id(), cached)
+        .unwrap()
+        .updates
+        .unwrap();
+    let _: Empty = call(
+        &host,
+        client.id(),
+        Call::RenameSession(op::RenameSession {
+            thread_id: root.clone(),
+            name: "Local title".into(),
+        }),
+    )
+    .await
+    .unwrap();
+    let notice = tokio::time::timeout(std::time::Duration::from_secs(2), client.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let notice: agent_protocol::protocol::Notification =
+        agent_protocol::protocol::decode(&notice).unwrap();
+    assert!(
+        matches!(notice, agent_protocol::protocol::Notification::SessionRenamed { session, name: Some(name), .. } if session == root && name == "Local title")
+    );
+    assert_eq!(
+        host.inner
+            .conversations
+            .get(&root)
+            .unwrap()
+            .unwrap()
+            .name
+            .as_deref(),
+        Some("Local title")
+    );
+    let _: Empty = call(
+        &host,
+        client.id(),
+        Call::ReadTurnItems(agent_protocol::session::ReadTurnItems {
+            session: root.clone(),
+            turn_id: original.clone(),
+        }),
+    )
+    .await
+    .unwrap();
+    let hydration = tokio::time::timeout(std::time::Duration::from_secs(2), updates.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let hydration: SessionChange = agent_protocol::protocol::decode(&hydration).unwrap();
+    let SessionChange::TurnItems { turn_id, items } = hydration else {
+        panic!("turn hydration missing")
+    };
+    assert_eq!(turn_id, original);
+    let texts = handoff::Message::from_turn(&Turn {
+        items: Some(items),
+        ..Default::default()
+    })
+    .into_iter()
+    .map(|message| message.text)
+    .collect::<Vec<_>>();
+    assert_eq!(texts, ["Original task", "answer original"]);
+    let fork: ThreadResponse = call(
+        &host,
+        client.id(),
+        Call::ForkSession(op::ForkSession::new(root.clone(), original)),
+    )
+    .await
+    .unwrap();
+    assert_ne!(fork.thread.id.as_ref(), Some(&root));
+    assert_eq!(fork.thread.active_provider, Some(ProviderKind::Codex));
+    let texts = fork
+        .thread
+        .turns
+        .as_ref()
+        .unwrap()
+        .iter()
+        .flat_map(|turn| handoff::Message::from_turn(turn))
+        .map(|message| message.text)
+        .collect::<Vec<_>>();
+    assert_eq!(texts, ["Original task", "answer original"]);
+    let error = call::<Empty>(
+        &host,
+        client.id(),
+        Call::Interrupt(op::Interrupt {
+            thread_id: root,
+            turn_id: current,
+        }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code, "provider_unavailable");
+    assert_eq!(error.message, "Claude failed to start");
+}
+
+#[tokio::test]
 async fn reopening_after_restart_restores_only_accepted_turn_settings() {
     let directory = tempfile::tempdir().unwrap();
     let a = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));

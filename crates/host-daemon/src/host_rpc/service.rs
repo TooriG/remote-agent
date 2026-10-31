@@ -330,9 +330,6 @@ impl HostRpcService {
                 .await
                 .map(Into::into);
         }
-        if let Some(target) = target_session {
-            self.check_native_operation(target, request)?;
-        }
         let response = match request {
             Call::ReadHandoffHistory(params) => self.read_handoff_history(params).await?.into(),
             Call::Unsupported => {
@@ -482,26 +479,6 @@ impl HostRpcService {
             _ => self.provider_request(request).await?,
         };
         Ok(response)
-    }
-
-    fn check_native_operation(
-        &self,
-        target: &agent_protocol::session::SessionRef,
-        request: &Call,
-    ) -> Result<(), Failure> {
-        let method = request.method();
-        let row = self.inner.conversations.get(target)?;
-        let native = row.as_ref().map_or(target, |row| &row.active);
-        let capabilities = self.inner.providers.get(native.provider)?.capabilities();
-        if matches!(request, Call::ForkSession(_)) && row.is_none() && !capabilities.fork
-            || matches!(request, Call::RenameSession(_)) && row.is_none() && !capabilities.rename
-        {
-            return Err(Failure::new(
-                "unsupported_operation",
-                format!("{method} is unsupported by this provider"),
-            ));
-        }
-        Ok(())
     }
 
     /// Dispatch remaining provider requests; unknown requests return method_not_found.
@@ -821,6 +798,12 @@ mod tests {
             .unwrap()
             .into_value();
             assert_eq!(response["error"]["code"], expected, "{method}");
+            if expected == "unsupported_operation" {
+                assert_eq!(
+                    response["error"]["message"],
+                    format!("{method} is unsupported by this provider")
+                );
+            }
         }
     }
 

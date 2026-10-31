@@ -121,6 +121,12 @@ impl HostRpcService {
             return self.fork_conversation(&row, &params.last_turn_id).await;
         }
         let agent = self.inner.providers.get(target.provider)?;
+        if !agent.capabilities().fork {
+            return Err(Failure::new(
+                "unsupported_operation",
+                "host/session/fork is unsupported by this provider",
+            ));
+        }
         self.start_thread(agent.as_ref(), |browser| {
             agent.fork(&target.id, &params.last_turn_id, browser)
         })
@@ -170,11 +176,14 @@ impl HostRpcService {
                 });
             return Ok(agent_protocol::models::Empty {});
         }
-        self.inner
-            .providers
-            .get(target.provider)?
-            .rename(&target.id, &params.name)
-            .await
+        let agent = self.inner.providers.get(target.provider)?;
+        if !agent.capabilities().rename {
+            return Err(Failure::new(
+                "unsupported_operation",
+                "host/session/rename is unsupported by this provider",
+            ));
+        }
+        agent.rename(&target.id, &params.name).await
     }
 
     pub(super) async fn submit_input(
