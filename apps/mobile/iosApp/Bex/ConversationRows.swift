@@ -3,18 +3,40 @@ import SwiftUI
 import UIKit
 
 struct ThreadActivityHeader: View {
-    let turn: ActivityPresentation
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    let summary: String
+    let canCollapse: Bool
+    let isInProgress: Bool
     let expanded: Bool
+
     var body: some View {
+        let label = Text(summary)
+            .font(.system(size: 16)).foregroundStyle(.secondary)
+            .lineLimit(1).truncationMode(.tail)
         HStack(spacing: 5) {
-            Text(turn.activitySummary)
-                .font(.system(size: 16)).foregroundColor(.secondary)
-                .lineLimit(1).truncationMode(.tail)
-            if turn.activityCanCollapse {
+            label.overlay {
+                if isInProgress, !reduceMotion, scenePhase == .active {
+                    TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
+                        // Share a clock across summary updates without restarting the sweep.
+                        let phase = context.date.timeIntervalSinceReferenceDate
+                            .truncatingRemainder(dividingBy: 2.8) / 2.8
+                        LinearGradient(
+                            colors: [.clear, .primary.opacity(0.55), .clear],
+                            startPoint: UnitPoint(x: phase * 2 - 0.7, y: 0.5),
+                            endPoint: UnitPoint(x: phase * 2, y: 0.5)
+                        )
+                    }
+                    .mask(label)
+                    .accessibilityHidden(true)
+                    .allowsHitTesting(false)
+                }
+            }
+            if canCollapse {
                 Image(systemName: expanded ? "chevron.down" : "chevron.right")
                     .font(.caption2.weight(.semibold)).foregroundColor(.secondary)
             }
-            if turn.isInProgress {
+            if isInProgress {
                 ProgressView().controlSize(.small)
             }
             Spacer(minLength: 0)

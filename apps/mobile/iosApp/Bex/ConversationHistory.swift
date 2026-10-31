@@ -137,6 +137,8 @@ extension ThreadScreen {
     @ViewBuilder
     func activityHeader(_ turn: ActivityPresentation) -> some View {
         let expanded = AgentCore.activityIsExpanded(activity: turn, choice: activityExpansionOverrides[turn.id])
+        let header = ThreadActivityHeader(summary: turn.activitySummary, canCollapse: turn.activityCanCollapse,
+                                          isInProgress: turn.isInProgress, expanded: expanded)
         if turn.activityCanCollapse {
             Button {
                 isFollowingLatest = false
@@ -145,12 +147,12 @@ extension ThreadScreen {
                     model.perform(.loadTurnItems(params))
                 }
             } label: {
-                ThreadActivityHeader(turn: turn, expanded: expanded)
+                header
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("turn.activity." + turn.id)
         } else {
-            ThreadActivityHeader(turn: turn, expanded: expanded).accessibilityIdentifier("turn.activity." + turn.id)
+            header.accessibilityIdentifier("turn.activity." + turn.id)
         }
     }
 
