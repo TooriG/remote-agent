@@ -182,67 +182,8 @@ extension ThreadScreen {
                         .accessibilityIdentifier("model.effort")
                         .disabled(!model.isConnected || model.sending)
                     }
-                    if answering == nil {
-                        Button {
-                            if dictation.isRecording {
-                                dictation.finish()
-                            } else {
-                                startDictation()
-                            }
-                        } label: {
-                            if dictation.requestingPermission {
-                                ProgressView().frame(width: 40, height: 40)
-                            } else {
-                                Image(systemName: dictation.isRecording ? "stop.fill" : "mic")
-                                    .font(dictation.isRecording ? .body : .title2)
-                                    .foregroundStyle(dictation.isRecording ? .red : .primary)
-                                    .frame(width: 34, height: 34)
-                                    .background(dictation.isRecording ? Color.red.opacity(0.12) : .clear, in: Circle())
-                                    .frame(width: 44, height: 44)
-                            }
-                        }
-                        .disabled(!model.isConnected || (!model.isNewThread && conversation == nil) || model
-                            .transcribing || dictation.requestingPermission || model.sending || model
-                            .transferring || preparingMedia)
-                        .accessibilityLabel(dictation.isRecording ? "録音を終了して文字起こし" : "音声をCodexで文字起こし")
-                        .accessibilityIdentifier("dictation.toggle")
-                    }
-                    if let answering {
-                        questionActions(answering, runningTurnId: runningTurnId)
-                    } else if let runningTurnId,
-                              !dictation.isRecording, !dictation.requestingPermission, !model.transcribing,
-                              model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, attachments
-                              .isEmpty {
-                        stopButton(runningTurnId)
-                    } else {
-                        Button {
-                            // Commit native text before Store can clear the accepted draft.
-                            UIApplication.shared.sendAction(
-                                #selector(UIResponder.resignFirstResponder),
-                                to: nil,
-                                from: nil,
-                                for: nil
-                            )
-                            composerFocused = false
-                            if dictation.isRecording {
-                                sendRecordedText = true
-                                dictation.finish()
-                            } else {
-                                model.send()
-                            }
-                        } label: {
-                            Image(systemName: "arrow.up")
-                        }
-                        .buttonStyle(ComposerSendButtonStyle())
-                        .accessibilityLabel(dictation.isRecording ? "文字起こしして送信" : "送信")
-                        .disabled(!model.isConnected || (!model.isNewThread && conversation == nil) || model
-                            .snapshot.modelProviderForDraft(threadId: model.coreDraftKey) == nil || model
-                            .sending || model.transferring || preparingMedia || dictation.requestingPermission || model
-                            .transcribing ||
-                            (!dictation.isRecording && model.draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                                .isEmpty && attachments.isEmpty))
-                        .accessibilityIdentifier("task.send")
-                    }
+                    trailingActions(answering: answering, runningTurnId: runningTurnId,
+                                    hasAttachments: !attachments.isEmpty)
                 }
             }
             .buttonStyle(.plain)
@@ -255,6 +196,79 @@ extension ThreadScreen {
             startPoint: .top,
             endPoint: .bottom
         ))
+    }
+
+    /// Dictation and the primary action, which answers an awaiting question.
+    @ViewBuilder
+    func trailingActions(answering: QuestionPrompt?, runningTurnId: String?, hasAttachments: Bool) -> some View {
+        if let answering {
+            questionActions(answering, runningTurnId: runningTurnId)
+        } else {
+            dictationButton
+            if let runningTurnId,
+               !dictation.isRecording, !dictation.requestingPermission, !model.transcribing,
+               model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !hasAttachments {
+                stopButton(runningTurnId)
+            } else {
+                sendButton(hasAttachments: hasAttachments)
+            }
+        }
+    }
+
+    var dictationButton: some View {
+        Button {
+            if dictation.isRecording {
+                dictation.finish()
+            } else {
+                startDictation()
+            }
+        } label: {
+            if dictation.requestingPermission {
+                ProgressView().frame(width: 40, height: 40)
+            } else {
+                Image(systemName: dictation.isRecording ? "stop.fill" : "mic")
+                    .font(dictation.isRecording ? .body : .title2)
+                    .foregroundStyle(dictation.isRecording ? .red : .primary)
+                    .frame(width: 34, height: 34)
+                    .background(dictation.isRecording ? Color.red.opacity(0.12) : .clear, in: Circle())
+                    .frame(width: 44, height: 44)
+            }
+        }
+        .disabled(!model.isConnected || (!model.isNewThread && conversation == nil) || model
+            .transcribing || dictation.requestingPermission || model.sending || model
+            .transferring || preparingMedia)
+        .accessibilityLabel(dictation.isRecording ? "録音を終了して文字起こし" : "音声をCodexで文字起こし")
+        .accessibilityIdentifier("dictation.toggle")
+    }
+
+    func sendButton(hasAttachments: Bool) -> some View {
+        Button {
+            // Commit native text before Store can clear the accepted draft.
+            UIApplication.shared.sendAction(
+                #selector(UIResponder.resignFirstResponder),
+                to: nil,
+                from: nil,
+                for: nil
+            )
+            composerFocused = false
+            if dictation.isRecording {
+                sendRecordedText = true
+                dictation.finish()
+            } else {
+                model.send()
+            }
+        } label: {
+            Image(systemName: "arrow.up")
+        }
+        .buttonStyle(ComposerSendButtonStyle())
+        .accessibilityLabel(dictation.isRecording ? "文字起こしして送信" : "送信")
+        .disabled(!model.isConnected || (!model.isNewThread && conversation == nil) || model
+            .snapshot.modelProviderForDraft(threadId: model.coreDraftKey) == nil || model
+            .sending || model.transferring || preparingMedia || dictation.requestingPermission || model
+            .transcribing ||
+            (!dictation.isRecording && model.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty && !hasAttachments))
+        .accessibilityIdentifier("task.send")
     }
 
     func startDictation() {
