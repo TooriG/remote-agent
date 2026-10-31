@@ -14,6 +14,14 @@ use objc2_web_kit::{WKContentWorld, WKSnapshotConfiguration};
 use serde_json::Value;
 use wry::WebViewExtMacOS;
 
+pub fn has_focus(view: &wry::WebView) -> bool {
+    let web = view.webview();
+    web.window()
+        .and_then(|window| window.firstResponder())
+        .and_then(|responder| responder.downcast::<NSView>().ok())
+        .is_some_and(|responder| responder.isDescendantOf(&web))
+}
+
 pub fn evaluate(
     view: &wry::WebView,
     expression: &str,

@@ -307,6 +307,19 @@ pub fn has_surface(scope: &str, renderer: &str, tab: &str, cx: &App) -> bool {
             .any(|t| t.saved.scope == scope && t.saved.id == tab)
 }
 
+pub fn has_focus(scope: &str, tab: &str, cx: &App) -> bool {
+    cx.try_global::<NativeGlobal>()
+        .and_then(|global| global.0.as_ref())
+        .and_then(|owner| {
+            owner
+                .read(cx)
+                .tabs
+                .iter()
+                .find(|view| view.saved.scope == scope && view.saved.id == tab)
+        })
+        .is_some_and(|tab| platform::has_focus(&tab.view))
+}
+
 /// Layout, visibility and canonical CSS viewport are updated by the same owner.
 /// A newly selected tab stays hidden until the PC has laid out its actual panel.
 pub fn layout(scope: &str, tab: &str, bounds: Bounds<Pixels>, cx: &mut App) {

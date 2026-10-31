@@ -60,9 +60,9 @@ impl Browser {
         let dialog_input = cx.new(|cx| InputState::new(window, cx));
         let focus = cx.focus_handle();
         cx.new(|cx: &mut Context<Self>| {
-            let subscription = cx.subscribe_in(&address, window, |view, _, event, _, cx| {
+            let subscription = cx.subscribe_in(&address, window, |view, _, event, window, cx| {
                 if matches!(event, InputEvent::PressEnter { .. }) {
-                    view.navigate(cx);
+                    view.navigate(window, cx);
                 }
             });
             let poll = cx.spawn_in(window, async move |view, cx| {
@@ -151,7 +151,12 @@ impl Browser {
     ) {
         let changed = match result {
             Ok((mut frame, image)) => {
-                if !self.address.read(cx).focus_handle(cx).is_focused(window) {
+                let address_focused = self.address.read(cx).focus_handle(cx).is_focused(window);
+                // Native WebKit focus does not update GPUI's focus handle.
+                #[cfg(target_os = "macos")]
+                let address_focused = address_focused
+                    && !native::has_focus(&self.thread.to_string(), &self.frame.tab_id, cx);
+                if !address_focused {
                     let url = frame
                         .tabs
                         .iter()
@@ -252,9 +257,12 @@ impl Browser {
         cx.notify();
     }
 
-    fn navigate(&mut self, cx: &mut Context<Self>) {
+    fn navigate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match agent_core::browser_view::address_url(self.address.read(cx).value().as_ref()) {
-            Ok(url) => self.send(BrowserAction::Navigate { url }, cx),
+            Ok(url) => {
+                window.focus(&self.focus, cx);
+                self.send(BrowserAction::Navigate { url }, cx);
+            }
             Err(error) => {
                 self.error = Some(error);
                 cx.notify();
@@ -957,6 +965,83 @@ mod tests {
     use super::*;
     use core::prelude::v1::test;
     use std::{cell::RefCell, rc::Rc};
+
+    #[gpui::test]
+    fn address_follows_committed_navigation_and_preserves_unsubmitted_edits(
+        cx: &mut TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        cx.update(|cx| {
+            crate::appearance::init(cx);
+            cx.set_global(Runtime {
+                handle: runtime.handle().clone(),
+                connections: Arc::default(),
+                closing: tokio_util::task::TaskTracker::new(),
+                logging_error: None,
+            });
+        });
+        let store = runtime.block_on(async { Arc::new(Store::offline(Default::default())) });
+        let window = cx.add_empty_window();
+        let browser = window.update(|window, cx| {
+            Browser::new(
+                store,
+                SessionRef::new(
+                    agent_protocol::session::ProviderKind::Codex,
+                    "address".into(),
+                )
+                .unwrap(),
+                None,
+                window,
+                cx,
+            )
+        });
+        window.update(|window, cx| {
+            browser.update(cx, |view, cx| {
+                view.address.update(cx, |input, cx| {
+                    input.set_value("https://example.com/portal", window, cx);
+                    window.focus(&input.focus_handle(cx), cx);
+                });
+                view.navigate(window, cx);
+                assert_eq!(view.pending.len(), 1);
+                assert!(!view.address.read(cx).focus_handle(cx).is_focused(window));
+                let frame = BrowserFrame {
+                    tab_id: "page".into(),
+                    tabs: vec![agent_protocol::browser::BrowserTab {
+                        id: "page".into(),
+                        title: "Login".into(),
+                        url: "https://example.com/login".into(),
+                    }],
+                    ..Default::default()
+                };
+                view.apply_result(Ok((frame.clone(), None)), true, window, cx);
+                assert_eq!(
+                    view.address.read(cx).value().as_ref(),
+                    "https://example.com/login"
+                );
+                view.address.update(cx, |input, cx| {
+                    input.set_value("unfinished.example", window, cx);
+                    window.focus(&input.focus_handle(cx), cx);
+                });
+                view.apply_result(Ok((frame, None)), true, window, cx);
+                assert_eq!(view.address.read(cx).value().as_ref(), "unfinished.example");
+                assert_eq!(
+                    view.pending.len(),
+                    1,
+                    "polling must never resubmit navigation"
+                );
+                view.address.update(cx, |input, cx| {
+                    input.set_value("javascript:alert(1)", window, cx);
+                });
+                view.navigate(window, cx);
+                assert!(view.error.is_some());
+                assert!(view.address.read(cx).focus_handle(cx).is_focused(window));
+                assert_eq!(view.pending.len(), 1);
+            })
+        });
+    }
 
     #[gpui::test]
     fn unchanged_polls_preserve_transport_state_without_notifying(cx: &mut TestAppContext) {
