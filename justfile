@@ -15,7 +15,7 @@ unit-tests *targets:
     set -uo pipefail
     failed=0
     node --test scripts/apple-*.test.mjs || failed=1
-    node --test crates/host-daemon/src/browser/password-fill.test.cjs || failed=1
+    node --test crates/host-daemon/src/browser/password-fill.test.cjs apps/desktop/src/browser/native/snapshot.test.cjs || failed=1
     pwsh -NoLogo -NoProfile -NonInteractive -File tools/windows-fxc/update.test.ps1 || failed=1
     npm --prefix crates/host-daemon/src/providers/claude/sdk ci --ignore-scripts --no-audit --no-fund || failed=1
     npm --prefix crates/host-daemon/src/providers/claude/sdk test || failed=1
