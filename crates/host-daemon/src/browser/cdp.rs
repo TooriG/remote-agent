@@ -6,7 +6,7 @@ use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, hash_map::Entry},
     path::Path,
     process::Stdio,
     sync::{Arc, Mutex},
@@ -32,11 +32,16 @@ struct CachedFrame {
     height: u32,
 }
 
+struct Viewer {
+    seen: Instant,
+    streaming: bool,
+}
+
 #[derive(Default)]
 struct Events {
     dialogs: HashMap<String, BrowserDialog>,
     frames: HashMap<String, CachedFrame>,
-    streaming: HashMap<String, Instant>,
+    viewers: HashMap<String, Viewer>,
     loading: HashMap<String, bool>,
     navigation: HashMap<String, u64>,
 }
@@ -76,11 +81,12 @@ impl Chrome {
                         pending.retain(|_, reply| !reply.is_closed());
                         let expired: Vec<_> = {
                             let mut events = updates.lock().unwrap();
-                            let expired: Vec<_> = events.streaming.iter().filter(|(_, seen)| seen.elapsed() >= Duration::from_secs(3)).map(|(session,_)| session.clone()).collect();
-                            for session in &expired { events.streaming.remove(session); events.frames.remove(session); }
+                            let expired: Vec<_> = events.viewers.iter().filter(|(_, viewer)| viewer.seen.elapsed() >= Duration::from_secs(3)).map(|(session,viewer)| (session.clone(), viewer.streaming)).collect();
+                            for (session, _) in &expired { events.viewers.remove(session); events.frames.remove(session); }
                             expired
                         };
-                        for session in expired {
+                        for (session, streaming) in expired {
+                            if !streaming { continue; }
                             let request = json!({"id":0,"sessionId":session,"method":"Page.stopScreencast","params":{}});
                             if socket.send(Message::Text(request.to_string().into())).await.is_err() { return; }
                         }
@@ -112,7 +118,7 @@ impl Chrome {
                                 Some("Page.frameNavigated") if params["frame"]["parentId"].is_null() => { *events.navigation.entry(session.into()).or_default() += 1; }
                                 Some("Page.screencastFrame") => {
                                     if let Some(data) = params["data"].as_str().filter(|data| data.len() <= 4 * 1024 * 1024)
-                                        && events.streaming.contains_key(session)
+                                        && events.viewers.get(session).is_some_and(|viewer| viewer.streaming)
                                         && let Ok(image) = STANDARD.decode(data) { events.frames.insert(session.into(), CachedFrame { image, width:params["metadata"]["deviceWidth"].as_f64().unwrap_or(0.) as u32, height:params["metadata"]["deviceHeight"].as_f64().unwrap_or(0.) as u32 }); }
                                 }
                                 _ => (),
@@ -333,7 +339,7 @@ impl Chrome {
             let mut events = self.events.lock().unwrap();
             events.dialogs.remove(&session);
             events.frames.remove(&session);
-            events.streaming.remove(&session);
+            events.viewers.remove(&session);
             events.loading.remove(&session);
             events.navigation.remove(&session);
             self.sizes.remove(&session);
@@ -406,27 +412,49 @@ impl Chrome {
             .unwrap_or(false)
     }
     pub async fn latest_image(&mut self, session: &str) -> Result<Vec<u8>, String> {
-        let start = self
-            .events
-            .lock()
-            .unwrap()
-            .streaming
-            .insert(session.into(), Instant::now())
-            .is_none();
-        if start
-            && let Err(error) = self
+        let (start, streaming) = {
+            let mut events = self.events.lock().unwrap();
+            match events.viewers.entry(session.into()) {
+                Entry::Occupied(mut entry) => {
+                    entry.get_mut().seen = Instant::now();
+                    (false, entry.get().streaming)
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(Viewer {
+                        seen: Instant::now(),
+                        streaming: true,
+                    });
+                    (true, true)
+                }
+            }
+        };
+        let streaming = if start
+            && self
                 .call(
                     Some(session),
                     "Page.startScreencast",
                     json!({"format":"jpeg","quality":70,"everyNthFrame":1}),
                 )
                 .await
+                .is_err()
         {
-            self.events.lock().unwrap().streaming.remove(session);
-            return Err(error);
-        }
+            // Starting may have completed before a timeout; stop it before switching capture modes.
+            let _ = self
+                .call(Some(session), "Page.stopScreencast", json!({}))
+                .await;
+            self.events.lock().unwrap().viewers.insert(
+                session.into(),
+                Viewer {
+                    seen: Instant::now(),
+                    streaming: false,
+                },
+            );
+            false
+        } else {
+            streaming
+        };
         let size = self.sizes.get(session).copied().unwrap_or((WIDTH, HEIGHT));
-        if let Some(image) = self.cached_image(session) {
+        if streaming && let Some(image) = self.cached_image(session) {
             return Ok(image);
         }
         let image = self.screenshot(session).await?;
@@ -1008,6 +1036,69 @@ mod tests {
             !methods.iter().any(|method| method == "Runtime.evaluate"),
             "inspection must not block on page scripts behind a modal dialog"
         );
+    }
+
+    #[tokio::test]
+    async fn snapshot_viewers_refresh_and_expire_without_replaying_actions() {
+        let (mut chrome, server, _) =
+            fixture("Page.startScreencast", Failure::Reject(usize::MAX)).await;
+        chrome.sessions.insert("target".into(), "page".into());
+        chrome
+            .action(
+                "page",
+                &BrowserAction::Navigate {
+                    url: "https://example.test/".into(),
+                },
+            )
+            .await
+            .unwrap();
+        for _ in 0..2 {
+            assert_eq!(
+                chrome.latest_image("page").await.unwrap(),
+                [0xff, 0xd8, 0xff, 0xd9]
+            );
+            assert_eq!(
+                chrome.cached_image("page").unwrap(),
+                [0xff, 0xd8, 0xff, 0xd9]
+            );
+        }
+        chrome
+            .events
+            .lock()
+            .unwrap()
+            .viewers
+            .get_mut("page")
+            .unwrap()
+            .seen = Instant::now() - Duration::from_secs(4);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while chrome.cached_image("page").is_some() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!chrome.events.lock().unwrap().viewers.contains_key("page"));
+        assert_eq!(
+            chrome.latest_image("page").await.unwrap(),
+            [0xff, 0xd8, 0xff, 0xd9]
+        );
+        assert!(chrome.targets().await.unwrap().is_empty());
+        assert!(!chrome.events.lock().unwrap().viewers.contains_key("page"));
+        assert!(chrome.cached_image("page").is_none());
+        chrome.shutdown().await;
+        let methods = server.await.unwrap();
+        for (method, count) in [
+            ("Page.startScreencast", 2),
+            ("Page.captureScreenshot", 3),
+            ("Page.stopScreencast", 2),
+            ("Page.navigate", 1),
+        ] {
+            assert_eq!(
+                methods.iter().filter(|sent| *sent == method).count(),
+                count,
+                "{method}"
+            );
+        }
     }
 
     #[tokio::test]
