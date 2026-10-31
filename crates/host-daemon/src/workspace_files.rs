@@ -66,9 +66,15 @@ impl WorkspaceFiles {
         }
     }
 
-    pub(crate) async fn request(&self, session: SessionId, request: Call) -> Result<Body> {
+    pub(crate) async fn request(
+        &self,
+        session: SessionId,
+        request: Call,
+    ) -> Result<Body, crate::providers::Failure> {
         let files = self.clone();
-        tokio::task::spawn_blocking(move || files.dispatch(session, request)).await?
+        tokio::task::spawn_blocking(move || files.dispatch(session, request))
+            .await
+            .map_err(|error| crate::providers::Failure::new("file_operation_failed", error))?
     }
 
     pub(crate) fn clear_session(&self, session: SessionId) {
@@ -108,33 +114,45 @@ impl WorkspaceFiles {
         .await?
     }
 
-    fn dispatch(&self, session: SessionId, request: Call) -> Result<Body> {
+    fn dispatch(
+        &self,
+        session: SessionId,
+        request: Call,
+    ) -> Result<Body, crate::providers::Failure> {
         match request {
-            Call::ReadVisualization(params) => {
-                use crate::visualize::{visualization_document, visualization_path};
-                let path =
-                    visualization_path(&params.path, &params.cwd).map_err(anyhow::Error::msg)?;
-                let directory = self.upload_directory.join("visualizations");
-                let archive = directory.join(hash(path.to_string_lossy().as_bytes()));
-                let _lock = self.writes.lock().unwrap_or_else(|e| e.into_inner());
-                let bytes = if path.try_exists()? {
-                    let bytes = read_bounded(&path, EDIT_LIMIT)?;
-                    std::str::from_utf8(&bytes).context("visualize HTML is not UTF-8")?;
-                    fs::create_dir_all(&directory)?;
-                    atomicwrites::AtomicFile::new(&archive, atomicwrites::AllowOverwrite)
-                        .write_with_options(
-                            |file| file.write_all(&bytes),
-                            agent_local_host::private_file_options(),
-                        )?;
-                    bytes
-                } else {
-                    read_bounded(&archive, EDIT_LIMIT)
-                        .context("表示ファイルが見つかりません。HostでHTMLを再作成してください。")?
-                };
-                let fragment =
-                    std::str::from_utf8(&bytes).context("visualize HTML is not UTF-8")?;
-                Ok(Body::from(visualization_document(fragment)))
-            }
+            Call::ReadVisualization(params) => self
+                .read_visualization(&params.path, &params.cwd)
+                .map_err(|error| crate::providers::Failure::new("file_operation_failed", error)),
+            request => self.file_request(session, request).map_err(file_failure),
+        }
+    }
+
+    fn read_visualization(&self, source: &str, cwd: &str) -> Result<Body> {
+        use crate::visualize::{visualization_document, visualization_path};
+        let path = visualization_path(source, cwd).map_err(anyhow::Error::msg)?;
+        let directory = self.upload_directory.join("visualizations");
+        let archive = directory.join(hash(path.to_string_lossy().as_bytes()));
+        let _lock = self.writes.lock().unwrap_or_else(|e| e.into_inner());
+        let bytes = if path.try_exists()? {
+            let bytes = read_bounded(&path, EDIT_LIMIT)?;
+            std::str::from_utf8(&bytes).context("visualize HTML is not UTF-8")?;
+            fs::create_dir_all(&directory)?;
+            atomicwrites::AtomicFile::new(&archive, atomicwrites::AllowOverwrite)
+                .write_with_options(
+                    |file| file.write_all(&bytes),
+                    agent_local_host::private_file_options(),
+                )?;
+            bytes
+        } else {
+            read_bounded(&archive, EDIT_LIMIT)
+                .context("表示ファイルが見つかりません。HostでHTMLを再作成してください。")?
+        };
+        let fragment = std::str::from_utf8(&bytes).context("visualize HTML is not UTF-8")?;
+        Ok(Body::from(visualization_document(fragment)))
+    }
+
+    fn file_request(&self, session: SessionId, request: Call) -> Result<Body> {
+        match request {
             Call::ListFiles(params) => {
                 let path = dunce::canonicalize(absolute_path(&params.path)?)?;
                 let mut entries = Vec::new();
@@ -422,7 +440,7 @@ fn absolute_path(path: &impl AsRef<Path>) -> Result<PathBuf> {
     }
 }
 
-pub(crate) fn file_failure(error: anyhow::Error) -> crate::providers::Failure {
+fn file_failure(error: anyhow::Error) -> crate::providers::Failure {
     let code = match error
         .downcast_ref::<std::io::Error>()
         .map(std::io::Error::kind)

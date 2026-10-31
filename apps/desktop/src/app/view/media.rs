@@ -227,7 +227,7 @@ impl Desktop {
             return;
         }
         if let Some(parent) = path.parent() {
-            self.browse(parent.to_string_lossy().into_owned());
+            self.browse(parent.to_string_lossy().into_owned(), cx);
         }
         self.edit(path.to_string_lossy().into_owned(), false);
         cx.notify();
@@ -641,7 +641,7 @@ mod file_panel_tests {
             desktop.update(cx, |view, cx| {
                 let snapshot = Arc::make_mut(&mut view.snapshot);
                 Arc::make_mut(&mut snapshot.navigation).cwd = cwd.clone();
-                Arc::make_mut(&mut snapshot.workspace).directory = Some(Arc::new(FileList {
+                let listing = FileList {
                     path: cwd.clone(),
                     entries: vec![FileEntry {
                         name: "large.PNG".into(),
@@ -650,11 +650,18 @@ mod file_panel_tests {
                         size,
                     }],
                     truncated: false,
-                }));
+                };
                 view.composer.input.update(cx, |input, cx| {
                     input.set_value("Keep this draft", window, cx)
                 });
-                view.panels.open(view.panel_scope(), Panel::Files, None);
+                let id = view.panels.open(view.panel_scope(), Panel::Files, None);
+                view.surface_resources.insert(
+                    id,
+                    SurfaceResource::Files {
+                        request: uuid::Uuid::new_v4(),
+                        listing: Some(Arc::new(listing)),
+                    },
+                );
                 view.panels.set_open(view.panel_scope(), true);
                 cx.notify();
             });

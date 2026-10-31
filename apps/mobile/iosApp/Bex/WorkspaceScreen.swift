@@ -1,9 +1,12 @@
 import AgentCore
 import SwiftUI
 
-private struct WorkspaceDestination: Hashable {
+struct WorkspaceDestination: Hashable, Identifiable {
     let scope: PanelScope
     let directory: String
+    var id: Self {
+        self
+    }
 }
 
 /// Keep the workbench on its conversation while side-chat operations change Store selection.
@@ -234,6 +237,7 @@ private struct WorkspaceToolsScreen: View {
             TerminalScreen(model: model, cwd: directory, handle: model.workbenchTerminalHandle(surface.id))
         case .files, .file:
             WorkspaceScreen(model: model, root: directory, draft: scope.draft, close: close)
+                .onDisappear { model.perform(.reviewWorkspace(ReviewWorkspace(cwd: directory))) }
         case .diff:
             WorkspaceDiffScreen(model: model, root: directory)
         case .agents:

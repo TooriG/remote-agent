@@ -18,6 +18,7 @@ struct ThreadScreen: View {
     @State var showingCamera = false
     @State var preparingMedia = false
     @State var showingModelSettings = false
+    @State var openedDirectory: WorkspaceDestination?
     @State var isFollowingLatest = true
     @State var scrollController = ConversationScrollObserver()
     @State var scrollPosition = ScrollPosition(idType: String.self, edge: .bottom)
@@ -48,7 +49,8 @@ struct ThreadScreen: View {
                     composerFocused = true
                 }
             }
-            .onChange(of: model.draftKey) { _ in dictation.cancel() }
+            .onChange(of: model.draftKey) { dictation.cancel(); openedDirectory = nil }
+            .onChange(of: model.selectedProfileId) { openedDirectory = nil }
             .onChange(of: model.isConnected) {
                 if !$0 {
                     dictation.cancel()
@@ -85,6 +87,7 @@ struct ThreadScreen: View {
                 }.ignoresSafeArea()
             }
             .sheet(isPresented: $showingModelSettings) { ModelSettingsSheet(model: model) }
+            .sheet(item: $openedDirectory, content: conversationDirectorySheet)
             .onAppear {
                 if model.isNewThread {
                     composerFocused = true

@@ -13,7 +13,6 @@ struct ConversationMarkdown: View {
     @State private var linkTarget: String?
     @State private var previewURL: URL?
     @State private var linkError: String?
-    @State private var folders: [FileList] = []
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             ForEach(blocks) { part in
@@ -50,11 +49,10 @@ struct ConversationMarkdown: View {
             } catch { linkError = "リンクを開けません: \(error.localizedDescription)" }
             return .handled
         })
-        .sheet(isPresented: Binding(get: { previewURL != nil || !folders.isEmpty }, set: {
+        .sheet(isPresented: Binding(get: { previewURL != nil }, set: {
             if !$0 {
                 linkTarget = nil
                 previewURL = nil
-                folders = []
             }
         })) {
             if let url = previewURL {
@@ -64,8 +62,6 @@ struct ConversationMarkdown: View {
                 ) {
                     previewURL = nil
                 }
-            } else if let folder = folders.last {
-                folderPreview(folder)
             }
         }
         .onChange(of: previewURL) { previous, current in
@@ -85,9 +81,7 @@ struct ConversationMarkdown: View {
                 let entry = try await media.resolve(target)
                 try Task.checkCancellation()
                 if entry.directory {
-                    let listing = try await media.directory(entry.path)
-                    try Task.checkCancellation()
-                    folders.append(listing)
+                    media.openDirectory(entry.path)
                     return
                 }
                 let downloaded = try await media.download(entry.path)
@@ -99,37 +93,6 @@ struct ConversationMarkdown: View {
             } catch {
                 if !Task.isCancelled {
                     linkError = error.localizedDescription
-                }
-            }
-        }
-    }
-
-    private func folderPreview(_ folder: FileList) -> some View {
-        NavigationStack {
-            List {
-                if let linkError {
-                    AppText(linkError).foregroundColor(.red)
-                }
-                if folder.truncated {
-                    AppText("先頭 2,000 件を表示しています。")
-                }
-                ForEach(folder.entries, id: \.path) { entry in
-                    Button { linkTarget = entry.path } label: {
-                        Label(entry.name, systemImage: entry.directory ? "folder" : "doc")
-                    }
-                    .disabled(linkTarget != nil)
-                }
-            }
-            .navigationTitle(folder.path)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                if folders.count > 1 {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("戻る") { linkTarget = nil; folders.removeLast(); linkError = nil }
-                    }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("閉じる") { linkTarget = nil; folders = [] }
                 }
             }
         }

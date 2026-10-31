@@ -459,19 +459,9 @@ impl HostRpcService {
             | Call::WriteFile(_)
             | Call::Upload(_)
             | Call::Download(_)
-            | Call::ReadVisualization(_) => self
-                .inner
-                .files
-                .request(session, request.clone())
-                .await
-                .map_err(|error| {
-                    // Visualization owns recovery instructions for a missing archive.
-                    if matches!(request, Call::ReadVisualization(_)) {
-                        Failure::new("file_operation_failed", error)
-                    } else {
-                        crate::workspace_files::file_failure(error)
-                    }
-                })?,
+            | Call::ReadVisualization(_) => {
+                self.inner.files.request(session, request.clone()).await?
+            }
             Call::ForkSession(params) => {
                 let target = target_session.expect("session-scoped fork");
                 self.fork_session(target, params).await?.into()

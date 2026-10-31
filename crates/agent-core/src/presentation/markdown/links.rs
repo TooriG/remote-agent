@@ -94,6 +94,33 @@ pub enum MarkdownFileKind {
     File,
 }
 
+/// Classify a Host filename without interpreting or resolving a link.
+#[cfg_attr(feature = "bindings", uniffi::export)]
+pub fn markdown_file_kind(path: &str) -> MarkdownFileKind {
+    let basename = path
+        .trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or_default();
+    let extension = basename
+        .rsplit_once('.')
+        .map(|(_, extension)| extension.to_ascii_lowercase());
+    match extension.as_deref() {
+        Some("md" | "mdx" | "markdown") => MarkdownFileKind::Markdown,
+        Some(
+            "rs" | "swift" | "kt" | "kts" | "ts" | "tsx" | "js" | "jsx" | "py" | "go" | "c" | "h"
+            | "cpp" | "hpp" | "cs" | "java" | "rb" | "sh" | "bash" | "zsh" | "nix" | "json"
+            | "toml" | "yaml" | "yml" | "xml" | "html" | "css" | "sql" | "vue" | "svelte" | "lock",
+        ) => MarkdownFileKind::Code,
+        Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "heic" | "avif") => {
+            MarkdownFileKind::Image
+        }
+        Some("pdf" | "txt" | "csv" | "tsv" | "docx" | "xlsx") => MarkdownFileKind::Document,
+        _ if path.ends_with(['/', '\\']) => MarkdownFileKind::Folder,
+        _ => MarkdownFileKind::File,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct MarkdownFileReference {
@@ -172,33 +199,13 @@ pub(super) fn file_reference(source: &str, implicit: bool) -> Option<MarkdownFil
         return None;
     }
     let basename = path.trim_end_matches('/').rsplit('/').next()?;
-    let extension = basename
-        .rsplit_once('.')
-        .map(|(_, extension)| extension.to_ascii_lowercase());
-    let kind = match extension.as_deref() {
-        Some("md" | "mdx" | "markdown") => MarkdownFileKind::Markdown,
-        Some(
-            "rs" | "swift" | "kt" | "kts" | "ts" | "tsx" | "js" | "jsx" | "py" | "go" | "c" | "h"
-            | "cpp" | "hpp" | "cs" | "java" | "rb" | "sh" | "bash" | "zsh" | "nix" | "json"
-            | "toml" | "yaml" | "yml" | "xml" | "html" | "css" | "sql" | "vue" | "svelte" | "lock",
-        ) => MarkdownFileKind::Code,
-        Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "heic" | "avif") => {
-            MarkdownFileKind::Image
-        }
-        Some("pdf" | "txt" | "csv" | "tsv" | "docx" | "xlsx") => MarkdownFileKind::Document,
-        _ if path.ends_with('/') || path == "~" => MarkdownFileKind::Folder,
-        _ => MarkdownFileKind::File,
-    };
-    let explicit =
-        path == "~" || path.contains('/') || line.is_some() || source.starts_with("file:");
+    let kind = markdown_file_kind(&path);
+    let explicit = path.contains('/') || line.is_some() || source.starts_with("file:");
     let known_name = matches!(
         basename,
         "Makefile" | "Dockerfile" | "LICENSE" | "AGENTS.md" | "README" | "justfile" | ".gitignore"
     );
     if !explicit && (implicit || (kind == MarkdownFileKind::File && !known_name)) {
-        return None;
-    }
-    if !explicit && matches!(extension.as_deref(), Some("com" | "org" | "net" | "io")) {
         return None;
     }
     if implicit && !path.contains('/') && kind == MarkdownFileKind::File && !known_name {
@@ -240,7 +247,7 @@ pub(super) fn is_file_label(label: &str, file: &MarkdownFileReference) -> bool {
 #[cfg_attr(feature = "bindings", uniffi::export)]
 pub fn markdown_file_target(source: String, cwd: String) -> Option<MarkdownFileReference> {
     let mut file = file_reference(&source, false)?;
-    if file.path == "~" || file.path.starts_with("~/") {
+    if file.path.starts_with("~/") {
         return Some(file);
     }
     let cwd = cwd
@@ -490,7 +497,7 @@ mod tests {
     #[test]
     fn home_paths_do_not_need_a_workspace_or_use_the_client_home() {
         for cwd in ["", "/workspace", "C:\\workspace"] {
-            for path in ["~", "~/Movies/video.mp4", "~/docs/../notes.md"] {
+            for path in ["~/", "~/Movies/video.mp4", "~/docs/../notes.md"] {
                 let file = markdown_file_target(path.into(), cwd.into()).unwrap();
                 assert_eq!(file.path, path);
             }
@@ -509,6 +516,40 @@ mod tests {
                 .path,
             "/workspace/~/notes.md"
         );
+    }
+    #[test]
+    fn tilde_operators_and_versions_stay_inline_code() {
+        let source = "`~` 演算子と semver `~1.2`、ホームは `~/Documents/`";
+        let blocks = super::super::markdown_blocks(source.into());
+        let MarkdownBlock::Paragraph { runs, .. } = &blocks[0] else {
+            panic!()
+        };
+        let files: Vec<_> = runs.iter().filter_map(|run| run.file.as_ref()).collect();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "~/Documents/");
+        for text in ["~", "~1.2"] {
+            assert!(
+                runs.iter()
+                    .any(|run| run.text == text && run.code && run.file.is_none())
+            );
+        }
+        assert!(markdown_file_target("~".into(), "/workspace".into()).is_none());
+        assert!(markdown_display_source(source).contains("`~` 演算子と semver `~1.2`"));
+    }
+
+    #[rstest::rstest]
+    #[case("/workspace/readme.MD", MarkdownFileKind::Markdown)]
+    #[case(r"C:\host\src\main.RS", MarkdownFileKind::Code)]
+    #[case("~/Pictures/photo.PNG", MarkdownFileKind::Image)]
+    #[case("notes.txt", MarkdownFileKind::Document)]
+    #[case("~/Documents/", MarkdownFileKind::Folder)]
+    #[case("~", MarkdownFileKind::File)]
+    #[case("notes%2Emd", MarkdownFileKind::File)]
+    fn kinds_classify_filenames_without_link_resolution(
+        #[case] path: &str,
+        #[case] kind: MarkdownFileKind,
+    ) {
+        assert_eq!(markdown_file_kind(path), kind);
     }
     #[rstest::rstest]
     #[case("https://example.com/a.rs")]

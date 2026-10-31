@@ -1,7 +1,7 @@
 //! Immutable client state and pure conversation transitions.
 use crate::models::{
-    FileContent, FileList, HostStatus, Invitation, Item, ListQuery, Model, RemoteHost, Thread,
-    ThreadList, WorkspaceReview, WorktreeSettings,
+    FileContent, HostStatus, Invitation, Item, ListQuery, Model, RemoteHost, Thread, ThreadList,
+    WorkspaceReview, WorktreeSettings,
 };
 use agent_protocol::requests::{Answer, Request};
 use operations as op;
@@ -72,7 +72,6 @@ pub struct FileDraft {
 }
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Workspace {
-    pub directory: Option<Arc<FileList>>,
     pub file: Option<Arc<FileContent>>,
     pub review_cwd: Option<String>,
     pub review: Option<Arc<WorkspaceReview>>,
@@ -83,7 +82,6 @@ pub struct Workspace {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct WorkspaceLocation {
     cwd: String,
-    directory: Option<Arc<FileList>>,
     file: Option<Arc<FileContent>>,
     review_cwd: Option<String>,
     review: Option<Arc<WorkspaceReview>>,
@@ -92,7 +90,6 @@ impl Workspace {
     fn location(&self, cwd: String) -> WorkspaceLocation {
         WorkspaceLocation {
             cwd,
-            directory: self.directory.clone(),
             file: self.file.clone(),
             review_cwd: self.review_cwd.clone(),
             review: self.review.clone(),
@@ -469,7 +466,6 @@ pub use crate::store::Effect;
 // Invalidate both displayed content and responses still in flight. File drafts
 // remain keyed by absolute path so navigation never discards unsaved edits.
 fn clear_workspace_location(workspace: &mut Workspace) {
-    workspace.directory = None;
     workspace.file = None;
     workspace.review = None;
     workspace.review_cwd = None;
@@ -1041,7 +1037,6 @@ fn navigate(snapshot: &mut Snapshot, navigation: Navigation) {
             .filter(|location| location.cwd == navigation.cwd)
             .unwrap_or_default();
         let workspace = Arc::make_mut(&mut snapshot.workspace);
-        workspace.directory = location.directory;
         workspace.file = location.file;
         workspace.review_cwd = location.review_cwd;
         workspace.review = location.review;

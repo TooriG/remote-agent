@@ -238,6 +238,7 @@ async fn file_operations_preserve_remote_reasons_and_download_can_retry_after_fa
                 directory: "~/Documents".into(),
             }), "host/blob/upload"),
             (Intent::ResolveFile(op::ResolveFile { path: "~/missing".into() }), "host/file/resolve"),
+            (Intent::ListFiles(op::ListFiles { path: "~/missing".into() }), "host/file/list"),
         ] {
             let completion = fixture.store.dispatch(intent);
             let request = fixture.requests.recv().await.unwrap();
@@ -264,6 +265,46 @@ async fn file_operations_preserve_remote_reasons_and_download_can_retry_after_fa
         assert_eq!(std::fs::read(destination).unwrap(), b"content");
         fixture.close().await;
     }).await.unwrap();
+}
+
+#[tokio::test]
+async fn concurrent_directory_requests_each_receive_their_own_result() {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let mut fixture = Fixture::start(0, false).await;
+        let first = fixture.store.dispatch(Intent::ListFiles(op::ListFiles {
+            path: "/first".into(),
+        }));
+        let second = fixture.store.dispatch(Intent::ListFiles(op::ListFiles {
+            path: "/second".into(),
+        }));
+        let a = fixture.requests.recv().await.unwrap();
+        let b = fixture.requests.recv().await.unwrap();
+        for request in [&b, &a] {
+            assert_eq!(request["method"], "host/file/list");
+            fixture
+                .output
+                .lock()
+                .await
+                .reply(
+                    request,
+                    json!({"result":{
+                        "path":request["params"]["path"], "entries":[], "truncated":false
+                    }}),
+                )
+                .await
+                .unwrap();
+        }
+        for (completion, path) in [(first, "/first"), (second, "/second")] {
+            let agent_core::store::Outcome::Directory { listing } = completion.await.unwrap()
+            else {
+                panic!("expected directory result")
+            };
+            assert_eq!(listing.path, path);
+        }
+        fixture.close().await;
+    })
+    .await
+    .unwrap();
 }
 
 #[tokio::test]

@@ -609,12 +609,6 @@ fn changing_workspace_clears_content_and_preserves_file_drafts() {
         }))
         .unwrap(),
     );
-    let directory: Arc<agent_protocol::models::FileList> = Arc::new(
-        serde_json::from_value(json!({
-            "path":"/old", "entries":[], "truncated":false
-        }))
-        .unwrap(),
-    );
     let review: Arc<agent_protocol::models::WorkspaceReview> = Arc::new(
         serde_json::from_value(json!({
             "branch":"main", "additions":1, "deletions":0, "files":[], "diff":"old"
@@ -628,7 +622,6 @@ fn changing_workspace_clears_content_and_preserves_file_drafts() {
         }),
         workspace: Arc::new(Workspace {
             file: Some(file.clone()),
-            directory: Some(directory.clone()),
             review: Some(review.clone()),
             review_cwd: Some("/old".into()),
             settings: Some(Arc::default()),
@@ -675,7 +668,6 @@ fn changing_workspace_clears_content_and_preserves_file_drafts() {
                 next.workspace.file.is_none(),
                 "old file remains after navigation"
             );
-            assert!(next.workspace.directory.is_none());
             assert!(next.workspace.review.is_none());
             assert!(next.workspace.review_cwd.is_none());
         }
@@ -1345,7 +1337,7 @@ fn unresolved_submission_actions_ignore_known_delivery_states() {
 
 #[test]
 fn file_navigation_rejects_empty_and_relative_paths_before_rpc() {
-    for path in ["", "nested", "../", "~/project"] {
+    for path in ["", "nested", "../", "~other/project"] {
         let (snapshot, effects) = reduce(
             &Snapshot::default(),
             Event::Intent(agent_core::state::Intent::ListFiles(op::ListFiles {
@@ -1361,14 +1353,17 @@ fn file_navigation_rejects_empty_and_relative_paths_before_rpc() {
             Some("絶対パスを入力してください。")
         );
     }
-    let (snapshot, effects) = reduce(
-        &Snapshot::default(),
-        Event::Intent(agent_core::state::Intent::ListFiles(op::ListFiles {
-            path: std::env::temp_dir().to_string_lossy().into_owned(),
-        })),
-    );
-    assert!(snapshot.error.is_none());
-    assert_eq!(effects.len(), 1);
+    for path in [
+        "~/project".to_owned(),
+        std::env::temp_dir().to_string_lossy().into_owned(),
+    ] {
+        let (snapshot, effects) = reduce(
+            &Snapshot::default(),
+            Event::Intent(agent_core::state::Intent::ListFiles(op::ListFiles { path })),
+        );
+        assert!(snapshot.error.is_none());
+        assert_eq!(effects.len(), 1);
+    }
 }
 
 #[test]
@@ -1521,22 +1516,11 @@ fn item_text(item: &agent_protocol::items::Item) -> Option<&str> {
 
 #[test]
 fn empty_directory_chat_keeps_its_draft_separate_from_the_list() {
-    let previous = Snapshot {
-        workspace: Arc::new(agent_core::state::Workspace {
-            directory: Some(Arc::new(agent_protocol::models::FileList {
-                path: "/workspace".into(),
-                entries: vec![],
-                truncated: false,
-            })),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
+    let previous = Snapshot::default();
     let (opened, _) = reduce(
         &previous,
         Event::Intent(op::Intent::NewChat { cwd: String::new() }),
     );
-    assert!(opened.workspace.directory.is_none());
     let key = opened.navigation.draft_key.clone();
     assert_ne!(key, Snapshot::default().navigation.draft_key);
     let (edited, _) = reduce(

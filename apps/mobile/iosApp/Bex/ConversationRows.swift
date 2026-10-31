@@ -90,7 +90,7 @@ struct ThreadMessageRow: View, Equatable {
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.item === rhs.item && lhs.isUser == rhs.isUser
-            && lhs.media.host == rhs.media.host && lhs.media.cwd == rhs.media.cwd
+            && lhs.media.host == rhs.media.host && lhs.media.cwd == rhs.media.cwd && lhs.media.draft == rhs.media.draft
             && lhs.timestampMs == rhs.timestampMs && lhs.forking == rhs.forking && lhs.forkError == rhs.forkError
             && (lhs.fork == nil) == (rhs.fork == nil)
             && (lhs.selection.askInSideChat == nil) == (rhs.selection.askInSideChat == nil)
@@ -232,7 +232,7 @@ struct ThreadItemRow: View, Equatable {
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.item === rhs.item && lhs.isExpanded == rhs.isExpanded
-            && lhs.media.host == rhs.media.host && lhs.media.cwd == rhs.media.cwd
+            && lhs.media.host == rhs.media.host && lhs.media.cwd == rhs.media.cwd && lhs.media.draft == rhs.media.draft
             && (lhs.selection.askInSideChat == nil) == (rhs.selection.askInSideChat == nil)
     }
 

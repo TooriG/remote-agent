@@ -49,7 +49,7 @@ extension ThreadScreen {
                                         ConversationImage(source: SessionImage(reference: attachment.path),
                                                           label: attachment.name,
                                                           identifier: "composer.attachment.\(index)",
-                                                          media: model.mediaAccess,
+                                                          media: mediaAccess,
                                                           contentMode: .fill)
                                             .frame(width: 120, height: 120)
                                     } else {

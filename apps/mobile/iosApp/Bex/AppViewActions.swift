@@ -264,32 +264,6 @@ extension AppViewModel {
         }
     }
 
-    var mediaAccess: ConversationMediaAccess {
-        let host = selectedProfileId
-        return ConversationMediaAccess(host: host, cwd: cwd, download: { [self] path in
-            guard selectedProfileId == host else { throw CancellationError() }
-            return try await download(path)
-        }, visualization: { [self, cwd] path in
-            guard selectedProfileId == host else { throw CancellationError() }
-            let result = try await outcome(for: .loadVisualization(LoadVisualization(path: path, cwd: cwd)))
-            guard selectedProfileId == host else { throw CancellationError() }
-            guard case let .visualization(html) = result else { throw URLError(.badServerResponse) }
-            return html
-        }, resolve: { [self] path in
-            guard selectedProfileId == host else { throw CancellationError() }
-            let result = try await outcome(for: .resolveFile(ResolveFile(path: path)))
-            guard selectedProfileId == host else { throw CancellationError() }
-            guard case let .resolvedFile(entry) = result else { throw URLError(.badServerResponse) }
-            return entry
-        }, directory: { [self] path in
-            guard selectedProfileId == host else { throw CancellationError() }
-            let result = try await outcome(for: .listFiles(ListFiles(path: path)))
-            guard selectedProfileId == host else { throw CancellationError() }
-            guard case let .directory(listing) = result else { throw URLError(.badServerResponse) }
-            return listing
-        })
-    }
-
     func forkAndOpen(through turnId: String, completion: @escaping (String?) -> Void) {
         guard let threadId = selectedThreadId, let host = selectedProfileId else { completion(nil); return }
         perform(.forkSession(ForkSession(threadId: threadId, lastTurnId: turnId))) { [self] result in

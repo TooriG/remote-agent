@@ -30,10 +30,11 @@ extension SessionImage {
 struct ConversationMediaAccess {
     let host: String?
     let cwd: String
+    let draft: DraftKey
     let download: @MainActor (String) async throws -> URL
     let visualization: @MainActor (String) async throws -> String
     let resolve: @MainActor (String) async throws -> FileEntry
-    let directory: @MainActor (String) async throws -> FileList
+    let openDirectory: @MainActor (String) -> Void
 }
 
 struct ConversationImageSkeleton: View {

@@ -4,6 +4,33 @@ import UIKit
 
 /// History and row presentation
 extension ThreadScreen {
+    var mediaAccess: ConversationMediaAccess {
+        let host = model.selectedProfileId
+        let draft = model.coreDraftKey
+        let cwd = model.cwd
+        return ConversationMediaAccess(host: host, cwd: cwd, draft: draft, download: { [model] path in
+            guard model.selectedProfileId == host else { throw CancellationError() }
+            return try await model.download(path)
+        }, visualization: { [model] path in
+            guard model.selectedProfileId == host else { throw CancellationError() }
+            let result = try await model.outcome(for: .loadVisualization(LoadVisualization(path: path, cwd: cwd)))
+            guard model.selectedProfileId == host else { throw CancellationError() }
+            guard case let .visualization(html) = result else { throw URLError(.badServerResponse) }
+            return html
+        }, resolve: { [model] path in
+            guard model.selectedProfileId == host else { throw CancellationError() }
+            let result = try await model.outcome(for: .resolveFile(ResolveFile(path: path)))
+            guard model.selectedProfileId == host else { throw CancellationError() }
+            guard case let .resolvedFile(entry) = result else { throw URLError(.badServerResponse) }
+            return entry
+        }, openDirectory: { path in
+            guard model.selectedProfileId == host, model.coreDraftKey == draft else { return }
+            openedDirectory = WorkspaceDestination(
+                scope: model.snapshot.panelScope(host: host ?? "", draft: draft), directory: path
+            )
+        })
+    }
+
     func historyControl(_ control: HistoryControl, session: SessionRef) -> some View {
         VStack(spacing: 6) {
             if control.hasMore {
@@ -70,7 +97,7 @@ extension ThreadScreen {
             ThreadMessageRow(
                 item: item,
                 isUser: false,
-                media: model.mediaAccess,
+                media: mediaAccess,
                 selection: selectionActions,
                 timestampMs: row.timestampMs,
                 fork: turnId
@@ -108,7 +135,7 @@ extension ThreadScreen {
         ThreadMessageRow(
             item: item,
             isUser: true,
-            media: model.mediaAccess,
+            media: mediaAccess,
             selection: selectionActions,
             timestampMs: timestampMs,
             restoreUnknown: { model.restoreUnknownSubmission($0) },
@@ -119,7 +146,7 @@ extension ThreadScreen {
     func activityItem(_ item: ConversationItem, turnId: String) -> some View {
         ThreadItemRow(
             item: item,
-            media: model.mediaAccess,
+            media: mediaAccess,
             selection: selectionActions,
             isExpanded: expandedItemIds.contains(item.data.id),
             toggleExpanded: {

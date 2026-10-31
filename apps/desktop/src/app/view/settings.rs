@@ -453,11 +453,11 @@ impl Desktop {
                                 file_name(&self.snapshot.navigation.cwd)
                             },
                             cx,
-                            |s, _, _| {
+                            |s, _, cx| {
                                 if s.snapshot.navigation.cwd.is_empty() {
                                     s.pick_folder();
                                 } else {
-                                    s.browse(s.snapshot.navigation.cwd.clone());
+                                    s.browse(s.snapshot.navigation.cwd.clone(), cx);
                                 }
                             },
                         )
@@ -546,7 +546,7 @@ impl Desktop {
                             "all-files",
                             language.text("すべてのファイル"),
                             cx,
-                            |s, _, _| s.browse(s.snapshot.navigation.cwd.clone()),
+                            |s, _, cx| s.browse(s.snapshot.navigation.cwd.clone(), cx),
                         )
                         .icon(IconName::Folder)
                         .w_full()

@@ -8,6 +8,26 @@ extension FileEntry: @retroactive Identifiable {
     }
 }
 
+extension ThreadScreen {
+    func conversationDirectorySheet(_ destination: WorkspaceDestination) -> some View {
+        NavigationStack {
+            WorkspaceScreen(model: model, root: destination.directory, draft: destination.scope.draft) {
+                openedDirectory = nil
+            }
+            .onDisappear {
+                guard model.selectedProfileId == destination.scope.host,
+                      model.coreDraftKey == destination.scope.draft else { return }
+                model.perform(.reviewWorkspace(ReviewWorkspace(cwd: model.cwd)))
+            }
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("閉じる") { openedDirectory = nil }
+                }
+            }
+        }
+    }
+}
+
 struct WorkspaceScreen: View {
     @ObservedObject var model: AppViewModel
     let root: String
@@ -23,7 +43,6 @@ struct WorkspaceScreen: View {
                                      text: "このファイルを編集してください: \($0)\n変更内容: "
                                  )) }, close: close)
             .background(Color(uiColor: .systemGroupedBackground))
-            .onDisappear { model.perform(.reviewWorkspace(ReviewWorkspace(cwd: root))) }
     }
 
     private func request(_ intent: Intent, completion: @escaping (AgentCore.Snapshot, Result<Outcome, Error>) -> Void) {

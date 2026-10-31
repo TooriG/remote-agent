@@ -984,8 +984,8 @@ async fn submissions_complete_across_saved_worktree_settings_and_chat_scopes(
                 assert!(store.snapshot().workspace.review_cwd.is_none());
                 assert!(store.snapshot().workspace.review.is_none());
             }
-            store.dispatch(Intent::ListFiles(op::ListFiles { path: cwd.clone() })).await.unwrap();
-            assert_eq!(store.snapshot().workspace.directory.as_ref().unwrap().path, cwd);
+            let agent_core::store::Outcome::Directory { listing } = store.dispatch(Intent::ListFiles(op::ListFiles { path: cwd.clone() })).await.unwrap() else { panic!("expected directory result") };
+            assert_eq!(listing.path, cwd);
             assert_eq!(store.snapshot().navigation.cwd, cwd, "reopening must preserve the execution directory");
             assert_eq!(store.snapshot().selected_directory(), if project { cwd.clone() } else { String::new() });
             let snapshot = store.snapshot();

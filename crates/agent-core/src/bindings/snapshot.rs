@@ -1,7 +1,7 @@
 //! Export the core snapshot and shared graph directly; only ABI getters live here.
 use super::{AgentError, error};
 use crate::{
-    models::{FileContent, FileList, ListQuery, Model, WorktreeSettings},
+    models::{FileContent, ListQuery, Model, WorktreeSettings},
     presentation::conversation::{
         ItemPresentation, RenderedConversation, RenderedItem, RenderedTurn,
     },
@@ -75,9 +75,6 @@ impl Snapshot {
         self.conversations
             .get(&id)
             .map(|value| Arc::new(Thread(value.clone())))
-    }
-    pub fn directory(&self) -> Option<FileList> {
-        self.workspace.directory.as_deref().cloned()
     }
     pub fn file(&self) -> Option<FileContent> {
         self.workspace.file.as_deref().cloned()

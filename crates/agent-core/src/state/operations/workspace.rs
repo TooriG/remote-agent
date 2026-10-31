@@ -47,7 +47,7 @@ impl Operation for ListFiles {
     fn key(&self) -> Option<OperationKey> {
         Some(OperationKey::Directory)
     }
-    rpc_operation!(workspace.directory);
+    rpc_operation!();
     fn outcome(output: &mut Self::Output) -> Outcome {
         Outcome::Directory {
             listing: output.clone(),

@@ -140,7 +140,7 @@ private suspend fun loadFilePreview(
         return FilePreview(directory = listing)
     }
     val source = entry?.path ?: path
-    val kind = entry?.path?.let { dev.remoteagent.core.markdownFileTarget(it, "/")?.kind } ?: fallbackKind
+    val kind = entry?.path?.let { dev.remoteagent.core.markdownFileKind(it) } ?: fallbackKind
     downloadPreview(target, source, perform)
     return withContext(Dispatchers.IO) { readFilePreview(target, kind, source, page) }
 }

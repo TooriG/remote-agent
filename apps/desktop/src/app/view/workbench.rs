@@ -101,6 +101,53 @@ impl Render for WorkbenchView {
 }
 
 impl Desktop {
+    pub(in crate::app) fn read_directory(&mut self, id: u64, path: String, cx: &Context<Self>) {
+        let listing = match self.surface_resources.remove(&id) {
+            Some(SurfaceResource::Files { listing, .. }) => listing,
+            _ => None,
+        };
+        let request = uuid::Uuid::new_v4();
+        self.surface_resources
+            .insert(id, SurfaceResource::Files { request, listing });
+        self.perform(
+            Intent::ListFiles(op::ListFiles { path }),
+            OperationCompletion::Directory {
+                id,
+                request,
+                input: self.path.read(cx).value().to_string(),
+            },
+        );
+    }
+
+    pub(in crate::app) fn directory_loaded(
+        &mut self,
+        id: u64,
+        request: uuid::Uuid,
+        input: &str,
+        directory: agent_protocol::models::FileList,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(SurfaceResource::Files {
+            request: current,
+            listing,
+        }) = self.surface_resources.get_mut(&id)
+        else {
+            return;
+        };
+        if *current != request {
+            return;
+        }
+        let path = directory.path.clone();
+        *listing = Some(Arc::new(directory));
+        if self.panels.get(self.panel_scope()).active == Some(id)
+            && self.path.read(cx).value().as_ref() == input
+        {
+            self.path
+                .update(cx, |field, cx| field.set_value(path, window, cx));
+        }
+    }
+
     fn workbench_visible(&self, open: bool) -> bool {
         self.visible
             && open
@@ -197,7 +244,7 @@ impl Desktop {
                 SurfaceResource::Terminal(view) => Some(view.clone().into()),
                 SurfaceResource::SideChat(view) => Some(view.clone().into()),
                 SurfaceResource::Diff { view, .. } => Some(view.clone().into()),
-                SurfaceResource::Pending { .. } => None,
+                SurfaceResource::Pending { .. } | SurfaceResource::Files { .. } => None,
             });
         let pending = panel.active.is_some_and(|id| {
             matches!(
@@ -239,6 +286,12 @@ impl Desktop {
                     == Some(file.path.as_str())
             })
             .map(|file| file.path.clone());
+        let directory = panel
+            .active
+            .and_then(|id| match self.surface_resources.get(&id) {
+                Some(SurfaceResource::Files { listing, .. }) => listing.clone(),
+                _ => None,
+            });
         Some(WorkbenchModel {
             standalone: !self.side_chat_mode
                 && (panel.layout == PanelLayout::Expanded
@@ -260,9 +313,7 @@ impl Desktop {
             side_chat_mode: self.side_chat_mode,
             tools: self.panel_tools(),
             errors: self.error_rows(&ErrorScope::Workspace),
-            directory: (kind == Panel::Files)
-                .then(|| self.snapshot.workspace.directory.clone())
-                .flatten(),
+            directory,
             file,
             saving: kind == Panel::File && self.busy > 0,
             review: (kind == Panel::Diff)
@@ -475,7 +526,7 @@ impl Desktop {
                             cx,
                             move |s, _, cx| {
                                 if directory {
-                                    s.browse(path.clone());
+                                    s.browse(path.clone(), cx);
                                 } else {
                                     s.open_file(PathBuf::from(&path), cx);
                                 }
@@ -526,6 +577,7 @@ impl Desktop {
                                     .unwrap_or(Path::new("/"))
                                     .to_string_lossy()
                                     .into_owned(),
+                                cx,
                             );
                         },
                     ))
@@ -539,7 +591,7 @@ impl Desktop {
                         IconName::ArrowRight,
                         language.text("フォルダを開く"),
                         cx,
-                        |s, _, cx| s.browse(s.path.read(cx).value().to_string()),
+                        |s, _, cx| s.browse(s.path.read(cx).value().to_string(), cx),
                     )),
             )
             .child(
@@ -992,6 +1044,137 @@ impl Desktop {
 mod tests {
     use super::*;
     use core::prelude::v1::test;
+
+    #[gpui::test]
+    fn directory_results_belong_to_the_request_and_surface_that_opened_them(
+        cx: &mut TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        cx.update(|cx| {
+            crate::appearance::init(cx);
+            cx.set_global(Runtime {
+                handle: runtime.handle().clone(),
+                connections: Arc::default(),
+                closing: tokio_util::task::TaskTracker::new(),
+                logging_error: None,
+            });
+        });
+        let (desktop, window) = cx.add_window_view(|window, cx| {
+            Desktop::new(
+                Mode::SideChat {
+                    remote: None,
+                    cwd: "/workspace".into(),
+                },
+                window,
+                cx,
+            )
+        });
+        window.update(|window, cx| {
+            desktop.update(cx, |view, cx| {
+                let listing = |path: &str, name: &str| agent_protocol::models::FileList {
+                    path: path.into(),
+                    entries: vec![agent_protocol::models::FileEntry {
+                        name: name.into(),
+                        path: format!("{path}/{name}"),
+                        directory: false,
+                        size: 1,
+                    }],
+                    truncated: false,
+                };
+                let request = |view: &Desktop, id| match &view.surface_resources[&id] {
+                    SurfaceResource::Files { request, .. } => *request,
+                    _ => panic!("expected Files resource"),
+                };
+                view.browse("/first".into(), cx);
+                let first = view.panels.get(view.panel_scope()).active.unwrap();
+                let old = request(view, first);
+                view.read_directory(first, "/first".into(), cx);
+                let current = request(view, first);
+                let input = view.path.read(cx).value().to_string();
+                view.directory_loaded(
+                    first,
+                    old,
+                    &input,
+                    listing("/first", "obsolete"),
+                    window,
+                    cx,
+                );
+                assert!(
+                    view.workbench_model(px(1600.), cx)
+                        .unwrap()
+                        .directory
+                        .is_none()
+                );
+                view.directory_loaded(
+                    first,
+                    current,
+                    &input,
+                    listing("/first", "current"),
+                    window,
+                    cx,
+                );
+                assert_eq!(
+                    view.workbench_model(px(1600.), cx)
+                        .unwrap()
+                        .directory
+                        .unwrap()
+                        .entries[0]
+                        .name,
+                    "current"
+                );
+                assert_eq!(view.path.read(cx).value().as_ref(), "/first");
+
+                view.read_directory(first, "/first".into(), cx);
+                let refresh = request(view, first);
+                view.path
+                    .update(cx, |field, cx| field.set_value("/unsent path", window, cx));
+                view.directory_loaded(
+                    first,
+                    refresh,
+                    "/first",
+                    listing("/first", "refreshed"),
+                    window,
+                    cx,
+                );
+                assert_eq!(view.path.read(cx).value().as_ref(), "/unsent path");
+
+                Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).navigation).draft_key =
+                    DraftKey::Local {
+                        key: "other".into(),
+                    };
+                view.browse("/second".into(), cx);
+                let second = view.panels.get(view.panel_scope()).active.unwrap();
+                view.directory_loaded(
+                    first,
+                    refresh,
+                    "/unsent path",
+                    listing("/first", "late"),
+                    window,
+                    cx,
+                );
+                assert!(
+                    view.workbench_model(px(1600.), cx)
+                        .unwrap()
+                        .directory
+                        .is_none()
+                );
+                let second_request = request(view, second);
+                view.close_surface(second, window, cx);
+                view.directory_loaded(
+                    second,
+                    second_request,
+                    "/unsent path",
+                    listing("/second", "closed"),
+                    window,
+                    cx,
+                );
+                assert!(!view.surface_resources.contains_key(&second));
+            })
+        });
+    }
 
     #[gpui::test]
     fn hidden_workbench_defers_resources_and_reconciles_before_drawing(cx: &mut TestAppContext) {

@@ -62,7 +62,10 @@ enum OperationCompletion {
     Busy,
     Composer(u64),
     Editor(u64),
-    Item { generation: u64, item_id: ItemId },
+    Item {
+        generation: u64,
+        item_id: ItemId,
+    },
     WorktreeSettings,
     Request(RequestId),
     Dictation(uuid::Uuid),
@@ -70,6 +73,11 @@ enum OperationCompletion {
     Account,
     Gallery(uuid::Uuid),
     OpenFile(u64),
+    Directory {
+        id: u64,
+        request: uuid::Uuid,
+        input: String,
+    },
 }
 enum Update {
     Connected(Result<(StoreSession, PathBuf), String>),
@@ -112,6 +120,10 @@ enum ModelPanel {
     Manage,
 }
 enum SurfaceResource {
+    Files {
+        request: uuid::Uuid,
+        listing: Option<Arc<agent_protocol::models::FileList>>,
+    },
     Diff {
         view: Entity<DiffView>,
         source: Option<Weak<agent_protocol::models::WorkspaceReview>>,
@@ -803,7 +815,7 @@ impl Desktop {
                 }
                 match result {
                     Ok(Outcome::ResolvedFile { entry }) if entry.directory => {
-                        self.browse(entry.path)
+                        self.browse(entry.path, cx)
                     }
                     Ok(Outcome::ResolvedFile { entry }) => {
                         self.open_file(PathBuf::from(entry.path), cx)
@@ -811,6 +823,13 @@ impl Desktop {
                     Err(error) => self.set_error(error),
                     _ => {}
                 }
+                return true;
+            }
+            OperationCompletion::Directory { id, request, input } => {
+                if let Ok(Outcome::Directory { listing }) = result {
+                    self.directory_loaded(id, request, &input, listing, window, cx);
+                }
+                self.accept_snapshot(window, cx);
                 return true;
             }
             OperationCompletion::ProjectImport => {
@@ -1068,20 +1087,6 @@ impl Desktop {
             }
             self.source_paths = paths.into_iter().map(str::to_owned).collect();
             self.source_items = self.user_items().cloned().collect();
-        }
-        if previous.workspace.directory != self.snapshot.workspace.directory
-            && let Some(directory) = &self.snapshot.workspace.directory
-        {
-            let previous_path = previous
-                .workspace
-                .directory
-                .as_ref()
-                .map_or("", |directory| directory.path.as_str());
-            if self.path.read(cx).value().as_ref() == previous_path {
-                self.path.update(cx, |input, cx| {
-                    input.set_value(directory.path.clone(), window, cx)
-                });
-            }
         }
         let cwd_changed = previous.navigation.cwd != self.snapshot.navigation.cwd;
         if cwd_changed {
@@ -1480,11 +1485,13 @@ impl Desktop {
                     }));
                 }
             }
-            Panel::Files => self.dispatch(Intent::ListFiles(op::ListFiles {
-                path: surface
+            Panel::Files => self.read_directory(
+                id,
+                surface
                     .path
                     .unwrap_or_else(|| self.snapshot.navigation.cwd.clone()),
-            })),
+                cx,
+            ),
             Panel::Diff => self.refresh_review(),
             Panel::Agents | Panel::Home => (),
         }
@@ -1705,11 +1712,12 @@ impl Desktop {
             },
         );
     }
-    fn browse(&mut self, path: String) {
-        self.panels
+    fn browse(&mut self, path: String, cx: &Context<Self>) {
+        let id = self
+            .panels
             .open(self.panel_scope(), Panel::Files, Some(path.clone()));
         self.tab = Tab::Chat;
-        self.dispatch(Intent::ListFiles(op::ListFiles { path }));
+        self.read_directory(id, path, cx);
     }
     fn edit(&mut self, path: String, discard_draft: bool) {
         self.panels
