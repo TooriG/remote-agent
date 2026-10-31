@@ -273,46 +273,9 @@ impl SessionChange {
                 .rposition(|turn| &turn.id == turn_id);
             if let Self::Turn { turn, completed } = self {
                 let old = index.map(|index| &next.turns.as_ref().unwrap()[index]);
-                if !completed
-                    && old.is_some_and(|old| {
-                        old.status != TurnStatus::Running && old.status != TurnStatus::Unknown
-                    })
-                {
+                let Some(merged) = merge_turn(old.map(AsRef::as_ref), turn, *completed) else {
                     return Ok(());
-                }
-                let mut merged = old.map_or_else(|| turn.clone(), |old| merge_fields(old, turn));
-                merged.status = if *completed {
-                    if turn.status == TurnStatus::Unknown {
-                        TurnStatus::Completed
-                    } else {
-                        turn.status
-                    }
-                } else {
-                    TurnStatus::Running
                 };
-                if let Some(items) = &turn.items {
-                    // Turn lifecycle and item notifications are independent. Even
-                    // a native "full" turn can omit an item whose output is still
-                    // arriving. Only RemoveItem removes a streamed item; a new
-                    // history response replaces the conversation at its owner.
-                    merged.items = Some(append_items(
-                        old.and_then(|old| old.items.as_ref())
-                            .cloned()
-                            .unwrap_or_default(),
-                        items,
-                    ));
-                }
-                if turn.error.is_none()
-                    && (merged.status == TurnStatus::Completed
-                        || old.is_some_and(|old| {
-                            old.error.as_ref().is_some_and(|e| {
-                                e.retry.as_ref().is_some_and(|retry| retry.retrying)
-                            })
-                        }))
-                    && merged.status != TurnStatus::Running
-                {
-                    merged.error = None;
-                }
                 let turns = next.turns.get_or_insert_default();
                 if let Some(index) = index {
                     turns[index] = Arc::new(merged);
@@ -434,8 +397,16 @@ impl SessionChange {
     }
 }
 
-fn merge_fields(previous: &Turn, incoming: &Turn) -> Turn {
-    let mut merged = previous.clone();
+/// Returns `None` when a running notification would reopen a terminal turn.
+fn merge_turn(previous: Option<&Turn>, incoming: &Turn, completed: bool) -> Option<Turn> {
+    if !completed
+        && previous.is_some_and(|old| {
+            old.status != TurnStatus::Running && old.status != TurnStatus::Unknown
+        })
+    {
+        return None;
+    }
+    let mut merged = previous.unwrap_or(incoming).clone();
     macro_rules! field { ($($field:ident),* $(,)?) => { $(if incoming.$field.is_some() { merged.$field = incoming.$field.clone(); })* }; }
     field!(
         started_at,
@@ -445,7 +416,135 @@ fn merge_fields(previous: &Turn, incoming: &Turn) -> Turn {
         completed_at_ms
     );
 
-    merged
+    merged.status = match (completed, incoming.status) {
+        (false, _) => TurnStatus::Running,
+        (true, TurnStatus::Unknown) => TurnStatus::Completed,
+        (true, status) => status,
+    };
+    if let Some(items) = &incoming.items {
+        // Turn lifecycle and item notifications are independent. Even
+        // a native "full" turn can omit an item whose output is still
+        // arriving. Only RemoveItem removes a streamed item; a new
+        // history response replaces the conversation at its owner.
+        merged.items = Some(append_items(
+            previous
+                .and_then(|old| old.items.clone())
+                .unwrap_or_default(),
+            items,
+        ));
+    }
+    if incoming.error.is_none()
+        && (merged.status == TurnStatus::Completed
+            || previous.is_some_and(|old| {
+                old.error
+                    .as_ref()
+                    .is_some_and(|e| e.retry.as_ref().is_some_and(|retry| retry.retrying))
+            }))
+        && merged.status != TurnStatus::Running
+    {
+        merged.error = None;
+    }
+    Some(merged)
+}
+
+#[cfg(test)]
+mod merge_turn_tests {
+    use super::*;
+    use crate::execution::{ExecutionError, RetryEvidence};
+
+    #[test]
+    fn running_notifications_do_not_reopen_terminal_turns() {
+        for status in [
+            TurnStatus::Completed,
+            TurnStatus::Failed,
+            TurnStatus::Interrupted,
+        ] {
+            let previous = Turn {
+                status,
+                ..Default::default()
+            };
+            assert!(merge_turn(Some(&previous), &Turn::default(), false).is_none());
+        }
+        for status in [TurnStatus::Unknown, TurnStatus::Running] {
+            let previous = Turn {
+                status,
+                ..Default::default()
+            };
+            assert_eq!(
+                merge_turn(Some(&previous), &Turn::default(), false)
+                    .unwrap()
+                    .status,
+                TurnStatus::Running
+            );
+        }
+    }
+
+    #[test]
+    fn completed_unknown_notifications_become_completed() {
+        assert_eq!(
+            merge_turn(None, &Turn::default(), true).unwrap().status,
+            TurnStatus::Completed
+        );
+        let previous = Turn {
+            status: TurnStatus::Running,
+            ..Default::default()
+        };
+        assert_eq!(
+            merge_turn(Some(&previous), &Turn::default(), true)
+                .unwrap()
+                .status,
+            TurnStatus::Completed
+        );
+    }
+
+    #[test]
+    fn terminal_notifications_clear_only_retrying_errors_unless_completed() {
+        for retrying in [false, true] {
+            let previous = Turn {
+                error: Some(ExecutionError {
+                    message: "retry failed".into(),
+                    retry: Some(RetryEvidence {
+                        retrying,
+                        overloaded: false,
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            for status in [TurnStatus::Failed, TurnStatus::Interrupted] {
+                let incoming = Turn {
+                    status,
+                    ..Default::default()
+                };
+                assert_eq!(
+                    merge_turn(Some(&previous), &incoming, true)
+                        .unwrap()
+                        .error
+                        .is_none(),
+                    retrying
+                );
+            }
+            assert!(
+                merge_turn(
+                    Some(&previous),
+                    &Turn {
+                        status: TurnStatus::Completed,
+                        ..Default::default()
+                    },
+                    true
+                )
+                .unwrap()
+                .error
+                .is_none()
+            );
+            assert!(
+                merge_turn(Some(&previous), &Turn::default(), false)
+                    .unwrap()
+                    .error
+                    .is_some()
+            );
+        }
+    }
 }
 
 pub fn append_items(mut previous: Vec<Arc<Item>>, incoming: &[Arc<Item>]) -> Vec<Arc<Item>> {
