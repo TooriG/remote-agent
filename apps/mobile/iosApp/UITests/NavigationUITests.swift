@@ -113,19 +113,20 @@ extension LaunchUITests {
         let cancel = app.buttons["pairing.cancel"]
         XCTAssertTrue(cancel.waitForExistence(timeout: 10))
         dismissSimulatorSetupNotification()
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.13))
+        let pairingBar = app.navigationBars["PCを追加"]
+        XCTAssertTrue(pairingBar.waitForExistence(timeout: 10))
+        waitForStableFrame(pairingBar)
+        pairingBar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)))
-        XCTAssertTrue(addHost.waitForExistence(timeout: 10))
-        XCTAssertFalse(cancel.exists)
+        // The profile list remains in the hierarchy while the sheet is closing.
+        XCTAssertTrue(cancel.waitForNonExistence(timeout: 10))
+        XCTAssertTrue(addHost.isHittable)
         addHost.tap()
         XCTAssertTrue(cancel.waitForExistence(timeout: 10)); cancel.tap()
         let host = app.buttons.matching(NSPredicate(
-            format: "identifier BEGINSWITH %@ AND identifier != %@",
-            "profiles.",
-            "profiles.add"
+            format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "profiles.", "検証 Host"
         )).firstMatch
-        XCTAssertTrue(host.waitForExistence(timeout: 10))
-        XCTAssertTrue(host.label.contains("検証 Host")); host.tap()
+        XCTAssertTrue(host.waitForExistence(timeout: 10)); host.tap()
         XCTAssertTrue(app.descendants(matching: .any)["tasks.list"].waitForExistence(timeout: 15))
 
         app.navigationBars.buttons["BackButton"].tap()
