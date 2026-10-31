@@ -520,100 +520,99 @@ fn permission_description(permissions: &serde_json::Map<String, Value>) -> Optio
                     );
                 }
             }
-            "fileSystem" => {
-                for (key, value) in fields {
-                    if !matches!(
-                        key.as_str(),
-                        "read" | "write" | "globScanMaxDepth" | "entries"
-                    ) {
+            "fileSystem" => lines.extend(file_permissions(fields)?),
+            _ => return None,
+        }
+    }
+    Some(lines.join("\n"))
+}
+
+fn file_permissions(fields: &serde_json::Map<String, Value>) -> Option<Vec<String>> {
+    let mut lines = Vec::new();
+    for (key, value) in fields {
+        if !matches!(
+            key.as_str(),
+            "read" | "write" | "globScanMaxDepth" | "entries"
+        ) {
+            return None;
+        }
+        if value.is_null() {
+            continue;
+        }
+        match key.as_str() {
+            "read" | "write" => {
+                for path in value.as_array()? {
+                    let path = path.as_str()?;
+                    if !std::path::Path::new(path).is_absolute() {
                         return None;
                     }
-                    if value.is_null() {
-                        continue;
-                    }
-                    match key.as_str() {
-                        "read" | "write" => {
-                            for path in value.as_array()? {
-                                let path = path.as_str()?;
-                                if !std::path::Path::new(path).is_absolute() {
-                                    return None;
-                                }
-                                lines.push(format!(
-                                    "{}: {path}",
-                                    if key == "read" {
-                                        "ファイルの読取り"
-                                    } else {
-                                        "ファイルの書込み"
-                                    }
-                                ));
-                            }
+                    lines.push(format!(
+                        "{}: {path}",
+                        if key == "read" {
+                            "ファイルの読取り"
+                        } else {
+                            "ファイルの書込み"
                         }
-                        "globScanMaxDepth" => {
-                            let depth = value.as_u64().filter(|depth| *depth > 0)?;
-                            lines.push(format!("ファイル検索の最大深さ: {depth}"));
-                        }
-                        "entries" => {
-                            for entry in value.as_array()? {
-                                let entry = entry.as_object().filter(|fields| fields.len() == 2)?;
-                                let access = match entry.get("access")?.as_str()? {
-                                    "read" => "読取り",
-                                    "write" => "書込み",
-                                    "deny" => "アクセス拒否",
-                                    _ => return None,
-                                };
-                                let path = entry
-                                    .get("path")?
-                                    .as_object()
-                                    .filter(|fields| fields.len() == 2)?;
-                                let target = match path.get("type")?.as_str()? {
-                                    "path" => {
-                                        let path = path.get("path")?.as_str()?;
-                                        if !std::path::Path::new(path).is_absolute() {
-                                            return None;
-                                        }
-                                        path.to_owned()
-                                    }
-                                    "glob_pattern" => format!(
-                                        "一致するファイル: {}",
-                                        path.get("pattern")?.as_str()?
-                                    ),
-                                    "special" => {
-                                        let special = path.get("value")?.as_object()?;
-                                        let label = match special.get("kind")?.as_str()? {
-                                            "root" => "全ファイル",
-                                            "minimal" => "最小限のファイル",
-                                            "project_roots" => "プロジェクトのファイル",
-                                            "tmpdir" => "一時ディレクトリ",
-                                            "slash_tmp" => "/tmp",
-                                            _ => return None,
-                                        };
-                                        if special
-                                            .keys()
-                                            .any(|key| !matches!(key.as_str(), "kind" | "subpath"))
-                                        {
-                                            return None;
-                                        }
-                                        match special
-                                            .get("subpath")
-                                            .filter(|value| !value.is_null())
-                                        {
-                                            Some(path) => format!("{label}/{}", path.as_str()?),
-                                            None => label.into(),
-                                        }
-                                    }
-                                    _ => return None,
-                                };
-                                lines.push(format!("ファイルの{access}: {target}"));
-                            }
-                        }
+                    ));
+                }
+            }
+            "globScanMaxDepth" => {
+                let depth = value.as_u64().filter(|depth| *depth > 0)?;
+                lines.push(format!("ファイル検索の最大深さ: {depth}"));
+            }
+            "entries" => {
+                for entry in value.as_array()? {
+                    let entry = entry.as_object().filter(|fields| fields.len() == 2)?;
+                    let access = match entry.get("access")?.as_str()? {
+                        "read" => "読取り",
+                        "write" => "書込み",
+                        "deny" => "アクセス拒否",
                         _ => return None,
-                    }
+                    };
+                    let target = permission_target(entry.get("path")?)?;
+                    lines.push(format!("ファイルの{access}: {target}"));
                 }
             }
             _ => return None,
         }
     }
-    Some(lines.join("\n"))
+    Some(lines)
+}
+
+fn permission_target(value: &Value) -> Option<String> {
+    let path = value.as_object().filter(|fields| fields.len() == 2)?;
+    Some(match path.get("type")?.as_str()? {
+        "path" => {
+            let path = path.get("path")?.as_str()?;
+            if !std::path::Path::new(path).is_absolute() {
+                return None;
+            }
+            path.to_owned()
+        }
+        "glob_pattern" => format!("一致するファイル: {}", path.get("pattern")?.as_str()?),
+        "special" => {
+            let special = path.get("value")?.as_object()?;
+            let label = match special.get("kind")?.as_str()? {
+                "root" => "全ファイル",
+                "minimal" => "最小限のファイル",
+                "project_roots" => "プロジェクトのファイル",
+                "tmpdir" => "一時ディレクトリ",
+                "slash_tmp" => "/tmp",
+                _ => return None,
+            };
+            if special
+                .keys()
+                .any(|key| !matches!(key.as_str(), "kind" | "subpath"))
+            {
+                return None;
+            }
+            match special.get("subpath").filter(|value| !value.is_null()) {
+                Some(path) => format!("{label}/{}", path.as_str()?),
+                None => label.into(),
+            }
+        }
+        _ => return None,
+    })
 }
 
 fn elicitation_input(

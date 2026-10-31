@@ -19,7 +19,7 @@ pub(super) struct Reports {
 }
 
 impl Reports {
-    pub(super) fn observe(mut self, tasks: impl IntoIterator<Item = (String, bool)>) -> Self {
+    pub(super) fn observe(&mut self, tasks: impl IntoIterator<Item = (String, bool)>) {
         for (id, needs_report) in tasks {
             let phase = self.tasks.entry(id).or_insert(Phase::Unreported);
             if *phase == Phase::Complete {
@@ -31,10 +31,9 @@ impl Reports {
                 *phase = Phase::Unreported;
             }
         }
-        self
     }
 
-    pub(super) fn notified(mut self, id: &str, ambient: bool) -> Self {
+    pub(super) fn notified(&mut self, id: &str, ambient: bool) {
         let phase = self
             .tasks
             .entry(id.into())
@@ -44,10 +43,9 @@ impl Reports {
         } else if !matches!(*phase, Phase::Complete | Phase::Responding | Phase::Ignored) {
             *phase = Phase::AwaitingResponse;
         }
-        self
     }
 
-    pub(super) fn response_started(mut self, run: Option<&str>) -> Self {
+    pub(super) fn response_started(&mut self, run: Option<&str>) {
         if let Some(id) = run {
             let phase = self.tasks.entry(id.into()).or_insert(Phase::Responding);
             if !matches!(*phase, Phase::Complete | Phase::Ignored) {
@@ -60,16 +58,14 @@ impl Reports {
                 }
             }
         }
-        self
     }
 
-    pub(super) fn response_finished(mut self) -> Self {
+    pub(super) fn response_finished(&mut self) {
         for phase in self.tasks.values_mut() {
             if *phase == Phase::Responding {
                 *phase = Phase::Complete;
             }
         }
-        self
     }
 
     pub(super) fn pending(&self) -> bool {
@@ -88,80 +84,78 @@ mod tests {
     use proptest::prelude::*;
 
     fn running() -> Reports {
-        Reports::default().observe(HashMap::from([("run".into(), true)]))
+        let mut work = Reports::default();
+        work.observe(HashMap::from([("run".into(), true)]));
+        work
     }
 
     #[test]
     fn old_foreground_results_do_not_answer_pending_background_reports() {
-        let work = running().observe(HashMap::new()).response_finished();
+        let mut work = running();
+        work.observe(HashMap::new());
+        work.response_finished();
         assert!(work.pending());
-        let work = work.notified("run", false).response_finished();
+        work.notified("run", false);
+        work.response_finished();
         assert!(work.pending());
-        let work = work.response_started(None).response_finished();
+        work.response_started(None);
+        work.response_finished();
         assert!(!work.pending());
-        assert!(!work.notified("run", false).pending());
+        work.notified("run", false);
+        assert!(!work.pending());
     }
 
     #[test]
     fn late_level_changes_do_not_restart_an_answered_report() {
-        let work = running()
-            .notified("run", false)
-            .response_started(None)
-            .observe(HashMap::new());
+        let mut work = running();
+        work.notified("run", false);
+        work.response_started(None);
+        work.observe(HashMap::new());
         assert!(work.pending());
-        let work = work
-            .response_finished()
-            .observe(HashMap::from([("run".into(), true)]))
-            .observe(HashMap::new());
+        work.response_finished();
+        work.observe(HashMap::from([("run".into(), true)]));
+        work.observe(HashMap::new());
         assert!(!work.pending());
-        let work = work.observe(HashMap::from([("resumed-run".into(), true)]));
-        assert!(work.notified("run", false).pending());
+        work.observe(HashMap::from([("resumed-run".into(), true)]));
+        work.notified("run", false);
+        assert!(work.pending());
     }
 
     #[test]
     fn ambient_changes_do_not_require_a_report() {
-        let work = running().observe(HashMap::from([("run".into(), false)]));
+        let mut work = running();
+        work.observe(HashMap::from([("run".into(), false)]));
         assert!(!work.pending());
-        assert!(
-            work.observe(HashMap::from([("run".into(), true)]))
-                .pending()
-        );
+        work.observe(HashMap::from([("run".into(), true)]));
+        assert!(work.pending());
     }
 
     #[test]
     fn consumed_reports_finish_only_their_own_task_run() {
-        let work = Reports::default()
-            .notified("one", false)
-            .notified("two", false)
-            .response_started(Some("one"))
-            .response_finished();
+        let mut work = Reports::default();
+        work.notified("one", false);
+        work.notified("two", false);
+        work.response_started(Some("one"));
+        work.response_finished();
         assert!(work.pending());
-        assert!(
-            !work
-                .response_started(Some("two"))
-                .response_finished()
-                .pending()
-        );
+        work.response_started(Some("two"));
+        work.response_finished();
+        assert!(!work.pending());
     }
 
     #[test]
     fn sdk_agents_and_silent_completions_do_not_need_another_report() {
-        let work = Reports::default()
-            .observe([("agent".into(), false)])
-            .notified("agent", false);
+        let mut work = Reports::default();
+        work.observe([("agent".into(), false)]);
+        work.notified("agent", false);
         assert!(!work.pending());
-        assert!(
-            !work
-                .observe(HashMap::from([("agent".into(), false)]))
-                .observe(HashMap::new())
-                .pending()
-        );
-        assert!(
-            !running()
-                .observe(HashMap::new())
-                .notified("run", true)
-                .pending()
-        );
+        work.observe(HashMap::from([("agent".into(), false)]));
+        work.observe(HashMap::new());
+        assert!(!work.pending());
+        let mut work = running();
+        work.observe(HashMap::new());
+        work.notified("run", true);
+        assert!(!work.pending());
     }
 
     proptest! {
@@ -171,14 +165,15 @@ mod tests {
             level_first in any::<bool>(),
         ) {
             let level = notices.iter().enumerate().map(|(i, _)| (i.to_string(), true));
-            let mut work = Reports::default().observe(level);
-            if level_first { work = work.observe(HashMap::new()); }
+            let mut work = Reports::default();
+            work.observe(level);
+            if level_first { work.observe(HashMap::new()); }
             for (i, noticed) in notices.iter().enumerate() {
-                if *noticed { work = work.notified(&i.to_string(), false); }
+                if *noticed { work.notified(&i.to_string(), false); }
             }
-            work = work.response_started(None);
-            if !level_first { work = work.observe(HashMap::new()); }
-            work = work.response_finished();
+            work.response_started(None);
+            if !level_first { work.observe(HashMap::new()); }
+            work.response_finished();
             prop_assert_eq!(work.pending(), notices.iter().any(|noticed| !noticed));
         }
 
@@ -186,14 +181,18 @@ mod tests {
         fn late_metadata_cannot_require_an_answer_for_a_completed_run(
             changes in prop::collection::vec((any::<bool>(), any::<bool>(), any::<bool>()), 0..16),
         ) {
-            let mut work = running().notified("run", false).response_started(None)
-                .response_finished().observe(HashMap::new());
+            let mut work = running();
+            work.notified("run", false);
+            work.response_started(None);
+            work.response_finished();
+            work.observe(HashMap::new());
             for (ambient, independent, notification) in changes {
-                work = if notification && independent { work.observe([("run".into(), false)]) }
-                    else if notification { work.notified("run", ambient) }
-                    else { work.observe(HashMap::from([("run".into(), !ambient && independent)])) };
+                if notification && independent { work.observe([("run".into(), false)]); }
+                    else if notification { work.notified("run", ambient); }
+                    else { work.observe(HashMap::from([("run".into(), !ambient && independent)])); }
             }
-            prop_assert!(!work.observe(HashMap::new()).pending());
+            work.observe(HashMap::new());
+            prop_assert!(!work.pending());
         }
     }
 }

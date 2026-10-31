@@ -1072,7 +1072,7 @@ impl Agent for Codex {
         let instance = self.instance;
         let processed = self.processed.clone();
         let accounts = self.accounts.clone();
-        let process = self.process.clone();
+        let process = codex.clone();
         let (output, receiver) = tokio::sync::mpsc::channel(256);
         tokio::spawn(async move {
             let (cause, reason) = loop {
@@ -1092,35 +1092,7 @@ impl Agent for Codex {
                             let accounts = accounts.clone();
                             let process = process.clone();
                             tokio::spawn(async move {
-                                #[derive(Deserialize)]
-                                #[serde(rename_all = "camelCase")]
-                                struct Refresh<'a> {
-                                    previous_account_id: Option<&'a str>,
-                                }
-                                let Ok(request) = RpcMessage::parse(&line) else {
-                                    return;
-                                };
-                                let Ok(params) = request.params::<Refresh>() else {
-                                    return;
-                                };
-                                let mut accounts = accounts.lock().await;
-                                let result = match accounts.as_mut() {
-                                    Some(accounts) => {
-                                        accounts.refresh(params.previous_account_id).await
-                                    }
-                                    None => Err("アカウントを選択してください。".into()),
-                                };
-                                let response = match result {
-                                    Ok(result) => request.response::<_, ()>(Ok(result)),
-                                    Err(error) => request.error(-32000, &error),
-                                };
-                                let Ok(response) = response else {
-                                    return;
-                                };
-                                let line = zeroize::Zeroizing::new(response);
-                                if let Ok(codex) = &process {
-                                    let _ = codex.send_raw(&line).await;
-                                }
+                                refresh_auth_tokens(&accounts, &process, &line).await;
                             });
                         } else if request.kind() == RpcMessageKind::Request {
                             let admission = match serde_json::from_str(&line)
@@ -1130,7 +1102,7 @@ impl Agent for Codex {
                                         instance,
                                         stopped.clone(),
                                         request,
-                                        process.as_ref().map_err(|e| e.clone())?.clone(),
+                                        process.clone(),
                                     )
                                 }) {
                                 Ok(change) => emit(&output, change).await,
@@ -1140,10 +1112,9 @@ impl Agent for Codex {
                                 tracing::warn!(target: "agent", operation = "host.codex.request_rejected", message = %error);
                             }
                             if let Err(error) = admission
-                                && let Ok(codex) = &process
                                 && let Ok(response) = request.error(-32000, &error)
                             {
-                                let _ = codex.send_raw(&response).await;
+                                let _ = process.send_raw(&response).await;
                             }
                         } else {
                             let result = match event_change(instance, &request) {
@@ -1187,9 +1158,7 @@ impl Agent for Codex {
                 tracing::error!(target: "agent", operation = "host.codex.event_stream_stopped", message = %message);
             }
             stopped.cancel();
-            if let Ok(codex) = &process
-                && let Err(error) = codex.shutdown().await
-            {
+            if let Err(error) = process.shutdown().await {
                 tracing::error!(target: "agent", operation = "host.codex.shutdown", message = %error);
             }
             let _=emit(&output,AgentChange::Stopped {provider:ProviderKind::Codex,reason:"エージェントとの接続が終了しました。Hostを再起動してから再送信してください。".into()}).await;
@@ -1202,6 +1171,38 @@ impl Agent for Codex {
             let _ = process.shutdown().await;
         }
     }
+}
+
+async fn refresh_auth_tokens(
+    accounts: &tokio::sync::Mutex<Option<accounts::Accounts>>,
+    process: &Arc<CodexAppServer>,
+    line: &str,
+) {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Refresh<'a> {
+        previous_account_id: Option<&'a str>,
+    }
+    let Ok(request) = RpcMessage::parse(line) else {
+        return;
+    };
+    let Ok(params) = request.params::<Refresh>() else {
+        return;
+    };
+    let mut accounts = accounts.lock().await;
+    let result = match accounts.as_mut() {
+        Some(accounts) => accounts.refresh(params.previous_account_id).await,
+        None => Err("アカウントを選択してください。".into()),
+    };
+    let response = match result {
+        Ok(result) => request.response::<_, ()>(Ok(result)),
+        Err(error) => request.error(-32000, &error),
+    };
+    let Ok(response) = response else {
+        return;
+    };
+    let line = zeroize::Zeroizing::new(response);
+    let _ = process.send_raw(&line).await;
 }
 
 #[cfg(test)]

@@ -3,7 +3,8 @@
 use super::refreshed::{DISCOVERY_FRESH, Refreshed};
 use agent_protocol::{execution::*, items::*};
 mod accounts;
-mod background;
+mod response;
+use response::{InputDelivery, MessageDisposition, ResponseState};
 mod history;
 mod native;
 mod permissions;
@@ -882,19 +883,15 @@ impl Worker {
                     .await;
             });
         });
-        let mut interrupted = false;
-        let mut pending_inputs = HashMap::new();
-        let mut result_received = false;
-        let mut idle = false;
+        let mut response = ResponseState::default();
         let outcome = async {
-            let mut background = background::Reports::default();
             let turn=self.current_turn().cloned().ok_or("Claude execution state is unavailable")?;
             self.change(SessionChange::Turn {turn,completed:false}).await?;
             loop {
                 let event = tokio::select! {
                     biased;
                     _ = self.stop.cancelled() => {
-                        interrupted = true;
+                        response.interrupt();
                         process.write(&SdkInput::Interrupt { request_id: "shutdown".into() }).await?;
                         return Ok(());
                     }
@@ -903,26 +900,10 @@ impl Worker {
                     message = process.read() => message?.ok_or("Claude SDK exited before the turn completed")?,
                     command = input.recv() => {
                         let command = command.ok_or("Claude input queue is closed")?;
-                        let result = process.write(&command.value).await;
-                        let mut accepted_turn = None;
-                        if result.is_ok() && let Some(user) = command.user {
-                            // An answered response gives new input its own turn,
-                            // as in the transcript and T3 Code.
-                            let background_context = background.pending();
-                            let settled = result_received && idle && pending_inputs.is_empty() && !interrupted;
-                            if settled && !background_context {
-                                self.next_turn(user.id.as_str().into()).await?;
-                            }
-                            accepted_turn = (!background_context).then(|| self.turn_id.clone());
-                            pending_inputs.insert(user.id.clone(), background_context);
-                            self.change(SessionChange::Item {
-                                turn_id: self.turn_id.clone(), item: Arc::new(user),
-                            }).await?;
+                        let delivery = response.delivery();
+                        if let Some(id) = self.deliver_command(&mut process, command, delivery).await? {
+                            response.accept(id, delivery);
                         }
-                        if let Some(delivered) = command.delivered {
-                            let _ = delivered.send(result.clone().map(|()| accepted_turn));
-                        }
-                        result?;
                         continue;
                     }
                 };
@@ -941,10 +922,10 @@ impl Worker {
                     }
                     SdkEvent::Interrupted { request_id, error } => {
                         if request_id == "interrupt" {
-                            let result = error.map_or_else(|| { interrupted = true; Ok(()) }, Err);
+                            let result = response.interrupt_result(error);
                             self.interrupt.send_replace(Some(result));
                             // Only background work remains, so no result will follow.
-                            if interrupted && result_received && idle && pending_inputs.is_empty() {
+                            if response.interrupted() && response.answered() {
                                 return Ok(());
                             }
                         }
@@ -954,98 +935,21 @@ impl Worker {
                     SdkEvent::Usage { .. } => return Err("Unexpected Claude usage response".into()),                    SdkEvent::Forked { .. } => return Err("Unexpected Claude fork response".into()),
                     SdkEvent::Error { message } => return Err(message),
                 };
-                let kind = message["type"].as_str().unwrap_or_default();
-                if kind == "system" && message["subtype"] == "task_notification" {
-                    let id = message["run_id"].as_str().or(message["task_id"].as_str()).ok_or("Claude task notification ID is missing")?;
-                    background = background.notified(id, message["ambient"] == true || message["skip_transcript"] == true);
+                let observation = response.observe(&message)?;
+                for (id, opens_turn) in &observation.echoes {
+                    self.consume_input(id, *opens_turn).await?;
                 }
-                if kind == "system" && message["subtype"] == "task_started" {
-                    let id = message["run_id"].as_str().or(message["task_id"].as_str()).ok_or("Claude task start ID is missing")?;
-                    let needs_report = native::needs_background_report(message["task_type"].as_str(), message["is_backgrounded"] != false,
-                        message["ambient"] == true || message["skip_transcript"] == true);
-                    background = background.observe([(id.to_owned(), needs_report)]);
-                }
-                // Reply frames can echo a batch before the individual user
-                // replays. Consume every UUID in SDK consumption order.
-                let consumed = if message["parent_tool_use_id"].is_null() {
-                    let echoes: Vec<_> = if kind == "user" {
-                        message["uuid"].as_str().into_iter().collect()
-                    } else if let Some(ids) = message["user_message_uuids"].as_array() {
-                        ids.iter().filter_map(Value::as_str).collect()
-                    } else {
-                        message["user_message_uuid"].as_str().into_iter().collect()
-                    };
-                    echoes.into_iter().filter_map(|id| {
-                        pending_inputs.remove(id).map(|was_background| (id, was_background))
-                    }).collect::<Vec<_>>()
-                } else { Vec::new() };
-                let starts_turn = result_received && idle && !interrupted
-                    && consumed.iter().any(|(_, was_background)| *was_background);
-                for (index, (id, _)) in consumed.iter().enumerate() {
-                    self.consume_input(id, starts_turn && index == 0).await?;
-                }
-                match kind {
-                    "system" if message["subtype"] == "session_state_changed" => {
-                        if idle && message["state"] == "running" && result_received {
-                            if pending_inputs.is_empty() {
-                                background = background.response_started(None);
-                            } else {
-                                // A turn-start level can precede the input echo.
-                                // Keep the prior terminal boundary until its owner is known.
-                                continue;
-                            }
-                        }
-                        idle = message["state"] == "idle";
-                    }
-                    "system" if message["subtype"] == "background_tasks_changed" => {
-                        let tasks = message["tasks"].as_array().ok_or("Claude background task level is missing")?
-                            .iter().map(|task| {
-                                let id = task["run_id"].as_str().or(task["task_id"].as_str()).ok_or("Claude background task ID is missing")?;
-                                Ok::<_, String>((id.to_owned(), native::needs_background_report(task["task_type"].as_str(), true, task["ambient"] == true)))
-                            }).collect::<Result<Vec<_>, _>>()?;
-                        background = background.observe(tasks);
-                    }
-                    "result" => {
-                        if message["is_error"] == true {
-                            let mut error = execution_error(&message, false);
-                            if matches!(error.category, ErrorCategory::Other | ErrorCategory::Provider(_))
-                                && let Some(previous) = self.current_turn().and_then(|turn| turn.error.as_ref())
-                            {
-                                error.category = previous.category.clone();
-                                error.provider_code = previous.provider_code.clone();
-                            }
-                            let text = error.message.clone();
-                            self.change(SessionChange::Error {turn_id: self.turn_id.clone(), error}).await?;
-                            return Err(text);
-                        }
-                        if message["origin"]["kind"] == "task-notification" {
-                            background = background.response_started(message["origin"]["runId"].as_str());
-                        }
-                        background = background.response_finished();
-                        result_received = true;
-                        if interrupted { return Ok(()); }
-                    }
-                    _ => {
-                        let notification_input = kind == "user" && message["origin"]["kind"] == "task-notification";
-                        let response_started = message["parent_tool_use_id"].is_null()
-                            && (kind == "assistant" || (kind == "system" && message["subtype"] == "init" && pending_inputs.is_empty())
-                                || (kind == "stream_event" && message["event"]["type"] == "message_start"));
-                        if notification_input {
-                            background = background.response_started(message["origin"]["runId"].as_str());
-                        } else if response_started && consumed.is_empty() && result_received {
-                            background = background.response_started(None);
-                        }
-                        if !consumed.is_empty() || response_started || (notification_input && message["parent_tool_use_id"].is_null()) {
-                            result_received = false;
-                            idle = false;
-                        }
-                        self.message(message).await?;
-                    }
+                match observation.disposition {
+                    MessageDisposition::Forward => self.message(message).await?,
+                    MessageDisposition::Applied => {},
+                    MessageDisposition::Deferred => continue,
+                    MessageDisposition::Failed => return self.fail_turn(&message).await,
+                    MessageDisposition::Interrupted => return Ok(()),
                 }
                 // A result ends a response. SDK idle covers background agents,
                 // but not background shells and monitors, which Claude answers
                 // after they finish; accepted input must be consumed before idle.
-                if result_received && idle && pending_inputs.is_empty() && (!background.pending() || interrupted) && input.is_empty() {
+                if response.finished() && input.is_empty() {
                     return Ok(());
                 }
             }
@@ -1054,6 +958,67 @@ impl Worker {
         drop(input);
         let _ = emit(&self.events, AgentChange::SourceClosed(self.instance)).await;
         scopeguard::ScopeGuard::into_inner(_requests);
+        self.finish_run(process, outcome, response.interrupted())
+            .await;
+    }
+
+    async fn fail_turn(&mut self, message: &Value) -> Result<(), String> {
+        let mut error = execution_error(message, false);
+        if matches!(
+            error.category,
+            ErrorCategory::Other | ErrorCategory::Provider(_)
+        ) && let Some(previous) = self.current_turn().and_then(|turn| turn.error.as_ref())
+        {
+            error.category = previous.category.clone();
+            error.provider_code = previous.provider_code.clone();
+        }
+        let text = error.message.clone();
+        self.change(SessionChange::Error {
+            turn_id: self.turn_id.clone(),
+            error,
+        })
+        .await?;
+        Err(text)
+    }
+
+    async fn deliver_command(
+        &mut self,
+        process: &mut Process,
+        command: Command,
+        delivery: InputDelivery,
+    ) -> Result<Option<agent_protocol::ids::ItemId>, String> {
+        let mut accepted_input = None;
+        let result = process.write(&command.value).await;
+        let mut accepted_turn = None;
+        if result.is_ok()
+            && let Some(user) = command.user
+        {
+            // An answered response gives new input its own turn,
+            // as in the transcript and T3 Code.
+            if delivery == InputDelivery::NewTurn {
+                self.next_turn(user.id.as_str().into()).await?;
+            }
+            accepted_turn = (delivery != InputDelivery::Background).then(|| self.turn_id.clone());
+            accepted_input = Some(user.id.clone());
+            self.change(SessionChange::Item {
+                turn_id: self.turn_id.clone(),
+                item: Arc::new(user),
+            })
+            .await?;
+        }
+        if let Some(delivered) = command.delivered {
+            let _ = delivered.send(result.clone().map(|()| accepted_turn));
+        }
+        result?;
+        Ok(accepted_input)
+    }
+
+    async fn finish_run(
+        mut self,
+        process: Process,
+        outcome: Result<(), String>,
+        interrupted: bool,
+    ) {
         let mut retained = None;
         // An interrupt leaves background work running; stop it with its CLI.
         let outcome = if outcome.is_ok() && !self.stop.is_cancelled() && !interrupted {

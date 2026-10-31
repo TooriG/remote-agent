@@ -177,6 +177,39 @@ impl DeepSeek {
         }
         agent_process::command(program).map_err(failure)
     }
+    async fn receive(
+        owner: &std::sync::Weak<Inner>,
+        reader: &Arc<Rpc>,
+        value: &Value,
+    ) -> Option<()> {
+        if let Some(method) = value["method"].as_str() {
+            let owner = owner.upgrade()?;
+            let adapter = Self(owner);
+            if method == "session/update" {
+                adapter.update(&value["params"]).await.ok()?;
+            } else if value.get("id").is_some() {
+                if method == "session/request_permission" {
+                    adapter.permission(reader, value).await.ok()?;
+                } else {
+                    let _ = reader.write(json!({"jsonrpc":"2.0","id":value["id"],"error":{"code":-32601,"message":"Unsupported client method"}})).await;
+                }
+            }
+        } else if let Some(id) = value["id"].as_u64()
+            && let Some(reply) = reader.pending.lock().await.remove(&id)
+        {
+            let result = if value.get("error").is_some() {
+                Err(value["error"]["message"]
+                    .as_str()
+                    .unwrap_or("Harness request failed")
+                    .into())
+            } else {
+                Ok(value["result"].clone())
+            };
+            let _ = reply.send(result);
+        }
+        Some(())
+    }
+
     async fn rpc(&self) -> Result<Arc<Rpc>, Failure> {
         let mut slot = self.0.rpc.lock().await;
         if let Some(rpc) = slot.as_ref().filter(|rpc| !rpc.stop.is_cancelled()) {
@@ -251,37 +284,8 @@ impl DeepSeek {
                 let Ok(value) = serde_json::from_str::<Value>(&line) else {
                     break;
                 };
-                if let Some(method) = value["method"].as_str() {
-                    if let Some(inner) = weak.upgrade() {
-                        let adapter = DeepSeek(inner);
-                        if method == "session/update" {
-                            if adapter.update(&value["params"]).await.is_err() {
-                                break;
-                            }
-                        } else if value.get("id").is_some() {
-                            if method == "session/request_permission" {
-                                if adapter.permission(&reader, &value).await.is_err() {
-                                    break;
-                                }
-                            } else {
-                                let _ = reader.write(json!({"jsonrpc":"2.0","id":value["id"],"error":{"code":-32601,"message":"Unsupported client method"}})).await;
-                            }
-                        }
-                    } else {
-                        break;
-                    }
-                } else if let Some(id) = value["id"].as_u64()
-                    && let Some(reply) = reader.pending.lock().await.remove(&id)
-                {
-                    let result = if value.get("error").is_some() {
-                        Err(value["error"]["message"]
-                            .as_str()
-                            .unwrap_or("Harness request failed")
-                            .into())
-                    } else {
-                        Ok(value["result"].clone())
-                    };
-                    let _ = reply.send(result);
+                if DeepSeek::receive(&weak, &reader, &value).await.is_none() {
+                    break;
                 }
             }
             reader.stop.cancel();

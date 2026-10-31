@@ -454,13 +454,12 @@ fn read_with_summary(path: &Path, thread: Thread, limit: usize) -> Result<Native
     convert(thread, nodes, limit, warnings)
 }
 
-fn convert(
-    mut thread: Thread,
-    nodes: Vec<Value>,
-    limit: usize,
-    mut warnings: Vec<&str>,
-) -> Result<NativeHistory> {
-    let native_id = &thread.id.as_ref().context("Claude session ID missing")?.id;
+fn transcript_chain<'a>(
+    nodes: &'a [Value],
+    native_id: &str,
+    agent_id: Option<&str>,
+) -> Result<(Vec<&'a Value>, Vec<&'static str>)> {
+    let mut warnings = Vec::new();
     let mut indexed = HashMap::new();
     let mut leaf = None;
     for (index, node) in nodes.iter().enumerate() {
@@ -469,7 +468,7 @@ fn convert(
         {
             return Err(anyhow!("Claude transcript session identity changed"));
         }
-        if let Some(agent_id) = thread.agent_id.as_deref() {
+        if let Some(agent_id) = agent_id {
             if node["agentId"].as_str().is_some_and(|id| id != agent_id) {
                 return Err(anyhow!("native subagent identity changed"));
             }
@@ -504,9 +503,25 @@ fn convert(
     if chain.is_empty() && !nodes.is_empty() {
         warnings.push("transcript has no readable message chain");
     }
+    Ok((chain, warnings))
+}
+
+fn convert(
+    mut thread: Thread,
+    nodes: Vec<Value>,
+    limit: usize,
+    mut warnings: Vec<&str>,
+) -> Result<NativeHistory> {
+    let session = thread
+        .id
+        .as_ref()
+        .context("Claude session ID missing")?
+        .clone();
+    let (chain, chain_warnings) =
+        transcript_chain(&nodes, &session.id, thread.agent_id.as_deref())?;
+    warnings.extend(chain_warnings);
     let mut output_paths = BTreeMap::new();
     let mut fork_points = HashMap::new();
-    let session = thread.id.as_ref().unwrap().clone();
     let mut turns: Vec<Arc<Turn>> = Vec::new();
     let mut model = None;
     let mut block_indices: HashMap<String, usize> = HashMap::new();
@@ -635,44 +650,23 @@ fn convert(
             .as_u64()
             .map(|index| index as usize)
             .unwrap_or(*block_indices.get(message_id).unwrap_or(&0));
-        for (index, block) in blocks.iter().enumerate() {
-            let id = format!("{message_id}:{}", base + index);
-            let item = match block["type"].as_str() {
-                Some("tool_result") => {
-                    if let Some(item) = items
-                        .iter_mut()
-                        .find(|item| Some(item.id.as_str()) == block["tool_use_id"].as_str())
-                    {
-                        *item = Arc::new(native::tool_result_item(
-                            item.id.clone(),
-                            item.body(),
-                            &block["content"],
-                            &node["toolUseResult"],
-                            block["is_error"] == true,
-                        ));
-                        if let Some(path) = node["toolUseResult"]["persistedOutputPath"]
-                            .as_str()
-                            .filter(|path| !path.is_empty())
-                        {
-                            output_paths.insert(item.id.clone(), path.into());
-                        }
-                    } else {
-                        warnings.push("tool result has no available tool call");
-                    }
-                    continue;
-                }
-                Some("text" | "image") if kind == "user" => continue,
-                _ => native::content_item(
-                    &session,
-                    id,
-                    block,
-                    node["message"]["stop_reason"].as_str(),
-                    thread.cwd.as_deref(),
-                    ItemStatus::Unknown,
-                )?,
-            };
-            items.push(Arc::new(item));
-        }
+        let appended = append_blocks(
+            std::mem::take(items),
+            blocks
+                .iter()
+                .enumerate()
+                .map(|(index, block)| (format!("{message_id}:{}", base + index), block))
+                .filter(|(_, block)| {
+                    kind != "user" || !matches!(block["type"].as_str(), Some("text" | "image"))
+                }),
+            &session,
+            thread.cwd.as_deref(),
+            &node["toolUseResult"],
+            node["message"]["stop_reason"].as_str(),
+        )?;
+        *items = appended.items;
+        output_paths.extend(appended.output_paths);
+        warnings.extend(appended.warnings);
         block_indices.insert(message_id.into(), base + blocks.len());
     }
     let page = page_turns(&turns, turns.len(), limit)?;
@@ -703,6 +697,58 @@ fn convert(
         },
         output_paths,
         fork_points,
+    })
+}
+
+struct AppendedBlocks {
+    items: Vec<Arc<agent_protocol::items::Item>>,
+    output_paths: BTreeMap<agent_protocol::ids::ItemId, String>,
+    warnings: Vec<&'static str>,
+}
+
+fn append_blocks<'a>(
+    mut items: Vec<Arc<agent_protocol::items::Item>>,
+    blocks: impl Iterator<Item = (String, &'a Value)>,
+    session: &SessionRef,
+    cwd: Option<&str>,
+    tool_result: &Value,
+    stop_reason: Option<&str>,
+) -> Result<AppendedBlocks> {
+    let mut output_paths = BTreeMap::new();
+    let mut warnings = Vec::new();
+    for (id, block) in blocks {
+        let item = match block["type"].as_str() {
+            Some("tool_result") => {
+                if let Some(item) = items
+                    .iter_mut()
+                    .find(|item| Some(item.id.as_str()) == block["tool_use_id"].as_str())
+                {
+                    *item = Arc::new(native::tool_result_item(
+                        item.id.clone(),
+                        item.body(),
+                        &block["content"],
+                        tool_result,
+                        block["is_error"] == true,
+                    ));
+                    if let Some(path) = tool_result["persistedOutputPath"]
+                        .as_str()
+                        .filter(|path| !path.is_empty())
+                    {
+                        output_paths.insert(item.id.clone(), path.into());
+                    }
+                } else {
+                    warnings.push("tool result has no available tool call");
+                }
+                continue;
+            }
+            _ => native::content_item(session, id, block, stop_reason, cwd, ItemStatus::Unknown)?,
+        };
+        items.push(Arc::new(item));
+    }
+    Ok(AppendedBlocks {
+        items,
+        output_paths,
+        warnings,
     })
 }
 
