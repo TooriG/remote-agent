@@ -89,6 +89,90 @@ fn subagent_work_and_requests_share_the_root_conversation_activity() {
 }
 
 #[test]
+fn each_finished_conversation_keeps_a_mark_until_its_result_is_read() {
+    use agent_protocol::{
+        execution::TurnStatus,
+        live_activity::{MarkSessionRead, TaskActivityIconKind::*},
+        models::SessionStatus,
+    };
+    let router = SessionRouter::new();
+    let first = SessionRef::new(ProviderKind::Codex, "first".into()).unwrap();
+    let second = SessionRef::new(ProviderKind::Claude, "second".into()).unwrap();
+    let child = SessionRef::new(ProviderKind::Codex, "child".into()).unwrap();
+    let seed = |id: &SessionRef, parent| Thread {
+        id: Some(id.clone()),
+        parent_id: parent,
+        status: SessionStatus::Running,
+        ..Default::default()
+    };
+    router.task_activity(
+        vec![
+            seed(&first, None),
+            seed(&second, None),
+            seed(&child, Some(first.clone())),
+        ],
+        0,
+    );
+    let finish = |id: &SessionRef, turn: &str| {
+        router.session_change(
+            id,
+            SessionChange::Status {
+                status: SessionStatus::Idle,
+            },
+        );
+        router.session_change(
+            id,
+            SessionChange::Turn {
+                turn: Turn {
+                    id: turn.into(),
+                    status: TurnStatus::Completed,
+                    ..Default::default()
+                },
+                completed: true,
+            },
+        );
+    };
+    let display = || router.task_activity(Vec::new(), 0).display;
+    let kinds = || {
+        display()
+            .current
+            .icons
+            .iter()
+            .map(|icon| icon.kind)
+            .collect::<Vec<_>>()
+    };
+    finish(&child, "child-turn");
+    assert_eq!(
+        display().current.label,
+        "実行中 2件",
+        "a descendant result belongs to its running conversation"
+    );
+    finish(&second, "second-turn");
+    assert_eq!(display().current.label, "実行中 1件 · 完了 1件");
+    assert_eq!(kinds(), [Running, Finished]);
+    assert!(display().ongoing);
+    finish(&first, "first-turn");
+    assert!(!display().ongoing);
+    assert_eq!(display().current.label, "すべてのタスクが終了");
+    assert_eq!(kinds(), [Finished, Finished]);
+    router
+        .mark_session_read(&MarkSessionRead {
+            session: second.clone(),
+            turn_id: "second-turn".into(),
+        })
+        .unwrap();
+    assert_eq!(kinds(), [Finished]);
+    router.session_change(
+        &first,
+        SessionChange::Status {
+            status: SessionStatus::Running,
+        },
+    );
+    assert_eq!(display().current.label, "実行中 1件");
+    assert_eq!(kinds(), [Running], "new work replaces the earlier result");
+}
+
+#[test]
 fn parent_identity_can_arrive_after_newer_task_facts_without_overwriting_them() {
     use agent_protocol::models::SessionStatus;
     let router = SessionRouter::new();

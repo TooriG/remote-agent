@@ -268,6 +268,7 @@ mod tests {
             running,
             waiting,
             unknown,
+            ..Default::default()
         }
         .display()
     }
@@ -357,7 +358,7 @@ mod tests {
                 TaskActivitySummary {
                     running: 1,
                     waiting: 1,
-                    unknown: 0
+                    ..Default::default()
                 }
                 .display()
             )

@@ -8,11 +8,27 @@ pub(super) struct Task {
     // Parent discovery must not fence out an already pending read of execution facts.
     pub(super) facts_revision: u64,
 }
+/// A conversation and all of its descendants contribute one icon and one count.
+fn conversation<'a>(
+    tasks: &'a HashMap<SessionRef, Task>,
+    session: &'a SessionRef,
+) -> &'a SessionRef {
+    let mut root = session;
+    let mut depth = 0;
+    while let Some(parent) = tasks.get(root).and_then(|task| task.parent.as_ref()) {
+        if depth == tasks.len() {
+            // Invalid ancestry cannot certify that known work has finished.
+            return session;
+        }
+        root = parent;
+        depth += 1;
+    }
+    root
+}
 fn task_groups(
     tasks: &HashMap<SessionRef, Task>,
 ) -> HashMap<&SessionRef, agent_protocol::live_activity::TaskActivitySummary> {
     use agent_protocol::live_activity::TaskActivitySummary;
-    // A conversation and all of its descendants contribute one icon and one count.
     let mut conversations: HashMap<&SessionRef, TaskActivitySummary> = HashMap::new();
     for (session, task) in tasks {
         let Some(facts) = task.facts else { continue };
@@ -20,39 +36,39 @@ fn task_groups(
         if contribution == TaskActivitySummary::default() {
             continue;
         }
-        let mut root = session;
-        let mut depth = 0;
-        while let Some(parent) = tasks.get(root).and_then(|task| task.parent.as_ref()) {
-            if depth == tasks.len() {
-                // Invalid ancestry cannot certify that known work has finished.
-                root = session;
-                break;
-            }
-            root = parent;
-            depth += 1;
-        }
-        let summary = conversations.entry(root).or_default();
+        let summary = conversations
+            .entry(conversation(tasks, session))
+            .or_default();
         summary.waiting += contribution.waiting;
         summary.running += contribution.running;
         summary.unknown += contribution.unknown;
     }
     conversations
 }
+/// An idle conversation keeps its finished mark until its own completion is read.
+/// Opening a conversation reads only its own completion, so descendants carry no mark.
 fn task_display(
+    tasks: &HashMap<SessionRef, Task>,
     groups: &HashMap<&SessionRef, agent_protocol::live_activity::TaskActivitySummary>,
+    unread: &[(SessionRef, agent_protocol::ids::TurnId)],
 ) -> agent_protocol::live_activity::TaskActivityDisplay {
-    agent_protocol::live_activity::TaskActivitySummary::from_statuses(groups.values().map(
-        |summary| {
-            if summary.waiting > 0 {
-                "waiting"
-            } else if summary.running > 0 {
-                "running"
-            } else {
-                "unknown"
-            }
-        },
-    ))
-    .display()
+    let mut summary = agent_protocol::live_activity::TaskActivitySummary::default();
+    for group in groups.values() {
+        if group.waiting > 0 {
+            summary.waiting += 1;
+        } else if group.running > 0 {
+            summary.running += 1;
+        } else {
+            summary.unknown += 1;
+        }
+    }
+    summary.finished = unread
+        .iter()
+        .filter(|(session, _)| {
+            conversation(tasks, session) == session && !groups.contains_key(session)
+        })
+        .count() as u32;
+    summary.display()
 }
 pub(super) fn task_activity_state(
     revision: u64,
@@ -76,7 +92,7 @@ pub(super) fn task_activity_state(
     }
     agent_protocol::live_activity::TaskActivityState {
         revision,
-        display: task_display(&groups),
+        display: task_display(tasks, &groups, &unread),
         statuses: statuses.into_iter().collect(),
         unread,
     }
@@ -280,7 +296,11 @@ impl SessionRouter {
         state.apns.as_ref().ok_or("APNs is unavailable")?.register(
             &principal.principal,
             params,
-            task_display(&task_groups(&state.tasks)),
+            task_display(
+                &state.tasks,
+                &task_groups(&state.tasks),
+                &state.reads.unread(),
+            ),
         )
     }
 }
