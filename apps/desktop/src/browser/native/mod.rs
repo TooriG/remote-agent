@@ -1154,7 +1154,18 @@ async fn capture_frame(
         }
         return Ok(frame);
     }
-    Err("ページが変わりました。画面を更新してください。".into())
+    if matches!(capture, Capture::Snapshot) {
+        return Err("ページが変わりました。画面を更新してください。".into());
+    }
+    // A dispatched action may open a popup that is still navigating. Return
+    // fresh tab metadata without an image instead of reporting an action error.
+    // The next viewer read captures that page; the input is never replayed.
+    owner
+        .update_in(cx, |owner, _, _| {
+            owner.refresh();
+            owner.frame(scope)
+        })
+        .map_err(|_| "ブラウザが閉じています。".into())
 }
 
 #[cfg(test)]

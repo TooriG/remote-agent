@@ -397,32 +397,46 @@ async fn shared_browser_live() {
     )
     .await
     .unwrap();
-    let popup_result = action(
-        &browser,
-        &a,
-        BrowserAction::ClickElement {
-            selector: "#popup".into(),
-        },
-    )
-    .await;
-    popup_result.unwrap();
-    wait(&browser, &a, "document.title", json!("Popup")).await;
-    assert_eq!(evaluate(&browser, &a, "!!window.opener").await, true);
-    evaluate(
-        &browser,
-        &a,
-        "window.opener.postMessage('retained-opener',location.origin)",
-    )
-    .await;
-    let _ = action(
-        &browser,
-        &a,
-        BrowserAction::Evaluate {
-            expression: "window.close()".into(),
-        },
-    )
-    .await;
-    wait(&browser, &a, "window.received", json!("retained-opener")).await;
+    // Repeated transitions exercise popup capture races while every click stays single.
+    for expected_clicks in 1..=5 {
+        let popup_result = action(
+            &browser,
+            &a,
+            BrowserAction::ClickElement {
+                selector: "#popup".into(),
+            },
+        )
+        .await;
+        if let Err(error) = popup_result {
+            let diagnostic = evaluate(
+                &browser,
+                &a,
+                "({title:document.title,ready:document.readyState,clicks:window.popupClicks,openerClicks:window.opener?.popupClicks,hasChild:!!window.child})",
+            ).await;
+            panic!("popup action failed: {error}; diagnostic {diagnostic}");
+        }
+        wait(&browser, &a, "document.title", json!("Popup")).await;
+        assert_eq!(evaluate(&browser, &a, "!!window.opener").await, true);
+        assert_eq!(
+            evaluate(&browser, &a, "window.opener.popupClicks").await,
+            json!(expected_clicks)
+        );
+        evaluate(
+            &browser,
+            &a,
+            "window.opener.postMessage('retained-opener',location.origin)",
+        )
+        .await;
+        let _ = action(
+            &browser,
+            &a,
+            BrowserAction::Evaluate {
+                expression: "window.close()".into(),
+            },
+        )
+        .await;
+        wait(&browser, &a, "window.received", json!("retained-opener")).await;
+    }
     let kept = action(&browser, &a, BrowserAction::Read).await.unwrap();
     let _ = action(
         &browser,
