@@ -10,6 +10,7 @@ impl Desktop {
         clickable: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let language = crate::localization::language(cx);
         let key = self.image_key(source, encoded);
         if !self.media.images.contains_key(&key) {
             let source = Arc::new(source.to_owned());
@@ -36,10 +37,11 @@ impl Desktop {
                         let data = if encoded {
                             source.as_str()
                         } else {
-                            let (header, data) =
-                                source.split_once(',').ok_or("画像データが不正です")?;
+                            let (header, data) = source
+                                .split_once(',')
+                                .ok_or(language.text("画像データが不正です"))?;
                             if !header.ends_with(";base64") {
-                                return Err("未対応の画像データです".into());
+                                return Err(language.text("未対応の画像データです").into());
                             }
                             data
                         };
@@ -59,7 +61,7 @@ impl Desktop {
                         return Ok(path.to_string_lossy().into_owned());
                     }
                     store
-                        .ok_or("Host に接続していません")?
+                        .ok_or(language.text("Host に接続していません"))?
                         .dispatch(Intent::DownloadFile(op::DownloadFile {
                             source: path
                                 .into_os_string()
@@ -94,11 +96,11 @@ impl Desktop {
                 .object_fit(ObjectFit::Contain)
                 .debug_selector(|| "chat-image".into())
                 .with_loading(move || image_skeleton(height, background).into_any_element())
-                .with_fallback(|| {
+                .with_fallback(move || {
                     div()
                         .text_sm()
                         .text_color(rgb(appearance::MUTED))
-                        .child("画像を表示できません")
+                        .child(language.text("画像を表示できません"))
                         .into_any_element()
                 });
             let source = state.source.clone();
@@ -129,7 +131,7 @@ impl Desktop {
                     let owner = owner.clone();
                     let source = menu_source.clone();
                     menu.item(
-                        PopupMenuItem::new("画像を名前を付けて保存…")
+                        PopupMenuItem::new(language.text("画像を名前を付けて保存…"))
                             .icon(Icon::default().path("icons/download.svg"))
                             .disabled(saving)
                             .on_click(move |_, _, cx| {
@@ -240,6 +242,7 @@ impl Desktop {
     }
 
     pub(super) fn gallery_thumbnail(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let language = crate::localization::language(cx);
         let Some(gallery) = &self.media.gallery else {
             return div().into_any_element();
         };
@@ -249,7 +252,11 @@ impl Desktop {
         let selected = gallery.selected == Some(index);
         let image = self.image(&source, encoded, 64., false, cx);
         Button::new(format!("gallery-thumbnail-{index}"))
-            .accessibility_label(format!("生成画像 {}", index + 1))
+            .accessibility_label(agent_core::localization::localized_ui_format(
+                language,
+                "生成画像 {0}".into(),
+                vec![(index + 1).to_string()],
+            ))
             .ghost()
             .child(image)
             .w(px(80.))
@@ -273,6 +280,7 @@ impl Desktop {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let language = crate::localization::language(cx);
         let gallery = self.media.gallery.as_ref().unwrap();
         let (source, encoded) = gallery.current_image().clone();
         let list_state = gallery.list.clone();
@@ -283,7 +291,7 @@ impl Desktop {
         let label = gallery
             .selected
             .map(|index| format!("{} / {}", index + 1, gallery.entries.len()))
-            .unwrap_or_else(|| "画像".into());
+            .unwrap_or_else(|| language.text("画像").into());
         let error = gallery.error.clone();
         let image = self.image(
             &source,
@@ -315,7 +323,9 @@ impl Desktop {
                     .justify_end()
                     .gap_3()
                     .child(div().flex_1().child(label))
-                    .when(loading, |row| row.child("画像一覧を読み込み中…"))
+                    .when(loading, |row| {
+                        row.child(language.text("画像一覧を読み込み中…"))
+                    })
                     .child(
                         icon_button(
                             "gallery-save",
@@ -324,7 +334,11 @@ impl Desktop {
                             } else {
                                 Icon::default().path("icons/download.svg")
                             },
-                            if saved { "保存済み" } else { "保存" },
+                            if saved {
+                                language.text("保存済み")
+                            } else {
+                                language.text("保存")
+                            },
                             cx,
                             |s, _, cx| s.save_gallery_image(cx),
                         )
@@ -334,7 +348,7 @@ impl Desktop {
                         icon_button(
                             "gallery-close",
                             IconName::Close,
-                            "閉じる",
+                            language.text("閉じる"),
                             cx,
                             |s, _, _| s.media.gallery = None,
                         )
@@ -376,7 +390,7 @@ impl Desktop {
                                 gallery.zoom = (gallery.zoom - 0.25).max(0.25);
                             }
                         })
-                        .accessibility_label("縮小")
+                        .accessibility_label(language.text("縮小"))
                         .disabled(zoom <= 0.25),
                     )
                     .child(
@@ -390,7 +404,7 @@ impl Desktop {
                                 }
                             },
                         )
-                        .accessibility_label("倍率をリセット"),
+                        .accessibility_label(language.text("倍率をリセット")),
                     )
                     .child(
                         button("gallery-zoom-in", "+", cx, |s, _, _| {
@@ -398,7 +412,7 @@ impl Desktop {
                                 gallery.zoom = (gallery.zoom + 0.25).min(4.);
                             }
                         })
-                        .accessibility_label("拡大")
+                        .accessibility_label(language.text("拡大"))
                         .disabled(zoom >= 4.),
                     ),
             )
@@ -419,6 +433,7 @@ impl Desktop {
     }
 
     fn save_image(&mut self, source: &str, encoded: bool, cx: &mut Context<Self>) {
+        let language = crate::localization::language(cx);
         let key = self.image_key(source, encoded);
         let Some(ImageSource::Resource(resource)) = self
             .media
@@ -461,7 +476,7 @@ impl Desktop {
                             .await
                             .map_err(|error| error.to_string())?;
                         if !response.status().is_success() {
-                            return Err(format!("画像の取得に失敗しました: {}", response.status()));
+                            return Err(agent_core::localization::localized_ui_format(language, "画像の取得に失敗しました: {0}".into(), vec![response.status().to_string()]));
                         }
                         let mut bytes = Vec::new();
                         response
@@ -471,7 +486,7 @@ impl Desktop {
                             .map_err(|error| error.to_string())?;
                         Original::Bytes(bytes)
                     }
-                    _ => return Err("保存できない画像です".into()),
+                    _ => return Err(language.text("保存できない画像です").into()),
                 };
                 cx.background_executor()
                     .spawn(async move {
@@ -480,7 +495,7 @@ impl Desktop {
                                 .and_then(|reader| reader.with_guessed_format())
                                 .map_err(|error| error.to_string())?
                                 .format()
-                                .ok_or("画像形式が不明です")?,
+                                .ok_or(language.text("画像形式が不明です"))?,
                             Original::Bytes(bytes) => {
                                 image::guess_format(bytes).map_err(|error| error.to_string())?
                             }

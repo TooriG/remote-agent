@@ -74,7 +74,7 @@ struct ConversationImage: View {
                 Image(uiImage: image).resizable().aspectRatio(contentMode: contentMode)
                     .frame(maxWidth: .infinity, maxHeight: 420)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .accessibilityLabel(label.isEmpty ? "画像" : label)
+                    .accessibilityLabel(LocalizedStringKey(label.isEmpty ? "画像" : label))
                     .accessibilityIdentifier(identifier)
                     .onTapGesture {
                         guard !preparingPreview, let original else { return }
@@ -103,7 +103,7 @@ struct ConversationImage: View {
             })
         ) {
             Button("OK") { error = nil }
-        } message: { Text(error ?? "") }
+        } message: { AppText(error ?? "") }
         .fullScreenCover(isPresented: Binding(get: { previewURL != nil }, set: {
             if !$0 {
                 dismissPreview()
@@ -226,7 +226,7 @@ struct ConversationPreview: View {
                                 Image(systemName: saved ? "checkmark" : "arrow.down.to.line")
                             }
                             .disabled(saving || saved)
-                            .accessibilityLabel(saved ? "保存済み" : "保存")
+                            .accessibilityLabel(LocalizedStringKey(saved ? "保存済み" : "保存"))
                             .accessibilityIdentifier("conversation.preview.save")
                         }
                         Button(action: close) { Image(systemName: "xmark") }
@@ -242,7 +242,7 @@ struct ConversationPreview: View {
                 }
             })) {
                 Button("OK") { saveError = nil }
-            } message: { Text(saveError ?? "") }
+            } message: { AppText(saveError ?? "") }
         }
         .interactiveDismissDisabled(isImage || saving)
     }

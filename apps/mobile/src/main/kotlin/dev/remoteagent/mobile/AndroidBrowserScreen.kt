@@ -63,8 +63,9 @@ internal fun BrowserLauncher(
     profile: String?,
     browser: suspend (String?, BrowserRequest) -> BrowserFrame,
 ) {
+    val language = LocalUiLanguage.current
     var visible by remember { mutableStateOf(false) }
-    TextButton(onClick = { visible = true }, enabled = thread != null) { Text("ブラウザ") }
+    TextButton(onClick = { visible = true }, enabled = thread != null) { Text(language.text("ブラウザ")) }
     if (visible && thread != null) {
         Dialog(onDismissRequest = { visible = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
             Surface(Modifier.fillMaxSize().imePadding()) { BrowserPane(thread, profile, browser) { visible = false } }
@@ -202,13 +203,7 @@ private fun BrowserPane(
     val density = LocalDensity.current.density
     val colors = MaterialTheme.colorScheme
     Column {
-        Row(
-            Modifier.fillMaxWidth().height(44.dp).padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("ブラウザ", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
-            IconButton(onClick = dismiss) { Icon(painterResource(R.drawable.ic_close), "閉じる", Modifier.size(16.dp)) }
-        }
+        BrowserHeader(dismiss)
         HorizontalDivider(color = colors.outlineVariant.copy(alpha = 0.6f))
         if ((frame?.tabs?.size ?: 0) > 1) BrowserTabs(frame?.tabs.orEmpty(), session::send)
         BrowserToolbar(
@@ -224,7 +219,9 @@ private fun BrowserPane(
         }
         val failure = session.error ?: session.connectionError
         val messageColor = if (failure == null) colors.onSurfaceVariant else colors.error
-        (failure ?: session.notice)?.let { Text(it, color = messageColor, modifier = Modifier.padding(12.dp)) }
+        (failure ?: session.notice)?.let {
+            Text(LocalUiLanguage.current.text(it), color = messageColor, modifier = Modifier.padding(12.dp))
+        }
         frame?.dialog?.let { BrowserDialogView(it, enabled, session::send) }
         val blank = tab == null || tab.url == "about:blank"
         BrowserImage(
@@ -246,11 +243,14 @@ private fun BrowserDialogView(
     enabled: Boolean,
     send: (BrowserAction) -> Unit,
 ) {
+    val language = LocalUiLanguage.current
     var response by remember(dialog) { mutableStateOf("") }
     Text(dialog.message, Modifier.padding(12.dp))
     if (dialog.prompt) OutlinedTextField(response, { response = it }, Modifier.fillMaxWidth())
     Row {
-        TextButton(onClick = { send(BrowserAction.Dialog(false, "")) }, enabled = enabled) { Text("キャンセル") }
+        TextButton(onClick = { send(BrowserAction.Dialog(false, "")) }, enabled = enabled) {
+            Text(language.text("キャンセル"))
+        }
         TextButton(onClick = { send(BrowserAction.Dialog(true, response)) }, enabled = enabled) { Text("OK") }
     }
 }
@@ -263,13 +263,14 @@ private fun BrowserImage(
     send: (BrowserAction) -> Unit,
     modifier: Modifier,
 ) {
+    val language = LocalUiLanguage.current
     if (image == null) {
         BrowserEmptyState(connected, modifier)
         return
     }
     Image(
         image,
-        "Host の共有ブラウザ",
+        language.text("Host の共有ブラウザ"),
         modifier
             .fillMaxSize()
             .pointerInput(enabled, image.width, image.height) {
@@ -314,13 +315,14 @@ private fun BrowserImage(
 
 @Composable
 private fun BrowserTextInput(send: (BrowserAction) -> Unit) {
+    val language = LocalUiLanguage.current
     var text by remember { mutableStateOf("") }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         OutlinedTextField(
             text,
             { text = it },
             Modifier.weight(1f),
-            placeholder = { Text("選択した欄に入力") },
+            placeholder = { Text(language.text("選択した欄に入力")) },
             visualTransformation = PasswordVisualTransformation(),
         )
         TextButton(
@@ -330,8 +332,22 @@ private fun BrowserTextInput(send: (BrowserAction) -> Unit) {
             },
             enabled = text.isNotEmpty(),
         ) {
-            Text("入力")
+            Text(language.text("入力"))
         }
         TextButton(onClick = { send(BrowserAction.Key(BrowserKey.ENTER)) }) { Text("Enter") }
+    }
+}
+
+@Composable
+private fun BrowserHeader(dismiss: () -> Unit) {
+    val language = LocalUiLanguage.current
+    Row(
+        Modifier.fillMaxWidth().height(44.dp).padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(language.text("ブラウザ"), Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+        IconButton(onClick = dismiss) {
+            Icon(painterResource(R.drawable.ic_close), language.text("閉じる"), Modifier.size(16.dp))
+        }
     }
 }

@@ -61,12 +61,13 @@ fun rememberAndroidQrScanner(activity: ComponentActivity): (onContents: (String)
 
 @Composable
 private fun AndroidQrCaptureDialog(activity: ComponentActivity, onContents: (String) -> Unit, onDismiss: () -> Unit) {
+    val language = LocalUiLanguage.current
     val executor = remember { Executors.newSingleThreadExecutor() }
     val handled = remember { AtomicBoolean(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        confirmButton = { TextButton(onClick = onDismiss) { Text("キャンセル") } },
-        title = { Text("QRコードを読み取る") },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(language.text("キャンセル")) } },
+        title = { Text(language.text("QRコードを読み取る")) },
         text = {
             AndroidView(
                 factory = { viewContext ->

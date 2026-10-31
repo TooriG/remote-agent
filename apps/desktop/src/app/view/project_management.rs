@@ -176,6 +176,7 @@ pub(super) fn project_menu_button(id: String, owner: WeakEntity<Desktop>) -> imp
 
 impl Desktop {
     fn edit_project(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let language = crate::localization::language(cx);
         let Some(list) = self.snapshot.thread_list() else {
             return;
         };
@@ -188,39 +189,40 @@ impl Desktop {
             name: cx.new(|cx| {
                 InputState::new(window, cx)
                     .default_value(project.name.clone())
-                    .placeholder("表示名")
+                    .placeholder(language.text("表示名"))
             }),
             section: cx.new(|cx| {
                 InputState::new(window, cx)
                     .default_value(project.section.clone().unwrap_or_default())
-                    .placeholder("空欄で未分類")
+                    .placeholder(language.text("空欄で未分類"))
             }),
         });
     }
     pub(super) fn project_editor_view(&self, cx: &Context<Self>) -> AnyElement {
+        let language = crate::localization::language(cx);
         let editor = self.project_editor.as_ref().unwrap();
         v_flex().flex_1().min_w_0().p_8().gap_4()
-            .child(section_heading("プロジェクトを編集", "表示名とセクションはこの端末・接続先ごとに保存されます。フォルダや会話履歴は残ります。"))
-            .child("表示名").child(Input::new(&editor.name).aria_label("プロジェクトの表示名"))
-            .child("セクション").child(Input::new(&editor.section).aria_label("プロジェクトのセクション"))
+            .child(section_heading(language.text("プロジェクトを編集"), language.text("表示名とセクションはこの端末・接続先ごとに保存されます。フォルダや会話履歴は残ります。")))
+            .child(language.text("表示名")).child(Input::new(&editor.name).aria_label(language.text("プロジェクトの表示名")))
+            .child(language.text("セクション")).child(Input::new(&editor.section).aria_label(language.text("プロジェクトのセクション")))
             .child(h_flex().gap_2()
-                .child(Button::new("save-project").label("保存").primary().on_click(cx.listener(|s, _, _, cx| {
+                .child(Button::new("save-project").label(language.text("保存")).primary().on_click(cx.listener(move |s, _, _, cx| {
                     let editor = s.project_editor.as_ref().unwrap();
                     if editor.scope != s.snapshot.storage_scope {
-                        s.set_error("接続先が変わりました。プロジェクトを開き直してください".into());
+                        s.set_error(language.text("接続先が変わりました。プロジェクトを開き直してください").into());
                         s.project_editor = None; cx.notify(); return;
                     }
                     let name = editor.name.read(cx).value().to_string();
                     let section = editor.section.read(cx).value().to_string();
                     if name.trim().is_empty() || name.trim().chars().count()>100 || section.trim().chars().count()>60 {
-                        s.set_error("表示名は1〜100文字、セクションは60文字以内で入力してください".into());
+                        s.set_error(language.text("表示名は1〜100文字、セクションは60文字以内で入力してください").into());
                     } else {
                         s.dispatch(Intent::EditProject { project_id: editor.id.clone(), name, section });
                         s.project_editor = None;
                     }
                     cx.notify();
                 })))
-                .child(Button::new("cancel-project").label("キャンセル").on_click(cx.listener(|s, _, _, cx| {
+                .child(Button::new("cancel-project").label(language.text("キャンセル")).on_click(cx.listener(move |s, _, _, cx| {
                     s.project_editor = None; cx.notify();
                 }))))
             .child(self.error_notices(ErrorScope::Projects, cx))

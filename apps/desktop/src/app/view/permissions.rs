@@ -10,6 +10,7 @@ impl Desktop {
         render_owner: EntityId,
         cx: &Context<Self>,
     ) -> AnyElement {
+        let language = crate::localization::language(cx);
         let entity = cx.entity().downgrade();
         let opening = entity.clone();
         popover::Popover::new("permission-controls")
@@ -21,8 +22,11 @@ impl Desktop {
                 Button::new("composer-permissions")
                     .debug_selector(|| "composer-permissions".into())
                     .icon(Icon::default().path("icons/shield.svg"))
-                    .label(label)
-                    .accessibility_label("承認方法を変更")
+                    .label(agent_core::localization::localized_ui_text(
+                        language,
+                        label.to_string(),
+                    ))
+                    .accessibility_label(language.text("承認方法を変更"))
                     .ghost()
                     .h(px(40.))
                     .when(mode == Some(PermissionMode::FullAccess), |button| {
@@ -53,6 +57,7 @@ impl Desktop {
     }
 
     fn permission_menu_content(&self, cx: &Context<Self>) -> AnyElement {
+        let language = crate::localization::language(cx);
         let control = self.snapshot.permission_control(self.draft_key());
         let provider = control.provider;
         let mut body = v_flex().w(px(430.)).p_3().gap_1().child(
@@ -61,10 +66,10 @@ impl Desktop {
                 .text_color(rgb(appearance::MUTED))
                 .pb_2()
                 .child(match provider {
-                    Some(ProviderKind::Codex) => "Codex の承認方法",
-                    Some(ProviderKind::Claude) => "Claude の承認方法",
-                    Some(ProviderKind::DeepSeek) => "DeepSeek Harness の承認方法",
-                    None => "エージェント未選択",
+                    Some(ProviderKind::Codex) => language.text("Codex の承認方法"),
+                    Some(ProviderKind::Claude) => language.text("Claude の承認方法"),
+                    Some(ProviderKind::DeepSeek) => language.text("DeepSeek Harness の承認方法"),
+                    None => language.text("エージェント未選択"),
                 }),
         );
         for (index, (mode, label, description)) in PERMISSION_CHOICES.into_iter().enumerate() {
@@ -83,7 +88,12 @@ impl Desktop {
                             .flex_1()
                             .min_w_0()
                             .items_start()
-                            .child(div().text_sm().child(label))
+                            .child(div().text_sm().child(
+                                agent_core::localization::localized_ui_text(
+                                    language,
+                                    label.to_string(),
+                                ),
+                            ))
                             .child(
                                 div()
                                     .text_xs()
@@ -114,14 +124,14 @@ impl Desktop {
             );
         }
         if control.loading {
-            body = body.child(div().text_xs().child("読み込み中…"));
+            body = body.child(div().text_xs().child(language.text("読み込み中…")));
         }
         if let Some(error) = control.error {
             body = body
                 .child(div().text_sm().whitespace_normal().child(error.to_owned()))
                 .child(button(
                     "permissions-retry",
-                    "再読み込み",
+                    language.text("再読み込み"),
                     cx,
                     move |view, _, _| {
                         if let Some(provider) = provider {

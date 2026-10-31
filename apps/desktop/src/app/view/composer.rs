@@ -14,6 +14,7 @@ impl Desktop {
     }
 
     fn composer_context(model: &ComposerModel, cx: &Context<Self>) -> AnyElement {
+        let language = crate::localization::language(cx);
         let mut row = h_flex()
             .w_full()
             .min_w_0()
@@ -49,7 +50,12 @@ impl Desktop {
                     .tooltip({
                         let name = name.clone();
                         move |window, cx| {
-                            tooltip::Tooltip::new(format!("実行先: {name}")).build(window, cx)
+                            tooltip::Tooltip::new(agent_core::localization::localized_ui_format(
+                                language,
+                                "実行先: {0}".into(),
+                                vec![name.to_string()],
+                            ))
+                            .build(window, cx)
                         }
                     })
                     .child(Icon::default().path("icons/monitor.svg").size_4())
@@ -67,8 +73,16 @@ impl Desktop {
                     .debug_selector(|| "composer-branch".into())
                     .label(review.branch.clone())
                     .icon(Icon::default().path("icons/branch.svg"))
-                    .accessibility_label(format!("現在のブランチ: {}", review.branch))
-                    .tooltip(format!("現在のブランチ: {}", review.branch))
+                    .accessibility_label(agent_core::localization::localized_ui_format(
+                        language,
+                        "現在のブランチ: {0}".into(),
+                        vec![review.branch.to_string()],
+                    ))
+                    .tooltip(agent_core::localization::localized_ui_format(
+                        language,
+                        "現在のブランチ: {0}".into(),
+                        vec![review.branch.to_string()],
+                    ))
                     .dropdown_caret(true)
                     .h_8()
                     .min_w_0()
@@ -79,15 +93,19 @@ impl Desktop {
                     .dropdown_menu(move |menu, _, _| {
                         let refresh = entity.clone();
                         let changes = entity.clone();
-                        menu.item(PopupMenuItem::new("変更を表示").on_click(move |_, _, cx| {
-                            let _ = changes.update(cx, |s, cx| {
-                                s.open_review(None, cx);
-                                cx.notify();
-                            });
-                        }))
-                        .item(PopupMenuItem::new("更新").on_click(move |_, _, cx| {
-                            let _ = refresh.update(cx, |s, _| s.refresh_review());
-                        }))
+                        menu.item(PopupMenuItem::new(language.text("変更を表示")).on_click(
+                            move |_, _, cx| {
+                                let _ = changes.update(cx, |s, cx| {
+                                    s.open_review(None, cx);
+                                    cx.notify();
+                                });
+                            },
+                        ))
+                        .item(
+                            PopupMenuItem::new(language.text("更新")).on_click(move |_, _, cx| {
+                                let _ = refresh.update(cx, |s, _| s.refresh_review());
+                            }),
+                        )
                     }),
             );
         }
@@ -95,23 +113,28 @@ impl Desktop {
     }
 
     fn composer_folder(model: &ComposerModel, cx: &Context<Self>) -> AnyElement {
+        let language = crate::localization::language(cx);
         let selected_directory = model.selected_directory.clone();
         let entity = cx.entity().downgrade();
         Button::new("composer-folder")
             .debug_selector(|| "composer-folder".into())
             .label(if selected_directory.is_empty() {
-                "チャット".into()
+                language.text("チャット").into()
             } else {
                 file_name(&selected_directory)
             })
             .accessibility_label(if selected_directory.is_empty() {
-                "フォルダ: チャット".into()
+                language.text("フォルダ: チャット").into()
             } else {
-                format!("フォルダ: {}", selected_directory)
+                agent_core::localization::localized_ui_format(
+                    language,
+                    "フォルダ: {0}".into(),
+                    vec![selected_directory.to_string()],
+                )
             })
             .icon(IconName::Folder)
             .tooltip(if selected_directory.is_empty() {
-                "チャット".into()
+                language.text("チャット").into()
             } else {
                 selected_directory.clone()
             })
@@ -130,7 +153,7 @@ impl Desktop {
                 let list = state.snapshot.thread_list();
                 let unassigned = entity.clone();
                 menu = menu.item(
-                    PopupMenuItem::new("チャット")
+                    PopupMenuItem::new(language.text("チャット"))
                         .checked(selected_directory.is_empty())
                         .on_click(move |_, window, cx| {
                             let _ = unassigned.update(cx, |s, cx| {
@@ -166,22 +189,26 @@ impl Desktop {
                 }
                 if list.as_ref().is_some_and(|page| page.has_more_projects) {
                     let target = entity.clone();
-                    menu = menu.item(PopupMenuItem::new("さらにプロジェクトを読み込む").on_click(
-                        move |_, _, cx| {
-                            let _ = target.update(cx, |s, cx| {
-                                s.dispatch(Intent::ExpandProjects);
-                                cx.notify();
-                            });
-                        },
-                    ));
+                    menu = menu.item(
+                        PopupMenuItem::new(language.text("さらにプロジェクトを読み込む")).on_click(
+                            move |_, _, cx| {
+                                let _ = target.update(cx, |s, cx| {
+                                    s.dispatch(Intent::ExpandProjects);
+                                    cx.notify();
+                                });
+                            },
+                        ),
+                    );
                 }
                 if state.remote.is_none() {
                     let target = entity.clone();
-                    menu = menu.item(PopupMenuItem::new("別のフォルダを選択…").on_click(
-                        move |_, _, cx| {
-                            let _ = target.update(cx, |s, _| s.pick_folder());
-                        },
-                    ));
+                    menu = menu.item(
+                        PopupMenuItem::new(language.text("別のフォルダを選択…")).on_click(
+                            move |_, _, cx| {
+                                let _ = target.update(cx, |s, _| s.pick_folder());
+                            },
+                        ),
+                    );
                 }
                 menu
             })
@@ -209,6 +236,7 @@ impl Desktop {
         render_owner: EntityId,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let language = crate::localization::language(cx);
         let key = model.key.clone();
         let attachments = &model.attachments;
         let mut files = h_flex().gap_3().p_2().flex_wrap();
@@ -217,7 +245,11 @@ impl Desktop {
             let remove = icon_button(
                 format!("attachment-{i}"),
                 IconName::Close,
-                format!("{}を外す", file.name),
+                agent_core::localization::localized_ui_format(
+                    language,
+                    "{0}を外す".into(),
+                    vec![file.name.to_string()],
+                ),
                 cx,
                 move |s, _, cx| {
                     cx.stop_propagation();
@@ -280,7 +312,7 @@ impl Desktop {
             icon_button(
                 "stop",
                 Icon::default().path("icons/stop.svg"),
-                "停止",
+                language.text("停止"),
                 cx,
                 move |s, _, _| {
                     s.dispatch(Intent::Interrupt(op::Interrupt {
@@ -291,9 +323,13 @@ impl Desktop {
             )
             .disabled(!model.connected || model.busy)
         } else {
-            icon_button("send", IconName::ArrowUp, "送信", cx, |s, _, cx| {
-                s.send(cx)
-            })
+            icon_button(
+                "send",
+                IconName::ArrowUp,
+                language.text("送信"),
+                cx,
+                |s, _, cx| s.send(cx),
+            )
             .disabled(
                 !model.connected
                     || !model.provider_available
@@ -308,8 +344,8 @@ impl Desktop {
             .w(px(40.))
             .h(px(40.))
             .large()
-            .tooltip("音声をCodexで文字起こし")
-            .accessibility_label("音声をCodexで文字起こし")
+            .tooltip(language.text("音声をCodexで文字起こし"))
+            .accessibility_label(language.text("音声をCodexで文字起こし"))
             .disabled(!model.connected || model.busy)
             .on_click(cx.listener(|s, _, window, cx| {
                 s.composer.input.read(cx).focus_handle(cx).focus(window, cx);
@@ -369,7 +405,7 @@ impl Desktop {
                             .appearance(false)
                             .bordered(false)
                             .text_size(px(14.))
-                            .aria_label("AI に依頼する")
+                            .aria_label(language.text("AI に依頼する"))
                             .readonly(!model.connected),
                     ),
                 )
@@ -381,7 +417,7 @@ impl Desktop {
                             icon_button(
                                 "attach",
                                 IconName::Plus,
-                                "ファイルを添付",
+                                language.text("ファイルを添付"),
                                 cx,
                                 |s, _, _| s.attach(),
                             )
@@ -522,6 +558,7 @@ impl Desktop {
             && self.snapshot.account.login.is_none()
     }
     fn composer_model(&self, cx: &App) -> ComposerModel {
+        let language = crate::localization::language(cx);
         let permission = self.snapshot.permission_control(self.draft_key());
         ComposerModel {
             key: self.draft_key().clone(),
@@ -551,7 +588,7 @@ impl Desktop {
             review_expanded: self.review_expanded,
             model_label: self
                 .selected_model()
-                .map_or("モデルを選択".to_owned(), |model| {
+                .map_or(language.text("モデルを選択").to_owned(), |model| {
                     model.display_name.clone()
                 }),
             permission_label: permission.label,

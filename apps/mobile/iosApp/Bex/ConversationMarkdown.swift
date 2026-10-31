@@ -35,7 +35,7 @@ struct ConversationMarkdown: View {
                 }
             }
             if let linkError {
-                Text(linkError).font(.caption).foregroundColor(.red)
+                AppText(linkError).font(.caption).foregroundColor(.red)
             }
         }
         .font(.system(size: 18))
@@ -167,7 +167,7 @@ private struct ConversationMarkdownCodeBlock: View {
                 Button { wrapped.toggle() } label: {
                     Image(systemName: wrapped ? "text.alignleft" : "arrow.right.to.line")
                 }
-                .accessibilityLabel(wrapped ? "コードの折り返しを解除" : "コードを折り返す")
+                .accessibilityLabel(LocalizedStringKey(wrapped ? "コードの折り返しを解除" : "コードを折り返す"))
                 Button {
                     UIPasteboard.general.string = text
                     copied = true
@@ -177,7 +177,7 @@ private struct ConversationMarkdownCodeBlock: View {
                 .font(.system(size: 16))
                 .foregroundColor(.secondary)
                 .buttonStyle(.plain)
-                .accessibilityLabel(copied ? "コピーしました" : "コードをコピー")
+                .accessibilityLabel(LocalizedStringKey(copied ? "コピーしました" : "コードをコピー"))
                 .accessibilityIdentifier("markdown.code.copy.\(part.id)")
             }
             .font(.caption.weight(.medium))

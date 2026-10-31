@@ -207,7 +207,7 @@ private struct WorkspaceToolsScreen: View {
 
     private func toolButton(_ tool: PanelTool) -> some View {
         Button { model.openWorkbench(tool.kind, scope: scope, directory: directory) } label: {
-            Label(tool.label, systemImage: tool.kind.icon)
+            Label(LocalizedStringKey(tool.label), systemImage: tool.kind.icon)
         }
         .disabled(!tool.enabled)
         .accessibilityIdentifier("workbench.\(tool.key)")

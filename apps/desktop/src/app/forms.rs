@@ -59,10 +59,11 @@ pub(super) struct ComposerInput {
 
 impl ComposerInput {
     pub(super) fn new(window: &mut Window, cx: &mut App) -> Self {
+        let language = crate::localization::language(cx);
         Self {
             input: cx.new(|cx| {
                 TextareaState::new(window, cx)
-                    .placeholder("AI に依頼する")
+                    .placeholder(language.text("AI に依頼する"))
                     .auto_grow(2, 8)
             }),
             text: DraftText::default(),
@@ -132,9 +133,11 @@ pub(super) struct WorktreeForm {
 
 impl WorktreeForm {
     pub(super) fn new(window: &mut Window, cx: &mut App) -> Self {
+        let language = crate::localization::language(cx);
         Self {
             directory: cx.new(|cx| {
-                InputState::new(window, cx).placeholder("接続先 Host 上の絶対パス（空欄で既定）")
+                InputState::new(window, cx)
+                    .placeholder(language.text("接続先 Host 上の絶対パス（空欄で既定）"))
             }),
             copy_paths: cx.new(|cx| {
                 TextareaState::new(window, cx)
@@ -192,10 +195,11 @@ pub(super) struct AccountForm {
 
 impl AccountForm {
     pub(super) fn new(window: &mut Window, cx: &mut App) -> Self {
+        let language = crate::localization::language(cx);
         Self {
             code: cx.new(|cx| {
                 InputState::new(window, cx)
-                    .placeholder("認証コード・APIキーを貼り付け")
+                    .placeholder(language.text("認証コード・APIキーを貼り付け"))
                     .masked(true)
             }),
             busy: false,
@@ -216,9 +220,11 @@ pub(super) struct ModelControls {
 
 impl ModelControls {
     pub(super) fn new(window: &mut Window, cx: &mut App) -> Self {
+        let language = crate::localization::language(cx);
         Self {
             panel: ModelPanel::Models,
-            search: cx.new(|cx| InputState::new(window, cx).placeholder("モデルを検索")),
+            search: cx
+                .new(|cx| InputState::new(window, cx).placeholder(language.text("モデルを検索"))),
             provider: None,
             settings_scope: ModelDefaultsScope::Global,
         }

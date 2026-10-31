@@ -11,7 +11,7 @@ struct ThreadActivityHeader: View {
     let expanded: Bool
 
     var body: some View {
-        let label = Text(summary)
+        let label = AppText(summary)
             .font(.system(size: 16)).foregroundStyle(.secondary)
             .lineLimit(1).truncationMode(.tail)
         HStack(spacing: 5) {
@@ -54,9 +54,9 @@ struct ThreadErrorRow: View {
                 if error.isReconnecting {
                     ProgressView().controlSize(.small)
                 }
-                Text(error.title).font(.subheadline.weight(.semibold))
+                AppText(error.title).font(.subheadline.weight(.semibold))
             }
-            Text(error.message).textSelection(.enabled)
+            AppText(error.message).textSelection(.enabled)
             if let details = error.details, !details.isEmpty {
                 DisclosureGroup("詳細を表示") {
                     Text(details).font(.caption).foregroundColor(.secondary).textSelection(.enabled)
@@ -182,7 +182,7 @@ struct ThreadMessageRow: View, Equatable {
                 HStack(spacing: 20) {
                     Button { UIPasteboard.general.string = text; copied = true } label: {
                         Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    }.accessibilityLabel(copied ? "コピーしました" : "回答をコピー")
+                    }.accessibilityLabel(LocalizedStringKey(copied ? "コピーしました" : "回答をコピー"))
                     if let fork {
                         Button(action: fork) {
                             Image(systemName: "arrow.triangle.branch")
@@ -198,7 +198,7 @@ struct ThreadMessageRow: View, Equatable {
                 .font(.system(size: 19)).foregroundColor(.secondary).buttonStyle(.plain)
                 .padding(.vertical, 4)
                 if let forkError {
-                    Text(forkError).font(.caption).foregroundColor(.red)
+                    AppText(forkError).font(.caption).foregroundColor(.red)
                 }
             }
         }
@@ -261,7 +261,7 @@ struct ThreadItemRow: View, Equatable {
                         if item.data.deferred {
                             VStack(alignment: .leading, spacing: 10) {
                                 if let detailError {
-                                    Text(detailError).font(.caption).foregroundColor(.red)
+                                    AppText(detailError).font(.caption).foregroundColor(.red)
                                     Button("再読み込み") { retry += 1 }
                                 } else {
                                     ProgressView("詳細を読み込み中…")

@@ -41,7 +41,7 @@ internal fun ErrorNotices(
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
     reconnect: (() -> Unit)? = null,
 ) {
-    val clipboard = LocalContext.current.getSystemService(ClipboardManager::class.java)
+    val language = LocalUiLanguage.current
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         snapshot.errorNotices(scope).forEach { notice ->
             var expanded by remember(notice) { mutableStateOf(false) }
@@ -55,14 +55,14 @@ internal fun ErrorNotices(
             ) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
-                        notice.context,
+                        LocalUiLanguage.current.text(notice.context),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Text(notice.title, style = MaterialTheme.typography.titleSmall)
+                    Text(LocalUiLanguage.current.text(notice.title), style = MaterialTheme.typography.titleSmall)
                     SelectionContainer {
                         Text(
-                            notice.message,
+                            LocalUiLanguage.current.text(notice.message),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = if (expanded || !hasDetails) Int.MAX_VALUE else ERROR_SUMMARY_LINES,
@@ -70,26 +70,19 @@ internal fun ErrorNotices(
                         )
                     }
                     if (hasDetails) {
-                        TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "詳細を閉じる" else "詳細を表示") }
+                        TextButton(onClick = { expanded = !expanded }) {
+                            Text(if (expanded) language.text("詳細を閉じる") else language.text("詳細を表示"))
+                        }
                     }
                     snapshot.errorRecovery(notice.id)?.let { recovery ->
-                        TextButton(onClick = { perform(recovery.intent) {} }) { Text(recovery.label) }
+                        TextButton(onClick = { perform(recovery.intent) {} }) {
+                            Text(LocalUiLanguage.current.text(recovery.label))
+                        }
                     }
                     if (scope == ErrorScope.Application && !snapshot.connected() && reconnect != null) {
-                        TextButton(onClick = reconnect) { Text("再接続") }
+                        TextButton(onClick = reconnect) { Text(language.text("再接続")) }
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(
-                            onClick = {
-                                clipboard.setPrimaryClip(
-                                    ClipData.newPlainText("エラーの詳細", "${notice.title}\n${notice.message}")
-                                )
-                            }
-                        ) {
-                            Text("詳細をコピー")
-                        }
-                        TextButton(onClick = { perform(Intent.DismissError(notice.id)) {} }) { Text("閉じる") }
-                    }
+                    ErrorNoticeButtons(notice.title, notice.message) { perform(Intent.DismissError(notice.id)) {} }
                 }
             }
         }
@@ -98,18 +91,19 @@ internal fun ErrorNotices(
 
 @Composable
 internal fun TurnErrorCard(error: TurnErrorPresentation) {
+    val language = LocalUiLanguage.current
     var detailsExpanded by remember(error) { mutableStateOf(false) }
     Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
-                "この応答",
+                language.text("この応答"),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (error.isReconnecting) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                 Text(
-                    error.title,
+                    LocalUiLanguage.current.text(error.title),
                     style = MaterialTheme.typography.titleSmall,
                     color =
                         if (error.isReconnecting) MaterialTheme.colorScheme.onSurface
@@ -118,16 +112,32 @@ internal fun TurnErrorCard(error: TurnErrorPresentation) {
                 )
             }
             androidx.compose.foundation.text.selection.SelectionContainer {
-                Text(error.message, style = MaterialTheme.typography.bodySmall)
+                Text(LocalUiLanguage.current.text(error.message), style = MaterialTheme.typography.bodySmall)
             }
             error.details
                 ?.takeIf { it.isNotEmpty() }
                 ?.let { details ->
                     TextButton(onClick = { detailsExpanded = !detailsExpanded }) {
-                        Text(if (detailsExpanded) "詳細を閉じる" else "詳細を表示")
+                        Text(if (detailsExpanded) language.text("詳細を閉じる") else language.text("詳細を表示"))
                     }
                     if (detailsExpanded) Text(details, style = MaterialTheme.typography.bodySmall)
                 }
         }
+    }
+}
+
+@Composable
+private fun ErrorNoticeButtons(title: String, message: String, dismiss: () -> Unit) {
+    val language = LocalUiLanguage.current
+    val clipboard = LocalContext.current.getSystemService(ClipboardManager::class.java)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        TextButton(
+            onClick = {
+                clipboard.setPrimaryClip(ClipData.newPlainText(language.text("エラーの詳細"), "${title}\n${message}"))
+            }
+        ) {
+            Text(language.text("詳細をコピー"))
+        }
+        TextButton(onClick = { dismiss() }) { Text(language.text("閉じる")) }
     }
 }

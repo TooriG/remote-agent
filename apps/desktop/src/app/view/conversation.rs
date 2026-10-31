@@ -252,22 +252,23 @@ impl WorkProgressView {
         });
         view
     }
-    fn label(&self) -> String {
+    fn label(&self, language: agent_core::localization::UiLanguage) -> String {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0., |duration| duration.as_secs_f64());
-        self.progress.label(now)
+        agent_core::localization::localized_ui_text(language, self.progress.label(now))
     }
 }
 
 impl Render for WorkProgressView {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div().child(self.label())
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div().child(self.label(crate::localization::language(cx)))
     }
 }
 
 impl ConversationView {
     pub(super) fn conversation_navigation(&self, cx: &Context<Self>) -> AnyElement {
+        let language = crate::localization::language(cx);
         let entries: Vec<_> = self
             .timeline
             .rows
@@ -375,7 +376,11 @@ impl ConversationView {
                                 cx.notify();
                             }))
                             .debug_selector(move || format!("conversation-marker-{index}"))
-                            .accessibility_label(format!("この発言へ移動: {user}"))
+                            .accessibility_label(agent_core::localization::localized_ui_format(
+                                language,
+                                "この発言へ移動: {0}".into(),
+                                vec![user.to_string()],
+                            ))
                             .w(px(56.))
                             .h(px(10.))
                             .pl(px(16.5))
@@ -477,6 +482,7 @@ impl ConversationView {
         turn: Option<&Turn>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let language = crate::localization::language(cx);
         let id = item.id.to_string();
         let title = projected.data.title.as_deref();
         let body_text = projected.data.body.as_deref();
@@ -503,13 +509,17 @@ impl ConversationView {
                 .as_ref()
                 .is_some_and(|key| self.model.running.contains(key))
             {
-                "詳細を読み込み中…".to_owned()
+                language.text("詳細を読み込み中…").to_owned()
             } else if let Some(error) =
                 operation.and_then(|key| self.model.failures.get(&key).cloned())
             {
-                format!("{error} · 再試行")
+                agent_core::localization::localized_ui_format(
+                    language,
+                    "{0} · 再試行".into(),
+                    vec![error.to_string()],
+                )
             } else {
-                "詳細を読み込む".to_owned()
+                language.text("詳細を読み込む").to_owned()
             };
             let title = title.expect("activity has a title");
             let toggle = id.clone();
@@ -573,7 +583,7 @@ impl ConversationView {
                     cx.emit(ConversationAction::Edit(copied.clone()));
                 });
                 let timestamp = turn.and_then(|turn| turn.started_at.map(|time| time as i64));
-                user_message_row(&id, text, body, timestamp, edit).into_any_element()
+                user_message_row(&id, text, body, timestamp, edit, language).into_any_element()
             }
             agent_protocol::items::ItemBody::CommandExecution {
                 command,
@@ -623,11 +633,11 @@ impl ConversationView {
                                     div()
                                         .text_sm()
                                         .text_color(rgb(appearance::MUTED))
-                                        .child("プレーンテキスト"),
+                                        .child(language.text("プレーンテキスト")),
                                 )
                                 .child(
                                     Button::new(format!("copy-output-{id}"))
-                                        .label("出力をコピー")
+                                        .label(language.text("出力をコピー"))
                                         .small()
                                         .ghost()
                                         .on_click(move |_, _, cx| {
@@ -679,7 +689,7 @@ impl ConversationView {
                         ))
                         .child(button(
                             format!("download-{id}-{i}"),
-                            "ダウンロード",
+                            language.text("ダウンロード"),
                             cx,
                             move |_, _, cx| cx.emit(ConversationAction::Download(path.clone())),
                         ));
@@ -719,15 +729,20 @@ impl ConversationView {
                     .border_color(cx.theme().border)
                     .rounded_md()
                     .child(
-                        h_flex().justify_between().child("計画").child(
-                            Button::new(format!("copy-plan-{id}"))
-                                .icon(IconName::Copy)
-                                .small()
-                                .ghost()
-                                .on_click(move |_, _, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(copied.clone()))
-                                }),
-                        ),
+                        h_flex()
+                            .justify_between()
+                            .child(language.text("計画"))
+                            .child(
+                                Button::new(format!("copy-plan-{id}"))
+                                    .icon(IconName::Copy)
+                                    .small()
+                                    .ghost()
+                                    .on_click(move |_, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            copied.clone(),
+                                        ))
+                                    }),
+                            ),
                     )
                     .child(content)
                     .into_any_element()
@@ -776,6 +791,7 @@ impl ConversationView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let language = crate::localization::language(cx);
         let turn = &projected.source;
         let mut body = v_flex().w_full().max_w(px(CHAT_WIDTH)).gap_4();
         let row = &projected.rows[index];
@@ -794,9 +810,15 @@ impl ConversationView {
                         window,
                         cx,
                     );
-                    (view.read(cx).label(), view.into_any_element())
+                    (
+                        view.read(cx).label(crate::localization::language(cx)),
+                        view.into_any_element(),
+                    )
                 } else {
-                    let label = activity.activity_summary.clone();
+                    let label = agent_core::localization::localized_ui_text(
+                        language,
+                        activity.activity_summary.clone(),
+                    );
                     (label.clone(), div().child(label).into_any_element())
                 };
                 let header = if activity.activity_can_collapse {
@@ -892,7 +914,7 @@ impl ConversationView {
                             div()
                                 .text_xs()
                                 .text_color(rgb(appearance::MUTED))
-                                .child("この応答"),
+                                .child(language.text("この応答")),
                         )
                         .child(
                             h_flex()
@@ -900,17 +922,16 @@ impl ConversationView {
                                 .when(error.is_reconnecting, |heading| {
                                     heading.child(crate::activity::indicator())
                                 })
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .font_semibold()
-                                        .text_color(accent)
-                                        .child(error.title.clone()),
-                                )
+                                .child(div().flex_1().font_semibold().text_color(accent).child(
+                                    agent_core::localization::localized_ui_text(
+                                        language,
+                                        error.title.clone(),
+                                    ),
+                                ))
                                 .child(icon_button(
                                     format!("copy-turn-error-{}", turn.id),
                                     IconName::Copy,
-                                    "エラーの詳細をコピー",
+                                    language.text("エラーの詳細をコピー"),
                                     cx,
                                     move |_, _, cx| {
                                         cx.write_to_clipboard(ClipboardItem::new_string(
@@ -919,7 +940,14 @@ impl ConversationView {
                                     },
                                 )),
                         )
-                        .child(div().text_sm().child(error.message.clone()))
+                        .child(
+                            div()
+                                .text_sm()
+                                .child(agent_core::localization::localized_ui_text(
+                                    language,
+                                    error.message.clone(),
+                                )),
+                        )
                         .when_some(error.details.clone(), |card, details| {
                             card.child(
                                 div()
@@ -944,7 +972,7 @@ impl ConversationView {
                                     .child(
                                         button(
                                             format!("usage-settings-{}", turn.id),
-                                            "使用量・リセット時刻",
+                                            language.text("使用量・リセット時刻"),
                                             cx,
                                             move |_, _, cx| {
                                                 cx.emit(ConversationAction::Usage(provider));
@@ -959,7 +987,7 @@ impl ConversationView {
                                             actions.child(
                                                 button(
                                                     format!("usage-manage-{}", turn.id),
-                                                    "追加クレジット・上限を管理",
+                                                    language.text("追加クレジット・上限を管理"),
                                                     cx,
                                                     |_, _, cx| {
                                                         cx.emit(ConversationAction::OpenUsage);
@@ -986,8 +1014,8 @@ impl ConversationView {
                                     .small()
                                     .ghost()
                                     .debug_selector(|| "response-copy".into())
-                                    .tooltip("回答をコピー")
-                                    .accessibility_label("回答をコピー")
+                                    .tooltip(language.text("回答をコピー"))
+                                    .accessibility_label(language.text("回答をコピー"))
                                     .on_click(move |_, _, cx| {
                                         cx.write_to_clipboard(ClipboardItem::new_string(
                                             text.clone(),
@@ -1030,14 +1058,14 @@ impl ConversationView {
                                                         .px_0()
                                                 })
                                                 .tooltip(if forking {
-                                                    "分岐を作成中…"
+                                                    language.text("分岐を作成中…")
                                                 } else {
-                                                    "ここから会話を分岐"
+                                                    language.text("ここから会話を分岐")
                                                 })
                                                 .accessibility_label(if forking {
-                                                    "分岐を作成中…"
+                                                    language.text("分岐を作成中…")
                                                 } else {
-                                                    "ここから会話を分岐"
+                                                    language.text("ここから会話を分岐")
                                                 })
                                                 .on_click(cx.listener(move |_, _, _, cx| {
                                                     cx.emit(ConversationAction::Fork(
@@ -1064,7 +1092,7 @@ impl ConversationView {
                                                     .gap_2()
                                                     .text_xs()
                                                     .text_color(rgb(appearance::MUTED))
-                                                    .child("分岐を作成中…")
+                                                    .child(language.text("分岐を作成中…"))
                                                     .debug_selector(|| {
                                                         "response-fork-progress".into()
                                                     }),
@@ -1138,6 +1166,7 @@ impl ConversationView {
         pending: &agent_core::state::PendingSubmission,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let language = crate::localization::language(cx);
         let draft = &pending.draft;
         let mut body = user_message_bubble();
         if !draft.text.is_empty() {
@@ -1177,12 +1206,12 @@ impl ConversationView {
             .gap_2()
             .my_4()
             .child(body)
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(rgb(appearance::MUTED))
-                    .child(pending.delivery_label()),
-            )
+            .child(div().text_sm().text_color(rgb(appearance::MUTED)).child(
+                agent_core::localization::localized_ui_text(
+                    language,
+                    pending.delivery_label().into(),
+                ),
+            ))
             .into_any_element()
     }
 
@@ -1237,6 +1266,7 @@ impl ConversationView {
         request: &agent_core::presentation::conversation::Request,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let language = crate::localization::language(cx);
         use agent_protocol::requests::{Answer, ElicitationAnswer, ElicitationInput, RequestBody};
         let key = &request.id;
         let Some(inputs) = self.timeline.requests.get(key) else {
@@ -1385,7 +1415,7 @@ impl ConversationView {
                 let key = key.to_owned();
                 body = body.child(button(
                     format!("respond-{key}"),
-                    "回答を送信",
+                    language.text("回答を送信"),
                     cx,
                     move |view, _, cx| {
                         let Some(inputs) = view.timeline.requests.get(&key) else {
@@ -1448,7 +1478,7 @@ impl ConversationView {
                     let url = url.clone();
                     body = body.child(button(
                         format!("elicitation-url-{key}"),
-                        "リンクを開く",
+                        language.text("リンクを開く"),
                         cx,
                         move |_, window, cx| {
                             cx.emit(ConversationAction::OpenLink(
@@ -1464,7 +1494,7 @@ impl ConversationView {
                 let request_body = request.request_body.clone();
                 body = body.child(button(
                     format!("elicitation-accept-{accept_key}"),
-                    "確認して送信",
+                    language.text("確認して送信"),
                     cx,
                     move |view, _, cx| {
                         let Some(inputs) = view.timeline.requests.get(&accept_key) else {
@@ -1482,8 +1512,8 @@ impl ConversationView {
                     },
                 ));
                 for (action, label) in [
-                    (ElicitationAnswer::Decline, "辞退"),
-                    (ElicitationAnswer::Cancel, "キャンセル"),
+                    (ElicitationAnswer::Decline, language.text("辞退")),
+                    (ElicitationAnswer::Cancel, language.text("キャンセル")),
                 ] {
                     let key = key.to_owned();
                     body = body.child(button(
@@ -1506,7 +1536,7 @@ impl ConversationView {
                 let request_body = request.request_body.clone();
                 body = body.child(Textarea::new(&inputs.response)).child(button(
                     format!("tool-answer-{key}"),
-                    "実行結果を送信",
+                    language.text("実行結果を送信"),
                     cx,
                     move |view, _, cx| {
                         let Some(inputs) = view.timeline.requests.get(&key) else {
@@ -1537,6 +1567,7 @@ impl ConversationView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let language = crate::localization::language(cx);
         self.timeline
             .requests
             .retain(|key, _| requests.iter().any(|request| &request.id == key));
@@ -1553,7 +1584,7 @@ impl ConversationView {
                         selected: HashSet::new(),
                         input: cx.new(|cx| {
                             InputState::new(window, cx)
-                                .placeholder("回答を入力")
+                                .placeholder(language.text("回答を入力"))
                                 .masked(question.secret)
                         }),
                     })
@@ -1586,6 +1617,7 @@ fn user_message_row(
     body: Div,
     timestamp: Option<i64>,
     edit: Button,
+    language: agent_core::localization::UiLanguage,
 ) -> impl IntoElement {
     let time = timestamp
         .and_then(|value| chrono::DateTime::from_timestamp(value, 0))
@@ -1623,8 +1655,8 @@ fn user_message_row(
                         .icon(IconName::Copy)
                         .small()
                         .ghost()
-                        .tooltip("発言をコピー")
-                        .accessibility_label("発言をコピー")
+                        .tooltip(language.text("発言をコピー"))
+                        .accessibility_label(language.text("発言をコピー"))
                         .disabled(copy_text.is_empty())
                         .on_click(move |_, _, cx| {
                             cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()));
@@ -1635,8 +1667,8 @@ fn user_message_row(
                         .small()
                         .ghost()
                         .debug_selector(|| "user-message-edit".into())
-                        .tooltip("入力欄で編集")
-                        .accessibility_label("入力欄で編集")
+                        .tooltip(language.text("入力欄で編集"))
+                        .accessibility_label(language.text("入力欄で編集"))
                         .disabled(text.is_empty()),
                 ),
         )
@@ -1648,10 +1680,11 @@ impl ConversationView {
         control: agent_core::presentation::conversation::HistoryControl,
         cx: &Context<Self>,
     ) -> AnyElement {
+        let language = crate::localization::language(cx);
         let label: SharedString = if control.has_more {
-            control.load_label.into()
+            agent_core::localization::localized_ui_text(language, control.load_label).into()
         } else {
-            "再試行".into()
+            language.text("再試行").into()
         };
         h_flex()
             .w_full()
@@ -1748,6 +1781,7 @@ impl ConversationView {
         .min_h_0()
     }
     fn viewport(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let language = crate::localization::language(cx);
         let history = self.conversation_list(cx);
         let mut body = v_flex()
             .debug_selector(|| "conversation-viewport".into())
@@ -1775,7 +1809,9 @@ impl ConversationView {
             .into_iter()
             .flatten()
         {
-            body = body.child(div().px_4().py_2().text_sm().child(notice.clone()));
+            body = body.child(div().px_4().py_2().text_sm().child(
+                agent_core::localization::localized_ui_text(language, notice.clone()),
+            ));
         }
         if self.timeline.rendered.is_none() {
             if let Some(control) = self.model.history.clone() {
@@ -1787,9 +1823,15 @@ impl ConversationView {
                     .items_center()
                     .justify_center()
                     .gap_4()
-                    .child(div().text_2xl().child("何から始めましょうか？"))
+                    .child(
+                        div()
+                            .text_2xl()
+                            .child(language.text("何から始めましょうか？")),
+                    )
                     .child(if self.model.cwd.is_empty() {
-                        "メッセージを入力して、作業を始めましょう。".into()
+                        language
+                            .text("メッセージを入力して、作業を始めましょう。")
+                            .into()
                     } else {
                         file_name(&self.model.cwd)
                     }),
@@ -1818,7 +1860,7 @@ impl ConversationView {
                             icon_button(
                                 "conversation-latest",
                                 IconName::ArrowDown,
-                                "最新のメッセージへ",
+                                language.text("最新のメッセージへ"),
                                 cx,
                                 |view, _, _| {
                                     view.timeline.list.set_follow_mode(FollowMode::Tail);
@@ -1853,6 +1895,7 @@ impl ConversationView {
         source: &str,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let language = crate::localization::language(cx);
         if self
             .timeline
             .markdown
@@ -1965,9 +2008,9 @@ impl ConversationView {
                         .child(
                             Button::new("wrap-code")
                                 .label(if wrap_code {
-                                    "折り返し解除"
+                                    language.text("折り返し解除")
                                 } else {
-                                    "折り返し"
+                                    language.text("折り返し")
                                 })
                                 .small()
                                 .ghost()
@@ -1988,7 +2031,7 @@ impl ConversationView {
                                 .icon(IconName::Copy)
                                 .small()
                                 .ghost()
-                                .tooltip("コードをコピー")
+                                .tooltip(language.text("コードをコピー"))
                                 .on_click(move |_, _, cx| {
                                     cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
                                 }),
@@ -2007,9 +2050,9 @@ impl ConversationView {
                         .child(
                             Button::new("wrap-table")
                                 .label(if compact_tables {
-                                    "セルを折り返す"
+                                    language.text("セルを折り返す")
                                 } else {
-                                    "セルをコンパクトに表示"
+                                    language.text("セルをコンパクトに表示")
                                 })
                                 .small()
                                 .ghost()
@@ -2027,7 +2070,7 @@ impl ConversationView {
                         )
                         .child(
                             Button::new("copy-markdown")
-                                .label("Markdownをコピー")
+                                .label(language.text("Markdownをコピー"))
                                 .small()
                                 .ghost()
                                 .on_click(move |_, _, cx| {
@@ -2038,7 +2081,7 @@ impl ConversationView {
                         )
                         .child(
                             Button::new("copy-csv")
-                                .label("CSVをコピー")
+                                .label(language.text("CSVをコピー"))
                                 .small()
                                 .ghost()
                                 .on_click(move |_, _, cx| {
@@ -2101,6 +2144,7 @@ mod tests {
                 user_message_bubble().child("一行目\nsecond line"),
                 Some(1),
                 gpui::component::button::Button::new("edit"),
+                agent_core::localization::UiLanguage::Japanese,
             )
         }
     }

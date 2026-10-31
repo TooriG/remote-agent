@@ -107,13 +107,18 @@ impl DiffView {
         }
     }
     fn row(&self, ix: usize, cx: &Context<Self>) -> AnyElement {
+        let language = crate::localization::language(cx);
         let row = &self.rows[self.visible[ix]];
         let source_ix = self.visible[ix];
         if let Some(range) = self.context_folds.get(&source_ix)
             && !self.expanded_context.contains(&source_ix)
         {
             return Button::new(("context", source_ix))
-                .label(format!("{} 行の未変更部分を表示", range.len()))
+                .label(agent_core::localization::localized_ui_format(
+                    language,
+                    "{0} 行の未変更部分を表示".into(),
+                    vec![range.len().to_string()],
+                ))
                 .ghost()
                 .on_click(cx.listener(move |s, _, _, cx| {
                     s.expanded_context.insert(source_ix);
@@ -171,7 +176,7 @@ impl DiffView {
             .child(
                 StyledText::new(
                     if row.kind == 'M' && row.text.starts_with("Binary files ") {
-                        "バイナリファイルが変更されました".into()
+                        language.text("バイナリファイルが変更されました").into()
                     } else {
                         row.text.clone()
                     },
@@ -191,10 +196,11 @@ impl DiffView {
 }
 impl Render for DiffView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let language = crate::localization::language(cx);
         let source = self.source.clone();
         let mut body = v_flex().gap_2().w_full().child(
             Button::new("copy-patch")
-                .label("差分をコピー")
+                .label(language.text("差分をコピー"))
                 .ghost()
                 .on_click(move |_, _, cx| {
                     cx.write_to_clipboard(ClipboardItem::new_string(source.to_string()))
@@ -222,7 +228,11 @@ impl Render for DiffView {
             if count < self.visible.len() {
                 body = body.child(
                     Button::new("show-more")
-                        .label(format!("残り {} 行を表示", self.visible.len() - count))
+                        .label(agent_core::localization::localized_ui_format(
+                            language,
+                            "残り {0} 行を表示".into(),
+                            vec![(self.visible.len() - count).to_string()],
+                        ))
                         .ghost()
                         .on_click(cx.listener(|s, _, _, cx| {
                             s.limit = None;

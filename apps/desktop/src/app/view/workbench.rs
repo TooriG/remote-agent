@@ -183,6 +183,7 @@ impl Desktop {
     }
 
     fn workbench_model(&self, width: Pixels, cx: &App) -> Option<WorkbenchModel> {
+        let language = crate::localization::language(cx);
         let panel = self.panels.get(self.panel_scope());
         if !self.workbench_visible(panel.open) {
             return None;
@@ -248,12 +249,12 @@ impl Desktop {
             resource,
             resource_message: if pending {
                 if matches!(self.draft_key(), DraftKey::Session { .. }) {
-                    "ブラウザを起動中…"
+                    language.text("ブラウザを起動中…")
                 } else {
-                    "会話を始めると、AIと同じブラウザを利用できます。"
+                    language.text("会話を始めると、AIと同じブラウザを利用できます。")
                 }
             } else {
-                "機能を開けませんでした。「＋」から再試行してください。"
+                language.text("機能を開けませんでした。「＋」から再試行してください。")
             },
             sidebar: self.sidebar,
             side_chat_mode: self.side_chat_mode,
@@ -323,6 +324,7 @@ impl Desktop {
         connected: bool,
         cx: &Context<Self>,
     ) -> AnyElement {
+        let language = crate::localization::language(cx);
         let files = &review.files;
         let visible = if expanded {
             files.len()
@@ -361,21 +363,29 @@ impl Desktop {
                             .flex_1()
                             .min_w_0()
                             .gap_1()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .child(format!("{} 件のファイルを変更", files.len())),
-                            )
+                            .child(div().text_sm().child(
+                                agent_core::localization::localized_ui_format(
+                                    language,
+                                    "{0} 件のファイルを変更".into(),
+                                    vec![files.len().to_string()],
+                                ),
+                            ))
                             .child(review_counts(
                                 Some(review.additions),
                                 Some(review.deletions),
+                                language,
                             )),
                     )
                     .child(
-                        button("review-changes", "レビューする", cx, |s, _, cx| {
-                            cx.stop_propagation();
-                            s.open_review(None, cx);
-                        })
+                        button(
+                            "review-changes",
+                            language.text("レビューする"),
+                            cx,
+                            |s, _, cx| {
+                                cx.stop_propagation();
+                                s.open_review(None, cx);
+                            },
+                        )
                         .border_1()
                         .rounded(px(8.))
                         .disabled(!connected),
@@ -408,7 +418,7 @@ impl Desktop {
                                     .text_ellipsis()
                                     .child(file.path.clone()),
                             )
-                            .child(review_counts(file.additions, file.deletions))
+                            .child(review_counts(file.additions, file.deletions, language))
                     })),
             )
             .when(files.len() > 3, |card| {
@@ -417,9 +427,13 @@ impl Desktop {
                         button(
                             "expand-review-files",
                             if expanded {
-                                "折りたたむ".to_owned()
+                                language.text("折りたたむ").to_owned()
                             } else {
-                                format!("あと {} 個のファイルを表示", files.len() - 3)
+                                agent_core::localization::localized_ui_format(
+                                    language,
+                                    "あと {0} 個のファイルを表示".into(),
+                                    vec![(files.len() - 3).to_string()],
+                                )
                             },
                             cx,
                             |s, _, _| s.review_expanded = !s.review_expanded,
@@ -439,6 +453,7 @@ impl Desktop {
         path_input: &Entity<InputState>,
         cx: &Context<Self>,
     ) -> AnyElement {
+        let language = crate::localization::language(cx);
         let mut entries = v_flex().gap_1();
         for (i, entry) in directory
             .map(|directory| directory.entries.as_slice())
@@ -480,8 +495,8 @@ impl Desktop {
                                 .icon(IconName::ArrowDown)
                                 .small()
                                 .ghost()
-                                .tooltip("ダウンロード")
-                                .accessibility_label("ダウンロード")
+                                .tooltip(language.text("ダウンロード"))
+                                .accessibility_label(language.text("ダウンロード"))
                                 .on_click(cx.listener(move |s, _, _, cx| {
                                     s.download(download.clone());
                                     cx.notify();
@@ -501,7 +516,7 @@ impl Desktop {
                     .child(icon_button(
                         "parent-directory",
                         IconName::ArrowUp,
-                        "親フォルダ",
+                        language.text("親フォルダ"),
                         cx,
                         |s, _, cx| {
                             let path = s.path.read(cx).value();
@@ -514,11 +529,15 @@ impl Desktop {
                             );
                         },
                     ))
-                    .child(Input::new(path_input).small().aria_label("フォルダのパス"))
+                    .child(
+                        Input::new(path_input)
+                            .small()
+                            .aria_label(language.text("フォルダのパス")),
+                    )
                     .child(icon_button(
                         "browse",
                         IconName::ArrowRight,
-                        "フォルダを開く",
+                        language.text("フォルダを開く"),
                         cx,
                         |s, _, cx| s.browse(s.path.read(cx).value().to_string()),
                     )),
@@ -540,6 +559,7 @@ impl Desktop {
         saving: bool,
         cx: &Context<Self>,
     ) -> AnyElement {
+        let language = crate::localization::language(cx);
         let mut editor = v_flex()
             .debug_selector(|| "conversation-file".into())
             .size_full()
@@ -559,24 +579,27 @@ impl Desktop {
                     ),
                 )
                 .child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .child(Editor::new(input).h_full().aria_label("ファイル編集")),
+                    div().flex_1().min_h_0().child(
+                        Editor::new(input)
+                            .h_full()
+                            .aria_label(language.text("ファイル編集")),
+                    ),
                 )
                 .child(
                     h_flex()
                         .gap_2()
                         .flex_wrap()
                         .child(
-                            button("save-file", "保存", cx, |s, _, _| s.save_file())
-                                .primary()
-                                .disabled(saving),
+                            button("save-file", language.text("保存"), cx, |s, _, _| {
+                                s.save_file()
+                            })
+                            .primary()
+                            .disabled(saving),
                         )
                         .child(icon_button(
                             "reload-file",
                             IconName::RotateCw,
-                            "再読み込み・下書きを破棄",
+                            language.text("再読み込み・下書きを破棄"),
                             cx,
                             |s, _, _| {
                                 if let Some(file) = &s.snapshot.workspace.file {
@@ -585,18 +608,24 @@ impl Desktop {
                             },
                         ))
                         .child(
-                            button("ai-edit", "AI に編集を依頼", cx, |s, _, _| {
-                                if let Some(file) = &s.snapshot.workspace.file {
-                                    s.dispatch(Intent::SetDraftText {
-                                        thread_id: s.draft_key().clone(),
-                                        text: format!(
-                                            "ファイル {} を編集してください。\n\n",
-                                            file.path
-                                        ),
-                                    });
-                                }
-                                s.tab = Tab::Chat;
-                            })
+                            button(
+                                "ai-edit",
+                                language.text("AI に編集を依頼"),
+                                cx,
+                                move |s, _, _| {
+                                    if let Some(file) = &s.snapshot.workspace.file {
+                                        s.dispatch(Intent::SetDraftText {
+                                            thread_id: s.draft_key().clone(),
+                                            text: agent_core::localization::localized_ui_format(
+                                                language,
+                                                "ファイル {0} を編集してください。\n\n".into(),
+                                                vec![file.path.clone()],
+                                            ),
+                                        });
+                                    }
+                                    s.tab = Tab::Chat;
+                                },
+                            )
                             .icon(IconName::Bot),
                         ),
                 );
@@ -614,12 +643,13 @@ impl Desktop {
                     div()
                         .text_sm()
                         .text_color(rgb(appearance::MUTED))
-                        .child("ファイルを読み込み中…"),
+                        .child(language.text("ファイルを読み込み中…")),
                 );
         }
         editor.p_4().into_any_element()
     }
     fn render_workbench(model: &WorkbenchModel, cx: &mut Context<Self>) -> AnyElement {
+        let language = crate::localization::language(cx);
         let panel = &model.panel;
         let layout = panel.layout;
         let active = panel.active;
@@ -650,7 +680,7 @@ impl Desktop {
                         icon_button(
                             format!("close-surface-{id}"),
                             IconName::Close,
-                            "タブを閉じる",
+                            language.text("タブを閉じる"),
                             cx,
                             move |view, window, cx| view.close_surface(id, window, cx),
                         )
@@ -671,8 +701,8 @@ impl Desktop {
             .icon(IconName::Plus)
             .small()
             .ghost()
-            .tooltip("機能を開く")
-            .accessibility_label("機能を開く")
+            .tooltip(language.text("機能を開く"))
+            .accessibility_label(language.text("機能を開く"))
             .dropdown_menu(move |mut menu, _, cx| {
                 let tools = menu_owner
                     .upgrade()
@@ -720,7 +750,7 @@ impl Desktop {
                         } else {
                             IconName::Maximize
                         },
-                        "パネルを拡大・縮小",
+                        language.text("パネルを拡大・縮小"),
                         cx,
                         |view, _, _| {
                             let key = view.panel_scope();
@@ -739,7 +769,7 @@ impl Desktop {
                     icon_button(
                         "panel-bottom",
                         IconName::PanelBottom,
-                        "下・右の配置を切り替え",
+                        language.text("下・右の配置を切り替え"),
                         cx,
                         move |view, _, _| {
                             let layout = if layout == PanelLayout::Bottom {
@@ -760,122 +790,130 @@ impl Desktop {
                     icon_button(
                         "back-side-chat",
                         IconName::ArrowLeft,
-                        "サイドチャットに戻る",
+                        language.text("サイドチャットに戻る"),
                         cx,
                         |view, _, _| view.panels.set_open(view.panel_scope(), false),
                     )
                     .debug_selector(|| "back-side-chat".into()),
                 )
             });
-        let body = match kind {
-            Panel::Home => {
-                let mut chooser = v_flex()
-                    .w_full()
-                    .max_w(px(300.))
-                    .gap_1()
-                    .child(div().text_sm().mb_3().text_center().child("機能を開く"));
-                for (ix, tool) in model.tools.iter().enumerate() {
-                    let panel = tool.kind;
-                    chooser = chooser.child(
-                        button(
-                            format!("tool-{ix}"),
-                            tool.label.clone(),
-                            cx,
-                            move |view, window, cx| {
-                                view.open_panel(panel, window, cx);
-                            },
-                        )
-                        .debug_selector(move || format!("surface-{ix}"))
-                        .icon(panel_icon(panel))
-                        .w_full()
-                        .h_8()
-                        .justify_start()
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(rgb(appearance::MUTED))
-                                .child(tool.shortcut.clone()),
-                        )
-                        .disabled(!tool.enabled),
+        let body =
+            match kind {
+                Panel::Home => {
+                    let mut chooser = v_flex().w_full().max_w(px(300.)).gap_1().child(
+                        div()
+                            .text_sm()
+                            .mb_3()
+                            .text_center()
+                            .child(language.text("機能を開く")),
                     );
-                }
-                v_flex()
-                    .id("surface-launcher")
-                    .debug_selector(|| "surface-launcher".into())
-                    .size_full()
-                    .p_6()
-                    .items_center()
-                    .justify_center()
-                    .track_focus(&model.focus)
-                    .on_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
-                        if event.keystroke.modifiers.control
-                            || event.keystroke.modifiers.platform
-                            || event.keystroke.modifiers.alt
-                        {
-                            return;
-                        }
-                        let Some(tool) = view.panel_tools().into_iter().find(|tool| {
-                            tool.shortcut
-                                .eq_ignore_ascii_case(event.keystroke.key.as_str())
-                        }) else {
-                            return;
-                        };
-                        if tool.enabled {
-                            view.open_panel(tool.kind, window, cx);
-                            cx.stop_propagation();
-                        }
-                    }))
-                    .child(chooser)
-                    .into_any_element()
-            }
-            Panel::Agents => Self::agents_panel(&model.agents),
-            Panel::Files => Self::files(model.directory.as_deref(), &model.path_input, cx),
-            Panel::File => {
-                Self::file_editor(model.file.as_deref(), &model.editor_input, model.saving, cx)
-            }
-            Panel::Diff => v_flex()
-                .size_full()
-                .min_h_0()
-                .p_4()
-                .gap_3()
-                .child(
-                    h_flex()
-                        .child(div().flex_1().child(format!(
-                            "変更  +{} −{}",
-                            model.review.map_or(0, |review| review.0),
-                            model.review.map_or(0, |review| review.1)
-                        )))
-                        .child(icon_button(
-                            "refresh-diff",
-                            IconName::RotateCw,
-                            "変更を更新",
-                            cx,
-                            |s, _, _| s.refresh_review(),
-                        )),
-                )
-                .child(Self::diff_file_menu(
-                    model.review.map_or(0, |review| review.2),
-                    cx,
-                ))
-                .child(
-                    div().flex_1().min_h_0().children(
-                        model
-                            .resource
-                            .clone()
-                            .map(|view| view.cached(StyleRefinement::default().size_full())),
-                    ),
-                )
-                .into_any_element(),
-            Panel::SideChat | Panel::Terminal | Panel::Browser => {
-                if let Some(view) = &model.resource {
-                    view.clone()
-                        .cached(StyleRefinement::default().size_full())
+                    for (ix, tool) in model.tools.iter().enumerate() {
+                        let panel = tool.kind;
+                        chooser = chooser.child(
+                            button(
+                                format!("tool-{ix}"),
+                                tool.label.clone(),
+                                cx,
+                                move |view, window, cx| {
+                                    view.open_panel(panel, window, cx);
+                                },
+                            )
+                            .debug_selector(move || format!("surface-{ix}"))
+                            .icon(panel_icon(panel))
+                            .w_full()
+                            .h_8()
+                            .justify_start()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(appearance::MUTED))
+                                    .child(tool.shortcut.clone()),
+                            )
+                            .disabled(!tool.enabled),
+                        );
+                    }
+                    v_flex()
+                        .id("surface-launcher")
+                        .debug_selector(|| "surface-launcher".into())
+                        .size_full()
+                        .p_6()
+                        .items_center()
+                        .justify_center()
+                        .track_focus(&model.focus)
+                        .on_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
+                            if event.keystroke.modifiers.control
+                                || event.keystroke.modifiers.platform
+                                || event.keystroke.modifiers.alt
+                            {
+                                return;
+                            }
+                            let Some(tool) = view.panel_tools().into_iter().find(|tool| {
+                                tool.shortcut
+                                    .eq_ignore_ascii_case(event.keystroke.key.as_str())
+                            }) else {
+                                return;
+                            };
+                            if tool.enabled {
+                                view.open_panel(tool.kind, window, cx);
+                                cx.stop_propagation();
+                            }
+                        }))
+                        .child(chooser)
                         .into_any_element()
-                } else {
-                    div().p_4().child(model.resource_message).into_any_element()
                 }
-            }
-        };
+                Panel::Agents => Self::agents_panel(&model.agents, language),
+                Panel::Files => Self::files(model.directory.as_deref(), &model.path_input, cx),
+                Panel::File => {
+                    Self::file_editor(model.file.as_deref(), &model.editor_input, model.saving, cx)
+                }
+                Panel::Diff => v_flex()
+                    .size_full()
+                    .min_h_0()
+                    .p_4()
+                    .gap_3()
+                    .child(
+                        h_flex()
+                            .child(div().flex_1().child(
+                                agent_core::localization::localized_ui_format(
+                                    language,
+                                    "変更  +{0} −{1}".into(),
+                                    vec![
+                                        model.review.map_or(0, |review| review.0).to_string(),
+                                        model.review.map_or(0, |review| review.1).to_string(),
+                                    ],
+                                ),
+                            ))
+                            .child(icon_button(
+                                "refresh-diff",
+                                IconName::RotateCw,
+                                language.text("変更を更新"),
+                                cx,
+                                |s, _, _| s.refresh_review(),
+                            )),
+                    )
+                    .child(Self::diff_file_menu(
+                        model.review.map_or(0, |review| review.2),
+                        cx,
+                    ))
+                    .child(
+                        div().flex_1().min_h_0().children(
+                            model
+                                .resource
+                                .clone()
+                                .map(|view| view.cached(StyleRefinement::default().size_full())),
+                        ),
+                    )
+                    .into_any_element(),
+                Panel::SideChat | Panel::Terminal | Panel::Browser => {
+                    if let Some(view) = &model.resource {
+                        view.clone()
+                            .cached(StyleRefinement::default().size_full())
+                            .into_any_element()
+                    } else {
+                        div().p_4().child(model.resource_message).into_any_element()
+                    }
+                }
+            };
         v_flex()
             .size_full()
             .min_h_0()
@@ -918,11 +956,16 @@ impl Desktop {
         view
     }
     fn diff_file_menu(files: usize, cx: &Context<Self>) -> AnyElement {
+        let language = crate::localization::language(cx);
         let entity = cx.entity().downgrade();
         Button::new("diff-file-navigation")
             .debug_selector(|| "diff-file-navigation".into())
-            .label(format!("ファイルを選択 ({})", files))
-            .accessibility_label("差分のファイルを選択")
+            .label(agent_core::localization::localized_ui_format(
+                language,
+                "ファイルを選択 ({0})".into(),
+                vec![files.to_string()],
+            ))
+            .accessibility_label(language.text("差分のファイルを選択"))
             .dropdown_caret(true)
             .ghost()
             .dropdown_menu(move |mut menu, _, cx| {

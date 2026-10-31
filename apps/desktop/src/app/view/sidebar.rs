@@ -67,6 +67,7 @@ impl From<SidebarMenuItem> for SidebarRow {
 
 impl SidebarRow {
     fn render(self, id: String, collapsed: bool, window: &mut Window, cx: &mut App) -> AnyElement {
+        let language = crate::localization::language(cx);
         match self {
             Self::Heading(label) => div()
                 .px_3()
@@ -243,8 +244,8 @@ impl SidebarRow {
                                 .icon(new_chat_icon())
                                 .xsmall()
                                 .ghost()
-                                .tooltip("このプロジェクトで新しいチャット")
-                                .accessibility_label("このプロジェクトで新しいチャット")
+                                .tooltip(language.text("このプロジェクトで新しいチャット"))
+                                .accessibility_label(language.text("このプロジェクトで新しいチャット"))
                                 .disabled(!connected)
                                 .on_click(move |_, window, cx| {
                                     cx.stop_propagation();
@@ -279,6 +280,7 @@ impl SidebarItem for SidebarSection {
         window: &mut Window,
         cx: &mut App,
     ) -> impl IntoElement {
+        let language = crate::localization::language(cx);
         let id = id.into();
         v_flex()
             .when(!self.is_collapsed(), |section| {
@@ -289,15 +291,15 @@ impl SidebarItem for SidebarSection {
                         .pl_2()
                         .text_xs()
                         .text_color(cx.theme().sidebar_foreground)
-                        .child(div().flex_1().child(self.label))
+                        .child(div().flex_1().child(language.text(self.label)))
                         .when_some(self.add_project, |header, (desktop, enabled)| {
                             header.child(
                                 Button::new("choose-project")
                                     .icon(Icon::default().path("icons/folder-plus.svg"))
                                     .small()
                                     .ghost()
-                                    .tooltip("プロジェクトを追加")
-                                    .accessibility_label("プロジェクトを追加")
+                                    .tooltip(language.text("プロジェクトを追加"))
+                                    .accessibility_label(language.text("プロジェクトを追加"))
                                     .disabled(!enabled)
                                     .on_click(move |_, _, cx| {
                                         let _ = desktop.update(cx, |desktop, cx| {
@@ -436,10 +438,11 @@ impl Render for SidebarView {
 
 impl Desktop {
     fn project_sidebar_rows(model: &Conversations, cx: &Context<Self>) -> Vec<SidebarRow> {
+        let language = crate::localization::language(cx);
         let list = &model.list;
         let loading_session_list = model.loading_session_list;
         let mut projects = Vec::new();
-        let mut last_section = Some("プロジェクト".to_string());
+        let mut last_section = Some(language.text("プロジェクト").to_string());
         let mut pinned_heading = false;
         for project in list
             .as_ref()
@@ -449,14 +452,14 @@ impl Desktop {
             if project.pinned {
                 last_section = None;
                 if !pinned_heading {
-                    projects.push(SidebarRow::Heading("ピン留め".into()));
+                    projects.push(SidebarRow::Heading(language.text("ピン留め").into()));
                     pinned_heading = true;
                 }
             } else {
                 let section = project
                     .section
                     .clone()
-                    .unwrap_or_else(|| "プロジェクト".into());
+                    .unwrap_or_else(|| language.text("プロジェクト").into());
                 if last_section.as_ref() != Some(&section) {
                     projects.push(SidebarRow::Heading(section.clone()));
                     last_section = Some(section);
@@ -491,13 +494,13 @@ impl Desktop {
                     ));
                 }
                 if project.loading && !project.has_more {
-                    projects.push(SidebarMenuItem::new("読み込み中…").into());
+                    projects.push(SidebarMenuItem::new(language.text("読み込み中…")).into());
                 }
                 if let Some(error) = &project.error {
                     projects.push(SidebarMenuItem::new(error.clone()).into());
                     let retry_id = id.clone();
                     projects.push(
-                        SidebarMenuItem::new("再試行")
+                        SidebarMenuItem::new(language.text("再試行"))
                             .on_click(cx.listener(move |s, _, _, cx| {
                                 s.dispatch(Intent::RefreshProject {
                                     project_id: retry_id.clone(),
@@ -508,7 +511,7 @@ impl Desktop {
                     );
                 }
                 if project.has_more {
-                    let mut more = SidebarMenuItem::new("もっと表示する")
+                    let mut more = SidebarMenuItem::new(language.text("もっと表示する"))
                         .icon(Icon::empty().size_4())
                         .on_click(cx.listener(move |s, _, _, cx| {
                             s.dispatch(Intent::ExpandThreadList {
@@ -524,12 +527,11 @@ impl Desktop {
             }
         }
         if list.as_ref().is_some_and(|page| page.has_more_projects) {
-            let mut more = SidebarMenuItem::new("もっとプロジェクトを表示").on_click(cx.listener(
-                |s, _, _, cx| {
+            let mut more = SidebarMenuItem::new(language.text("もっとプロジェクトを表示"))
+                .on_click(cx.listener(|s, _, _, cx| {
                     s.dispatch(Intent::ExpandProjects);
                     cx.notify();
-                },
-            ));
+                }));
             if list.as_ref().is_some_and(|page| page.loading_projects) {
                 more = more.suffix(|_, _| crate::activity::indicator());
             }
@@ -544,15 +546,19 @@ impl Desktop {
             for project in &list.hidden_projects {
                 let id = project.id.clone();
                 projects.push(
-                    SidebarMenuItem::new(format!("一覧に戻す: {}", project.name))
-                        .on_click(cx.listener(move |s, _, _, cx| {
-                            s.dispatch(Intent::SetProjectHidden {
-                                project_id: id.clone(),
-                                hidden: false,
-                            });
-                            cx.notify();
-                        }))
-                        .into(),
+                    SidebarMenuItem::new(agent_core::localization::localized_ui_format(
+                        language,
+                        "一覧に戻す: {0}".into(),
+                        vec![project.name.clone()],
+                    ))
+                    .on_click(cx.listener(move |s, _, _, cx| {
+                        s.dispatch(Intent::SetProjectHidden {
+                            project_id: id.clone(),
+                            hidden: false,
+                        });
+                        cx.notify();
+                    }))
+                    .into(),
                 );
             }
         }
@@ -565,6 +571,7 @@ impl Desktop {
         app_updates: Option<Entity<crate::updates::Updates>>,
         cx: &Context<Self>,
     ) -> Sidebar<SidebarSection> {
+        let language = crate::localization::language(cx);
         let list = &model.list;
         let loading_session_list = model.loading_session_list;
         let projects = Self::project_sidebar_rows(model, cx);
@@ -585,11 +592,12 @@ impl Desktop {
             })
             .unwrap_or_default();
         if list.as_ref().is_some_and(|page| page.has_more) {
-            let mut more =
-                SidebarMenuItem::new("もっと表示する").on_click(cx.listener(|s, _, _, cx| {
+            let mut more = SidebarMenuItem::new(language.text("もっと表示する")).on_click(
+                cx.listener(|s, _, _, cx| {
                     s.dispatch(Intent::ExpandThreadList { project_id: None });
                     cx.notify();
-                }));
+                }),
+            );
             if list.as_ref().is_some_and(|page| page.loading_chats) {
                 more = more.suffix(|_, _| crate::activity::indicator());
             }
@@ -625,14 +633,14 @@ impl Desktop {
                                         .small()
                                         .prefix(IconName::Search)
                                         .appearance(false)
-                                        .aria_label("会話を検索"),
+                                        .aria_label(language.text("会話を検索")),
                                 ),
                             )
                             .child(
                                 icon_button(
                                     "new-chat",
                                     new_chat_icon(),
-                                    "新しいチャット",
+                                    language.text("新しいチャット"),
                                     cx,
                                     |s, window, cx| s.new_chat(String::new(), window, cx),
                                 )
@@ -641,13 +649,13 @@ impl Desktop {
                     ),
             )
             .child(SidebarSection {
-                label: "プロジェクト",
+                label: language.text("プロジェクト"),
                 menu: projects,
                 collapsed: false,
                 add_project: Some((cx.weak_entity(), model.connected && model.local)),
             })
             .child(SidebarSection {
-                label: "チャット",
+                label: language.text("チャット"),
                 menu: chats,
                 collapsed: false,
                 add_project: None,
@@ -662,7 +670,7 @@ impl Desktop {
                         icon_button(
                             "sidebar-settings",
                             IconName::Settings,
-                            "設定を開く",
+                            language.text("設定を開く"),
                             cx,
                             |s, _, cx| {
                                 s.open_settings();
@@ -679,7 +687,7 @@ impl Desktop {
                         icon_button(
                             "refresh-threads",
                             IconName::RotateCw,
-                            "会話を更新",
+                            language.text("会話を更新"),
                             cx,
                             |s, _, _| s.refresh_threads(),
                         )
@@ -708,6 +716,7 @@ impl Desktop {
         selected: bool,
         cx: &Context<Self>,
     ) -> SidebarMenuItem {
+        let language = crate::localization::language(cx);
         let id = thread.id.clone();
         let active = thread.active;
         let unread = thread.unread;
@@ -715,13 +724,13 @@ impl Desktop {
             agent_protocol::models::WorktreeStatus::Unmerged => (
                 "icons/diff.svg",
                 0xfb923c,
-                "main に未反映の変更あり",
+                language.text("main に未反映の変更あり"),
                 format!("thread-unmerged-{}", thread.id),
             ),
             agent_protocol::models::WorktreeStatus::Merged => (
                 "icons/merge.svg",
                 0xa78bfa,
-                "main にマージ済み",
+                language.text("main にマージ済み"),
                 format!("thread-merged-{}", thread.id),
             ),
         });

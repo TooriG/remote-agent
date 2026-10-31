@@ -41,6 +41,7 @@ internal fun TerminalDialog(
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
     dismiss: () -> Unit,
 ) {
+    val language = LocalUiLanguage.current
     val cwd = snapshot.navigation().cwd
     val handle = remember(cwd) { terminalHandle(cwd) }
     var terminated by remember { mutableStateOf(false) }
@@ -58,7 +59,7 @@ internal fun TerminalDialog(
                     terminal.status?.let { Text(it) }
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    TextButton(onClick = dismiss) { Text("閉じる") }
+                    TextButton(onClick = dismiss) { Text(language.text("閉じる")) }
                     TextButton(
                         onClick = {
                             perform(Intent.KillTerminal(KillTerminal(handle))) {
@@ -69,7 +70,7 @@ internal fun TerminalDialog(
                             }
                         }
                     ) {
-                        Text("終了")
+                        Text(language.text("終了"))
                     }
                 }
                 TerminalBody(snapshot, handle, cwd, perform, Modifier.weight(1f))
@@ -163,7 +164,8 @@ private fun TerminalKeys(terminal: NativeTerminal?) {
 
 @Composable
 internal fun TerminalLauncher(snapshot: Snapshot, perform: (Intent, (Result<Outcome>) -> Unit) -> Unit) {
+    val language = LocalUiLanguage.current
     var visible by remember { mutableStateOf(false) }
-    TextButton(onClick = { visible = true }) { Text("ターミナル") }
+    TextButton(onClick = { visible = true }) { Text(language.text("ターミナル")) }
     if (visible) TerminalDialog(snapshot, perform) { visible = false }
 }

@@ -59,6 +59,7 @@ impl ConversationSelection {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let language = crate::localization::language(cx);
         self.clear(cx);
         let text = TextSelection::selected_text(window, cx);
         let previous_focus = window.focused(cx);
@@ -66,21 +67,25 @@ impl ConversationSelection {
             let menu = menu.when_some(previous_focus, |menu, focus| menu.action_context(focus));
             let menu = menu.when_some(link, |menu, link| {
                 menu.item(
-                    PopupMenuItem::new("リンクをコピー").on_click(move |_, _, cx| {
-                        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(link.clone()));
-                    }),
+                    PopupMenuItem::new(language.text("リンクをコピー")).on_click(
+                        move |_, _, cx| {
+                            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+                                link.clone(),
+                            ));
+                        },
+                    ),
                 )
             });
             let query = text.clone();
             menu.item(
-                PopupMenuItem::new("コピー")
+                PopupMenuItem::new(language.text("コピー"))
                     .disabled(text.is_empty())
                     .on_click(move |_, _, cx| {
                         cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text.clone()));
                     }),
             )
             .item(
-                PopupMenuItem::new("Googleで検索")
+                PopupMenuItem::new(language.text("Googleで検索"))
                     .disabled(query.is_empty())
                     .on_click(move |_, _, cx| cx.open_url(search_url(&query).as_str())),
             )
@@ -133,6 +138,7 @@ impl ConversationSelection {
 
 impl Render for ConversationSelection {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let language = crate::localization::language(cx);
         let owner = cx.entity();
         let capture = self.pending.take().map(|position| {
             canvas(
@@ -180,7 +186,7 @@ impl Render for ConversationSelection {
             .child(
                 Button::new("selection-add")
                     .debug_selector(|| "selection-add".into())
-                    .label("チャットに追加")
+                    .label(language.text("チャットに追加"))
                     .small()
                     .ghost()
                     .on_click(cx.listener(move |view, _, _, cx| {
@@ -191,7 +197,7 @@ impl Render for ConversationSelection {
             .child(
                 Button::new("selection-details")
                     .debug_selector(|| "selection-details".into())
-                    .label("詳細を表示")
+                    .label(language.text("詳細を表示"))
                     .small()
                     .ghost()
                     .on_click(cx.listener(move |view, _, _, cx| {
@@ -203,7 +209,7 @@ impl Render for ConversationSelection {
                 menu.child(
                     Button::new("selection-side-chat")
                         .debug_selector(|| "selection-side-chat".into())
-                        .label("サイドチャットで質問")
+                        .label(language.text("サイドチャットで質問"))
                         .small()
                         .ghost()
                         .on_click(cx.listener(move |view, _, _, cx| {

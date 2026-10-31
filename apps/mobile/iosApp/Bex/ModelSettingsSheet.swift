@@ -118,7 +118,7 @@ struct ModelSettingsScreen: View {
         }
         .accessibilityIdentifier("model.picker")
         .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "モデルを検索")
-        .navigationTitle(defaults ? "モデルのデフォルト" : "モデル設定")
+        .navigationTitle(LocalizedStringKey(defaults ? "モデルのデフォルト" : "モデル設定"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
@@ -214,7 +214,7 @@ extension ModelSettingsScreen {
                 .disabled(disabled)
             }
             if choices.isEmpty {
-                Text(loadingModels ? "モデルを読み込み中…" : "利用可能なモデルがありません")
+                AppText(loadingModels ? "モデルを読み込み中…" : "利用可能なモデルがありません")
                     .foregroundStyle(.secondary)
             }
             ForEach(choices, id: \.model) { choice in
@@ -238,7 +238,7 @@ extension ModelSettingsScreen {
         }
         .foregroundStyle(.primary)
         ForEach(model.snapshot.modelErrorMessages(provider: provider), id: \.self) { error in
-            Text(accountErrorMessage(message: error)).font(.caption).foregroundStyle(.red)
+            AppText(accountErrorMessage(message: error)).font(.caption).foregroundStyle(.red)
                 .accessibilityIdentifier("model.error")
         }
     }

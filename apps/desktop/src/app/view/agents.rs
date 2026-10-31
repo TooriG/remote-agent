@@ -3,6 +3,7 @@ use super::*;
 impl Desktop {
     pub(super) fn agents_panel(
         agents: &[agent_core::presentation::agents::AgentSummary],
+        language: agent_core::localization::UiLanguage,
     ) -> AnyElement {
         let working = agents.iter().filter(|agent| agent.active).count();
         v_flex()
@@ -15,13 +16,19 @@ impl Desktop {
                 h_flex()
                     .gap_2()
                     .child(IconName::Network)
-                    .child(div().flex_1().font_semibold().child("エージェント"))
                     .child(
                         div()
-                            .text_sm()
-                            .text_color(rgb(appearance::MUTED))
-                            .child(format!("{working} 件が実行中")),
-                    ),
+                            .flex_1()
+                            .font_semibold()
+                            .child(language.text("エージェント")),
+                    )
+                    .child(div().text_sm().text_color(rgb(appearance::MUTED)).child(
+                        agent_core::localization::localized_ui_format(
+                            language,
+                            "{0} 件が実行中".into(),
+                            vec![working.to_string()],
+                        ),
+                    )),
             )
             .child(
                 div()
@@ -34,10 +41,11 @@ impl Desktop {
                             .gap_2()
                             .when(agents.is_empty(), |list| {
                                 list.child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(rgb(appearance::MUTED))
-                                        .child("サブエージェントが起動するとここに表示されます。"),
+                                    div().text_sm().text_color(rgb(appearance::MUTED)).child(
+                                        language.text(
+                                            "サブエージェントが起動するとここに表示されます。",
+                                        ),
+                                    ),
                                 )
                             })
                             .children(agents.iter().map(|agent| {
@@ -78,7 +86,12 @@ impl Desktop {
                                                 div()
                                                     .text_xs()
                                                     .text_color(rgb(appearance::MUTED))
-                                                    .child(agent.status.clone()),
+                                                    .child(
+                                                        agent_core::localization::localized_ui_text(
+                                                            language,
+                                                            agent.status.clone(),
+                                                        ),
+                                                    ),
                                             ),
                                     )
                                     .child(

@@ -54,10 +54,12 @@ pub(super) struct Hosts {
     busy: bool,
     connecting: bool,
     error: Option<String>,
+    _language: Subscription,
 }
 impl EventEmitter<HostEvent> for Hosts {}
 impl Hosts {
     pub(super) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let language = crate::localization::language(cx);
         StoreSession::on_app_quit(cx, |view| &mut view.session);
         let (updates, incoming) = async_channel::unbounded();
         cx.spawn_in(window, async move |view, cx| {
@@ -78,7 +80,7 @@ impl Hosts {
             updates,
             pairing: cx.new(|cx| {
                 TextareaState::new(window, cx)
-                    .placeholder("相手の端末で発行した招待を貼り付け")
+                    .placeholder(language.text("相手の端末で発行した招待を貼り付け"))
                     .auto_grow(3, 6)
             }),
             ssh: cx.new(|cx| InputState::new(window, cx).placeholder("user@your-server")),
@@ -88,6 +90,20 @@ impl Hosts {
             busy: false,
             connecting: false,
             error: None,
+            _language: cx.observe_global_in::<crate::localization::Language>(
+                window,
+                |view, window, cx| {
+                    let language = crate::localization::language(cx);
+                    view.pairing.update(cx, |input, cx| {
+                        input.set_placeholder(
+                            language.text("相手の端末で発行した招待を貼り付け"),
+                            window,
+                            cx,
+                        )
+                    });
+                    cx.notify();
+                },
+            ),
         };
         view.connect();
         view
@@ -245,6 +261,7 @@ impl Hosts {
         agent_controls: Div,
         cx: &Context<Self>,
     ) -> Div {
+        let language = crate::localization::language(cx);
         let cards = layout == ConnectionLayout::Onboarding;
         let mut agent_controls = Some(agent_controls);
         let mut choices = v_flex()
@@ -261,17 +278,17 @@ impl Hosts {
         {
             let selected = current == remote.map(|host| host.id.as_str());
             let destination = remote.cloned();
-            let name = remote.map_or("このPC", |host| host.name.as_str());
+            let name = remote.map_or(language.text("このPC"), |host| host.name.as_str());
             let label = if selected {
                 if connected {
-                    "接続済み"
+                    language.text("接続済み")
                 } else {
-                    "接続中…"
+                    language.text("接続中…")
                 }
             } else if remote.is_none() && self.snapshot.connected {
-                "利用可能"
+                language.text("利用可能")
             } else {
-                "保存済み"
+                language.text("保存済み")
             };
             let mut card = v_flex()
                 .gap_3()
@@ -330,8 +347,8 @@ impl Hosts {
                                     .icon(IconName::Close)
                                     .small()
                                     .ghost()
-                                    .accessibility_label("保存した接続を削除")
-                                    .tooltip("保存した接続を削除")
+                                    .accessibility_label(language.text("保存した接続を削除"))
+                                    .tooltip(language.text("保存した接続を削除"))
                                     .disabled(self.busy || !self.snapshot.connected)
                                     .on_click(cx.listener(move |view, _, _, cx| {
                                         view.dispatch(
@@ -367,9 +384,9 @@ impl Hosts {
         choices = choices.child(
             Button::new("onboarding-add-remote")
                 .accessibility_label(if cards {
-                    "クラウドVM・別のPCに接続"
+                    language.text("クラウドVM・別のPCに接続")
                 } else {
-                    "接続先を追加"
+                    language.text("接続先を追加")
                 })
                 .child(
                     h_flex()
@@ -381,9 +398,9 @@ impl Hosts {
                             IconName::Plus
                         }))
                         .child(if cards {
-                            "クラウドVM・別のPCに接続"
+                            language.text("クラウドVM・別のPCに接続")
                         } else {
-                            "接続先を追加"
+                            language.text("接続先を追加")
                         }),
                 )
                 .ghost()
@@ -392,7 +409,7 @@ impl Hosts {
                     button.h(px(48.)).px_4().text_color(rgb(0x8bb7f9))
                 })
                 .disabled(self.busy)
-                .on_click(cx.listener(|view, _, _, cx| {
+                .on_click(cx.listener(move |view, _, _, cx| {
                     view.adding_remote = !view.adding_remote;
                     view.error = None;
                     cx.notify();
@@ -402,8 +419,12 @@ impl Hosts {
             let disabled = self.busy || !self.snapshot.connected;
             let mut methods = h_flex().gap_2();
             for (id, label, use_ssh) in [
-                ("onboarding-use-ssh", "SSHで接続", true),
-                ("onboarding-use-invitation", "接続情報を貼り付け", false),
+                ("onboarding-use-ssh", language.text("SSHで接続"), true),
+                (
+                    "onboarding-use-invitation",
+                    language.text("接続情報を貼り付け"),
+                    false,
+                ),
             ] {
                 methods = methods.child(
                     Button::new(id)
@@ -430,19 +451,21 @@ impl Hosts {
                 .child(methods);
             if self.use_ssh {
                 form =
-                    form.child("SSH接続先")
+                    form.child(language.text("SSH接続先"))
                         .child(
                             Input::new(&self.ssh)
-                                .aria_label("SSH接続先")
+                                .aria_label(language.text("SSH接続先"))
                                 .disabled(disabled),
                         )
                         .child(div().text_xs().text_color(rgb(appearance::MUTED)).child(
-                            "SSHの鍵で接続でき、Bex Hostを起動済みのサーバーにつなぎます。",
+                            language.text(
+                                "SSHの鍵で接続でき、Bex Hostを起動済みのサーバーにつなぎます。",
+                            ),
                         ));
             } else {
                 form = form.child(
                     Textarea::new(&self.pairing)
-                        .aria_label("接続情報")
+                        .aria_label(language.text("接続情報"))
                         .readonly(disabled),
                 );
             }
@@ -450,9 +473,13 @@ impl Hosts {
                 choices.child(
                     form.child(
                         Button::new("onboarding-pair")
-                            .label(if self.busy { "接続中…" } else { "接続" })
+                            .label(if self.busy {
+                                language.text("接続中…")
+                            } else {
+                                language.text("接続")
+                            })
                             .disabled(disabled)
-                            .on_click(cx.listener(|view, _, _, cx| {
+                            .on_click(cx.listener(move |view, _, _, cx| {
                                 if view.use_ssh {
                                     view.busy = true;
                                     view.error = None;
@@ -469,7 +496,7 @@ impl Hosts {
                                     ) {
                                         Ok(invitation) => view.pair(invitation),
                                         Err(_) => view.error = Some(
-                                            "接続先で発行したBexの接続情報を貼り付けてください。"
+                                            language.text("接続先で発行したBexの接続情報を貼り付けてください。")
                                                 .into(),
                                         ),
                                     }
@@ -489,8 +516,8 @@ impl Hosts {
                 .border_color(rgb(appearance::BORDER))
                 .text_color(rgb(appearance::MUTED))
                 .child(Icon::new(IconName::Network))
-                .child(div().flex_1().child("Bexの実行環境"))
-                .child(div().text_xs().child("今後対応")),
+                .child(div().flex_1().child(language.text("Bexの実行環境")))
+                .child(div().text_xs().child(language.text("今後対応"))),
         );
         if let Some(error) = self.error.as_ref().or(self.snapshot.error.as_ref()) {
             choices = choices.child(
@@ -510,6 +537,7 @@ impl Hosts {
         disabled: bool,
         cx: &App,
     ) -> impl IntoElement {
+        let language = crate::localization::language(cx);
         let view = owner.read(cx);
         let hosts = &view.snapshot.management.remotes;
         let name: SharedString = current
@@ -524,8 +552,16 @@ impl Hosts {
         Button::new(id)
             .debug_selector(move || id.into())
             .disabled(disabled)
-            .accessibility_label(format!("実行先: {name}"))
-            .tooltip(format!("実行先: {name}"))
+            .accessibility_label(agent_core::localization::localized_ui_format(
+                language,
+                "実行先: {0}".into(),
+                vec![name.to_string()],
+            ))
+            .tooltip(agent_core::localization::localized_ui_format(
+                language,
+                "実行先: {0}".into(),
+                vec![name.to_string()],
+            ))
             .label(name)
             .icon(Icon::default().path("icons/monitor.svg"))
             .dropdown_caret(true)
@@ -537,7 +573,7 @@ impl Hosts {
             .dropdown_menu(move |mut menu, _, _| {
                 let local = owner.clone();
                 menu = menu.item(
-                    PopupMenuItem::new("この端末")
+                    PopupMenuItem::new(language.text("この端末"))
                         .checked(current.is_none())
                         .on_click(move |_, _, cx| {
                             let _ = local.update(cx, |_, cx| cx.emit(HostEvent::Selected(None)));
@@ -562,6 +598,7 @@ impl Hosts {
 }
 impl Render for Hosts {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let language = crate::localization::language(cx);
         let disabled = !self.snapshot.connected || self.busy;
         let mut body = v_flex().w_full().gap_5();
         if !self.snapshot.connected {
@@ -569,17 +606,17 @@ impl Render for Hosts {
                 .child(
                     div()
                         .text_color(rgb(appearance::MUTED))
-                        .child("このPCの接続情報を読み込めません。"),
+                        .child(language.text("このPCの接続情報を読み込めません。")),
                 )
                 .child(
                     Button::new("connect-host")
                         .label(if self.connecting {
-                            "接続中…"
+                            language.text("接続中…")
                         } else {
-                            "Host に接続"
+                            language.text("Host に接続")
                         })
                         .disabled(self.connecting)
-                        .on_click(cx.listener(|view, _, _, cx| {
+                        .on_click(cx.listener(move |view, _, _, cx| {
                             view.connect();
                             cx.notify();
                         })),
@@ -593,19 +630,19 @@ impl Render for Hosts {
                 .gap_4()
                 .child(
                     section_heading(
-                        "スマートフォンから接続",
-                        "このPCの会話を、iPhoneやAndroidから続けられます。",
+                        language.text("スマートフォンから接続"),
+                        language.text("このPCの会話を、iPhoneやAndroidから続けられます。"),
                     )
                     .flex_1()
                     .min_w(px(220.)),
                 )
                 .child(
                     Button::new("invite")
-                        .label("接続用QRを表示")
+                        .label(language.text("接続用QRを表示"))
                         .icon(Icon::default().path("icons/qr-code.svg"))
                         .primary()
                         .disabled(disabled)
-                        .on_click(cx.listener(|view, _, _, cx| {
+                        .on_click(cx.listener(move |view, _, _, cx| {
                             view.dispatch(
                                 Intent::CreateInvitation(op::CreateInvitation {}),
                                 Action::Invite,
@@ -620,55 +657,57 @@ impl Render for Hosts {
                     .border_1().border_color(rgb(appearance::BORDER))
                     .child(img(file.path().to_path_buf()).w(px(200.)).h(px(200.)))
                     .child(v_flex().flex_1().min_w(px(200.)).gap_3()
-                        .child(div().font_semibold().child("BexアプリでQRを読み取る"))
+                        .child(div().font_semibold().child(language.text("BexアプリでQRを読み取る")))
                         .child(div().text_sm().text_color(rgb(appearance::MUTED))
-                            .child("1回限りの招待です。QRを読み取るか、招待をコピーして相手の端末に貼り付けてください。"))
+                            .child(language.text("1回限りの招待です。QRを読み取るか、招待をコピーして相手の端末に貼り付けてください。")))
                         .child(Button::new("copy-invite")
-                            .label("招待をコピー")
+                            .label(language.text("招待をコピー"))
                             .icon(IconName::Copy)
                             .ghost()
-                            .on_click(cx.listener(|view, _, _, cx| {
+                            .on_click(cx.listener(move |view, _, _, cx| {
                                 if let Some((text, _)) = &view.invitation {
                                     cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
                                 }
                             })))),
             );
         }
-        let mut devices = v_flex()
-            .gap_3()
-            .pt_6()
-            .border_t_1()
-            .border_color(rgb(appearance::BORDER))
-            .child(
-                h_flex()
-                    .items_center()
-                    .gap_3()
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .gap_1()
-                            .child(div().font_semibold().child("接続を許可した端末"))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(rgb(appearance::MUTED))
-                                    .child("このPCへアクセスできる端末を管理します。"),
-                            ),
-                    )
-                    .child(
-                        Button::new("refresh-hosts")
-                            .icon(IconName::RotateCw)
-                            .small()
-                            .ghost()
-                            .accessibility_label("接続一覧を更新")
-                            .tooltip("接続一覧を更新")
-                            .disabled(disabled)
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.refresh();
-                                cx.notify();
-                            })),
-                    ),
-            );
+        let mut devices =
+            v_flex()
+                .gap_3()
+                .pt_6()
+                .border_t_1()
+                .border_color(rgb(appearance::BORDER))
+                .child(
+                    h_flex()
+                        .items_center()
+                        .gap_3()
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .font_semibold()
+                                        .child(language.text("接続を許可した端末")),
+                                )
+                                .child(div().text_sm().text_color(rgb(appearance::MUTED)).child(
+                                    language.text("このPCへアクセスできる端末を管理します。"),
+                                )),
+                        )
+                        .child(
+                            Button::new("refresh-hosts")
+                                .icon(IconName::RotateCw)
+                                .small()
+                                .ghost()
+                                .accessibility_label(language.text("接続一覧を更新"))
+                                .tooltip(language.text("接続一覧を更新"))
+                                .disabled(disabled)
+                                .on_click(cx.listener(move |view, _, _, cx| {
+                                    view.refresh();
+                                    cx.notify();
+                                })),
+                        ),
+                );
         if let Some(status) = &self.snapshot.management.status {
             let mut list = v_flex()
                 .rounded(px(10.))
@@ -681,7 +720,7 @@ impl Render for Hosts {
                         .p_4()
                         .text_sm()
                         .text_color(rgb(appearance::MUTED))
-                        .child("接続を許可した端末はありません。"),
+                        .child(language.text("接続を許可した端末はありません。")),
                 );
             }
             for (index, device) in status.devices.iter().enumerate() {
@@ -700,14 +739,11 @@ impl Render for Hosts {
                                 .flex_1()
                                 .min_w_0()
                                 .gap_1()
-                                .child(
-                                    div().text_ellipsis().child(
-                                        device
-                                            .name
-                                            .clone()
-                                            .unwrap_or_else(|| "名前未取得の端末".into()),
-                                    ),
-                                )
+                                .child(div().text_ellipsis().child(
+                                    device.name.clone().unwrap_or_else(|| {
+                                        language.text("名前未取得の端末").into()
+                                    }),
+                                ))
                                 .child(
                                     div()
                                         .text_xs()
@@ -718,7 +754,7 @@ impl Render for Hosts {
                         )
                         .child(
                             Button::new(format!("revoke-{index}"))
-                                .label("接続を解除")
+                                .label(language.text("接続を解除"))
                                 .small()
                                 .ghost()
                                 .text_color(rgb(0x8bb7f9))
@@ -739,7 +775,7 @@ impl Render for Hosts {
                 div()
                     .text_sm()
                     .text_color(rgb(appearance::MUTED))
-                    .child("端末を読み込み中…"),
+                    .child(language.text("端末を読み込み中…")),
             );
         }
         body.child(devices).into_any_element()

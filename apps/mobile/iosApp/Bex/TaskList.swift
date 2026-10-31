@@ -199,7 +199,7 @@ struct ThreadsScreen: View {
                         if model.isConnecting || model.threadLoadState == .loading {
                             ProgressView().controlSize(.mini)
                                 .tint(model.isConnecting ? .red : .green)
-                                .accessibilityLabel(model.isConnecting ? "接続中" : "読み込み中")
+                                .accessibilityLabel(LocalizedStringKey(model.isConnecting ? "接続中" : "読み込み中"))
                                 .accessibilityIdentifier("connection.progress")
                         } else {
                             Circle().fill(model.isConnected ? Color.blue : Color.red).frame(width: 6, height: 6)
@@ -304,7 +304,7 @@ private struct ThreadListRow: View {
                         .resizable()
                         .frame(width: 18, height: 18)
                         .foregroundStyle(unmerged ? .orange : .purple)
-                        .accessibilityLabel(unmerged ? "main に未反映の変更あり" : "main にマージ済み")
+                        .accessibilityLabel(LocalizedStringKey(unmerged ? "main に未反映の変更あり" : "main にマージ済み"))
                         .accessibilityIdentifier(
                             "tasks.\(unmerged ? "unmerged" : "merged").\(accessibilityID)"
                         )

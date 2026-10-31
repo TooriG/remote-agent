@@ -11,6 +11,7 @@ impl ConversationView {
         node: &MarkdownNode,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let language = crate::localization::language(cx);
         let Some(diagram) = node.data::<MarkdownDiagram>() else {
             return div().into_any_element();
         };
@@ -29,9 +30,9 @@ impl ConversationView {
             .child(
                 Button::new("diagram-source")
                     .label(if source_visible {
-                        "図を表示"
+                        language.text("図を表示")
                     } else {
-                        "ソース"
+                        language.text("ソース")
                     })
                     .small()
                     .ghost()
@@ -45,7 +46,11 @@ impl ConversationView {
             )
             .child(
                 Button::new("diagram-size")
-                    .label(if large { "縮小" } else { "拡大" })
+                    .label(if large {
+                        language.text("縮小")
+                    } else {
+                        language.text("拡大")
+                    })
                     .small()
                     .ghost()
                     .on_click(cx.listener(move |view, _, _, cx| {
@@ -61,7 +66,7 @@ impl ConversationView {
                     .icon(IconName::Copy)
                     .small()
                     .ghost()
-                    .tooltip("Mermaidをコピー")
+                    .tooltip(language.text("Mermaidをコピー"))
                     .on_click(move |_, _, cx| {
                         cx.write_to_clipboard(ClipboardItem::new_string(source.clone()))
                     }),

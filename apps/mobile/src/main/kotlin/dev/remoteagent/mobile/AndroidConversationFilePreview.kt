@@ -58,6 +58,7 @@ internal fun ConversationFilePreview(
     perform: ((Intent, (Result<Outcome>) -> Unit) -> Unit)?,
     dismiss: () -> Unit,
 ) {
+    val language = LocalUiLanguage.current
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     val target = remember(reference.path) { File(context.cacheDir, "preview-${UUID.randomUUID()}") }
@@ -75,7 +76,7 @@ internal fun ConversationFilePreview(
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             throw cancelled
         } catch (expectedFailure: Exception) {
-            error = expectedFailure.message ?: "ファイルを開けません"
+            error = expectedFailure.message ?: language.text("ファイルを開けません")
         } finally {
             loading = false
         }
@@ -87,7 +88,7 @@ internal fun ConversationFilePreview(
             Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState())) {
                 SelectionContainer {
                     Text(
-                        reference.path.takeUnless { it.startsWith("data:image/") } ?: "添付画像",
+                        reference.path.takeUnless { it.startsWith("data:image/") } ?: language.text("添付画像"),
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -105,9 +106,11 @@ internal fun ConversationFilePreview(
                 }
             }
         },
-        confirmButton = { TextButton(onClick = dismiss) { Text("閉じる") } },
+        confirmButton = { TextButton(onClick = dismiss) { Text(language.text("閉じる")) } },
         dismissButton = {
-            TextButton(onClick = { clipboard.setText(AnnotatedString(reference.path)) }) { Text("パスをコピー") }
+            TextButton(onClick = { clipboard.setText(AnnotatedString(reference.path)) }) {
+                Text(language.text("パスをコピー"))
+            }
         },
     )
 }
@@ -156,8 +159,12 @@ private fun PreviewText(
     cwd: String,
     perform: ((Intent, (Result<Outcome>) -> Unit) -> Unit)?,
 ) {
+    val language = LocalUiLanguage.current
     var rendered by remember(text) { mutableStateOf(markdown) }
-    if (markdown) TextButton(onClick = { rendered = !rendered }) { Text(if (rendered) "ソースを表示" else "Markdownを表示") }
+    if (markdown)
+        TextButton(onClick = { rendered = !rendered }) {
+            Text(if (rendered) language.text("ソースを表示") else language.text("Markdownを表示"))
+        }
     if (rendered) Column { ConversationBody(text, cwd, perform) }
     else
         SelectionContainer {
@@ -192,10 +199,11 @@ private suspend fun downloadPreview(
 
 @Composable
 private fun PreviewPages(page: Int, pages: Int, previous: () -> Unit, next: () -> Unit) {
+    val language = LocalUiLanguage.current
     if (pages > 1)
         Row {
-            TextButton(onClick = previous, enabled = page > 0) { Text("前") }
+            TextButton(onClick = previous, enabled = page > 0) { Text(language.text("前")) }
             Text("${page + 1} / $pages")
-            TextButton(onClick = next, enabled = page + 1 < pages) { Text("次") }
+            TextButton(onClick = next, enabled = page + 1 < pages) { Text(language.text("次")) }
         }
 }

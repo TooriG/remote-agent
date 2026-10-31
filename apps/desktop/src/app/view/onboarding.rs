@@ -8,6 +8,7 @@ impl Desktop {
         agents: &[ConnectionAgent],
         cx: &Context<Self>,
     ) -> Div {
+        let language = crate::localization::language(cx);
         let login_provider = self.account_provider();
         let login = self.snapshot.account.login.is_some();
         let disabled = !self.snapshot.connected || self.account.busy || login;
@@ -15,7 +16,7 @@ impl Desktop {
             div()
                 .text_xs()
                 .text_color(rgb(appearance::MUTED))
-                .child("この環境で使えるAI"),
+                .child(language.text("この環境で使えるAI")),
         );
         for agent in agents {
             let provider = agent.provider;
@@ -38,9 +39,12 @@ impl Desktop {
                             rgb(appearance::MUTED)
                         })
                         .child(if pending {
-                            "接続中…".into()
+                            language.text("接続中…").into()
                         } else {
-                            agent.label.clone()
+                            agent_core::localization::localized_ui_text(
+                                language,
+                                agent.label.clone(),
+                            )
                         }),
                 );
             if matches!(
@@ -49,9 +53,14 @@ impl Desktop {
             ) {
                 let id = format!("connection-agent-{}", agent.name);
                 row = row.child(
-                    button(id.clone(), "ログイン", cx, move |view, window, cx| {
-                        view.start_provider_setup(provider, window, cx);
-                    })
+                    button(
+                        id.clone(),
+                        language.text("ログイン"),
+                        cx,
+                        move |view, window, cx| {
+                            view.start_provider_setup(provider, window, cx);
+                        },
+                    )
                     .debug_selector(move || id.clone())
                     .small()
                     .ghost()
@@ -74,7 +83,7 @@ impl Desktop {
                         .child(
                             button(
                                 format!("connection-agent-retry-{}", provider.key()),
-                                "再確認",
+                                language.text("再確認"),
                                 cx,
                                 |view, _, _| view.refresh_accounts_and_models(),
                             )
@@ -118,6 +127,7 @@ impl Desktop {
     }
 
     pub(super) fn onboarding_view(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+        let language = crate::localization::language(cx);
         if self.import_projects {
             return self.project_import_view(window, cx);
         }
@@ -144,6 +154,7 @@ impl Desktop {
             .flex_shrink_0()
             .gap_5()
             .p_6()
+            .child(self.language_settings(cx))
             .child(
                 v_flex()
                     .gap_2()
@@ -151,13 +162,11 @@ impl Desktop {
                         div()
                             .text_size(px(24.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child("どこで作業しますか？"),
+                            .child(language.text("どこで作業しますか？")),
                     )
-                    .child(
-                        div()
-                            .text_color(rgb(appearance::MUTED))
-                            .child("手元のPCでも、クラウドでも。いつもの環境でAIを使えます。"),
-                    ),
+                    .child(div().text_color(rgb(appearance::MUTED)).child(
+                        language.text("手元のPCでも、クラウドでも。いつもの環境でAIを使えます。"),
+                    )),
             )
             .children(choices);
         body = body
@@ -165,13 +174,13 @@ impl Desktop {
             .child(self.error_notices(ErrorScope::Settings, cx))
             .child(self.error_notices(ErrorScope::Application, cx));
         let start_label = if self.connecting || !connected {
-            "接続中…"
+            language.text("接続中…")
         } else if setup.can_start {
-            "プロジェクトを選ぶ"
+            language.text("プロジェクトを選ぶ")
         } else if checking {
-            "AIを確認中…"
+            language.text("AIを確認中…")
         } else {
-            "AIにログインしてください"
+            language.text("AIにログインしてください")
         };
         let footer = h_flex()
             .flex_shrink_0()
@@ -187,12 +196,12 @@ impl Desktop {
                     .min_w_0()
                     .text_xs()
                     .text_color(rgb(appearance::MUTED))
-                    .child("次に、既存のプロジェクトを選んで取り込めます。"),
+                    .child(language.text("次に、既存のプロジェクトを選んで取り込めます。")),
             )
             .children((!setup.can_start).then(|| {
                 button(
                     "onboarding-skip-agents",
-                    "AIは後で設定",
+                    language.text("AIは後で設定"),
                     cx,
                     |view, _, _| {
                         view.open_project_import();
@@ -221,6 +230,7 @@ impl Desktop {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Div {
+        let language = crate::localization::language(cx);
         v_flex()
             .size_full()
             .items_center()
@@ -258,12 +268,12 @@ impl Desktop {
                             .child(div().flex_1().text_color(rgb(appearance::MUTED)).child(
                                 if self.import_projects {
                                     if self.onboarding {
-                                        "2 / 2 プロジェクトの取り込み"
+                                        language.text("2 / 2 プロジェクトの取り込み")
                                     } else {
-                                        "プロジェクトの取り込み"
+                                        language.text("プロジェクトの取り込み")
                                     }
                                 } else {
-                                    "1 / 2 環境とAI"
+                                    language.text("1 / 2 環境とAI")
                                 },
                             ))
                             .child(
@@ -271,9 +281,9 @@ impl Desktop {
                                     "onboarding-refresh",
                                     IconName::RotateCw,
                                     if self.import_projects {
-                                        "既存のプロジェクトを再検索"
+                                        language.text("既存のプロジェクトを再検索")
                                     } else {
-                                        "接続とAIの状態を再確認"
+                                        language.text("接続とAIの状態を再確認")
                                     },
                                     cx,
                                     |view, _, cx| {
@@ -312,24 +322,27 @@ impl Desktop {
     }
 
     fn project_import_view(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+        let language = crate::localization::language(cx);
         let state = &self.snapshot.project_import;
         let busy = self.snapshot.project_import_busy();
-        let mut body =
-            v_flex()
-                .gap_4()
-                .p_6()
-                .child(section_heading(
-                    "これまでのプロジェクトを引き継ぐ",
-                    "CodexとClaude Codeの履歴から選べます。元の会話をそのまま再開できます。",
-                ))
-                .child(div().text_sm().text_color(rgb(appearance::MUTED)).child(
+        let mut body = v_flex()
+            .gap_4()
+            .p_6()
+            .child(section_heading(
+                language.text("これまでのプロジェクトを引き継ぐ"),
+                language
+                    .text("CodexとClaude Codeの履歴から選べます。元の会話をそのまま再開できます。"),
+            ))
+            .child(div().text_sm().text_color(rgb(appearance::MUTED)).child(
+                language.text(
                     "最近30日以内に使い、会話が3件以上あるGitリポジトリを初期選択しています。",
-                ));
+                ),
+            ));
         if self
             .snapshot
             .operation_running(op::OperationKey::ProjectScan)
         {
-            body = body.child("既存のプロジェクトを探しています…");
+            body = body.child(language.text("既存のプロジェクトを探しています…"));
         }
         body = body
             .child(self.error_notices(ErrorScope::Projects, cx))
@@ -340,26 +353,36 @@ impl Desktop {
                 h_flex()
                     .gap_2()
                     .child(
-                        button("import-select-all", "すべて選択", cx, |view, _, _| {
-                            view.dispatch(Intent::SelectAllImportProjects { selected: true })
-                        })
+                        button(
+                            "import-select-all",
+                            language.text("すべて選択"),
+                            cx,
+                            |view, _, _| {
+                                view.dispatch(Intent::SelectAllImportProjects { selected: true })
+                            },
+                        )
                         .ghost()
                         .small()
                         .disabled(busy),
                     )
                     .child(
-                        button("import-select-none", "選択を解除", cx, |view, _, _| {
-                            view.dispatch(Intent::SelectAllImportProjects { selected: false })
-                        })
+                        button(
+                            "import-select-none",
+                            language.text("選択を解除"),
+                            cx,
+                            |view, _, _| {
+                                view.dispatch(Intent::SelectAllImportProjects { selected: false })
+                            },
+                        )
                         .ghost()
                         .small()
                         .disabled(busy),
                     ),
             );
             if scan.projects.is_empty() {
-                body = body.child(
+                body = body.child(language.text(
                     "取り込めるプロジェクトは見つかりませんでした。後から設定でも取り込めます。",
-                );
+                ));
             }
             for (index, project) in scan.projects.iter().enumerate() {
                 let selected = state.selected.contains(&project.path);
@@ -401,11 +424,15 @@ impl Desktop {
                                 .child(div().flex_1())
                                 .child(div().text_xs().text_color(rgb(appearance::MUTED)).child(
                                     if project.registered {
-                                        "取り込み済み".into()
+                                        language.text("取り込み済み").into()
                                     } else {
-                                        format!(
-                                            "{}件の会話 · {providers}",
-                                            project.conversation_count
+                                        agent_core::localization::localized_ui_format(
+                                            language,
+                                            "{0}件の会話 · {1}".into(),
+                                            vec![
+                                                project.conversation_count.to_string(),
+                                                providers.to_string(),
+                                            ],
                                         )
                                     },
                                 )),
@@ -429,9 +456,10 @@ impl Desktop {
         }
         if let Some(result) = &state.result {
             if !result.imported.is_empty() {
-                body = body.child(format!(
-                    "{}件のプロジェクトを取り込みました。",
-                    result.imported.len()
+                body = body.child(agent_core::localization::localized_ui_format(
+                    language,
+                    "{0}件のプロジェクトを取り込みました。".into(),
+                    vec![result.imported.len().to_string()],
                 ));
             }
             for (path, error) in &result.errors {
@@ -454,7 +482,7 @@ impl Desktop {
             .border_t_1()
             .border_color(rgb(appearance::BORDER))
             .child(
-                button("import-back", "戻る", cx, |view, _, _| {
+                button("import-back", language.text("戻る"), cx, |view, _, _| {
                     view.import_projects = false
                 })
                 .ghost()
@@ -466,9 +494,9 @@ impl Desktop {
                 button(
                     "import-skip",
                     if self.onboarding {
-                        "今はスキップ"
+                        language.text("今はスキップ")
                     } else {
-                        "閉じる"
+                        language.text("閉じる")
                     },
                     cx,
                     |view, _, _| view.complete_onboarding(),
@@ -481,9 +509,13 @@ impl Desktop {
                 button(
                     "import-selected",
                     if busy {
-                        "読み込み中…".into()
+                        language.text("読み込み中…").into()
                     } else {
-                        format!("{}件を取り込む", state.selected.len())
+                        agent_core::localization::localized_ui_format(
+                            language,
+                            "{0}件を取り込む".into(),
+                            vec![state.selected.len().to_string()],
+                        )
                     },
                     cx,
                     |view, _, _| {

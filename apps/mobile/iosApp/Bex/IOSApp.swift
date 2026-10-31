@@ -6,10 +6,12 @@ struct IOSApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var wasBackgrounded = false
     @StateObject private var model = AppViewModel()
+    @AppStorage("bex.language") private var language = "ja"
 
     var body: some Scene {
         WindowGroup {
             SwiftUIRoot(model: model)
+                .environment(\.locale, Locale(identifier: language))
                 .onOpenURL { model.openTaskActivity($0) }
                 .onChange(of: scenePhase) { phase in
                     model.synchronizeLiveActivities(foreground: phase == .active)
@@ -50,6 +52,24 @@ struct PrivacyPolicyButton: View {
         Button("プライバシーポリシー") { showing = true }
             .accessibilityIdentifier("privacy.policy")
             .sheet(isPresented: $showing) { PrivacyPolicyScreen() }
+    }
+}
+
+/// Only application-owned labels go through this view. Conversation text,
+/// filenames and provider output keep their original spelling.
+struct AppText: View {
+    @Environment(\.locale) private var locale
+    let source: String
+
+    init(_ source: String) {
+        self.source = source
+    }
+
+    var body: some View {
+        Text(verbatim: localizedUiText(
+            language: locale.language.languageCode?.identifier == "ja" ? .japanese : .english,
+            source: source
+        ))
     }
 }
 

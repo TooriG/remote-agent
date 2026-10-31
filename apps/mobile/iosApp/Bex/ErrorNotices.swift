@@ -16,13 +16,13 @@ struct ErrorNotices: View {
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: "exclamationmark.circle").foregroundStyle(.red)
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(notice.context).font(.caption).foregroundStyle(.secondary)
-                            Text(notice.title).font(.subheadline.weight(.semibold))
-                            Text(notice.message).font(.subheadline).foregroundStyle(.secondary)
+                            AppText(notice.context).font(.caption).foregroundStyle(.secondary)
+                            AppText(notice.title).font(.subheadline.weight(.semibold))
+                            AppText(notice.message).font(.subheadline).foregroundStyle(.secondary)
                                 .textSelection(.enabled).lineLimit(hasDetails ? 3 : nil)
                             if hasDetails {
                                 DisclosureGroup("詳細を表示") {
-                                    Text(notice.message).font(.caption).textSelection(.enabled)
+                                    AppText(notice.message).font(.caption).textSelection(.enabled)
                                 }.font(.caption)
                             }
                             if let recovery = model.snapshot.errorRecovery(id: notice.id) {

@@ -22,6 +22,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.LoadVisualization
 import dev.remoteagent.core.Outcome
+import dev.remoteagent.core.localizedUiFormat
 import java.io.ByteArrayInputStream
 import kotlin.coroutines.resume
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -32,11 +33,12 @@ internal fun ConversationVisualization(
     cwd: String,
     perform: ((Intent, (Result<Outcome>) -> Unit) -> Unit)?,
 ) {
+    val language = LocalUiLanguage.current
     var html by remember(path, cwd) { mutableStateOf<String?>(null) }
     var error by remember(path, cwd) { mutableStateOf<String?>(null) }
     LaunchedEffect(path, cwd) {
         if (perform == null) {
-            error = "Hostに接続して表示を読み込んでください。"
+            error = language.text("Hostに接続して表示を読み込んでください。")
         } else {
             val result =
                 suspendCancellableCoroutine<Result<Outcome>> { continuation ->
@@ -46,11 +48,16 @@ internal fun ConversationVisualization(
                 }
             val outcome = result.getOrNull()
             if (outcome is Outcome.Visualization) html = outcome.html
-            else error = result.exceptionOrNull()?.message ?: "表示の応答が無効です。"
+            else error = result.exceptionOrNull()?.message ?: language.text("表示の応答が無効です。")
         }
     }
     val document = html
-    if (document != null) VisualizationWebView(document) else Text(error?.let { "表示できません: $it" } ?: "インタラクティブ表示を読み込み中…")
+    if (document != null) VisualizationWebView(document)
+    else
+        Text(
+            error?.let { localizedUiFormat(language, "表示できません: {0}", listOf(it)) }
+                ?: language.text("インタラクティブ表示を読み込み中…")
+        )
 }
 
 @SuppressLint("SetJavaScriptEnabled")

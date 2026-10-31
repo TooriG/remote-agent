@@ -152,7 +152,7 @@ extension AgentSettingsScreen {
                 ForEach(controls, id: \.provider) { route in Text(route.label).tag(route.provider) }
             }.onChange(of: credentialProvider) { _ in loginCode = "" }
             if let selected {
-                Text(selected.status).font(.caption).foregroundStyle(.secondary)
+                AppText(selected.status).font(.caption).foregroundStyle(.secondary)
                 if let url = URL(string: selected.keyUrl) {
                     Link("APIキーを取得", destination: url)
                 }
@@ -172,7 +172,7 @@ extension AgentSettingsScreen {
             Button("設定状態を取得", action: refresh).disabled(updating || !model.isConnected)
             if let error = model.snapshot
                 .operationError(key: .dshCredentials) {
-                Text(error).font(.caption).foregroundStyle(.red)
+                AppText(error).font(.caption).foregroundStyle(.red)
             }
         }
     }
@@ -222,7 +222,7 @@ extension AgentSettingsScreen {
                 ProgressView(loginProgressMessage)
             }
             if let error = loginError ?? model.accountError {
-                Text(accountErrorMessage(message: error)).font(.caption).foregroundStyle(.red)
+                AppText(accountErrorMessage(message: error)).font(.caption).foregroundStyle(.red)
             }
         } header: {
             HStack {

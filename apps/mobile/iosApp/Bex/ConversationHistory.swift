@@ -24,7 +24,7 @@ extension ThreadScreen {
                 } label: {
                     HStack(spacing: 12) {
                         Rectangle().frame(height: 1).foregroundStyle(Color(UIColor.separator))
-                        Text(control.loadLabel).fixedSize()
+                        AppText(control.loadLabel).fixedSize()
                         Rectangle().frame(height: 1).foregroundStyle(Color(UIColor.separator))
                     }
                     .font(.caption)
@@ -36,7 +36,7 @@ extension ThreadScreen {
                 .accessibilityIdentifier("history.load")
             }
             if let error = control.error {
-                Text(error).font(.caption).foregroundStyle(.secondary)
+                AppText(error).font(.caption).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity)
                     .multilineTextAlignment(.center)
                     .accessibilityIdentifier("history.error")
@@ -48,7 +48,7 @@ extension ThreadScreen {
     @ViewBuilder
     func conversationRow(_ row: ThreadConversationRow) -> some View {
         switch row.content {
-        case let .historyNotice(message): Text(message).font(.caption).foregroundStyle(.secondary)
+        case let .historyNotice(message): AppText(message).font(.caption).foregroundStyle(.secondary)
         case let .native(content, item): nativeConversationRow(content, item: item)
         case let .queued(item):
             userMessageRow(item)

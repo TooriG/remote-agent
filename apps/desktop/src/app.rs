@@ -243,6 +243,7 @@ impl Desktop {
         self.local_errors.insert(self.local_error_scope(), error);
     }
     pub(crate) fn new(mode: Mode, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let language = crate::localization::language(cx);
         StoreSession::on_app_quit(cx, |view| &mut view.session);
         let (remote, initial_cwd, side_chat_mode) = match mode {
             Mode::Main => (None, None, false),
@@ -296,8 +297,9 @@ impl Desktop {
         let editor = forms::FileEditor::new(window, cx);
         let model_controls = forms::ModelControls::new(window, cx);
         let account = forms::AccountForm::new(window, cx);
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("会話を検索"));
-        let path = cx.new(|cx| InputState::new(window, cx).placeholder("絶対パス"));
+        let search =
+            cx.new(|cx| InputState::new(window, cx).placeholder(language.text("会話を検索")));
+        let path = cx.new(|cx| InputState::new(window, cx).placeholder(language.text("絶対パス")));
         let worktrees = forms::WorktreeForm::new(window, cx);
         let hosts = (!side_chat_mode).then(|| cx.new(|cx| Hosts::new(window, cx)));
         let app_updates = (!side_chat_mode
@@ -312,6 +314,30 @@ impl Desktop {
         let workbench_view = cx.new(|_| view::WorkbenchView::new(&owner));
         let header_view = cx.new(|cx| view::HeaderView::new(&owner, cx));
         let mut subscriptions = vec![
+            cx.observe_global_in::<crate::localization::Language>(window, |view, window, cx| {
+                let language = crate::localization::language(cx);
+                for (input, source) in [
+                    (&view.search, language.text("会話を検索")),
+                    (&view.path, language.text("絶対パス")),
+                    (&view.model_controls.search, language.text("モデルを検索")),
+                    (
+                        &view.account.code,
+                        language.text("認証コード・APIキーを貼り付け"),
+                    ),
+                    (
+                        &view.worktrees.directory,
+                        language.text("接続先 Host 上の絶対パス（空欄で既定）"),
+                    ),
+                ] {
+                    input.update(cx, |input, cx| {
+                        input.set_placeholder(language.text(source), window, cx)
+                    });
+                }
+                view.composer.input.update(cx, |input, cx| {
+                    input.set_placeholder(language.text("AI に依頼する"), window, cx)
+                });
+                cx.notify();
+            }),
             cx.observe_in(&owner, window, |view, _, window, cx| {
                 view.sync_surfaces(window, cx)
             }),
@@ -1275,6 +1301,7 @@ impl Desktop {
     }
 
     fn explain_selection(&mut self, text: &str, cx: &mut Context<Self>) {
+        let language = crate::localization::language(cx);
         let Some(store) = self.session.as_ref().map(|session| session.store.clone()) else {
             self.pending_explanation = Some(text.into());
             return;
@@ -1284,10 +1311,18 @@ impl Desktop {
             .snapshot
             .model_provider_for_draft(self.draft_key().clone())
         else {
-            self.set_error("利用可能なエージェントを選択してください。".into());
+            self.set_error(
+                language
+                    .text("利用可能なエージェントを選択してください。")
+                    .into(),
+            );
             return;
         };
-        let prompt = format!("次の選択範囲について詳しく説明してください。\n\n{text}");
+        let prompt = agent_core::localization::localized_ui_format(
+            language,
+            "次の選択範囲について詳しく説明してください。\n\n{0}".into(),
+            vec![text.to_string()],
+        );
         self.busy += 1;
         self.effect(
             async move {
@@ -1300,7 +1335,9 @@ impl Desktop {
                     .await
                     .map_err(|error| error.to_string())?
                 else {
-                    return Err("新しいサイドチャットを作成できませんでした".into());
+                    return Err(language
+                        .text("新しいサイドチャットを作成できませんでした")
+                        .into());
                 };
                 // The new thread has its own draft; existing side-chat input stays intact.
                 store
@@ -1802,6 +1839,54 @@ mod completion_tests {
     use super::{Arc, Context, Desktop, Mode, OperationCompletion, Outcome, Update, Window};
     use gpui_kit as gpui;
     use gpui_kit::TestAppContext;
+
+    #[gpui::test]
+    fn language_switch_updates_existing_inputs_and_preserves_drafts(cx: &mut TestAppContext) {
+        use crate::localization::Language;
+        use agent_core::localization::UiLanguage;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        cx.update(|cx| {
+            crate::appearance::init(cx);
+            cx.set_global(Language(UiLanguage::Japanese));
+            cx.set_global(crate::Runtime {
+                handle: runtime.handle().clone(),
+                connections: Arc::new(crate::platform::Connections::default()),
+                closing: tokio_util::task::TaskTracker::new(),
+                logging_error: None,
+            });
+        });
+        let view = cx.add_window(|window, cx| {
+            Desktop::new(
+                Mode::SideChat {
+                    remote: None,
+                    cwd: "/fixture".into(),
+                },
+                window,
+                cx,
+            )
+        });
+        view.update(cx, |view, window, cx| {
+            view.composer.input.update(cx, |input, cx| {
+                input.set_value("ユーザーの入力 {0}", window, cx)
+            });
+        })
+        .unwrap();
+        for (language, placeholder) in [
+            (UiLanguage::English, "Ask AI"),
+            (UiLanguage::Japanese, "AI に依頼する"),
+        ] {
+            cx.update(|cx| cx.set_global(Language(language)));
+            view.update(cx, |view, _, cx| {
+                let input = view.composer.input.read(cx);
+                assert_eq!(input.presentation().placeholder().as_ref(), placeholder);
+                assert_eq!(input.text().to_string(), "ユーザーの入力 {0}");
+            })
+            .unwrap();
+        }
+    }
 
     #[gpui::test]
     fn completion_messages_preserve_newer_host_navigation_and_input(cx: &mut TestAppContext) {

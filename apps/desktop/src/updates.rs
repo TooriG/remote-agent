@@ -260,35 +260,60 @@ impl Updates {
 
 impl Render for Updates {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let language = crate::localization::language(cx);
         let (icon, tooltip, disabled) = match &self.state {
-            State::Checking => (Icon::new(IconName::RotateCw), "更新を確認中…".into(), true),
-            State::Current => (Icon::new(IconName::RotateCw), "会話を更新".into(), false),
+            State::Checking => (
+                Icon::new(IconName::RotateCw),
+                language.text("更新を確認中…").into(),
+                true,
+            ),
+            State::Current => (
+                Icon::new(IconName::RotateCw),
+                language.text("会話を更新").into(),
+                false,
+            ),
             State::Available(download) => (
                 Icon::default().path("icons/download.svg"),
-                format!("Bex {}をダウンロードします。", download.build),
+                agent_core::localization::localized_ui_format(
+                    language,
+                    "Bex {0}をダウンロードします。".into(),
+                    vec![download.build.to_string()],
+                ),
                 false,
             ),
             State::Downloading(percent) => (
                 Icon::default().path("icons/download.svg"),
-                format!("ダウンロード中 {percent}%"),
+                agent_core::localization::localized_ui_format(
+                    language,
+                    "ダウンロード中 {0}%".into(),
+                    vec![percent.to_string()],
+                ),
                 true,
             ),
             State::Ready(plan) => (
                 Icon::new(IconName::RotateCw),
-                format!(
-                    "再起動してBex {}に更新します。中断した会話は同じ会話で再開します。",
-                    plan.build
+                agent_core::localization::localized_ui_format(
+                    language,
+                    "再起動してBex {0}に更新します。中断した会話は同じ会話で再開します。".into(),
+                    vec![plan.build.to_string()],
                 ),
                 false,
             ),
             State::Installing => (
                 Icon::new(IconName::RotateCw),
-                "再起動の準備中…".into(),
+                language.text("再起動の準備中…").into(),
                 true,
             ),
             State::Failed(error) => (
                 Icon::new(IconName::RotateCw),
-                format!("更新を再試行: {error}"),
+                agent_core::localization::localized_ui_format(
+                    language,
+                    "更新を再試行: {0}".into(),
+                    vec![agent_core::localization::localized_ui_text(
+                        language,
+                        error.to_string(),
+                    )],
+                ),
                 false,
             ),
         };
@@ -342,7 +367,7 @@ impl Render for Updates {
                             .size_full()
                             .color(foreground)
                             .value(f32::from(percent))
-                            .accessibility_label("更新のダウンロード進捗"),
+                            .accessibility_label(language.text("更新のダウンロード進捗")),
                     )
                 },
             );

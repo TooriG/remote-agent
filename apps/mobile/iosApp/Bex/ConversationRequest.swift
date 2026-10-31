@@ -15,7 +15,7 @@ struct ThreadRequestRow: View {
                 ProgressView()
             }
             if let error {
-                Text(error).foregroundColor(.red)
+                AppText(error).foregroundColor(.red)
             }
         }
         .onAppear { response = requestInputDefault(body: request.requestBody) }
@@ -115,7 +115,7 @@ struct QuestionPanel: View {
         let expanded = collapsedQuestionId != question.id
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                Label(prompt.status ?? "質問", systemImage: "questionmark.bubble")
+                Label(LocalizedStringKey(prompt.status ?? "質問"), systemImage: "questionmark.bubble")
                     .font(.subheadline).foregroundStyle(.secondary)
                     .accessibilityIdentifier("request.\(prompt.requestId)")
                 if !question.header.isEmpty {
@@ -137,7 +137,7 @@ struct QuestionPanel: View {
                         .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
-                .accessibilityLabel(expanded ? "質問を閉じる" : "質問を開く")
+                .accessibilityLabel(LocalizedStringKey(expanded ? "質問を閉じる" : "質問を開く"))
                 .accessibilityIdentifier("request.toggle")
             }
             if expanded {
@@ -164,7 +164,7 @@ struct QuestionPanel: View {
                 Text(question.prompt).lineLimit(1).foregroundStyle(.secondary)
             }
             if let error {
-                Text(error).font(.caption).foregroundColor(.red)
+                AppText(error).font(.caption).foregroundColor(.red)
             }
         }
         .disabled(busy || !prompt.canRespond)
@@ -245,7 +245,7 @@ extension ThreadScreen {
             composerFocused = false
             model.answerQuestion(question.requestId, .advance)
         } label: {
-            Text(question.action)
+            AppText(question.action)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(enabled ? Color.white : Color.primary)
                 .padding(.horizontal, 16)

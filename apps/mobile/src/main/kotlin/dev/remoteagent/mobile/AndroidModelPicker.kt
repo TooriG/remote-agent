@@ -40,6 +40,7 @@ internal fun ModelPickerButton(
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val language = LocalUiLanguage.current
     val key = snapshot.navigation().draftKey
     val draft = snapshot.draft(key)
     val provider = snapshot.modelProviderForDraft(key)
@@ -57,7 +58,7 @@ internal fun ModelPickerButton(
         Text(
             listOfNotNull(
                     if (controls.fast) "⚡" else null,
-                    model?.displayName ?: selected?.id ?: "モデルを選択",
+                    model?.displayName ?: selected?.id ?: language.text("モデルを選択"),
                     controls.effort.takeIf { it.isNotEmpty() }?.let(::effortLabel),
                 )
                 .joinToString(" "),
@@ -75,19 +76,20 @@ private fun ModelPickerDialog(
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
     dismiss: () -> Unit,
 ) {
+    val language = LocalUiLanguage.current
     val key = snapshot.navigation().draftKey
     var query by remember(key) { mutableStateOf("") }
     val choices = snapshot.modelsMatching(null, query)
     AlertDialog(
         onDismissRequest = { dismiss() },
-        title = { Text("モデルと実行設定") },
+        title = { Text(language.text("モデルと実行設定")) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 ErrorNotices(snapshot, dev.remoteagent.core.ErrorScope.Settings, perform)
                 OutlinedTextField(
                     query,
                     { query = it },
-                    label = { Text("モデルを検索") },
+                    label = { Text(language.text("モデルを検索")) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -111,14 +113,14 @@ private fun ModelPickerDialog(
                         }
                     }
                 }
-                if (choices.isEmpty()) Text("モデルがありません。検索条件やPCとの接続を確認してください。")
+                if (choices.isEmpty()) Text(language.text("モデルがありません。検索条件やPCとの接続を確認してください。"))
                 ModelQuickSettings(snapshot, perform)
                 SaveNewChatDefaultsButton(snapshot, selected, perform)
                 if (selected?.provider == dev.remoteagent.core.ProviderKind.DEEP_SEEK)
                     CredentialSettings(snapshot, perform)
             }
         },
-        confirmButton = { TextButton(onClick = { dismiss() }) { Text("完了") } },
+        confirmButton = { TextButton(onClick = { dismiss() }) { Text(language.text("完了")) } },
     )
 }
 
@@ -128,6 +130,7 @@ private fun SaveNewChatDefaultsButton(
     selected: ModelRef?,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
 ) {
+    val language = LocalUiLanguage.current
     val key = snapshot.navigation().draftKey
     val controls = snapshot.modelQuickControls(key)
     val tier = controls.speedChoices.firstOrNull { it.selected }?.id
@@ -143,34 +146,41 @@ private fun SaveNewChatDefaultsButton(
                     result ->
                     savingDefaults = false
                     defaultsNotice =
-                        result.fold(onSuccess = { "新規チャットの既定に保存しました" }, onFailure = { it.message ?: "既定の保存に失敗しました" })
+                        result.fold(
+                            onSuccess = { language.text("新規チャットの既定に保存しました") },
+                            onFailure = { it.message ?: language.text("既定の保存に失敗しました") },
+                        )
                 }
             },
         ) {
-            Text("この設定を新規チャットの既定にする")
+            Text(language.text("この設定を新規チャットの既定にする"))
         }
-        Text(defaultsNotice ?: "この端末で、次の新規チャットからモデル・推論量・速度を引き継ぎます。", style = MaterialTheme.typography.bodySmall)
+        Text(
+            defaultsNotice ?: language.text("この端末で、次の新規チャットからモデル・推論量・速度を引き継ぎます。"),
+            style = MaterialTheme.typography.bodySmall,
+        )
     }
 }
 
 @Composable
 private fun ModelQuickSettings(snapshot: Snapshot, perform: (Intent, (Result<Outcome>) -> Unit) -> Unit) {
+    val language = LocalUiLanguage.current
     val key = snapshot.navigation().draftKey
     val controls = snapshot.modelQuickControls(key)
     if (controls.efforts.isNotEmpty()) {
-        Text("推論量", style = MaterialTheme.typography.labelLarge)
+        Text(language.text("推論量"), style = MaterialTheme.typography.labelLarge)
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             controls.efforts.forEach { effort ->
                 FilterChip(
                     selected = controls.effort == effort,
                     onClick = { perform(Intent.SelectEffort(key, effort)) {} },
-                    label = { Text(effortLabel(effort)) },
+                    label = { Text(LocalUiLanguage.current.text(effortLabel(effort))) },
                 )
             }
         }
     }
     if (controls.speedChoices.isNotEmpty()) {
-        Text("速度", style = MaterialTheme.typography.labelLarge)
+        Text(language.text("速度"), style = MaterialTheme.typography.labelLarge)
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             controls.speedChoices.forEach { speed ->
                 FilterChip(

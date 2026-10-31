@@ -66,6 +66,7 @@ import dev.remoteagent.core.SessionRef
 import dev.remoteagent.core.ThreadList
 import dev.remoteagent.core.ThreadSummary
 import dev.remoteagent.core.WorktreeStatus
+import dev.remoteagent.core.localizedUiFormat
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.drop
 
@@ -78,7 +79,9 @@ internal fun ThreadListScreen(
     showHosts: () -> Unit,
     hostName: String = "My PC",
     connected: Boolean = false,
+    openSettings: () -> Unit = {},
 ) {
+    val language = LocalUiLanguage.current
     var search by rememberSaveable { mutableStateOf(query.searchTerm.takeIf { it.isNotEmpty() }) }
     val focusManager = LocalFocusManager.current
     fun closeSearch() {
@@ -118,9 +121,10 @@ internal fun ThreadListScreen(
                 maxLines = 1,
             )
             HostSelector(hostName, connected, showHosts, Modifier.weight(1f))
+            IconButton(onClick = openSettings) { Icon(painterResource(R.drawable.ic_globe), language.text("設定")) }
         }
         TabRow(selectedTabIndex = selectedTab, containerColor = MaterialTheme.colorScheme.background) {
-            listOf("最近のチャット", "プロジェクト").forEachIndexed { index, label ->
+            listOf(language.text("最近のチャット"), language.text("プロジェクト")).forEachIndexed { index, label ->
                 Tab(selected = selectedTab == index, onClick = { selectedTab = index }, text = { Text(label) })
             }
         }
@@ -131,6 +135,7 @@ internal fun ThreadListScreen(
 
 @Composable
 private fun NewChatButton(perform: (Intent) -> Unit) {
+    val language = LocalUiLanguage.current
     Button(
         onClick = { perform(Intent.NewChat("")) },
         modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
@@ -138,7 +143,7 @@ private fun NewChatButton(perform: (Intent) -> Unit) {
         contentPadding = PaddingValues(16.dp),
     ) {
         Icon(painterResource(R.drawable.ic_add), null, Modifier.size(20.dp))
-        Text("新しいチャット", Modifier.padding(start = 8.dp), fontWeight = FontWeight.SemiBold)
+        Text(language.text("新しいチャット"), Modifier.padding(start = 8.dp), fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -151,13 +156,14 @@ private fun ThreadListContent(
     perform: (Intent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val language = LocalUiLanguage.current
     Box(modifier.clipToBounds()) {
         LazyColumn(Modifier.fillMaxSize(), state = reorder.list, contentPadding = PaddingValues(vertical = 16.dp)) {
             list?.notice?.let { notice -> item { Text(notice, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
             if (selectedTab == 0) {
-                recentChats(list, loadingThreads, perform)
+                recentChats(list, loadingThreads, perform, language)
             } else {
-                projectThreads(list, loadingThreads, perform, reorder)
+                projectThreads(list, loadingThreads, perform, reorder, language)
             }
         }
         reorder.projects
@@ -185,7 +191,12 @@ private fun ThreadListContent(
     }
 }
 
-private fun LazyListScope.recentChats(list: ThreadList?, loadingThreads: Boolean, perform: (Intent) -> Unit) {
+private fun LazyListScope.recentChats(
+    list: ThreadList?,
+    loadingThreads: Boolean,
+    perform: (Intent) -> Unit,
+    language: dev.remoteagent.core.UiLanguage,
+) {
     val threads = list?.threads.orEmpty()
     items(threads, key = { "chat:${it.id.listKey}" }) {
         SummaryRow(it, perform, list?.projects?.firstOrNull { project -> project.id == it.projectId }?.name)
@@ -201,18 +212,23 @@ private fun LazyListScope.recentChats(list: ThreadList?, loadingThreads: Boolean
         }
     if (list != null && threads.isEmpty())
         item {
-            Text("チャットがありません。", Modifier.padding(vertical = 24.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                language.text("チャットがありません。"),
+                Modifier.padding(vertical = 24.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
 }
 
 @Composable
 private fun HostSelector(hostName: String, connected: Boolean, showHosts: () -> Unit, modifier: Modifier = Modifier) {
+    val language = LocalUiLanguage.current
     Row(
         modifier
             .heightIn(min = 48.dp)
             .clickable(
                 role = androidx.compose.ui.semantics.Role.Button,
-                onClickLabel = "接続先を切り替える",
+                onClickLabel = language.text("接続先を切り替える"),
                 onClick = showHosts,
             ),
         verticalAlignment = Alignment.CenterVertically,
@@ -220,7 +236,7 @@ private fun HostSelector(hostName: String, connected: Boolean, showHosts: () -> 
     ) {
         Icon(
             painterResource(R.drawable.ic_circle),
-            if (connected) "接続中" else "未接続",
+            if (connected) language.text("接続中") else language.text("未接続"),
             Modifier.size(6.dp),
             tint = if (connected) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -244,12 +260,13 @@ private fun HostSelector(hostName: String, connected: Boolean, showHosts: () -> 
 private fun LoadingLabel(label: String, loading: Boolean) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         if (loading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-        Text(label)
+        Text(LocalUiLanguage.current.text(label))
     }
 }
 
 @Composable
 private fun SummaryRow(thread: ThreadSummary, openConversation: (Intent) -> Unit, projectName: String? = null) {
+    val language = LocalUiLanguage.current
     Row(
         Modifier.fillMaxWidth()
             .clickable { openConversation(Intent.ReadThread(ReadThread(thread.id, open = true))) }
@@ -276,12 +293,12 @@ private fun SummaryRow(thread: ThreadSummary, openConversation: (Intent) -> Unit
             }
         }
         if (thread.active) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-        else if (thread.unread) Text("● 完了・未確認")
+        else if (thread.unread) Text(language.text("● 完了・未確認"))
         thread.worktreeStatus?.let { status ->
             val unmerged = status == WorktreeStatus.UNMERGED
             Icon(
                 painterResource(if (unmerged) R.drawable.ic_diff else R.drawable.ic_merge),
-                if (unmerged) "main に未反映の変更あり" else "main にマージ済み",
+                if (unmerged) language.text("main に未反映の変更あり") else language.text("main にマージ済み"),
                 Modifier.padding(start = 8.dp).size(18.dp),
                 tint = if (unmerged) Color(UNMERGED_COLOR_ARGB) else MaterialTheme.colorScheme.tertiary,
             )
@@ -308,6 +325,7 @@ private fun LazyListScope.projectThreads(
     loadingThreads: Boolean,
     perform: (Intent) -> Unit,
     reorder: ProjectReorder,
+    language: dev.remoteagent.core.UiLanguage,
 ) {
     list?.projects.orEmpty().forEach { project ->
         item(key = "project:${project.id}") {
@@ -325,7 +343,7 @@ private fun LazyListScope.projectThreads(
             project.coordinatorUrl?.let {
                 item(key = "coordinator:${project.id}") {
                     Text(
-                        "タスクの依頼・振り分けはメイン会話へ。以下はこのPCの作業スレッドです。",
+                        language.text("タスクの依頼・振り分けはメイン会話へ。以下はこのPCの作業スレッドです。"),
                         Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -337,7 +355,7 @@ private fun LazyListScope.projectThreads(
             project.error?.let { message ->
                 item(key = "error:${project.id}") {
                     Text(message)
-                    TextButton(onClick = { perform(Intent.RefreshProject(project.id)) }) { Text("再試行") }
+                    TextButton(onClick = { perform(Intent.RefreshProject(project.id)) }) { Text(language.text("再試行")) }
                 }
             }
             items(project.threads, key = { "project:${project.id}:${it.id.listKey}" }) { SummaryRow(it, perform) }
@@ -361,7 +379,7 @@ private fun LazyListScope.projectThreads(
     if (list != null && list.projects.isEmpty())
         item {
             Text(
-                "プロジェクトがありません。",
+                language.text("プロジェクトがありません。"),
                 Modifier.padding(vertical = 24.dp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -376,6 +394,7 @@ private fun ProjectRow(
     modifier: Modifier = Modifier,
     floating: Boolean = false,
 ) {
+    val language = LocalUiLanguage.current
     val openLink = rememberExternalLinkOpener()
     val coordinatorUrl = project.coordinatorUrl
     Row(
@@ -418,11 +437,17 @@ private fun ProjectRow(
         }
         if (coordinatorUrl != null) {
             IconButton(onClick = { openLink(coordinatorUrl) }) {
-                Icon(painterResource(R.drawable.ic_chat), "${project.name}のメイン会話をClaudeで開く")
+                Icon(
+                    painterResource(R.drawable.ic_chat),
+                    localizedUiFormat(language, "{0}のメイン会話をClaudeで開く", listOf(project.name)),
+                )
             }
         } else {
             IconButton(onClick = { perform(Intent.NewChat(project.roots.firstOrNull()?.path.orEmpty())) }) {
-                Icon(painterResource(R.drawable.ic_add), "${project.name}で新しいチャット")
+                Icon(
+                    painterResource(R.drawable.ic_add),
+                    localizedUiFormat(language, "{0}で新しいチャット", listOf(project.name)),
+                )
             }
         }
     }

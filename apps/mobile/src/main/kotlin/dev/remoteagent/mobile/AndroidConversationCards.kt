@@ -47,6 +47,7 @@ internal fun ThreadMessageCard(
     fork: (() -> Unit)? = null,
     forkPhase: OperationPhase? = null,
 ) {
+    val language = LocalUiLanguage.current
     val content = remember(item) { item.presentation() }
     val imageFrame = Modifier.widthIn(max = 320.dp).fillMaxWidth().height(320.dp)
     Column(
@@ -55,7 +56,7 @@ internal fun ThreadMessageCard(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         if (content.imagePlaceholder) {
-            ImageSkeleton(imageFrame, "画像を生成中", "image.generation.skeleton")
+            ImageSkeleton(imageFrame, language.text("画像を生成中"), "image.generation.skeleton")
         }
         MessageImages(content.imageSources, isUser, perform)
         content.body
@@ -91,6 +92,7 @@ private fun MessageTime(timestampMs: ULong?) {
 
 @Composable
 internal fun MessageFooter(text: String, timestampMs: ULong?, fork: (() -> Unit)?, forkPhase: OperationPhase? = null) {
+    val language = LocalUiLanguage.current
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     val forking = forkPhase is OperationPhase.Running
     var copied by remember(text) { mutableStateOf(false) }
@@ -111,21 +113,21 @@ internal fun MessageFooter(text: String, timestampMs: ULong?, fork: (() -> Unit)
             ) {
                 Icon(
                     painterResource(if (copied) R.drawable.ic_check else R.drawable.ic_copy),
-                    if (copied) "コピーしました" else "コピー",
+                    if (copied) language.text("コピーしました") else language.text("コピー"),
                     Modifier.size(20.dp),
                 )
             }
             fork?.let {
                 IconButton(onClick = it, enabled = !forking) {
                     if (forking) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                    else Icon(painterResource(R.drawable.ic_fork), "分岐", Modifier.size(20.dp))
+                    else Icon(painterResource(R.drawable.ic_fork), language.text("分岐"), Modifier.size(20.dp))
                 }
             }
             MessageTime(timestampMs)
         }
         if (forkPhase != null)
             Text(
-                if (forking) "分岐を作成中…" else "分岐できませんでした。もう一度お試しください。",
+                if (forking) language.text("分岐を作成中…") else language.text("分岐できませんでした。もう一度お試しください。"),
                 style = MaterialTheme.typography.bodySmall,
                 color =
                     if (forkPhase is OperationPhase.Failed) MaterialTheme.colorScheme.error
@@ -179,18 +181,19 @@ private fun MessageImages(
     isUser: Boolean,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
 ) {
+    val language = LocalUiLanguage.current
     var preview by remember(sources) { mutableStateOf<MarkdownFileReference?>(null) }
     fun openImage(source: String) {
-        preview = MarkdownFileReference(source, "画像プレビュー", MarkdownFileKind.IMAGE, null, null)
+        preview = MarkdownFileReference(source, language.text("画像プレビュー"), MarkdownFileKind.IMAGE, null, null)
     }
     if (isUser && sources.isNotEmpty()) {
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             sources.forEach { source ->
                 AttachmentThumbnail(
                     source,
-                    "添付画像",
+                    language.text("添付画像"),
                     perform,
-                    Modifier.size(80.dp).clickable(onClickLabel = "画像をプレビュー") { openImage(source) },
+                    Modifier.size(80.dp).clickable(onClickLabel = language.text("画像をプレビュー")) { openImage(source) },
                 )
             }
         }
@@ -199,9 +202,11 @@ private fun MessageImages(
         sources.forEach { source ->
             AttachmentThumbnail(
                 source,
-                "生成画像",
+                language.text("生成画像"),
                 perform,
-                Modifier.widthIn(max = 320.dp).fillMaxWidth().height(320.dp).clickable(onClickLabel = "画像をプレビュー") {
+                Modifier.widthIn(max = 320.dp).fillMaxWidth().height(320.dp).clickable(
+                    onClickLabel = language.text("画像をプレビュー")
+                ) {
                     openImage(source)
                 },
             )

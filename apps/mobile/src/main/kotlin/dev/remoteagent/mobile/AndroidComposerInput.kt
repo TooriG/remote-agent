@@ -10,16 +10,25 @@ import androidx.compose.ui.graphics.Color
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.Outcome
 import dev.remoteagent.core.Snapshot
+import dev.remoteagent.core.insertInvocation
 
 @Composable
 internal fun ComposerTextInput(snapshot: Snapshot, perform: (Intent, (Result<Outcome>) -> Unit) -> Unit) {
+    val language = LocalUiLanguage.current
     val navigation = snapshot.navigation()
     val draft = snapshot.draft(navigation.draftKey)
+    val cursor = draft.text.toByteArray(Charsets.UTF_8).size.toUInt()
+    ComposerInvocationPicker(snapshot.composerSuggestions(draft.text, cursor)) { invocation ->
+        insertInvocation(draft.text, cursor, invocation.kind, invocation.name)?.let {
+            perform(Intent.InsertInvocation(navigation.draftKey, it.text, invocation)) {}
+        }
+    }
+
     TextField(
         draft.text,
         { perform(Intent.EditComposer(navigation.draftKey, it, it.toByteArray(Charsets.UTF_8).size.toUInt())) {} },
         Modifier.fillMaxWidth(),
-        placeholder = { Text("AIに依頼する…") },
+        placeholder = { Text(language.text("AIに依頼する…")) },
         colors =
             TextFieldDefaults.colors(
                 focusedContainerColor = Color.Transparent,

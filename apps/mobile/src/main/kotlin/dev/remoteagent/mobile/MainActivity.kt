@@ -62,6 +62,7 @@ class MainActivity : ComponentActivity() {
         )
         continueOverInternet = savedInstanceState?.getBoolean("continueOverInternet") ?: false
         setContent {
+            val language = model.language
             if (localNetworkGranted || continueOverInternet) {
                 val requestQrScan = rememberAndroidQrScanner(this)
                 RemoteAgentApp(activity = this, model = model, requestQrScan = requestQrScan)
@@ -69,11 +70,11 @@ class MainActivity : ComponentActivity() {
                 AppTheme {
                     Surface(Modifier.fillMaxSize()) {
                         Column(Modifier.safeDrawingPadding().padding(24.dp)) {
-                            Text("同じネットワークのPCへ接続するには、付近のデバイスへのアクセスを許可してください。")
+                            Text(language.text("同じネットワークのPCへ接続するには、付近のデバイスへのアクセスを許可してください。"))
                             Button(onClick = { requestNetwork.launch(Manifest.permission.ACCESS_LOCAL_NETWORK) }) {
-                                Text("許可して接続")
+                                Text(language.text("許可して接続"))
                             }
-                            Text("拒否した場合は再試行するか、設定で許可できます。インターネット経由の接続も選べます。")
+                            Text(language.text("拒否した場合は再試行するか、設定で許可できます。インターネット経由の接続も選べます。"))
                             Button(
                                 onClick = {
                                     startActivity(
@@ -84,9 +85,9 @@ class MainActivity : ComponentActivity() {
                                     )
                                 }
                             ) {
-                                Text("アプリの設定を開く")
+                                Text(language.text("アプリの設定を開く"))
                             }
-                            Button(onClick = { continueOverInternet = true }) { Text("インターネット経由で接続") }
+                            Button(onClick = { continueOverInternet = true }) { Text(language.text("インターネット経由で接続")) }
                         }
                     }
                 }

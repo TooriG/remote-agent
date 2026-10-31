@@ -162,12 +162,13 @@ private struct PairingScreen: View {
             } else if let error {
                 AppNotice(text: error)
             }
+            LanguageSettings()
             Section {
                 PrivacyPolicyButton()
             }
         }
         .scrollDismissesKeyboard(.interactively)
-        .navigationTitle(canCancel ? "PCを追加" : "Bex")
+        .navigationTitle(LocalizedStringKey(canCancel ? "PCを追加" : "Bex"))
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $isScanning) {
             QrScannerSheet {
@@ -227,6 +228,7 @@ private struct ProfilesScreen: View {
             } footer: {
                 Text("接続先を選んで、タスクを続けられます。")
             }
+            LanguageSettings()
             Section {
                 PrivacyPolicyButton()
             }

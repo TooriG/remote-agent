@@ -8,6 +8,7 @@ struct SettingsSheet: View {
     var body: some View {
         NavigationStack {
             List {
+                LanguageSettings()
                 Section("適用範囲") {
                     SettingsScopeFields(profiles: model.profiles, selectedProfileId: model.selectedProfileId,
                                         disabled: model.snapshot.accountLogin() != nil, select: model.selectProfile)
@@ -48,6 +49,20 @@ struct SettingsSheet: View {
                     Button("完了") { dismiss() }.accessibilityIdentifier("settings.close")
                 }
             }
+        }
+    }
+}
+
+struct LanguageSettings: View {
+    @AppStorage("bex.language") private var language = "ja"
+
+    var body: some View {
+        Section("表示言語") {
+            Picker("言語", selection: $language) {
+                Text(verbatim: "English").tag("en")
+                Text(verbatim: "日本語").tag("ja")
+            }
+            .accessibilityIdentifier("settings.language")
         }
     }
 }
@@ -109,7 +124,7 @@ struct WorktreeSettingsScreen: View {
             }
             if let error {
                 Section {
-                    Text(error).foregroundColor(.red).accessibilityIdentifier("worktree.error")
+                    AppText(error).foregroundColor(.red).accessibilityIdentifier("worktree.error")
                     if !loaded {
                         Button("再読み込み", action: load).disabled(busy || !model.isConnected)
                     }

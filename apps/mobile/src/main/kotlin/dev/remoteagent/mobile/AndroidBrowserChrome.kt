@@ -47,13 +47,18 @@ import dev.remoteagent.core.BrowserAction
 import dev.remoteagent.core.BrowserCredentials
 import dev.remoteagent.core.BrowserTab
 import dev.remoteagent.core.browserAddressUrl
+import dev.remoteagent.core.localizedUiFormat
 
 @Composable
 internal fun BrowserTabs(tabs: List<BrowserTab>, send: (BrowserAction) -> Unit) {
+    val language = LocalUiLanguage.current
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
         tabs.forEach { tab ->
             TextButton(onClick = { send(BrowserAction.SelectTab(tab.id)) }) {
-                Text(if (tab.url == "about:blank") "新しいタブ" else tab.title.ifEmpty { tab.url }, maxLines = 1)
+                Text(
+                    if (tab.url == "about:blank") language.text("新しいタブ") else tab.title.ifEmpty { tab.url },
+                    maxLines = 1,
+                )
             }
             TextButton(onClick = { send(BrowserAction.CloseTab(tab.id)) }) { Text("×") }
         }
@@ -73,6 +78,7 @@ internal fun BrowserToolbar(
     type: () -> Unit,
     failed: (String?) -> Unit,
 ) {
+    val language = LocalUiLanguage.current
     val url = tab?.url?.takeUnless { it == "about:blank" } ?: ""
     var address by remember { mutableStateOf("") }
     var focused by remember { mutableStateOf(false) }
@@ -81,23 +87,7 @@ internal fun BrowserToolbar(
         Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconButton(
-            onClick = { send(BrowserAction.Back) },
-            enabled = canGoBack,
-            modifier = Modifier.size(40.dp),
-        ) {
-            Icon(painterResource(R.drawable.ic_arrow_left), "前のページ", Modifier.size(16.dp))
-        }
-        IconButton(
-            onClick = { send(BrowserAction.Forward) },
-            enabled = canGoForward,
-            modifier = Modifier.size(40.dp),
-        ) {
-            Icon(painterResource(R.drawable.ic_arrow_right), "次のページ", Modifier.size(16.dp))
-        }
-        IconButton(onClick = { send(BrowserAction.Reload) }, enabled = enabled, modifier = Modifier.size(40.dp)) {
-            Icon(painterResource(R.drawable.ic_refresh), "再読み込み", Modifier.size(16.dp))
-        }
+        BrowserNavigation(enabled, canGoBack, canGoForward, send)
         BasicTextField(
             address,
             { address = it },
@@ -119,7 +109,11 @@ internal fun BrowserToolbar(
             decorationBox = { input ->
                 Box {
                     if (address.isEmpty())
-                        Text("検索または URL", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            language.text("検索または URL"),
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     input()
                 }
             },
@@ -137,22 +131,23 @@ private fun BrowserMenu(
     fit: () -> Unit,
     type: () -> Unit,
 ) {
+    val language = LocalUiLanguage.current
     var menuOpen by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { menuOpen = true }, enabled = enabled, modifier = Modifier.size(40.dp)) {
-            Icon(painterResource(R.drawable.ic_more), "ブラウザのメニュー", Modifier.size(16.dp))
+            Icon(painterResource(R.drawable.ic_more), language.text("ブラウザのメニュー"), Modifier.size(16.dp))
         }
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
             val close = { menuOpen = false }
-            BrowserMenuItem("ログイン状態・保存パスワード", close) { send(BrowserAction.Credentials) }
+            BrowserMenuItem(language.text("ログイン状態・保存パスワード"), close) { send(BrowserAction.Credentials) }
             HorizontalDivider()
-            BrowserMenuItem("新しいタブ", close) { send(BrowserAction.OpenTab("about:blank")) }
-            BrowserMenuItem("タブを閉じる", close) { tabId?.let { send(BrowserAction.CloseTab(it)) } }
-            BrowserMenuItem("文字入力", close, type)
+            BrowserMenuItem(language.text("新しいタブ"), close) { send(BrowserAction.OpenTab("about:blank")) }
+            BrowserMenuItem(language.text("タブを閉じる"), close) { tabId?.let { send(BrowserAction.CloseTab(it)) } }
+            BrowserMenuItem(language.text("文字入力"), close, type)
             HorizontalDivider()
-            BrowserMenuItem("画面に合わせる", close, fit)
-            BrowserMenuItem("デスクトップ · 1280 × 800", close) { send(BrowserAction.Resize(1280u, 800u)) }
-            BrowserMenuItem("モバイル · 390 × 844", close) { send(BrowserAction.Resize(390u, 844u)) }
+            BrowserMenuItem(language.text("画面に合わせる"), close, fit)
+            BrowserMenuItem(language.text("デスクトップ · 1280 × 800"), close) { send(BrowserAction.Resize(1280u, 800u)) }
+            BrowserMenuItem(language.text("モバイル · 390 × 844"), close) { send(BrowserAction.Resize(390u, 844u)) }
         }
     }
 }
@@ -170,9 +165,14 @@ private fun BrowserMenuItem(label: String, close: () -> Unit, action: () -> Unit
 
 @Composable
 internal fun BrowserEmptyState(connected: Boolean, modifier: Modifier) {
+    val language = LocalUiLanguage.current
     Box(modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
         if (!connected)
-            Text("Host のブラウザに接続中…", Modifier.padding(48.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                language.text("Host のブラウザに接続中…"),
+                Modifier.padding(48.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         else
             Column(
                 Modifier.widthIn(max = 384.dp).padding(horizontal = 24.dp, vertical = 48.dp),
@@ -192,9 +192,14 @@ internal fun BrowserEmptyState(connected: Boolean, modifier: Modifier) {
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                Text("プレビューはまだありません", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
                 Text(
-                    "上の欄に URL を入力するか、AI にブラウザ操作を依頼してください。",
+                    language.text("プレビューはまだありません"),
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.Center,
+                )
+                Text(
+                    language.text("上の欄に URL を入力するか、AI にブラウザ操作を依頼してください。"),
                     fontSize = 14.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -209,48 +214,76 @@ internal fun BrowserCredentialsDialog(
     send: (BrowserAction) -> Unit,
     close: () -> Unit,
 ) {
+    val language = LocalUiLanguage.current
     AlertDialog(
         onDismissRequest = close,
-        title = { Text("ブラウザデータ") },
-        confirmButton = { TextButton(onClick = close) { Text("閉じる") } },
+        title = { Text(language.text("ブラウザデータ")) },
+        confirmButton = { TextButton(onClick = close) { Text(language.text("閉じる")) } },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                Text("接続先のブラウザから取り込む")
-                if (credentials.profiles.isEmpty()) Text("取り込めるブラウザプロファイルがありません。")
+                Text(language.text("接続先のブラウザから取り込む"))
+                if (credentials.profiles.isEmpty()) Text(language.text("取り込めるブラウザプロファイルがありません。"))
                 credentials.profiles.forEach { profile ->
                     Text(profile.label)
                     TextButton(
                         onClick = { send(BrowserAction.ImportCookies(profile.id)) },
                         enabled = profile.id.isNotEmpty(),
                     ) {
-                        Text("ログイン状態（Cookie）")
+                        Text(language.text("ログイン状態（Cookie）"))
                     }
                     TextButton(
                         onClick = { send(BrowserAction.ImportPasswords(profile.id)) },
                         enabled = profile.id.isNotEmpty(),
                     ) {
-                        Text("保存パスワード → Keychain")
+                        Text(language.text("保存パスワード → Keychain"))
                     }
                 }
                 credentials.origin?.let { origin ->
                     HorizontalDivider()
-                    Text("保存パスワード · $origin")
+                    Text(localizedUiFormat(language, "保存パスワード · {0}", listOf(origin)))
                     if (credentials.accounts.isEmpty()) {
-                        Text(credentials.passwordError ?: "このサイトの保存パスワードはありません。")
+                        Text(credentials.passwordError ?: language.text("このサイトの保存パスワードはありません。"))
                     }
                     credentials.accounts.forEach { username ->
                         TextButton(onClick = { send(BrowserAction.FillPassword(origin, username)) }) {
-                            Text(username.ifEmpty { "ユーザー名なし" })
+                            Text(username.ifEmpty { language.text("ユーザー名なし") })
                         }
                     }
                     TextButton(
                         onClick = { send(BrowserAction.DeletePasswords(origin)) },
                         enabled = credentials.accounts.isNotEmpty(),
                     ) {
-                        Text("このサイトの保存パスワードを削除")
+                        Text(language.text("このサイトの保存パスワードを削除"))
                     }
                 }
             }
         },
     )
+}
+
+@Composable
+private fun BrowserNavigation(
+    enabled: Boolean,
+    canGoBack: Boolean,
+    canGoForward: Boolean,
+    send: (BrowserAction) -> Unit,
+) {
+    val language = LocalUiLanguage.current
+    IconButton(
+        onClick = { send(BrowserAction.Back) },
+        enabled = canGoBack,
+        modifier = Modifier.size(40.dp),
+    ) {
+        Icon(painterResource(R.drawable.ic_arrow_left), language.text("前のページ"), Modifier.size(16.dp))
+    }
+    IconButton(
+        onClick = { send(BrowserAction.Forward) },
+        enabled = canGoForward,
+        modifier = Modifier.size(40.dp),
+    ) {
+        Icon(painterResource(R.drawable.ic_arrow_right), language.text("次のページ"), Modifier.size(16.dp))
+    }
+    IconButton(onClick = { send(BrowserAction.Reload) }, enabled = enabled, modifier = Modifier.size(40.dp)) {
+        Icon(painterResource(R.drawable.ic_refresh), language.text("再読み込み"), Modifier.size(16.dp))
+    }
 }

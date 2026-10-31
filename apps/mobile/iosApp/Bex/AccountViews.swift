@@ -9,8 +9,11 @@ struct AccountUsageView: View {
         VStack(alignment: .leading, spacing: 12) {
             if let usage {
                 if let error = usage.error {
-                    Label(accountErrorMessage(message: error), systemImage: "exclamationmark.circle")
-                        .font(.caption).foregroundStyle(.orange)
+                    Label(
+                        LocalizedStringKey(accountErrorMessage(message: error)),
+                        systemImage: "exclamationmark.circle"
+                    )
+                    .font(.caption).foregroundStyle(.orange)
                 }
                 ForEach(Array(usage.windows.enumerated()), id: \.offset) { _, window in
                     UsageWindowView(window: window)
@@ -76,7 +79,7 @@ private struct UsageWindowView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
-                Text(window.label)
+                AppText(window.label)
                 Spacer()
                 Text("残り \(window.remainingPercent)%").monospacedDigit()
             }.font(.caption)
@@ -153,10 +156,10 @@ struct AccountLoginSection: View {
                 ProgressView("ブラウザでの認証を待っています…")
             }
             if let progressMessage {
-                ProgressView(progressMessage)
+                ProgressView(LocalizedStringKey(progressMessage))
             }
             if let error = loginError {
-                Text(accountErrorMessage(message: error)).font(.caption).foregroundStyle(.red)
+                AppText(accountErrorMessage(message: error)).font(.caption).foregroundStyle(.red)
                 Button("認証状態を再確認", action: retry)
             }
         }

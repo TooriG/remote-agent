@@ -237,7 +237,7 @@ extension ThreadScreen {
         .disabled(!model.isConnected || (!model.isNewThread && conversation == nil) || model
             .transcribing || dictation.requestingPermission || model.sending || model
             .transferring || preparingMedia)
-        .accessibilityLabel(dictation.isRecording ? "録音を終了して文字起こし" : "音声をCodexで文字起こし")
+        .accessibilityLabel(LocalizedStringKey(dictation.isRecording ? "録音を終了して文字起こし" : "音声をCodexで文字起こし"))
         .accessibilityIdentifier("dictation.toggle")
     }
 
@@ -261,7 +261,7 @@ extension ThreadScreen {
             Image(systemName: "arrow.up")
         }
         .buttonStyle(ComposerActionButtonStyle())
-        .accessibilityLabel(dictation.isRecording ? "文字起こしして送信" : "送信")
+        .accessibilityLabel(LocalizedStringKey(dictation.isRecording ? "文字起こしして送信" : "送信"))
         .disabled(!model.isConnected || (!model.isNewThread && conversation == nil) || model
             .snapshot.modelProviderForDraft(threadId: model.coreDraftKey) == nil || model
             .sending || model.transferring || preparingMedia || dictation.requestingPermission || model
@@ -298,7 +298,7 @@ extension ThreadScreen {
         }
         .buttonStyle(ComposerActionButtonStyle(tint: .red))
         .disabled(model.interruptingTurnId == turnId)
-        .accessibilityLabel(model.interruptingTurnId == turnId ? "停止中" : "停止")
+        .accessibilityLabel(LocalizedStringKey(model.interruptingTurnId == turnId ? "停止中" : "停止"))
         .accessibilityIdentifier("turn.interrupt.\(turnId)")
     }
 
@@ -312,7 +312,7 @@ extension ThreadScreen {
                 )
                 let candidates = suggestions?.candidates ?? []
                 if let status = suggestions?.status {
-                    Text(status).font(.caption).foregroundStyle(.secondary)
+                    AppText(status).font(.caption).foregroundStyle(.secondary)
                 }
                 if !candidates.isEmpty {
                     ScrollView {

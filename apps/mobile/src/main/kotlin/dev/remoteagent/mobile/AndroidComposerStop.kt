@@ -27,6 +27,7 @@ internal fun ComposerStopButton(
     phase: dev.remoteagent.core.OperationPhase?,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
 ) {
+    val language = LocalUiLanguage.current
     val stopping = phase is dev.remoteagent.core.OperationPhase.Running
     Column {
         FilledIconButton(
@@ -35,12 +36,14 @@ internal fun ComposerStopButton(
             colors =
                 IconButtonDefaults.filledIconButtonColors(containerColor = Color.White, contentColor = Color.Black),
             modifier =
-                Modifier.testTag("composer.stop").semantics { contentDescription = if (stopping) "停止中" else "停止" },
+                Modifier.testTag("composer.stop").semantics {
+                    contentDescription = if (stopping) language.text("停止中") else language.text("停止")
+                },
         ) {
             if (stopping) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
             else Box(Modifier.size(16.dp).background(Color.Black, RoundedCornerShape(3.dp)))
         }
         if (phase is dev.remoteagent.core.OperationPhase.Failed)
-            Text("停止できませんでした。再試行してください。", color = MaterialTheme.colorScheme.error)
+            Text(language.text("停止できませんでした。再試行してください。"), color = MaterialTheme.colorScheme.error)
     }
 }

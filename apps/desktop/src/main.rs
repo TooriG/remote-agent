@@ -4,6 +4,7 @@ mod appearance;
 mod browser;
 mod composition;
 mod diff;
+mod localization;
 mod platform;
 mod store_session;
 mod terminal;
@@ -190,6 +191,7 @@ fn main() {
         })
         .detach();
         appearance::init(cx);
+        localization::init(cx);
         cx.bind_keys([KeyBinding::new(
             "ctrl-v",
             gpui_kit::component::input::Paste,

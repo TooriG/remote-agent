@@ -77,17 +77,18 @@ pub(super) fn section_heading(title: &'static str, description: &'static str) ->
 }
 
 fn sidebar_header(expanded: bool, cx: &Context<Desktop>) -> Div {
+    let language = crate::localization::language(cx);
     let (id, icon, label) = if expanded {
         (
             "collapse-sidebar",
             IconName::PanelLeftClose,
-            "サイドバーを閉じる",
+            language.text("サイドバーを閉じる"),
         )
     } else {
         (
             "expand-sidebar",
             IconName::PanelLeftOpen,
-            "サイドバーを開く",
+            language.text("サイドバーを開く"),
         )
     };
     h_flex()
@@ -135,7 +136,11 @@ fn user_message_bubble() -> Div {
         .bg(rgb(appearance::RAISED))
 }
 
-fn review_counts(additions: Option<u64>, deletions: Option<u64>) -> AnyElement {
+fn review_counts(
+    additions: Option<u64>,
+    deletions: Option<u64>,
+    language: agent_core::localization::UiLanguage,
+) -> AnyElement {
     let counts = h_flex().gap_1().text_xs();
     match (additions, deletions) {
         (Some(added), Some(deleted)) => counts
@@ -144,7 +149,7 @@ fn review_counts(additions: Option<u64>, deletions: Option<u64>) -> AnyElement {
             .into_any_element(),
         _ => counts
             .text_color(rgb(appearance::MUTED))
-            .child("バイナリ")
+            .child(language.text("バイナリ"))
             .into_any_element(),
     }
 }
@@ -210,10 +215,11 @@ impl Render for Desktop {
 
 impl Desktop {
     fn panel_toggle(open: bool, cx: &Context<Self>) -> Button {
+        let language = crate::localization::language(cx);
         icon_button(
             "panel-toggle",
             IconName::PanelRight,
-            "右パネルを切り替え",
+            language.text("右パネルを切り替え"),
             cx,
             move |view, window, cx| {
                 let key = view.panel_scope();

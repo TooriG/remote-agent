@@ -1,5 +1,6 @@
 //! macOS owns a system menu independently of any application window.
 use crate::{Runtime, store_session::StoreSession};
+use agent_core::localization::{UiLanguage, localized_ui_text};
 use agent_core::state::Snapshot;
 use agent_protocol::live_activity::{TaskActivityIconKind, TaskActivityView};
 use gpui_kit::{App, AppContext, Context, Entity, Global, Task};
@@ -41,7 +42,7 @@ struct StatusMenu {
     actions: Retained<MenuActions>,
 }
 impl StatusMenu {
-    fn new(actions: async_channel::Sender<Action>) -> Self {
+    fn new(actions: async_channel::Sender<Action>, language: UiLanguage) -> Self {
         let mtm = MainThreadMarker::new().expect("menu runs on main thread");
         let allocated = MenuActions::alloc(mtm).set_ivars(actions);
         // SAFETY: NSObject init has no additional requirements.
@@ -50,19 +51,19 @@ impl StatusMenu {
             item: NSStatusBar::systemStatusBar().statusItemWithLength(NSVariableStatusItemLength),
             actions,
         };
-        result.render(None);
+        result.render(None, language);
         result
     }
-    fn render(&self, view: Option<&TaskActivityView>) {
+    fn render(&self, view: Option<&TaskActivityView>, language: UiLanguage) {
         let mtm = MainThreadMarker::new().expect("menu runs on main thread");
         let menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str("Bex"));
         menu.setAutoenablesItems(false);
         if let Some(view) = view {
-            let header = menu_item(&view.label, None, mtm);
+            let header = menu_item(&localized_ui_text(language, view.label.clone()), None, mtm);
             header.setEnabled(false);
             menu.addItem(&header);
             for icon in &view.icons {
-                let row = menu_item(&icon.label, None, mtm);
+                let row = menu_item(&localized_ui_text(language, icon.label.clone()), None, mtm);
                 row.setEnabled(false);
                 row.setImage(symbol(icon.kind, &icon.label).as_deref());
                 menu.addItem(&row);
@@ -76,7 +77,7 @@ impl StatusMenu {
         }
         for (title, action) in [("Bexを開く", sel!(openBex:)), ("Bexを終了", sel!(quitBex:))]
         {
-            let row = menu_item(title, Some(action), mtm);
+            let row = menu_item(language.text(title), Some(action), mtm);
             // SAFETY: The retained target implements these selectors with the NSMenuItem action signature.
             unsafe {
                 row.setTarget(Some(&self.actions));
@@ -173,6 +174,7 @@ struct TaskMenu {
     session: Option<StoreSession>,
     _updates: Task<()>,
     _actions: Task<()>,
+    _language: gpui_kit::Subscription,
 }
 struct TaskMenuRoot {
     _menu: Entity<TaskMenu>,
@@ -219,14 +221,14 @@ pub(crate) fn init(cx: &mut App) {
         let updates = cx.spawn(async move |menu, cx| {
             while let Ok(update) = incoming.recv().await {
                 if menu
-                    .update(cx, |menu, _| match update {
+                    .update(cx, |menu, cx| match update {
                         Update::Connected(Ok(session)) => menu.session = Some(session),
                         Update::Connected(Err(error)) => {
                             tracing::error!(target: "agent", operation = "task_menu.connect", %error)
                         }
                         Update::Snapshot(snapshot) => {
                             if let Some(display) = snapshot.task_activity_display() {
-                                menu.menu.render(Some(&display.current));
+                                menu.menu.render(Some(&display.current), crate::localization::language(cx));
                             }
                         }
                     })
@@ -245,10 +247,14 @@ pub(crate) fn init(cx: &mut App) {
             }
         });
         TaskMenu {
-            menu: StatusMenu::new(actions),
+            menu: StatusMenu::new(actions, crate::localization::language(cx)),
             session: None,
             _updates: updates,
             _actions: actions_task,
+            _language: cx.observe_global::<crate::localization::Language>(|menu, cx| {
+                let display = menu.session.as_ref().and_then(|session| session.store.snapshot().task_activity_display());
+                menu.menu.render(display.as_ref().map(|display| &display.current), crate::localization::language(cx));
+            }),
         }
     });
     cx.set_global(TaskMenuRoot { _menu: menu });

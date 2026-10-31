@@ -27,6 +27,7 @@ impl Desktop {
         connected: bool,
         cx: &Context<Self>,
     ) -> AnyElement {
+        let language = crate::localization::language(cx);
         let Some(phase) = phase else {
             return div().into_any_element();
         };
@@ -39,7 +40,7 @@ impl Desktop {
                 icon_button(
                     "cancel-dictation",
                     IconName::Close,
-                    "録音を取り消す (Esc)",
+                    language.text("録音を取り消す (Esc)"),
                     cx,
                     |s, _, _| s.cancel_recording(),
                 )
@@ -70,10 +71,10 @@ impl Desktop {
                     .gap_2()
                     .child(crate::activity::indicator())
                     .child(match phase {
-                        Phase::Preparing => "録音を準備中…",
+                        Phase::Preparing => language.text("録音を準備中…"),
                         #[cfg(target_os = "macos")]
-                        Phase::Permission => "マイクの許可を確認中…",
-                        _ => "文字起こし中…",
+                        Phase::Permission => language.text("マイクの許可を確認中…"),
+                        _ => language.text("文字起こし中…"),
                     })
                     .into_any_element()
             })
@@ -81,7 +82,7 @@ impl Desktop {
                 icon_button(
                     "stop-dictation",
                     Icon::default().path("icons/stop.svg"),
-                    "録音を終了して文字起こし",
+                    language.text("録音を終了して文字起こし"),
                     cx,
                     |s, _, _| s.finish_dictation(false),
                 )
@@ -91,7 +92,7 @@ impl Desktop {
                 icon_button(
                     "send-dictation",
                     IconName::ArrowUp,
-                    "文字起こしして送信",
+                    language.text("文字起こしして送信"),
                     cx,
                     |s, _, cx| s.send(cx),
                 )

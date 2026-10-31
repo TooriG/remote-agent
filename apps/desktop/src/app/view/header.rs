@@ -20,7 +20,12 @@ impl HeaderView {
             desktop: desktop.downgrade(),
             model: None,
             _observation: cx.observe(desktop, |view, desktop, cx| {
-                view.set_model(desktop.read(cx).header_model(), cx);
+                view.set_model(
+                    desktop
+                        .read(cx)
+                        .header_model(crate::localization::language(cx)),
+                    cx,
+                );
             }),
             #[cfg(test)]
             renders: 0,
@@ -50,7 +55,7 @@ impl Render for HeaderView {
     }
 }
 impl Desktop {
-    fn header_model(&self) -> HeaderModel {
+    fn header_model(&self, language: agent_core::localization::UiLanguage) -> HeaderModel {
         let panel_open = self.panels.get(self.panel_scope()).open;
         let title = self
             .thread()
@@ -66,7 +71,7 @@ impl Desktop {
                     })
                     .and_then(|thread| thread.name.as_deref())
             })
-            .unwrap_or("新しいチャット")
+            .unwrap_or(language.text("新しいチャット"))
             .to_owned();
         HeaderModel {
             title,
@@ -76,7 +81,7 @@ impl Desktop {
     }
     pub(super) fn conversation_header(&self, cx: &mut Context<Self>) -> AnyElement {
         if self.header_view.read(cx).model.is_none() {
-            let model = self.header_model();
+            let model = self.header_model(crate::localization::language(cx));
             self.header_view
                 .update(cx, |view, cx| view.set_model(model, cx));
         }

@@ -94,7 +94,8 @@ struct ThreadScreen: View {
                     composerFocused = true
                 }
             }
-            .navigationTitle(isSideChat ? "サイドチャット" : conversation?.title ?? (model.isNewThread ? "新しいタスク" : "タスク"))
+            .navigationTitle(LocalizedStringKey(isSideChat ? "サイドチャット" : conversation?
+                    .title ?? (model.isNewThread ? "新しいタスク" : "タスク")))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if !isSideChat {
@@ -345,7 +346,9 @@ extension ThreadScreen {
                         .truncationMode(.middle)
                         .frame(minWidth: 44, minHeight: 44)
                 }
-                .accessibilityLabel("フォルダ: \(project?.name ?? (directory.isEmpty ? "チャット" : directory))")
+                .accessibilityLabel(
+                    LocalizedStringKey("フォルダ: \(project?.name ?? (directory.isEmpty ? "チャット" : directory))")
+                )
                 .accessibilityIdentifier("task.folder")
             }
             .font(.title2)
@@ -372,7 +375,7 @@ extension ThreadScreen {
             }
             .font(.subheadline)
             .foregroundColor(.secondary)
-            .accessibilityLabel("環境: \(model.selectedProfileName ?? "未選択")")
+            .accessibilityLabel(LocalizedStringKey("環境: \(model.selectedProfileName ?? "未選択")"))
             .accessibilityIdentifier("task.environment")
         }
         .multilineTextAlignment(.center)

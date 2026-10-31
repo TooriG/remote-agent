@@ -57,7 +57,6 @@ import dev.remoteagent.core.ReadItem
 import dev.remoteagent.core.Respond
 import dev.remoteagent.core.Snapshot
 import dev.remoteagent.core.activityIsExpanded
-import dev.remoteagent.core.insertInvocation
 import dev.remoteagent.core.shouldLoadHistory
 import java.util.UUID
 import kotlinx.coroutines.launch
@@ -89,7 +88,7 @@ internal fun ThreadDetailScreen(
             ) {
                 historyControl(threadId, threadId?.let(snapshot::historyControl), perform)
                 threadId?.let(snapshot::conversation)?.historyNotice()?.let { notice ->
-                    item(key = "history:read-state") { Text(notice) }
+                    item(key = "history:read-state") { Text(LocalUiLanguage.current.text(notice)) }
                 }
                 val renderRow: @Composable (ConversationRow) -> Unit = { row ->
                     ConversationContent(
@@ -128,6 +127,7 @@ private fun BoxScope.LatestMessageButton(
     listState: androidx.compose.foundation.lazy.LazyListState,
     follow: () -> Unit,
 ) {
+    val language = LocalUiLanguage.current
     val scope = rememberCoroutineScope()
     if (listState.canScrollForward) {
         FilledIconButton(
@@ -141,7 +141,7 @@ private fun BoxScope.LatestMessageButton(
                 IconButtonDefaults.filledIconButtonColors(containerColor = Color.DarkGray, contentColor = Color.White),
             modifier =
                 Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp).semantics {
-                    contentDescription = "最新のメッセージへ"
+                    contentDescription = language.text("最新のメッセージへ")
                 },
         ) {
             Text("↓")
@@ -175,6 +175,7 @@ private fun ConversationContent(
     forkPhase: dev.remoteagent.core.OperationPhase? = null,
     activityHeader: @Composable (ActivityPresentation) -> Unit,
 ) {
+    val language = LocalUiLanguage.current
     val timestampMs = row.timestampMs
     when (val content = row.content) {
         is ConversationRowContent.ProviderHandoff ->
@@ -215,7 +216,7 @@ private fun ConversationContent(
             Button(
                 onClick = { if (threadId != null) perform(Intent.Interrupt(Interrupt(threadId, content.turnId))) {} }
             ) {
-                Text("停止")
+                Text(language.text("停止"))
             }
     }
 }
@@ -228,7 +229,10 @@ private fun ActivityHeader(
 ) {
     val expanded = activityIsExpanded(activity, choice)
     TextButton(onClick = { if (activity.activityCanCollapse) toggle(ActivityExpansion(activity.status, !expanded)) }) {
-        Text(activity.activitySummary + if (activity.activityCanCollapse) if (expanded) " ⌄" else " ›" else "")
+        Text(
+            LocalUiLanguage.current.text(activity.activitySummary) +
+                if (activity.activityCanCollapse) if (expanded) " ⌄" else " ›" else ""
+        )
     }
 }
 
@@ -239,6 +243,7 @@ internal fun ThreadComposer(
     onSend: () -> Unit,
     attach: @Composable ((Boolean) -> Unit) -> Unit,
 ) {
+    val language = LocalUiLanguage.current
     val navigation = snapshot.navigation()
     val draft = snapshot.draft(navigation.draftKey)
     val sending = snapshot.operationRunning(dev.remoteagent.core.OperationKey.Submission(navigation.draftKey))
@@ -253,12 +258,6 @@ internal fun ThreadComposer(
         Column(Modifier.padding(8.dp)) {
             inputUnavailable?.let { Text(it) }
             DraftAttachments(draft.attachments, navigation.draftKey, perform)
-            val cursor = draft.text.toByteArray(Charsets.UTF_8).size.toUInt()
-            ComposerInvocationPicker(snapshot.composerSuggestions(draft.text, cursor)) { invocation ->
-                insertInvocation(draft.text, cursor, invocation.kind, invocation.name)?.let {
-                    perform(Intent.InsertInvocation(navigation.draftKey, it.text, invocation)) {}
-                }
-            }
             ComposerTextInput(snapshot, perform)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 attach { uploading = it }
@@ -286,7 +285,12 @@ internal fun ThreadComposer(
                                 (draft.text.isNotBlank() || draft.attachments.isNotEmpty()),
                     ) {
                         if (sending) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                        else Text("↑", fontSize = 24.sp, modifier = Modifier.semantics { contentDescription = "送信" })
+                        else
+                            Text(
+                                "↑",
+                                fontSize = 24.sp,
+                                modifier = Modifier.semantics { contentDescription = language.text("送信") },
+                            )
                     }
             }
         }
@@ -299,6 +303,7 @@ internal fun AttachmentButton(
     attach: (Pair<String?, dev.remoteagent.core.DraftKey>, Uri, () -> Unit) -> Unit,
     transferState: (Boolean) -> Unit = {},
 ) {
+    val language = LocalUiLanguage.current
     var transferring by remember { mutableStateOf(false) }
     var selection by remember { mutableStateOf(selectionKey) }
     val picker =
@@ -321,7 +326,10 @@ internal fun AttachmentButton(
             picker.launch(arrayOf("*/*"))
         },
         enabled = !transferring,
-        modifier = Modifier.semantics { contentDescription = if (transferring) "アップロード中" else "写真やファイルを添付" },
+        modifier =
+            Modifier.semantics {
+                contentDescription = if (transferring) language.text("アップロード中") else language.text("写真やファイルを添付")
+            },
     ) {
         if (transferring) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
         else Text("+", fontSize = 32.sp)
@@ -330,16 +338,24 @@ internal fun AttachmentButton(
 
 @Composable
 internal fun ConversationHeader(title: String?, showThreads: () -> Unit, scrollToTop: () -> Unit) {
+    val language = LocalUiLanguage.current
     Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onClick = showThreads, modifier = Modifier.semantics { contentDescription = "タスク一覧に戻る" }) {
+        IconButton(
+            onClick = showThreads,
+            modifier = Modifier.semantics { contentDescription = language.text("タスク一覧に戻る") },
+        ) {
             Text("‹", fontSize = 32.sp)
         }
         TextButton(
             onClick = scrollToTop,
             colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
-            modifier = Modifier.weight(1f).semantics { contentDescription = "会話の先頭へ" },
+            modifier = Modifier.weight(1f).semantics { contentDescription = language.text("会話の先頭へ") },
         ) {
-            Text(title?.ifEmpty { "タスク" } ?: "新しいチャット", maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                title?.ifEmpty { language.text("タスク") } ?: language.text("新しいチャット"),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }

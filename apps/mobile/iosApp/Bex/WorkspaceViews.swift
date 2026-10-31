@@ -301,7 +301,7 @@ struct WorkspaceAgentsScreen: View {
                             }
                             Text(agent.title)
                             Spacer()
-                            Text(agent.status).foregroundStyle(.secondary)
+                            AppText(agent.status).foregroundStyle(.secondary)
                         }
                         if let detail = agent.detail {
                             Text(detail).foregroundStyle(.secondary)

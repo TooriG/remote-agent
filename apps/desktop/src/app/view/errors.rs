@@ -67,6 +67,7 @@ impl Desktop {
         reconnect: Option<bool>,
         cx: &Context<Self>,
     ) -> Div {
+        let language = crate::localization::language(cx);
         v_flex()
             .gap_2()
             .min_w_0()
@@ -95,13 +96,15 @@ impl Desktop {
                             .flex_1()
                             .min_w_0()
                             .gap_1()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(appearance::MUTED))
-                                    .child(notice.context),
-                            )
-                            .child(div().text_sm().font_semibold().child(notice.title))
+                            .child(div().text_xs().text_color(rgb(appearance::MUTED)).child(
+                                agent_core::localization::localized_ui_text(
+                                    language,
+                                    notice.context,
+                                ),
+                            ))
+                            .child(div().text_sm().font_semibold().child(
+                                agent_core::localization::localized_ui_text(language, notice.title),
+                            ))
                             .child(
                                 div()
                                     .id(format!("error-details-{}-{index}", scope.label()))
@@ -111,7 +114,10 @@ impl Desktop {
                                     .tooltip(move |window, cx| {
                                         tooltip::Tooltip::new(detail.clone()).build(window, cx)
                                     })
-                                    .child(notice.message),
+                                    .child(agent_core::localization::localized_ui_text(
+                                        language,
+                                        notice.message,
+                                    )),
                             )
                             .when_some(row.recovery.clone(), |body, label| {
                                 body.child(button(
@@ -131,7 +137,7 @@ impl Desktop {
                                 body.child(
                                     button(
                                         format!("reconnect-error-{index}"),
-                                        "再接続",
+                                        language.text("再接続"),
                                         cx,
                                         |view, window, cx| {
                                             view.switch_host(view.remote.clone(), window, cx)
@@ -144,7 +150,7 @@ impl Desktop {
                     .child(icon_button(
                         format!("copy-error-{}-{index}", scope.label()),
                         IconName::Copy,
-                        "エラーの詳細をコピー",
+                        language.text("エラーの詳細をコピー"),
                         cx,
                         move |_, _, cx| {
                             cx.write_to_clipboard(ClipboardItem::new_string(copied.clone()))
@@ -154,7 +160,7 @@ impl Desktop {
                         icon_button(
                             format!("dismiss-error-{}-{index}", scope.label()),
                             IconName::Close,
-                            "エラーを閉じる",
+                            language.text("エラーを閉じる"),
                             cx,
                             move |view, _, _| {
                                 if local {

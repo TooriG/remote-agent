@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.Outcome
 import dev.remoteagent.core.RenderedItem
+import dev.remoteagent.core.localizedUiFormat
 import kotlin.coroutines.resume
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -33,16 +34,20 @@ internal fun UnknownSubmissionSummary(
     setExpanded: (Boolean) -> Unit,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
 ) {
+    val language = LocalUiLanguage.current
     var busy by remember { mutableStateOf(false) }
     var failed by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     Card {
         Column(Modifier.padding(12.dp)) {
-            Text("送信結果不明・${submissionIds.size}件", style = MaterialTheme.typography.labelLarge)
-            Text("内容は保存されています。自動再送はしません。", style = MaterialTheme.typography.bodySmall)
+            Text(
+                localizedUiFormat(language, "送信結果不明・{0}件", listOf(submissionIds.size.toString())),
+                style = MaterialTheme.typography.labelLarge,
+            )
+            Text(language.text("内容は保存されています。自動再送はしません。"), style = MaterialTheme.typography.bodySmall)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(enabled = !busy, onClick = { setExpanded(!expanded) }) {
-                    Text(if (expanded) "閉じる" else "内容を確認")
+                    Text(if (expanded) language.text("閉じる") else language.text("内容を確認"))
                 }
                 TextButton(
                     enabled = !busy,
@@ -61,10 +66,10 @@ internal fun UnknownSubmissionSummary(
                         }
                     },
                 ) {
-                    Text(if (busy) "削除中…" else "表示をすべて削除")
+                    Text(if (busy) language.text("削除中…") else language.text("表示をすべて削除"))
                 }
             }
-            if (failed) Text("削除できませんでした。残った表示をもう一度削除できます。", style = MaterialTheme.typography.bodySmall)
+            if (failed) Text(language.text("削除できませんでした。残った表示をもう一度削除できます。"), style = MaterialTheme.typography.bodySmall)
         }
     }
 }
@@ -87,6 +92,7 @@ private suspend fun discardUnknownSubmissions(
 
 @Composable
 internal fun UnknownSubmissionActions(submissionId: String, perform: (Intent, (Result<Outcome>) -> Unit) -> Unit) {
+    val language = LocalUiLanguage.current
     var busy by remember(submissionId) { mutableStateOf(false) }
     var failed by remember(submissionId) { mutableStateOf(false) }
     fun dispatch(intent: Intent) {
@@ -100,13 +106,13 @@ internal fun UnknownSubmissionActions(submissionId: String, perform: (Intent, (R
     Column {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(enabled = !busy, onClick = { dispatch(Intent.RestoreUnknownSubmission(submissionId)) }) {
-                Text("下書きに戻す")
+                Text(language.text("下書きに戻す"))
             }
             TextButton(enabled = !busy, onClick = { dispatch(Intent.DiscardUnknownSubmission(submissionId)) }) {
-                Text("表示を削除")
+                Text(language.text("表示を削除"))
             }
         }
-        if (failed) Text("操作できませんでした。もう一度お試しください。", style = MaterialTheme.typography.bodySmall)
+        if (failed) Text(language.text("操作できませんでした。もう一度お試しください。"), style = MaterialTheme.typography.bodySmall)
     }
 }
 

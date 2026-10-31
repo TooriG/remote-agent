@@ -25,6 +25,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -73,6 +74,22 @@ internal enum class Screen {
 // The selected Store owns browser requests as well as conversation operations.
 @Suppress("TooManyFunctions")
 internal class AndroidAppModel(private val context: Context) : ViewModel() {
+    private val appPreferences = context.getSharedPreferences("bex-app", Context.MODE_PRIVATE)
+    var language by
+        mutableStateOf(
+            if (appPreferences.getString("language", "ja") == "en") dev.remoteagent.core.UiLanguage.ENGLISH
+            else dev.remoteagent.core.UiLanguage.JAPANESE
+        )
+        private set
+
+    fun selectLanguage(value: dev.remoteagent.core.UiLanguage) {
+        appPreferences
+            .edit()
+            .putString("language", if (value == dev.remoteagent.core.UiLanguage.ENGLISH) "en" else "ja")
+            .apply()
+        language = value
+    }
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val repository = AndroidMobileRepository(context)
     var snapshot by mutableStateOf(Snapshot.empty())
@@ -92,6 +109,9 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     var notice by mutableStateOf<String?>(null)
     val loadingHistory: Boolean
         get() = snapshot.navigation().threadId?.let { snapshot.operationRunning(OperationKey.History(it)) } ?: false
+
+    val shouldReconnect: Boolean
+        get() = !snapshot.connected() && profileId != null && screen != Screen.Pairing
 
     val loadingThreads: Boolean
         get() = snapshot.operationRunning(OperationKey.SessionList)
@@ -377,6 +397,7 @@ internal fun RemoteAgentApp(
     model: AndroidAppModel,
     requestQrScan: (onContents: (String) -> Unit) -> Unit,
 ) {
+    var showingSettings by remember { mutableStateOf(false) }
     DisposableEffect(model, activity) {
         val observer = AndroidConnectionLifecycle({ model.lifecycle(true) }, { model.lifecycle(false) })
         activity.lifecycle.addObserver(observer)
@@ -386,54 +407,50 @@ internal fun RemoteAgentApp(
     BackHandler(model.screen != Screen.Hosts) {
         if (model.screen == Screen.Conversation) model.showThreads() else model.showHosts()
     }
-    AppTheme {
-        Scaffold(
-            topBar = {
-                if (screen in listOf(Screen.Pairing, Screen.Hosts))
-                    TopAppBar(title = { Text("bex", fontWeight = androidx.compose.ui.text.font.FontWeight.Bold) })
-            }
-        ) { padding ->
-            Column(Modifier.fillMaxSize().appContentInsets(padding)) {
-                ConnectionStatus(
-                    model.notice,
-                    model.busy,
-                    !model.snapshot.connected() && model.profileId != null && model.screen != Screen.Pairing,
-                    model::connect,
-                )
-                ErrorNotices(
-                    model.snapshot,
-                    ErrorScope.Application,
-                    model::perform,
-                    model::connect,
-                )
-                when (screen) {
-                    Screen.Pairing -> PairingScreen(model.busy, model::pair, model::showHosts, requestQrScan)
-                    Screen.Hosts ->
-                        ProfilesScreen(model.profiles, model::selectProfile) { model.screen = Screen.Pairing }
-                    Screen.Threads -> {
-                        ErrorNotices(model.snapshot, ErrorScope.Projects, model::perform)
-                        Box(Modifier.weight(1f)) {
-                            ThreadListScreen(
-                                model.list,
-                                model.snapshot.listQuery(),
-                                model.loadingThreads,
-                                { intent ->
-                                    if (intent is Intent.NewChat || intent is Intent.ReadThread) {
-                                        model.screen = Screen.Conversation
-                                    }
-                                    model.perform(intent)
-                                },
-                                model::showHosts,
-                                hostName = model.profiles.firstOrNull { it.id == model.profileId }?.name ?: "My PC",
-                                connected = model.snapshot.connected(),
-                            )
+    CompositionLocalProvider(LocalUiLanguage provides model.language) {
+        AppTheme {
+            Scaffold(
+                topBar = { if (screen in listOf(Screen.Pairing, Screen.Hosts)) HostAppBar { showingSettings = true } }
+            ) { padding ->
+                Column(Modifier.fillMaxSize().appContentInsets(padding)) {
+                    ConnectionStatus(model.notice, model.busy, model.shouldReconnect, model::connect)
+                    ErrorNotices(
+                        model.snapshot,
+                        ErrorScope.Application,
+                        model::perform,
+                        model::connect,
+                    )
+                    when (screen) {
+                        Screen.Pairing -> PairingScreen(model.busy, model::pair, model::showHosts, requestQrScan)
+                        Screen.Hosts ->
+                            ProfilesScreen(model.profiles, model::selectProfile) { model.screen = Screen.Pairing }
+                        Screen.Threads -> {
+                            ErrorNotices(model.snapshot, ErrorScope.Projects, model::perform)
+                            Box(Modifier.weight(1f)) {
+                                ThreadListScreen(
+                                    model.list,
+                                    model.snapshot.listQuery(),
+                                    model.loadingThreads,
+                                    { intent ->
+                                        if (intent is Intent.NewChat || intent is Intent.ReadThread) {
+                                            model.screen = Screen.Conversation
+                                        }
+                                        model.perform(intent)
+                                    },
+                                    model::showHosts,
+                                    hostName = model.profiles.firstOrNull { it.id == model.profileId }?.name ?: "My PC",
+                                    connected = model.snapshot.connected(),
+                                    openSettings = { showingSettings = true },
+                                )
+                            }
                         }
+                        Screen.Conversation -> ConversationPane(model)
                     }
-                    Screen.Conversation -> ConversationPane(model)
                 }
             }
         }
     }
+    if (showingSettings) LanguageSettingsDialog(model.language, model::selectLanguage) { showingSettings = false }
 }
 
 @Composable
@@ -443,27 +460,29 @@ private fun PairingScreen(
     showHosts: () -> Unit,
     scan: (onContents: (String) -> Unit) -> Unit,
 ) {
+    val language = LocalUiLanguage.current
     var contents by remember { mutableStateOf("") }
     Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("PCとペアリング", style = MaterialTheme.typography.headlineMedium)
-        Text("PC Host ManagerのQRコードを読み取ります。QRの内容はこの端末に保存しません。")
-        Button(onClick = { scan { value -> contents = value } }) { Text("QRコードを読み取る") }
+        Text(language.text("PCとペアリング"), style = MaterialTheme.typography.headlineMedium)
+        Text(language.text("PC Host ManagerのQRコードを読み取ります。QRの内容はこの端末に保存しません。"))
+        Button(onClick = { scan { value -> contents = value } }) { Text(language.text("QRコードを読み取る")) }
         OutlinedTextField(
             contents,
             { contents = it },
             Modifier.fillMaxWidth(),
-            label = { Text("ペアリングQR（手入力）") },
+            label = { Text(language.text("ペアリングQR（手入力）")) },
             minLines = 3,
         )
-        Button(onClick = { pair(contents) }, enabled = contents.isNotBlank() && !busy) { Text("ペアリング") }
-        Button(onClick = showHosts) { Text("戻る") }
+        Button(onClick = { pair(contents) }, enabled = contents.isNotBlank() && !busy) { Text(language.text("ペアリング")) }
+        Button(onClick = showHosts) { Text(language.text("戻る")) }
     }
 }
 
 @Composable
 private fun ProfilesScreen(profiles: List<HostProfile>, select: (String) -> Unit, pair: () -> Unit) {
+    val language = LocalUiLanguage.current
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp)) {
-        item { Button(onClick = pair) { Text("PCを追加") } }
+        item { Button(onClick = pair) { Text(language.text("PCを追加")) } }
         items(profiles, key = { it.id }) { profile ->
             Card(onClick = { select(profile.id) }, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                 Column(Modifier.padding(16.dp)) {
@@ -477,9 +496,10 @@ private fun ProfilesScreen(profiles: List<HostProfile>, select: (String) -> Unit
 
 @Composable
 private fun ConnectionStatus(notice: String?, busy: Boolean, reconnect: Boolean, connect: () -> Unit) {
+    val language = LocalUiLanguage.current
     notice?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp)) }
     if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-    if (reconnect) Button(onClick = connect, enabled = !busy) { Text("再接続") }
+    if (reconnect) Button(onClick = connect, enabled = !busy) { Text(language.text("再接続")) }
 }
 
 @Composable
@@ -515,3 +535,13 @@ private fun androidx.compose.foundation.layout.ColumnScope.ConversationPane(mode
 // Keep IME handling at the screen boundary so it cannot create a gap below the composer.
 internal fun Modifier.appContentInsets(padding: PaddingValues): Modifier =
     padding(padding).consumeWindowInsets(padding).imePadding()
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HostAppBar(openSettings: () -> Unit) {
+    val language = LocalUiLanguage.current
+    TopAppBar(
+        title = { Text("bex", fontWeight = androidx.compose.ui.text.font.FontWeight.Bold) },
+        actions = { androidx.compose.material3.TextButton(onClick = openSettings) { Text(language.text("設定")) } },
+    )
+}

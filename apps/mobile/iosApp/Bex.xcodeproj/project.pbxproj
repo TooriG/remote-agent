@@ -6,6 +6,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        BEE100000000000000000001 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = BEE100000000000000000002; };
 		36EC1BF85BB52BB71505A303 /* ErrorNotices.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DCF44CEC164E07252AA639F /* ErrorNotices.swift */; };
         D80000000000000000000001 /* SwiftUIIntrospect in Frameworks */ = {isa = PBXBuildFile; productRef = D80000000000000000000002; };
 		C0DE00000000000000000801 /* ConversationScrollObserver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000802 /* ConversationScrollObserver.swift */; };
@@ -74,6 +75,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+        BEE100000000000000000002 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = ../../../crates/agent-core/src/localization/Localizable.xcstrings; sourceTree = SOURCE_ROOT; };
 		5DCF44CEC164E07252AA639F /* ErrorNotices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ErrorNotices.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000802 /* ConversationScrollObserver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationScrollObserver.swift; sourceTree = "<group>"; };
         C0DE00000000000000000702 /* BrowserScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserScreen.swift; sourceTree = "<group>"; };
@@ -187,7 +189,8 @@
 		A10000000000000000000031 /* Bex */ = {
 			isa = PBXGroup;
 			children = (
-				A10000000000000000000011 /* IOSApp.swift */,
+				BEE100000000000000000002 /* Localizable.xcstrings */,
+                A10000000000000000000011 /* IOSApp.swift */,
 				F70000000000000000000011 /* TaskLiveActivities.swift */,
 				A10000000000000000000012 /* PlatformServices.swift */,
 				A10000000000000000000013 /* QRCodeCaptureViewController.swift */,
@@ -321,9 +324,9 @@
 			};
 			buildConfigurationList = A10000000000000000000051 /* Build configuration list for PBXProject "Bex" */;
 			compatibilityVersion = "Xcode 14.0";
-			developmentRegion = en;
+			developmentRegion = ja;
 			hasScannedForEncodings = 0;
-			knownRegions = (en, Base);
+			knownRegions = (en, ja, Base);
 			mainGroup = A10000000000000000000030;
 			productRefGroup = A10000000000000000000033 /* Products */;
 			projectDirPath = "";
@@ -354,7 +357,7 @@
 /* End PBXTargetDependency section */
 
 /* Begin PBXResourcesBuildPhase section */
-		A10000000000000000000022 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000007 /* Assets.xcassets in Resources */, E50000000000000000000001 /* PrivacyInfo.xcprivacy in Resources */,); runOnlyForDeploymentPostprocessing = 0; };
+		A10000000000000000000022 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (BEE100000000000000000001 /* Localizable.xcstrings in Resources */, A10000000000000000000007 /* Assets.xcassets in Resources */, E50000000000000000000001 /* PrivacyInfo.xcprivacy in Resources */,); runOnlyForDeploymentPostprocessing = 0; };
 		B20000000000000000000022 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;

@@ -26,6 +26,7 @@ import dev.remoteagent.core.Snapshot
 
 @Composable
 internal fun CredentialSettings(snapshot: Snapshot, perform: (Intent, (Result<Outcome>) -> Unit) -> Unit) {
+    val language = LocalUiLanguage.current
     var open by remember { mutableStateOf(false) }
     TextButton(
         onClick = {
@@ -33,7 +34,7 @@ internal fun CredentialSettings(snapshot: Snapshot, perform: (Intent, (Result<Ou
             perform(Intent.ReadDshCredentials(ReadCredentials())) {}
         }
     ) {
-        Text("接続先のAPIキーを管理")
+        Text(language.text("接続先のAPIキーを管理"))
     }
     if (open) CredentialEditor(snapshot, perform) { open = false }
 }
@@ -44,13 +45,14 @@ private fun CredentialEditor(
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
     dismiss: () -> Unit,
 ) {
+    val language = LocalUiLanguage.current
     val controls = snapshot.credentialControls()
     var provider by remember { mutableStateOf(controls.first().provider) }
     val selected = controls.first { it.provider == provider }
     val disabled = !snapshot.connected() || snapshot.operationRunning(OperationKey.DshCredentials)
     AlertDialog(
         onDismissRequest = dismiss,
-        title = { Text("接続先のAPIキー") },
+        title = { Text(language.text("接続先のAPIキー")) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 controls.forEach { route ->
@@ -64,7 +66,7 @@ private fun CredentialEditor(
                 }
             }
         },
-        confirmButton = { TextButton(onClick = dismiss) { Text("完了") } },
+        confirmButton = { TextButton(onClick = dismiss) { Text(language.text("完了")) } },
     )
 }
 
@@ -74,14 +76,15 @@ private fun CredentialActions(
     disabled: Boolean,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
 ) {
+    val language = LocalUiLanguage.current
     var key by remember(selected.provider) { mutableStateOf("") }
     val openLink = rememberExternalLinkOpener()
-    Text(selected.status)
-    TextButton(onClick = { openLink(selected.keyUrl) }) { Text("APIキーを取得") }
+    Text(LocalUiLanguage.current.text(selected.status))
+    TextButton(onClick = { openLink(selected.keyUrl) }) { Text(language.text("APIキーを取得")) }
     OutlinedTextField(
         value = key,
         onValueChange = { key = it },
-        label = { Text("APIキー") },
+        label = { Text(language.text("APIキー")) },
         visualTransformation = PasswordVisualTransformation(),
         singleLine = true,
         enabled = !disabled,
@@ -94,14 +97,14 @@ private fun CredentialActions(
         },
         enabled = !disabled && key.isNotBlank(),
     ) {
-        Text("保存")
+        Text(language.text("保存"))
     }
     if (selected.canRemove) {
         TextButton(
             onClick = { perform(Intent.UpdateDshCredential(KeyUpdate(selected.provider, null))) {} },
             enabled = !disabled,
         ) {
-            Text("この接続先のキーを削除")
+            Text(language.text("この接続先のキーを削除"))
         }
     }
 }

@@ -398,11 +398,14 @@ impl Terminal {
 }
 impl Render for Terminal {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let language = crate::localization::language(cx);
         let status = self.error.clone().unwrap_or_else(|| {
             self.snapshot
                 .terminals
                 .get(&self.handle)
-                .map_or("接続中…".into(), |terminal| terminal.phase.label())
+                .map_or(language.text("接続中…").into(), |terminal| {
+                    terminal.phase.label()
+                })
         });
         v_flex()
             .size_full()
@@ -421,7 +424,7 @@ impl Render for Terminal {
                             .id("terminal-stop")
                             .ml_3()
                             .cursor_pointer()
-                            .child("終了")
+                            .child(language.text("終了"))
                             .on_click(cx.listener(|s, _, _, _| {
                                 s.dispatch(Intent::KillTerminal(op::KillTerminal {
                                     handle: s.handle.clone(),

@@ -13,7 +13,7 @@ struct TerminalScreen: View {
             if terminal?.loading ?? true {
                 ProgressView().accessibilityIdentifier("terminal.loading")
             } else if let status = terminal?.status {
-                Text(status).font(.caption).foregroundStyle(.secondary)
+                AppText(status).font(.caption).foregroundStyle(.secondary)
             }
             NativeTerminalView(session: model.session, handle: handle, cwd: cwd, terminal: terminal)
         }

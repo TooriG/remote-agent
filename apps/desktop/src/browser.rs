@@ -46,6 +46,7 @@ pub(crate) struct Browser {
     _poll: Task<()>,
     initial_url: Option<String>,
     _subscription: Subscription,
+    _language: Subscription,
 }
 impl EventEmitter<BrowserTitle> for Browser {}
 
@@ -65,8 +66,11 @@ impl Browser {
         window: &mut Window,
         cx: &mut App,
     ) -> Entity<Self> {
+        let language = crate::localization::language(cx);
         let runtime = cx.global::<Runtime>().clone();
-        let address = cx.new(|cx| InputState::new(window, cx).placeholder("検索または URL を入力"));
+        let address = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(language.text("検索または URL を入力"))
+        });
         let dialog_input = cx.new(|cx| InputState::new(window, cx));
         let focus = cx.focus_handle();
         cx.new(|cx: &mut Context<Self>| {
@@ -101,7 +105,9 @@ impl Browser {
                                     None
                                 } else {
                                     let mut rgba = image::load_from_memory(&frame.image)
-                                        .map_err(|_| "ブラウザ画像を読み取れません。")?
+                                        .map_err(|_| {
+                                            language.text("ブラウザ画像を読み取れません。")
+                                        })?
                                         .into_rgba8();
                                     for pixel in rgba.pixels_mut() {
                                         pixel.0.swap(0, 2);
@@ -111,8 +117,9 @@ impl Browser {
                                 Ok::<_, String>((frame, image))
                             })
                             .await;
-                        let result =
-                            result.unwrap_or_else(|_| Err("ブラウザとの接続が切れました。".into()));
+                        let result = result.unwrap_or_else(|_| {
+                            Err(language.text("ブラウザとの接続が切れました。").into())
+                        });
                         if view
                             .update_in(cx, |view, window, cx| {
                                 view.apply_result(result, reading, window, cx);
@@ -148,6 +155,20 @@ impl Browser {
                 _poll: poll,
                 initial_url: url,
                 _subscription: subscription,
+                _language: cx.observe_global_in::<crate::localization::Language>(
+                    window,
+                    |view, window, cx| {
+                        let language = crate::localization::language(cx);
+                        view.address.update(cx, |input, cx| {
+                            input.set_placeholder(
+                                language.text("検索または URL を入力"),
+                                window,
+                                cx,
+                            )
+                        });
+                        cx.notify();
+                    },
+                ),
             }
         })
     }
@@ -249,6 +270,7 @@ impl Browser {
     }
 
     fn send(&mut self, action: BrowserAction, cx: &mut Context<Self>) {
+        let language = crate::localization::language(cx);
         self.error = None;
         self.notice = None;
         if matches!(
@@ -256,7 +278,9 @@ impl Browser {
             BrowserAction::ImportCookies { .. } | BrowserAction::ImportPasswords { .. }
         ) {
             self.notice = Some(
-                "ブラウザデータを取り込み中… OSのアクセス確認が出たら許可してください。".into(),
+                language
+                    .text("ブラウザデータを取り込み中… OSのアクセス確認が出たら許可してください。")
+                    .into(),
             );
         }
         self.credentials = None;
@@ -280,6 +304,7 @@ impl Browser {
     }
 
     fn actions_menu(&self, cx: &Context<Self>) -> impl IntoElement {
+        let language = crate::localization::language(cx);
         let owner = cx.entity().downgrade();
         let menu_owner = owner.clone();
         let tab_id = self.frame.tab_id.clone();
@@ -293,7 +318,7 @@ impl Browser {
             .icon(IconName::Ellipsis)
             .xsmall()
             .ghost()
-            .accessibility_label("ブラウザのメニュー")
+            .accessibility_label(language.text("ブラウザのメニュー"))
             .dropdown_menu(move |menu, _, _| {
                 let new_tab = owner.clone();
                 let close_tab = owner.clone();
@@ -303,74 +328,84 @@ impl Browser {
                 let credentials = owner.clone();
                 let tab_id = tab_id.clone();
                 let url = url.clone();
-                menu.item(PopupMenuItem::new("ログイン状態・保存パスワード").on_click(
-                    move |_, _, cx| {
-                        let _ = credentials
-                            .update(cx, |view, cx| view.send(BrowserAction::Credentials, cx));
-                    },
-                ))
+                menu.item(
+                    PopupMenuItem::new(language.text("ログイン状態・保存パスワード")).on_click(
+                        move |_, _, cx| {
+                            let _ = credentials
+                                .update(cx, |view, cx| view.send(BrowserAction::Credentials, cx));
+                        },
+                    ),
+                )
                 .separator()
-                .item(PopupMenuItem::new("新しいタブ").on_click(move |_, _, cx| {
-                    let _ = new_tab.update(cx, |view, cx| {
-                        view.send(
-                            BrowserAction::OpenTab {
-                                url: "about:blank".into(),
-                            },
-                            cx,
-                        )
-                    });
-                }))
                 .item(
-                    PopupMenuItem::new("タブを閉じる").on_click(move |_, _, cx| {
+                    PopupMenuItem::new(language.text("新しいタブ")).on_click(move |_, _, cx| {
+                        let _ = new_tab.update(cx, |view, cx| {
+                            view.send(
+                                BrowserAction::OpenTab {
+                                    url: "about:blank".into(),
+                                },
+                                cx,
+                            )
+                        });
+                    }),
+                )
+                .item(PopupMenuItem::new(language.text("タブを閉じる")).on_click(
+                    move |_, _, cx| {
                         let _ = close_tab.update(cx, |view, cx| {
                             view.send(BrowserAction::CloseTab { id: tab_id.clone() }, cx)
                         });
-                    }),
+                    },
+                ))
+                .separator()
+                .item(
+                    PopupMenuItem::new(language.text("パネルに合わせる")).on_click(
+                        move |_, _, cx| {
+                            let _ = fit.update(cx, |view, cx| {
+                                if let Some(action) = agent_core::browser_view::fit_action(
+                                    f64::from(view.bounds.size.width / px(1.)),
+                                    f64::from(view.bounds.size.height / px(1.)),
+                                    view.frame.width,
+                                    view.frame.height,
+                                ) {
+                                    view.send(action, cx);
+                                }
+                            });
+                        },
+                    ),
+                )
+                .item(
+                    PopupMenuItem::new(language.text("デスクトップ · 1280 × 800")).on_click(
+                        move |_, _, cx| {
+                            let _ = desktop.update(cx, |view, cx| {
+                                view.send(
+                                    BrowserAction::Resize {
+                                        width: 1280,
+                                        height: 800,
+                                    },
+                                    cx,
+                                )
+                            });
+                        },
+                    ),
+                )
+                .item(
+                    PopupMenuItem::new(language.text("モバイル · 390 × 844")).on_click(
+                        move |_, _, cx| {
+                            let _ = mobile.update(cx, |view, cx| {
+                                view.send(
+                                    BrowserAction::Resize {
+                                        width: 390,
+                                        height: 844,
+                                    },
+                                    cx,
+                                )
+                            });
+                        },
+                    ),
                 )
                 .separator()
                 .item(
-                    PopupMenuItem::new("パネルに合わせる").on_click(move |_, _, cx| {
-                        let _ = fit.update(cx, |view, cx| {
-                            if let Some(action) = agent_core::browser_view::fit_action(
-                                f64::from(view.bounds.size.width / px(1.)),
-                                f64::from(view.bounds.size.height / px(1.)),
-                                view.frame.width,
-                                view.frame.height,
-                            ) {
-                                view.send(action, cx);
-                            }
-                        });
-                    }),
-                )
-                .item(
-                    PopupMenuItem::new("デスクトップ · 1280 × 800").on_click(move |_, _, cx| {
-                        let _ = desktop.update(cx, |view, cx| {
-                            view.send(
-                                BrowserAction::Resize {
-                                    width: 1280,
-                                    height: 800,
-                                },
-                                cx,
-                            )
-                        });
-                    }),
-                )
-                .item(
-                    PopupMenuItem::new("モバイル · 390 × 844").on_click(move |_, _, cx| {
-                        let _ = mobile.update(cx, |view, cx| {
-                            view.send(
-                                BrowserAction::Resize {
-                                    width: 390,
-                                    height: 844,
-                                },
-                                cx,
-                            )
-                        });
-                    }),
-                )
-                .separator()
-                .item(
-                    PopupMenuItem::new("URL をコピー")
+                    PopupMenuItem::new(language.text("URL をコピー"))
                         .disabled(url.is_none())
                         .on_click(move |_, _, cx| {
                             if let Some(url) = &url {
@@ -396,6 +431,7 @@ impl Browser {
         metadata: BrowserCredentials,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let language = crate::localization::language(cx);
         let mut panel = v_flex()
             .id("browser-credentials")
             .max_h(px(360.))
@@ -405,24 +441,31 @@ impl Browser {
             .border_b_1()
             .border_color(rgb(0x202020))
             .child(
-                h_flex().justify_between().child("ブラウザデータ").child(
-                    Button::new("close-browser-data")
-                        .icon(IconName::Close)
-                        .ghost()
-                        .xsmall()
-                        .accessibility_label("ブラウザデータを閉じる")
-                        .on_click(cx.listener(|view, _, _, cx| {
-                            view.credentials = None;
-                            cx.notify();
-                        })),
-                ),
+                h_flex()
+                    .justify_between()
+                    .child(language.text("ブラウザデータ"))
+                    .child(
+                        Button::new("close-browser-data")
+                            .icon(IconName::Close)
+                            .ghost()
+                            .xsmall()
+                            .accessibility_label(language.text("ブラウザデータを閉じる"))
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                view.credentials = None;
+                                cx.notify();
+                            })),
+                    ),
             )
-            .child(div().text_sm().child("Hostのブラウザから取り込む"));
+            .child(
+                div()
+                    .text_sm()
+                    .child(language.text("Hostのブラウザから取り込む")),
+            );
         if metadata.profiles.is_empty() {
             panel = panel.child(
                 div()
                     .text_sm()
-                    .child("取り込めるブラウザプロファイルがありません。"),
+                    .child(language.text("取り込めるブラウザプロファイルがありません。")),
             );
         }
         for (index, profile) in metadata.profiles.into_iter().enumerate() {
@@ -434,7 +477,7 @@ impl Browser {
                         .gap_2()
                         .child(
                             Button::new(SharedString::from(format!("import-cookies-{index}")))
-                                .label("ログイン状態（Cookie）")
+                                .label(language.text("ログイン状態（Cookie）"))
                                 .small()
                                 .ghost()
                                 .disabled(cookies.is_empty())
@@ -449,7 +492,7 @@ impl Browser {
                         )
                         .child(
                             Button::new(SharedString::from(format!("import-passwords-{index}")))
-                                .label("保存パスワード → Keychain")
+                                .label(language.text("保存パスワード → Keychain"))
                                 .small()
                                 .ghost()
                                 .disabled(passwords.is_empty())
@@ -466,19 +509,22 @@ impl Browser {
             );
         }
         if let Some(origin) = metadata.origin {
-            panel = panel.child(
-                div()
-                    .mt_2()
-                    .text_sm()
-                    .child(format!("保存パスワード · {origin}")),
-            );
+            panel = panel.child(div().mt_2().text_sm().child(
+                agent_core::localization::localized_ui_format(
+                    language,
+                    "保存パスワード · {0}".into(),
+                    vec![origin.to_string()],
+                ),
+            ));
             if metadata.accounts.is_empty() {
                 panel = panel.child(
-                    div().text_sm().child(
-                        metadata
-                            .password_error
-                            .unwrap_or_else(|| "このサイトの保存パスワードはありません。".into()),
-                    ),
+                    div()
+                        .text_sm()
+                        .child(metadata.password_error.unwrap_or_else(|| {
+                            language
+                                .text("このサイトの保存パスワードはありません。")
+                                .into()
+                        })),
                 );
             }
             for (index, username) in metadata.accounts.iter().enumerate() {
@@ -487,7 +533,7 @@ impl Browser {
                 panel = panel.child(
                     Button::new(SharedString::from(format!("fill-password-{index}")))
                         .label(if username.is_empty() {
-                            "ユーザー名なし".into()
+                            language.text("ユーザー名なし").into()
                         } else {
                             username.clone()
                         })
@@ -506,7 +552,7 @@ impl Browser {
             }
             panel = panel.child(
                 Button::new("delete-site-passwords")
-                    .label("このサイトの保存パスワードを削除")
+                    .label(language.text("このサイトの保存パスワードを削除"))
                     .small()
                     .ghost()
                     .disabled(metadata.accounts.is_empty())
@@ -615,6 +661,7 @@ impl Browser {
 
 impl Render for Browser {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let language = crate::localization::language(cx);
         let enabled = !self.frame.tab_id.is_empty();
         let tabs = self.frame.tabs.clone();
         let active = self.frame.tab_id.clone();
@@ -656,7 +703,7 @@ impl Render for Browser {
                                     Button::new(SharedString::from(format!("browser-tab-{id}")))
                                         .label(
                                             if tab.title.is_empty() || tab.url == "about:blank" {
-                                                "新しいタブ".into()
+                                                language.text("新しいタブ").into()
                                             } else {
                                                 tab.title
                                             },
@@ -677,7 +724,7 @@ impl Render for Browser {
                                     .icon(IconName::Close)
                                     .small()
                                     .ghost()
-                                    .accessibility_label("タブを閉じる")
+                                    .accessibility_label(language.text("タブを閉じる"))
                                     .on_click(cx.listener(move |view, _, _, cx| {
                                         view.send(BrowserAction::CloseTab { id: close.clone() }, cx)
                                     })),
@@ -688,7 +735,7 @@ impl Render for Browser {
                                 .icon(IconName::Plus)
                                 .small()
                                 .ghost()
-                                .accessibility_label("新しいタブ")
+                                .accessibility_label(language.text("新しいタブ"))
                                 .on_click(cx.listener(|view, _, _, cx| {
                                     view.send(
                                         BrowserAction::OpenTab {
@@ -712,7 +759,7 @@ impl Render for Browser {
                                 .xsmall()
                                 .ghost()
                                 .disabled(!self.frame.can_go_back)
-                                .accessibility_label("前のページ")
+                                .accessibility_label(language.text("前のページ"))
                                 .on_click(
                                     cx.listener(|view, _, _, cx| {
                                         view.send(BrowserAction::Back, cx)
@@ -725,7 +772,7 @@ impl Render for Browser {
                                 .xsmall()
                                 .ghost()
                                 .disabled(!self.frame.can_go_forward)
-                                .accessibility_label("次のページ")
+                                .accessibility_label(language.text("次のページ"))
                                 .on_click(cx.listener(|view, _, _, cx| {
                                     view.send(BrowserAction::Forward, cx)
                                 })),
@@ -736,7 +783,7 @@ impl Render for Browser {
                                 .xsmall()
                                 .ghost()
                                 .disabled(!enabled)
-                                .accessibility_label("再読み込み")
+                                .accessibility_label(language.text("再読み込み"))
                                 .on_click(cx.listener(|view, _, _, cx| {
                                     view.send(BrowserAction::Reload, cx)
                                 })),
@@ -746,7 +793,7 @@ impl Render for Browser {
                                 Input::new(&self.address)
                                     .small()
                                     .appearance(false)
-                                    .aria_label("ブラウザの URL"),
+                                    .aria_label(language.text("ブラウザの URL")),
                             ),
                         )
                         .child(self.actions_menu(cx)),
@@ -754,7 +801,7 @@ impl Render for Browser {
                 .when_some(self.credentials.clone(), |body, metadata| body.child(self.credentials_panel(metadata,cx)))
                 .when_some(self.notice.clone(), |body, notice| body.child(div().px_3().py_2().text_sm().child(notice)))
                 .when_some(self.error.clone().or(self.connection_error.clone()), |body, error| {
-                    body.child(div().px_3().py_2().text_sm().child(error))
+                    body.child(div().px_3().py_2().text_sm().child(agent_core::localization::localized_ui_text(language, error)))
                 })
                 .when_some(self.frame.dialog.clone(), |body, dialog| {
                     body.child(
@@ -770,7 +817,7 @@ impl Render for Browser {
                                     .gap_2()
                                     .child(
                                         Button::new("browser-dialog-cancel")
-                                            .label("キャンセル")
+                                            .label(language.text("キャンセル"))
                                             .small()
                                             .on_click(cx.listener(|view, _, _, cx| {
                                                 view.send(
@@ -860,9 +907,9 @@ impl Render for Browser {
                                                 .bg(rgb(appearance::RAISED)).mb_6()
                                                 .child(Icon::new(IconName::Globe).size(px(18.)).text_color(rgb(appearance::MUTED))),
                                         )
-                                        .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).child("プレビューはまだありません"))
+                                        .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).child(language.text("プレビューはまだありません")))
                                         .child(div().max_w(px(384.)).text_sm().text_center()
-                                            .text_color(rgb(appearance::MUTED)).child("上の欄に URL を入力するか、AI にブラウザ操作を依頼してください。")),
+                                            .text_color(rgb(appearance::MUTED)).child(language.text("上の欄に URL を入力するか、AI にブラウザ操作を依頼してください。"))),
                                 )
                             }
                         })

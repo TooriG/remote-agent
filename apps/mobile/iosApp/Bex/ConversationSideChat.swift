@@ -138,7 +138,7 @@ struct ConversationSideChat: View {
                 ProgressView("サイドチャットを準備中…")
             } else if let error = request.error {
                 VStack(spacing: 16) {
-                    Text(error).foregroundStyle(.red)
+                    AppText(error).foregroundStyle(.red)
                     Button("再試行") { request.activate(true, model: model) }
                 }.padding()
             } else {

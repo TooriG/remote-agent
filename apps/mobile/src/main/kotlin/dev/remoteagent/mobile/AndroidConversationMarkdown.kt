@@ -139,6 +139,7 @@ internal fun ConversationBlocks(
 
 @Composable
 private fun MarkdownCode(block: MarkdownBlock.Paragraph, index: Int) {
+    val language = LocalUiLanguage.current
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     var copied by remember { mutableStateOf(false) }
     var wrapped by remember { mutableStateOf(false) }
@@ -168,7 +169,7 @@ private fun MarkdownCode(block: MarkdownBlock.Paragraph, index: Int) {
                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
             )
             androidx.compose.material3.TextButton(onClick = { wrapped = !wrapped }) {
-                Text(if (wrapped) "折り返し解除" else "折り返し")
+                Text(if (wrapped) language.text("折り返し解除") else language.text("折り返し"))
             }
             androidx.compose.material3.TextButton(
                 onClick = {
@@ -177,7 +178,7 @@ private fun MarkdownCode(block: MarkdownBlock.Paragraph, index: Int) {
                 },
                 modifier = Modifier.testTag("markdown.code.copy.$index"),
             ) {
-                Text(if (copied) "✓" else "コピー")
+                Text(if (copied) "✓" else language.text("コピー"))
             }
         }
         HorizontalDivider()
@@ -241,20 +242,21 @@ private fun MarkdownTable(table: MarkdownBlock.Table, index: Int, openFile: (Str
 
 @Composable
 private fun TableCopyMenu(table: MarkdownBlock.Table) {
+    val language = LocalUiLanguage.current
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     var menu by remember { mutableStateOf(false) }
     Box {
-        androidx.compose.material3.TextButton(onClick = { menu = true }) { Text("表をコピー") }
+        androidx.compose.material3.TextButton(onClick = { menu = true }) { Text(language.text("表をコピー")) }
         androidx.compose.material3.DropdownMenu(menu, onDismissRequest = { menu = false }) {
             androidx.compose.material3.DropdownMenuItem(
-                text = { Text("Markdownをコピー") },
+                text = { Text(language.text("Markdownをコピー")) },
                 onClick = {
                     clipboard.setText(androidx.compose.ui.text.AnnotatedString(table.source))
                     menu = false
                 },
             )
             androidx.compose.material3.DropdownMenuItem(
-                text = { Text("CSVをコピー") },
+                text = { Text(language.text("CSVをコピー")) },
                 onClick = {
                     clipboard.setText(
                         androidx.compose.ui.text.AnnotatedString(
