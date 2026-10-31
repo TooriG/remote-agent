@@ -50,6 +50,7 @@
               "x86_64-linux-android"
             ];
           };
+          cccc = pkgs.callPackage ./tools/cccc/package.nix { };
           kache = pkgs.callPackage ./tools/kache/package.nix { };
           nodeRuntime = pkgs.callPackage ./tools/node-runtime/package.nix { };
           kacheHook = ''
@@ -108,7 +109,7 @@
             AGENT_NODE_RUNTIME = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "${nodeRuntime}";
             RUST_TOOLCHAIN_VERSION = rustToolchain.version;
             NEXTEST_VERSION = pkgs.cargo-nextest.version;
-            packages = with pkgs; [ rustToolchain kache cargo-mutants cargo-nextest just jq git pkg-config cmake clang workflowLinter nodejs powershell ]
+            packages = with pkgs; [ rustToolchain kache cccc cargo-mutants cargo-nextest just jq git pkg-config cmake clang workflowLinter nodejs powershell ]
               ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
                 lsof
                 alsa-lib fontconfig freetype libxkbcommon wayland libGL vulkan-loader
@@ -138,6 +139,7 @@
               powershell
               rustToolchain
               kache
+              cccc
               cargo-mutants
               cargo-nextest
             ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [

@@ -74,6 +74,7 @@ jobs:
             # Unknown paths verify every client.
             case "$path" in
               docs/PRIVACY.md) area=all ;;
+              cccc.toml) area=repository ;;
               docs/* | AGENTS.md | CHANGELOG.md | README.md | README.ja.md | SECURITY.md) area=docs ;;
               apps/mobile/src/* | apps/mobile/build.gradle.kts | build.gradle.kts | settings.gradle.kts | \
                 gradle.properties | gradle/* | gradlew | gradlew.bat | detekt.yml | scripts/android-e2e.sh) area=android ;;
@@ -110,6 +111,8 @@ jobs:
           nix develop .#native --command npm --prefix crates/host-daemon/src/providers/claude/sdk run vendor
           nix develop .#native --command npm --prefix crates/host-daemon/src/providers/claude/sdk test
           git diff --exit-code -- crates/host-daemon/src/providers/claude/sdk/bridge.bundle.mjs crates/host-daemon/src/providers/claude/sdk/SDK-LICENSE.md
+      - name: Check function complexity
+        run: nix develop .#native --command just complexity
   toolchain:
     if: ${{ !inputs.ios-tests }}
     runs-on: ubuntu-24.04

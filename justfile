@@ -9,6 +9,16 @@ default:
 check *args:
     cargo check --locked "$@"
 
+# Check handwritten functions against the configured complexity limits.
+complexity:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    failed=0
+    # Two rankings; each invocation enforces the limits in cccc.toml.
+    cccc --table --top-cognitive 20 . || failed=1
+    cccc --table --top-cyclomatic 20 . || failed=1
+    exit "$failed"
+
 # Run all unit tests; CI can add explicit integration targets to the same build.
 unit-tests *targets:
     #!/usr/bin/env bash

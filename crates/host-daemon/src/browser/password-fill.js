@@ -1,4 +1,4 @@
-function (origin, username, password) {
+(origin, username, password) => {
   if (window !== top || location.origin !== origin || !origin.startsWith("https://")) return false;
   const visible = (element) => !element.disabled && !element.readOnly && element.getClientRects().length > 0;
   const fields = [...document.querySelectorAll('input[type="password"]')].filter(visible);

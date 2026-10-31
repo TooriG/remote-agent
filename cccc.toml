@@ -1,0 +1,9 @@
+max-cognitive = 40
+max-cyclomatic = 40
+# Exclude repository metadata, third-party code, and generated bundles only.
+exclude = [
+  ".git/**",
+  "vendor/**",
+  "crates/host-daemon/src/providers/claude/sdk/bridge.bundle.mjs",
+  "crates/host-daemon/src/visualize/lucide.min.js",
+]
