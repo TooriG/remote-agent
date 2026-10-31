@@ -41,7 +41,7 @@ fn project_directory(home: &Path) -> std::path::PathBuf {
     home.join("projects").join(name)
 }
 
-fn native(mut value: Value) {
+fn native(session: &str, mut value: Value) {
     if value["type"] == "system" && value["subtype"] == "task_notification" {
         let Some(tool) = value["tool_use_id"].as_str() else {
             return;
@@ -67,10 +67,6 @@ fn native(mut value: Value) {
     if let Some(result) = value.as_object_mut().unwrap().remove("tool_use_result") {
         value["toolUseResult"] = result;
     }
-    let args: Vec<_> = std::env::args().collect();
-    let session = option(&args, "--resume")
-        .or_else(|| option(&args, "--session-id"))
-        .unwrap();
     let directory = project_directory(Path::new(&home));
     fs::create_dir_all(&directory).unwrap();
     let path = directory.join(format!("{session}.jsonl"));
@@ -111,10 +107,10 @@ fn session_state(session: &str, state: &str) -> Value {
     json!({"type":"system","subtype":"session_state_changed","state":state,"session_id":session,"sdk_host_only":true})
 }
 
-fn emit(value: Value) {
+fn emit(session: &str, value: Value) {
     let idle = (value["type"] == "result")
         .then(|| session_state(value["session_id"].as_str().unwrap(), "idle"));
-    native(value.clone());
+    native(session, value.clone());
     output(value);
     if let Some(idle) = idle {
         output(idle);
@@ -143,29 +139,34 @@ fn block(
         ("text", "text_delta")
     };
     emit(
+        session,
         json!({"type":"stream_event","session_id":session,"event":{"type":"content_block_start","index":index,"content_block":{"type":kind,field:""}}}),
     );
     emit(
+        session,
         json!({"type":"stream_event","session_id":session,"event":{"type":"content_block_delta","index":index,"delta":{"type":delta,field:text}}}),
     );
     let envelope = json!({"type":"assistant","apiBlockIndex":index,"uuid":format!("envelope-{message}-{index}"),"session_id":session,"message":{"id":message,"role":"assistant","stop_reason":null,"content":[{"type":kind,field:text}]}});
     let mut saved = envelope.clone();
     saved["message"]["stop_reason"] = stop_reason.into();
-    native(saved);
+    native(session, saved);
     output(envelope);
     emit(
+        session,
         json!({"type":"stream_event","session_id":session,"event":{"type":"content_block_stop","index":index}}),
     );
 }
 
 fn end_turn(session: &str) {
     emit(
+        session,
         json!({"type":"stream_event","session_id":session,"event":{"type":"message_delta","delta":{"stop_reason":"end_turn"}}}),
     );
 }
 
-fn reply(session: &str, message: &str, text: &str, idle_before_result: bool) {
+fn emit_reply(session: &str, message: &str, text: &str, idle_before_result: bool) {
     emit(
+        session,
         json!({"type":"stream_event","session_id":session,"event":{"type":"message_start","message":{"id":message}}}),
     );
     block(
@@ -183,8 +184,447 @@ fn reply(session: &str, message: &str, text: &str, idle_before_result: bool) {
         output(session_state(session, "idle"));
         output(result);
     } else {
-        emit(result);
+        emit(session, result);
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ControlRequest {
+    Unknown,
+    Dialog,
+    Elicitation,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Waiting {
+    Control(ControlRequest),
+    Permission,
+    Question,
+    Background,
+    BackgroundSettled,
+    BackgroundShell,
+    Wait,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PermissionScenario {
+    Command,
+    Question,
+    Background,
+    BackgroundSettled,
+}
+impl PermissionScenario {
+    fn tool(self) -> (&'static str, Value) {
+        match self {
+            Self::Question => (
+                "AskUserQuestion",
+                json!({"questions":[{"question":"Which color?","header":"Color","multiSelect":false,"options":[{"label":"Blue","description":"Use blue"},{"label":"Red","description":"Use red"}]}]}),
+            ),
+            _ => ("Bash", json!({"command":"printf approved > approved.txt"})),
+        }
+    }
+    fn waiting(self) -> Waiting {
+        match self {
+            Self::Command => Waiting::Permission,
+            Self::Question => Waiting::Question,
+            Self::Background => Waiting::Background,
+            Self::BackgroundSettled => Waiting::BackgroundSettled,
+        }
+    }
+}
+
+enum InputScenario {
+    Crash,
+    Error,
+    BackgroundShell,
+    Wait,
+    Control(ControlRequest),
+    Permission(PermissionScenario),
+    Reply,
+}
+impl InputScenario {
+    fn parse(text: &str, result_error: bool) -> Self {
+        match text {
+            "crash" => Self::Crash,
+            _ if result_error => Self::Error,
+            "background-shell" => Self::BackgroundShell,
+            "wait" => Self::Wait,
+            "unknown_control" => Self::Control(ControlRequest::Unknown),
+            "dialog" => Self::Control(ControlRequest::Dialog),
+            "elicitation" => Self::Control(ControlRequest::Elicitation),
+            "permission" => Self::Permission(PermissionScenario::Command),
+            "question" => Self::Permission(PermissionScenario::Question),
+            "background" => Self::Permission(PermissionScenario::Background),
+            "background-settled" => Self::Permission(PermissionScenario::BackgroundSettled),
+            _ => Self::Reply,
+        }
+    }
+}
+
+struct Fixture {
+    model: Option<String>,
+    effort: Option<String>,
+    config: Value,
+    session: String,
+    inputs: Vec<Value>,
+    process: String,
+    history: std::path::PathBuf,
+    trace: String,
+    waiting: Option<Waiting>,
+}
+
+impl Fixture {
+    fn interrupt(&mut self, value: &Value) {
+        emit(
+            &self.session,
+            json!({"type":"control_response","response":{"subtype":"success","request_id":value["request_id"],"response":{}}}),
+        );
+        // A settled response has no result to end; its shell keeps running.
+        if self.waiting != Some(Waiting::BackgroundShell) {
+            emit(
+                &self.session,
+                json!({"type":"result","session_id":self.session,"is_error":false,"result":"interrupted"}),
+            );
+        }
+        self.waiting = None;
+    }
+
+    fn message_id(&self) -> String {
+        format!("message-{}", self.inputs.len())
+    }
+
+    fn reply(&self, text: &str) {
+        emit_reply(
+            &self.session,
+            &self.message_id(),
+            text,
+            self.config["idleBeforeResult"] == true,
+        );
+    }
+
+    fn initialize(&self, value: &Value) {
+        let home = std::env::var_os("CLAUDE_SECURESTORAGE_CONFIG_DIR").unwrap();
+        let home = Path::new(&home);
+        let account = if self.config["unauthenticated"] == true {
+            json!({})
+        } else if let Ok(bytes) = fs::read(home.join("fixture-auth.json")) {
+            serde_json::from_slice(&bytes).unwrap()
+        } else if self.session == "catalog" {
+            json!({"tokenSource":"none","apiKeySource":"none"})
+        } else {
+            json!({"subscriptionType":"Claude Max","tokenSource":"oauth","apiKeySource":"none"})
+        };
+        if self.session == "catalog" {
+            let home = std::env::var_os("CLAUDE_CONFIG_DIR").unwrap();
+            let home = Path::new(&home);
+            if let Ok(mode) = fs::read_to_string(home.join("model-list-mode")) {
+                fs::write(home.join("model-list-requested"), []).unwrap();
+                if mode == "silent" {
+                    return;
+                }
+            }
+        }
+        if self.config["initializeError"] == true {
+            emit(
+                &self.session,
+                json!({"type":"control_response","response":{"subtype":"error","request_id":value["request_id"],"error":"fixture initialization failed"}}),
+            );
+        } else {
+            emit(
+                &self.session,
+                json!({"type":"control_response","response":{"subtype":"success","request_id":value["request_id"],"response":{
+                    "models":fs::read(Path::new(&std::env::var_os("CLAUDE_CONFIG_DIR").unwrap()).join("fixture-models.json"))
+                        .ok()
+                        .map(|bytes| serde_json::from_slice::<Value>(&bytes).unwrap())
+                        .unwrap_or_else(|| json!([
+                        {"value":"default","displayName":"Default (recommended)","description":"Opus 5 with 1M context · Best for everyday, complex tasks","supportedEffortLevels":["low","high"]},
+                        {"value":"opus[1m]","displayName":"Opus (1M context)","description":"Opus 5 with 1M context · Best for everyday, complex tasks"},
+                        {"value":"claude-fable-5-1[1m]","displayName":"Fable","description":"Fable 5.1 · Most capable for your hardest and longest-running tasks"},
+                        {"value":"sonnet","displayName":"Sonnet","description":"Sonnet 5 · Efficient for routine tasks"},
+                        {"value":"haiku","displayName":"Haiku","description":"Haiku 4.5 · Fastest for quick answers"},
+                        {"value":"custom","displayName":"Custom model"}
+                    ])),
+                    "commands":[{"name":"fixture-skill","description":"Fixture skill"}],
+                    "account":account
+                }}}),
+            );
+        }
+    }
+
+    fn user(&mut self, value: &Value) {
+        assert_ne!(self.session, "catalog");
+        assert_eq!(value["session_id"], self.session);
+        assert!(
+            self.config["unauthenticated"] != true,
+            "unauthenticated input must never reach Claude"
+        );
+        assert_eq!(
+            self.model.as_deref(),
+            Some(self.config["expectedModel"].as_str().unwrap_or("default"))
+        );
+        if self.waiting.take() == Some(Waiting::Wait) {
+            // The previous input can finish before the queued input is consumed.
+            emit(
+                &self.session,
+                json!({"type":"result","session_id":self.session,"is_error":false,"result":"finished waiting"}),
+            );
+            native(
+                &self.session,
+                json!({"type":"attachment","attachment":{
+                    "type":"queued_command","commandMode":"prompt","origin":{"kind":"human"},"source_uuid":value["uuid"],
+                    "prompt":value["message"]["content"]
+                }}),
+            );
+            output(value.clone());
+        } else {
+            emit(&self.session, value.clone());
+        }
+        let content = value["message"]["content"].clone();
+        self.inputs.push(
+            json!({"content":content,"model":self.model,"effort":self.effort,"process":self.process}),
+        );
+        let bytes = serde_json::to_vec(&self.inputs).unwrap();
+        fs::create_dir_all(self.history.parent().unwrap()).unwrap();
+        fs::write(&self.history, &bytes).unwrap();
+        // Append: Windows cannot truncate a file that Git's workspace review maps.
+        let mut trace = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.trace)
+            .unwrap();
+        let written = trace.metadata().unwrap().len() > 0;
+        for input in &self.inputs[if written { self.inputs.len() - 1 } else { 0 }..] {
+            write_json_line(&mut trace, input).unwrap();
+        }
+        emit(
+            &self.session,
+            json!({"type":"system","subtype":"init","session_id":self.session}),
+        );
+        output(session_state(&self.session, "running"));
+        let text = content
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|block| block["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        self.waiting = self.respond_to_input(&text);
+    }
+
+    fn control_response(&mut self, value: &Value) {
+        match self.waiting {
+            Some(Waiting::Control(control)) => {
+                assert_eq!(value["response"]["request_id"], "control-1");
+                match control {
+                    ControlRequest::Unknown => assert_eq!(value["response"]["subtype"], "error"),
+                    ControlRequest::Dialog => {
+                        assert_eq!(value["response"]["response"]["behavior"], "cancelled")
+                    }
+                    ControlRequest::Elicitation => assert_eq!(
+                        value["response"]["response"],
+                        json!({"action":"accept","content":{"name":"BEX"}})
+                    ),
+                }
+                self.reply("control resolved");
+            }
+            _ => {
+                assert_eq!(value["response"]["request_id"], "permission-1");
+                let response = &value["response"]["response"];
+                let allowed = response["behavior"] == "allow";
+                let text = if self.waiting == Some(Waiting::Question) && allowed {
+                    response["updatedInput"]["answers"]["Which color?"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned()
+                } else if allowed {
+                    fs::write("approved.txt", "approved").unwrap();
+                    "approved".into()
+                } else {
+                    "denied".into()
+                };
+                emit(
+                    &self.session,
+                    json!({"type":"user","uuid":format!("tool-result-{}", self.inputs.len()),
+                        "message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-1","content":text,"is_error":!allowed}]},
+                        "tool_use_result":if allowed && self.waiting == Some(Waiting::Background) { json!({"backgroundTaskId":"background-1"}) }
+                            else if allowed && self.waiting != Some(Waiting::Question) { json!({"exitCode":0}) } else { json!({}) }}),
+                );
+                if self.waiting == Some(Waiting::Background) {
+                    let output_file = std::env::current_dir().unwrap().join("background.output");
+                    fs::write(&output_file, "background stdout\n").unwrap();
+                    emit(
+                        &self.session,
+                        json!({"type":"system","subtype":"task_notification","task_id":"background-1","tool_use_id":"tool-1","output_file":output_file,"status":"completed","summary":"background done","session_id":self.session}),
+                    );
+                    while Path::new("background-paused").exists() {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                }
+                self.reply(&text);
+            }
+        }
+        self.waiting = None;
+    }
+
+    fn respond_to_input(&self, text: &str) -> Option<Waiting> {
+        match InputScenario::parse(text, self.config["resultError"] == true) {
+            InputScenario::Crash => {
+                std::process::exit(17);
+            }
+            InputScenario::Error => {
+                emit(
+                    &self.session,
+                    json!({"type":"result","session_id":self.session,"is_error":true,"errors":["fixture inference failed"]}),
+                );
+                None
+            }
+            InputScenario::BackgroundShell => {
+                // Claude settles the response while its shell runs, then
+                // answers the finished shell without another input.
+                emit(
+                    &self.session,
+                    json!({"type":"system","subtype":"background_tasks_changed","session_id":self.session,"tasks":[
+                        {"task_id":"shell-1","task_type":"local_bash","description":"background shell"},
+                        {"task_id":"watcher-1","task_type":"monitor","description":"watcher","ambient":true}
+                    ]}),
+                );
+                let message = self.message_id();
+                emit_reply(&self.session, &message, "あとで結果を報告します", false);
+                let session = self.session.clone();
+                std::thread::spawn(move || {
+                    while Path::new("background-shell-paused").exists() {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    emit(
+                        &session,
+                        json!({"type":"system","subtype":"background_tasks_changed","session_id":session,"tasks":[
+                            {"task_id":"watcher-1","task_type":"monitor","description":"watcher","ambient":true}
+                        ]}),
+                    );
+                    emit(
+                        &session,
+                        json!({"type":"system","subtype":"task_notification","task_id":"shell-1","status":"completed","output_file":"","summary":"background shell done","session_id":session}),
+                    );
+                    let _response = ROOT_RESPONSE.lock().unwrap();
+                    emit(
+                        &session,
+                        json!({"type":"system","subtype":"init","session_id":session}),
+                    );
+                    output(session_state(&session, "running"));
+                    emit_reply(
+                        &session,
+                        &format!("{message}-report"),
+                        "結果を報告します",
+                        false,
+                    );
+                });
+                Some(Waiting::BackgroundShell)
+            }
+            InputScenario::Wait => {
+                let message = format!("waiting-{}", self.inputs.len());
+                emit(
+                    &self.session,
+                    json!({"type":"stream_event","session_id":self.session,"event":{"type":"message_start","message":{"id":message}}}),
+                );
+                block(
+                    &self.session,
+                    &message,
+                    0,
+                    "text",
+                    "Waiting for interruption",
+                    None,
+                );
+                Some(Waiting::Wait)
+            }
+            InputScenario::Control(control) => {
+                let request = match control {
+                    ControlRequest::Dialog => {
+                        json!({"subtype":"request_user_dialog","dialog_kind":"future"})
+                    }
+                    ControlRequest::Elicitation => {
+                        json!({"subtype":"elicitation","mcp_server_name":"fixture","message":"Name?","requested_schema":{"type":"object","required":["name"],"properties":{"name":{"type":"string","minLength":1}}}})
+                    }
+                    ControlRequest::Unknown => json!({"subtype":"future_control"}),
+                };
+                emit(
+                    &self.session,
+                    json!({"type":"control_request","request_id":"control-1","request":request}),
+                );
+                Some(Waiting::Control(control))
+            }
+            InputScenario::Permission(permission) => {
+                if matches!(
+                    permission,
+                    PermissionScenario::Background | PermissionScenario::BackgroundSettled
+                ) {
+                    emit(
+                        &self.session,
+                        json!({"type":"system","subtype":"task_started","task_id":"background-1","task_type":"local_agent","description":"background work","session_id":self.session}),
+                    );
+                    let message = format!("background-{}", self.inputs.len());
+                    emit(
+                        &self.session,
+                        json!({"type":"stream_event","session_id":self.session,"event":{"type":"message_start","message":{"id":message}}}),
+                    );
+                    block(
+                        &self.session,
+                        &message,
+                        0,
+                        "text",
+                        "あとで報告します",
+                        Some("end_turn"),
+                    );
+                    end_turn(&self.session);
+                    if permission == PermissionScenario::BackgroundSettled {
+                        emit(
+                            &self.session,
+                            json!({"type":"system","subtype":"task_notification","task_id":"background-1","status":"completed","summary":"background done","session_id":self.session}),
+                        );
+                    }
+                    // The parent still owes a follow-up after this result.
+                    output(
+                        json!({"type":"result","session_id":self.session,"is_error":false,"result":"あとで報告します"}),
+                    );
+                }
+                let (tool, input) = permission.tool();
+                emit(
+                    &self.session,
+                    json!({"type":"assistant","uuid":format!("tool-message-{}", self.inputs.len()),"message":{"id":"tool-message","role":"assistant","content":[{"type":"tool_use","id":"tool-1","name":tool,"input":input}]}}),
+                );
+                emit(
+                    &self.session,
+                    json!({"type":"control_request","request_id":"permission-1","request":{"subtype":"can_use_tool","tool_name":tool,"tool_use_id":"tool-1","input":input}}),
+                );
+                Some(permission.waiting())
+            }
+            InputScenario::Reply => {
+                self.reply(&format!("reply {}: {text}", self.inputs.len()));
+                None
+            }
+        }
+    }
+}
+
+fn usage(session: &str, value: &Value) {
+    assert_eq!(value["request"]["skip_behaviors"], true);
+    let home = std::env::var_os("CLAUDE_SECURESTORAGE_CONFIG_DIR").unwrap();
+    let home = Path::new(&home);
+    if fs::read_to_string(home.join("usage-paused"))
+        .is_ok_and(|cwd| Path::new(&cwd) == std::env::current_dir().unwrap())
+    {
+        fs::write(home.join("usage-requested"), "").unwrap();
+        while home.join("usage-paused").exists() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+    emit(
+        session,
+        json!({"type":"control_response","response":{"subtype":"success","request_id":value["request_id"],"response":{"rate_limits":{"limits":[
+            {"kind":"session","group":"session","percent":72,"resets_at":"2033-05-18T03:33:20Z","scope":null},
+            {"kind":"weekly_all","group":"weekly","percent":39,"resets_at":"2033-05-24T03:33:20Z","scope":null},
+            {"kind":"weekly_scoped","group":"weekly","percent":34,"resets_at":"2033-05-24T03:33:20Z","scope":{"model":{"display_name":"Fable"}}}
+        ]}}}}),
+    );
 }
 
 fn main() {
@@ -252,7 +692,7 @@ fn main() {
     let path = format!("claude-session-{session}.jsonl");
     let history = project_directory(Path::new(&std::env::var_os("CLAUDE_CONFIG_DIR").unwrap()))
         .join(format!("{session}.inputs.json"));
-    let mut inputs: Vec<Value> = if option(&args, "--resume").is_some() {
+    let inputs: Vec<Value> = if option(&args, "--resume").is_some() {
         serde_json::from_slice(
             &fs::read(&history).expect("resume must find the original session in native storage"),
         )
@@ -265,332 +705,32 @@ fn main() {
         Vec::new()
     };
     assert!(args.iter().any(|arg| arg == "--replay-user-messages"));
-    let mut waiting = None;
+    let mut fixture = Fixture {
+        model: option(&args, "--model"),
+        effort: option(&args, "--effort"),
+        config,
+        session,
+        inputs,
+        process,
+        history,
+        trace: path,
+        waiting: None,
+    };
+
     for line in io::stdin().lock().lines() {
         let value: Value = serde_json::from_str(&line.unwrap()).unwrap();
         let _response = ROOT_RESPONSE.lock().unwrap();
         match value["type"].as_str().unwrap() {
             "control_request" if value["request"]["subtype"] == "initialize" => {
-                let home = std::env::var_os("CLAUDE_SECURESTORAGE_CONFIG_DIR").unwrap();
-                let home = Path::new(&home);
-                let account = if config["unauthenticated"] == true {
-                    json!({})
-                } else if let Ok(bytes) = fs::read(home.join("fixture-auth.json")) {
-                    serde_json::from_slice(&bytes).unwrap()
-                } else if session == "catalog" {
-                    json!({"tokenSource":"none","apiKeySource":"none"})
-                } else {
-                    json!({"subscriptionType":"Claude Max","tokenSource":"oauth","apiKeySource":"none"})
-                };
-                if session == "catalog" {
-                    let home = std::env::var_os("CLAUDE_CONFIG_DIR").unwrap();
-                    let home = Path::new(&home);
-                    if let Ok(mode) = fs::read_to_string(home.join("model-list-mode")) {
-                        fs::write(home.join("model-list-requested"), []).unwrap();
-                        if mode == "silent" {
-                            continue;
-                        }
-                    }
-                }
-                if config["initializeError"] == true {
-                    emit(
-                        json!({"type":"control_response","response":{"subtype":"error","request_id":value["request_id"],"error":"fixture initialization failed"}}),
-                    );
-                } else {
-                    emit(
-                        json!({"type":"control_response","response":{"subtype":"success","request_id":value["request_id"],"response":{
-                            "models":fs::read(Path::new(&std::env::var_os("CLAUDE_CONFIG_DIR").unwrap()).join("fixture-models.json"))
-                                .ok()
-                                .map(|bytes| serde_json::from_slice::<Value>(&bytes).unwrap())
-                                .unwrap_or_else(|| json!([
-                                {"value":"default","displayName":"Default (recommended)","description":"Opus 5 with 1M context · Best for everyday, complex tasks","supportedEffortLevels":["low","high"]},
-                                {"value":"opus[1m]","displayName":"Opus (1M context)","description":"Opus 5 with 1M context · Best for everyday, complex tasks"},
-                                {"value":"claude-fable-5-1[1m]","displayName":"Fable","description":"Fable 5.1 · Most capable for your hardest and longest-running tasks"},
-                                {"value":"sonnet","displayName":"Sonnet","description":"Sonnet 5 · Efficient for routine tasks"},
-                                {"value":"haiku","displayName":"Haiku","description":"Haiku 4.5 · Fastest for quick answers"},
-                                {"value":"custom","displayName":"Custom model"}
-                            ])),
-                            "commands":[{"name":"fixture-skill","description":"Fixture skill"}],
-                            "account":account
-                        }}}),
-                    );
-                }
+                fixture.initialize(&value)
             }
             "control_request" if value["request"]["subtype"] == "get_usage" => {
-                assert_eq!(value["request"]["skip_behaviors"], true);
-                let home = std::env::var_os("CLAUDE_SECURESTORAGE_CONFIG_DIR").unwrap();
-                let home = Path::new(&home);
-                if fs::read_to_string(home.join("usage-paused"))
-                    .is_ok_and(|cwd| Path::new(&cwd) == std::env::current_dir().unwrap())
-                {
-                    fs::write(home.join("usage-requested"), "").unwrap();
-                    while home.join("usage-paused").exists() {
-                        std::thread::sleep(std::time::Duration::from_millis(10));
-                    }
-                }
-                emit(
-                    json!({"type":"control_response","response":{"subtype":"success","request_id":value["request_id"],"response":{"rate_limits":{"limits":[
-                        {"kind":"session","group":"session","percent":72,"resets_at":"2033-05-18T03:33:20Z","scope":null},
-                        {"kind":"weekly_all","group":"weekly","percent":39,"resets_at":"2033-05-24T03:33:20Z","scope":null},
-                        {"kind":"weekly_scoped","group":"weekly","percent":34,"resets_at":"2033-05-24T03:33:20Z","scope":{"model":{"display_name":"Fable"}}}
-                    ]}}}}),
-                );
+                usage(&fixture.session, &value)
             }
-            "user" => {
-                assert_ne!(session, "catalog");
-                assert_eq!(value["session_id"], session);
-                assert!(
-                    config["unauthenticated"] != true,
-                    "unauthenticated input must never reach Claude"
-                );
-                assert_eq!(
-                    option(&args, "--model").as_deref(),
-                    Some(config["expectedModel"].as_str().unwrap_or("default"))
-                );
-                if waiting.take() == Some("wait") {
-                    // The previous input can finish before the queued input is consumed.
-                    emit(
-                        json!({"type":"result","session_id":session,"is_error":false,"result":"finished waiting"}),
-                    );
-                    native(json!({"type":"attachment","attachment":{
-                        "type":"queued_command","commandMode":"prompt","origin":{"kind":"human"},"source_uuid":value["uuid"],
-                        "prompt":value["message"]["content"]
-                    }}));
-                    output(value.clone());
-                } else {
-                    emit(value.clone());
-                }
-                let content = value["message"]["content"].clone();
-                inputs.push(
-                    json!({"content":content,"model":option(&args, "--model"),"effort":option(&args, "--effort"),"process":process}),
-                );
-                let bytes = serde_json::to_vec(&inputs).unwrap();
-                fs::create_dir_all(history.parent().unwrap()).unwrap();
-                fs::write(&history, &bytes).unwrap();
-                // Append: Windows cannot truncate a file that Git's workspace review maps.
-                let mut trace = fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&path)
-                    .unwrap();
-                let written = trace.metadata().unwrap().len() > 0;
-                for input in &inputs[if written { inputs.len() - 1 } else { 0 }..] {
-                    write_json_line(&mut trace, input).unwrap();
-                }
-                emit(json!({"type":"system","subtype":"init","session_id":session}));
-                output(session_state(&session, "running"));
-                let text = content
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .filter_map(|block| block["text"].as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                if text == "crash" {
-                    std::process::exit(17);
-                } else if config["resultError"] == true {
-                    emit(
-                        json!({"type":"result","session_id":session,"is_error":true,"errors":["fixture inference failed"]}),
-                    );
-                } else if text == "background-shell" {
-                    // Claude settles the response while its shell runs, then
-                    // answers the finished shell without another input.
-                    emit(
-                        json!({"type":"system","subtype":"background_tasks_changed","session_id":session,"tasks":[
-                            {"task_id":"shell-1","task_type":"local_bash","description":"background shell"},
-                            {"task_id":"watcher-1","task_type":"monitor","description":"watcher","ambient":true}
-                        ]}),
-                    );
-                    let message = format!("message-{}", inputs.len());
-                    reply(&session, &message, "あとで結果を報告します", false);
-                    waiting = Some("background-shell");
-                    let session = session.clone();
-                    std::thread::spawn(move || {
-                        while Path::new("background-shell-paused").exists() {
-                            std::thread::sleep(std::time::Duration::from_millis(10));
-                        }
-                        emit(
-                            json!({"type":"system","subtype":"background_tasks_changed","session_id":session,"tasks":[
-                                {"task_id":"watcher-1","task_type":"monitor","description":"watcher","ambient":true}
-                            ]}),
-                        );
-                        emit(
-                            json!({"type":"system","subtype":"task_notification","task_id":"shell-1","status":"completed","output_file":"","summary":"background shell done","session_id":session}),
-                        );
-                        let _response = ROOT_RESPONSE.lock().unwrap();
-                        emit(json!({"type":"system","subtype":"init","session_id":session}));
-                        output(session_state(&session, "running"));
-                        reply(
-                            &session,
-                            &format!("{message}-report"),
-                            "結果を報告します",
-                            false,
-                        );
-                    });
-                } else if text == "wait" {
-                    waiting = Some("wait");
-                    let message = format!("waiting-{}", inputs.len());
-                    emit(
-                        json!({"type":"stream_event","session_id":session,"event":{"type":"message_start","message":{"id":message}}}),
-                    );
-                    block(
-                        &session,
-                        &message,
-                        0,
-                        "text",
-                        "Waiting for interruption",
-                        None,
-                    );
-                } else if matches!(text.as_str(), "unknown_control" | "dialog" | "elicitation") {
-                    let request = match text.as_str() {
-                        "dialog" => json!({"subtype":"request_user_dialog","dialog_kind":"future"}),
-                        "elicitation" => {
-                            json!({"subtype":"elicitation","mcp_server_name":"fixture","message":"Name?","requested_schema":{"type":"object","required":["name"],"properties":{"name":{"type":"string","minLength":1}}}})
-                        }
-                        _ => json!({"subtype":"future_control"}),
-                    };
-                    emit(
-                        json!({"type":"control_request","request_id":"control-1","request":request}),
-                    );
-                    waiting = Some(match text.as_str() {
-                        "dialog" => "dialog",
-                        "elicitation" => "elicitation",
-                        _ => "unknown_control",
-                    });
-                } else if matches!(
-                    text.as_str(),
-                    "permission" | "question" | "background" | "background-settled"
-                ) {
-                    if text.starts_with("background") {
-                        emit(
-                            json!({"type":"system","subtype":"task_started","task_id":"background-1","task_type":"local_agent","description":"background work","session_id":session}),
-                        );
-                        let message = format!("background-{}", inputs.len());
-                        emit(
-                            json!({"type":"stream_event","session_id":session,"event":{"type":"message_start","message":{"id":message}}}),
-                        );
-                        block(
-                            &session,
-                            &message,
-                            0,
-                            "text",
-                            "あとで報告します",
-                            Some("end_turn"),
-                        );
-                        end_turn(&session);
-                        if text == "background-settled" {
-                            emit(
-                                json!({"type":"system","subtype":"task_notification","task_id":"background-1","status":"completed","summary":"background done","session_id":session}),
-                            );
-                        }
-                        // The parent still owes a follow-up after this result.
-                        output(
-                            json!({"type":"result","session_id":session,"is_error":false,"result":"あとで報告します"}),
-                        );
-                    }
-                    let tool = if text == "question" {
-                        "AskUserQuestion"
-                    } else {
-                        "Bash"
-                    };
-                    let input = if text == "question" {
-                        json!({"questions":[{"question":"Which color?","header":"Color","multiSelect":false,"options":[{"label":"Blue","description":"Use blue"},{"label":"Red","description":"Use red"}]}]})
-                    } else {
-                        json!({"command":"printf approved > approved.txt"})
-                    };
-                    emit(
-                        json!({"type":"assistant","uuid":format!("tool-message-{}", inputs.len()),"message":{"id":"tool-message","role":"assistant","content":[{"type":"tool_use","id":"tool-1","name":tool,"input":input}]}}),
-                    );
-                    emit(
-                        json!({"type":"control_request","request_id":"permission-1","request":{"subtype":"can_use_tool","tool_name":tool,"tool_use_id":"tool-1","input":input}}),
-                    );
-                    waiting = Some(match text.as_str() {
-                        "background-settled" => "background-settled",
-                        "background" => "background",
-                        "question" => "question",
-                        _ => "permission",
-                    });
-                } else {
-                    reply(
-                        &session,
-                        &format!("message-{}", inputs.len()),
-                        &format!("reply {}: {text}", inputs.len()),
-                        config["idleBeforeResult"] == true,
-                    );
-                }
-            }
-            "control_response" => {
-                if matches!(waiting, Some("unknown_control" | "dialog" | "elicitation")) {
-                    assert_eq!(value["response"]["request_id"], "control-1");
-                    match waiting.unwrap() {
-                        "unknown_control" => assert_eq!(value["response"]["subtype"], "error"),
-                        "dialog" => {
-                            assert_eq!(value["response"]["response"]["behavior"], "cancelled")
-                        }
-                        "elicitation" => assert_eq!(
-                            value["response"]["response"],
-                            json!({"action":"accept","content":{"name":"BEX"}})
-                        ),
-                        _ => unreachable!(),
-                    }
-                    reply(
-                        &session,
-                        &format!("message-{}", inputs.len()),
-                        "control resolved",
-                        config["idleBeforeResult"] == true,
-                    );
-                    waiting = None;
-                    continue;
-                }
-                assert_eq!(value["response"]["request_id"], "permission-1");
-                let response = &value["response"]["response"];
-                let allowed = response["behavior"] == "allow";
-                let text = if waiting == Some("question") && allowed {
-                    response["updatedInput"]["answers"]["Which color?"]
-                        .as_str()
-                        .unwrap()
-                        .to_owned()
-                } else if allowed {
-                    fs::write("approved.txt", "approved").unwrap();
-                    "approved".into()
-                } else {
-                    "denied".into()
-                };
-                emit(
-                    json!({"type":"user","uuid":format!("tool-result-{}", inputs.len()),
-                        "message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-1","content":text,"is_error":!allowed}]},
-                        "tool_use_result":if allowed && waiting == Some("background") { json!({"backgroundTaskId":"background-1"}) }
-                            else if allowed && waiting != Some("question") { json!({"exitCode":0}) } else { json!({}) }}),
-                );
-                if waiting == Some("background") {
-                    let output_file = std::env::current_dir().unwrap().join("background.output");
-                    fs::write(&output_file, "background stdout\n").unwrap();
-                    emit(
-                        json!({"type":"system","subtype":"task_notification","task_id":"background-1","tool_use_id":"tool-1","output_file":output_file,"status":"completed","summary":"background done","session_id":session}),
-                    );
-                    while Path::new("background-paused").exists() {
-                        std::thread::sleep(std::time::Duration::from_millis(10));
-                    }
-                }
-                reply(
-                    &session,
-                    &format!("message-{}", inputs.len()),
-                    &text,
-                    config["idleBeforeResult"] == true,
-                );
-                waiting = None;
-            }
+            "user" => fixture.user(&value),
+            "control_response" => fixture.control_response(&value),
             "control_request" if value["request"]["subtype"] == "interrupt" => {
-                emit(
-                    json!({"type":"control_response","response":{"subtype":"success","request_id":value["request_id"],"response":{}}}),
-                );
-                // A settled response has no result to end; its shell keeps running.
-                if waiting != Some("background-shell") {
-                    emit(
-                        json!({"type":"result","session_id":session,"is_error":false,"result":"interrupted"}),
-                    );
-                }
-                waiting = None;
+                fixture.interrupt(&value)
             }
             _ => panic!("unexpected fixture input type"),
         }

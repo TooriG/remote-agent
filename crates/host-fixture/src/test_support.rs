@@ -14,6 +14,17 @@ use std::{
 use tokio_util::sync::{CancellationToken, DropGuard};
 use zeroize::Zeroizing;
 
+/// Automatic checkouts live at `<worktrees>/<id>/<project name>`.
+#[track_caller]
+pub fn assert_project_directory(cwd: &Path, project: &Path, worktrees: Option<&Path>) {
+    if let Some(worktrees) = worktrees {
+        assert_eq!(cwd.file_name(), project.file_name());
+        assert_eq!(cwd.parent().unwrap().parent().unwrap(), worktrees);
+    } else {
+        assert_eq!(cwd, project);
+    }
+}
+
 #[derive(Default)]
 pub struct Memory {
     bytes: Mutex<Option<Zeroizing<Vec<u8>>>>,

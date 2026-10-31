@@ -1,7 +1,7 @@
 //! The same observable conversation contract against both native subprocess fixtures.
 use agent_protocol::{
     execution::{ErrorCategory, TurnStatus},
-    ids::ClientInputId,
+    ids::{ClientInputId, TurnId},
     items::ItemBody,
     models::{Empty, Turn, WorktreeSettings},
     operations as op,
@@ -41,6 +41,33 @@ async fn finished(events: &mut Reader) -> Turn {
         }
     }
 }
+// Native completion and a deferred input echo may arrive independently.
+// Both must be observed before checking the persisted conversation.
+async fn finished_with_input(events: &mut Reader, input: &ClientInputId) -> TurnId {
+    let mut completed = None;
+    let mut echoed = false;
+    while completed.is_none() || !echoed {
+        let items = match change(events).await {
+            SessionChange::Turn {
+                turn,
+                completed: done,
+            } => {
+                if done {
+                    assert_eq!(turn.status, TurnStatus::Completed);
+                    completed = Some(turn.id);
+                }
+                turn.items.unwrap_or_default()
+            }
+            SessionChange::Item { item, .. } => vec![item],
+            _ => Vec::new(),
+        };
+        echoed |= items
+            .iter()
+            .any(|item| item.client_input_id.as_ref() == Some(input));
+    }
+    completed.unwrap()
+}
+
 fn submission(session: &SessionRef, text: &str) -> op::Submission {
     op::Submission {
         thread_id: session.clone(),
@@ -629,30 +656,8 @@ async fn scenarios(provider: ProviderKind) {
             if provider == ProviderKind::Codex {
                 std::fs::write(root.join("release-inputs"), "").unwrap();
             }
-            // Native completion and a deferred input echo may arrive independently.
-            // Both must be observed before checking the persisted conversation.
-            let mut completed = None;
-            let mut echoed = false;
-            while completed.is_none() || !echoed {
-                let items = match change(&mut events).await {
-                    SessionChange::Turn {
-                        turn,
-                        completed: done,
-                    } => {
-                        if done {
-                            assert_eq!(turn.status, TurnStatus::Completed);
-                            completed = Some(turn.id);
-                        }
-                        turn.items.unwrap_or_default()
-                    }
-                    SessionChange::Item { item, .. } => vec![item],
-                    _ => Vec::new(),
-                };
-                echoed |= items.iter().any(|item| {
-                    item.client_input_id.as_ref() == Some(&additional.client_user_message_id)
-                });
-            }
-            let turn_id = completed.unwrap();
+            let turn_id =
+                finished_with_input(&mut events, &additional.client_user_message_id).await;
             let (history, _) = open(&local.peer, &session).await;
             let turn = history
                 .response

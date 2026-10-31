@@ -20,7 +20,7 @@ use agent_transport::transport::Endpoint;
 
 use agent_transport::transport::Relays;
 use codex_app_server::AppServerConfig;
-use host_fixture::test_support::{HostFixture, Memory};
+use host_fixture::test_support::{HostFixture, Memory, assert_project_directory};
 use serde_json::{Value, json};
 
 mod codex_fixture;
@@ -435,11 +435,11 @@ async fn claude_submission_preserves_inputs_settings_workspaces_and_history_acro
             assert_eq!(snapshot.drafts[&agent_core::state::DraftKey::from(&id)].effort.as_deref(), Some("low"));
             let cwd = snapshot.navigation.cwd.clone();
             if let Some(previous) = &previous_cwd { assert_eq!(&cwd, previous); }
-            if selected && automatic {
-                assert_eq!(Path::new(&cwd).file_name(), workspace.file_name());
-                assert_eq!(Path::new(&cwd).parent().unwrap().parent().unwrap(), root.join("worktrees"));
-            }
-            else { assert_eq!(Path::new(&cwd), if selected { workspace.clone() } else { root.join("bex-chats") }); }
+            assert_project_directory(
+                Path::new(&cwd),
+                &if selected { workspace.clone() } else { root.join("bex-chats") },
+                (selected && automatic).then_some(root.join("worktrees").as_path()),
+            );
             let turn = &snapshot.conversations[&id].turns.as_ref().unwrap()[number];
             let items = turn.items.as_ref().unwrap();
             assert!(items.iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::Reasoning { .. }) && item_text(item) == Some("Fixture reasoning")));
@@ -934,11 +934,11 @@ async fn missing_codex_keeps_claude_inputs_workspaces_and_resumed_history_usable
             assert!(snapshot.drafts[&agent_core::state::DraftKey::from(&id)].text.is_empty() && snapshot.pending_submissions.is_empty());
             let current = snapshot.conversations[&id].cwd.clone().unwrap();
             if let Some(previous) = &cwd { assert_eq!(previous, &current); }
-            if selected && automatic {
-                assert_eq!(Path::new(&current).file_name(), workspace.file_name());
-                assert_eq!(Path::new(&current).parent().unwrap().parent().unwrap(), root.join("worktrees"));
-            }
-            else { assert_eq!(Path::new(&current), if selected { workspace.clone() } else { root.join("bex-chats") }); }
+            assert_project_directory(
+                Path::new(&current),
+                &if selected { workspace.clone() } else { root.join("bex-chats") },
+                (selected && automatic).then_some(root.join("worktrees").as_path()),
+            );
             let turns = snapshot.conversations[&id].turns.as_ref().unwrap();
             assert!(turns[index].items.as_ref().unwrap().iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::AssistantText { .. }) && item_text(item).is_some_and(|text| text.starts_with(&format!("reply {}: independent {index}", index + 1)))));
             let snapshot = listed(&store, &id, selected.then_some(workspace.as_path())).await;

@@ -21,7 +21,7 @@ use std::{
 use tokio_util::sync::CancellationToken;
 
 mod codex_fixture;
-use host_fixture::test_support::{HostFixture, Memory};
+use host_fixture::test_support::{HostFixture, Memory, assert_project_directory};
 
 // These transport Hosts run without account management and use an explicit
 // Codex new-chat preference.
@@ -825,6 +825,45 @@ async fn new_live_conversation_avoids_unmaterialized_history_and_survives_reconn
     .expect("live conversation recovery exceeded deadline");
 }
 
+fn assert_submission_items(
+    turn: &models::Turn,
+    prompt: &str,
+    uploaded: Option<&str>,
+    bytes: &[u8],
+) {
+    assert!(turn.error.is_none());
+    let items = turn.items.as_ref().unwrap();
+    let user = items
+        .iter()
+        .find(|item| {
+            matches!(
+                item.body(),
+                agent_protocol::items::ItemBody::UserMessage { .. }
+            )
+        })
+        .unwrap();
+    assert_eq!(item_text(user), Some(prompt));
+    let agent_protocol::items::ItemBody::UserMessage { content, .. } = user.body() else {
+        panic!("user body")
+    };
+    let mut images = content.iter().filter_map(|input| match input {
+        agent_protocol::items::MessagePart::Image { source } => Some(source),
+        _ => None,
+    });
+    if let Some(path) = uploaded {
+        assert_eq!(images.next().unwrap(), path);
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
+    }
+    assert!(images.next().is_none());
+    assert!(items.iter().any(|item| matches!(
+        item.body(),
+        agent_protocol::items::ItemBody::AssistantText {
+            phase: agent_protocol::items::AssistantPhase::Final,
+            ..
+        }
+    ) && item_text(item).is_some_and(|text| !text.is_empty())));
+}
+
 #[rstest::rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn submissions_complete_across_saved_worktree_settings_and_chat_scopes(
@@ -918,11 +957,9 @@ async fn submissions_complete_across_saved_worktree_settings_and_chat_scopes(
             }
             let cwd = store.snapshot().navigation.cwd.clone();
             if let Some(previous) = &session_cwd { assert_eq!(&cwd, previous); }
-            if automatic && project {
-                assert_eq!(Path::new(&cwd).file_name(), workspace.file_name());
-                assert_eq!(Path::new(&cwd).parent().unwrap().parent().unwrap(), destination);
+            if project {
+                assert_project_directory(Path::new(&cwd), &workspace, automatic.then_some(destination.as_path()));
             }
-            else if project { assert_eq!(Path::new(&cwd), &workspace); }
             else {
                 assert!(store.snapshot().selected_directory().is_empty(), "an unselected chat must remain unselected: {cwd}");
                 assert_eq!(Path::new(&cwd), root.join("bex-chats"));
@@ -964,17 +1001,7 @@ async fn submissions_complete_across_saved_worktree_settings_and_chat_scopes(
             let draft = &snapshot.drafts[&agent_core::state::DraftKey::from(&id)];
             assert!(draft.text.is_empty() && draft.attachments.is_empty());
             let turn = &snapshot.conversations[&id].turns.as_ref().unwrap()[number];
-            assert!(turn.error.is_none());
-            let items = turn.items.as_ref().unwrap();
-            let user = items.iter().find(|item| matches!(item.body(), agent_protocol::items::ItemBody::UserMessage { .. })).unwrap();
-            assert_eq!(item_text(user), Some(prompt.as_str()));
-            let agent_protocol::items::ItemBody::UserMessage { content, .. } = user.body() else { panic!("user body") }; let mut images = content.iter().filter_map(|input| match input {agent_protocol::items::MessagePart::Image { source } => Some(source), _ => None});
-            if let Some(path) = uploaded {
-                assert_eq!(images.next().unwrap(), &path);
-                assert_eq!(std::fs::read(path).unwrap(), bytes);
-            }
-            assert!(images.next().is_none());
-            assert!(items.iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::AssistantText { phase: agent_protocol::items::AssistantPhase::Final, .. }) && item_text(item).is_some_and(|text| !text.is_empty())));
+            assert_submission_items(turn, &prompt, uploaded.as_deref(), bytes);
             thread_id = Some(id);
             session_cwd = Some(cwd);
         }
@@ -1881,8 +1908,7 @@ async fn session_worktree_settings_apply_to_new_threads_and_preserve_project_mem
             let thread = &started["thread"];
             let cwd = std::path::PathBuf::from(thread["cwd"].as_str().unwrap());
             assert_ne!(cwd, workspace);
-            assert_eq!(cwd.file_name(), workspace.file_name());
-            assert_eq!(cwd.parent().unwrap().parent().unwrap(), destination);
+            assert_project_directory(&cwd, &workspace, Some(&destination));
             assert_eq!(std::fs::read(cwd.join(".env")).unwrap(), std::fs::read(workspace.join(".env")).unwrap());
             assert_eq!(thread["projectId"], json!({"Assigned":"workspace"}));
             ids.push(thread["id"].clone());
@@ -2616,14 +2642,7 @@ async fn completed_conversations_refresh_the_sidebar_without_manual_reload() {
                             assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
                             assert!(snapshot.drafts[&agent_core::state::DraftKey::from(&id)].text.is_empty());
                             if scoped {
-                                let selected = snapshot.selected_directory();
-                                let cwd = Path::new(&selected);
-                                assert_eq!(cwd.file_name(), project.file_name());
-                                if automatic {
-                                    assert_eq!(cwd.parent().unwrap().parent().unwrap(), project.join(".worktree"));
-                                } else {
-                                    assert_eq!(cwd, project);
-                                }
+                                assert_project_directory(Path::new(&snapshot.selected_directory()), &project, automatic.then_some(project.join(".worktree").as_path()));
                             }
                             break;
                         }

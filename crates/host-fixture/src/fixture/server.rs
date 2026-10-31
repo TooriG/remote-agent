@@ -64,7 +64,6 @@ pub(super) struct Context {
     pub config: Config,
     output: mpsc::UnboundedSender<Output>,
     peer: Arc<RpcPeer>,
-    controls: RefCell<HashMap<String, Control>>,
 }
 
 impl Context {
@@ -241,6 +240,681 @@ impl Context {
     }
 }
 
+#[derive(Default)]
+struct Threads {
+    controls: HashMap<String, Control>,
+    by_id: IndexMap<String, SharedThread>,
+    saved_threads: Option<IndexMap<String, SharedThread>>,
+    list_contents: Option<Vec<u8>>,
+    next_thread: i32,
+}
+
+const THREAD_START: &str = "thread/start";
+const TURN_START: &str = "turn/start";
+const QUEUE_INPUT: &str = "thread/queue/add";
+
+fn thread_id(params: &Value) -> &str {
+    params["threadId"].as_str().unwrap_or("")
+}
+
+impl Threads {
+    fn cancel(&self) {
+        for control in self.controls.values() {
+            control.stop.cancel();
+        }
+    }
+
+    fn require_thread(
+        &self,
+        context: &Context,
+        request_id: &Value,
+        thread_id: &str,
+    ) -> Result<Option<SharedThread>> {
+        let thread = self.by_id.get(thread_id).cloned();
+        if thread.is_none() {
+            context.error(request_id, -32602, "thread not found")?;
+        }
+        Ok(thread)
+    }
+
+    fn active_turn(&self, id: &str) -> Option<Turn> {
+        self.by_id.get(id).and_then(|thread| {
+            thread
+                .borrow()
+                .turns
+                .iter()
+                .find(|turn| turn.borrow()["status"] == "inProgress")
+                .cloned()
+        })
+    }
+
+    fn unsubscribe(&self, context: &Context, id: &Value, params: &Value) -> Result<()> {
+        let Some(thread) = self.require_thread(context, id, thread_id(params))? else {
+            return Ok(());
+        };
+        thread
+            .borrow_mut()
+            .metadata
+            .insert("status".into(), json!({"type":"notLoaded"}));
+        context.respond(id, &json!({}))
+    }
+
+    fn history_page(
+        &self,
+        context: &Context,
+        id: &Value,
+        method: &str,
+        params: &Value,
+    ) -> Result<()> {
+        let Some(thread) = self.require_thread(context, id, thread_id(params))? else {
+            return Ok(());
+        };
+        history::page(context, id, &thread.borrow(), method, params)
+    }
+
+    fn refresh(&mut self, home: &std::path::Path) -> Result<bool> {
+        let fixture = home.join("list-fixture.json");
+        let exists = fixture.exists();
+        let contents = if exists {
+            Some(fs::read(&fixture)?)
+        } else {
+            None
+        };
+        if contents.is_some() && contents != self.list_contents {
+            if self.saved_threads.is_none() {
+                self.saved_threads = Some(std::mem::take(&mut self.by_id));
+            }
+            self.list_contents = contents;
+            self.by_id.clear();
+            let summaries: Vec<Map<String, Value>> =
+                serde_json::from_slice(self.list_contents.as_ref().unwrap())?;
+            for (index, mut summary) in summaries.into_iter().enumerate() {
+                let thread_id = summary["id"]
+                    .as_str()
+                    .ok_or("fixture thread lacks id")?
+                    .to_owned();
+                summary.insert(
+                    "path".into(),
+                    json!(home.join(format!("imported-{index}.jsonl"))),
+                );
+                let mut thread = Thread::new(
+                    thread_id.clone(),
+                    summary.remove("cwd").unwrap_or(Value::Null),
+                );
+                let persisted_turns = summary.remove("turns");
+                thread.metadata.extend(summary);
+                thread.turns.push(Rc::new(RefCell::new(json!({"id":format!("turn-{thread_id}"),"status":"completed","items":[
+                                {"id":format!("answer-{thread_id}"),"type":"agentMessage","phase":"final_answer",
+                                    "text":format!("History for {}",thread.metadata["name"].as_str().unwrap_or(""))}]}))));
+                if let Some(turns) = persisted_turns {
+                    thread.turns = serde_json::from_value::<Vec<Value>>(turns)?
+                        .into_iter()
+                        .map(|turn| Rc::new(RefCell::new(turn)))
+                        .collect();
+                }
+                self.by_id.insert(thread_id, Rc::new(RefCell::new(thread)));
+            }
+        } else if contents.is_none()
+            && let Some(saved) = self.saved_threads.take()
+        {
+            self.by_id = saved;
+            self.list_contents = None;
+        }
+
+        Ok(exists)
+    }
+
+    fn list(&mut self, context: &Context, id: &Value, method: &str, params: &Value) -> Result<()> {
+        if context.home.join("exit-on-list").exists() {
+            std::process::exit(0);
+        }
+        let has_list_fixture = self.refresh(&context.home)?;
+        if method == "thread/loaded/list" {
+            let mut loaded: Vec<_> = self
+                .by_id
+                .values()
+                .filter_map(|thread| {
+                    let thread = thread.borrow();
+                    (self.list_contents.is_none()
+                        || thread.metadata.get("loaded") == Some(&Value::Bool(true))
+                        || thread.metadata["status"]["type"] == "active")
+                        .then(|| thread.metadata["id"].as_str().unwrap().to_owned())
+                })
+                .collect();
+            loaded.sort();
+            let offset = params["cursor"]
+                .as_str()
+                .and_then(|cursor| cursor.parse::<usize>().ok())
+                .unwrap_or(0)
+                .min(loaded.len());
+            let end = (offset + params["limit"].as_u64().unwrap_or(100) as usize).min(loaded.len());
+            let next = (end < loaded.len()).then(|| end.to_string());
+            context.trace(
+                method,
+                json!({"cursor":params["cursor"],"returned":end-offset}),
+            )?;
+            context.respond(id, &json!({"data":&loaded[offset..end],"nextCursor":next}))?;
+            return Ok(());
+        }
+        if has_list_fixture && params["useStateDbOnly"] != true {
+            context.error(id, -32602, "Title lists must not scan rollout history")?;
+            return Ok(());
+        }
+        let term = params["searchTerm"].as_str().unwrap_or("").to_lowercase();
+        let mut ordered: Vec<_> = self
+            .by_id
+            .values()
+            .map(|thread| thread.borrow())
+            .filter(|thread| {
+                !context.config.deferred_thread_metadata
+                    || thread
+                        .turns
+                        .iter()
+                        .any(|turn| turn.borrow()["status"] != "inProgress")
+            })
+            .filter(|thread| {
+                term.is_empty()
+                    || thread
+                        .metadata
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .filter(|name| !name.is_empty())
+                        .or_else(|| thread.metadata.get("preview").and_then(Value::as_str))
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .contains(&term)
+            })
+            .filter(|thread| {
+                let Some(kinds) = params["sourceKinds"]
+                    .as_array()
+                    .filter(|kinds| !kinds.is_empty())
+                else {
+                    return true;
+                };
+                let kind = if thread
+                    .metadata
+                    .get("parentThreadId")
+                    .is_some_and(Value::is_string)
+                {
+                    "subAgentThreadSpawn"
+                } else {
+                    "cli"
+                };
+                kinds.iter().any(|value| value.as_str() == Some(kind))
+            })
+            .filter(|thread| {
+                let Some(ancestor) = params["ancestorThreadId"].as_str() else {
+                    return true;
+                };
+                let mut parent = thread
+                    .metadata
+                    .get("parentThreadId")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                let mut visited = HashSet::new();
+                while let Some(id) = parent {
+                    if id == ancestor {
+                        return true;
+                    }
+                    if !visited.insert(id.clone()) {
+                        break;
+                    }
+                    parent = self.by_id.get(&id).and_then(|thread| {
+                        thread
+                            .borrow()
+                            .metadata
+                            .get("parentThreadId")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned)
+                    });
+                }
+                false
+            })
+            .collect();
+        ordered.sort_by_key(|thread| {
+            std::cmp::Reverse(thread.metadata["updatedAt"].as_i64().unwrap_or(0))
+        });
+        let offset = offset(params);
+        let end = offset.saturating_add(limit(params, 64).min(100));
+        let page: Vec<_> = ordered
+            .iter()
+            .skip(offset)
+            .take(end - offset)
+            .map(|thread| ThreadView {
+                metadata: &thread.metadata,
+                turns: &[],
+            })
+            .collect();
+        context.trace(method, json!({"useStateDbOnly":params["useStateDbOnly"] == true,"count":page.len(),"ancestorThreadId":params["ancestorThreadId"]}))?;
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Page<'a> {
+            data: &'a [ThreadView<'a>],
+            next_cursor: Option<String>,
+        }
+        let next_cursor = if context.home.join("repeat-list-cursor").exists() {
+            Some(offset.to_string())
+        } else {
+            (end < ordered.len()).then(|| end.to_string())
+        };
+        let response = Page {
+            data: &page,
+            next_cursor,
+        };
+        if params["ancestorThreadId"].is_string() {
+            context.respond_read(id, &response, "list")?;
+        } else {
+            context.respond(id, &response)?;
+        }
+        Ok(())
+    }
+
+    fn create(&mut self, context: &Context, id: &Value, params: &mut Value) -> Result<()> {
+        let failure = context.home.join("fail-next-thread-start");
+        if failure.exists() {
+            fs::remove_file(failure)?;
+            context.error(id, -32603, "fixture session creation failed")?;
+            return Ok(());
+        }
+        let cwd = match params.get_mut("cwd") {
+            Some(cwd) => cwd.take(),
+            // Unscoped chats must never inherit the developer's
+            // checkout through the fixture process environment.
+            None => serde_json::to_value(&context.home)?,
+        };
+        let matches = context.config.expected_cwd.as_ref().is_none_or(|expected| {
+            cwd.as_str()
+                .is_some_and(|cwd| std::path::Path::new(cwd) == expected)
+        });
+        context.trace(
+            THREAD_START,
+            json!({"hasProjectId":params.get("projectId").is_some(),"cwdMatchesFixture":matches}),
+        )?;
+        assert!(
+            params.get("projectId").is_none(),
+            "BEX creation uses cwd, not native project assignment"
+        );
+        if !matches || !cwd.as_str().is_some_and(|cwd| !cwd.is_empty()) {
+            context.error(id, -32602, "invalid cwd")?;
+            return Ok(());
+        }
+        let thread_id = loop {
+            self.next_thread += 1;
+            let id = format!("fixture-thread-{}", self.next_thread);
+            if !self.by_id.contains_key(&id) {
+                break id;
+            }
+        };
+        let mut thread = Thread::new(thread_id.clone(), cwd);
+        if context.config.deferred_thread_metadata {
+            thread.metadata.insert("name".into(), Value::Null);
+        }
+        thread.metadata.insert(
+            "path".into(),
+            context
+                .home
+                .join(format!("{thread_id}.jsonl"))
+                .into_os_string()
+                .into_string()
+                .unwrap()
+                .into(),
+        );
+        thread
+            .metadata
+            .insert("historyMode".into(), "paginated".into());
+        thread
+            .metadata
+            .insert("model".into(), params["model"].take());
+        thread
+            .metadata
+            .insert("createdAt".into(), self.next_thread.into());
+        thread
+            .metadata
+            .insert("updatedAt".into(), self.next_thread.into());
+        #[derive(Serialize)]
+        struct Started<'a> {
+            thread: &'a Thread,
+        }
+        context.respond(id, &Started { thread: &thread })?;
+        self.by_id.insert(thread_id, Rc::new(RefCell::new(thread)));
+        Ok(())
+    }
+
+    fn fork(&mut self, context: &Context, id: &Value, params: &Value) -> Result<()> {
+        let Some(source) = self.require_thread(context, id, thread_id(params))? else {
+            return Ok(());
+        };
+        let source = source.borrow();
+        let Some(boundary) = source
+            .turns
+            .iter()
+            .position(|turn| turn.borrow()["id"] == params["lastTurnId"])
+        else {
+            context.error(id, -32602, "turn not found")?;
+            return Ok(());
+        };
+        if source.turns[boundary].borrow()["status"] == "inProgress" {
+            context.error(id, -32602, "completed turn required")?;
+            return Ok(());
+        }
+        self.next_thread += 1;
+        let thread_id = format!("fixture-thread-{}", self.next_thread);
+        let mut thread = Thread {
+            metadata: source.metadata.clone(),
+            turns: source.turns[..=boundary]
+                .iter()
+                .map(|turn| Rc::new(RefCell::new(turn.borrow().clone())))
+                .collect(),
+        };
+        thread
+            .metadata
+            .insert("id".into(), thread_id.clone().into());
+        thread
+            .metadata
+            .insert("createdAt".into(), self.next_thread.into());
+        thread
+            .metadata
+            .insert("updatedAt".into(), self.next_thread.into());
+        thread
+            .metadata
+            .insert("status".into(), json!({"type":"idle"}));
+        #[derive(Serialize)]
+        struct Forked<'a> {
+            thread: ThreadView<'a>,
+        }
+        context.respond(
+            id,
+            &Forked {
+                thread: ThreadView {
+                    metadata: &thread.metadata,
+                    turns: if params["excludeTurns"] == true {
+                        &[]
+                    } else {
+                        &thread.turns
+                    },
+                },
+            },
+        )?;
+        self.by_id.insert(thread_id, Rc::new(RefCell::new(thread)));
+        Ok(())
+    }
+
+    async fn start_turn(
+        &mut self,
+        context: &Rc<Context>,
+        id: &Value,
+        params: &mut Value,
+    ) -> Result<()> {
+        let thread_id = thread_id(params);
+        let prompt = params["input"][0]["text"].as_str().unwrap_or("");
+        let has_text = params["input"][0]["type"] == "text" && !prompt.trim().is_empty();
+        context.trace(TURN_START, json!({"threadExists":self.by_id.contains_key(thread_id),"hasTextInput":has_text,
+                        "model":params["model"],"effort":params["effort"],"serviceTierForTurn":params["serviceTierForTurn"]}))?;
+        let Some(thread) = self.by_id.get(thread_id).filter(|_| has_text) else {
+            context.error(id, -32602, "invalid turn input")?;
+            return Ok(());
+        };
+        if prompt.contains("[model]")
+            && (params["model"] != "fixture-model"
+                || params["effort"] != "high"
+                || thread
+                    .borrow()
+                    .metadata
+                    .get("model")
+                    .and_then(Value::as_str)
+                    != Some("fixture-model"))
+        {
+            context.error(
+                id,
+                -32602,
+                "selected model and effort did not reach the server",
+            )?;
+            return Ok(());
+        }
+        if self.active_turn(thread_id).is_some() {
+            context.error(id, -32600, "turn already active")?;
+            return Ok(());
+        }
+        let suffix = format!(
+            "{}-{}",
+            thread_id.rsplit('-').next().unwrap(),
+            thread.borrow().turns.len() + 1
+        );
+        let turn_id = format!("fixture-turn-{suffix}");
+        let turn = Rc::new(RefCell::new(
+            json!({"id":turn_id,"status":"inProgress","items":[],"startedAt":1}),
+        ));
+        thread.borrow_mut().turns.push(turn.clone());
+        thread
+            .borrow_mut()
+            .metadata
+            .insert("status".into(), json!({"type":"active","activeFlags":[]}));
+        context.respond(id, &json!({"turn":{"id":turn_id}}))?;
+        if prompt == "[crash]" {
+            context.turn_event("turn/started", thread_id, &turn.borrow())?;
+            let (flushed, ready) = oneshot::channel();
+            context.output.send(Output::Barrier(flushed))?;
+            ready.await?;
+            std::process::exit(17);
+        }
+        let delayed = prompt.contains("[delayed-input]") || prompt.contains("[deferred-steer]");
+        if delayed || prompt.contains("[workspace-edit]") || prompt.contains("[groups]") {
+            remove_if_present(&context.home.join("release-inputs"))?;
+        }
+        let stop = CancellationToken::new();
+        self.controls.insert(
+            turn_id,
+            Control {
+                stop: stop.clone(),
+                delayed,
+            },
+        );
+        let context = context.clone();
+        let thread = thread.clone();
+        let input = std::mem::take(params["input"].as_array_mut().unwrap());
+        let client_id = params["clientUserMessageId"].take();
+        tokio::task::spawn_local(async move {
+            if let Err(error) = (scenario::ScenarioTurn {
+                context: context.clone(),
+                thread: thread.clone(),
+                turn: turn.clone(),
+                inputs: input,
+                suffix,
+                stop,
+                client_id,
+            })
+            .run()
+            .await
+            {
+                eprintln!("Codex scenario failed: {error}");
+                let _ = context.finish(
+                    &thread,
+                    &turn,
+                    "failed",
+                    Some(json!({"message":"fixture scenario failed"})),
+                );
+            }
+        });
+        Ok(())
+    }
+
+    fn queue(&self, context: &Context, id: &Value, params: &Value) -> Result<()> {
+        let thread_id = thread_id(params);
+        let active = self.active_turn(thread_id);
+        let Some(turn) = active else {
+            context.error(id, -32602, "no active turn")?;
+            return Ok(());
+        };
+        context.trace(
+            QUEUE_INPUT,
+            json!({"hasExpectedTurnId":params.get("expectedTurnId").is_some()}),
+        )?;
+        context.respond(
+            id,
+            &json!({"queuedSubmission":{"id":"fixture-queued-input"}}),
+        )?;
+        context.turn_event("turn/started", thread_id, &turn.borrow())?;
+        context.stream_item(thread_id,&turn,json!({"id":params["clientUserMessageId"],"clientId":params["clientUserMessageId"],"type":"userMessage","content":params["input"]}))?;
+        Ok(())
+    }
+
+    fn control_turn(
+        &self,
+        context: &Rc<Context>,
+        id: &Value,
+        method: &str,
+        params: &Value,
+    ) -> Result<()> {
+        let thread_id = thread_id(params);
+        let active = self.active_turn(thread_id);
+        let expected = &params[if method == "turn/interrupt" {
+            "turnId"
+        } else {
+            "expectedTurnId"
+        }];
+        let Some(turn) = active.filter(|turn| &turn.borrow()["id"] == expected) else {
+            context.error(id, -32602, "active turn changed")?;
+            return Ok(());
+        };
+        let turn_id = turn.borrow()["id"].as_str().unwrap().to_owned();
+        let control = self.controls[&turn_id].clone();
+        if method == "turn/interrupt" {
+            control.stop.cancel();
+            context.respond(id, &json!({}))?;
+        } else {
+            let item_id = params["clientUserMessageId"]
+                .as_str()
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned)
+                .unwrap_or_else(|| turn.borrow()["items"].as_array().unwrap().len().to_string());
+            let item = json!({"id":format!("steered-{item_id}"),"clientId":params["clientUserMessageId"],"type":"userMessage",
+                            "content":params.get("input").unwrap_or(&json!([]))});
+            if control.delayed {
+                let context = context.clone();
+                let thread_id = thread_id.to_owned();
+                tokio::task::spawn_local(async move {
+                    if scenario::wait_for_release(&context.home, &control.stop).await {
+                        let recorded = json!({"id":format!("fixture-steer-recorded-{}",item["id"].as_str().unwrap()),"type":"agentMessage","phase":"commentary","text":"Additional input recorded"});
+                        if context
+                            .stream_item(&thread_id, &turn, item)
+                            .and_then(|_| context.stream_item(&thread_id, &turn, recorded))
+                            .is_err()
+                        {
+                            eprintln!("Deferred fixture input could not be written");
+                        }
+                    }
+                });
+            } else {
+                context.stream_item(thread_id, &turn, item)?;
+            }
+            context.respond(id, &json!({"turnId":turn_id}))?;
+        }
+        Ok(())
+    }
+
+    fn read(&self, context: &Rc<Context>, id: &Value, method: &str, params: &Value) -> Result<()> {
+        context.trace(method, json!({"threadId":params["threadId"]}))?;
+        let failure = context.home.join("fail-next-history-read");
+        if method == "thread/read" && failure.exists() {
+            fs::remove_file(failure)?;
+            context.error(id, -32601, "list_turns is not supported yet")?;
+            return Ok(());
+        }
+        let external = context.home.join("background-reply");
+        if external.exists()
+            && let Some(latest) = self
+                .by_id
+                .values()
+                .max_by_key(|thread| thread.borrow().metadata["createdAt"].as_i64().unwrap_or(0))
+        {
+            latest.borrow_mut().turns.push(Rc::new(RefCell::new(json!({"id":"fixture-external-turn","status":"completed","items":[
+                                {"id":"fixture-external-final","type":"agentMessage","phase":"final_answer","text":fs::read_to_string(&external)?}]}))));
+            fs::remove_file(external)?;
+        }
+        let Some(thread) = self.require_thread(context, id, thread_id(params))? else {
+            return Ok(());
+        };
+        if method == "thread/resume" && thread.borrow().metadata["status"]["type"] == "notLoaded" {
+            thread
+                .borrow_mut()
+                .metadata
+                .insert("status".into(), json!({"type":"idle"}));
+        }
+        let stored_thread = thread.borrow();
+        let overridden = stored_thread.metadata.get("readCwd").map(|cwd| {
+            let mut metadata = stored_thread.metadata.clone();
+            metadata.insert("cwd".into(), cwd.clone());
+            let notification = json!({"threadId":metadata["id"], "threadName":metadata["name"]});
+            let context = context.clone();
+            tokio::task::spawn_local(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                context.notify("thread/name/updated", &notification)
+            });
+            Thread {
+                metadata,
+                turns: stored_thread.turns.clone(),
+            }
+        });
+        let thread = overridden.as_ref().unwrap_or(&stored_thread);
+        let include = params["includeTurns"] == true;
+        if method == "thread/read"
+            && include
+            && thread.metadata.get("historyMode").and_then(Value::as_str) == Some("paginated")
+        {
+            context.error(
+                id,
+                -32603,
+                "Full history hydration is unavailable; use pagination",
+            )?;
+        } else if method == "thread/read"
+            && include
+            && !thread.turns.is_empty()
+            && thread.turns.iter().all(|turn| {
+                let turn = turn.borrow();
+                turn["status"] == "inProgress"
+                    && !turn["items"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|item| item["type"] == "agentMessage")
+            })
+        {
+            context.error(id, -32603, "rollout is empty")?;
+        } else if method == "thread/resume" && thread.turns.is_empty() {
+            context.error(id, -32600, "no rollout found for thread id")?;
+        } else {
+            #[derive(Serialize)]
+            struct Read<'a, T> {
+                thread: &'a T,
+            }
+            if include {
+                if let Some(persisted) = history::persisted(thread) {
+                    context.respond(id, &Read { thread: &persisted })?;
+                } else {
+                    context.respond(id, &Read { thread })?;
+                }
+            } else {
+                let response = Read {
+                    thread: &ThreadView {
+                        metadata: &thread.metadata,
+                        turns: if method == "thread/read" {
+                            &[]
+                        } else {
+                            &thread.turns
+                        },
+                    },
+                };
+                if method == "thread/read" {
+                    context.respond_read(id, &response, "history")?;
+                } else {
+                    context.respond(id, &response)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 pub(super) async fn run(home: PathBuf, config: Config) -> Result<()> {
     tokio::task::LocalSet::new().run_until(async move {
         let peer = Arc::new(RpcPeer::open(agent_transport::peer::JsonlReader::new(tokio::io::stdin()), tokio::io::stdout(),
@@ -257,13 +931,10 @@ pub(super) async fn run(home: PathBuf, config: Config) -> Result<()> {
             }
             Ok::<_, agent_transport::peer::PeerError>(())
         });
-        let context = Rc::new(Context { home, config, output, peer: peer.clone(), controls: RefCell::new(HashMap::new()) });
+        let context = Rc::new(Context { home, config, output, peer: peer.clone() });
+        let mut threads = Threads::default();
         let result = async {
         let mut accounts = accounts::Accounts::load(&context.home)?;
-        let mut threads = IndexMap::<String, SharedThread>::new();
-        let mut saved_threads = None;
-        let mut list_contents = None;
-        let mut next_thread = 0;
         loop {
             let line = tokio::select! {
                 result = &mut writer => { result??; break; }
@@ -347,309 +1018,21 @@ pub(super) async fn run(home: PathBuf, config: Config) -> Result<()> {
                             "isDefault":true,"hidden":false,"description":"Isolated test model"}]);
                     context.respond(id, &json!({"data":models,"nextCursor":null}))?;
                 }
-                "thread/list" | "thread/loaded/list" => {
-                    if context.home.join("exit-on-list").exists() { std::process::exit(0); }
-                    let fixture = context.home.join("list-fixture.json");
-                    let contents = if fixture.exists() { Some(fs::read(&fixture)?) } else { None };
-                    if contents.is_some() && contents != list_contents {
-                        if saved_threads.is_none() { saved_threads = Some(std::mem::take(&mut threads)); }
-                        list_contents = contents;
-                        threads.clear();
-                        let summaries: Vec<Map<String, Value>> = serde_json::from_slice(list_contents.as_ref().unwrap())?;
-                        for (index, mut summary) in summaries.into_iter().enumerate() {
-                            let thread_id = summary["id"].as_str().ok_or("fixture thread lacks id")?.to_owned();
-                            summary.insert("path".into(), json!(context.home.join(format!("imported-{index}.jsonl"))));
-                            let mut thread = Thread::new(thread_id.clone(), summary.remove("cwd").unwrap_or(Value::Null));
-                            let persisted_turns = summary.remove("turns");
-                            thread.metadata.extend(summary);
-                            thread.turns.push(Rc::new(RefCell::new(json!({"id":format!("turn-{thread_id}"),"status":"completed","items":[
-                                {"id":format!("answer-{thread_id}"),"type":"agentMessage","phase":"final_answer",
-                                    "text":format!("History for {}",thread.metadata["name"].as_str().unwrap_or(""))}]}))));
-                            if let Some(turns) = persisted_turns {
-                                thread.turns = serde_json::from_value::<Vec<Value>>(turns)?
-                                    .into_iter().map(|turn| Rc::new(RefCell::new(turn))).collect();
-                            }
-                            threads.insert(thread_id, Rc::new(RefCell::new(thread)));
-                        }
-                    } else if contents.is_none() && let Some(saved) = saved_threads.take() {
-                        threads = saved; list_contents = None;
-                    }
-                    if method == "thread/loaded/list" {
-                        let mut loaded: Vec<_> = threads.values().filter_map(|thread| {
-                            let thread = thread.borrow();
-                            (list_contents.is_none() || thread.metadata.get("loaded") == Some(&Value::Bool(true)) || thread.metadata["status"]["type"] == "active")
-                                .then(|| thread.metadata["id"].as_str().unwrap().to_owned())
-                        }).collect();
-                        loaded.sort();
-                        let offset = params["cursor"].as_str().and_then(|cursor| cursor.parse::<usize>().ok()).unwrap_or(0).min(loaded.len());
-                        let end = (offset + params["limit"].as_u64().unwrap_or(100) as usize).min(loaded.len());
-                        let next = (end < loaded.len()).then(|| end.to_string());
-                        context.trace(method, json!({"cursor":params["cursor"],"returned":end-offset}))?;
-                        context.respond(id, &json!({"data":&loaded[offset..end],"nextCursor":next}))?;
-                        continue;
-                    }
-                    if fixture.exists() && params["useStateDbOnly"] != true {
-                        context.error(id, -32602, "Title lists must not scan rollout history")?;
-                        continue;
-                    }
-                    let term = params["searchTerm"].as_str().unwrap_or("").to_lowercase();
-                    let mut ordered: Vec<_> = threads.values().map(|thread| thread.borrow()).filter(|thread| {
-                        !context.config.deferred_thread_metadata || thread.turns.iter().any(|turn| turn.borrow()["status"] != "inProgress")
-                    }).filter(|thread| {
-                        term.is_empty() || thread.metadata.get("name").and_then(Value::as_str).filter(|name| !name.is_empty())
-                            .or_else(|| thread.metadata.get("preview").and_then(Value::as_str)).unwrap_or("").to_lowercase().contains(&term)
-                    }).filter(|thread| {
-                        let Some(kinds) = params["sourceKinds"].as_array().filter(|kinds| !kinds.is_empty()) else { return true; };
-                        let kind = if thread.metadata.get("parentThreadId").is_some_and(Value::is_string) {
-                            "subAgentThreadSpawn"
-                        } else { "cli" };
-                        kinds.iter().any(|value| value.as_str() == Some(kind))
-                    }).filter(|thread| {
-                        let Some(ancestor) = params["ancestorThreadId"].as_str() else { return true; };
-                        let mut parent = thread.metadata.get("parentThreadId").and_then(Value::as_str).map(str::to_owned);
-                        let mut visited = HashSet::new();
-                        while let Some(id) = parent {
-                            if id == ancestor { return true; }
-                            if !visited.insert(id.clone()) { break; }
-                            parent = threads.get(&id).and_then(|thread| thread.borrow().metadata.get("parentThreadId").and_then(Value::as_str).map(str::to_owned));
-                        }
-                        false
-                    }).collect();
-                    ordered.sort_by_key(|thread| std::cmp::Reverse(thread.metadata["updatedAt"].as_i64().unwrap_or(0)));
-                    let offset = offset(params);
-                    let end = offset.saturating_add(limit(params, 64).min(100));
-                    let page: Vec<_> = ordered.iter().skip(offset).take(end - offset)
-                        .map(|thread| ThreadView { metadata: &thread.metadata, turns: &[] }).collect();
-                    context.trace(method, json!({"useStateDbOnly":params["useStateDbOnly"] == true,"count":page.len(),"ancestorThreadId":params["ancestorThreadId"]}))?;
-                    #[derive(Serialize)] #[serde(rename_all = "camelCase")]
-                    struct Page<'a> { data: &'a [ThreadView<'a>], next_cursor: Option<String> }
-                    let next_cursor = if context.home.join("repeat-list-cursor").exists() {
-                        Some(offset.to_string())
-                    } else { (end < ordered.len()).then(|| end.to_string()) };
-                    let response = Page { data: &page, next_cursor };
-                    if params["ancestorThreadId"].is_string() {
-                        context.respond_read(id, &response, "list")?;
-                    } else {
-                        context.respond(id, &response)?;
-                    }
-                }
-                "thread/start" => {
-                    let failure = context.home.join("fail-next-thread-start");
-                    if failure.exists() {
-                        fs::remove_file(failure)?;
-                        context.error(id, -32603, "fixture session creation failed")?;
-                        continue;
-                    }
-                    let cwd = match params.get_mut("cwd") {
-                        Some(cwd) => cwd.take(),
-                        // Unscoped chats must never inherit the developer's
-                        // checkout through the fixture process environment.
-                        None => serde_json::to_value(&context.home)?,
-                    };
-                    let matches = context.config.expected_cwd.as_ref().is_none_or(|expected| cwd.as_str().is_some_and(|cwd| std::path::Path::new(cwd) == expected));
-                    context.trace(method, json!({"hasProjectId":params.get("projectId").is_some(),"cwdMatchesFixture":matches}))?;
-                    assert!(params.get("projectId").is_none(), "BEX creation uses cwd, not native project assignment");
-                    if !matches || !cwd.as_str().is_some_and(|cwd| !cwd.is_empty()) {
-                        context.error(id, -32602, "invalid cwd")?; continue;
-                    }
-                    let thread_id = loop {
-                        next_thread += 1;
-                        let id = format!("fixture-thread-{next_thread}");
-                        if !threads.contains_key(&id) { break id; }
-                    };
-                    let mut thread = Thread::new(thread_id.clone(), cwd);
-                    if context.config.deferred_thread_metadata { thread.metadata.insert("name".into(), Value::Null); }
-                    thread.metadata.insert("path".into(), context.home.join(format!("{thread_id}.jsonl")).into_os_string().into_string().unwrap().into());
-                    thread.metadata.insert("historyMode".into(), "paginated".into());
-                    thread.metadata.insert("model".into(), params["model"].take());
-                    thread.metadata.insert("createdAt".into(), next_thread.into());
-                    thread.metadata.insert("updatedAt".into(), next_thread.into());
-                    #[derive(Serialize)] struct Started<'a> { thread: &'a Thread }
-                    context.respond(id, &Started { thread: &thread })?;
-                    threads.insert(thread_id, Rc::new(RefCell::new(thread)));
-                }
-                "thread/fork" => {
-                    let Some(source) = threads.get(params["threadId"].as_str().unwrap_or("")).cloned() else {
-                        context.error(id, -32602, "thread not found")?; continue;
-                    };
-                    let source = source.borrow();
-                    let Some(boundary) = source.turns.iter().position(|turn| turn.borrow()["id"] == params["lastTurnId"]) else {
-                        context.error(id, -32602, "turn not found")?; continue;
-                    };
-                    if source.turns[boundary].borrow()["status"] == "inProgress" {
-                        context.error(id, -32602, "completed turn required")?; continue;
-                    }
-                    next_thread += 1;
-                    let thread_id = format!("fixture-thread-{next_thread}");
-                    let mut thread = Thread { metadata: source.metadata.clone(),
-                        turns: source.turns[..=boundary].iter().map(|turn| Rc::new(RefCell::new(turn.borrow().clone()))).collect() };
-                    thread.metadata.insert("id".into(), thread_id.clone().into());
-                    thread.metadata.insert("createdAt".into(), next_thread.into());
-                    thread.metadata.insert("updatedAt".into(), next_thread.into());
-                    thread.metadata.insert("status".into(), json!({"type":"idle"}));
-                    #[derive(Serialize)] struct Forked<'a> { thread: ThreadView<'a> }
-                    context.respond(id, &Forked { thread: ThreadView { metadata: &thread.metadata,
-                        turns: if params["excludeTurns"] == true { &[] } else { &thread.turns } } })?;
-                    threads.insert(thread_id, Rc::new(RefCell::new(thread)));
-                }
-                "thread/unsubscribe" => {
-                    let Some(thread) = threads.get(params["threadId"].as_str().unwrap_or("")) else {
-                        context.error(id, -32602, "thread not found")?; continue;
-                    };
-                    thread.borrow_mut().metadata.insert("status".into(), json!({"type":"notLoaded"}));
-                    context.respond(id, &json!({}))?;
-                }
-                "turn/start" => {
-                    let thread_id = params["threadId"].as_str().unwrap_or("");
-                    let prompt = params["input"][0]["text"].as_str().unwrap_or("");
-                    let has_text = params["input"][0]["type"] == "text" && !prompt.trim().is_empty();
-                    context.trace(method, json!({"threadExists":threads.contains_key(thread_id),"hasTextInput":has_text,
-                        "model":params["model"],"effort":params["effort"],"serviceTierForTurn":params["serviceTierForTurn"]}))?;
-                    let Some(thread) = threads.get(thread_id).filter(|_| has_text) else {
-                        context.error(id, -32602, "invalid turn input")?; continue;
-                    };
-                    if prompt.contains("[model]") && (params["model"] != "fixture-model" || params["effort"] != "high" || thread.borrow().metadata.get("model").and_then(Value::as_str) != Some("fixture-model")) {
-                        context.error(id, -32602, "selected model and effort did not reach the server")?; continue;
-                    }
-                    if thread.borrow().turns.iter().any(|turn| turn.borrow()["status"] == "inProgress") {
-                        context.error(id, -32600, "turn already active")?; continue;
-                    }
-                    let suffix = format!("{}-{}", thread_id.rsplit('-').next().unwrap(), thread.borrow().turns.len() + 1);
-                    let turn_id = format!("fixture-turn-{suffix}");
-                    let turn = Rc::new(RefCell::new(json!({"id":turn_id,"status":"inProgress","items":[],"startedAt":1})));
-                    thread.borrow_mut().turns.push(turn.clone());
-                    thread.borrow_mut().metadata.insert("status".into(), json!({"type":"active","activeFlags":[]}));
-                    context.respond(id, &json!({"turn":{"id":turn_id}}))?;
-                    if prompt == "[crash]" {
-                        context.turn_event("turn/started",thread_id,&turn.borrow())?;
-                        let (flushed,ready)=oneshot::channel();
-                        context.output.send(Output::Barrier(flushed))?;
-                        ready.await?;
-                        std::process::exit(17);
-                    }
-                    let delayed = prompt.contains("[delayed-input]") || prompt.contains("[deferred-steer]");
-                    if delayed || prompt.contains("[workspace-edit]") || prompt.contains("[groups]") { remove_if_present(&context.home.join("release-inputs"))?; }
-                    let stop = CancellationToken::new();
-                    context.controls.borrow_mut().insert(turn_id, Control { stop: stop.clone(), delayed });
-                    let context = context.clone();
-                    let thread = thread.clone();
-                    let input = std::mem::take(params["input"].as_array_mut().unwrap());
-                    let client_id = params["clientUserMessageId"].take();
-                    tokio::task::spawn_local(async move {
-                        if let Err(error) = scenario::run(context.clone(), thread.clone(), turn.clone(), input, suffix, stop, client_id).await {
-                            eprintln!("Codex scenario failed: {error}");
-                            let _ = context.finish(&thread, &turn, "failed", Some(json!({"message":"fixture scenario failed"})));
-                        }
-                    });
-                }
-                "thread/queue/add" => {
-                    let thread_id=params["threadId"].as_str().unwrap_or("");
-                    let active=threads.get(thread_id).and_then(|thread|thread.borrow().turns.iter().find(|turn|turn.borrow()["status"]=="inProgress").cloned());
-                    let Some(turn)=active else {context.error(id,-32602,"no active turn")?;continue;};
-                    context.trace(method,json!({"hasExpectedTurnId":params.get("expectedTurnId").is_some()}))?;
-                    context.respond(id,&json!({"queuedSubmission":{"id":"fixture-queued-input"}}))?;
-                    context.turn_event("turn/started",thread_id,&turn.borrow())?;
-                    context.stream_item(thread_id,&turn,json!({"id":params["clientUserMessageId"],"clientId":params["clientUserMessageId"],"type":"userMessage","content":params["input"]}))?;
-                }
-                "turn/interrupt" | "turn/steer" => {
-                    let thread_id = params["threadId"].as_str().unwrap_or("");
-                    let active = threads.get(thread_id).and_then(|thread| thread.borrow().turns.iter()
-                        .find(|turn| turn.borrow()["status"] == "inProgress").cloned());
-                    let expected = &params[if method == "turn/interrupt" { "turnId" } else { "expectedTurnId" }];
-                    let Some(turn) = active.filter(|turn| &turn.borrow()["id"] == expected) else {
-                        context.error(id, -32602, "active turn changed")?; continue;
-                    };
-                    let turn_id = turn.borrow()["id"].as_str().unwrap().to_owned();
-                    let control = context.controls.borrow()[&turn_id].clone();
-                    if method == "turn/interrupt" {
-                        control.stop.cancel(); context.respond(id, &json!({}))?;
-                    } else {
-                        let item_id = params["clientUserMessageId"].as_str().filter(|id| !id.is_empty()).map(str::to_owned)
-                            .unwrap_or_else(|| turn.borrow()["items"].as_array().unwrap().len().to_string());
-                        let item = json!({"id":format!("steered-{item_id}"),"clientId":params["clientUserMessageId"],"type":"userMessage",
-                            "content":params.get("input").unwrap_or(&json!([]))});
-                        if control.delayed {
-                            let context = context.clone(); let thread_id = thread_id.to_owned();
-                            tokio::task::spawn_local(async move {
-                                if scenario::wait_for_release(&context.home, &control.stop).await {
-                                    let recorded = json!({"id":format!("fixture-steer-recorded-{}",item["id"].as_str().unwrap()),"type":"agentMessage","phase":"commentary","text":"Additional input recorded"});
-                                    if context.stream_item(&thread_id, &turn, item).and_then(|_| context.stream_item(&thread_id, &turn, recorded)).is_err() {
-                                        eprintln!("Deferred fixture input could not be written");
-                                    }
-                                }
-                            });
-                        } else { context.stream_item(thread_id, &turn, item)?; }
-                        context.respond(id, &json!({"turnId":turn_id}))?;
-                    }
-                }
-                "thread/items/list" | "thread/turns/list" => {
-                    let Some(thread) = threads.get(params["threadId"].as_str().unwrap_or("")) else {
-                        context.error(id, -32602, "thread not found")?; continue;
-                    };
-                    history::page(&context, id, &thread.borrow(), method, params)?;
-                }
-                "thread/read" | "thread/resume" => {
-                    context.trace(method, json!({"threadId":params["threadId"]}))?;
-                    let failure = context.home.join("fail-next-history-read");
-                    if method == "thread/read" && failure.exists() {
-                        fs::remove_file(failure)?;
-                        context.error(id, -32601, "list_turns is not supported yet")?;
-                        continue;
-                    }
-                    let external = context.home.join("background-reply");
-                    if external.exists()
-                        && let Some(latest) = threads.values().max_by_key(|thread| thread.borrow().metadata["createdAt"].as_i64().unwrap_or(0)) {
-                            latest.borrow_mut().turns.push(Rc::new(RefCell::new(json!({"id":"fixture-external-turn","status":"completed","items":[
-                                {"id":"fixture-external-final","type":"agentMessage","phase":"final_answer","text":fs::read_to_string(&external)?}]}))));
-                            fs::remove_file(external)?;
-                    }
-                    let Some(thread) = threads.get(params["threadId"].as_str().unwrap_or("")) else {
-                        context.error(id, -32602, "thread not found")?; continue;
-                    };
-                    if method == "thread/resume" && thread.borrow().metadata["status"]["type"] == "notLoaded" {
-                        thread.borrow_mut().metadata.insert("status".into(), json!({"type":"idle"}));
-                    }
-                    let stored_thread = thread.borrow();
-                    let overridden = stored_thread.metadata.get("readCwd").map(|cwd| {
-                        let mut metadata = stored_thread.metadata.clone();
-                        metadata.insert("cwd".into(), cwd.clone());
-                        let notification = json!({"threadId":metadata["id"], "threadName":metadata["name"]});
-                        let context = context.clone();
-                        tokio::task::spawn_local(async move {
-                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                            context.notify("thread/name/updated", &notification)
-                        });
-                        Thread { metadata, turns: stored_thread.turns.clone() }
-                    });
-                    let thread = overridden.as_ref().unwrap_or(&stored_thread);
-                    let include = params["includeTurns"] == true;
-                    if method == "thread/read" && include && thread.metadata.get("historyMode").and_then(Value::as_str) == Some("paginated") {
-                        context.error(id, -32603, "Full history hydration is unavailable; use pagination")?;
-                    } else if method == "thread/read" && include && !thread.turns.is_empty() && thread.turns.iter().all(|turn| {
-                        let turn = turn.borrow(); turn["status"] == "inProgress" && !turn["items"].as_array().unwrap().iter().any(|item| item["type"] == "agentMessage")
-                    }) { context.error(id, -32603, "rollout is empty")?;
-                    } else if method == "thread/resume" && thread.turns.is_empty() {
-                        context.error(id, -32600, "no rollout found for thread id")?;
-                    } else {
-                        #[derive(Serialize)] struct Read<'a, T> { thread: &'a T }
-                        if include {
-                            if let Some(persisted) = history::persisted(thread) {
-                                context.respond(id, &Read { thread: &persisted })?;
-                            } else { context.respond(id, &Read { thread })?; }
-                        } else {
-                            let response = Read { thread: &ThreadView { metadata: &thread.metadata,
-                                turns: if method == "thread/read" { &[] } else { &thread.turns } } };
-                            if method == "thread/read" { context.respond_read(id, &response, "history")?; }
-                            else { context.respond(id, &response)?; }
-                        }
-                    }
-                }
+                "thread/list" | "thread/loaded/list" => threads.list(&context, id, method, params)?,
+                THREAD_START => threads.create(&context, id, params)?,
+                "thread/fork" => threads.fork(&context, id, params)?,
+                "thread/unsubscribe" => threads.unsubscribe(&context, id, params)?,
+                TURN_START => threads.start_turn(&context, id, params).await?,
+                QUEUE_INPUT => threads.queue(&context, id, params)?,
+                "turn/interrupt" | "turn/steer" => threads.control_turn(&context, id, method, params)?,
+                "thread/items/list" | "thread/turns/list" => threads.history_page(&context, id, method, params)?,
+                "thread/read" | "thread/resume" => threads.read(&context, id, method, params)?,
                 _ => context.error(id, -32601, "method not found")?,
             }
         }
         Ok(())
         }.await;
-        for control in context.controls.borrow().values() { control.stop.cancel(); }
+        threads.cancel();
         let closed = peer.close().await;
         writer.abort();
         result.and(closed.map_err(Into::into))
