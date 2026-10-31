@@ -11,6 +11,7 @@ pub mod panels;
 pub mod persistence;
 pub mod presentation;
 pub mod privacy;
+pub mod questions;
 pub mod state;
 pub mod store;
 pub mod updates;

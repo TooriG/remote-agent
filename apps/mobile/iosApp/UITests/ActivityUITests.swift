@@ -133,7 +133,7 @@ extension LaunchUITests {
         let request = prefixedElement(app, prefix: "request.")
         XCTAssertTrue(request.waitForExistence(timeout: 10), "Pending request was not visible")
         XCTAssertTrue(app.staticTexts["質問"].exists)
-        let answer = app.textFields["request.answer"]
+        let answer = app.textFields["task.message"]
         XCTAssertTrue(answer.waitForExistence(timeout: 5))
         answer.tap(); answer.typeText("Continue")
         app.buttons["request.send"].tap()
@@ -143,7 +143,7 @@ extension LaunchUITests {
         XCTAssertTrue(prefixedButton(app, prefix: "turn.activity.fixture-turn-").exists)
     }
 
-    func testSimulatorQuestionCardPreservesDraftWhenClosedAndSendsChoiceOnTap() throws {
+    func testSimulatorQuestionChoiceReturnsTypedAnswerToDraft() throws {
         #if !targetEnvironment(simulator)
             throw XCTSkip("Simulator-only conversation display E2E")
         #endif
@@ -153,16 +153,20 @@ extension LaunchUITests {
         let send = app.buttons["request.send"]
         XCTAssertTrue(send.waitForExistence(timeout: 10))
         XCTAssertFalse(send.isEnabled)
-        let answer = app.textFields["request.answer"]
+        XCTAssertTrue(prefixedButton(app, prefix: "turn.interrupt.").exists, "Stop stays beside the answer")
+        let answer = app.textFields["task.message"]
         XCTAssertTrue(answer.waitForExistence(timeout: 5))
         answer.tap(); answer.typeText("Keep this draft")
         XCTAssertTrue(send.isEnabled)
         app.buttons["request.toggle"].tap()
-        XCTAssertFalse(send.exists)
+        XCTAssertFalse(app.buttons["続ける"].exists)
+        XCTAssertTrue(send.exists)
         app.buttons["request.toggle"].tap()
         XCTAssertEqual(answer.value as? String, "Keep this draft")
         app.buttons["続ける"].tap()
         XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 15))
+        XCTAssertFalse(send.exists)
+        XCTAssertEqual(app.textFields["task.message"].value as? String, "Keep this draft")
     }
 
     func testSimulatorSendsQuestionChoiceOnTap() throws {
@@ -179,7 +183,7 @@ extension LaunchUITests {
         XCTAssertFalse(app.buttons["request.send"].exists)
     }
 
-    func testSimulatorCanSkipQuestionCard() throws {
+    func testSimulatorCanSkipQuestion() throws {
         #if !targetEnvironment(simulator)
             throw XCTSkip("Simulator-only conversation display E2E")
         #endif

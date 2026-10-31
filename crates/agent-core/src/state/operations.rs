@@ -243,6 +243,10 @@ pub enum Intent {
         client_user_message_id: agent_protocol::ids::ClientInputId,
     },
     Respond(Respond),
+    AnswerQuestion {
+        request_id: agent_protocol::ids::RequestId,
+        action: crate::questions::QuestionAction,
+    },
 }
 
 pub enum StalePolicy {

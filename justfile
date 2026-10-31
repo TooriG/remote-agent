@@ -122,9 +122,9 @@ conversation-ui:
         testSimulatorShowsAcceptedAdditionalInputBeforeCodexProcessesIt \
         testSimulatorKeepsFailedWorkCollapsedWithVisibleTerminalError \
         testSimulatorKeepsInputRequestVisibleUntilResolved \
-        testSimulatorQuestionCardPreservesDraftWhenClosedAndSendsChoiceOnTap \
+        testSimulatorQuestionChoiceReturnsTypedAnswerToDraft \
         testSimulatorSendsQuestionChoiceOnTap \
-        testSimulatorCanSkipQuestionCard \
+        testSimulatorCanSkipQuestion \
         testSimulatorRetriesAFailedTaskOpenWithoutLosingItsDraft \
         testSimulatorLoadsEarlierHistoryOnTapAndRetriesFailedPage \
         testSimulatorWorkbenchStartsEmptyAndOwnsOnlyOpenedTabs \

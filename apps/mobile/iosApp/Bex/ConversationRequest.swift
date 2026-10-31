@@ -4,19 +4,13 @@ import SwiftUI
 struct ThreadRequestRow: View {
     let request: Request
     let respond: (Answer, @escaping (String?) -> Void) -> Void
-    @State private var answers: [String: QuestionAnswer] = [:]
     @State private var response = ""
     @State private var busy = false
     @State private var error: String?
-    @State private var questionExpanded = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            if case let .question(questions) = request.requestBody {
-                questionCard(questions)
-            } else {
-                requestForm
-            }
+            requestForm
             if busy {
                 ProgressView()
             }
@@ -26,22 +20,10 @@ struct ThreadRequestRow: View {
         }
         .onAppear { response = requestInputDefault(body: request.requestBody) }
         .disabled(busy || !request.canRespond)
-        .padding(isQuestion ? 16 : 10)
+        .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(isQuestion ? Color(uiColor: .secondarySystemGroupedBackground) : Color.orange.opacity(0.14))
-        .clipShape(RoundedRectangle(cornerRadius: isQuestion ? 24 : 10))
-        .overlay {
-            if isQuestion {
-                RoundedRectangle(cornerRadius: 24).strokeBorder(Color.primary.opacity(0.15), lineWidth: 1)
-            }
-        }
-    }
-
-    private var isQuestion: Bool {
-        if case .question = request.requestBody {
-            return true
-        }
-        return false
+        .background(Color.orange.opacity(0.14))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
     private var requestForm: some View {
@@ -55,6 +37,7 @@ struct ThreadRequestRow: View {
             switch request.requestBody {
             case let .approval(_, _, _, choices): choiceButtons(choices, permission: false)
             case let .permission(_, _, choices): choiceButtons(choices, permission: true)
+            // The composer answers questions.
             case .question: EmptyView()
             case let .elicitation(_, _, input):
                 if case let .url(url) = input {
@@ -84,51 +67,6 @@ struct ThreadRequestRow: View {
         }
     }
 
-    private func questionCard(_ questions: [Question]) -> some View {
-        VStack(alignment: .leading, spacing: 24) {
-            HStack {
-                Label(request.canRespond ? "質問" : request.title, systemImage: "questionmark.bubble")
-                    .font(.subheadline).foregroundStyle(.secondary)
-                    .accessibilityIdentifier("request.\(request.id)")
-                Spacer()
-                Button {
-                    questionExpanded.toggle()
-                } label: {
-                    Image(systemName: questionExpanded ? "xmark" : "chevron.down")
-                        .font(.body.weight(.medium))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .accessibilityLabel(questionExpanded ? "質問を閉じる" : "質問を開く")
-                .accessibilityIdentifier("request.toggle")
-            }
-            if questionExpanded {
-                ForEach(questions, id: \.id) { question in
-                    VStack(alignment: .leading, spacing: 20) { questionView(question) }
-                }
-                HStack(spacing: 8) {
-                    Spacer(minLength: 0)
-                    Button("スキップする") { submit(.skipQuestions) }
-                        .padding(.horizontal, 20).padding(.vertical, 12)
-                        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.15), lineWidth: 1))
-                        .accessibilityIdentifier("request.skip")
-                    let answer = Answer.questions(answers: answers)
-                    let canSend = requestAnswerIsValid(body: request.requestBody, answer: answer)
-                    Button("送信") { submit(answer) }
-                        .padding(.horizontal, 20).padding(.vertical, 12)
-                        .foregroundStyle(Color(uiColor: .systemBackground))
-                        .background(Color.primary, in: Capsule())
-                        .disabled(!canSend)
-                        .opacity(canSend ? 1 : 0.35)
-                        .accessibilityIdentifier("request.send")
-                }
-                .font(.body.weight(.semibold))
-            }
-        }
-        .buttonStyle(.plain)
-    }
-
     private var responseEditor: some View {
         TextEditor(text: $response).font(.body.monospaced()).frame(minHeight: 100)
     }
@@ -145,88 +83,120 @@ struct ThreadRequestRow: View {
         }
     }
 
-    @ViewBuilder private func questionView(_ question: Question) -> some View {
-        let id = question.id
-        if !question.header.isEmpty {
-            Text(question.header).font(.subheadline.weight(.semibold))
+    private func submitResponse() {
+        do {
+            try submit(requestAnswerFromJson(body: request.requestBody, text: response))
+        } catch {
+            self.error = error.localizedDescription
         }
-        Text(question.prompt).textSelection(.enabled)
+    }
+
+    private func submit(_ answer: Answer) {
+        guard !busy, request.canRespond else { return }
+        busy = true
+        error = nil
+        respond(answer) { message in busy = false; error = message }
+    }
+}
+
+/// The question the composer answers, docked above it as in T3 Code.
+struct QuestionPanel: View {
+    let prompt: QuestionPrompt
+    let busy: Bool
+    let error: String?
+    let choose: (String) -> Void
+    let skip: () -> Void
+    /// Collapsing applies to one question; the next question opens again.
+    @State private var collapsedQuestionId: String?
+
+    var body: some View {
+        let question = prompt.question
+        let expanded = collapsedQuestionId != question.id
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Label(prompt.status ?? "質問", systemImage: "questionmark.bubble")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("request.\(prompt.requestId)")
+                if !question.header.isEmpty {
+                    Text(question.header).font(.subheadline.weight(.semibold)).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                if let progress = prompt.progress {
+                    Text(progress).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                }
+                if busy {
+                    ProgressView()
+                }
+                Button {
+                    collapsedQuestionId = expanded ? question.id : nil
+                } label: {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.up")
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel(expanded ? "質問を閉じる" : "質問を開く")
+                .accessibilityIdentifier("request.toggle")
+            }
+            if expanded {
+                Text(question.prompt).textSelection(.enabled)
+                if question.multiple {
+                    Text("複数選択できます").font(.caption).foregroundStyle(.secondary)
+                }
+                ViewThatFits(in: .vertical) {
+                    choices(question)
+                    ScrollView { choices(question) }
+                }
+                .frame(maxHeight: 280)
+                HStack {
+                    Spacer(minLength: 0)
+                    Button("スキップする", action: skip)
+                        .font(.body.weight(.semibold))
+                        .padding(.horizontal, 20).padding(.vertical, 12)
+                        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.15), lineWidth: 1))
+                        .accessibilityIdentifier("request.skip")
+                }
+            } else {
+                Text(question.prompt).lineLimit(1).foregroundStyle(.secondary)
+            }
+            if let error {
+                Text(error).font(.caption).foregroundColor(.red)
+            }
+        }
+        .disabled(busy || !prompt.canRespond)
+        .buttonStyle(.plain)
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(uiColor: .secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 24))
+        .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(Color.primary.opacity(0.15), lineWidth: 1))
+    }
+
+    private func choices(_ question: Question) -> some View {
         VStack(spacing: 0) {
             ForEach(question.choices, id: \.id) { choice in
-                let selected = selectedChoiceIds(answers[id]).contains(choice.id)
-                Button {
-                    selectChoice(choice.id, questionId: id, multiple: question.multiple)
-                }
-                label: {
-                    questionChoiceLabel(label: choice.label, description: choice.description, selected: selected)
+                let chosen = prompt.chosenChoiceIds.contains(choice.id)
+                Button { choose(choice.id) } label: {
+                    choiceLabel(label: choice.label, description: choice.description, chosen: chosen)
                 }
                 .accessibilityLabel(choice.label)
                 .accessibilityHint(choice.description)
-                .accessibilityValue(selected ? "選択済み" : "未選択")
-                .accessibilityAddTraits(selected ? [.isSelected] : [])
+                .accessibilityValue(chosen ? "選択済み" : "未選択")
+                .accessibilityAddTraits(chosen ? [.isSelected] : [])
                 .accessibilityIdentifier("request.choice.\(choice.id)")
                 if choice.id != question.choices.last?.id {
                     Divider()
                 }
             }
         }
-        if question.allowFreeText {
-            questionReply(id: id, secret: question.secret)
-        }
     }
 
-    private func selectChoice(_ choiceId: String, questionId: String, multiple: Bool) {
-        if multiple {
-            var selected = selectedChoiceIds(answers[questionId])
-            if selected.contains(choiceId) {
-                selected.removeAll { $0 == choiceId }
-            } else {
-                selected.append(choiceId)
-            }
-            answers[questionId] = .multipleChoices(choiceIds: selected)
-        } else {
-            answers[questionId] = .singleChoice(choiceId: choiceId)
-            let answer = Answer.questions(answers: answers)
-            if requestAnswerIsValid(body: request.requestBody, answer: answer) {
-                submit(answer)
-            }
-        }
-    }
-
-    private func selectedChoiceIds(_ answer: QuestionAnswer?) -> [String] {
-        switch answer {
-        case let .singleChoice(id): [id]
-        case let .multipleChoices(ids): ids
-        default: []
-        }
-    }
-
-    private func questionReply(id: String, secret: Bool) -> some View {
-        let binding = Binding<String>(get: {
-            if case let .freeText(text) = answers[id] {
-                return text
-            }
-            return ""
-        }, set: { answers[id] = .freeText(text: $0) })
-        return Group {
-            if secret {
-                SecureField("返信…", text: binding)
-            } else {
-                TextField("返信…", text: binding)
-            }
-        }
-        .padding(12)
-        .frame(minHeight: 48)
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.primary.opacity(0.15), lineWidth: 1))
-        .accessibilityLabel("回答")
-        .accessibilityIdentifier("request.answer")
-    }
-
-    private func questionChoiceLabel(label: String, description: String, selected: Bool) -> some View {
+    private func choiceLabel(label: String, description: String, chosen: Bool) -> some View {
         HStack(alignment: .center, spacing: 12) {
             ZStack {
                 Circle().strokeBorder(Color.primary.opacity(0.2), lineWidth: 2)
-                if selected {
+                if chosen {
                     Circle().fill(Color.primary)
                     Image(systemName: "checkmark")
                         .font(.caption.weight(.semibold))
@@ -243,23 +213,65 @@ struct ThreadRequestRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.vertical, 16)
+        .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
     }
+}
 
-    private func submitResponse() {
-        do {
-            try submit(requestAnswerFromJson(body: request.requestBody, text: response))
-        } catch {
-            self.error = error.localizedDescription
+/// Composer controls while a question awaits an answer.
+extension ThreadScreen {
+    /// While a question awaits an answer, the primary action answers it.
+    @ViewBuilder
+    func questionActions(_ question: QuestionPrompt, runningTurnId: String?) -> some View {
+        if let runningTurnId {
+            stopButton(runningTurnId)
         }
+        if question.canGoBack {
+            Button("前へ") { model.answerQuestion(question.requestId, .back) }
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 12)
+                .frame(minHeight: 44)
+                .accessibilityIdentifier("request.back")
+        }
+        let enabled = question.canAdvance && model.isConnected
+            && !model.snapshot.operationRunning(key: .request(id: question.requestId))
+        Button {
+            // Commit native text before the answer is read.
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            composerFocused = false
+            model.answerQuestion(question.requestId, .advance)
+        } label: {
+            Text(question.action)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(enabled ? Color.white : Color.primary)
+                .padding(.horizontal, 16)
+                .frame(height: 32)
+                .background(enabled ? Color.accentColor : Color(UIColor.systemGray4), in: Capsule())
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .disabled(!enabled)
+        .accessibilityIdentifier("request.send")
     }
 
-    private func submit(_ answer: Answer) {
-        guard !busy, request.canRespond else { return }
-        busy = true
-        error = nil
-        respond(answer) { message in busy = false; error = message }
+    /// The composer text is the active question's own answer.
+    func answerField(_ question: QuestionPrompt) -> some View {
+        BufferedTextInput(value: Binding(get: { question.text }, set: {
+            model.answerQuestion(question.requestId, .edit(text: $0))
+        })) { input in
+            Group {
+                if question.question.secret {
+                    SecureField(question.placeholder, text: input)
+                } else {
+                    TextField(question.placeholder, text: input, axis: .vertical)
+                        .lineLimit(1 ... 6)
+                }
+            }
+            .focused($composerFocused)
+            .disabled(!question.question.allowFreeText || !question.canRespond)
+            .accessibilityIdentifier("task.message")
+        }
+        .id("\(question.requestId)/\(question.question.id)")
     }
 }

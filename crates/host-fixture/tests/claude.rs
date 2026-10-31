@@ -4,6 +4,8 @@ use std::{path::Path, sync::Arc, time::Duration};
 
 use agent_protocol::requests::Answer;
 
+use agent_core::questions::QuestionAction;
+
 use agent_core::state::Attachment;
 
 use agent_core::state::Intent;
@@ -593,33 +595,36 @@ async fn claude_approval_snapshot_after_disconnect_denial_is_effective_and_inter
             std::fs::read_to_string(Path::new(&cwd).join("approved.txt")).unwrap(),
             "approved"
         );
+        // The composer answers the question; a chosen option sends it and
+        // returns the typed text to the draft.
         send(&store, "question", "question").await;
-        let snapshot = until(&store, |snapshot| snapshot.requests().next().is_some()).await;
-        let request = snapshot.requests().next().unwrap();
-        let agent_protocol::requests::RequestBody::Question { questions } = &request.body else {
-            panic!("question request")
-        };
-        let question = &questions[0];
-        let blue = question
+        let snapshot = until(&store, |snapshot| {
+            snapshot.question_prompt(id.clone()).is_some()
+        })
+        .await;
+        let prompt = snapshot.question_prompt(id.clone()).unwrap();
+        let blue = prompt
+            .question
             .choices
             .iter()
             .find(|choice| choice.label == "Blue")
             .unwrap();
-        store
-            .dispatch(Intent::Respond(op::Respond {
-                request_id: request.id.clone(),
-                answer: Answer::Questions {
-                    answers: [(
-                        question.id.clone(),
-                        agent_protocol::requests::QuestionAnswer::SingleChoice {
-                            choice_id: blue.id.clone(),
-                        },
-                    )]
-                    .into(),
-                },
-            }))
-            .await
-            .unwrap();
+        for action in [
+            QuestionAction::Edit {
+                text: "Green please".into(),
+            },
+            QuestionAction::Choose {
+                choice_id: blue.id.clone(),
+            },
+        ] {
+            store
+                .dispatch(Intent::AnswerQuestion {
+                    request_id: prompt.request_id.clone(),
+                    action,
+                })
+                .await
+                .unwrap();
+        }
         let snapshot = completed(&store, &id, 3, "completed").await;
         assert!(
             snapshot.conversations[&id].turns.as_ref().unwrap()[2]
@@ -629,6 +634,11 @@ async fn claude_approval_snapshot_after_disconnect_denial_is_effective_and_inter
                 .iter()
                 .any(|item| item_text(item) == Some("Blue"))
         );
+        assert_eq!(
+            snapshot.drafts[&agent_core::state::DraftKey::from(&id)].text,
+            "Green please"
+        );
+        assert!(snapshot.question_prompt(id.clone()).is_none());
         send(&store, "wait", "wait").await;
         let snapshot = until(&store, |snapshot| {
             snapshot.conversations[&id]

@@ -206,6 +206,22 @@ impl RequestBody {
     }
 }
 
+impl Question {
+    pub fn accepts(&self, answer: &QuestionAnswer) -> bool {
+        let valid_choice = |id: &str| self.choices.iter().any(|choice| choice.id == id);
+        match answer {
+            QuestionAnswer::FreeText { text } => self.allow_free_text && !text.trim().is_empty(),
+            QuestionAnswer::SingleChoice { choice_id } => !self.multiple && valid_choice(choice_id),
+            QuestionAnswer::MultipleChoices { choice_ids } => {
+                self.multiple
+                    && !choice_ids.is_empty()
+                    && choice_ids.iter().all(|id| valid_choice(id))
+                    && choice_ids.iter().collect::<BTreeSet<_>>().len() == choice_ids.len()
+            }
+        }
+    }
+}
+
 /// Runs on both clients and the Host, before claiming a request or sending bytes.
 pub fn validate_answer(body: &RequestBody, answer: &Answer) -> Result<(), String> {
     match (body, answer) {
@@ -219,17 +235,12 @@ pub fn validate_answer(body: &RequestBody, answer: &Answer) -> Result<(), String
             if questions.len() != answers.len() {
                 return Err("every question requires one answer".into());
             }
-            for question in questions {
-                let valid_choice = |id: &str| question.choices.iter().any(|choice| choice.id == id);
-                match answers.get(&question.id) {
-                    Some(QuestionAnswer::FreeText { text }) if question.allow_free_text && !text.trim().is_empty() => {}
-                    Some(QuestionAnswer::SingleChoice { choice_id }) if !question.multiple && valid_choice(choice_id) => {}
-                    Some(QuestionAnswer::MultipleChoices { choice_ids }) if question.multiple
-                        && !choice_ids.is_empty()
-                        && choice_ids.iter().all(|id| valid_choice(id))
-                        && choice_ids.iter().collect::<BTreeSet<_>>().len() == choice_ids.len() => {}
-                    _ => return Err("invalid question answer".into()),
-                }
+            if !questions.iter().all(|question| {
+                answers
+                    .get(&question.id)
+                    .is_some_and(|answer| question.accepts(answer))
+            }) {
+                return Err("invalid question answer".into());
             }
         }
         (RequestBody::Question { .. }, Answer::SkipQuestions) => {}
@@ -351,6 +362,72 @@ impl StringFormat {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn every_question_needs_its_own_text_or_offered_choices() {
+        let question = |id: &str, multiple| Question {
+            id: id.into(),
+            header: String::new(),
+            prompt: "Choose".into(),
+            secret: false,
+            allow_free_text: true,
+            multiple,
+            choices: ["a", "b"]
+                .map(|choice| QuestionChoice {
+                    id: choice.into(),
+                    label: choice.into(),
+                    description: String::new(),
+                })
+                .into(),
+        };
+        let text = |text: &str| QuestionAnswer::FreeText { text: text.into() };
+        let single = |id: &str| QuestionAnswer::SingleChoice {
+            choice_id: id.into(),
+        };
+        let multiple = |ids: &[&str]| QuestionAnswer::MultipleChoices {
+            choice_ids: ids.iter().map(|id| (*id).into()).collect(),
+        };
+        for (multiple_choice, answer, accepted) in [
+            (false, text("Custom answer"), true),
+            (false, text(" "), false),
+            (false, single("a"), true),
+            (false, single("unknown"), false),
+            (false, multiple(&["a"]), false),
+            (true, multiple(&["a", "b"]), true),
+            (true, multiple(&[]), false),
+            (true, multiple(&["a", "a"]), false),
+            (true, single("a"), false),
+        ] {
+            let first = question("first", multiple_choice);
+            assert_eq!(first.accepts(&answer), accepted, "{answer:?}");
+            let answers = Answer::Questions {
+                answers: [("first".into(), answer)].into(),
+            };
+            assert_eq!(
+                validate_answer(
+                    &RequestBody::Question {
+                        questions: vec![first.clone()]
+                    },
+                    &answers
+                )
+                .is_ok(),
+                accepted
+            );
+            assert!(
+                validate_answer(
+                    &RequestBody::Question {
+                        questions: vec![first, question("second", false)]
+                    },
+                    &answers
+                )
+                .is_err(),
+                "an unanswered question rejects the answers"
+            );
+        }
+        let mut choice_only = question("first", false);
+        choice_only.allow_free_text = false;
+        assert!(!choice_only.accepts(&text("Custom answer")));
+    }
 
     #[test]
     fn skipping_questions_is_explicit_and_cannot_answer_an_approval() {

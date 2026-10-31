@@ -198,7 +198,7 @@ fn general_snapshot_changed(before: &Snapshot, after: &Snapshot) -> bool {
     let changed = changed!(
         shared: [project_import, project_preferences, operations, scoped_model_defaults,
             archived_scopes, account, terminals, conversations, expanded_projects,
-            project_threads, models, model_errors, draft_sessions, pending_submissions,
+            project_threads, models, model_errors, question_drafts, draft_sessions, pending_submissions,
             workspace, workspaces, navigation, activity, management, list_query, subscriptions],
         optional: [permission_settings, task_activity, threads],
         values: [recent_chats, operation_sequence, model_defaults, host_name, host_ticket, storage_scope,

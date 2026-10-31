@@ -844,6 +844,7 @@ fn publication_key(snapshot: &Snapshot) -> impl PartialEq + '_ {
         models,
         model_errors,
         drafts,
+        question_drafts,
         draft_sessions,
         pending_submissions,
         file_drafts,
@@ -890,6 +891,7 @@ fn publication_key(snapshot: &Snapshot) -> impl PartialEq + '_ {
         ),
         (
             SharedIdentity(drafts),
+            SharedIdentity(question_drafts),
             SharedIdentity(draft_sessions),
             SharedIdentity(pending_submissions),
             SharedIdentity(file_drafts),

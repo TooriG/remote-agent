@@ -294,6 +294,10 @@ pub struct Snapshot {
     pub model_errors: Arc<Map<String, Value>>,
     #[serde(with = "crate::persistence::entries")]
     pub drafts: Arc<BTreeMap<DraftKey, Arc<Draft>>>,
+    /// Answers composed for awaiting questions; local to this device.
+    #[serde(skip)]
+    pub question_drafts:
+        Arc<BTreeMap<agent_protocol::ids::RequestId, crate::questions::QuestionDraft>>,
     /// Startup identity changes outlive pending sends, which subscribers may coalesce.
     #[serde(skip)]
     pub draft_sessions: Arc<BTreeMap<DraftKey, crate::session::SessionRef>>,
@@ -926,6 +930,11 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             draft.text = text;
         }
         Intent::SetDraftText { thread_id, text } => set_draft_text(&mut next, thread_id, text),
+        Intent::AnswerQuestion { request_id, action } => {
+            if let Some(answer) = crate::questions::act(&mut next, request_id.clone(), action) {
+                return prepare(next, op::Respond { request_id, answer });
+            }
+        }
         intent @ (Intent::SelectModel { .. }
         | Intent::SelectEffort { .. }
         | Intent::SelectServiceTier { .. }) => {
@@ -994,7 +1003,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
     });
     (next, Vec::new())
 }
-fn set_draft_text(snapshot: &mut Snapshot, thread_id: DraftKey, text: String) {
+pub(crate) fn set_draft_text(snapshot: &mut Snapshot, thread_id: DraftKey, text: String) {
     if snapshot
         .drafts
         .get(&thread_id)

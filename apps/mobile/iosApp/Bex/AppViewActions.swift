@@ -227,6 +227,14 @@ extension AppViewModel {
         }
     }
 
+    func answerQuestion(_ requestId: String, _ action: QuestionAction) {
+        perform(.answerQuestion(requestId: requestId, action: action))
+    }
+
+    func skipQuestions(_ requestId: String) {
+        perform(.respond(Respond(requestId: requestId, answer: .skipQuestions)))
+    }
+
     func readItemDetails(threadId: SessionRef, turnId: String, itemId: String) async -> String? {
         do {
             _ = try await outcome(for: .readItem(ReadItem(threadId: threadId, turnId: turnId, itemId: itemId)))
