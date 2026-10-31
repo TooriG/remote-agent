@@ -826,7 +826,7 @@ impl Identity for DeepSeek {
 #[async_trait::async_trait]
 impl Agent for DeepSeek {
     fn data_recipient(&self) -> &'static str {
-        "DeepSeek"
+        "DeepSeek Harness（選択したAPI事業者：DeepSeek / OpenRouter / NanoGPT / OpenAI / Google / Anthropic / Groq / Mistral AI / xAI、およびモデル提供元）"
     }
     fn running_input(&self) -> RunningInput {
         RunningInput::Queue
