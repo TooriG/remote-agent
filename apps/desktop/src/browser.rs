@@ -1,7 +1,9 @@
 use crate::{Runtime, appearance};
 use agent_core::store::Store;
 use agent_protocol::{
-    browser::{BrowserAction, BrowserCredentials, BrowserFrame, BrowserKey, BrowserRequest},
+    browser::{
+        BrowserAction, BrowserCredentials, BrowserFrame, BrowserKey, BrowserRequest, BrowserTab,
+    },
     session::SessionRef,
 };
 use gpui_kit::{
@@ -46,6 +48,14 @@ pub(crate) struct Browser {
     _subscription: Subscription,
 }
 impl EventEmitter<BrowserTitle> for Browser {}
+
+fn tab_address<'a>(id: &str, tabs: &'a [BrowserTab]) -> &'a str {
+    tabs.iter()
+        .find(|tab| tab.id == id)
+        .map(|tab| tab.url.as_str())
+        .filter(|url| *url != "about:blank")
+        .unwrap_or_default()
+}
 
 impl Browser {
     pub(crate) fn new(
@@ -152,23 +162,22 @@ impl Browser {
         let changed = match result {
             Ok((mut frame, image)) => {
                 let address_focused = self.address.read(cx).focus_handle(cx).is_focused(window);
-                // Native WebKit focus does not update GPUI's focus handle.
+                // Window::focus updates GPUI focus without changing AppKit's
+                // first responder, so native typing keeps its selected field.
                 #[cfg(target_os = "macos")]
-                let address_focused = address_focused
-                    && !native::has_focus(&self.thread.to_string(), &self.frame.tab_id, cx);
-                if !address_focused {
-                    let url = frame
-                        .tabs
-                        .iter()
-                        .find(|tab| tab.id == frame.tab_id)
-                        .map(|tab| {
-                            if tab.url == "about:blank" {
-                                ""
-                            } else {
-                                &tab.url
-                            }
-                        })
-                        .unwrap_or_default();
+                let address_focused = if address_focused
+                    && native::has_focus(&self.thread.to_string(), &self.frame.tab_id, cx)
+                {
+                    window.focus(&self.focus, cx);
+                    false
+                } else {
+                    address_focused
+                };
+                let editing = address_focused
+                    && self.address.read(cx).value().as_ref()
+                        != tab_address(&self.frame.tab_id, &self.frame.tabs);
+                if self.frame.tab_id != frame.tab_id || !editing {
+                    let url = tab_address(&frame.tab_id, &frame.tabs);
                     if self.address.read(cx).value().as_ref() != url {
                         self.address
                             .update(cx, |input, cx| input.set_value(url.to_owned(), window, cx));
@@ -1007,7 +1016,7 @@ mod tests {
                 view.navigate(window, cx);
                 assert_eq!(view.pending.len(), 1);
                 assert!(!view.address.read(cx).focus_handle(cx).is_focused(window));
-                let frame = BrowserFrame {
+                let mut frame = BrowserFrame {
                     tab_id: "page".into(),
                     tabs: vec![agent_protocol::browser::BrowserTab {
                         id: "page".into(),
@@ -1021,17 +1030,37 @@ mod tests {
                     view.address.read(cx).value().as_ref(),
                     "https://example.com/login"
                 );
+                window.focus(&view.address.read(cx).focus_handle(cx), cx);
+                frame.tabs[0].url = "https://example.net/moved".into();
+                frame.generation += 1;
+                view.apply_result(Ok((frame.clone(), None)), true, window, cx);
+                assert_eq!(
+                    view.address.read(cx).value().as_ref(),
+                    "https://example.net/moved"
+                );
                 view.address.update(cx, |input, cx| {
                     input.set_value("unfinished.example", window, cx);
                     window.focus(&input.focus_handle(cx), cx);
                 });
-                view.apply_result(Ok((frame, None)), true, window, cx);
+                view.apply_result(Ok((frame.clone(), None)), true, window, cx);
                 assert_eq!(view.address.read(cx).value().as_ref(), "unfinished.example");
                 assert_eq!(
                     view.pending.len(),
                     1,
                     "polling must never resubmit navigation"
                 );
+                let mut switched = frame;
+                switched.tab_id = "other".into();
+                switched.tabs[0].id = "other".into();
+                switched.tabs[0].url = "https://example.org/".into();
+                view.apply_result(Ok((switched.clone(), None)), true, window, cx);
+                assert_eq!(
+                    view.address.read(cx).value().as_ref(),
+                    "https://example.org/"
+                );
+                switched.tabs[0].url = "about:blank".into();
+                view.apply_result(Ok((switched, None)), true, window, cx);
+                assert_eq!(view.address.read(cx).value().as_ref(), "");
                 view.address.update(cx, |input, cx| {
                     input.set_value("javascript:alert(1)", window, cx);
                 });
@@ -1039,6 +1068,8 @@ mod tests {
                 assert!(view.error.is_some());
                 assert!(view.address.read(cx).focus_handle(cx).is_focused(window));
                 assert_eq!(view.pending.len(), 1);
+                view.apply_result(Ok((BrowserFrame::default(), None)), true, window, cx);
+                assert_eq!(view.address.read(cx).value().as_ref(), "");
             })
         });
     }
