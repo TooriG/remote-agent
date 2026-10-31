@@ -435,12 +435,7 @@ impl Render for SidebarView {
 }
 
 impl Desktop {
-    fn conversation_sidebar(
-        model: &Conversations,
-        search: &Entity<InputState>,
-        app_updates: Option<Entity<crate::updates::Updates>>,
-        cx: &Context<Self>,
-    ) -> Sidebar<SidebarSection> {
+    fn project_sidebar_rows(model: &Conversations, cx: &Context<Self>) -> Vec<SidebarRow> {
         let list = &model.list;
         let loading_session_list = model.loading_session_list;
         let mut projects = Vec::new();
@@ -561,6 +556,18 @@ impl Desktop {
                 );
             }
         }
+        projects
+    }
+
+    fn conversation_sidebar(
+        model: &Conversations,
+        search: &Entity<InputState>,
+        app_updates: Option<Entity<crate::updates::Updates>>,
+        cx: &Context<Self>,
+    ) -> Sidebar<SidebarSection> {
+        let list = &model.list;
+        let loading_session_list = model.loading_session_list;
+        let projects = Self::project_sidebar_rows(model, cx);
         let mut chats: Vec<SidebarRow> = list
             .as_ref()
             .map(|page| {

@@ -424,6 +424,52 @@ impl ConversationView {
             .scrollable(true)
             .h(px(lines as f32 * 22. + 32.))
     }
+    fn user_message_body(
+        &mut self,
+        id: &str,
+        text: Option<&str>,
+        content: &[agent_protocol::items::MessagePart],
+        image_sources: &[String],
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let mut body = user_message_bubble();
+        let mut has_body = false;
+        if !content.is_empty() {
+            for (i, part) in content.iter().enumerate() {
+                use agent_protocol::items::MessagePart;
+                let rendered = match part {
+                    MessagePart::Image { .. } => continue,
+                    MessagePart::Text { text } if text.is_empty() => continue,
+                    MessagePart::Text { text } => self.markdown(format!("{id}-{i}"), text, cx),
+                    MessagePart::Attachment { name, path }
+                    | MessagePart::Invocation { name, path } => {
+                        let path = path.clone();
+                        button(
+                            format!("{id}-{i}"),
+                            if path.is_empty() {
+                                name.clone()
+                            } else {
+                                file_name(&path)
+                            },
+                            cx,
+                            move |_, _, cx| {
+                                if !path.is_empty() {
+                                    cx.emit(ConversationAction::Download(path.clone()));
+                                }
+                            },
+                        )
+                        .into_any_element()
+                    }
+                };
+                has_body = true;
+                body = body.child(rendered);
+            }
+        } else {
+            has_body = !text.unwrap_or_default().is_empty();
+            body = body.child(self.markdown(id.to_owned(), text.unwrap_or_default(), cx));
+        }
+        self.user_message_content(body, has_body, image_sources.iter().map(String::as_str), cx)
+    }
     pub(super) fn item(
         &mut self,
         projected: &agent_core::presentation::conversation::RenderedItem,
@@ -514,52 +560,11 @@ impl ConversationView {
                 .into_any_element()
             }
             agent_protocol::items::ItemBody::UserMessage { text, content } => {
-                let mut body = user_message_bubble();
-                let mut has_body = false;
-                if !content.is_empty() {
-                    for (i, part) in content.iter().enumerate() {
-                        use agent_protocol::items::MessagePart;
-                        let rendered = match part {
-                            MessagePart::Image { .. } => continue,
-                            MessagePart::Text { text } if text.is_empty() => continue,
-                            MessagePart::Text { text } => {
-                                self.markdown(format!("{id}-{i}"), text, cx)
-                            }
-                            MessagePart::Attachment { name, path }
-                            | MessagePart::Invocation { name, path } => {
-                                let path = path.clone();
-                                button(
-                                    format!("{id}-{i}"),
-                                    if path.is_empty() {
-                                        name.clone()
-                                    } else {
-                                        file_name(&path)
-                                    },
-                                    cx,
-                                    move |_, _, cx| {
-                                        if !path.is_empty() {
-                                            cx.emit(ConversationAction::Download(path.clone()));
-                                        }
-                                    },
-                                )
-                                .into_any_element()
-                            }
-                        };
-                        has_body = true;
-                        body = body.child(rendered);
-                    }
-                } else {
-                    has_body = !text.as_deref().unwrap_or_default().is_empty();
-                    body = body.child(self.markdown(
-                        id.clone(),
-                        text.as_deref().unwrap_or_default(),
-                        cx,
-                    ));
-                }
-                let body = self.user_message_content(
-                    body,
-                    has_body,
-                    projected.data.image_sources.iter().map(String::as_str),
+                let body = self.user_message_body(
+                    &id,
+                    text.as_deref(),
+                    content,
+                    &projected.data.image_sources,
                     cx,
                 );
                 let text = body_text.expect("user message has text");

@@ -349,6 +349,133 @@ impl Desktop {
             })
             .into_any_element()
     }
+    fn account_row(
+        &self,
+        in_settings: bool,
+        selected: bool,
+        (index, account): (usize, &agent_protocol::operations::Account),
+        manage: bool,
+        disabled: bool,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let id = account.id.clone();
+        let provider = account.provider;
+        let logout_id = id.clone();
+        let identity = account.email.as_deref().unwrap_or(&account.id);
+        let mut row = v_flex()
+            .gap_2()
+            .p_3()
+            .rounded(px(10.))
+            .when(!in_settings, |row| row.bg(rgb(appearance::SELECTED)))
+            .when(in_settings, |row| {
+                row.p_4().border_1().border_color(rgb(appearance::BORDER))
+            })
+            .child(
+                Button::new(format!("account-choice-{index}"))
+                    .accessibility_label(identity.to_owned())
+                    .small()
+                    .ghost()
+                    .child(account_identity(Some(account.provider), identity).flex_1())
+                    .on_click(cx.listener(move |s, _, _, cx| {
+                        s.account_operation(Intent::SelectAccountForDraft(
+                            op::SelectAccountForDraft {
+                                provider,
+                                id: id.clone(),
+                                thread_id: s.draft_key().clone(),
+                            },
+                        ));
+                        cx.notify();
+                    }))
+                    .debug_selector(move || format!("account-choice-{index}"))
+                    .when(selected, |button| {
+                        button.child(Icon::new(IconName::Check).size(px(14.)))
+                    })
+                    .w_full()
+                    .disabled(disabled),
+            )
+            .when_some(account.plan_type.as_ref(), |row, plan| {
+                row.child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(appearance::MUTED))
+                        .child(plan.to_uppercase()),
+                )
+            })
+            .child(if manage {
+                account_usage_view(account.usage.as_ref())
+            } else {
+                weekly_usage_view(
+                    self.snapshot
+                        .account_weekly_usage(account.provider, account.id.clone()),
+                )
+            });
+        if manage && provider == ProviderKind::Codex {
+            let manage_usage = button(
+                format!("account-usage-manage-{index}"),
+                "追加クレジット・上限を管理",
+                cx,
+                |s, _, cx| {
+                    s.open_browser(s.panel_scope(), "https://chatgpt.com/settings/usage", cx);
+                },
+            )
+            .small()
+            .ghost();
+            let hint = div().text_xs().text_color(rgb(appearance::MUTED))
+                .child("利用枠は表示時刻に自動リセットされます。上限の変更・追加クレジットは管理画面で行えます。");
+            row = row.child(manage_usage).child(hint);
+        }
+        if manage && self.account.sign_out.as_deref() == Some(account.id.as_str()) {
+            row = row
+                .child(
+                    div()
+                        .text_sm()
+                        .child("サインアウトしますか？ 再び使うにはサインインが必要です。"),
+                )
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            button(
+                                format!("account-logout-confirm-{index}"),
+                                "サインアウト",
+                                cx,
+                                move |s, _, _| {
+                                    s.account.sign_out = None;
+                                    s.account_operation(Intent::LogoutAccount(op::LogoutAccount {
+                                        provider,
+                                        id: logout_id.clone(),
+                                    }));
+                                },
+                            )
+                            .disabled(disabled),
+                        )
+                        .child(
+                            button(
+                                format!("account-logout-cancel-{index}"),
+                                "キャンセル",
+                                cx,
+                                |s, _, _| s.account.sign_out = None,
+                            )
+                            .debug_selector(move || format!("account-logout-cancel-{index}")),
+                        ),
+                );
+        } else if manage {
+            let logout = button(
+                format!("account-logout-{index}"),
+                "サインアウト",
+                cx,
+                move |s, _, _| s.account.sign_out = Some(logout_id.clone()),
+            )
+            .debug_selector(move || format!("account-logout-{index}"))
+            .disabled(disabled);
+            row = if in_settings {
+                row.child(h_flex().justify_end().child(logout))
+            } else {
+                row.child(logout)
+            };
+        }
+        row.into_any_element()
+    }
     pub(super) fn account_controls(&self, manage: bool, cx: &Context<Self>) -> AnyElement {
         let in_settings = self.tab == Tab::Settings;
         let accounts = self.snapshot.account.accounts.as_ref();
@@ -446,129 +573,24 @@ impl Desktop {
             body = body.child(self.account_login_controls(None, cx));
         } else {
             if let Some(accounts) = accounts {
-                let mut found = false;
-                for (index, account) in accounts
+                let mut matching = accounts
                     .accounts
                     .iter()
                     .enumerate()
                     .filter(|(_, account)| account.provider == provider)
-                {
-                    found = true;
-                    let id = account.id.clone();
-                    let provider = account.provider;
-                    let logout_id = id.clone();
-                    let identity = account.email.as_deref().unwrap_or(&account.id);
-                    let mut row = v_flex()
-                        .gap_2()
-                        .p_3()
-                        .rounded(px(10.))
-                        .when(!in_settings, |row| row.bg(rgb(appearance::SELECTED)))
-                        .when(in_settings, |row| {
-                            row.p_4().border_1().border_color(rgb(appearance::BORDER))
-                        })
-                        .child(
-                            Button::new(format!("account-choice-{index}"))
-                                .accessibility_label(identity.to_owned())
-                                .small()
-                                .ghost()
-                                .child(account_identity(Some(account.provider), identity).flex_1())
-                                .on_click(cx.listener(move |s, _, _, cx| {
-                                    s.account_operation(Intent::SelectAccountForDraft(
-                                        op::SelectAccountForDraft {
-                                            provider,
-                                            id: id.clone(),
-                                            thread_id: s.draft_key().clone(),
-                                        },
-                                    ));
-                                    cx.notify();
-                                }))
-                                .debug_selector(move || format!("account-choice-{index}"))
-                                .when(accounts.is_selected(account), |button| {
-                                    button.child(Icon::new(IconName::Check).size(px(14.)))
-                                })
-                                .w_full()
-                                .disabled(disabled),
-                        )
-                        .when_some(account.plan_type.as_ref(), |row, plan| {
-                            row.child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(appearance::MUTED))
-                                    .child(plan.to_uppercase()),
-                            )
-                        })
-                        .child(if manage {
-                            account_usage_view(account.usage.as_ref())
-                        } else {
-                            weekly_usage_view(
-                                self.snapshot
-                                    .account_weekly_usage(account.provider, account.id.clone()),
-                            )
-                        })
-                        .when(manage && provider == ProviderKind::Codex, |row| {
-                            row.child(
-                                button(format!("account-usage-manage-{index}"), "追加クレジット・上限を管理", cx, |s, _, cx| {
-                                    s.open_browser(s.panel_scope(), "https://chatgpt.com/settings/usage", cx);
-                                }).small().ghost()
-                            ).child(div().text_xs().text_color(rgb(appearance::MUTED))
-                                .child("利用枠は表示時刻に自動リセットされます。上限の変更・追加クレジットは管理画面で行えます。"))
-                        });
-                    if manage && self.account.sign_out.as_deref() == Some(account.id.as_str()) {
-                        row =
-                            row.child(div().text_sm().child(
-                                "サインアウトしますか？ 再び使うにはサインインが必要です。",
-                            ))
-                            .child(
-                                h_flex()
-                                    .gap_2()
-                                    .child(
-                                        button(
-                                            format!("account-logout-confirm-{index}"),
-                                            "サインアウト",
-                                            cx,
-                                            move |s, _, _| {
-                                                s.account.sign_out = None;
-                                                s.account_operation(Intent::LogoutAccount(
-                                                    op::LogoutAccount {
-                                                        provider,
-                                                        id: logout_id.clone(),
-                                                    },
-                                                ));
-                                            },
-                                        )
-                                        .disabled(disabled),
-                                    )
-                                    .child(
-                                        button(
-                                            format!("account-logout-cancel-{index}"),
-                                            "キャンセル",
-                                            cx,
-                                            |s, _, _| s.account.sign_out = None,
-                                        )
-                                        .debug_selector(
-                                            move || format!("account-logout-cancel-{index}"),
-                                        ),
-                                    ),
-                            );
-                    } else if manage {
-                        let logout = button(
-                            format!("account-logout-{index}"),
-                            "サインアウト",
-                            cx,
-                            move |s, _, _| s.account.sign_out = Some(logout_id.clone()),
-                        )
-                        .debug_selector(move || format!("account-logout-{index}"))
-                        .disabled(disabled);
-                        row = if in_settings {
-                            row.child(h_flex().justify_end().child(logout))
-                        } else {
-                            row.child(logout)
-                        };
-                    }
-                    body = body.child(row);
-                }
-                if !found {
+                    .peekable();
+                if matching.peek().is_none() {
                     body = body.child(div().text_sm().child("サインインして利用を開始できます。"));
+                }
+                for entry in matching {
+                    body = body.child(self.account_row(
+                        in_settings,
+                        accounts.is_selected(entry.1),
+                        entry,
+                        manage,
+                        disabled,
+                        cx,
+                    ));
                 }
             } else {
                 body = body.child("アカウントを読み込み中…");
