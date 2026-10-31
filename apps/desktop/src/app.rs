@@ -1443,7 +1443,7 @@ impl Desktop {
         self.panels.close(self.panel_scope(), id);
         match self.surface_resources.remove(&id) {
             Some(SurfaceResource::Browser(view)) => {
-                view.update(cx, |view, _| view.set_visible(false));
+                view.update(cx, |view, cx| view.set_visible(false, cx));
             }
             Some(SurfaceResource::Terminal(view)) => view.update(cx, |view, _| view.close()),
             Some(SurfaceResource::SideChat(view)) => {

@@ -18,6 +18,9 @@ use gpui_kit::{
 };
 use std::{collections::VecDeque, ops::Range, sync::Arc, time::Duration};
 
+#[cfg(target_os = "macos")]
+pub(crate) mod native;
+
 pub(crate) struct BrowserTitle(pub(crate) String);
 
 pub(crate) struct Browser {
@@ -34,6 +37,7 @@ pub(crate) struct Browser {
     credentials: Option<BrowserCredentials>,
     pending: VecDeque<BrowserRequest>,
     visible: bool,
+    menu_open: bool,
     focus: FocusHandle,
     bounds: Bounds<Pixels>,
     composition: crate::composition::Composition,
@@ -63,7 +67,15 @@ impl Browser {
             });
             let poll = cx.spawn_in(window, async move |view, cx| {
                 loop {
-                    let Ok(job) = view.update_in(cx, |view, _, _| view.next_request()) else {
+                    let Ok(job) = view.update_in(cx, |view, _, _cx| {
+                        let job = view.next_request();
+                        #[cfg(target_os = "macos")]
+                        let job = job.map(|(runtime, store, mut request)| {
+                            request.renderer_id = native::renderer_id(_cx);
+                            (runtime, store, request)
+                        });
+                        job
+                    }) else {
                         break;
                     };
                     if let Some((runtime, store, request)) = job {
@@ -119,6 +131,7 @@ impl Browser {
                 credentials: None,
                 pending: VecDeque::new(),
                 visible: false,
+                menu_open: false,
                 focus,
                 bounds: Bounds::default(),
                 composition: Default::default(),
@@ -157,6 +170,11 @@ impl Browser {
                     }
                 }
                 let mut changed = self.connection_error.take().is_some();
+                if (frame.tab_id.is_empty() || frame.image_id.is_empty())
+                    && self.image.take().is_some()
+                {
+                    changed = true;
+                }
                 if image.is_some() {
                     self.image = image;
                     changed = true;
@@ -211,6 +229,7 @@ impl Browser {
             generation: self.frame.generation,
             tab_id: self.frame.tab_id.clone(),
             image_id: self.frame.image_id.clone(),
+            renderer_id: String::new(),
             action,
         }
     }
@@ -227,7 +246,7 @@ impl Browser {
             );
         }
         self.credentials = None;
-        if !self.frame.tab_id.is_empty() && self.pending.len() < 64 {
+        if self.pending.len() < 64 {
             self.pending.push_back(self.request(action));
         }
         cx.notify();
@@ -245,6 +264,7 @@ impl Browser {
 
     fn actions_menu(&self, cx: &Context<Self>) -> impl IntoElement {
         let owner = cx.entity().downgrade();
+        let menu_owner = owner.clone();
         let tab_id = self.frame.tab_id.clone();
         let url = self
             .frame
@@ -257,7 +277,6 @@ impl Browser {
             .xsmall()
             .ghost()
             .accessibility_label("ブラウザのメニュー")
-            .disabled(self.frame.tab_id.is_empty())
             .dropdown_menu(move |menu, _, _| {
                 let new_tab = owner.clone();
                 let close_tab = owner.clone();
@@ -342,6 +361,16 @@ impl Browser {
                             }
                         }),
                 )
+            })
+            .on_open_change(move |open, _, cx| {
+                let _ = menu_owner.update(cx, |view, cx| {
+                    view.menu_open = *open;
+                    #[cfg(target_os = "macos")]
+                    if *open {
+                        native::hide(&view.thread.to_string(), cx);
+                    }
+                    cx.notify();
+                });
             })
     }
 
@@ -485,6 +514,7 @@ impl Browser {
             || self.frame.dialog != frame.dialog
             || self.frame.can_go_back != frame.can_go_back
             || self.frame.can_go_forward != frame.can_go_forward;
+        let changed = changed || self.frame.renderer_id != frame.renderer_id;
         let previous = self.title();
         self.frame = frame;
         let title = self.title();
@@ -509,8 +539,13 @@ impl Browser {
             .unwrap_or_else(|| "ブラウザ".into())
     }
 
-    pub(crate) fn set_visible(&mut self, visible: bool) {
+    pub(crate) fn set_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
         self.visible = visible;
+        #[cfg(target_os = "macos")]
+        if !visible {
+            native::hide(&self.thread.to_string(), cx);
+        }
+        let _ = cx;
     }
 
     fn page_point(&self, position: Point<Pixels>) -> Option<(f64, f64)> {
@@ -567,6 +602,20 @@ impl Render for Browser {
         let tabs = self.frame.tabs.clone();
         let active = self.frame.tab_id.clone();
         let entity = cx.entity();
+        #[cfg(target_os = "macos")]
+        let native_entity = entity.clone();
+        #[cfg(target_os = "macos")]
+        let native = self.visible
+            && !self.menu_open
+            && native::has_surface(
+                &self.thread.to_string(),
+                &self.frame.renderer_id,
+                &self.frame.tab_id,
+                cx,
+            );
+        #[cfg(not(target_os = "macos"))]
+        let native = false;
+        let remote = !native;
         v_flex()
             .size_full()
             .min_h_0()
@@ -680,7 +729,6 @@ impl Render for Browser {
                                 Input::new(&self.address)
                                     .small()
                                     .appearance(false)
-                                    .disabled(!enabled)
                                     .aria_label("ブラウザの URL"),
                             ),
                         )
@@ -740,6 +788,7 @@ impl Render for Browser {
                         .flex_1()
                         .min_h_0()
                         .overflow_hidden()
+                        .when(remote, |body| body
                         .track_focus(&self.focus)
                         .on_key_down(cx.listener(Self::key))
                         .on_mouse_down(
@@ -822,7 +871,16 @@ impl Render for Browser {
                             .top_0()
                             .left_0()
                             .size_full(),
-                        ),
+                        ))
+                        .when(native, |body| {
+                            #[cfg(target_os="macos")]
+                            { let entity=native_entity.clone(); let scope=self.thread.to_string();let tab=self.frame.tab_id.clone();body.child(canvas(move |bounds,_,cx| {
+                                entity.update(cx, |view,_|view.bounds=bounds);
+                                native::layout(&scope,&tab,bounds,cx);
+                            }, |_,_,_,_|{}).size_full()) }
+                            #[cfg(not(target_os="macos"))]
+                            { body }
+                        }),
                 )
 
             })

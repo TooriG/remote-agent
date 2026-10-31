@@ -57,7 +57,7 @@ struct WorkspaceBrowserScreen: View {
                 }.padding()
             }
             ZStack {
-                if let image, currentTab?.url != "about:blank" {
+                if let image, let currentTab, currentTab.url != "about:blank" {
                     RemoteBrowserCanvas(image: image, acceptsInput: acceptsInput, send: send)
                         .accessibilityIdentifier("browser.content")
                 } else if frame != nil {
@@ -187,7 +187,7 @@ struct WorkspaceBrowserScreen: View {
 
     private func request(_ action: BrowserAction) -> BrowserRequest {
         BrowserRequest(threadId: thread, tabId: frame?.tabId ?? "", imageId: frame?.imageId ?? "",
-                       generation: frame?.generation ?? 0, action: action)
+                       generation: frame?.generation ?? 0, action: action, rendererId: "")
     }
 
     private func perform(_ request: BrowserRequest) async {
@@ -195,6 +195,9 @@ struct WorkspaceBrowserScreen: View {
             let result = try await store.browser(request: request)
             guard !Task.isCancelled, scenePhase == .active else { return }
             frame = result
+            if result.tabId.isEmpty || result.imageId.isEmpty {
+                image = nil
+            }
             if let metadata = result.credentials {
                 credentials = metadata
             }

@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 agent-protocol = { path = "../agent-protocol" }
 agent-transport = { path = "../agent-transport" }
+agent-local-host = { path = "../agent-local-host" }
 anyhow.workspace = true
 dunce.workspace = true
 agent-core = { path = "../agent-core" }
@@ -28,7 +29,6 @@ indexmap = "2"
 rustix = { version = "1", features = ["process"] }
 
 [dev-dependencies]
-agent-local-host = { path = "../agent-local-host" }
 agent-protocol = { path = "../agent-protocol", features = ["test-support"] }
 rstest = { version = "0.28", default-features = false }
 tempfile = "3"

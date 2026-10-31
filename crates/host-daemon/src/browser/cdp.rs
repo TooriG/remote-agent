@@ -278,32 +278,18 @@ impl Chrome {
         self.commands.is_closed()
     }
 
-    #[cfg(any(target_os = "macos", test))]
+    #[cfg(test)]
     pub(super) async fn install_cookies(
         &mut self,
-        context: &str,
         cookies: &[super::credentials::Cookie],
     ) -> Result<(), String> {
         if cookies.is_empty() {
             return Ok(());
         }
-        let parameters: Vec<_> = cookies
-            .iter()
-            .map(super::credentials::Cookie::params)
-            .collect();
-        self.call(
-            None,
-            "Storage.setCookies",
-            json!({"browserContextId":context,"cookies":parameters}),
-        )
-        .await?;
-        let installed = self
-            .call(
-                None,
-                "Storage.getCookies",
-                json!({"browserContextId":context}),
-            )
+        let parameters: Vec<_> = cookies.iter().map(cookie_params).collect();
+        self.call(None, "Storage.setCookies", json!({"cookies":parameters}))
             .await?;
+        let installed = self.call(None, "Storage.getCookies", json!({})).await?;
         let verified = installed["cookies"]
             .as_array()
             .is_some_and(|installed| cookies_installed(&parameters, installed));
@@ -329,24 +315,9 @@ impl Chrome {
         }
         Ok(targets)
     }
-    pub async fn create_context(&mut self) -> Result<String, String> {
-        self.call(
-            None,
-            "Target.createBrowserContext",
-            json!({"disposeOnDetach":true}),
-        )
-        .await?["browserContextId"]
-            .as_str()
-            .map(str::to_owned)
-            .ok_or_else(|| "ブラウザのプロファイルを作成できません。".into())
-    }
-    pub async fn create(&mut self, context: &str) -> Result<String, String> {
-        self.call(
-            None,
-            "Target.createTarget",
-            json!({"url":"about:blank", "browserContextId":context}),
-        )
-        .await?["targetId"]
+    pub async fn create(&mut self) -> Result<String, String> {
+        self.call(None, "Target.createTarget", json!({"url":"about:blank"}))
+            .await?["targetId"]
             .as_str()
             .map(str::to_owned)
             .ok_or_else(|| "ブラウザのタブを作成できません。".into())
@@ -759,9 +730,7 @@ impl Chrome {
                     BrowserKey::ArrowDown => ("ArrowDown", 40, 0),
                     BrowserKey::ArrowLeft => ("ArrowLeft", 37, 0),
                     BrowserKey::ArrowRight => ("ArrowRight", 39, 0),
-                    BrowserKey::SelectAll => {
-                        ("a", 65, if cfg!(target_os = "macos") { 4 } else { 2 })
-                    }
+                    BrowserKey::SelectAll => ("a", 65, 2),
                     BrowserKey::Delete => ("Delete", 46, 0),
                     BrowserKey::Home => ("Home", 36, 0),
                     BrowserKey::End => ("End", 35, 0),
@@ -846,6 +815,23 @@ fn redact(value: Value, secrets: &[Zeroizing<String>]) -> Value {
         ),
         value => value,
     }
+}
+
+#[cfg(test)]
+fn cookie_params(cookie: &super::credentials::Cookie) -> serde_json::Value {
+    let mut value = serde_json::json!({"domain":cookie.domain,"name":cookie.name,"value":cookie.value.as_str(),"path":cookie.path,"secure":cookie.secure,"httpOnly":cookie.http_only});
+    if let Some(expires) = cookie.expires {
+        value["expires"] = expires.into();
+    }
+    if let Some(policy) = match cookie.same_site {
+        0 => Some("None"),
+        1 => Some("Lax"),
+        2 => Some("Strict"),
+        _ => None,
+    } {
+        value["sameSite"] = policy.into();
+    }
+    value
 }
 
 #[cfg(test)]
@@ -1204,7 +1190,7 @@ mod tests {
     }
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(test)]
 fn cookies_installed(expected: &[Value], installed: &[Value]) -> bool {
     expected.iter().all(|expected| {
         installed.iter().any(|cookie| {

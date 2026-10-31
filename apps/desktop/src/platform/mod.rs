@@ -286,7 +286,7 @@ fn isolation_setting(
     }
 }
 
-async fn discover_local_host() -> anyhow::Result<LocalHost> {
+pub(crate) async fn discover_local_host() -> anyhow::Result<LocalHost> {
     let preferred = state_dir().map_err(anyhow::Error::msg)?;
     let isolated = isolated_host()?;
     tokio::task::spawn_blocking(move || {

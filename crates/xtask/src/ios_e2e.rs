@@ -900,6 +900,16 @@ pub async fn run(tests: Vec<String>, without_codex: bool, driver: TestDriver) ->
     ] {
         supervision::run(&arguments, &cwd, Io::Log(&log), &cancel, BUILD_TIMEOUT).await?;
     }
+    if needs_browser_fixture(&tests) {
+        supervision::run(
+            &args!["cargo", "build", "--locked", "-p", "agent-desktop"],
+            &cwd,
+            Io::Log(&log),
+            &cancel,
+            BUILD_TIMEOUT,
+        )
+        .await?;
+    }
     let products = build.join("Build/Products");
     if products.is_dir() {
         for entry in fs::read_dir(&products)? {
@@ -1229,7 +1239,7 @@ mod tests {
     }
 
     #[test]
-    fn only_browser_tests_prepare_chrome_before_booting_simulator() {
+    fn only_browser_tests_prepare_native_renderer_before_booting_simulator() {
         let mut tests = vec![
             "testSimulatorOpensOnlyTheTappedImageAndSavesIt".to_owned(),
             "testSimulatorRendersMarkdownTableAndReopensIt".to_owned(),

@@ -7,35 +7,7 @@ use zeroize::Zeroizing;
 mod macos;
 
 #[cfg(any(target_os = "macos", test))]
-pub(super) struct Cookie {
-    pub(super) domain: String,
-    pub(super) name: String,
-    pub(super) value: Zeroizing<String>,
-    pub(super) path: String,
-    pub(super) secure: bool,
-    pub(super) http_only: bool,
-    pub(super) same_site: i64,
-    pub(super) expires: Option<i64>,
-}
-#[cfg(any(target_os = "macos", test))]
-impl Cookie {
-    pub(super) fn params(&self) -> serde_json::Value {
-        let mut value = serde_json::json!({"domain":self.domain,"name":self.name,
-            "value":self.value.as_str(),"path":self.path,"secure":self.secure,"httpOnly":self.http_only});
-        if let Some(expires) = self.expires {
-            value["expires"] = expires.into();
-        }
-        if let Some(policy) = match self.same_site {
-            0 => Some("None"),
-            1 => Some("Lax"),
-            2 => Some("Strict"),
-            _ => None,
-        } {
-            value["sameSite"] = policy.into();
-        }
-        value
-    }
-}
+pub(super) use agent_protocol::browser_native::BrowserCookie as Cookie;
 
 pub(super) enum Prepared {
     Metadata(BrowserCredentials),

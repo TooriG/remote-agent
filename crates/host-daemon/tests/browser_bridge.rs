@@ -81,9 +81,36 @@ async fn stdio_browser_tool_is_typed_and_does_not_expose_generic_execution() {
 }
 
 #[tokio::test]
-#[ignore = "requires installed Codex, Chrome and the process supervisor; no model turn is submitted"]
+#[ignore = "requires installed Codex, native desktop (Mac) or Chromium (Linux), and the process supervisor; no model turn is submitted"]
 async fn installed_codex_exposes_the_same_browser_as_the_phone() {
     let root = tempfile::tempdir().unwrap();
+    #[cfg(target_os = "macos")]
+    let mut desktop = {
+        let target = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_owned();
+        let mut desktop = tokio::process::Command::new(target.join("agent-desktop"))
+            .env("AGENT_STATE_DIR", root.path())
+            .env("AGENT_ISOLATED_HOST", "1")
+            .env("AGENT_HOST_DAEMON", "/usr/bin/false")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        for _ in 0..100 {
+            if agent_local_host::browser::read_renderer(root.path()).is_ok() {
+                break;
+            }
+            assert!(desktop.try_wait().unwrap().is_none());
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        desktop
+    };
     let browser = host_daemon::browser::Browser::start(root.path().join("profile"))
         .await
         .unwrap();
@@ -138,6 +165,7 @@ async fn installed_codex_exposes_the_same_browser_as_the_phone() {
         found,
         "Codex must discover the conversation-scoped MCP tool"
     );
+    server.request::<_,Value>("mcpServer/tool/call",&json!({"threadId":thread,"server":"agent_browser","tool":"preview_open","arguments":{"url":"about:blank"}})).await.unwrap().outcome.unwrap();
     let result=server.request::<_,Value>("mcpServer/tool/call",&json!({"threadId":thread,"server":"agent_browser","tool":"preview_snapshot","arguments":{}})).await.unwrap().outcome.unwrap();
     assert!(
         result.to_string().contains("image/jpeg"),
@@ -148,6 +176,7 @@ async fn installed_codex_exposes_the_same_browser_as_the_phone() {
             thread_id: session,
             tab_id: String::new(),
             image_id: String::new(),
+            renderer_id: String::new(),
             generation: 0,
             action: agent_protocol::browser::BrowserAction::Read,
         })
@@ -157,6 +186,8 @@ async fn installed_codex_exposes_the_same_browser_as_the_phone() {
     assert!(result.to_string().contains(&phone.tab_id));
     server.shutdown().await.unwrap();
     browser.shutdown().await;
+    #[cfg(target_os = "macos")]
+    desktop.kill().await.unwrap();
 }
 
 #[tokio::test]

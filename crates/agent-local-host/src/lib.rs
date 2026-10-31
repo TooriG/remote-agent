@@ -1,6 +1,8 @@
 //! Files the Host and its local clients share on one machine: private state
 //! files, the local client identity, discovery of the running Host and the
 //! application bundle layout.
+#[cfg(unix)]
+pub mod browser;
 mod files;
 mod registry;
 pub mod update;

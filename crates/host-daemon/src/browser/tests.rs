@@ -1,82 +1,15 @@
 use super::*;
-use agent_protocol::session::{ProviderKind, SessionRef};
-
-#[test]
-fn input_requires_the_displayed_tab_but_reads_and_selection_can_refresh_it() {
-    for action in [
-        BrowserAction::Click { x: 10.0, y: 10.0 },
-        BrowserAction::Type {
-            text: "input".into(),
-        },
-        BrowserAction::Navigate {
-            url: "https://example.test".into(),
-        },
-        BrowserAction::Back,
-        BrowserAction::Dialog {
-            accept: true,
-            text: String::new(),
-        },
-    ] {
-        assert!(validate_tab("tab", "tab", &action).is_ok());
-        assert!(validate_tab("tab", "old-tab", &action).is_err());
-    }
-    for action in [
-        BrowserAction::Read,
-        BrowserAction::SelectTab { id: "tab".into() },
-    ] {
-        assert!(validate_tab("tab", "old-tab", &action).is_ok());
-    }
-}
-
-#[test]
-fn input_requires_current_pages_but_reads_and_tab_selection_can_refresh() {
-    let action = BrowserAction::Type {
-        text: "input".into(),
-    };
-    assert!(validate_generation(2, 2, &action).is_ok());
-    assert!(validate_generation(2, 1, &action).is_err());
-    assert!(validate_generation(2, 3, &action).is_err());
-    for action in [
-        BrowserAction::Read,
-        BrowserAction::Snapshot,
-        BrowserAction::SelectTab { id: "tab".into() },
-    ] {
-        assert!(validate_generation(2, 0, &action).is_ok());
-    }
-}
-
-#[test]
-fn coordinates_follow_the_current_viewport() {
-    for action in [
-        BrowserAction::Click { x: 389., y: 843. },
-        BrowserAction::Drag {
-            x: 0.,
-            y: 0.,
-            to_x: 389.,
-            to_y: 843.,
-        },
-    ] {
-        assert!(validate_point(390, 844, &action).is_ok());
-    }
-    for action in [
-        BrowserAction::Click { x: 390., y: 0. },
-        BrowserAction::Hover { x: 0., y: 844. },
-        BrowserAction::Drag {
-            x: 0.,
-            y: 0.,
-            to_x: 390.,
-            to_y: 0.,
-        },
-    ] {
-        assert!(validate_point(390, 844, &action).is_err());
-    }
-}
+use agent_protocol::{
+    browser::*,
+    session::{ProviderKind, SessionRef},
+};
 
 fn request(thread: &SessionRef, frame: &BrowserFrame, action: BrowserAction) -> BrowserRequest {
     BrowserRequest {
         thread_id: thread.clone(),
         tab_id: frame.tab_id.clone(),
         image_id: frame.image_id.clone(),
+        renderer_id: String::new(),
         generation: frame.generation,
         action,
     }
@@ -328,14 +261,22 @@ async fn shared_browser_live() {
     let mut isolated = BrowserFrame::default();
     for _ in 0..20 {
         isolated = browser.agent(&scope_b, BrowserAction::Read).await.unwrap();
-        if isolated.tabs.iter().any(|tab| tab.title.ends_with("null")) {
+        if isolated
+            .tabs
+            .iter()
+            .any(|tab| tab.title.ends_with("stored"))
+        {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     assert!(
-        isolated.tabs.iter().any(|tab| tab.title.trim() == "null"),
-        "agent conversations must not share cookies or local storage"
+        isolated
+            .tabs
+            .iter()
+            .any(|tab| tab.title.contains("agent_fixture=persisted")
+                && tab.title.ends_with("stored")),
+        "login state is shared while tab ownership stays scoped to a conversation"
     );
     let delayed = browser
         .agent(
@@ -382,7 +323,7 @@ async fn shared_browser_live() {
         .await
         .unwrap();
     }
-    for (scope, expected) in [(&scope_a, "Logged in"), (&scope_b, "Logged out")] {
+    for (scope, expected) in [(&scope_a, "Logged in"), (&scope_b, "Logged in")] {
         browser
             .agent(
                 scope,
@@ -415,11 +356,7 @@ async fn shared_browser_live() {
             .unwrap();
         let value: serde_json::Value = serde_json::from_str(&visible.value).unwrap();
         let cookies = value.as_str().unwrap();
-        if scope == &scope_a {
-            assert!(cookies.contains("agent_fixture=persisted"));
-        } else {
-            assert!(cookies.is_empty());
-        }
+        assert!(cookies.contains("agent_fixture=persisted"));
         assert!(
             !cookies.contains("imported_session"),
             "HttpOnly cookies stay unavailable to page scripts"
@@ -456,9 +393,16 @@ async fn credential_import_and_vault_access_are_explicit_client_actions() {
             origin: "https://example.test".into(),
         },
     ] {
-        assert!(validate_tab("new-tab", "old-tab", &action).is_err());
-        assert!(validate_generation(2, 1, &action).is_err());
-        assert!(validate_generation(2, 2, &action).is_ok());
+        assert!(
+            agent_protocol::browser::validate_displayed_page("new-tab", 2, "old-tab", 2, &action)
+                .is_err()
+        );
+        assert!(
+            agent_protocol::browser::validate_displayed_page("tab", 2, "tab", 1, &action).is_err()
+        );
+        assert!(
+            agent_protocol::browser::validate_displayed_page("tab", 2, "tab", 2, &action).is_ok()
+        );
         let error = browser.agent("thread", action).await.err().unwrap();
         assert!(error.contains("ブラウザのメニュー"));
     }

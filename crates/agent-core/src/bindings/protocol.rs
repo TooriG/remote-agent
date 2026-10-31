@@ -184,6 +184,7 @@ struct BrowserRequest {
     pub image_id: String,
     pub generation: u64,
     pub action: BrowserAction,
+    pub renderer_id: String,
 }
 #[uniffi::remote(Enum)]
 enum BrowserAction {
@@ -324,6 +325,7 @@ struct BrowserFrame {
     pub page_text: String,
     pub value: String,
     pub credentials: Option<BrowserCredentials>,
+    pub renderer_id: String,
 }
 #[uniffi::remote(Enum)]
 enum InvocationKind {

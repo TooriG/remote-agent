@@ -16,9 +16,7 @@ if [[ $language == apple || $language == rust ]]; then
     )
     just unit-tests "${integration_targets[@]}" || failed=1
     if [[ $(uname -s) == Darwin ]]; then
-        # The Host-owned Chrome: navigation, clicks, concurrent phone and agent input, popups and persistence.
-        cargo nextest run --locked --workspace --lib --features agent-core/bindings \
-            --run-ignored only -E 'test(=browser::tests::shared_browser_live)' || failed=1
+        just macos-e2e || failed=1
     fi
 fi
 if [[ $language == kotlin ]]; then

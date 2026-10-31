@@ -166,8 +166,8 @@ impl Desktop {
         }
         for (id, resource) in &self.surface_resources {
             match resource {
-                SurfaceResource::Browser(view) => view.update(cx, |view, _| {
-                    view.set_visible(active && Some(*id) == active_surface);
+                SurfaceResource::Browser(view) => view.update(cx, |view, cx| {
+                    view.set_visible(active && Some(*id) == active_surface, cx);
                 }),
                 SurfaceResource::SideChat(chat) => {
                     chat.update(cx, |chat, cx| {

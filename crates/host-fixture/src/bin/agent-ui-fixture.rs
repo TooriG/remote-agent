@@ -86,10 +86,40 @@ async fn main() {
     )
     .await
     .unwrap();
+    #[cfg(target_os = "macos")]
+    let mut browser_desktop = None;
     if let Some(argument) = std::env::args_os().nth(6) {
         assert_eq!(argument, "--prepare-browser");
-        // Prepare Chrome before booting a fresh Simulator on small hosted Macs,
-        // using the same Host/browser RPC that the UI will call.
+        // Use the production native owner in an isolated desktop window. The
+        // fixture's authenticated Host RPC reaches exactly that renderer.
+        #[cfg(target_os = "macos")]
+        {
+            let executable = std::env::current_exe()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join("agent-desktop");
+            let mut child = tokio::process::Command::new(executable)
+                .env("AGENT_STATE_DIR", &directory)
+                .env("AGENT_ISOLATED_HOST", "1")
+                .env("AGENT_HOST_DAEMON", "/usr/bin/false")
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+            while agent_local_host::browser::read_renderer(&directory).is_err() {
+                assert!(
+                    child.try_wait().unwrap().is_none(),
+                    "native browser desktop exited during startup"
+                );
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "native browser renderer did not become ready"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            browser_desktop = Some(child);
+        }
         println!("Preparing browser dependency before Simulator startup");
         let connection = host.local().await.unwrap();
         let ready = connection
@@ -99,6 +129,7 @@ async fn main() {
                     .unwrap(),
                 tab_id: String::new(),
                 image_id: String::new(),
+                renderer_id: String::new(),
                 generation: 0,
                 action: BrowserAction::Read,
             })
@@ -118,4 +149,8 @@ async fn main() {
     tokio::signal::ctrl_c().await.unwrap();
     pairing.shutdown().unwrap();
     host.close().await.unwrap();
+    #[cfg(target_os = "macos")]
+    if let Some(mut child) = browser_desktop {
+        let _ = child.kill().await;
+    }
 }

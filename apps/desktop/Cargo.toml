@@ -42,11 +42,14 @@ raw-window-handle = "0.6"
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Graphics_Dwm"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+wry = { package = "lb-wry", version = "=0.53.3" }
+zeroize.workspace = true
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "objc2-core-foundation", "NSStatusBar", "NSStatusItem", "NSStatusBarButton", "NSButton", "NSCell", "NSControl", "NSResponder", "NSView", "NSMenu", "NSMenuItem", "NSImage", "NSGraphics"] }
 objc2-av-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "AVCaptureDevice", "AVMediaFormat"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSBundle"] }
 block2 = "0.6"
+objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKSnapshotConfiguration", "WKHTTPCookieStore", "WKUIDelegate", "WKFrameInfo", "WKNavigationAction", "WKWindowFeatures", "WKOpenPanelParameters"] }
 
 [dev-dependencies]
 gpui-kit = { version = "=0.8.1", features = ["test-support"] }

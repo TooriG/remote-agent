@@ -120,6 +120,8 @@ fn open_main_window(cx: &mut App) {
                 ..Default::default()
             },
             |window, cx| {
+                #[cfg(target_os = "macos")]
+                browser::native::init(window, cx);
                 #[cfg(target_os = "windows")]
                 appearance::style_native_titlebar(window);
                 let desktop = cx.new(|cx| app::Desktop::new(app::Mode::Main, window, cx));
@@ -170,6 +172,8 @@ fn main() {
             connections: std::sync::Arc::new(platform::Connections::default()),
         });
         cx.on_app_quit(|cx| {
+            #[cfg(target_os = "macos")]
+            browser::native::shutdown(cx);
             tracing::info!(target: "agent", operation = "shutdown", "Bex shutting down");
             let runtime = cx.global::<Runtime>().clone();
             async move {

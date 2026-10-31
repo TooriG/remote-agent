@@ -352,15 +352,14 @@ mod tests {
         let cookie = &cookies[0];
         assert_eq!(&**cookie.value, "fixture-login");
         assert_eq!(cookie.expires, Some(1_800_000_000));
-        let params = cookie.params();
-        assert_eq!(params["domain"], ".example.test");
-        assert_eq!(params["name"], "login");
-        assert_eq!(params["value"], "fixture-login");
-        assert_eq!(params["path"], "/account");
-        assert_eq!(params["httpOnly"], true);
-        assert_eq!(params["secure"], true);
-        assert_eq!(params["sameSite"], "Lax");
-        assert_eq!(params["expires"], 1_800_000_000_i64);
+        assert_eq!(cookie.domain, ".example.test");
+        assert_eq!(cookie.name, "login");
+        assert_eq!(&**cookie.value, "fixture-login");
+        assert_eq!(cookie.path, "/account");
+        assert!(cookie.http_only);
+        assert!(cookie.secure);
+        assert_eq!(cookie.same_site, 1);
+        assert_eq!(cookie.expires, Some(1_800_000_000_i64));
         assert_eq!(
             std::fs::read(directory.path().join("Cookies")).unwrap(),
             original
@@ -388,13 +387,13 @@ mod tests {
         })
         .unwrap();
         assert_eq!((cookies.len(), skipped), (1, 0));
-        let params = cookies[0].params();
-        assert_eq!(params["value"], "session");
-        assert_eq!(params["domain"], "example.test");
-        assert_eq!(params["httpOnly"], false);
-        assert_eq!(params["secure"], false);
-        assert!(params.get("expires").is_none());
-        assert_eq!(params["sameSite"], "Strict");
+        let cookie = &cookies[0];
+        assert_eq!(&**cookie.value, "session");
+        assert_eq!(cookie.domain, "example.test");
+        assert!(!cookie.http_only);
+        assert!(!cookie.secure);
+        assert!(cookie.expires.is_none());
+        assert_eq!(cookie.same_site, 2);
         db.execute_batch("ROLLBACK;").unwrap();
     }
 
@@ -406,14 +405,14 @@ mod tests {
             UPDATE cookies SET encrypted_value=X'7631309d53da233d3900ecc985316cd65cae4a', samesite=0;").unwrap();
         let (cookies, _) = read_chrome_cookies(directory.path(), 0, password).unwrap();
         assert_eq!(&**cookies[0].value, "fixture-login");
-        assert_eq!(cookies[0].params()["sameSite"], "None");
+        assert_eq!(cookies[0].same_site, 0);
         db.execute_batch("UPDATE cookies SET encrypted_value=X'', value='', samesite=-1;")
             .unwrap();
         let (cookies, _) =
             read_chrome_cookies(directory.path(), 0, || panic!("empty plaintext")).unwrap();
         assert_eq!(cookies.len(), 1);
         assert!(cookies[0].value.is_empty());
-        assert!(cookies[0].params().get("sameSite").is_none());
+        assert_eq!(cookies[0].same_site, -1);
     }
 
     #[test]

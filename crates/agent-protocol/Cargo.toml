@@ -14,6 +14,7 @@ uuid = { version = "1", features = ["serde"] }
 thiserror.workspace = true
 url.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["std"] }
+zeroize = { workspace = true, features = ["serde"] }
 
 [features]
 # JSON conversions for recorded fixtures and tests; production uses MessagePack records.

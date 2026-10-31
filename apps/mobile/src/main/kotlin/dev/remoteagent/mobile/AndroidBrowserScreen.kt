@@ -102,7 +102,7 @@ private class BrowserSession(private val thread: SessionRef) {
     }
 
     private fun request(action: BrowserAction) =
-        BrowserRequest(thread, frame?.tabId ?: "", frame?.imageId ?: "", frame?.generation ?: 0uL, action)
+        BrowserRequest(thread, frame?.tabId ?: "", frame?.imageId ?: "", frame?.generation ?: 0uL, action, "")
 
     fun send(action: BrowserAction) {
         error = null
@@ -138,7 +138,9 @@ private class BrowserSession(private val thread: SessionRef) {
                 val reading = request.action == BrowserAction.Read
                 try {
                     val result = browser(profile, request)
-                    image = decodeBrowserImage(result.image) ?: image
+                    image =
+                        if (result.tabId.isEmpty() || result.imageId.isEmpty()) null
+                        else decodeBrowserImage(result.image) ?: image
                     frame = result
                     credentials = result.credentials ?: credentials
                     notice = result.value.takeIf(String::isNotEmpty) ?: notice
@@ -222,7 +224,7 @@ private fun BrowserPane(
         val messageColor = if (failure == null) colors.onSurfaceVariant else colors.error
         (failure ?: session.notice)?.let { Text(it, color = messageColor, modifier = Modifier.padding(12.dp)) }
         frame?.dialog?.let { BrowserDialogView(it, enabled, session::send) }
-        val blank = tab?.url == "about:blank"
+        val blank = tab == null || tab.url == "about:blank"
         BrowserImage(
             session.image?.takeUnless { blank },
             frame != null,

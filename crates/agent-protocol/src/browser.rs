@@ -14,6 +14,9 @@ pub struct BrowserRequest {
     pub tab_id: String,
     pub image_id: String,
     pub generation: u64,
+    /// A desktop that owns this native renderer already displays its surface.
+    /// Other clients leave this empty and receive browser images.
+    pub renderer_id: String,
     pub action: BrowserAction,
 }
 impl std::fmt::Debug for BrowserRequest {
@@ -218,6 +221,8 @@ pub struct BrowserFrame {
     pub height: u32,
     #[serde(with = "crate::protocol::bytes")]
     pub image: Vec<u8>,
+    /// Empty clears the client's cached image. Otherwise omitted bytes reuse
+    /// the image with this identity (for example while a dialog blocks capture).
     pub image_id: String,
     pub dialog: Option<BrowserDialog>,
     pub generation: u64,
@@ -227,6 +232,7 @@ pub struct BrowserFrame {
     pub page_text: String,
     pub value: String,
     pub credentials: Option<BrowserCredentials>,
+    pub renderer_id: String,
 }
 impl std::fmt::Debug for BrowserFrame {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -239,16 +245,123 @@ impl std::fmt::Debug for BrowserFrame {
 impl BrowserRequest {
     pub fn validate(&self) -> Result<(), String> {
         self.thread_id.validate()?;
-        if self.tab_id.len() > 256 || self.image_id.len() > 256 {
+        if self.tab_id.len() > 256 || self.image_id.len() > 256 || self.renderer_id.len() > 256 {
             return Err("ブラウザ接続情報が不正です。".into());
         }
         self.action.validate()
     }
 }
 
+/// Input refers to the page the client saw. Observations and tab selection can
+/// refresh stale state; uncertain input is never replayed against another page.
+pub fn validate_displayed_page(
+    active: &str,
+    generation: u64,
+    displayed_tab: &str,
+    displayed_generation: u64,
+    action: &BrowserAction,
+) -> Result<(), String> {
+    if matches!(
+        action,
+        BrowserAction::Read | BrowserAction::Snapshot | BrowserAction::SelectTab { .. }
+    ) {
+        return Ok(());
+    }
+    if active != displayed_tab {
+        return Err("表示中のタブが変わりました。最新の画面で再試行してください。".into());
+    }
+    if generation != displayed_generation {
+        return Err("表示中のページが変わりました。最新の画面で再試行してください。".into());
+    }
+    Ok(())
+}
+
+pub fn validate_viewport_point(
+    width: u32,
+    height: u32,
+    action: &BrowserAction,
+) -> Result<(), String> {
+    let point = |x: f64, y: f64| {
+        (0.0..f64::from(width)).contains(&x) && (0.0..f64::from(height)).contains(&y)
+    };
+    let valid = match action {
+        BrowserAction::Click { x, y }
+        | BrowserAction::Hover { x, y }
+        | BrowserAction::Scroll { x, y, .. } => point(*x, *y),
+        BrowserAction::Drag { x, y, to_x, to_y } => point(*x, *y) && point(*to_x, *to_y),
+        _ => true,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err("表示範囲外の座標です。".into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stale_input_is_rejected_but_observation_can_recover() {
+        for action in [
+            BrowserAction::Type { text: "one".into() },
+            BrowserAction::Navigate {
+                url: "https://example.com/".into(),
+            },
+            BrowserAction::Key {
+                key: BrowserKey::Enter,
+            },
+        ] {
+            assert!(validate_displayed_page("a", 7, "a", 7, &action).is_ok());
+            assert!(validate_displayed_page("a", 7, "b", 7, &action).is_err());
+            assert!(validate_displayed_page("a", 7, "a", 6, &action).is_err());
+            assert!(validate_displayed_page("a", 7, "a", 8, &action).is_err());
+        }
+        for action in [
+            BrowserAction::Read,
+            BrowserAction::Snapshot,
+            BrowserAction::SelectTab { id: "b".into() },
+        ] {
+            assert!(validate_displayed_page("a", 7, "b", 0, &action).is_ok());
+        }
+    }
+    #[test]
+    fn input_coordinates_follow_the_current_viewport() {
+        for (x, y, valid) in [
+            (0., 0., true),
+            (389., 843., true),
+            (390., 0., false),
+            (0., 844., false),
+            (-1., 0., false),
+            (f64::NAN, 0., false),
+            (0., f64::INFINITY, false),
+        ] {
+            for action in [
+                BrowserAction::Click { x, y },
+                BrowserAction::Hover { x, y },
+                BrowserAction::Scroll {
+                    x,
+                    y,
+                    delta_x: 1.,
+                    delta_y: 1.,
+                },
+                BrowserAction::Drag {
+                    x: 0.,
+                    y: 0.,
+                    to_x: x,
+                    to_y: y,
+                },
+                BrowserAction::Drag {
+                    x,
+                    y,
+                    to_x: 0.,
+                    to_y: 0.,
+                },
+            ] {
+                assert_eq!(validate_viewport_point(390, 844, &action).is_ok(), valid);
+            }
+        }
+    }
     #[test]
     fn browser_contract_rejects_invalid_input_and_preserves_binary_images() {
         for action in [

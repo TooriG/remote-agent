@@ -66,9 +66,10 @@ ios-archive archive-path derived-data-path *args:
 ios-markdown:
     cargo xtask ios-markdown
 
-# Exercise the Host-owned browser with isolated native clients.
+# Exercise native pages through the Host using an isolated desktop window.
 macos-e2e:
-    cargo nextest run --locked -p host-daemon --lib --run-ignored only -E 'test(=browser::tests::shared_browser_live)'
+    cargo build --locked -p agent-desktop
+    cargo nextest run --locked -p host-daemon --test browser_native --run-ignored only -E 'test(=shared_browser_live)'
 
 # Build and test Store recovery, Markdown and network permission on a fresh Android 17 emulator.
 android-e2e:
