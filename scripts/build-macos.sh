@@ -75,7 +75,6 @@ resources="$bundle/Contents/Resources"
 node_bundle="$bundle/Contents/Helpers/Bex Node.app"
 node="$node_bundle/Contents/MacOS/node"
 mkdir -p "$executables" "$resources" "${node%/*}"
-cp apps/desktop/assets/icon.icns "$resources/bex.icns"
 cp crates/host-daemon/src/providers/claude/sdk/SDK-LICENSE.md "$resources/Claude-Agent-SDK-LICENSE.md"
 cp "$output/agent-desktop" "$executables/bex"
 cp "$output/host-daemon" "$executables/host-daemon"
@@ -85,11 +84,14 @@ cp "${AGENT_NODE_RUNTIME:?Use the pinned Nix development environment}/bin/node" 
 cp apps/desktop/macos/Node.Info.plist "$node_bundle/Contents/Info.plist"
 cp "$AGENT_NODE_RUNTIME/share/doc/node/LICENSE" "$resources/Node-LICENSE.txt"
 cp apps/desktop/macos/Info.plist "$bundle/Contents/Info.plist"
+icon=icon
 if [[ $profile == dev ]]; then
+    icon=icon-dev
     /usr/bin/plutil -replace CFBundleIdentifier -string app.bex.dev.desktop "$bundle/Contents/Info.plist"
     /usr/bin/plutil -replace CFBundleName -string 'Bex Dev' "$bundle/Contents/Info.plist"
     /usr/bin/plutil -replace CFBundleDisplayName -string 'Bex Dev' "$bundle/Contents/Info.plist"
 fi
+cp "apps/desktop/assets/$icon.icns" "$resources/bex.icns"
 /usr/bin/plutil -insert BEXBuildRevision -string "$AGENT_BUILD_REVISION" "$bundle/Contents/Info.plist"
 if [[ -n ${AGENT_BUILD_NUMBER:-} ]]; then
     [[ $AGENT_BUILD_NUMBER =~ ^[1-9][0-9]*$ ]] || { echo 'Invalid Mac build number.' >&2; exit 1; }

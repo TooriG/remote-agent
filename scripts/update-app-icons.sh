@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Transparent logo is the source for standard app icons. Requires macOS Apple tools.
+# Build standard icons from the logo and reuse the iPhone Dev artwork. Requires macOS.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source=apps/desktop/assets/logo.png
@@ -29,11 +29,16 @@ icon=apps/desktop/assets/icon.png
 "$temporary/app-icon" "$source" "$icon"
 cp "$icon" apps/mobile/iosApp/Bex/Assets.xcassets/AppIcon.appiconset/AppIcon.png
 sips -z 192 192 "$icon" --out apps/mobile/src/main/res/drawable/agent_icon.png >/dev/null
-iconset="$temporary/Bex.iconset"
-mkdir -p "$iconset"
-for size in 16 32 128 256 512; do
-    sips -z "$size" "$size" "$icon" --out "$iconset/icon_${size}x${size}.png" >/dev/null
-    doubled=$((size * 2))
-    sips -z "$doubled" "$doubled" "$icon" --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
-done
-iconutil -c icns "$iconset" -o apps/desktop/assets/icon.icns
+create_icns() {
+    local image=$1 destination=$2 iconset="$temporary/Bex.iconset" size doubled
+    mkdir -p "$iconset"
+    for size in 16 32 128 256 512; do
+        sips -z "$size" "$size" "$image" --out "$iconset/icon_${size}x${size}.png" >/dev/null
+        doubled=$((size * 2))
+        sips -z "$doubled" "$doubled" "$image" --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
+    done
+    iconutil -c icns "$iconset" -o "$destination"
+}
+create_icns "$icon" apps/desktop/assets/icon.icns
+create_icns apps/mobile/iosApp/Bex/Assets.xcassets/AppIconDev.appiconset/AppIcon.png \
+    apps/desktop/assets/icon-dev.icns
