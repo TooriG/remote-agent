@@ -25,10 +25,11 @@ use tokio::sync::mpsc;
 /// Independent native sessions, including persisted history and provider
 /// acknowledgements. Assertions observe the Host boundary, not a reimplementation
 /// of its handoff/routing decisions.
-struct NativeAgent {
+pub(in crate::host_rpc::service) struct NativeAgent {
     provider: ProviderKind,
     directory: PathBuf,
-    records: Arc<Mutex<HashMap<String, ThreadResponse>>>,
+    pub(in crate::host_rpc::service) records: Arc<Mutex<HashMap<String, ThreadResponse>>>,
+    pub(in crate::host_rpc::service) idle_warning: Option<&'static str>,
     inputs: Arc<Mutex<Vec<op::Submission>>>,
     injected: Arc<Mutex<Vec<(String, handoff::Context)>>>,
     released: Arc<Mutex<Vec<String>>>,
@@ -36,6 +37,8 @@ struct NativeAgent {
     fail_submit: AtomicUsize,
     fail_inject: AtomicUsize,
     fail_open: AtomicUsize,
+    pub(in crate::host_rpc::service) fail_list: AtomicUsize,
+    pub(in crate::host_rpc::service) fail_accounts: AtomicUsize,
     events: mpsc::Sender<AgentEvent>,
     receiver: Mutex<Option<mpsc::Receiver<AgentEvent>>>,
 }
@@ -45,12 +48,16 @@ fn unsupported() -> Failure {
 }
 
 impl NativeAgent {
-    fn new(provider: ProviderKind, directory: PathBuf) -> Arc<Self> {
+    pub(in crate::host_rpc::service) fn new(
+        provider: ProviderKind,
+        directory: PathBuf,
+    ) -> Arc<Self> {
         let (events, receiver) = mpsc::channel(32);
         Arc::new(Self {
             provider,
             directory,
             records: Default::default(),
+            idle_warning: None,
             inputs: Default::default(),
             injected: Default::default(),
             released: Default::default(),
@@ -58,6 +65,8 @@ impl NativeAgent {
             fail_submit: AtomicUsize::new(0),
             fail_inject: AtomicUsize::new(0),
             fail_open: AtomicUsize::new(0),
+            fail_list: AtomicUsize::new(0),
+            fail_accounts: AtomicUsize::new(0),
             events,
             receiver: Mutex::new(Some(receiver)),
         })
@@ -68,6 +77,7 @@ impl NativeAgent {
             provider: self.provider,
             directory: self.directory.clone(),
             records: self.records.clone(),
+            idle_warning: self.idle_warning,
             inputs: self.inputs.clone(),
             injected: self.injected.clone(),
             released: self.released.clone(),
@@ -75,11 +85,13 @@ impl NativeAgent {
             fail_submit: AtomicUsize::new(0),
             fail_inject: AtomicUsize::new(0),
             fail_open: AtomicUsize::new(0),
+            fail_list: AtomicUsize::new(0),
+            fail_accounts: AtomicUsize::new(0),
             events,
             receiver: Mutex::new(Some(receiver)),
         })
     }
-    fn backend(self: &Arc<Self>) -> Backend {
+    pub(in crate::host_rpc::service) fn backend(self: &Arc<Self>) -> Backend {
         Backend {
             provider: self.provider,
             agent: Ok(self.clone()),
@@ -91,6 +103,12 @@ impl NativeAgent {
 #[async_trait::async_trait]
 impl Identity for NativeAgent {
     async fn list(&self) -> Result<op::Accounts, Failure> {
+        if self.fail_accounts.swap(0, Ordering::SeqCst) != 0 {
+            return Err(Failure::new(
+                "fixture_accounts_failed",
+                format!("{} accounts failed", self.provider.key()),
+            ));
+        }
         Ok(op::Accounts {
             accounts: vec![],
             selected: Default::default(),
@@ -130,6 +148,9 @@ impl Agent for NativeAgent {
     fn storage_directory(&self) -> &Path {
         &self.directory
     }
+    async fn workspace_idle_warning(&self, _: &str) -> Option<&'static str> {
+        self.idle_warning
+    }
     async fn list(
         &self,
         search: &str,
@@ -137,6 +158,12 @@ impl Agent for NativeAgent {
         scope: SessionListScope<'_>,
         _: u32,
     ) -> Result<SessionPage, Failure> {
+        if self.fail_list.swap(0, Ordering::SeqCst) != 0 {
+            return Err(Failure::new(
+                "fixture_list_failed",
+                format!("{} list failed", self.provider.key()),
+            ));
+        }
         let mut data = self
             .records
             .lock()
@@ -600,7 +627,7 @@ async fn app_update_does_not_repeat_uncertain_failed_or_finished_continuations()
     assert_eq!(recovery.tasks[3].delivery, ContinuationDelivery::Completed);
 }
 
-async fn call<T: DeserializeOwned>(
+pub(in crate::host_rpc::service) async fn call<T: DeserializeOwned>(
     service: &HostRpcService,
     session: SessionId,
     request: Call,

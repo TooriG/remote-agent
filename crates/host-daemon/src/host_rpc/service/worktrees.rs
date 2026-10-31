@@ -1,11 +1,40 @@
 //! Worktree listing and removal. Removal waits until no provider can be running there.
 use super::*;
 
+#[derive(Default)]
+struct WorktreeBlockers {
+    running: bool,
+    terminal: bool,
+    warnings: std::collections::BTreeSet<String>,
+}
+
+impl WorktreeBlockers {
+    fn reason(self) -> Option<String> {
+        // Known occupancy precedes uncertainty; warnings are sorted and deduplicated.
+        let mut reasons = Vec::new();
+        if self.running {
+            reasons.push(
+                "このワークツリーで作業を実行中です。完了または停止してから削除してください。"
+                    .to_owned(),
+            );
+        }
+        if self.terminal {
+            reasons.push("このワークツリーのターミナルを閉じてから削除してください。".to_owned());
+        }
+        reasons.extend(
+            self.warnings
+                .into_iter()
+                .map(|warning| format!("稼働状況を確認できないため削除できません: {warning}")),
+        );
+        (!reasons.is_empty()).then(|| reasons.join("\n"))
+    }
+}
+
 impl HostRpcService {
     pub(super) async fn worktree_list(
         &self,
     ) -> Result<Vec<agent_protocol::models::Worktree>, Failure> {
-        let mut worktrees = self
+        let worktrees = self
             .inner
             .worktrees
             .list()
@@ -15,13 +44,18 @@ impl HostRpcService {
             return Ok(worktrees);
         }
         let (threads, warning) = self.worktree_threads().await?;
-        if let Some(warning) = warning {
-            for worktree in &mut worktrees {
-                worktree.blocked_reason = Some(format!(
-                    "稼働状況を確認できないため削除できません: {warning}"
-                ));
-            }
-        }
+        let mut worktrees = worktrees
+            .into_iter()
+            .map(|tree| {
+                (
+                    tree,
+                    WorktreeBlockers {
+                        warnings: warning.iter().cloned().collect(),
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
         for thread in threads {
             let thread = match thread.id.clone() {
                 Some(id) => self.inner.router.overlay_execution(&id, thread),
@@ -49,7 +83,7 @@ impl HostRpcService {
             let matching: Vec<_> = worktrees
                 .iter()
                 .enumerate()
-                .filter_map(|(index, tree)| cwd.starts_with(&tree.path).then_some(index))
+                .filter_map(|(index, (tree, _))| cwd.starts_with(&tree.path).then_some(index))
                 .collect();
             if matching.is_empty() {
                 continue;
@@ -67,13 +101,10 @@ impl HostRpcService {
             };
             let display = self.inner.conversations.summary(thread)?;
             for index in matching {
-                let worktree = &mut worktrees[index];
-                if active {
-                    worktree.blocked_reason = Some("このワークツリーで作業を実行中です。完了または停止してから削除してください。".into());
-                } else if let Some(warning) = idle_warning {
-                    worktree.blocked_reason = Some(format!(
-                        "稼働状況を確認できないため削除できません: {warning}"
-                    ));
+                let (worktree, blockers) = &mut worktrees[index];
+                blockers.running |= active;
+                if let Some(warning) = idle_warning {
+                    blockers.warnings.insert(warning.into());
                 }
                 if let Some(thread) = &display
                     && let Some(id) = &thread.id
@@ -98,29 +129,24 @@ impl HostRpcService {
                 }
             }
         }
-        for worktree in &mut worktrees {
-            if self
-                .inner
-                .terminals
-                .in_use(std::path::Path::new(&worktree.path))
-            {
-                worktree.blocked_reason =
-                    Some("このワークツリーのターミナルを閉じてから削除してください。".into());
-            }
-        }
-        Ok(worktrees)
+        Ok(worktrees
+            .into_iter()
+            .map(|(mut worktree, mut blockers)| {
+                blockers.terminal = self
+                    .inner
+                    .terminals
+                    .in_use(std::path::Path::new(&worktree.path));
+                worktree.blocked_reason = blockers.reason();
+                worktree
+            })
+            .collect())
     }
     async fn worktree_threads(
         &self,
     ) -> Result<(Vec<agent_protocol::models::Thread>, Option<String>), Failure> {
-        let mut warning = self
-            .inner
-            .providers
-            .startup_errors()
-            .last()
-            .map(|(_, error)| error.to_string());
+        let mut warnings = std::collections::BTreeMap::new();
         let mut threads = Vec::new();
-        for (_, agent) in self.inner.providers.all() {
+        for (provider, agent) in self.inner.providers.all() {
             let pages = session_pages(
                 agent.as_ref(),
                 "",
@@ -136,7 +162,7 @@ impl HostRpcService {
                     Ok(page) => threads.extend(page.into_iter().map(|summary| summary.thread)),
                     Err(error) if error.code == "invalid_session_list" => return Err(error),
                     Err(error) => {
-                        warning = Some(error.to_string());
+                        warnings.insert(provider, error.to_string());
                         break;
                     }
                 }
@@ -166,7 +192,7 @@ impl HostRpcService {
             }
             threads.push(response.thread);
         }
-        Ok((threads, warning))
+        Ok((threads, self.inner.providers.error_summary(warnings)))
     }
     pub(super) async fn remove_worktree(&self, path: String) -> Result<(), Failure> {
         let _exclusive = self.inner.worktree_access.write().await;
@@ -250,6 +276,191 @@ pub(super) fn worktree_active<'a>(
 
 #[cfg(test)]
 mod tests {
+    fn repository(directory: &std::path::Path) -> std::path::PathBuf {
+        let repository = directory.join("repository");
+        std::fs::create_dir(&repository).unwrap();
+        crate::git::text(&repository, &["init", "--quiet", "--initial-branch=main"]).unwrap();
+        crate::git::text(
+            &repository,
+            &[
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--allow-empty",
+                "--quiet",
+                "-m",
+                "fixture",
+            ],
+        )
+        .unwrap();
+        repository
+    }
+
+    #[tokio::test]
+    async fn worktree_keeps_idle_uncertainty_and_provider_failures_alongside_running_work() {
+        use super::*;
+        use crate::host_rpc::service::conversations::tests::{NativeAgent, call};
+        let directory = tempfile::tempdir().unwrap();
+        let repository = repository(directory.path());
+        let mut agent = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));
+        Arc::get_mut(&mut agent).unwrap().idle_warning = Some("native idle warning");
+        let host = HostRpcService::new(
+            [
+                agent.backend(),
+                Backend::unavailable(ProviderKind::Claude, "claude startup failed"),
+            ],
+            ProjectStore::new(directory.path().join("worktrees.json")),
+        );
+        host.inner
+            .worktrees
+            .settings(Some(agent_protocol::models::WorktreeSettings {
+                create_on_new_session: true,
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        let checkout = host
+            .inner
+            .worktrees
+            .prepare(repository.to_str())
+            .await
+            .unwrap()
+            .unwrap();
+        agent
+            .create(checkout.to_str().unwrap(), None, None)
+            .await
+            .unwrap();
+        let running = agent
+            .create(checkout.to_str().unwrap(), None, None)
+            .await
+            .unwrap()
+            .thread
+            .id
+            .unwrap();
+        agent
+            .records
+            .lock()
+            .unwrap()
+            .get_mut(&running.id)
+            .unwrap()
+            .thread
+            .status = agent_protocol::models::SessionStatus::Running;
+        let client = host.open_session();
+        let worktrees: Vec<agent_protocol::models::Worktree> = call(
+            &host,
+            client.id(),
+            Call::ListWorktrees(agent_protocol::models::Empty {}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(worktrees.len(), 1);
+        assert_eq!(worktrees[0].threads.len(), 2);
+        assert!(worktrees[0].threads.iter().any(|thread| thread.active));
+        assert!(worktrees[0].threads.iter().any(|thread| !thread.active));
+        assert_eq!(
+            worktrees[0].blocked_reason.as_deref(),
+            Some(
+                "このワークツリーで作業を実行中です。完了または停止してから削除してください。\n稼働状況を確認できないため削除できません: claude startup failed\n稼働状況を確認できないため削除できません: native idle warning"
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn worktree_block_reasons_keep_every_provider_failure_in_provider_order() {
+        for listing_fails in [false, true] {
+            use super::*;
+            use crate::host_rpc::service::conversations::tests::NativeAgent;
+            use std::sync::atomic::Ordering;
+            let directory = tempfile::tempdir().unwrap();
+            let repository = repository(directory.path());
+            for order in [
+                [
+                    ProviderKind::DeepSeek,
+                    ProviderKind::Claude,
+                    ProviderKind::Codex,
+                ],
+                [
+                    ProviderKind::Claude,
+                    ProviderKind::Codex,
+                    ProviderKind::DeepSeek,
+                ],
+                [
+                    ProviderKind::Codex,
+                    ProviderKind::DeepSeek,
+                    ProviderKind::Claude,
+                ],
+            ] {
+                let a = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));
+                let host = HostRpcService::new(
+                    order.map(|provider| {
+                        if listing_fails && provider == ProviderKind::Codex {
+                            a.backend()
+                        } else {
+                            Backend::unavailable(
+                                provider,
+                                format!("{} startup failed", provider.key()),
+                            )
+                        }
+                    }),
+                    ProjectStore::new(directory.path().join("worktrees.json")),
+                );
+                host.inner
+                    .worktrees
+                    .settings(Some(agent_protocol::models::WorktreeSettings {
+                        create_on_new_session: true,
+                        ..Default::default()
+                    }))
+                    .await
+                    .unwrap();
+                host.inner
+                    .worktrees
+                    .prepare(repository.to_str())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let expected = if listing_fails {
+                    "稼働状況を確認できないため削除できません: codex list failed\nclaude startup failed\ndeepseek startup failed"
+                } else {
+                    "稼働状況を確認できないため削除できません: codex startup failed\nclaude startup failed\ndeepseek startup failed"
+                };
+
+                a.fail_list.store(1, Ordering::SeqCst);
+                let entries = host.worktree_list().await.unwrap();
+                assert!(!entries.is_empty());
+                assert!(
+                    entries
+                        .iter()
+                        .all(|entry| entry.blocked_reason.as_deref() == Some(expected))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn blockers_keep_all_occupancy_and_uncertainty_reasons_in_a_fixed_order() {
+        assert_eq!(super::WorktreeBlockers::default().reason(), None);
+        for warnings in [
+            ["native idle warning", "codex startup failed"],
+            ["codex startup failed", "native idle warning"],
+        ] {
+            let blockers = super::WorktreeBlockers {
+                running: true,
+                terminal: true,
+                warnings: warnings.into_iter().map(str::to_owned).collect(),
+            };
+            assert_eq!(
+                blockers.reason().as_deref(),
+                Some(
+                    "このワークツリーで作業を実行中です。完了または停止してから削除してください。\nこのワークツリーのターミナルを閉じてから削除してください。\n稼働状況を確認できないため削除できません: codex startup failed\n稼働状況を確認できないため削除できません: native idle warning"
+                )
+            );
+        }
+    }
+
     #[test]
     fn worktree_activity_requires_finished_delivery_and_no_other_live_work() {
         use super::worktree_active;

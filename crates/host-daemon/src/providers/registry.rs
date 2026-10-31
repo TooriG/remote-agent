@@ -3,7 +3,12 @@
 use super::{Agent, Backend, Failure, Identity};
 use crate::dictation::Dictation;
 use agent_protocol::{composer::ComposerCatalog, operations as op, session::ProviderKind};
-use std::{collections::HashMap, path::Path, path::PathBuf, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::Path,
+    path::PathBuf,
+    sync::Arc,
+};
 
 // Finish discovery before the client's request deadline, even when a native
 // provider is still initializing. Healthy providers must remain usable.
@@ -11,14 +16,14 @@ const MODEL_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2
 
 pub(crate) struct Registry {
     agents: HashMap<ProviderKind, Arc<dyn Agent>>,
-    startup_errors: HashMap<ProviderKind, Failure>,
+    startup_errors: BTreeMap<ProviderKind, Failure>,
 }
 
 impl Registry {
     /// Also returns the dictation backend supplied by the backends, if any.
     pub(crate) fn new(backends: impl IntoIterator<Item = Backend>) -> (Self, Dictation) {
         let mut agents = HashMap::new();
-        let mut startup_errors = HashMap::new();
+        let mut startup_errors = BTreeMap::new();
         let mut dictation = Dictation::default();
         for backend in backends {
             match backend.agent {
@@ -69,28 +74,38 @@ impl Registry {
             .map(|(provider, error)| (*provider, error))
     }
 
+    /// Startup and one read failure per provider share the same provider ordering.
+    pub(crate) fn error_summary(&self, errors: BTreeMap<ProviderKind, String>) -> Option<String> {
+        let errors = self
+            .startup_errors()
+            .map(|(provider, error)| (provider, error.to_string()))
+            .chain(errors)
+            .collect::<BTreeMap<_, _>>();
+        (!errors.is_empty()).then(|| errors.into_values().collect::<Vec<_>>().join("\n"))
+    }
+
     pub(crate) async fn accounts(&self) -> op::Accounts {
         let mut combined = op::Accounts {
             accounts: Vec::new(),
             selected: HashMap::new(),
             error: None,
         };
-        let mut errors = self
-            .startup_errors
-            .values()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>();
-        for (_, agent) in self.all() {
+        let mut errors = BTreeMap::new();
+        for (provider, agent) in self.all() {
             match Identity::list(agent.as_ref()).await {
                 Ok(accounts) => {
                     combined.accounts.extend(accounts.accounts);
                     combined.selected.extend(accounts.selected);
-                    errors.extend(accounts.error);
+                    if let Some(error) = accounts.error {
+                        errors.insert(provider, error);
+                    }
                 }
-                Err(error) => errors.push(error.to_string()),
+                Err(error) => {
+                    errors.insert(provider, error.to_string());
+                }
             }
         }
-        combined.error = (!errors.is_empty()).then(|| errors.join("\n"));
+        combined.error = self.error_summary(errors);
         combined
     }
 
@@ -128,7 +143,7 @@ impl Registry {
 
     /// The cursor records each provider's own cursor; exhausted providers drop out.
     pub(crate) async fn models(&self, params: &op::ListModels) -> Result<op::ModelPage, Failure> {
-        let cursors: std::collections::BTreeMap<ProviderKind, Option<String>> = params
+        let cursors: BTreeMap<ProviderKind, Option<String>> = params
             .cursor
             .as_deref()
             .map(serde_json::from_str)
@@ -146,7 +161,7 @@ impl Registry {
             next_cursor: None,
             provider_errors: None,
         };
-        let mut next = std::collections::BTreeMap::new();
+        let mut next = BTreeMap::new();
         let listings = futures_util::future::join_all(cursors.into_iter().map(
             |(provider, cursor)| async move {
                 let result = match self.get(provider) {
@@ -249,7 +264,7 @@ impl Registry {
 fn storage_scope(
     areas: impl IntoIterator<Item = (ProviderKind, PathBuf)>,
 ) -> Result<String, serde_json::Error> {
-    let areas: std::collections::BTreeMap<_, _> = areas
+    let areas: BTreeMap<_, _> = areas
         .into_iter()
         .map(|(provider, path)| (provider.key().to_owned(), path))
         .collect();
@@ -279,6 +294,41 @@ fn canonical_storage_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn startup_errors_and_account_errors_follow_provider_order() {
+        for providers in [
+            [
+                ProviderKind::DeepSeek,
+                ProviderKind::Claude,
+                ProviderKind::Codex,
+            ],
+            [
+                ProviderKind::Claude,
+                ProviderKind::Codex,
+                ProviderKind::DeepSeek,
+            ],
+            [
+                ProviderKind::Codex,
+                ProviderKind::DeepSeek,
+                ProviderKind::Claude,
+            ],
+        ] {
+            let (registry, _) = Registry::new(providers.map(|provider| {
+                Backend::unavailable(provider, format!("{} startup failed", provider.key()))
+            }));
+            let expected = "codex startup failed\nclaude startup failed\ndeepseek startup failed";
+            assert_eq!(
+                registry
+                    .startup_errors()
+                    .map(|(_, error)| error.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                expected
+            );
+            assert_eq!(registry.accounts().await.error.as_deref(), Some(expected));
+        }
+    }
 
     #[test]
     fn storage_scope_has_a_fixed_encoding() {

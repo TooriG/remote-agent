@@ -6,7 +6,7 @@ use agent_protocol::{
 };
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 impl HostRpcService {
     pub(super) async fn read_handoff_history(

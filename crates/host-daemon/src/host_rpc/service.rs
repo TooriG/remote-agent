@@ -650,6 +650,37 @@ fn session_target(request: &Call) -> (Option<&agent_protocol::session::SessionRe
 #[cfg(test)]
 mod tests {
     #[tokio::test]
+    async fn account_read_failures_are_ordered_with_other_providers_startup_errors() {
+        use super::conversations::tests::{NativeAgent, call};
+        use super::*;
+        use std::sync::atomic::Ordering;
+        let directory = tempfile::tempdir().unwrap();
+        let a = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));
+        let host = HostRpcService::new(
+            [
+                Backend::unavailable(ProviderKind::DeepSeek, "deepseek startup failed"),
+                Backend::unavailable(ProviderKind::Claude, "claude startup failed"),
+                a.backend(),
+            ],
+            ProjectStore::new(directory.path().join("worktrees.json")),
+        );
+        let client = host.open_session();
+
+        a.fail_accounts.store(1, Ordering::SeqCst);
+        let accounts: op::Accounts = call(
+            &host,
+            client.id(),
+            Call::ListAccounts(agent_protocol::models::Empty {}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            accounts.error.as_deref(),
+            Some("codex accounts failed\nclaude startup failed\ndeepseek startup failed")
+        );
+    }
+
+    #[tokio::test]
     async fn failed_model_providers_remain_identifiable_when_no_catalog_is_available() {
         use super::*;
         let root = tempfile::tempdir().unwrap();
