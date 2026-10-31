@@ -131,20 +131,22 @@ private class BrowserSession(private val thread: SessionRef) {
         }
     }
 
+    private suspend fun apply(result: BrowserFrame) {
+        image =
+            if (result.tabId.isEmpty() || result.imageId.isEmpty()) null else decodeBrowserImage(result.image) ?: image
+        frame = result
+        credentials = result.credentials ?: credentials
+        notice = result.value.takeIf(String::isNotEmpty) ?: notice
+        connectionError = null
+    }
+
     suspend fun run(profile: String?, browser: suspend (String?, BrowserRequest) -> BrowserFrame) {
         try {
             while (kotlinx.coroutines.currentCoroutineContext().isActive) {
                 val request = nextRequest()
                 val reading = request.action == BrowserAction.Read
                 try {
-                    val result = browser(profile, request)
-                    image =
-                        if (result.tabId.isEmpty() || result.imageId.isEmpty()) null
-                        else decodeBrowserImage(result.image) ?: image
-                    frame = result
-                    credentials = result.credentials ?: credentials
-                    notice = result.value.takeIf(String::isNotEmpty) ?: notice
-                    connectionError = null
+                    apply(browser(profile, request))
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (failure: dev.remoteagent.core.AgentException) {
