@@ -761,47 +761,201 @@ async fn worker(
     Ok(result)
 }
 
-pub async fn run(tests: Vec<String>, without_codex: bool, driver: TestDriver) -> Result<()> {
-    if std::env::consts::OS != "macos" || std::env::consts::ARCH != "aarch64" {
-        return Err("iOS E2E requires an Apple Silicon Mac with Xcode".into());
+struct TestEnvironment {
+    shard: usize,
+    shards: usize,
+    workers: usize,
+    rounds: usize,
+}
+
+impl TestEnvironment {
+    fn read(lookup: impl Fn(&str) -> Option<String>) -> Result<Self> {
+        let read = |key, default: &str| -> Result<usize> {
+            Ok(lookup(key).unwrap_or_else(|| default.to_owned()).parse()?)
+        };
+        let shard = read("AGENT_IOS_TEST_SHARD", "0")?;
+        let shards = read("AGENT_IOS_TEST_SHARDS", "1")?;
+        let workers = read("AGENT_IOS_TEST_WORKERS", "1")?;
+        if !(1..=10).contains(&workers) {
+            return Err("AGENT_IOS_TEST_WORKERS must be between 1 and 10".into());
+        }
+        // Each repeated round gets fresh Simulators and Hosts to expose flakes.
+        let rounds = read("AGENT_IOS_TEST_ROUNDS", "1")?;
+        if !(1..=10).contains(&rounds) {
+            return Err("AGENT_IOS_TEST_ROUNDS must be between 1 and 10".into());
+        }
+        Ok(Self {
+            shard,
+            shards,
+            workers,
+            rounds,
+        })
     }
+}
+
+fn validate_test_names(tests: &[String]) -> Result<()> {
     if tests.is_empty()
         || tests.iter().any(|test| !test.starts_with("testSimulator"))
         || tests.iter().collect::<BTreeSet<_>>().len() != tests.len()
     {
         return Err("Select unique isolated Simulator tests".into());
     }
-    let shard = std::env::var("AGENT_IOS_TEST_SHARD")
-        .unwrap_or_else(|_| "0".to_owned())
-        .parse::<usize>()?;
-    let shards = std::env::var("AGENT_IOS_TEST_SHARDS")
-        .unwrap_or_else(|_| "1".to_owned())
-        .parse::<usize>()?;
-    let tests = partition_tests(&tests, shard, shards)?;
-    let workers = std::env::var("AGENT_IOS_TEST_WORKERS")
-        .unwrap_or_else(|_| "1".to_owned())
-        .parse::<usize>()?;
-    if !(1..=10).contains(&workers) {
-        return Err("AGENT_IOS_TEST_WORKERS must be between 1 and 10".into());
-    }
-    let workers = workers.min(tests.len());
-    // Repeated rounds measure flaky tests; each round gets fresh Simulators and Hosts.
-    let rounds = std::env::var("AGENT_IOS_TEST_ROUNDS")
-        .unwrap_or_else(|_| "1".to_owned())
-        .parse::<usize>()?;
-    if !(1..=10).contains(&rounds) {
-        return Err("AGENT_IOS_TEST_ROUNDS must be between 1 and 10".into());
-    }
-    if driver == TestDriver::Maestro {
-        for test in &tests {
-            if !Path::new("apps/mobile/maestro/ios")
-                .join(test)
-                .with_extension("yaml")
-                .is_file()
-            {
-                return Err(format!("No maintained Maestro flow for {test}").into());
-            }
+    Ok(())
+}
+
+fn validate_maestro_flows(tests: &[String]) -> Result<()> {
+    for test in tests {
+        if !Path::new("apps/mobile/maestro/ios")
+            .join(test)
+            .with_extension("yaml")
+            .is_file()
+        {
+            return Err(format!("No maintained Maestro flow for {test}").into());
         }
+    }
+    Ok(())
+}
+
+async fn build_test_bundle(
+    cwd: &Path,
+    target: &Path,
+    build: &Path,
+    driver: TestDriver,
+    tests: &[String],
+    log: &File,
+    cancel: &watch::Receiver<bool>,
+) -> Result<(PathBuf, f64)> {
+    let build_started = Instant::now();
+    if driver == TestDriver::Maestro {
+        supervision::run(
+            &args!["nix", "run", ".#maestro", "--", "--version"],
+            cwd,
+            Io::Log(log),
+            cancel,
+            BUILD_TIMEOUT,
+        )
+        .await?;
+    }
+    println!("Building iOS bindings and isolated Host fixtures");
+    for arguments in [
+        args![vec; "scripts/build-agent-ios.sh", "simulator"],
+        args![vec;
+            "cargo",
+            "build",
+            "--locked",
+            "--package",
+            "agent-process",
+            "--bin",
+            "agent-provider-supervisor",
+            "--package",
+            "host-fixture",
+            "--bin",
+            "agent-ui-fixture",
+            "--bin",
+            "agent-codex-fixture",
+            "--bin",
+            "agent-claude-fixture"
+        ],
+        args![vec; "node", "scripts/install-claude-sdk.mjs", target.join("debug")],
+    ] {
+        supervision::run(&arguments, cwd, Io::Log(log), cancel, BUILD_TIMEOUT).await?;
+    }
+    if needs_browser_fixture(tests) {
+        supervision::run(
+            &args!["cargo", "build", "--locked", "-p", "agent-desktop"],
+            cwd,
+            Io::Log(log),
+            cancel,
+            BUILD_TIMEOUT,
+        )
+        .await?;
+    }
+    let products = build.join("Build/Products");
+    if products.is_dir() {
+        for path in xctestrun_files(&products)? {
+            fs::remove_file(path)?;
+        }
+    }
+    println!("Building the iOS app and UI test bundle");
+    supervision::run(
+        &args![
+            "xcodebuild",
+            "-skipPackagePluginValidation",
+            "-project",
+            "apps/mobile/iosApp/Bex.xcodeproj",
+            "-scheme",
+            "Bex",
+            "-destination",
+            "generic/platform=iOS Simulator",
+            "-configuration",
+            "Debug",
+            "ARCHS=arm64",
+            "ONLY_ACTIVE_ARCH=YES",
+            "-derivedDataPath",
+            &build,
+            "CODE_SIGNING_ALLOWED=YES",
+            "CODE_SIGN_IDENTITY=-",
+            "CODE_SIGNING_REQUIRED=YES",
+            format!("AGENT_CARGO_TARGET_DIR={}", target.display()),
+            "build-for-testing"
+        ],
+        cwd,
+        Io::Log(log),
+        cancel,
+        BUILD_TIMEOUT,
+    )
+    .await?;
+    let seconds = build_started.elapsed().as_secs_f64();
+    let runs = xctestrun_files(&products)?;
+    let [run]: [PathBuf; 1] = runs
+        .try_into()
+        .map_err(|_| "Expected exactly one xctestrun file")?;
+    Ok((run, seconds))
+}
+
+fn report_rounds(records: &Path, rounds: usize, test_count: usize) -> Result<()> {
+    let mut summaries = Vec::new();
+    for entry in fs::read_dir(records)? {
+        let path = entry?.path();
+        if path.to_string_lossy().ends_with(".summary.json") {
+            summaries.push(serde_json::from_slice(&fs::read(path)?)?);
+        }
+    }
+    let counts = failure_counts(&summaries);
+    println!(
+        "{rounds} rounds of {} tests: {} worker results, {} failing tests",
+        test_count,
+        summaries.len(),
+        counts.len()
+    );
+    for (test, failed) in &counts {
+        println!("  {test}: failed {failed}/{rounds}");
+    }
+    Ok(())
+}
+
+fn xctestrun_files(products: &Path) -> Result<Vec<PathBuf>> {
+    Ok(fs::read_dir(products)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<std::io::Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "xctestrun")
+        })
+        .collect())
+}
+
+pub async fn run(tests: Vec<String>, without_codex: bool, driver: TestDriver) -> Result<()> {
+    if std::env::consts::OS != "macos" || std::env::consts::ARCH != "aarch64" {
+        return Err("iOS E2E requires an Apple Silicon Mac with Xcode".into());
+    }
+    validate_test_names(&tests)?;
+    let environment = TestEnvironment::read(|key| std::env::var(key).ok())?;
+    let tests = partition_tests(&tests, environment.shard, environment.shards)?;
+    let workers = environment.workers.min(tests.len());
+    if driver == TestDriver::Maestro {
+        validate_maestro_flows(&tests)?;
     }
     let groups = (0..workers)
         .map(|index| partition_tests(&tests, index, workers))
@@ -865,94 +1019,8 @@ pub async fn run(tests: Vec<String>, without_codex: bool, driver: TestDriver) ->
         }
     }
     let log = File::create(records.join("build.log"))?;
-    let build_started = Instant::now();
-    if driver == TestDriver::Maestro {
-        supervision::run(
-            &args!["nix", "run", ".#maestro", "--", "--version"],
-            &cwd,
-            Io::Log(&log),
-            &cancel,
-            BUILD_TIMEOUT,
-        )
-        .await?;
-    }
-    println!("Building iOS bindings and isolated Host fixtures");
-    for arguments in [
-        args![vec; "scripts/build-agent-ios.sh", "simulator"],
-        args![vec;
-            "cargo",
-            "build",
-            "--locked",
-            "--package",
-            "agent-process",
-            "--bin",
-            "agent-provider-supervisor",
-            "--package",
-            "host-fixture",
-            "--bin",
-            "agent-ui-fixture",
-            "--bin",
-            "agent-codex-fixture",
-            "--bin",
-            "agent-claude-fixture"
-        ],
-        args![vec; "node", "scripts/install-claude-sdk.mjs", target.join("debug")],
-    ] {
-        supervision::run(&arguments, &cwd, Io::Log(&log), &cancel, BUILD_TIMEOUT).await?;
-    }
-    if needs_browser_fixture(&tests) {
-        supervision::run(
-            &args!["cargo", "build", "--locked", "-p", "agent-desktop"],
-            &cwd,
-            Io::Log(&log),
-            &cancel,
-            BUILD_TIMEOUT,
-        )
-        .await?;
-    }
-    let products = build.join("Build/Products");
-    if products.is_dir() {
-        for entry in fs::read_dir(&products)? {
-            let entry = entry?;
-            if entry
-                .path()
-                .extension()
-                .is_some_and(|extension| extension == "xctestrun")
-            {
-                fs::remove_file(entry.path())?;
-            }
-        }
-    }
-    println!("Building the iOS app and UI test bundle");
-    supervision::run(
-        &args![
-            "xcodebuild",
-            "-skipPackagePluginValidation",
-            "-project",
-            "apps/mobile/iosApp/Bex.xcodeproj",
-            "-scheme",
-            "Bex",
-            "-destination",
-            "generic/platform=iOS Simulator",
-            "-configuration",
-            "Debug",
-            "ARCHS=arm64",
-            "ONLY_ACTIVE_ARCH=YES",
-            "-derivedDataPath",
-            &build,
-            "CODE_SIGNING_ALLOWED=YES",
-            "CODE_SIGN_IDENTITY=-",
-            "CODE_SIGNING_REQUIRED=YES",
-            format!("AGENT_CARGO_TARGET_DIR={}", target.display()),
-            "build-for-testing"
-        ],
-        &cwd,
-        Io::Log(&log),
-        &cancel,
-        BUILD_TIMEOUT,
-    )
-    .await?;
-    let build_seconds = build_started.elapsed().as_secs_f64();
+    let (test_run, build_seconds) =
+        build_test_bundle(&cwd, &target, &build, driver, &tests, &log, &cancel).await?;
     if needs_media_fixtures(&tests) {
         supervision::run(
             &args![
@@ -987,18 +1055,6 @@ pub async fn run(tests: Vec<String>, without_codex: bool, driver: TestDriver) ->
         SimulatorSource::Template(template(&state, &runtime, &records, &cwd, &log, &cancel).await?)
     };
     let template_seconds = template_started.elapsed().as_secs_f64();
-    let runs = fs::read_dir(&products)?
-        .map(|entry| entry.map(|entry| entry.path()))
-        .collect::<std::io::Result<Vec<_>>>()?
-        .into_iter()
-        .filter(|path| {
-            path.extension()
-                .is_some_and(|extension| extension == "xctestrun")
-        })
-        .collect::<Vec<_>>();
-    if runs.len() != 1 {
-        return Err("Expected exactly one xctestrun file".into());
-    }
     println!(
         "Build: {build_seconds:.2}s; running {} tests on {workers} isolated pairs; records: {}",
         tests.len(),
@@ -1006,10 +1062,10 @@ pub async fn run(tests: Vec<String>, without_codex: bool, driver: TestDriver) ->
     );
     let mut results = Vec::new();
     let mut failure = None;
-    for round in 1..=rounds {
+    for round in 1..=environment.rounds {
         let mut pending = JoinSet::new();
         for (index, tests) in groups.iter().cloned().enumerate() {
-            let label = if rounds == 1 {
+            let label = if environment.rounds == 1 {
                 format!("worker-{}", index + 1)
             } else {
                 format!("worker-{}-round-{round}", index + 1)
@@ -1017,7 +1073,7 @@ pub async fn run(tests: Vec<String>, without_codex: bool, driver: TestDriver) ->
             pending.spawn(worker(
                 tests,
                 target.clone(),
-                runs[0].clone(),
+                test_run.clone(),
                 simulator_source.clone(),
                 runtime_root.clone(),
                 records.join(label),
@@ -1031,8 +1087,8 @@ pub async fn run(tests: Vec<String>, without_codex: bool, driver: TestDriver) ->
             match result {
                 Ok(Ok(result)) => results.push(result),
                 Ok(Err(error)) => {
-                    if rounds > 1 {
-                        eprintln!("Round {round}/{rounds}: {error}");
+                    if environment.rounds > 1 {
+                        eprintln!("Round {round}/{}: {error}", environment.rounds);
                     }
                     failure.get_or_insert(error);
                 }
@@ -1045,24 +1101,8 @@ pub async fn run(tests: Vec<String>, without_codex: bool, driver: TestDriver) ->
             return Err(supervision::interrupted());
         }
     }
-    if rounds > 1 {
-        let mut summaries = Vec::new();
-        for entry in fs::read_dir(&records)? {
-            let path = entry?.path();
-            if path.to_string_lossy().ends_with(".summary.json") {
-                summaries.push(serde_json::from_slice(&fs::read(path)?)?);
-            }
-        }
-        let counts = failure_counts(&summaries);
-        println!(
-            "{rounds} rounds of {} tests: {} worker results, {} failing tests",
-            tests.len(),
-            summaries.len(),
-            counts.len()
-        );
-        for (test, failed) in &counts {
-            println!("  {test}: failed {failed}/{rounds}");
-        }
+    if environment.rounds > 1 {
+        report_rounds(&records, environment.rounds, tests.len())?;
     }
     if let Some(error) = failure {
         return Err(error);
@@ -1084,11 +1124,50 @@ pub async fn run(tests: Vec<String>, without_codex: bool, driver: TestDriver) ->
     );
     Ok(())
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use proptest::prelude::*;
     use serde_json::json;
+
+    #[test]
+    fn test_environment_parses_defaults_and_bounds_worker_and_round_counts() {
+        let defaults = TestEnvironment::read(|_| None).unwrap();
+        assert_eq!(
+            (
+                defaults.shard,
+                defaults.shards,
+                defaults.workers,
+                defaults.rounds
+            ),
+            (0, 1, 1, 1)
+        );
+        for key in ["AGENT_IOS_TEST_WORKERS", "AGENT_IOS_TEST_ROUNDS"] {
+            for value in ["0", "11", "bad"] {
+                assert!(TestEnvironment::read(|name| (name == key).then(|| value.into())).is_err());
+            }
+            for value in ["1", "10"] {
+                assert!(TestEnvironment::read(|name| (name == key).then(|| value.into())).is_ok());
+            }
+        }
+        let selected = TestEnvironment::read(|key| match key {
+            "AGENT_IOS_TEST_SHARD" => Some("2".into()),
+            "AGENT_IOS_TEST_SHARDS" => Some("3".into()),
+            _ => None,
+        })
+        .unwrap();
+        assert_eq!((selected.shard, selected.shards), (2, 3));
+    }
+
+    #[test]
+    fn invalid_test_names_are_rejected() {
+        assert!(validate_test_names(&[]).is_err());
+        assert!(validate_test_names(&["other".into()]).is_err());
+        assert!(
+            validate_test_names(&["testSimulatorOne".into(), "testSimulatorOne".into()]).is_err()
+        );
+    }
 
     proptest! {
         #[test]
