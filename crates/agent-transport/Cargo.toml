@@ -24,6 +24,8 @@ tempfile = "3"
 scopeguard = "1.2"
 pin-project-lite = "0.2"
 regex = "1"
+zstd = { version = "0.14.3", default-features = false }
 
 [dev-dependencies]
+proptest = "1.12"
 tokio = { workspace = true, features = ["test-util"] }

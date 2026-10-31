@@ -33,9 +33,8 @@ pub struct Client {
     _path_monitor: Option<tokio_util::task::AbortOnDropHandle<()>>,
 }
 struct PendingReply {
-    response: tokio_util::task::AbortOnDropHandle<
-        Result<(tokio_util::bytes::BytesMut, Updates), PeerError>,
-    >,
+    response:
+        tokio_util::task::AbortOnDropHandle<Result<(tokio_util::bytes::Bytes, Updates), PeerError>>,
     stream: u64,
     _permit: OwnedSemaphorePermit,
 }
@@ -234,7 +233,7 @@ impl Client {
     async fn call_stream(
         &self,
         call: &Call,
-    ) -> Result<(tokio_util::bytes::BytesMut, Updates), PeerError> {
+    ) -> Result<(tokio_util::bytes::Bytes, Updates), PeerError> {
         let mut reply = self.start_call(call).await?;
         let stream = reply.stream;
         let measured = self.trace.active() && !matches!(call, Call::ConnectionPerformance(_));
@@ -422,20 +421,26 @@ mod tests {
                     IncomingRequest::Close
                 ));
             });
+            let mut invalid_parameters = vec![0]; // raw frame encoding
+            invalid_parameters.extend(
+                protocol::encode(serde_json::json!({"method":"host/model/list","limit":"invalid"}))
+                    .unwrap(),
+            );
             for frame in [
                 None,
-                Some(vec![0]),
-                Some(
-                    protocol::encode(
-                        serde_json::json!({"method":"host/model/list","limit":"invalid"}),
-                    )
-                    .unwrap(),
-                ),
+                Some(vec![0, 0]), // raw payload with invalid parameters
+                Some(invalid_parameters),
+                Some(vec![]),     // missing encoding
+                Some(vec![1, 0]), // invalid Zstd payload
+                Some(vec![2]),    // unknown encoding
             ] {
                 let (mut send, recv) = peer.connection.open_bi().await.unwrap();
                 send.write_all(&[CALL]).await.unwrap();
                 if let Some(frame) = frame {
-                    framing::write_frame(&mut send, &frame).await.unwrap();
+                    send.write_all(&(frame.len() as u32).to_be_bytes())
+                        .await
+                        .unwrap();
+                    send.write_all(&frame).await.unwrap();
                 }
                 send.finish().unwrap();
                 let reply: Response<()> = framing::Reader::new(recv).read().await.unwrap().unwrap();
@@ -665,7 +670,13 @@ mod tests {
                                     return;
                                 }
                                 let body = if matches!(&request.call, crate::protocol::Call::ReadVisualization(params) if params.path == "large") {
-                                    "x".repeat(8 * 1024 * 1024)
+                                    // Keep the unread response large on the wire even with compression.
+                                    let mut bytes = vec![0; 8 * 1024 * 1024];
+                                    ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut bytes).unwrap();
+                                    for byte in &mut bytes { *byte = b' ' + *byte % 95; }
+                                    String::from_utf8(bytes).unwrap()
+                                } else if matches!(&request.call, crate::protocol::Call::ReadVisualization(params) if params.path == "compressed") {
+                                    "x".repeat(1024 * 1024)
                                 } else {
                                     "pong".into()
                                 };
@@ -701,6 +712,13 @@ mod tests {
                 "pong"
             );
             drop((send, recv));
+            assert_eq!(
+                remote
+                    .request::<String>(&crate::protocol::Call::ReadVisualization(agent_protocol::operations::LoadVisualization {path:"compressed".into(),cwd:"/fixture".into()}))
+                    .await
+                    .unwrap(),
+                "x".repeat(1024 * 1024)
+            );
             assert!(
                 remote
                     .request::<String>(&crate::protocol::Call::ReadVisualization(agent_protocol::operations::LoadVisualization {path:"malformed".into(),cwd:"/fixture".into()}))

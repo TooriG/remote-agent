@@ -24,6 +24,10 @@ rust-version = "1.98"
 [profile.dev]
 debug = "line-tables-only"
 
+# Keep compression off the slow C debug path in development Hosts and clients.
+[profile.dev.package.zstd-sys]
+opt-level = 3
+
 # GPUI's Windows debug renderer reads HLSL from its build-time Cargo source
 # directory. Embed compiled shaders so development packages also run on other PCs.
 # This applies to the crate's build script as well; other crates keep assertions.
