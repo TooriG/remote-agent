@@ -749,22 +749,7 @@ impl Chrome {
             ),
             BrowserAction::Type { text } => ("Input.insertText", json!({"text":text})),
             BrowserAction::Key { key } => {
-                let (name, code, modifiers) = match key {
-                    BrowserKey::Enter => ("Enter", 13, 0),
-                    BrowserKey::Tab => ("Tab", 9, 0),
-                    BrowserKey::Backspace => ("Backspace", 8, 0),
-                    BrowserKey::Escape => ("Escape", 27, 0),
-                    BrowserKey::ArrowUp => ("ArrowUp", 38, 0),
-                    BrowserKey::ArrowDown => ("ArrowDown", 40, 0),
-                    BrowserKey::ArrowLeft => ("ArrowLeft", 37, 0),
-                    BrowserKey::ArrowRight => ("ArrowRight", 39, 0),
-                    BrowserKey::SelectAll => ("a", 65, 2),
-                    BrowserKey::Delete => ("Delete", 46, 0),
-                    BrowserKey::Home => ("Home", 36, 0),
-                    BrowserKey::End => ("End", 35, 0),
-                    BrowserKey::PageUp => ("PageUp", 33, 0),
-                    BrowserKey::PageDown => ("PageDown", 34, 0),
-                };
+                let (name, code, modifiers) = key_event(*key);
                 let mut params = json!({"type":"keyDown","key":name,"windowsVirtualKeyCode":code,"modifiers":modifiers});
                 if matches!(key, BrowserKey::Enter) {
                     params["text"] = "\r".into();
@@ -818,6 +803,25 @@ impl Chrome {
             self.refs.remove(session);
         }
         Ok(ActionOutput::default())
+    }
+}
+
+fn key_event(key: BrowserKey) -> (&'static str, u32, u32) {
+    match key {
+        BrowserKey::Enter => ("Enter", 13, 0),
+        BrowserKey::Tab => ("Tab", 9, 0),
+        BrowserKey::Backspace => ("Backspace", 8, 0),
+        BrowserKey::Escape => ("Escape", 27, 0),
+        BrowserKey::ArrowUp => ("ArrowUp", 38, 0),
+        BrowserKey::ArrowDown => ("ArrowDown", 40, 0),
+        BrowserKey::ArrowLeft => ("ArrowLeft", 37, 0),
+        BrowserKey::ArrowRight => ("ArrowRight", 39, 0),
+        BrowserKey::SelectAll => ("a", 65, 2),
+        BrowserKey::Delete => ("Delete", 46, 0),
+        BrowserKey::Home => ("Home", 36, 0),
+        BrowserKey::End => ("End", 35, 0),
+        BrowserKey::PageUp => ("PageUp", 33, 0),
+        BrowserKey::PageDown => ("PageDown", 34, 0),
     }
 }
 

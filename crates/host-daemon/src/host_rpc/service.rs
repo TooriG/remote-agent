@@ -321,7 +321,6 @@ impl HostRpcService {
                 .map(Into::into)
                 .map_err(|e| Failure::new("browser_failed", e));
         }
-        let method = request.method();
         if let Call::ReadItem(params) = request {
             let Some(target) = target_session else {
                 return Err(Failure::new("invalid_params", "session ID is required"));
@@ -332,19 +331,7 @@ impl HostRpcService {
                 .map(Into::into);
         }
         if let Some(target) = target_session {
-            let row = self.inner.conversations.get(target)?;
-            let native = row.as_ref().map_or(target, |row| &row.active);
-            let capabilities = self.inner.providers.get(native.provider)?.capabilities();
-            if matches!(request, Call::ForkSession(_)) && row.is_none() && !capabilities.fork
-                || matches!(request, Call::RenameSession(_))
-                    && row.is_none()
-                    && !capabilities.rename
-            {
-                return Err(Failure::new(
-                    "unsupported_operation",
-                    format!("{method} is unsupported by this provider"),
-                ));
-            }
+            self.check_native_operation(target, request)?;
         }
         let response = match request {
             Call::ReadHandoffHistory(params) => self.read_handoff_history(params).await?.into(),
@@ -367,69 +354,6 @@ impl HostRpcService {
             }
             Call::ReadTurnItems(params) => self.read_turn_items(session, params).await?.into(),
             Call::ReadHistory(params) => self.read_history(params).await?.into(),
-            Call::ReadPermissionSettings(params) => {
-                let _guard = self.inner.permission_settings_access.lock().await;
-                self.inner
-                    .providers
-                    .get(params.provider)?
-                    .read_permissions()
-                    .await?
-                    .into()
-            }
-            Call::UpdatePermissionSettings(params) => {
-                let _guard = self.inner.permission_settings_access.lock().await;
-                self.inner
-                    .providers
-                    .get(params.provider)?
-                    .update_permissions(params.mode, &params.version)
-                    .await?
-                    .into()
-            }
-            Call::ComposerCatalog(params) => self.inner.providers.catalog(&params.cwd).await.into(),
-            Call::ReadAccountUsage(params) => self
-                .inner
-                .providers
-                .get(params.provider)?
-                .usage(&params.id)
-                .await?
-                .into(),
-            Call::ListAccounts(_)
-            | Call::SelectAccount(_)
-            | Call::LogoutAccount(_)
-            | Call::StartAccountLogin(_)
-            | Call::ReadAccountLogin(_)
-            | Call::SubmitAccountLogin(_)
-            | Call::CancelAccountLogin(_) => self.account_request(request.clone()).await?,
-
-            Call::CodexCli(params) => self
-                .inner
-                .providers
-                .get(ProviderKind::Codex)?
-                .codex_cli(params.update)
-                .await?
-                .into(),
-            Call::ReadModelSettings(params) => self
-                .inner
-                .providers
-                .get(params.model.provider)?
-                .model_settings(&params.model.id)
-                .await?
-                .into(),
-            Call::ReadDshCredentials(_) => self
-                .inner
-                .providers
-                .get(ProviderKind::DeepSeek)?
-                .dsh_credentials()
-                .await?
-                .into(),
-            Call::UpdateDshCredential(update) => self
-                .inner
-                .providers
-                .get(ProviderKind::DeepSeek)?
-                .update_dsh_credential(update.clone())
-                .await?
-                .into(),
-            Call::ListModels(params) => self.inner.providers.models(params).await?.into(),
 
             Call::RequestSession(params) => (self
                 .inner
@@ -555,14 +479,104 @@ impl HostRpcService {
                 let target = target_session.expect("session-scoped rename");
                 self.rename_session(target, params).await?.into()
             }
+            _ => self.provider_request(request).await?,
+        };
+        Ok(response)
+    }
+
+    fn check_native_operation(
+        &self,
+        target: &agent_protocol::session::SessionRef,
+        request: &Call,
+    ) -> Result<(), Failure> {
+        let method = request.method();
+        let row = self.inner.conversations.get(target)?;
+        let native = row.as_ref().map_or(target, |row| &row.active);
+        let capabilities = self.inner.providers.get(native.provider)?.capabilities();
+        if matches!(request, Call::ForkSession(_)) && row.is_none() && !capabilities.fork
+            || matches!(request, Call::RenameSession(_)) && row.is_none() && !capabilities.rename
+        {
+            return Err(Failure::new(
+                "unsupported_operation",
+                format!("{method} is unsupported by this provider"),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Dispatch remaining provider requests; unknown requests return method_not_found.
+    async fn provider_request(&self, request: &Call) -> Result<Body, Failure> {
+        Ok(match request {
+            Call::ReadPermissionSettings(params) => {
+                let _guard = self.inner.permission_settings_access.lock().await;
+                self.inner
+                    .providers
+                    .get(params.provider)?
+                    .read_permissions()
+                    .await?
+                    .into()
+            }
+            Call::UpdatePermissionSettings(params) => {
+                let _guard = self.inner.permission_settings_access.lock().await;
+                self.inner
+                    .providers
+                    .get(params.provider)?
+                    .update_permissions(params.mode, &params.version)
+                    .await?
+                    .into()
+            }
+            Call::ComposerCatalog(params) => self.inner.providers.catalog(&params.cwd).await.into(),
+            Call::ReadAccountUsage(params) => self
+                .inner
+                .providers
+                .get(params.provider)?
+                .usage(&params.id)
+                .await?
+                .into(),
+            Call::ListAccounts(_)
+            | Call::SelectAccount(_)
+            | Call::LogoutAccount(_)
+            | Call::StartAccountLogin(_)
+            | Call::ReadAccountLogin(_)
+            | Call::SubmitAccountLogin(_)
+            | Call::CancelAccountLogin(_) => self.account_request(request.clone()).await?,
+
+            Call::CodexCli(params) => self
+                .inner
+                .providers
+                .get(ProviderKind::Codex)?
+                .codex_cli(params.update)
+                .await?
+                .into(),
+            Call::ReadModelSettings(params) => self
+                .inner
+                .providers
+                .get(params.model.provider)?
+                .model_settings(&params.model.id)
+                .await?
+                .into(),
+            Call::ReadDshCredentials(_) => self
+                .inner
+                .providers
+                .get(ProviderKind::DeepSeek)?
+                .dsh_credentials()
+                .await?
+                .into(),
+            Call::UpdateDshCredential(update) => self
+                .inner
+                .providers
+                .get(ProviderKind::DeepSeek)?
+                .update_dsh_credential(update.clone())
+                .await?
+                .into(),
+            Call::ListModels(params) => self.inner.providers.models(params).await?.into(),
             _ => {
                 return Err(Failure::new(
                     "method_not_found",
-                    format!("unregistered method: {method}"),
+                    format!("unregistered method: {}", request.method()),
                 ));
             }
-        };
-        Ok(response)
+        })
     }
 
     pub(crate) fn files(&self) -> &crate::workspace_files::WorkspaceFiles {

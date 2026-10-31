@@ -14,61 +14,13 @@ impl HostRpcService {
         if worktrees.is_empty() {
             return Ok(worktrees);
         }
-        for (_, error) in self.inner.providers.startup_errors() {
+        let (threads, warning) = self.worktree_threads().await?;
+        if let Some(warning) = warning {
             for worktree in &mut worktrees {
-                worktree.blocked_reason =
-                    Some(format!("稼働状況を確認できないため削除できません: {error}"));
-            }
-        }
-        let mut threads = Vec::new();
-        for (_, agent) in self.inner.providers.all() {
-            let pages = session_pages(
-                agent.as_ref(),
-                "",
-                SessionListScope::All,
-                100,
-                100,
-                None,
-                None,
-            );
-            futures_util::pin_mut!(pages);
-            while let Some(result) = pages.next().await {
-                match result {
-                    Ok(page) => threads.extend(page.into_iter().map(|summary| summary.thread)),
-                    Err(error) if error.code == "invalid_session_list" => return Err(error),
-                    Err(error) => {
-                        for w in &mut worktrees {
-                            w.blocked_reason =
-                                Some(format!("稼働状況を確認できないため削除できません: {error}"));
-                        }
-                        break;
-                    }
-                }
-            }
-        }
-        // Providers can omit a first, still-running turn from their history list.
-        // Resolve every retained execution before allowing any checkout removal.
-        for target in self.inner.router.execution_targets() {
-            if threads
-                .iter()
-                .any(|thread| thread.id.as_ref() == Some(&target))
-            {
-                continue;
-            }
-            let response = self
-                .inner
-                .providers
-                .get(target.provider)?
-                .state(&target.id)
-                .await?
-                .response;
-            if response.thread.id.as_ref() != Some(&target) {
-                return Err(Failure::new(
-                    "invalid_thread",
-                    "native session identity changed",
+                worktree.blocked_reason = Some(format!(
+                    "稼働状況を確認できないため削除できません: {warning}"
                 ));
             }
-            threads.push(response.thread);
         }
         for thread in threads {
             let thread = match thread.id.clone() {
@@ -157,6 +109,64 @@ impl HostRpcService {
             }
         }
         Ok(worktrees)
+    }
+    async fn worktree_threads(
+        &self,
+    ) -> Result<(Vec<agent_protocol::models::Thread>, Option<String>), Failure> {
+        let mut warning = self
+            .inner
+            .providers
+            .startup_errors()
+            .last()
+            .map(|(_, error)| error.to_string());
+        let mut threads = Vec::new();
+        for (_, agent) in self.inner.providers.all() {
+            let pages = session_pages(
+                agent.as_ref(),
+                "",
+                SessionListScope::All,
+                100,
+                100,
+                None,
+                None,
+            );
+            futures_util::pin_mut!(pages);
+            while let Some(result) = pages.next().await {
+                match result {
+                    Ok(page) => threads.extend(page.into_iter().map(|summary| summary.thread)),
+                    Err(error) if error.code == "invalid_session_list" => return Err(error),
+                    Err(error) => {
+                        warning = Some(error.to_string());
+                        break;
+                    }
+                }
+            }
+        }
+        // Providers can omit a first, still-running turn from their history list.
+        // Resolve every retained execution before allowing any checkout removal.
+        for target in self.inner.router.execution_targets() {
+            if threads
+                .iter()
+                .any(|thread| thread.id.as_ref() == Some(&target))
+            {
+                continue;
+            }
+            let response = self
+                .inner
+                .providers
+                .get(target.provider)?
+                .state(&target.id)
+                .await?
+                .response;
+            if response.thread.id.as_ref() != Some(&target) {
+                return Err(Failure::new(
+                    "invalid_thread",
+                    "native session identity changed",
+                ));
+            }
+            threads.push(response.thread);
+        }
+        Ok((threads, warning))
     }
     pub(super) async fn remove_worktree(&self, path: String) -> Result<(), Failure> {
         let _exclusive = self.inner.worktree_access.write().await;

@@ -55,28 +55,7 @@ impl HostRpcService {
     ) -> Result<agent_protocol::models::ThreadList, Failure> {
         let revision = self.inner.router.list_revision();
         let agents = self.inner.providers.all();
-        // One title walk supplies each requested quota plus lookahead.
-        let (first_page_size, later_page_size) = match query {
-            crate::projects::titles::TitleQuery::Root {
-                limit,
-                project_limits,
-                part,
-                ..
-            } => {
-                let chats = if part == Some(agent_protocol::models::ListPart::Projects) {
-                    0
-                } else {
-                    limit.max(1).saturating_add(1)
-                };
-                let projects = project_limits.map_or(30, |limits| {
-                    limits.values().fold(0u32, |sum, limit| {
-                        sum.saturating_add(limit.max(&1).saturating_add(1))
-                    })
-                });
-                ((chats.saturating_add(projects)).clamp(1, 100), 100)
-            }
-            crate::projects::titles::TitleQuery::Project { .. } => (100, 100),
-        };
+        let first_page_size = title_first_page_size(query);
         let started = std::time::Instant::now();
         let scope = if search.trim().is_empty() {
             SessionListScope::Roots
@@ -151,7 +130,7 @@ impl HostRpcService {
                     search,
                     scope,
                     first_page_size,
-                    later_page_size,
+                    TITLE_PAGE_SIZE,
                     Some(deadline),
                     Some(page),
                 )
@@ -304,6 +283,33 @@ impl HostRpcService {
                 .map(|(id, source)| (id, statuses.get(&source).copied()))
                 .collect(),
         })
+    }
+}
+
+const TITLE_PAGE_SIZE: u32 = 100;
+
+// One title walk supplies each requested quota plus lookahead.
+fn title_first_page_size(query: crate::projects::titles::TitleQuery<'_>) -> u32 {
+    match query {
+        crate::projects::titles::TitleQuery::Root {
+            limit,
+            project_limits,
+            part,
+            ..
+        } => {
+            let chats = if part == Some(agent_protocol::models::ListPart::Projects) {
+                0
+            } else {
+                limit.max(1).saturating_add(1)
+            };
+            let projects = project_limits.map_or(30, |limits| {
+                limits.values().fold(0u32, |sum, limit| {
+                    sum.saturating_add(limit.max(&1).saturating_add(1))
+                })
+            });
+            (chats.saturating_add(projects)).clamp(1, TITLE_PAGE_SIZE)
+        }
+        crate::projects::titles::TitleQuery::Project { .. } => TITLE_PAGE_SIZE,
     }
 }
 
