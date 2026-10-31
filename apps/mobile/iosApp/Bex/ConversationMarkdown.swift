@@ -10,10 +10,10 @@ struct ConversationMarkdown: View {
     let selection: ConversationSelectionActions
     @ScaledMetric(relativeTo: .body) private var tableColumnWidth = 160.0
     var textIdentifier: String = "message.assistant-text"
-    @State private var linkTarget: URL?
+    @State private var linkTarget: String?
     @State private var previewURL: URL?
-    @State private var previewDirectory: URL?
     @State private var linkError: String?
+    @State private var folders: [FileList] = []
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             ForEach(blocks) { part in
@@ -46,13 +46,15 @@ struct ConversationMarkdown: View {
             }
             do {
                 linkError = nil
-                linkTarget = try conversationFileURL(url.absoluteString, cwd: media.cwd)
+                linkTarget = try conversationFilePath(url.absoluteString, cwd: media.cwd)
             } catch { linkError = "リンクを開けません: \(error.localizedDescription)" }
             return .handled
         })
-        .sheet(isPresented: Binding(get: { previewURL != nil }, set: {
+        .sheet(isPresented: Binding(get: { previewURL != nil || !folders.isEmpty }, set: {
             if !$0 {
+                linkTarget = nil
                 previewURL = nil
+                folders = []
             }
         })) {
             if let url = previewURL {
@@ -62,30 +64,74 @@ struct ConversationMarkdown: View {
                 ) {
                     previewURL = nil
                 }
+            } else if let folder = folders.last {
+                folderPreview(folder)
             }
         }
-        .onChange(of: previewURL) { value in
-            if value == nil, let directory = previewDirectory {
-                try? FileManager.default.removeItem(at: directory)
-                previewDirectory = nil
+        .onChange(of: previewURL) { previous, current in
+            if let previous, previous != current {
+                try? FileManager.default.removeItem(at: previous.deletingLastPathComponent())
             }
         }
         .task(id: linkTarget) {
             guard let target = linkTarget else { return }
+            defer {
+                if !Task.isCancelled, linkTarget == target {
+                    linkTarget = nil
+                }
+            }
             do {
-                let downloaded = try await media.download(target.path)
+                linkError = nil
+                let entry = try await media.resolve(target)
+                try Task.checkCancellation()
+                if entry.directory {
+                    let listing = try await media.directory(entry.path)
+                    try Task.checkCancellation()
+                    folders.append(listing)
+                    return
+                }
+                let downloaded = try await media.download(entry.path)
                 guard !Task.isCancelled else {
                     try? FileManager.default.removeItem(at: downloaded.deletingLastPathComponent())
                     return
                 }
-                previewDirectory = downloaded.deletingLastPathComponent()
                 previewURL = downloaded
             } catch {
                 if !Task.isCancelled {
                     linkError = error.localizedDescription
                 }
             }
-            linkTarget = nil
+        }
+    }
+
+    private func folderPreview(_ folder: FileList) -> some View {
+        NavigationStack {
+            List {
+                if let linkError {
+                    AppText(linkError).foregroundColor(.red)
+                }
+                if folder.truncated {
+                    AppText("先頭 2,000 件を表示しています。")
+                }
+                ForEach(folder.entries, id: \.path) { entry in
+                    Button { linkTarget = entry.path } label: {
+                        Label(entry.name, systemImage: entry.directory ? "folder" : "doc")
+                    }
+                    .disabled(linkTarget != nil)
+                }
+            }
+            .navigationTitle(folder.path)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                if folders.count > 1 {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("戻る") { linkTarget = nil; folders.removeLast(); linkError = nil }
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("閉じる") { linkTarget = nil; folders = [] }
+                }
+            }
         }
     }
 

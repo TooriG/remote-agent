@@ -58,6 +58,8 @@ mod delivery_tests {
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum PeerError {
+    #[error("{0}")]
+    Transfer(String),
     #[error("invalid RPC message: {0}")]
     InvalidMessage(String),
     #[error("Invalid {method} response: {reason}")]

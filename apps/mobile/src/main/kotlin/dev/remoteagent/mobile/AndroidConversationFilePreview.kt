@@ -35,10 +35,13 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import dev.remoteagent.core.DownloadFile
+import dev.remoteagent.core.FileList
 import dev.remoteagent.core.Intent
+import dev.remoteagent.core.ListFiles
 import dev.remoteagent.core.MarkdownFileKind
 import dev.remoteagent.core.MarkdownFileReference
 import dev.remoteagent.core.Outcome
+import dev.remoteagent.core.ResolveFile
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
@@ -49,7 +52,14 @@ private const val PDF_PREVIEW_WIDTH = 1024f
 private const val PREVIEW_MAX_PIXELS = 2048
 private const val TEXT_PREVIEW_MAX_BYTES = 2 * 1024 * 1024
 
-private data class FilePreview(val text: String? = null, val image: ImageBitmap? = null, val pages: Int = 0)
+private data class FilePreview(
+    val text: String? = null,
+    val image: ImageBitmap? = null,
+    val pages: Int = 0,
+    val markdown: Boolean = false,
+    val cwd: String = "",
+    val directory: FileList? = null,
+)
 
 /** File previews always read through the authenticated Host transfer. */
 @Composable
@@ -61,58 +71,78 @@ internal fun ConversationFilePreview(
     val language = LocalUiLanguage.current
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
-    val target = remember(reference.path) { File(context.cacheDir, "preview-${UUID.randomUUID()}") }
-    var content by remember(reference.path) { mutableStateOf(FilePreview()) }
-    var error by remember(reference.path) { mutableStateOf<String?>(null) }
-    var loading by remember(reference.path) { mutableStateOf(true) }
-    var page by remember(reference.path) { mutableStateOf(0) }
+    var paths by remember(reference.path) { mutableStateOf(listOf(reference.path)) }
+    val path = paths.last()
+    val label = if (paths.size == 1) reference.label else path.substringAfterLast('/')
+    val target = remember(path) { File(context.cacheDir, "preview-${UUID.randomUUID()}") }
+    var content by remember(path) { mutableStateOf(FilePreview()) }
+    var error by remember(path) { mutableStateOf<String?>(null) }
+    var loading by remember(path) { mutableStateOf(true) }
+    var page by remember(path) { mutableStateOf(0) }
     DisposableEffect(target) { onDispose { target.delete() } }
-    LaunchedEffect(reference.path, page) {
+    LaunchedEffect(path, page) {
         try {
             loading = true
             error = null
-            downloadPreview(target, reference.path, perform)
-            content = withContext(Dispatchers.IO) { readFilePreview(target, reference.kind, reference.path, page) }
+            content = loadFilePreview(target, path, reference.kind, page, perform)
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             throw cancelled
         } catch (expectedFailure: Exception) {
-            error = expectedFailure.message ?: language.text("ファイルを開けません")
+            error = expectedFailure.displayMessage() ?: "ファイルを開けません"
         } finally {
             loading = false
         }
     }
     AlertDialog(
         onDismissRequest = dismiss,
-        title = { Text(reference.label) },
+        title = { Text(label) },
         text = {
             Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState())) {
                 SelectionContainer {
                     Text(
-                        reference.path.takeUnless { it.startsWith("data:image/") } ?: language.text("添付画像"),
+                        path.takeUnless { it.startsWith("data:image/") } ?: language.text("添付画像"),
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
                 if (loading) CircularProgressIndicator()
-                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                content.image?.let { Image(it, reference.label, Modifier.fillMaxWidth()) }
-                PreviewPages(page, content.pages, { page-- }, { page++ })
-                content.text?.let { content ->
-                    PreviewText(
-                        content,
-                        reference.kind == MarkdownFileKind.MARKDOWN,
-                        reference.path.replace('\\', '/').substringBeforeLast('/'),
-                        perform,
-                    )
+                if (paths.size > 1) TextButton(onClick = { paths = paths.dropLast(1) }) { Text(language.text("戻る")) }
+                error?.let { Text(language.text(it), color = MaterialTheme.colorScheme.error) }
+                content.directory?.let { folder ->
+                    if (folder.truncated) Text(language.text("先頭 2,000 件を表示しています。"))
+                    folder.entries.forEach { entry ->
+                        TextButton(onClick = { paths = paths + entry.path }) { Text(entry.name) }
+                    }
                 }
+                content.image?.let { Image(it, label, Modifier.fillMaxWidth()) }
+                PreviewPages(page, content.pages, { page-- }, { page++ })
+                content.text?.let { PreviewText(it, content.markdown, content.cwd, perform) }
             }
         },
         confirmButton = { TextButton(onClick = dismiss) { Text(language.text("閉じる")) } },
         dismissButton = {
-            TextButton(onClick = { clipboard.setText(AnnotatedString(reference.path)) }) {
-                Text(language.text("パスをコピー"))
-            }
+            TextButton(onClick = { clipboard.setText(AnnotatedString(path)) }) { Text(language.text("パスをコピー")) }
         },
     )
+}
+
+private suspend fun loadFilePreview(
+    target: File,
+    path: String,
+    fallbackKind: MarkdownFileKind,
+    page: Int,
+    perform: ((Intent, (Result<Outcome>) -> Unit) -> Unit)?,
+): FilePreview {
+    val entry =
+        if (path.startsWith("data:image/")) null
+        else (previewOperation(Intent.ResolveFile(ResolveFile(path)), perform) as Outcome.ResolvedFile).entry
+    if (entry?.directory == true) {
+        val listing = (previewOperation(Intent.ListFiles(ListFiles(entry.path)), perform) as Outcome.Directory).listing
+        return FilePreview(directory = listing)
+    }
+    val source = entry?.path ?: path
+    val kind = entry?.path?.let { dev.remoteagent.core.markdownFileTarget(it, "/")?.kind } ?: fallbackKind
+    downloadPreview(target, source, perform)
+    return withContext(Dispatchers.IO) { readFilePreview(target, kind, source, page) }
 }
 
 private fun readFilePreview(target: File, kind: MarkdownFileKind, path: String, page: Int): FilePreview {
@@ -147,7 +177,11 @@ private fun readFilePreview(target: File, kind: MarkdownFileKind, path: String, 
             check(target.length() <= TEXT_PREVIEW_MAX_BYTES) { "プレビューできるサイズを超えています" }
             val bytes = target.readBytes()
             check(0.toByte() !in bytes) { "このファイル形式はプレビューできません" }
-            FilePreview(text = bytes.toString(Charsets.UTF_8))
+            FilePreview(
+                text = bytes.toString(Charsets.UTF_8),
+                markdown = kind == MarkdownFileKind.MARKDOWN,
+                cwd = path.replace('\\', '/').substringBeforeLast('/'),
+            )
         }
     }
 }
@@ -194,6 +228,16 @@ private suspend fun downloadPreview(
                 if (continuation.isActive) continuation.resumeWith(result.map { Unit }) else target.delete()
             }
         }
+    }
+}
+
+private suspend fun previewOperation(
+    intent: Intent,
+    perform: ((Intent, (Result<Outcome>) -> Unit) -> Unit)?,
+): Outcome {
+    checkNotNull(perform) { "Hostに接続してください" }
+    return suspendCancellableCoroutine { continuation ->
+        perform(intent) { result -> if (continuation.isActive) continuation.resumeWith(result) }
     }
 }
 

@@ -141,18 +141,18 @@ private struct WorkspaceDirectoryScreen: View {
     private func load(_ directory: String) {
         path = directory
         busy = true; error = nil
-        perform(.listFiles(ListFiles(path: directory))) { snapshot, result in
+        perform(.listFiles(ListFiles(path: directory))) { _, result in
             busy = false
             if case let .failure(failure) = result {
                 error = failure.localizedDescription; return
             }
-            guard let result = snapshot.directory(), result.path == directory else {
-                error = snapshot.operationError(key: .directory)
+            guard case let .success(.directory(listing)) = result else {
+                error = "フォルダを読み込めませんでした"
                 return
             }
-            path = result.path
-            entries = result.entries
-            if result.truncated {
+            path = listing.path
+            entries = listing.entries
+            if listing.truncated {
                 error = "先頭 2,000 件を表示しています。パスを指定して開けます。"
             }
         }

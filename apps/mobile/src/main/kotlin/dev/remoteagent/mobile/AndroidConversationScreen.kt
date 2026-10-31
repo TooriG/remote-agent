@@ -209,7 +209,9 @@ private fun ConversationContent(
         is ConversationRowContent.ActivityHeader -> activityHeader(content.activity)
         is ConversationRowContent.PendingRequest ->
             RequestCard(content.request) { answer, complete ->
-                perform(Intent.Respond(Respond(content.request.id, answer))) { complete(it.exceptionOrNull()?.message) }
+                perform(Intent.Respond(Respond(content.request.id, answer))) {
+                    complete(it.exceptionOrNull()?.displayMessage())
+                }
             }
         is ConversationRowContent.Error -> TurnErrorCard(content.error)
         is ConversationRowContent.InProgress ->

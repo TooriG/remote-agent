@@ -151,9 +151,9 @@ private class BrowserSession(private val thread: SessionRef) {
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (failure: dev.remoteagent.core.AgentException) {
-                    failed(failure.message, reading)
+                    failed(failure.displayMessage(), reading)
                 } catch (failure: IllegalStateException) {
-                    failed(failure.message, reading)
+                    failed(failure.displayMessage(), reading)
                 }
                 delay(if (connectionError == null) BROWSER_POLL_MS else BROWSER_RETRY_MS)
             }

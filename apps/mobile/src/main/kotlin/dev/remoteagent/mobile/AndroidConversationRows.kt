@@ -85,7 +85,7 @@ internal fun RequestCard(request: Request, submit: (Answer, (String?) -> Unit) -
                 }
                 is RequestBody.ToolExecution -> StructuredAnswer(request, disabled, ::respond) { error = it }
             }
-            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            error?.let { Text(language.text(it), color = MaterialTheme.colorScheme.error) }
         }
     }
 }
@@ -232,7 +232,7 @@ private fun StructuredAnswer(
             try {
                 respond(requestAnswerFromJson(request.requestBody, text))
             } catch (failure: AgentException) {
-                onError(failure.message)
+                onError(failure.displayMessage())
             }
         },
         enabled = !disabled,

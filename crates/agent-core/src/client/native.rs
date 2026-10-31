@@ -25,7 +25,7 @@ pub enum AgentError {
 }
 pub(crate) fn error(error: impl std::fmt::Display) -> AgentError {
     AgentError::Failed {
-        reason: error.to_string(),
+        reason: crate::presentation::error::error_message(&error.to_string()),
     }
 }
 
@@ -397,6 +397,46 @@ impl Receipt {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_transfer_errors_show_localized_host_reasons_without_wrappers() {
+        use crate::localization::{UiLanguage, localized_ui_text};
+        for (code, japanese, english) in [
+            (
+                "file_not_found",
+                "ファイルまたはフォルダが見つかりません。",
+                "The file or folder could not be found.",
+            ),
+            (
+                "file_access_denied",
+                "ファイルまたはフォルダにアクセスする権限がありません。",
+                "You do not have permission to access this file or folder.",
+            ),
+            (
+                "file_operation_failed",
+                "Host supplied reason",
+                "Host supplied reason",
+            ),
+        ] {
+            let peer = crate::peer::PeerError::Remote {
+                error: serde_json::json!({"code":code,"message":"Host supplied reason"})
+                    .to_string(),
+                delivery: agent_protocol::error::Delivery::NotSent,
+                sequence: Some(1),
+            };
+            let error = super::error(crate::peer::PeerError::from(
+                crate::transfers::TransferError::from(peer),
+            ));
+            assert_eq!(error.to_string(), japanese);
+            assert_eq!(
+                localized_ui_text(UiLanguage::Japanese, error.to_string()),
+                japanese
+            );
+            assert_eq!(
+                localized_ui_text(UiLanguage::English, error.to_string()),
+                english
+            );
+        }
+    }
     fn item_text(item: &agent_protocol::items::Item) -> Option<&str> {
         match item.body() {
             agent_protocol::items::ItemBody::AssistantText { text, .. } => Some(text),

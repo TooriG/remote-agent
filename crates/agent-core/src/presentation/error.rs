@@ -206,6 +206,13 @@ pub fn error_message(error: &str) -> String {
     let Ok(value) = serde_json::from_str::<Value>(raw) else {
         return "接続先で操作に失敗しました。エラーの詳細を取得できませんでした。".into();
     };
+    match value["code"].as_str() {
+        Some("file_not_found") => return "ファイルまたはフォルダが見つかりません。".into(),
+        Some("file_access_denied") => {
+            return "ファイルまたはフォルダにアクセスする権限がありません。".into();
+        }
+        _ => {}
+    }
     if value["code"] == "thread_in_use" {
         return agent_protocol::error::THREAD_IN_USE_MESSAGE.into();
     }

@@ -30,8 +30,8 @@ pub(crate) const TRANSFER_LIMIT: u64 = 512 * 1024 * 1024;
 const GRANT_LIFETIME: Duration = Duration::from_secs(120);
 
 #[cfg(test)]
-#[path = "workspace_files/item_read_tests.rs"]
-mod item_read_tests;
+#[path = "workspace_files/transfer_tests.rs"]
+mod transfer_tests;
 
 #[derive(Clone)]
 pub(crate) struct WorkspaceFiles {
@@ -164,6 +164,22 @@ impl WorkspaceFiles {
                     truncated,
                 }))
             }
+            Call::ResolveFile(params) => {
+                // Preserve the link's filename and extension, including symlinks;
+                // clients use them to select their existing file presentation.
+                let path = absolute_path(&params.path)?;
+                let metadata = fs::metadata(&path)?;
+                Ok(Body::from(FileEntry {
+                    name: path
+                        .file_name()
+                        .unwrap_or(path.as_os_str())
+                        .to_string_lossy()
+                        .into_owned(),
+                    path: path.to_str().context("file path is not UTF-8")?.into(),
+                    directory: metadata.is_dir(),
+                    size: metadata.len(),
+                }))
+            }
             Call::ReadFile(params) => {
                 let path = dunce::canonicalize(absolute_path(&params.path)?)?;
                 read_editable(&path).map(Body::from)
@@ -229,7 +245,7 @@ impl WorkspaceFiles {
                 // Host-owned storage; explicit destinations remain absolute.
                 let directory = if params.directory.is_empty() {
                     let directory = absolute_path(&self.upload_directory)?;
-                    agent_local_host::create_state_directory(directory)?;
+                    agent_local_host::create_state_directory(&directory)?;
                     directory
                 } else {
                     absolute_path(&params.directory)?
@@ -393,13 +409,29 @@ impl WorkspaceFiles {
     }
 }
 
-fn absolute_path(path: &impl AsRef<Path>) -> Result<&Path> {
+fn absolute_path(path: &impl AsRef<Path>) -> Result<PathBuf> {
     let path = path.as_ref();
+    if let Ok(relative) = path.strip_prefix("~") {
+        let home = directories::BaseDirs::new().context("Host home directory is unavailable")?;
+        return Ok(home.home_dir().join(relative));
+    }
     if path.is_absolute() {
-        Ok(path)
+        Ok(path.to_owned())
     } else {
         Err(anyhow!("an absolute filesystem path is required"))
     }
+}
+
+pub(crate) fn file_failure(error: anyhow::Error) -> crate::providers::Failure {
+    let code = match error
+        .downcast_ref::<std::io::Error>()
+        .map(std::io::Error::kind)
+    {
+        Some(std::io::ErrorKind::NotFound) => "file_not_found",
+        Some(std::io::ErrorKind::PermissionDenied) => "file_access_denied",
+        _ => "file_operation_failed",
+    };
+    crate::providers::Failure::new(code, error)
 }
 fn hash(bytes: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(digest::digest(&SHA256, bytes).as_ref())
@@ -476,6 +508,161 @@ fn digest_file(file: &mut File) -> Result<(u64, [u8; 32])> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn home_links_resolve_list_read_write_and_download_on_the_host() {
+        let home = directories::BaseDirs::new().unwrap();
+        let directory = tempfile::tempdir_in(home.home_dir()).unwrap();
+        let prefix = format!(
+            "~/{}",
+            directory.path().file_name().unwrap().to_str().unwrap()
+        );
+        let files = WorkspaceFiles::new(directory.path().join("attachments"));
+        fs::create_dir(directory.path().join("Movies")).unwrap();
+        fs::write(directory.path().join("Movies/video.mp4"), b"video").unwrap();
+        fs::write(directory.path().join("notes.md"), "original").unwrap();
+        let Body::FileEntry(folder) = files
+            .dispatch(
+                1,
+                Call::ResolveFile(agent_protocol::operations::ResolveFile {
+                    path: format!("{prefix}/Movies"),
+                }),
+            )
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert!(folder.directory);
+        assert_eq!(
+            folder.path,
+            directory.path().join("Movies").to_str().unwrap()
+        );
+        let Body::Files(listing) = files
+            .dispatch(
+                1,
+                Call::ListFiles(PathParams {
+                    path: format!("{prefix}/Movies/"),
+                }),
+            )
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            Path::new(&listing.path),
+            dunce::canonicalize(&folder.path).unwrap()
+        );
+        assert_eq!(listing.entries.len(), 1);
+        assert_eq!(listing.entries[0].name, "video.mp4");
+        assert!(!listing.entries[0].directory);
+        let Body::FileEntry(video) = files
+            .dispatch(
+                1,
+                Call::ResolveFile(agent_protocol::operations::ResolveFile {
+                    path: format!("{prefix}/Movies/video.mp4"),
+                }),
+            )
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert!(!video.directory);
+        assert_eq!(
+            Path::new(&listing.entries[0].path),
+            dunce::canonicalize(&video.path).unwrap()
+        );
+        let Body::File(content) = files
+            .dispatch(
+                1,
+                Call::ReadFile(PathParams {
+                    path: format!("{prefix}/notes.md"),
+                }),
+            )
+            .unwrap()
+        else {
+            panic!()
+        };
+        files
+            .dispatch(
+                1,
+                Call::WriteFile(agent_protocol::operations::WriteFile {
+                    path: format!("{prefix}/notes.md"),
+                    revision: content.revision,
+                    text: "changed".into(),
+                }),
+            )
+            .unwrap();
+        assert_eq!(
+            fs::read_to_string(directory.path().join("notes.md")).unwrap(),
+            "changed"
+        );
+        let grant = files
+            .dispatch(
+                1,
+                Call::Download(PathParams {
+                    path: format!("{prefix}/Movies/video.mp4"),
+                }),
+            )
+            .unwrap();
+        let (mut client, server) = tokio::io::duplex(1024);
+        send_token(&mut client, &grant).await;
+        files.transfer(1, server).await.unwrap();
+        let mut bytes = Vec::new();
+        client.read_to_end(&mut bytes).await.unwrap();
+        assert_eq!(bytes, b"video");
+        assert_eq!(absolute_path(&"~").unwrap(), home.home_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolving_a_symlink_keeps_the_filename_used_for_file_presentation() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("content"), b"video").unwrap();
+        let path = directory.path().join("video.mp4");
+        std::os::unix::fs::symlink("content", &path).unwrap();
+        let files = WorkspaceFiles::new(directory.path().join("attachments"));
+        let Body::FileEntry(entry) = files
+            .dispatch(
+                1,
+                Call::ResolveFile(agent_protocol::operations::ResolveFile {
+                    path: path.to_str().unwrap().into(),
+                }),
+            )
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(entry.path, path.to_str().unwrap());
+        assert_eq!(entry.name, "video.mp4");
+        assert!(!entry.directory);
+        assert_eq!(entry.size, 5);
+    }
+
+    #[test]
+    fn relative_paths_and_other_users_are_not_home_links() {
+        for path in ["relative", "~other/file", "other/~/file", "./file"] {
+            assert!(absolute_path(&path).is_err(), "{path}");
+        }
+    }
+
+    #[test]
+    fn file_failures_classify_io_causes_and_preserve_other_host_reasons() {
+        for (kind, code) in [
+            (std::io::ErrorKind::NotFound, "file_not_found"),
+            (std::io::ErrorKind::PermissionDenied, "file_access_denied"),
+            (std::io::ErrorKind::Other, "file_operation_failed"),
+        ] {
+            let error =
+                anyhow::Error::new(std::io::Error::new(kind, "Host reason")).context("read file");
+            let failure = file_failure(error);
+            assert_eq!(failure.code, code);
+            assert!(failure.message.contains("Host reason"));
+        }
+        assert_eq!(
+            file_failure(anyhow!("editor size limit")).message,
+            "editor size limit"
+        );
+    }
 
     async fn send_token(stream: &mut tokio::io::DuplexStream, grant: &Body) {
         let Body::Grant(grant) = grant else {

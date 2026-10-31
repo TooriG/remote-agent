@@ -44,6 +44,12 @@ pub enum Outcome {
     Visualization {
         html: String,
     },
+    ResolvedFile {
+        entry: crate::models::FileEntry,
+    },
+    Directory {
+        listing: crate::models::FileList,
+    },
     SessionImages {
         images: Vec<SessionImage>,
     },

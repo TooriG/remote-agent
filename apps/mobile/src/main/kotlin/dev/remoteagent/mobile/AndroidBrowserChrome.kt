@@ -103,7 +103,7 @@ internal fun BrowserToolbar(
                     onGo = {
                         runCatching { browserAddressUrl(address) }
                             .onSuccess { send(BrowserAction.Navigate(it)) }
-                            .onFailure { failed(it.message) }
+                            .onFailure { failed(it.displayMessage()) }
                     }
                 ),
             decorationBox = { input ->

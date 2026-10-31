@@ -23,6 +23,7 @@
 		A10000000000000000000007 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000018 /* Assets.xcassets */; };
 		A10000000000000000000001 /* IOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000011 /* IOSApp.swift */; };
 		A10000000000000000000002 /* PlatformServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000012 /* PlatformServices.swift */; };
+		C0DE00000000000000000901 /* AgentError.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000902 /* AgentError.swift */; };
 		A10000000000000000000003 /* QRCodeCaptureViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000013 /* QRCodeCaptureViewController.swift */; };
 		A10000000000000000000006 /* SwiftUIRoot.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000017 /* SwiftUIRoot.swift */; };
 		B20000000000000000000001 /* LaunchUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000011 /* LaunchUITests.swift */; };
@@ -90,6 +91,7 @@
 		A10000000000000000000010 /* bex.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = bex.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000000000000000000011 /* IOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSApp.swift; sourceTree = "<group>"; };
 		A10000000000000000000012 /* PlatformServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformServices.swift; sourceTree = "<group>"; };
+		C0DE00000000000000000902 /* AgentError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentError.swift; sourceTree = "<group>"; };
 		A10000000000000000000013 /* QRCodeCaptureViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRCodeCaptureViewController.swift; sourceTree = "<group>"; };
 		A10000000000000000000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A10000000000000000000017 /* SwiftUIRoot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftUIRoot.swift; sourceTree = "<group>"; };
@@ -193,6 +195,7 @@
                 A10000000000000000000011 /* IOSApp.swift */,
 				F70000000000000000000011 /* TaskLiveActivities.swift */,
 				A10000000000000000000012 /* PlatformServices.swift */,
+				C0DE00000000000000000902 /* AgentError.swift */,
 				A10000000000000000000013 /* QRCodeCaptureViewController.swift */,
 				A10000000000000000000017 /* SwiftUIRoot.swift */,
 				5DCF44CEC164E07252AA639F /* ErrorNotices.swift */,
@@ -376,6 +379,7 @@
 				F70000000000000000000001 /* TaskLiveActivities.swift in Sources */,
 				F70000000000000000000002 /* TaskActivityAttributes.swift in App Sources */,
 				A10000000000000000000002 /* PlatformServices.swift in Sources */,
+				C0DE00000000000000000901 /* AgentError.swift in Sources */,
 				A10000000000000000000003 /* QRCodeCaptureViewController.swift in Sources */,
 				A10000000000000000000006 /* SwiftUIRoot.swift in Sources */,
 				36EC1BF85BB52BB71505A303 /* ErrorNotices.swift in Sources */,

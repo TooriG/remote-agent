@@ -454,6 +454,7 @@ impl HostRpcService {
                 .into()
             }
             Call::ListFiles(_)
+            | Call::ResolveFile(_)
             | Call::ReadFile(_)
             | Call::WriteFile(_)
             | Call::Upload(_)
@@ -463,7 +464,14 @@ impl HostRpcService {
                 .files
                 .request(session, request.clone())
                 .await
-                .map_err(|error| Failure::new("file_operation_failed", error))?,
+                .map_err(|error| {
+                    // Visualization owns recovery instructions for a missing archive.
+                    if matches!(request, Call::ReadVisualization(_)) {
+                        Failure::new("file_operation_failed", error)
+                    } else {
+                        crate::workspace_files::file_failure(error)
+                    }
+                })?,
             Call::ForkSession(params) => {
                 let target = target_session.expect("session-scoped fork");
                 self.fork_session(target, params).await?.into()
@@ -649,6 +657,49 @@ fn session_target(request: &Call) -> (Option<&agent_protocol::session::SessionRe
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn file_failures_are_classified_without_losing_visualization_recovery() {
+        use super::conversations::tests::call;
+        use super::*;
+        let root = tempfile::tempdir().unwrap();
+        let service = HostRpcService::new(
+            std::iter::empty::<Backend>(),
+            ProjectStore::new(root.path().join("worktrees.json")),
+        );
+        let session = service.open_session();
+        let missing = root.path().join("missing.mp4").to_str().unwrap().to_owned();
+        for request in [
+            Call::ResolveFile(op::ResolveFile {
+                path: missing.clone(),
+            }),
+            Call::ReadFile(op::ListFiles {
+                path: missing.clone(),
+            }),
+            Call::Download(op::ListFiles { path: missing }),
+        ] {
+            let failure = call::<serde_json::Value>(&service, session.id(), request)
+                .await
+                .unwrap_err();
+            assert_eq!(failure.code, "file_not_found");
+        }
+        let failure = call::<String>(
+            &service,
+            session.id(),
+            Call::ReadVisualization(op::LoadVisualization {
+                path: "missing.html".into(),
+                cwd: root.path().to_str().unwrap().into(),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(failure.code, "file_operation_failed");
+        assert!(
+            failure
+                .message
+                .contains("表示ファイルが見つかりません。HostでHTMLを再作成してください。")
+        );
+    }
+
     #[tokio::test]
     async fn account_read_failures_are_ordered_with_other_providers_startup_errors() {
         use super::conversations::tests::{NativeAgent, call};

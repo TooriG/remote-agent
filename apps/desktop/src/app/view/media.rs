@@ -57,11 +57,23 @@ impl Desktop {
                         return Ok(source.as_ref().clone());
                     }
                     let path = conversation_file_path(&source, &cwd)?;
-                    if !remote {
+                    if !remote && path.is_absolute() {
                         return Ok(path.to_string_lossy().into_owned());
                     }
+                    let store = store.ok_or(language.text("Host に接続していません"))?;
+                    if !remote {
+                        let result = store
+                            .dispatch(Intent::ResolveFile(op::ResolveFile {
+                                path: path.to_string_lossy().into_owned(),
+                            }))
+                            .await
+                            .map_err(|error| error.to_string())?;
+                        let Outcome::ResolvedFile { entry } = result else {
+                            unreachable!("resolved file outcome")
+                        };
+                        return Ok(entry.path);
+                    }
                     store
-                        .ok_or(language.text("Host に接続していません"))?
                         .dispatch(Intent::DownloadFile(op::DownloadFile {
                             source: path
                                 .into_os_string()
@@ -186,10 +198,20 @@ impl Desktop {
                 return;
             }
         };
-        self.open_file(path, cx);
+        if self.session.is_none() {
+            self.set_error("Host に接続していません".into());
+            cx.notify();
+            return;
+        }
+        self.perform(
+            Intent::ResolveFile(op::ResolveFile {
+                path: path.to_string_lossy().into_owned(),
+            }),
+            OperationCompletion::OpenFile(self.snapshot.epoch),
+        );
     }
 
-    pub(super) fn open_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+    pub(in crate::app) fn open_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         if agent_core::presentation::markdown::file_requires_download(&path.to_string_lossy()) {
             self.download(path.to_string_lossy().into_owned());
             cx.notify();
@@ -550,6 +572,21 @@ mod file_panel_tests {
     use super::*;
     use core::prelude::v1::test;
 
+    fn resolved(path: &str, directory: bool) -> Outcome {
+        Outcome::ResolvedFile {
+            entry: agent_protocol::models::FileEntry {
+                name: Path::new(path)
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+                path: path.into(),
+                directory,
+                size: 0,
+            },
+        }
+    }
+
     #[gpui::test]
     fn file_panel_opens_large_images_in_gallery_and_preserves_text_draft(cx: &mut TestAppContext) {
         use agent_protocol::models::{FileEntry, FileList};
@@ -628,7 +665,7 @@ mod file_panel_tests {
             .expect("image file entry");
         window.simulate_click(entry.center(), Modifiers::default());
         window.run_until_parked();
-        window.update(|_, cx| {
+        window.update(|window, cx| {
             desktop.update(cx, |view, cx| {
                 let gallery = view
                     .media
@@ -645,18 +682,43 @@ mod file_panel_tests {
                     "images must bypass the text editor"
                 );
                 view.media.gallery = None;
-                view.open_conversation_link(&source, cx);
-                assert!(
-                    view.media.gallery.is_some(),
-                    "Markdown links use the same image viewer"
-                );
-                view.media.gallery = None;
+                for link in [source.as_str(), "~/large.PNG"] {
+                    view.open_conversation_link(link, cx);
+                    // This view fixture has no connection; deliver the Host's
+                    // metadata result through the production completion path.
+                    view.operation_completed(
+                        OperationCompletion::OpenFile(view.snapshot.epoch),
+                        Ok(resolved(&source, false)),
+                        window,
+                        cx,
+                    );
+                    assert!(
+                        view.media.gallery.is_some(),
+                        "Markdown links use the same image viewer"
+                    );
+                    assert_eq!(
+                        view.media
+                            .gallery
+                            .as_ref()
+                            .unwrap()
+                            .current_image()
+                            .0
+                            .as_str(),
+                        source
+                    );
+                    view.media.gallery = None;
+                }
                 view.panels.set_open(view.panel_scope(), false);
-                view.open_conversation_link(
-                    &directory
-                        .path()
-                        .join("ImoutoTank-Multiplayer.EXE")
-                        .to_string_lossy(),
+                let installer = directory
+                    .path()
+                    .join("ImoutoTank-Multiplayer.EXE")
+                    .to_string_lossy()
+                    .into_owned();
+                view.open_conversation_link(&installer, cx);
+                view.operation_completed(
+                    OperationCompletion::OpenFile(view.snapshot.epoch),
+                    Ok(resolved(&installer, false)),
+                    window,
                     cx,
                 );
                 assert!(
@@ -676,6 +738,24 @@ mod file_panel_tests {
                 assert!(
                     view.panels.get(view.panel_scope()).open
                         && view.panels.get(view.panel_scope()).kind() == Panel::File
+                );
+                view.open_conversation_link("~/Documents", cx);
+                view.operation_completed(
+                    OperationCompletion::OpenFile(view.snapshot.epoch),
+                    Ok(resolved(&cwd, true)),
+                    window,
+                    cx,
+                );
+                assert_eq!(view.panels.get(view.panel_scope()).kind(), Panel::Files);
+                view.operation_completed(
+                    OperationCompletion::OpenFile(view.snapshot.epoch + 1),
+                    Ok(resolved(&source, false)),
+                    window,
+                    cx,
+                );
+                assert!(
+                    view.media.gallery.is_none(),
+                    "a stale Host response must not open a file"
                 );
             });
         });
@@ -726,6 +806,12 @@ mod file_panel_tests {
                     input.set_value("Keep this side draft", window, cx)
                 });
                 view.open_conversation_link("readme.txt:1", cx);
+                view.operation_completed(
+                    OperationCompletion::OpenFile(view.snapshot.epoch),
+                    Ok(resolved("/fixture/readme.txt", false)),
+                    window,
+                    cx,
+                );
                 assert!(
                     view.panels.get(view.panel_scope()).open
                         && view.panels.get(view.panel_scope()).kind() == Panel::File
@@ -757,6 +843,12 @@ mod file_panel_tests {
                         Some("http://localhost:3000/next?q=1#detail")
                     );
                     view.click_conversation_link("readme.txt:1", true, cx);
+                    view.operation_completed(
+                        OperationCompletion::OpenFile(view.snapshot.epoch),
+                        Ok(resolved("/fixture/readme.txt", false)),
+                        window,
+                        cx,
+                    );
                     assert!(view.panels.get(view.panel_scope()).kind() == Panel::File);
                     assert_eq!(
                         view.composer.input.read(cx).value().as_ref(),

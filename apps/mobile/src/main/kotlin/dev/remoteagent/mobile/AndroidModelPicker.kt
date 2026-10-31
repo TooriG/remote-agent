@@ -147,8 +147,8 @@ private fun SaveNewChatDefaultsButton(
                     savingDefaults = false
                     defaultsNotice =
                         result.fold(
-                            onSuccess = { language.text("新規チャットの既定に保存しました") },
-                            onFailure = { it.message ?: language.text("既定の保存に失敗しました") },
+                            onSuccess = { "新規チャットの既定に保存しました" },
+                            onFailure = { it.displayMessage() ?: "既定の保存に失敗しました" },
                         )
                 }
             },
@@ -156,7 +156,7 @@ private fun SaveNewChatDefaultsButton(
             Text(language.text("この設定を新規チャットの既定にする"))
         }
         Text(
-            defaultsNotice ?: language.text("この端末で、次の新規チャットからモデル・推論量・速度を引き継ぎます。"),
+            language.text(defaultsNotice ?: "この端末で、次の新規チャットからモデル・推論量・速度を引き継ぎます。"),
             style = MaterialTheme.typography.bodySmall,
         )
     }

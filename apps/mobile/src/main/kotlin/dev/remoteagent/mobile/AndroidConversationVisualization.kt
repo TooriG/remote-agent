@@ -38,7 +38,7 @@ internal fun ConversationVisualization(
     var error by remember(path, cwd) { mutableStateOf<String?>(null) }
     LaunchedEffect(path, cwd) {
         if (perform == null) {
-            error = language.text("Hostに接続して表示を読み込んでください。")
+            error = "Hostに接続して表示を読み込んでください。"
         } else {
             val result =
                 suspendCancellableCoroutine<Result<Outcome>> { continuation ->
@@ -48,14 +48,15 @@ internal fun ConversationVisualization(
                 }
             val outcome = result.getOrNull()
             if (outcome is Outcome.Visualization) html = outcome.html
-            else error = result.exceptionOrNull()?.message ?: language.text("表示の応答が無効です。")
+            else error = result.exceptionOrNull()?.displayMessage() ?: "表示の応答が無効です。"
         }
     }
     val document = html
     if (document != null) VisualizationWebView(document)
     else
         Text(
-            error?.let { localizedUiFormat(language, "表示できません: {0}", listOf(it)) } ?: language.text("インタラクティブ表示を読み込み中…")
+            error?.let { localizedUiFormat(language, "表示できません: {0}", listOf(language.text(it))) }
+                ?: language.text("インタラクティブ表示を読み込み中…")
         )
 }
 

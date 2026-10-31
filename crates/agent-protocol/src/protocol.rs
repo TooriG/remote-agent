@@ -139,7 +139,7 @@ results! {
     ModelSettings(crate::models::ModelSettings),
     DshCredentials(crate::dsh::Credentials),
     Login(crate::operations::AccountLogin), LoginStatus(crate::operations::AccountLoginStatus),
-    Files(crate::models::FileList), File(crate::models::FileContent), Grant(crate::models::TransferGrant),
+    Files(crate::models::FileList), FileEntry(crate::models::FileEntry), File(crate::models::FileContent), Grant(crate::models::TransferGrant),
     Transcription(crate::operations::Transcription),
     HostStatus(crate::models::HostStatus), Invitation(crate::models::Invitation),
     Remotes(Vec<crate::models::RemoteHost>), Remote(crate::models::RemoteHost),

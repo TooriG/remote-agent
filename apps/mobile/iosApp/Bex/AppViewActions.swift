@@ -275,6 +275,18 @@ extension AppViewModel {
             guard selectedProfileId == host else { throw CancellationError() }
             guard case let .visualization(html) = result else { throw URLError(.badServerResponse) }
             return html
+        }, resolve: { [self] path in
+            guard selectedProfileId == host else { throw CancellationError() }
+            let result = try await outcome(for: .resolveFile(ResolveFile(path: path)))
+            guard selectedProfileId == host else { throw CancellationError() }
+            guard case let .resolvedFile(entry) = result else { throw URLError(.badServerResponse) }
+            return entry
+        }, directory: { [self] path in
+            guard selectedProfileId == host else { throw CancellationError() }
+            let result = try await outcome(for: .listFiles(ListFiles(path: path)))
+            guard selectedProfileId == host else { throw CancellationError() }
+            guard case let .directory(listing) = result else { throw URLError(.badServerResponse) }
+            return listing
         })
     }
 

@@ -563,6 +563,13 @@ pub struct ListFiles {
     pub path: String,
 }
 
+/// Resolve a filesystem path and inspect its kind on the authenticated Host.
+/// File operations accept absolute paths or `~` / `~/...` for the Host user's home.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolveFile {
+    pub path: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResizeTerminal {
     #[serde(rename = "processHandle")]

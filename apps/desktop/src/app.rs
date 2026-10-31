@@ -69,6 +69,7 @@ enum OperationCompletion {
     RemoveWorktree,
     Account,
     Gallery(uuid::Uuid),
+    OpenFile(u64),
 }
 enum Update {
     Connected(Result<(StoreSession, PathBuf), String>),
@@ -796,6 +797,22 @@ impl Desktop {
             OperationCompletion::Composer(_) | OperationCompletion::Editor(_)
         );
         match kind {
+            OperationCompletion::OpenFile(epoch) => {
+                if self.snapshot.epoch != epoch {
+                    return true;
+                }
+                match result {
+                    Ok(Outcome::ResolvedFile { entry }) if entry.directory => {
+                        self.browse(entry.path)
+                    }
+                    Ok(Outcome::ResolvedFile { entry }) => {
+                        self.open_file(PathBuf::from(entry.path), cx)
+                    }
+                    Err(error) => self.set_error(error),
+                    _ => {}
+                }
+                return true;
+            }
             OperationCompletion::ProjectImport => {
                 self.accept_snapshot(window, cx);
                 if result.is_ok()

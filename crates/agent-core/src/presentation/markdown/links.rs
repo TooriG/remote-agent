@@ -186,10 +186,11 @@ pub(super) fn file_reference(source: &str, implicit: bool) -> Option<MarkdownFil
             MarkdownFileKind::Image
         }
         Some("pdf" | "txt" | "csv" | "tsv" | "docx" | "xlsx") => MarkdownFileKind::Document,
-        _ if path.ends_with('/') => MarkdownFileKind::Folder,
+        _ if path.ends_with('/') || path == "~" => MarkdownFileKind::Folder,
         _ => MarkdownFileKind::File,
     };
-    let explicit = path.contains('/') || line.is_some() || source.starts_with("file:");
+    let explicit =
+        path == "~" || path.contains('/') || line.is_some() || source.starts_with("file:");
     let known_name = matches!(
         basename,
         "Makefile" | "Dockerfile" | "LICENSE" | "AGENTS.md" | "README" | "justfile" | ".gitignore"
@@ -235,10 +236,13 @@ pub(super) fn is_file_label(label: &str, file: &MarkdownFileReference) -> bool {
             .is_some_and(|candidate| candidate.path == file.path || candidate.label == file.label)
 }
 
-/// Resolve against the Host workspace, independent of the client's operating system.
+/// Resolve workspace-relative links without interpreting Host-owned home paths.
 #[cfg_attr(feature = "bindings", uniffi::export)]
 pub fn markdown_file_target(source: String, cwd: String) -> Option<MarkdownFileReference> {
     let mut file = file_reference(&source, false)?;
+    if file.path == "~" || file.path.starts_with("~/") {
+        return Some(file);
+    }
     let cwd = cwd
         .replace('\\', "/")
         .replace('%', "%25")
@@ -458,6 +462,9 @@ mod tests {
     #[case("../docs/概要.md#L7-L10", "/docs/概要.md", Some(7), None)]
     #[case("file:///tmp/hello%20world.md", "/tmp/hello world.md", None, None)]
     #[case("/tmp/a%23b.rs", "/tmp/a#b.rs", None, None)]
+    #[case("~/Movies/bex-promo-ja.mp4", "~/Movies/bex-promo-ja.mp4", None, None)]
+    #[case("~/Documents/", "~/Documents/", None, None)]
+    #[case("~/概要%20a.md:12:3", "~/概要 a.md", Some(12), Some(3))]
     fn host_targets(
         #[case] source: &str,
         #[case] path: &str,
@@ -478,6 +485,29 @@ mod tests {
                 .unwrap()
                 .path,
             "D:/docs/a.md"
+        );
+    }
+    #[test]
+    fn home_paths_do_not_need_a_workspace_or_use_the_client_home() {
+        for cwd in ["", "/workspace", "C:\\workspace"] {
+            for path in ["~", "~/Movies/video.mp4", "~/docs/../notes.md"] {
+                let file = markdown_file_target(path.into(), cwd.into()).unwrap();
+                assert_eq!(file.path, path);
+            }
+        }
+        let blocks = super::super::markdown_blocks("`~/Movies/bex-promo-ja.mp4`".into());
+        let MarkdownBlock::Paragraph { runs, .. } = &blocks[0] else {
+            panic!()
+        };
+        assert_eq!(
+            runs[0].file.as_ref().unwrap().path,
+            "~/Movies/bex-promo-ja.mp4"
+        );
+        assert_eq!(
+            markdown_file_target("./~/notes.md".into(), "/workspace".into())
+                .unwrap()
+                .path,
+            "/workspace/~/notes.md"
         );
     }
     #[rstest::rstest]

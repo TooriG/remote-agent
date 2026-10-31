@@ -371,7 +371,7 @@ impl Operation for UploadAttachment {
             &self.attachment.name,
         )
         .await
-        .map_err(|error| PeerError::InvalidMessage(error.to_string()))?;
+        .map_err(PeerError::from)?;
         Ok(uploaded.path)
     }
     fn apply(mut self, snapshot: &mut Snapshot, path: Self::Output) -> Vec<Effect> {

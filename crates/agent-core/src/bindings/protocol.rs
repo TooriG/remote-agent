@@ -706,6 +706,11 @@ struct Interrupt {
 struct ListFiles {
     pub path: String,
 }
+
+#[uniffi::remote(Record)]
+struct ResolveFile {
+    pub path: String,
+}
 #[uniffi::remote(Record)]
 struct ResizeTerminal {
     pub handle: String,

@@ -524,7 +524,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
         ManageCodexCli, ReadDshCredentials, UpdateDshCredential, ListAccounts, SelectAccount, SelectAccountForDraft, LogoutAccount, StartAccountLogin,
         ReadAccountLogin, CancelAccountLogin, SubmitAccountLogin, ForkSession,
         StartTerminal, DetachTerminal, KillTerminal, CreateInvitation, RemoveRemoteHost,
-        RevokeDevice, ListFiles, ReadFile,
+        RevokeDevice, ListFiles, ResolveFile, ReadFile,
         SaveFile, ReviewWorkspace, ReadWorktreeSettings,
         UpdateWorktreeSettings, ListWorktrees, RemoveWorktree, ListProjectSessions,
         ListAgents, AddProject, ScanProjects, ImportProjects, CreateSession,

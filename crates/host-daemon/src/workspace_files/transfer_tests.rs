@@ -216,6 +216,57 @@ impl Fixture {
 }
 
 #[tokio::test]
+async fn file_operations_preserve_remote_reasons_and_download_can_retry_after_failure() {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let mut fixture = Fixture::start(0, false).await;
+        let local = tempfile::tempdir().unwrap();
+        let source = local.path().join("source.txt");
+        std::fs::write(&source, b"content").unwrap();
+        let destination = local.path().join("download.txt");
+        let download = || Intent::DownloadFile(op::DownloadFile {
+            source: source.to_str().unwrap().into(),
+            destination: destination.to_str().unwrap().into(),
+        });
+        for (intent, method) in [
+            (download(), "host/blob/download"),
+            (Intent::UploadAttachment(op::UploadAttachment {
+                draft_key: Default::default(),
+                attachment: agent_core::state::Attachment {
+                    path: source.to_str().unwrap().into(),
+                    name: "source.txt".into(), is_image: false,
+                },
+                directory: "~/Documents".into(),
+            }), "host/blob/upload"),
+            (Intent::ResolveFile(op::ResolveFile { path: "~/missing".into() }), "host/file/resolve"),
+        ] {
+            let completion = fixture.store.dispatch(intent);
+            let request = fixture.requests.recv().await.unwrap();
+            assert_eq!(request["method"], method);
+            fixture.output.lock().await.reply(&request, json!({"error":{
+                "code":"file_operation_failed", "message":"Host supplied reason", "delivery":"notSent"
+            }})).await.unwrap();
+            let error = completion.await.unwrap_err();
+            assert!(matches!(&error, agent_protocol::error::PeerError::Remote {
+                delivery: agent_protocol::error::Delivery::NotSent, ..
+            }));
+            assert_eq!(agent_core::presentation::error::error_message(&error.to_string()), "Host supplied reason");
+        }
+        assert!(!destination.exists());
+        let completion = fixture.store.dispatch(download());
+        let request = fixture.requests.recv().await.unwrap();
+        assert_eq!(request["method"], "host/blob/download");
+        let agent_protocol::protocol::Body::Grant(grant) = fixture.files.dispatch(OWNER, agent_protocol::protocol::Call::Download(
+            agent_protocol::operations::ListFiles { path: source.to_str().unwrap().into() }
+        )).unwrap() else { panic!("expected download grant") };
+        fixture.output.lock().await.reply(&request, json!({"result":grant})).await.unwrap();
+        fixture.files.transfer(OWNER, fixture.session.accept_stream().await.unwrap()).await.unwrap();
+        completion.await.unwrap();
+        assert_eq!(std::fs::read(destination).unwrap(), b"content");
+        fixture.close().await;
+    }).await.unwrap();
+}
+
+#[tokio::test]
 async fn bulk_item_reads_hold_slots_through_body_application_without_starving_control() {
     tokio::time::timeout(Duration::from_secs(30), async {
         let mut fixture = Fixture::start(12, true).await;

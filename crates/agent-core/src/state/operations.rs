@@ -67,6 +67,7 @@ pub enum Intent {
     RemoveRemoteHost(RemoveRemoteHost),
     RevokeDevice(RevokeDevice),
     ListFiles(ListFiles),
+    ResolveFile(ResolveFile),
     ReadFile(ReadFile),
     SaveFile(SaveFile),
     ReviewWorkspace(ReviewWorkspace),

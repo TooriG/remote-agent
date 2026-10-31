@@ -135,7 +135,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
             profiles = repository.profiles()
             repository.selected?.takeIf { id -> profiles.any { it.id == id } }?.let(::selectProfile)
         } catch (error: SerializationException) {
-            notice = error.message
+            notice = error.displayMessage()
         }
     }
 
@@ -197,7 +197,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
                 observe(store, id)
                 connect()
             } catch (error: AgentException) {
-                if (session === selected && isActive) notice = error.message
+                if (session === selected && isActive) notice = error.displayMessage()
             }
         }
     }
@@ -241,7 +241,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
                 busy = false
             } catch (error: AgentException) {
                 busy = false
-                notice = error.message
+                notice = error.displayMessage()
             }
         }
     }
@@ -260,7 +260,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
                 publish(store.snapshot())
                 notice = null
             } catch (error: AgentException) {
-                if (session === store) notice = error.message
+                if (session === store) notice = error.displayMessage()
             } finally {
                 if (session === store && profileId == profile.id && connection === currentCoroutineContext()[Job])
                     busy = false
@@ -336,9 +336,9 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
                 uploading = true
                 perform(Intent.UploadAttachment(UploadAttachment(key, attachment, directory))) { finish() }
             } catch (error: SecurityException) {
-                if (selection == selectionKey) notice = error.message
+                if (selection == selectionKey) notice = error.displayMessage()
             } catch (error: IOException) {
-                if (selection == selectionKey) notice = error.message
+                if (selection == selectionKey) notice = error.displayMessage()
             } finally {
                 if (!uploading) finish()
             }
@@ -351,7 +351,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
             try {
                 selected.flush()
             } catch (error: AgentException) {
-                if (session === selected) notice = error.message
+                if (session === selected) notice = error.displayMessage()
             }
         }
     }
@@ -497,7 +497,7 @@ private fun ProfilesScreen(profiles: List<HostProfile>, select: (String) -> Unit
 @Composable
 private fun ConnectionStatus(notice: String?, busy: Boolean, reconnect: Boolean, connect: () -> Unit) {
     val language = LocalUiLanguage.current
-    notice?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp)) }
+    notice?.let { Text(language.text(it), color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp)) }
     if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
     if (reconnect) Button(onClick = connect, enabled = !busy) { Text(language.text("再接続")) }
 }

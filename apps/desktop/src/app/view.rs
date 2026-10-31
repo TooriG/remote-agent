@@ -373,6 +373,10 @@ mod link_tests {
         assert!(conversation_file_path("https://example.com", "/tmp/project").is_err());
         assert!(conversation_file_path("javascript:alert(1)", "/tmp/project").is_err());
         assert!(conversation_file_path("file://other-host/private.png", "/tmp/project").is_err());
+        assert_eq!(
+            conversation_file_path("~/Movies/video.mp4", "/tmp/project").unwrap(),
+            std::path::Path::new("~/Movies/video.mp4")
+        );
     }
 }
 

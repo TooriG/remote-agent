@@ -15,6 +15,8 @@ struct MarkdownTests {
     }
 
     static func main() throws {
+        check(AgentError.Failed(reason: "Host reason").localizedDescription == "Host reason",
+              "native errors expose their display reason without Swift type names")
         let table = try String(contentsOfFile: CommandLine.arguments[1], encoding: .utf8)
         let visual = ConversationMarkdownContent
             .parse("Before\n\nvisualize{\"path\":\"/fixture/options.html\"}\n\nAfter")

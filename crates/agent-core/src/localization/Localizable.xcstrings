@@ -7985,6 +7985,54 @@
         }
       }
     },
+    "先頭 2,000 件を表示しています。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "先頭 2,000 件を表示しています。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Showing the first 2,000 entries."
+          }
+        }
+      }
+    },
+    "ファイルまたはフォルダが見つかりません。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイルまたはフォルダが見つかりません。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The file or folder could not be found."
+          }
+        }
+      }
+    },
+    "ファイルまたはフォルダにアクセスする権限がありません。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイルまたはフォルダにアクセスする権限がありません。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You do not have permission to access this file or folder."
+          }
+        }
+      }
+    },
     "ファイルを開けません": {
       "localizations": {
         "ja": {
@@ -9617,18 +9665,18 @@
         }
       }
     },
-    "リンクを開けません: %@": {
+    "リンクを開けません: {0}": {
       "localizations": {
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "リンクを開けません: %@"
+            "value": "リンクを開けません: {0}"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Could not open link: %@"
+            "value": "Could not open link: {0}"
           }
         }
       }

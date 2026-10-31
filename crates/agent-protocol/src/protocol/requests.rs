@@ -107,6 +107,7 @@ contracts! {
     PrepareDictation, "host/dictation/prepare" => (op::DictationPreparation, m::Empty),
     CancelDictation, "host/dictation/cancel" => (op::DictationPreparation, m::Empty),
     ListFiles, "host/file/list" => (op::ListFiles, m::FileList) [clone],
+    ResolveFile, "host/file/resolve" => (op::ResolveFile, m::FileEntry) [clone],
     ReadFile, "host/file/read" => (op::ListFiles, m::FileContent),
     WriteFile, "host/file/write" => (op::WriteFile, m::FileContent) [clone],
     Upload, "host/blob/upload" => (op::Upload, m::TransferGrant),

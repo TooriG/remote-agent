@@ -294,7 +294,7 @@ extension AgentSettingsScreen {
             cancelLogin(); return
         }
         if case let .failure(error) = result {
-            loginError = accountErrorMessage(message: error.localizedDescription)
+            loginError = error.localizedDescription
         } else if let login {
             pollLogin(login.loginId, provider: login.provider)
         }
@@ -319,7 +319,7 @@ extension AgentSettingsScreen {
                 }
                 guard !Task.isCancelled else { return }
                 if case let .failure(error) = result {
-                    loginError = accountErrorMessage(message: error.localizedDescription); return
+                    loginError = error.localizedDescription; return
                 }
             }
         }
@@ -341,7 +341,7 @@ extension AgentSettingsScreen {
         ))) { result in
             cancellingLogin = false
             if case let .failure(error) = result {
-                loginError = accountErrorMessage(message: error.localizedDescription)
+                loginError = error.localizedDescription
             }
         }
     }
