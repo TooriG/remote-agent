@@ -351,7 +351,7 @@ impl OperationKey {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Scheduling {
     Concurrent,
     Control,

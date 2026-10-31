@@ -809,7 +809,15 @@ fn apply_locked(current: &mut Arc<Snapshot>, event: Event) -> (Vec<Scheduled>, b
     let changed = publish_locked(current, next);
     (scheduled, changed)
 }
-fn publish_locked(current: &mut Arc<Snapshot>, next: Snapshot) -> bool {
+struct SharedIdentity<'a, T>(&'a Arc<T>);
+
+impl<T> PartialEq for SharedIdentity<'_, T> {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(self.0, other.0)
+    }
+}
+
+fn publication_key(snapshot: &Snapshot) -> impl PartialEq + '_ {
     // No `..`: adding a Snapshot field must update the publication contract.
     let Snapshot {
         project_import,
@@ -851,57 +859,83 @@ fn publish_locked(current: &mut Arc<Snapshot>, next: Snapshot) -> bool {
         connection_attempt,
         subscriptions,
         error,
-    } = &next;
-    let same_threads = match (&current.threads, threads) {
-        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-        (None, None) => true,
-        _ => false,
-    };
-    if current.recent_chats == *recent_chats
-        && Arc::ptr_eq(&current.project_import, project_import)
-        && Arc::ptr_eq(&current.operations, operations)
-        && current.operation_sequence == *operation_sequence
-        && current.model_defaults == *model_defaults
-        && Arc::ptr_eq(&current.project_preferences, project_preferences)
-        && Arc::ptr_eq(&current.scoped_model_defaults, scoped_model_defaults)
-        && current.host_name == *host_name
-        && current.host_ticket == *host_ticket
-        && current.task_activity == *task_activity
-        && current.permission_settings == *permission_settings
-        && current.composer_catalog == *composer_catalog
-        && current.storage_scope == *storage_scope
-        && Arc::ptr_eq(&current.archived_scopes, archived_scopes)
-        && Arc::ptr_eq(&current.terminals, terminals)
-        && Arc::ptr_eq(&current.subscriptions, subscriptions)
-        && Arc::ptr_eq(&current.account, account)
-        && Arc::ptr_eq(&current.conversations, conversations)
-        && same_threads
-        && Arc::ptr_eq(&current.expanded_projects, expanded_projects)
-        && Arc::ptr_eq(&current.project_threads, project_threads)
-        && current.observed_agents == *observed_agents
-        && Arc::ptr_eq(&current.models, models)
-        && Arc::ptr_eq(&current.model_errors, model_errors)
-        && Arc::ptr_eq(&current.drafts, drafts)
-        && Arc::ptr_eq(&current.draft_sessions, draft_sessions)
-        && Arc::ptr_eq(&current.pending_submissions, pending_submissions)
-        && Arc::ptr_eq(&current.file_drafts, file_drafts)
-        && Arc::ptr_eq(&current.workspace, workspace)
-        && Arc::ptr_eq(&current.workspaces, workspaces)
-        && Arc::ptr_eq(&current.navigation, navigation)
-        && Arc::ptr_eq(&current.activity, activity)
-        && Arc::ptr_eq(&current.management, management)
-        && Arc::ptr_eq(&current.list_query, list_query)
-        && &current.epoch == epoch
-        && current.connection_generation == *connection_generation
-        && current.connection_attempt == *connection_attempt
-        && &current.connected == connected
-        && &current.error == error
-    {
+    } = snapshot;
+    // Nest tuples because std implements tuple equality only up to 12 elements.
+    // Equality short-circuits; shared caches compare allocation identity.
+    (
+        (
+            recent_chats,
+            model_defaults,
+            SharedIdentity(project_preferences),
+            SharedIdentity(scoped_model_defaults),
+        ),
+        (
+            host_name,
+            host_ticket,
+            task_activity,
+            permission_settings,
+            composer_catalog,
+            SharedIdentity(account),
+            SharedIdentity(models),
+            SharedIdentity(model_errors),
+        ),
+        (
+            SharedIdentity(operations),
+            operation_sequence,
+            SharedIdentity(conversations),
+            threads.as_ref().map(SharedIdentity),
+            SharedIdentity(subscriptions),
+            observed_agents,
+            SharedIdentity(activity),
+        ),
+        (
+            SharedIdentity(drafts),
+            SharedIdentity(draft_sessions),
+            SharedIdentity(pending_submissions),
+            SharedIdentity(file_drafts),
+        ),
+        (
+            SharedIdentity(project_import),
+            SharedIdentity(terminals),
+            SharedIdentity(expanded_projects),
+            SharedIdentity(project_threads),
+            SharedIdentity(workspace),
+            SharedIdentity(workspaces),
+            SharedIdentity(navigation),
+            SharedIdentity(management),
+            SharedIdentity(list_query),
+        ),
+        (
+            storage_scope,
+            SharedIdentity(archived_scopes),
+            epoch,
+            connected,
+            connection_generation,
+            connection_attempt,
+            error,
+        ),
+    )
+}
+
+fn publish_locked(current: &mut Arc<Snapshot>, next: Snapshot) -> bool {
+    if publication_key(current) == publication_key(&next) {
         return false;
     }
     *current = Arc::new(next);
     true
 }
+
+fn finish_unobserved(updates: &watch::Sender<Arc<Snapshot>>, scheduled: Scheduled) {
+    updates.send_if_modified(|snapshot| {
+        let mut next = snapshot.as_ref().clone();
+        scheduled.scope.finish(&mut next.operations, None);
+        publish_locked(snapshot, next)
+    });
+    if let Some(complete) = scheduled.complete {
+        complete.send(Ok(Outcome::Applied));
+    }
+}
+
 fn finish(updates: &watch::Sender<Arc<Snapshot>>, completed: Completed) -> Vec<Scheduled> {
     let mut effects = Vec::new();
     let mut scheduled = Vec::new();
@@ -1104,25 +1138,120 @@ impl ItemReads {
             .insert(scheduled.effect.scheduling.item().unwrap().clone());
         Some(scheduled)
     }
-    fn finish(
-        &mut self,
-        updates: &watch::Sender<Arc<Snapshot>>,
-        completed: Completed,
-    ) -> Vec<Scheduled> {
-        let key = completed.scheduling.item().cloned();
-        let effects = finish(updates, completed);
-        if let Some(key) = key
-            && !effects.iter().any(|s| {
-                s.effect.receipt == ReceiptPolicy::Continue
-                    && s.effect.scheduling.item() == Some(&key)
-            })
-        {
-            self.running.remove(&key);
-            self.receipts.remove(&key);
-        }
-        effects
+    fn release(&mut self, key: &op::ReadItem) {
+        self.running.remove(key);
+        self.receipts.remove(key);
     }
 }
+#[derive(Default)]
+struct Scheduler {
+    latest_reads: BTreeMap<op::OperationKey, Option<Scheduled>>,
+    terminal_commands: VecDeque<Scheduled>,
+    terminal_running: BTreeSet<String>,
+    item_reads: ItemReads,
+}
+
+enum Admission {
+    Run(Scheduled),
+    Queued,
+    Unobserved(Scheduled),
+    Rejected(Box<(Scheduled, PeerError)>),
+}
+
+impl Scheduler {
+    fn admit(
+        &mut self,
+        mut scheduled: Scheduled,
+        snapshot: &Snapshot,
+        running_jobs: usize,
+    ) -> Admission {
+        // Dispatch publishes before enqueueing. Newer notifications can arrive
+        // first; older work must not replace the latest pending read.
+        let unobserved = (scheduled.effect.scheduling.latest_key().is_some()
+            && !generation_current(scheduled.scope.operation.as_ref(), &snapshot.operations))
+            || matches!(&scheduled.effect.scheduling, op::Scheduling::LatestAgents(session)
+                if snapshot.observed_agents.as_ref() != Some(session));
+        if unobserved {
+            return Admission::Unobserved(scheduled);
+        }
+        if let Some(key) = scheduled.effect.scheduling.latest_key()
+            && let Some(pending) = self.latest_reads.get_mut(&key)
+        {
+            if let Some(previous) = pending.take()
+                && let Some(complete) = previous.complete
+            {
+                scheduled.complete.get_or_insert_default().join(complete);
+            }
+            *pending = Some(scheduled);
+            return Admission::Queued;
+        }
+        let limit = match &scheduled.effect.scheduling {
+            op::Scheduling::Terminal { .. } => {
+                if self.terminal_commands.len() >= MAX_TERMINAL_QUEUE {
+                    return Admission::Rejected(Box::new((scheduled, busy_error())));
+                }
+                self.terminal_commands.push_back(scheduled);
+                return Admission::Queued;
+            }
+            op::Scheduling::Item(_) => {
+                return match self.item_reads.enqueue(scheduled) {
+                    Ok(()) => Admission::Queued,
+                    Err(rejected) => Admission::Rejected(rejected),
+                };
+            }
+            op::Scheduling::Control => MAX_RPC_JOBS + CONTROL_RESERVE,
+            _ => MAX_RPC_JOBS,
+        };
+        if running_jobs >= limit {
+            return Admission::Rejected(Box::new((scheduled, busy_error())));
+        }
+        if let Some(key) = scheduled.effect.scheduling.latest_key() {
+            self.latest_reads.insert(key, None);
+        }
+        Admission::Run(scheduled)
+    }
+
+    fn next(&mut self, running_jobs: usize) -> Option<Scheduled> {
+        if running_jobs >= MAX_RPC_JOBS {
+            return None;
+        }
+        if let Some(scheduled) = self.item_reads.next() {
+            return Some(scheduled);
+        }
+        if self.terminal_running.len() >= MAX_TERMINAL_JOBS {
+            return None;
+        }
+        let index = self.terminal_commands.iter().position(|scheduled| {
+            !self
+                .terminal_running
+                .contains(scheduled.effect.scheduling.terminal().unwrap())
+        })?;
+        let scheduled = self.terminal_commands.remove(index).unwrap();
+        self.terminal_running
+            .insert(scheduled.effect.scheduling.terminal().unwrap().to_owned());
+        Some(scheduled)
+    }
+
+    fn complete(&mut self, scheduling: &op::Scheduling, followups: &[Scheduled]) -> Vec<Scheduled> {
+        if let Some(handle) = scheduling.terminal() {
+            self.terminal_running.remove(handle);
+        }
+        let pending = scheduling
+            .latest_key()
+            .and_then(|key| self.latest_reads.remove(&key))
+            .flatten();
+        if let Some(key) = scheduling.item()
+            && !followups.iter().any(|scheduled| {
+                scheduled.effect.receipt == ReceiptPolicy::Continue
+                    && scheduled.effect.scheduling.item() == Some(key)
+            })
+        {
+            self.item_reads.release(key);
+        }
+        pending.into_iter().collect()
+    }
+}
+
 async fn run(
     mut connection: Connection,
     updates: watch::Sender<Arc<Snapshot>>,
@@ -1138,10 +1267,7 @@ async fn run(
     let mut diagnostic_jobs = FuturesUnordered::new();
     let mut preparation_jobs = FuturesUnordered::new();
     let mut subscriptions = tokio_stream::StreamMap::new();
-    let mut terminal_commands = VecDeque::new();
-    let mut item_reads = ItemReads::default();
-    let mut terminal_running = BTreeSet::new();
-    let mut latest_reads: BTreeMap<op::OperationKey, Option<Scheduled>> = BTreeMap::new();
+    let mut scheduler = Scheduler::default();
     let mut disconnected = None;
     let mut introduction = connection.introduction.take();
     let mut held = Vec::new();
@@ -1160,89 +1286,23 @@ async fn run(
         for id in unused {
             subscriptions.remove(&id);
         }
-        for mut scheduled in std::mem::take(&mut effects) {
-            let unobserved = {
-                let snapshot = updates.borrow();
-                // Dispatch publishes before enqueueing. Newer notifications can
-                // reach the executor before an older command; never let that
-                // older work replace the latest pending read.
-                (scheduled.effect.scheduling.latest_key().is_some()
-                    && !generation_current(
-                        scheduled.scope.operation.as_ref(),
-                        &snapshot.operations,
-                    ))
-                    || matches!(&scheduled.effect.scheduling, op::Scheduling::LatestAgents(session)
-                        if snapshot.observed_agents.as_ref() != Some(session))
-            };
-            if unobserved {
-                updates.send_if_modified(|snapshot| {
-                    let mut next = snapshot.as_ref().clone();
-                    scheduled.scope.finish(&mut next.operations, None);
-                    publish_locked(snapshot, next)
-                });
-                if let Some(complete) = scheduled.complete {
-                    complete.send(Ok(Outcome::Applied));
+        for scheduled in std::mem::take(&mut effects) {
+            let admission = scheduler.admit(scheduled, &updates.borrow(), jobs.len());
+            // Publish each rejection before deciding the next effect: recovery
+            // can change the operation generation used by admission.
+            match admission {
+                Admission::Run(scheduled) => {
+                    jobs.push(perform(Some(peer), session.as_ref(), scheduled))
                 }
-                continue;
-            }
-            if let Some(key) = scheduled.effect.scheduling.latest_key()
-                && let Some(pending) = latest_reads.get_mut(&key)
-            {
-                if let Some(previous) = pending.take()
-                    && let Some(complete) = previous.complete
-                {
-                    scheduled.complete.get_or_insert_default().join(complete);
+                Admission::Queued => {}
+                Admission::Unobserved(scheduled) => finish_unobserved(&updates, scheduled),
+                Admission::Rejected(rejection) => {
+                    let (scheduled, error) = *rejection;
+                    effects.extend(finish(&updates, rejected(scheduled, error)));
                 }
-                *pending = Some(scheduled);
-                continue;
             }
-            let limit = match &scheduled.effect.scheduling {
-                op::Scheduling::Terminal { .. } => {
-                    if terminal_commands.len() >= MAX_TERMINAL_QUEUE {
-                        effects.extend(finish(&updates, rejected(scheduled, busy_error())));
-                    } else {
-                        terminal_commands.push_back(scheduled);
-                    }
-                    continue;
-                }
-                op::Scheduling::Item(_) => {
-                    if let Err(rejection) = item_reads.enqueue(scheduled) {
-                        let (scheduled, error) = *rejection;
-                        effects.extend(finish(&updates, rejected(scheduled, error)));
-                    }
-                    continue;
-                }
-                op::Scheduling::Control => MAX_RPC_JOBS + CONTROL_RESERVE,
-                op::Scheduling::Concurrent
-                | op::Scheduling::LatestHostState(_)
-                | op::Scheduling::LatestList(_)
-                | op::Scheduling::LatestAgents(_)
-                | op::Scheduling::LatestProject(_)
-                | op::Scheduling::LatestReview => MAX_RPC_JOBS,
-            };
-            if jobs.len() >= limit {
-                effects.extend(finish(&updates, rejected(scheduled, busy_error())));
-                continue;
-            }
-            if let Some(key) = scheduled.effect.scheduling.latest_key() {
-                latest_reads.insert(key, None);
-            }
-            jobs.push(perform(Some(peer), session.as_ref(), scheduled));
         }
-        while jobs.len() < MAX_RPC_JOBS {
-            let Some(scheduled) = item_reads.next() else {
-                break;
-            };
-            jobs.push(perform(Some(peer), session.as_ref(), scheduled));
-        }
-        while terminal_running.len() < MAX_TERMINAL_JOBS && jobs.len() < MAX_RPC_JOBS {
-            let Some(index) = terminal_commands.iter().position(|scheduled| {
-                !terminal_running.contains(scheduled.effect.scheduling.terminal().unwrap())
-            }) else {
-                break;
-            };
-            let scheduled = terminal_commands.remove(index).unwrap();
-            terminal_running.insert(scheduled.effect.scheduling.terminal().unwrap().to_owned());
+        while let Some(scheduled) = scheduler.next(jobs.len()) {
             jobs.push(perform(Some(peer), session.as_ref(), scheduled));
         }
         tokio::select! {
@@ -1329,12 +1389,10 @@ async fn run(
                     }).chain(futures_util::stream::once(async {
                     Err(std::io::Error::other("subscription ended"))
                 })).boxed()); }
-                if let Some(handle) = result.scheduling.terminal() { terminal_running.remove(handle); }
-                if let Some(key) = result.scheduling.latest_key()
-                    && let Some(Some(scheduled)) = latest_reads.remove(&key) {
-                    effects.push(scheduled);
-                }
-                effects.extend(item_reads.finish(&updates, result));
+                let scheduling = result.scheduling.clone();
+                let followups = finish(&updates, result);
+                effects.extend(scheduler.complete(&scheduling, &followups));
+                effects.extend(followups);
             }
             Some(()) = preparation_jobs.next(), if !preparation_jobs.is_empty() => {},
             Some((id, update)) = subscriptions.next(), if !subscriptions.is_empty() => {
@@ -1630,6 +1688,239 @@ impl Execution<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn queued(scheduling: op::Scheduling) -> Scheduled {
+        let mut effect = Effect::execute(op::ReadTaskActivity {});
+        effect.scheduling = scheduling;
+        Scheduled {
+            effect,
+            scope: Scope {
+                navigation: 0,
+                operation: None,
+            },
+            complete: None,
+        }
+    }
+
+    fn item(id: &str) -> op::ReadItem {
+        op::ReadItem {
+            thread_id: crate::session::SessionRef {
+                provider: crate::session::ProviderKind::Codex,
+                id: "chat".into(),
+            },
+            turn_id: "turn".into(),
+            item_id: id.into(),
+        }
+    }
+
+    fn enqueue(queue: &mut Scheduler, scheduling: op::Scheduling) {
+        assert!(matches!(
+            queue.admit(queued(scheduling), &Snapshot::default(), 0),
+            Admission::Queued
+        ));
+    }
+
+    #[test]
+    fn scheduler_serializes_each_terminal_and_releases_completed_work() {
+        let mut queue = Scheduler::default();
+        let terminal = |handle: &str| op::Scheduling::Terminal {
+            handle: handle.into(),
+            starts: false,
+        };
+        for handle in ["a", "a", "b"] {
+            enqueue(&mut queue, terminal(handle));
+        }
+        let first = queue.next(0).unwrap();
+        assert_eq!(first.effect.scheduling.terminal(), Some("a"));
+        assert_eq!(
+            queue.next(1).unwrap().effect.scheduling.terminal(),
+            Some("b")
+        );
+        assert!(queue.next(2).is_none());
+        assert!(queue.complete(&first.effect.scheduling, &[]).is_empty());
+        assert_eq!(
+            queue.next(1).unwrap().effect.scheduling.terminal(),
+            Some("a")
+        );
+    }
+
+    #[test]
+    fn scheduler_reserves_control_capacity_and_bounds_terminal_concurrency() {
+        let mut queue = Scheduler::default();
+        assert!(matches!(
+            queue.admit(
+                queued(op::Scheduling::Concurrent),
+                &Snapshot::default(),
+                MAX_RPC_JOBS
+            ),
+            Admission::Rejected(_)
+        ));
+        assert!(matches!(
+            queue.admit(
+                queued(op::Scheduling::Control),
+                &Snapshot::default(),
+                MAX_RPC_JOBS
+            ),
+            Admission::Run(_)
+        ));
+        assert!(matches!(
+            queue.admit(
+                queued(op::Scheduling::Control),
+                &Snapshot::default(),
+                MAX_RPC_JOBS + CONTROL_RESERVE
+            ),
+            Admission::Rejected(_)
+        ));
+        let mut running = Vec::new();
+        for index in 0..=MAX_TERMINAL_JOBS {
+            enqueue(
+                &mut queue,
+                op::Scheduling::Terminal {
+                    handle: index.to_string(),
+                    starts: false,
+                },
+            );
+        }
+        for index in 0..MAX_TERMINAL_JOBS {
+            running.push(queue.next(index).unwrap());
+        }
+        assert!(queue.next(MAX_TERMINAL_JOBS).is_none());
+        queue.complete(&running.pop().unwrap().effect.scheduling, &[]);
+        assert!(queue.next(MAX_TERMINAL_JOBS - 1).is_some());
+    }
+
+    #[test]
+    fn scheduler_coalesces_latest_reads_until_completion() {
+        let mut queue = Scheduler::default();
+        let latest = || queued(op::Scheduling::LatestHostState(op::OperationKey::Models));
+        let Admission::Run(first) = queue.admit(latest(), &Snapshot::default(), 0) else {
+            panic!("initial read must run")
+        };
+        assert!(matches!(
+            queue.admit(latest(), &Snapshot::default(), 1),
+            Admission::Queued
+        ));
+        let mut newest = latest();
+        newest.scope.navigation = 9;
+        assert!(matches!(
+            queue.admit(newest, &Snapshot::default(), 1),
+            Admission::Queued
+        ));
+        assert!(queue.next(1).is_none());
+        let mut followups = queue.complete(&first.effect.scheduling, &[]);
+        assert_eq!(followups.len(), 1);
+        assert_eq!(followups[0].scope.navigation, 9);
+        assert!(matches!(
+            queue.admit(followups.pop().unwrap(), &Snapshot::default(), 0),
+            Admission::Run(_)
+        ));
+    }
+
+    #[test]
+    fn scheduler_releases_item_slots_and_prioritizes_items_over_terminals() {
+        let mut queue = Scheduler::default();
+        enqueue(
+            &mut queue,
+            op::Scheduling::Terminal {
+                handle: "terminal".into(),
+                starts: false,
+            },
+        );
+        for index in 0..MAX_ITEM_TRANSFERS {
+            enqueue(&mut queue, op::Scheduling::Item(item(&index.to_string())));
+        }
+        assert!(queue.next(MAX_RPC_JOBS).is_none());
+        let first = queue.next(0).unwrap();
+        assert_eq!(first.effect.scheduling.item(), Some(&item("0")));
+        for index in 1..MAX_ITEM_TRANSFERS {
+            assert!(
+                queue
+                    .next(index)
+                    .unwrap()
+                    .effect
+                    .scheduling
+                    .item()
+                    .is_some()
+            );
+        }
+        queue.complete(&first.effect.scheduling, &[]);
+        enqueue(&mut queue, op::Scheduling::Item(item("new")));
+        let replacement = queue.next(0).unwrap();
+        assert_eq!(replacement.effect.scheduling.item(), Some(&item("new")));
+        queue.complete(&replacement.effect.scheduling, &[]);
+        enqueue(&mut queue, op::Scheduling::Item(item("0")));
+        assert_eq!(
+            queue.next(0).unwrap().effect.scheduling.item(),
+            Some(&item("0"))
+        );
+        assert_eq!(
+            queue.next(0).unwrap().effect.scheduling.terminal(),
+            Some("terminal")
+        );
+    }
+
+    #[test]
+    fn scheduler_continuations_keep_joined_receipts_and_release_unrelated_items() {
+        let mut queue = Scheduler::default();
+        let (first, mut first_receipt) = oneshot::channel();
+        let mut scheduled = queued(op::Scheduling::Item(item("one")));
+        scheduled.complete = Some(Receipt::new(first));
+        assert!(matches!(
+            queue.admit(scheduled, &Snapshot::default(), 0),
+            Admission::Queued
+        ));
+        let reading = queue.next(0).unwrap();
+        let mut continuation = queued(op::Scheduling::Item(item("one")));
+        continuation.effect.receipt = ReceiptPolicy::Continue;
+        continuation.complete = reading.complete;
+        queue.complete(
+            &reading.effect.scheduling,
+            std::slice::from_ref(&continuation),
+        );
+        let (second, mut second_receipt) = oneshot::channel();
+        let mut duplicate = queued(op::Scheduling::Item(item("one")));
+        duplicate.complete = Some(Receipt::new(second));
+        assert!(matches!(
+            queue.admit(duplicate, &Snapshot::default(), 0),
+            Admission::Queued
+        ));
+        assert!(queue.next(0).is_none());
+        assert!(matches!(
+            queue.admit(continuation, &Snapshot::default(), 0),
+            Admission::Queued
+        ));
+        let continued = queue.next(0).unwrap();
+        continued.complete.unwrap().send(Ok(Outcome::Applied));
+        assert!(first_receipt.try_recv().unwrap().is_ok());
+        assert!(second_receipt.try_recv().unwrap().is_ok());
+        let mut unrelated = queued(op::Scheduling::Item(item("other")));
+        unrelated.effect.receipt = ReceiptPolicy::Continue;
+        queue.complete(&continued.effect.scheduling, &[unrelated]);
+        enqueue(&mut queue, op::Scheduling::Item(item("one")));
+        assert_eq!(
+            queue.next(0).unwrap().effect.scheduling.item(),
+            Some(&item("one"))
+        );
+    }
+
+    #[test]
+    fn scheduler_ignores_superseded_and_unobserved_reads() {
+        let mut queue = Scheduler::default();
+        let mut scheduled = queued(op::Scheduling::LatestHostState(op::OperationKey::Models));
+        scheduled.scope.operation = Some((op::OperationKey::Models, 1));
+        assert!(matches!(
+            queue.admit(scheduled, &Snapshot::default(), 0),
+            Admission::Unobserved(_)
+        ));
+        assert!(matches!(
+            queue.admit(
+                queued(op::Scheduling::LatestAgents(item("one").thread_id)),
+                &Snapshot::default(),
+                0
+            ),
+            Admission::Unobserved(_)
+        ));
+    }
 
     #[allow(dead_code)]
     mod host_fixture {

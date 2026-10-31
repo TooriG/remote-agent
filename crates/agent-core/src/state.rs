@@ -1143,7 +1143,7 @@ fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
                 next.account = Arc::default();
                 next.models = Arc::default();
                 next.model_errors = Arc::default();
-                reset_session(&mut next);
+                next.reset_session();
             }
             next.storage_scope = scope;
         }
@@ -1188,75 +1188,19 @@ fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
         }
         Event::Connected => {
             next.connection_generation = previous.connection_generation.saturating_add(1);
-            for page in next
-                .threads
-                .iter_mut()
-                .chain(Arc::make_mut(&mut next.project_threads).values_mut())
-            {
-                if page.revision == 0
-                    && page.data.iter().all(|row| row.list_revision == 0)
-                    && page
-                        .projects
-                        .iter()
-                        .all(|project| project.list_revision == 0)
-                {
-                    continue;
-                }
-                let page = Arc::make_mut(page);
-                page.revision = 0;
-                for row in &mut page.data {
-                    row.list_revision = 0;
-                }
-                for project in &mut page.projects {
-                    project.list_revision = 0;
-                }
-            }
-            for thread in Arc::make_mut(&mut next.conversations).values_mut() {
-                if thread.list_revision != 0 {
-                    Arc::make_mut(thread).list_revision = 0;
-                }
-            }
+            next.reset_list_revisions();
             next.operations = Arc::default();
-            reset_session(&mut next);
+            next.reset_session();
             next.connected = true;
             next.task_activity = None;
             next.error = None;
             next.list_query = Arc::new((*next.list_query).clone().for_connection());
-            let mut effects = vec![Effect::execute(op::ReadTaskActivity {})];
-            if next.threads.is_none() {
-                effects.push(Effect::execute(op::ListSessions::new(
-                    (*next.list_query).clone(),
-                )));
-            }
-            // The Host catalog can change while a mobile client is backgrounded.
-            // Keep cached choices visible until the fresh catalog arrives.
-            effects.push(Effect::execute(op::LoadModels {}));
-            if next.account.accounts.is_none() {
-                effects.push(Effect::execute(op::ListAccounts {}));
-            }
-            effects.extend(op::refresh_agents(
-                next.connected,
-                next.observed_agents.as_ref(),
-            ));
-            if let Some(thread_id) = &next.navigation.thread_id {
-                effects.push(Effect::execute(op::ReadThread::open(thread_id.clone())));
-            } else {
-                effects.extend(op::review_workspace(&mut next));
-            }
-            for (handle, terminal) in next.terminals.iter() {
-                if terminal.phase == TerminalPhase::Suspended {
-                    effects.push(Effect::execute(op::StartTerminal {
-                        handle: handle.clone(),
-                        cwd: terminal.cwd.clone(),
-                        size: terminal.size,
-                    }));
-                }
-            }
+            let effects = next.prepare_connection_refresh();
             return (next, effects);
         }
         Event::Disconnected(reason) => {
             next.operations = Arc::default();
-            reset_session(&mut next);
+            next.reset_session();
             next.connected = false;
             for terminal in Arc::make_mut(&mut next.terminals).values_mut() {
                 if matches!(
@@ -1276,51 +1220,119 @@ fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
     (next, Vec::new())
 }
 
-/// Cached history and drafts survive; IDs and activity belong to one connection.
-/// Pending submissions are persisted only to recover dictation after a crash.
-fn reset_session(snapshot: &mut Snapshot) {
-    snapshot.composer_catalog = None;
-    snapshot.permission_settings = None;
-    snapshot.subscriptions = Arc::default();
-    for thread in Arc::make_mut(&mut snapshot.conversations).values_mut() {
-        if !thread.requests.is_empty() || !thread.submissions.is_empty() {
-            let thread = Arc::make_mut(thread);
-            thread.requests.clear();
-            thread.submissions.clear();
+impl Snapshot {
+    fn reset_list_revisions(&mut self) {
+        for page in self
+            .threads
+            .iter_mut()
+            .chain(Arc::make_mut(&mut self.project_threads).values_mut())
+        {
+            if page.revision == 0
+                && page.data.iter().all(|row| row.list_revision == 0)
+                && page
+                    .projects
+                    .iter()
+                    .all(|project| project.list_revision == 0)
+            {
+                continue;
+            }
+            let page = Arc::make_mut(page);
+            page.revision = 0;
+            for row in &mut page.data {
+                row.list_revision = 0;
+            }
+            for project in &mut page.projects {
+                project.list_revision = 0;
+            }
         }
-    }
-    if !snapshot.activity.active.is_empty() {
-        Arc::make_mut(&mut snapshot.activity).active.clear();
-    }
-    snapshot.epoch += 1;
-    for pending in Arc::make_mut(&mut snapshot.pending_submissions).values_mut() {
-        Arc::make_mut(pending).delivery_unknown = true;
-    }
-    if snapshot
-        .conversations
-        .values()
-        .any(|thread| has_session_status(thread))
-    {
-        for thread in Arc::make_mut(&mut snapshot.conversations).values_mut() {
-            if has_session_status(thread) {
-                clear_session_status(Arc::make_mut(thread));
+        for thread in Arc::make_mut(&mut self.conversations).values_mut() {
+            if thread.list_revision != 0 {
+                Arc::make_mut(thread).list_revision = 0;
             }
         }
     }
-    if snapshot.listed_threads().any(has_session_status) {
-        for list in snapshot
-            .threads
-            .iter_mut()
-            .chain(Arc::make_mut(&mut snapshot.project_threads).values_mut())
+
+    fn prepare_connection_refresh(&mut self) -> Vec<Effect> {
+        let mut effects = vec![Effect::execute(op::ReadTaskActivity {})];
+        if self.threads.is_none() {
+            effects.push(Effect::execute(op::ListSessions::new(
+                (*self.list_query).clone(),
+            )));
+        }
+        // The Host catalog can change while a mobile client is backgrounded.
+        // Keep cached choices visible until the fresh catalog arrives.
+        effects.push(Effect::execute(op::LoadModels {}));
+        if self.account.accounts.is_none() {
+            effects.push(Effect::execute(op::ListAccounts {}));
+        }
+        effects.extend(op::refresh_agents(
+            self.connected,
+            self.observed_agents.as_ref(),
+        ));
+        if let Some(thread_id) = &self.navigation.thread_id {
+            effects.push(Effect::execute(op::ReadThread::open(thread_id.clone())));
+        } else {
+            effects.extend(op::review_workspace(self));
+        }
+        for (handle, terminal) in self.terminals.iter() {
+            if terminal.phase == TerminalPhase::Suspended {
+                effects.push(Effect::execute(op::StartTerminal {
+                    handle: handle.clone(),
+                    cwd: terminal.cwd.clone(),
+                    size: terminal.size,
+                }));
+            }
+        }
+        effects
+    }
+
+    /// Cached history and drafts survive; IDs and activity belong to one connection.
+    /// Pending submissions are persisted only to recover dictation after a crash.
+    fn reset_session(&mut self) {
+        self.composer_catalog = None;
+        self.permission_settings = None;
+        self.subscriptions = Arc::default();
+        for thread in Arc::make_mut(&mut self.conversations).values_mut() {
+            if !thread.requests.is_empty() || !thread.submissions.is_empty() {
+                let thread = Arc::make_mut(thread);
+                thread.requests.clear();
+                thread.submissions.clear();
+            }
+        }
+        if !self.activity.active.is_empty() {
+            Arc::make_mut(&mut self.activity).active.clear();
+        }
+        self.epoch += 1;
+        for pending in Arc::make_mut(&mut self.pending_submissions).values_mut() {
+            Arc::make_mut(pending).delivery_unknown = true;
+        }
+        if self
+            .conversations
+            .values()
+            .any(|thread| has_session_status(thread))
         {
-            if list.data.iter().any(has_session_status) {
-                for thread in &mut Arc::make_mut(list).data {
-                    clear_session_status(thread);
+            for thread in Arc::make_mut(&mut self.conversations).values_mut() {
+                if has_session_status(thread) {
+                    clear_session_status(Arc::make_mut(thread));
+                }
+            }
+        }
+        if self.listed_threads().any(has_session_status) {
+            for list in self
+                .threads
+                .iter_mut()
+                .chain(Arc::make_mut(&mut self.project_threads).values_mut())
+            {
+                if list.data.iter().any(has_session_status) {
+                    for thread in &mut Arc::make_mut(list).data {
+                        clear_session_status(thread);
+                    }
                 }
             }
         }
     }
 }
+
 fn has_session_status(thread: &Thread) -> bool {
     thread.status == crate::models::SessionStatus::Running
         || thread
