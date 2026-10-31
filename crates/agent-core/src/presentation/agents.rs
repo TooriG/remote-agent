@@ -1,6 +1,6 @@
 //! The selected conversation's agent fleet, independent of conversation navigation.
 use crate::{
-    models::{ItemBody, ItemStatus, SessionStatus, TurnStatus, task_title},
+    models::{Item, ItemBody, ItemStatus, SessionStatus, TurnStatus, task_title},
     session::{ProviderKind, SessionRef},
     state::Snapshot,
 };
@@ -33,146 +33,161 @@ impl Snapshot {
                 continue;
             };
             let observed = self.activity.active.get(id).copied();
-            let (status, active) = agent_status(
+            let row = session_agent(
+                id,
+                task_title(thread.name.as_deref(), thread.preview.as_deref()),
                 match thread.status {
                     SessionStatus::Running => TurnStatus::Running,
                     _ => TurnStatus::Unknown,
                 },
                 observed.or_else(|| (thread.status == SessionStatus::Idle).then_some(false)),
+                self.activity.unread.contains(id),
             );
-            let key = format!("session:{id}");
-            entries.insert(
-                key.clone(),
-                (
-                    parent.clone(),
-                    Some(id.clone()),
-                    AgentSummary {
-                        key,
-                        title: task_title(thread.name.as_deref(), thread.preview.as_deref()).into(),
-                        status: status.into(),
-                        active,
-                        unread: self.activity.unread.contains(id),
-                        model: None,
-                        detail: None,
-                        depth: 0,
-                    },
-                ),
-            );
+            entries.insert(row.key.clone(), (parent.clone(), Some(id.clone()), row));
         }
-        for (owner, thread) in self.conversations.iter() {
-            for (item, provider) in thread.turns.iter().flatten().flat_map(|turn| {
-                turn.items
-                    .iter()
-                    .flatten()
-                    .map(move |item| (item, turn.provider.unwrap_or(owner.provider)))
-            }) {
-                let ItemBody::Subagent {
-                    tool,
-                    prompt,
-                    model,
-                    receivers,
-                    states,
-                    result,
-                    ..
-                } = item.body()
-                else {
+        for (owner, item, provider) in self.conversation_items() {
+            let ItemBody::Subagent {
+                tool,
+                prompt,
+                model,
+                receivers,
+                states,
+                result,
+                ..
+            } = item.body()
+            else {
+                continue;
+            };
+            let detail = result
+                .as_ref()
+                .and_then(serde_json::Value::as_str)
+                .or(prompt.as_deref())
+                .map(str::to_owned);
+            if receivers.is_empty() {
+                if provider != ProviderKind::Claude {
                     continue;
-                };
-                let detail = result
-                    .as_ref()
-                    .and_then(serde_json::Value::as_str)
-                    .or(prompt.as_deref())
-                    .map(str::to_owned);
-                if receivers.is_empty() {
-                    if provider != ProviderKind::Claude {
+                }
+                let row = local_agent(
+                    owner,
+                    &item.id,
+                    item.status,
+                    prompt.as_deref(),
+                    model.clone(),
+                    detail,
+                );
+                entries.insert(row.key.clone(), (owner.clone(), None, row));
+            } else {
+                for receiver in receivers {
+                    if receiver.provider != provider {
                         continue;
                     }
-                    let key = format!("item:{owner}:{}", item.id);
-                    let (status, active) = agent_status(
-                        match item.status {
-                            ItemStatus::Running => TurnStatus::Running,
-                            ItemStatus::Completed => TurnStatus::Completed,
-                            ItemStatus::Failed => TurnStatus::Failed,
-                            ItemStatus::Interrupted | ItemStatus::Declined => {
-                                TurnStatus::Interrupted
-                            }
-                            ItemStatus::Unknown => TurnStatus::Unknown,
-                        },
-                        None,
-                    );
-                    entries.insert(
-                        key.clone(),
-                        (
-                            owner.clone(),
-                            None,
-                            AgentSummary {
-                                key,
-                                title: prompt
-                                    .as_deref()
-                                    .map(crate::models::compact_title)
-                                    .filter(|title| !title.is_empty())
-                                    .unwrap_or_else(|| "サブエージェント".into()),
-                                status: status.into(),
-                                active,
-                                unread: false,
-                                model: model.clone(),
-                                detail,
-                                depth: 0,
-                            },
-                        ),
-                    );
-                } else {
-                    for receiver in receivers {
-                        if receiver.provider != provider {
-                            continue;
-                        }
-                        let key = format!("session:{receiver}");
-                        if !entries.contains_key(&key) && tool != "spawnAgent" {
-                            continue;
-                        }
-                        let entry = entries.entry(key.clone()).or_insert_with(|| {
-                            let (status, active) = agent_status(
-                                TurnStatus::Unknown,
-                                self.activity.active.get(receiver).copied(),
-                            );
-                            (
-                                owner.clone(),
-                                Some(receiver.clone()),
-                                AgentSummary {
-                                    key,
-                                    title: receiver.id.clone(),
-                                    status: status.into(),
-                                    active,
-                                    unread: self.activity.unread.contains(receiver),
-                                    model: None,
-                                    detail: None,
-                                    depth: 0,
-                                },
-                            )
-                        });
-                        if &entry.0 != owner {
-                            continue;
-                        }
-                        if model.is_some() {
-                            entry.2.model = model.clone();
-                        }
-                        if let Some(state) = states.iter().find(|state| &state.session == receiver)
-                        {
-                            let (status, active) = agent_status(
-                                state.status,
-                                self.activity.active.get(receiver).copied(),
-                            );
-                            entry.2.status = status.into();
-                            entry.2.active = active;
-                            entry.2.detail = state.message.clone().or_else(|| detail.clone());
-                        } else if detail.is_some() {
-                            entry.2.detail = detail.clone();
-                        }
+                    let key = session_key(receiver);
+                    if !entries.contains_key(&key) && tool != "spawnAgent" {
+                        continue;
+                    }
+                    let entry = entries.entry(key).or_insert_with(|| {
+                        let row = session_agent(
+                            receiver,
+                            &receiver.id,
+                            TurnStatus::Unknown,
+                            self.activity.active.get(receiver).copied(),
+                            self.activity.unread.contains(receiver),
+                        );
+                        (owner.clone(), Some(receiver.clone()), row)
+                    });
+                    if &entry.0 != owner {
+                        continue;
+                    }
+                    if model.is_some() {
+                        entry.2.model = model.clone();
+                    }
+                    if let Some(state) = states.iter().find(|state| &state.session == receiver) {
+                        let (status, active) =
+                            agent_status(state.status, self.activity.active.get(receiver).copied());
+                        entry.2.status = status.into();
+                        entry.2.active = active;
+                        entry.2.detail = state.message.clone().or_else(|| detail.clone());
+                    } else if detail.is_some() {
+                        entry.2.detail = detail.clone();
                     }
                 }
             }
         }
         scoped_agents(root, entries)
+    }
+}
+
+impl Snapshot {
+    fn conversation_items(&self) -> impl Iterator<Item = (&SessionRef, &Item, ProviderKind)> {
+        self.conversations.iter().flat_map(|(owner, thread)| {
+            thread.turns.iter().flatten().flat_map(move |turn| {
+                turn.items.iter().flatten().map(move |item| {
+                    (
+                        owner,
+                        item.as_ref(),
+                        turn.provider.unwrap_or(owner.provider),
+                    )
+                })
+            })
+        })
+    }
+}
+
+fn session_key(id: &SessionRef) -> String {
+    format!("session:{id}")
+}
+
+fn session_agent(
+    id: &SessionRef,
+    title: &str,
+    status: TurnStatus,
+    observed_active: Option<bool>,
+    unread: bool,
+) -> AgentSummary {
+    let (status, active) = agent_status(status, observed_active);
+    AgentSummary {
+        key: session_key(id),
+        title: title.into(),
+        status: status.into(),
+        active,
+        unread,
+        model: None,
+        detail: None,
+        depth: 0,
+    }
+}
+
+fn local_agent(
+    owner: &SessionRef,
+    item_id: &agent_protocol::ids::ItemId,
+    item_status: ItemStatus,
+    prompt: Option<&str>,
+    model: Option<String>,
+    detail: Option<String>,
+) -> AgentSummary {
+    let key = format!("item:{owner}:{item_id}");
+    let (status, active) = agent_status(
+        match item_status {
+            ItemStatus::Running => TurnStatus::Running,
+            ItemStatus::Completed => TurnStatus::Completed,
+            ItemStatus::Failed => TurnStatus::Failed,
+            ItemStatus::Interrupted | ItemStatus::Declined => TurnStatus::Interrupted,
+            ItemStatus::Unknown => TurnStatus::Unknown,
+        },
+        None,
+    );
+    AgentSummary {
+        key,
+        title: prompt
+            .map(crate::models::compact_title)
+            .filter(|title| !title.is_empty())
+            .unwrap_or_else(|| "サブエージェント".into()),
+        status: status.into(),
+        active,
+        unread: false,
+        model,
+        detail,
+        depth: 0,
     }
 }
 
