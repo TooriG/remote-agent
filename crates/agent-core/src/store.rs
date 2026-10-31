@@ -2158,8 +2158,10 @@ mod tests {
                         json!({"data":[{"id":{"provider":"claude","id":"latest"}}],
                         "projects":[],"hasMore":false,"hasMoreProjects":false,"limit":5,"projectPages":{}})
                     }
-                    "host/taskActivity/read" => json!({"revision":0,"statuses":[],"unread":[],
-                        "display":agent_protocol::live_activity::TaskActivitySummary::default().display()}),
+                    "host/taskActivity/read" => {
+                        json!({"revision":0,"statuses":[],"waiting":[],"unread":[],
+                        "display":agent_protocol::live_activity::TaskActivitySummary::default().display()})
+                    }
                     "host/model/list" => json!({"data":[]}),
                     "host/account/list" => json!({"accounts":[],"selected":{}}),
                     "host/name" => json!("Fixture"),
@@ -2274,6 +2276,7 @@ mod tests {
             ("task_activity", |snapshot| {
                 snapshot.task_activity =
                     Some(Arc::new(agent_protocol::live_activity::TaskActivityState {
+                        waiting: Vec::new(),
                         unread: Vec::new(),
                         statuses: Vec::new(),
                         revision: 1,

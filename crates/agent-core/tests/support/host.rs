@@ -352,6 +352,7 @@ impl Writer {
                 state.activity_revision += 1;
                 agent_protocol::live_activity::TaskActivityState {
                     revision: state.activity_revision,
+                    waiting: Vec::new(),
                     statuses: Vec::new(),
                     display: agent_protocol::live_activity::TaskActivitySummary::default()
                         .display(),

@@ -27,6 +27,7 @@ fn subagent_work_and_requests_share_the_root_conversation_activity() {
     );
     assert_eq!(initial.display.current.total, 2);
     assert_eq!(initial.display.current.label, "実行中 2件");
+    assert!(initial.waiting.is_empty());
     for (id, body) in [
         ("question", serde_json::json!({"question":{"questions":[]}})),
         (
@@ -39,9 +40,10 @@ fn subagent_work_and_requests_share_the_root_conversation_activity() {
         )
         .unwrap();
         router.session_change(&grandchild, SessionChange::Request { request });
-        let waiting = router.task_activity(Vec::new(), 0).display;
-        assert_eq!(waiting.current.total, 2);
-        assert_eq!(waiting.current.label, "確認待ち 1件 · 実行中 1件");
+        let waiting = router.task_activity(Vec::new(), 0);
+        assert_eq!(waiting.display.current.total, 2);
+        assert_eq!(waiting.display.current.label, "確認待ち 1件 · 実行中 1件");
+        assert_eq!(waiting.waiting, [root.clone()]);
         router.session_change(
             &grandchild,
             SessionChange::RequestDelivery {
@@ -49,6 +51,7 @@ fn subagent_work_and_requests_share_the_root_conversation_activity() {
                 state: RequestDelivery::Sent,
             },
         );
+        assert!(router.task_activity(Vec::new(), 0).waiting.is_empty());
         router.session_change(
             &grandchild,
             SessionChange::ResolveRequest {
@@ -327,6 +330,7 @@ fn task_state_is_authoritative_without_apns_or_conversation_subscriptions() {
         router.session_change(&target, SessionChange::Request { request });
         let waiting = router.task_activity(Vec::new(), 0);
         assert_eq!(waiting.display.current.label, "確認待ち 1件 · 実行中 1件");
+        assert_eq!(waiting.waiting, [target.clone()]);
         router.session_change(
             &target,
             SessionChange::RequestDelivery {
@@ -338,6 +342,7 @@ fn task_state_is_authoritative_without_apns_or_conversation_subscriptions() {
             router.task_activity(Vec::new(), 0).display.current.label,
             "実行中 2件"
         );
+        assert!(router.task_activity(Vec::new(), 0).waiting.is_empty());
     }
     let read_revision = router.task_activity_revision();
     router.session_change(

@@ -80,7 +80,11 @@ pub(super) fn task_activity_state(
         .filter_map(|(id, task)| Some((id.clone(), task.facts?.session_status())))
         .collect();
     let groups = task_groups(tasks);
+    let mut waiting = Vec::new();
     for (root, summary) in &groups {
+        if summary.waiting > 0 {
+            waiting.push((*root).clone());
+        }
         statuses.insert(
             (*root).clone(),
             if summary.running + summary.waiting > 0 {
@@ -90,10 +94,12 @@ pub(super) fn task_activity_state(
             },
         );
     }
+    waiting.sort();
     agent_protocol::live_activity::TaskActivityState {
         revision,
         display: task_display(tasks, &groups, &unread),
         statuses: statuses.into_iter().collect(),
+        waiting,
         unread,
     }
 }

@@ -560,6 +560,7 @@ mod tests {
         let activity = |revision, turn: Option<&str>| Notification::TaskActivity {
             state: agent_protocol::live_activity::TaskActivityState {
                 revision,
+                waiting: Vec::new(),
                 display: agent_protocol::live_activity::TaskActivitySummary::default().display(),
                 statuses: Vec::new(),
                 unread: turn
@@ -629,6 +630,7 @@ mod tests {
 
     fn host_unread(state: &mut Snapshot, id: &SessionRef, unread: bool) {
         let _ = state.accept_task_activity(agent_protocol::live_activity::TaskActivityState {
+            waiting: Vec::new(),
             revision: state
                 .task_activity
                 .as_ref()

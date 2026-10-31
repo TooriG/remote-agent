@@ -78,14 +78,3 @@ private struct TaskIconRow: View {
         }
     }
 }
-
-private extension TaskActivityAttributes.IconKind {
-    var symbol: String {
-        switch self {
-        case .running: "circle.dotted"
-        case .waiting: "person.crop.circle.badge.questionmark"
-        case .unknown: "arrow.clockwise.circle"
-        case .finished: "checkmark.circle.fill"
-        }
-    }
-}

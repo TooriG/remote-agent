@@ -51,7 +51,7 @@ mod task_activity_tests {
             }
             store.dispatch(Intent::NewChat { cwd: String::new() }).await.unwrap();
             let display = agent_protocol::live_activity::TaskActivitySummary { running: 1, ..Default::default() }.display();
-            writer.reply(&activity.unwrap(), json!({"result":{"revision":1,"statuses":[],"unread":[],"display":display}})).await.unwrap();
+            writer.reply(&activity.unwrap(), json!({"result":{"revision":1,"statuses":[],"waiting":[],"unread":[],"display":display}})).await.unwrap();
             while store.snapshot().task_activity.is_none() { updates.changed().await.unwrap(); }
             assert_eq!(store.snapshot().task_activity.as_ref().unwrap().display.current.total, 1);
             tokio::time::timeout(std::time::Duration::from_secs(5), store.dispatch(Intent::ReadTaskActivity(ReadTaskActivity {})))

@@ -4,6 +4,15 @@ import Foundation
 struct TaskActivityAttributes: ActivityAttributes, Hashable {
     enum IconKind: String, Codable {
         case running, waiting, unknown, finished
+
+        var symbol: String {
+            switch self {
+            case .running: "circle.dotted"
+            case .waiting: "person.crop.circle.badge.questionmark"
+            case .unknown: "arrow.clockwise.circle"
+            case .finished: "checkmark.circle.fill"
+            }
+        }
     }
 
     struct Icon: Codable, Hashable {

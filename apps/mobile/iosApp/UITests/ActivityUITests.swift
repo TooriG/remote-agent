@@ -133,6 +133,17 @@ extension LaunchUITests {
         let request = prefixedElement(app, prefix: "request.")
         XCTAssertTrue(request.waitForExistence(timeout: 10), "Pending request was not visible")
         XCTAssertTrue(app.staticTexts["質問"].exists)
+        let turn = prefixedButton(app, prefix: "turn.interrupt.fixture-turn-")
+        XCTAssertTrue(turn.exists)
+        let number = try XCTUnwrap(turn.identifier.split(separator: "-").dropLast().last)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        let waiting = app.descendants(matching: .any)["tasks.waiting.codex:fixture-thread-\(number)"]
+        XCTAssertTrue(waiting.waitForExistence(timeout: 10))
+        XCTAssertEqual(waiting.label, "確認待ち")
+        let row = app.buttons["tasks.row.codex:fixture-thread-\(number)"]
+        XCTAssertEqual(row.value as? String, "確認待ち")
+        row.tap()
+        XCTAssertTrue(request.waitForExistence(timeout: 10))
         let answer = app.textFields["task.message"]
         XCTAssertTrue(answer.waitForExistence(timeout: 5))
         answer.tap(); answer.typeText("Continue")
@@ -141,6 +152,10 @@ extension LaunchUITests {
         let resolved = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: request)
         wait(for: [resolved], timeout: 10)
         XCTAssertTrue(prefixedButton(app, prefix: "turn.activity.fixture-turn-").exists)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        XCTAssertFalse(waiting.exists)
+        XCTAssertNotEqual(row.value as? String, "確認待ち")
     }
 
     func testSimulatorQuestionChoiceReturnsTypedAnswerToDraft() throws {

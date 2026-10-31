@@ -89,6 +89,7 @@ pub struct ThreadSummary {
     pub title: String,
     pub project_id: Option<String>,
     pub active: bool,
+    pub waiting: bool,
     pub unread: bool,
     pub worktree_status: Option<crate::models::WorktreeStatus>,
 }
@@ -126,6 +127,10 @@ impl Snapshot {
     pub fn recent_thread_list(&self) -> Option<ThreadList> {
         let mut list = self.thread_list()?;
         let source = self.threads.as_ref()?;
+        let waiting = self
+            .task_activity
+            .as_ref()
+            .map_or(&[][..], |state| state.waiting.as_slice());
         let project_ids: HashSet<_> = source.projects.iter().map(|p| p.id.as_str()).collect();
         let mut rows: BTreeMap<_, crate::models::Thread> = BTreeMap::new();
         for thread in source
@@ -162,6 +167,7 @@ impl Snapshot {
             &rows,
             &self.activity.active,
             &self.activity.unread,
+            waiting,
             &project_ids,
         );
         let limit = self.list_query.limit as usize;
@@ -178,6 +184,10 @@ impl Snapshot {
 
     pub fn thread_list(&self) -> Option<ThreadList> {
         let list = self.threads.as_ref()?;
+        let waiting = self
+            .task_activity
+            .as_ref()
+            .map_or(&[][..], |state| state.waiting.as_slice());
         let project_ids: HashSet<_> = list
             .projects
             .iter()
@@ -191,6 +201,7 @@ impl Snapshot {
             &list.data,
             &self.activity.active,
             &self.activity.unread,
+            waiting,
             &project_ids,
         )
         .into_iter()
@@ -284,6 +295,7 @@ impl Snapshot {
                                 .collect::<Vec<_>>(),
                             &self.activity.active,
                             &self.activity.unread,
+                            waiting,
                             &project_ids,
                         );
                         summary.has_more = page.has_more;
@@ -325,6 +337,7 @@ impl Snapshot {
                                 &placed,
                                 &self.activity.active,
                                 &self.activity.unread,
+                                waiting,
                                 &project_ids,
                             ),
                         );
@@ -342,6 +355,7 @@ fn thread_summaries(
     data: &[crate::models::Thread],
     active: &BTreeMap<crate::session::SessionRef, bool>,
     unread: &BTreeSet<crate::session::SessionRef>,
+    waiting: &[crate::session::SessionRef],
     project_ids: &HashSet<&str>,
 ) -> Vec<ThreadSummary> {
     data.iter()
@@ -350,6 +364,7 @@ fn thread_summaries(
             let id = thread.id.clone()?;
             let active = task_active(active.get(&id).copied(), thread.status);
             let unread = unread.contains(&id);
+            let waiting = waiting.contains(&id);
             Some(ThreadSummary {
                 id,
                 title: task_title(thread.name.as_deref(), thread.preview.as_deref()).to_owned()
@@ -364,6 +379,7 @@ fn thread_summaries(
                     .filter(|id| project_ids.contains(id.as_str()))
                     .cloned(),
                 active,
+                waiting,
                 unread,
                 worktree_status: thread.worktree_status,
             })
@@ -443,6 +459,83 @@ mod tests {
                 .unwrap(),
             )),
             ..Default::default()
+        }
+    }
+
+    #[test]
+    fn waiting_updates_all_list_scopes_without_opening_conversations() {
+        use crate::state::{Event, Intent, reduce};
+        use agent_protocol::{
+            live_activity::{TaskActivityState, TaskActivitySummary},
+            session::{ProviderKind, SessionRef},
+        };
+        let id = |provider, name: &str| SessionRef::new(provider, name.into()).unwrap();
+        let root = id(ProviderKind::Codex, "same");
+        let other = id(ProviderKind::Claude, "same");
+        let project = id(ProviderKind::Codex, "project");
+        let placed = id(ProviderKind::Claude, "placed");
+        let affected = vec![root.clone(), project.clone(), placed.clone()];
+        let mut state = snapshot_list(json!([
+            {"id":root}, {"id":other}, {"id":placed}
+        ]));
+        let page = snapshot_list(json!([{"id":project,"projectId":"project"}]))
+            .threads
+            .unwrap();
+        Arc::make_mut(&mut state.project_threads).insert("project".into(), page);
+        state = reduce(
+            &state,
+            Event::Intent(Intent::MoveChatToProject {
+                thread_id: placed,
+                project_id: "project".into(),
+            }),
+        )
+        .0;
+        let update = |revision, waiting: bool| TaskActivityState {
+            revision,
+            display: TaskActivitySummary {
+                waiting: if waiting { 3 } else { 0 },
+                running: if waiting { 0 } else { 3 },
+                ..Default::default()
+            }
+            .display(),
+            statuses: affected
+                .iter()
+                .cloned()
+                .map(|id| (id, models::SessionStatus::Running))
+                .collect(),
+            waiting: if waiting {
+                affected.clone()
+            } else {
+                Vec::new()
+            },
+            unread: Vec::new(),
+        };
+        for (revision, requested, expected) in
+            [(1, true, true), (2, false, false), (1, true, false)]
+        {
+            // Exercise the wire contract as well as revision ordering.
+            let received =
+                serde_json::from_value(serde_json::to_value(update(revision, requested)).unwrap())
+                    .unwrap();
+            let _ = state.accept_task_activity(received);
+            let list = state.thread_list().unwrap();
+            assert_eq!(list.threads.len(), 2);
+            assert_eq!(list.projects[0].threads.len(), 2);
+            let recent = state.recent_thread_list().unwrap();
+            assert_eq!(recent.threads.len(), 4);
+            for row in list
+                .threads
+                .iter()
+                .chain(&list.projects[0].threads)
+                .chain(&recent.threads)
+            {
+                assert_eq!(row.waiting, expected && row.id != other);
+                if row.id != other {
+                    assert!(row.active);
+                }
+            }
+            assert!(state.conversations.is_empty());
+            assert!(state.subscriptions.is_empty());
         }
     }
 

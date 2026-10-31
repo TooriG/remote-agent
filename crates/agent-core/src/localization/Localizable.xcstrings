@@ -12561,6 +12561,22 @@
         }
       }
     },
+    "確認待ち": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "確認待ち"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Awaiting confirmation"
+          }
+        }
+      }
+    },
     "実行中": {
       "localizations": {
         "ja": {

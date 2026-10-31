@@ -290,7 +290,12 @@ private struct ThreadListRow: View {
             HStack(spacing: 10) {
                 Text(thread.title).font(.title3).foregroundColor(.primary).lineLimit(1)
                 Spacer()
-                if thread.active {
+                if thread.waiting {
+                    Image(systemName: TaskActivityAttributes.IconKind.waiting.symbol)
+                        .foregroundStyle(.orange)
+                        .accessibilityLabel("確認待ち")
+                        .accessibilityIdentifier("tasks.waiting.\(accessibilityID)")
+                } else if thread.active {
                     RunningIndicator().controlSize(.small)
                         .accessibilityIdentifier("tasks.running.\(accessibilityID)")
                 } else if thread.unread {
@@ -314,7 +319,9 @@ private struct ThreadListRow: View {
             .contentShape(Rectangle())
         }
         .accessibilityIdentifier("tasks.row.\(accessibilityID)")
-        .accessibilityValue(thread.active ? "実行中" : thread.unread ? "完了・未確認" : "")
+        .accessibilityValue(LocalizedStringKey(
+            thread.waiting ? "確認待ち" : thread.active ? "実行中" : thread.unread ? "完了・未確認" : ""
+        ))
         .taskListRowStyle()
     }
 }
