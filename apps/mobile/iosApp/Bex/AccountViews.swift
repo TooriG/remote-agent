@@ -51,14 +51,17 @@ struct WeeklyUsageView: View {
 }
 
 struct ReasoningStrengthIcon: View {
+    @Environment(\.colorScheme) private var colorScheme
     let level: UInt32
     let count: Int
 
     var body: some View {
+        let color = colorScheme == .dark ? Color.white : .black
         HStack(alignment: .bottom, spacing: 2) {
             ForEach(0 ..< count, id: \.self) { index in
                 RoundedRectangle(cornerRadius: 1)
-                    .foregroundStyle(index < Int(level) ? Color.primary : .secondary)
+                    .foregroundStyle(color)
+                    .opacity(index < Int(level) ? 1 : 0.15)
                     .frame(width: 3, height: 6 + 10 * CGFloat(index + 1) / CGFloat(count))
             }
         }
