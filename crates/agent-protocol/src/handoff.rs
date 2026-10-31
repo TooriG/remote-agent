@@ -25,6 +25,7 @@ pub struct Excerpt {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Page {
+    pub history_read_state: Option<crate::session::HistoryReadState>,
     pub items: Vec<Excerpt>,
     pub next_offset: Option<usize>,
 }
@@ -51,6 +52,7 @@ pub fn page(messages: &[Message], offset: usize, limit: usize, text_offset: usiz
         })
         .collect();
     Page {
+        history_read_state: None,
         items,
         next_offset: (end < messages.len()).then_some(end),
     }

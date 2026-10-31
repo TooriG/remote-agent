@@ -587,6 +587,8 @@ pub struct ReadTurnItems {
 #[serde(rename_all = "camelCase")]
 pub struct HistoryPage {
     pub turns: Vec<Arc<Turn>>,
+    /// Availability of the source ranges, independent of the continuation cursor.
+    pub history_read_state: Option<HistoryReadState>,
     pub next_cursor: Option<String>,
 }
 
@@ -599,14 +601,16 @@ impl HistoryPage {
         ));
         thread.history_cursor = self.next_cursor.clone();
         thread.history_has_more = Some(thread.history_cursor.is_some());
-        thread.history_read_state = Some(HistoryReadState::new(
-            if thread.history_cursor.is_some() {
-                HistoryReadKind::Partial
-            } else {
-                HistoryReadKind::Complete
-            },
-            Vec::new(),
-        ));
+        thread.history_read_state = self.history_read_state.clone().or_else(|| {
+            Some(HistoryReadState::new(
+                if thread.history_cursor.is_some() {
+                    HistoryReadKind::Partial
+                } else {
+                    HistoryReadKind::Complete
+                },
+                Vec::new(),
+            ))
+        });
     }
 }
 

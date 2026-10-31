@@ -48,6 +48,83 @@ impl HostRpcService {
             .await
             .map_err(|error| Failure::new("project_state_unavailable", error))
     }
+    fn title_capabilities(
+        &self,
+        session: Option<&agent_protocol::session::SessionRef>,
+        native: agent_protocol::session::Capabilities,
+    ) -> Result<agent_protocol::session::Capabilities, Failure> {
+        let row = session
+            .map(|session| self.inner.conversations.get(session))
+            .transpose()?
+            .flatten();
+        Ok(row.map_or(native, |row| {
+            self.conversation_capabilities(
+                row.active.provider,
+                row.segments.iter().map(|segment| segment.session.provider),
+            )
+        }))
+    }
+
+    pub(super) fn unavailable_conversation_titles(
+        &self,
+        search: &str,
+    ) -> Result<Vec<Thread>, Failure> {
+        let search = search.trim().to_lowercase();
+        let mut threads = Vec::new();
+        for (mut thread, sources) in self.inner.conversations.summaries()? {
+            let Some(provider) = thread.active_provider else {
+                continue;
+            };
+            let Err(error) = self
+                .inner
+                .providers
+                .get(provider)
+                .and_then(|agent| agent.availability())
+            else {
+                continue;
+            };
+            let text = format!(
+                "{} {}",
+                thread.name.as_deref().unwrap_or_default(),
+                thread.preview.as_deref().unwrap_or_default()
+            )
+            .to_lowercase();
+            if !text.contains(&search) {
+                continue;
+            }
+            thread.status = agent_protocol::models::SessionStatus::Unavailable;
+            thread.history_read_state = Some(agent_protocol::session::HistoryReadState::new(
+                agent_protocol::session::HistoryReadKind::Unavailable,
+                vec![format!("{}: {}", provider.key(), error.message)],
+            ));
+            thread.capabilities =
+                Some(self.conversation_capabilities(provider, sources.into_iter()));
+            threads.push(thread);
+        }
+        threads.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(threads)
+    }
+
+    fn add_unavailable_titles(
+        &self,
+        titles: &mut crate::projects::titles::TitleList<'_>,
+        search: &str,
+        projects: &crate::projects::state::Snapshot,
+        listed: &std::collections::HashSet<agent_protocol::session::SessionRef>,
+    ) -> Result<bool, Failure> {
+        let threads = self.unavailable_conversation_titles(search)?;
+        let found = !threads.is_empty();
+        for mut thread in threads {
+            if thread.id.as_ref().is_some_and(|id| listed.contains(id)) {
+                continue;
+            }
+            let capabilities = thread.capabilities.unwrap_or_default();
+            describe_thread(&mut thread, capabilities, projects);
+            titles.push(thread);
+        }
+        Ok(found)
+    }
+
     pub(super) async fn host_title_list(
         &self,
         search: &str,
@@ -148,6 +225,7 @@ impl HostRpcService {
             .as_object()
             .cloned()
             .unwrap_or_default();
+        let mut listed = std::collections::HashSet::new();
         let successful = listings.iter().any(|(_, _, _, head)| head.is_ok());
         while let Some(newest) = listings
             .iter()
@@ -184,7 +262,9 @@ impl HostRpcService {
                     continue;
                 };
                 thread.git_branch = summary.branch;
+                let capabilities = self.title_capabilities(thread.id.as_ref(), capabilities)?;
                 describe_thread(&mut thread, capabilities, &snapshot);
+                listed.extend(thread.id.clone());
                 titles.push(thread);
                 if titles.done() {
                     break;
@@ -207,7 +287,8 @@ impl HostRpcService {
                 provider_errors.insert(provider.key().to_owned(), serde_json::to_value(error)?);
             }
         }
-        if !successful && !provider_errors.is_empty() {
+        let saved = self.add_unavailable_titles(&mut titles, search, &snapshot, &listed)?;
+        if !successful && !saved && !provider_errors.is_empty() {
             return Err(Failure::new(
                 "sessions_unavailable",
                 serde_json::to_value(provider_errors)?,

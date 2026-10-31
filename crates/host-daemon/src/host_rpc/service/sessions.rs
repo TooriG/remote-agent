@@ -121,12 +121,9 @@ impl HostRpcService {
             return self.fork_conversation(&row, &params.last_turn_id).await;
         }
         let agent = self.inner.providers.get(target.provider)?;
-        if !agent.capabilities().fork {
-            return Err(Failure::new(
-                "unsupported_operation",
-                "host/session/fork is unsupported by this provider",
-            ));
-        }
+        require_capability::<agent_protocol::protocol::contracts::ForkSession>(
+            agent.capabilities().fork,
+        )?;
         self.start_thread(agent.as_ref(), |browser| {
             agent.fork(&target.id, &params.last_turn_id, browser)
         })
@@ -177,12 +174,9 @@ impl HostRpcService {
             return Ok(agent_protocol::models::Empty {});
         }
         let agent = self.inner.providers.get(target.provider)?;
-        if !agent.capabilities().rename {
-            return Err(Failure::new(
-                "unsupported_operation",
-                "host/session/rename is unsupported by this provider",
-            ));
-        }
+        require_capability::<agent_protocol::protocol::contracts::RenameSession>(
+            agent.capabilities().rename,
+        )?;
         agent.rename(&target.id, &params.name).await
     }
 
@@ -434,7 +428,6 @@ impl HostRpcService {
             let target = params.session.clone();
             let row = self.inner.conversations.get(&target)?;
             let native = row.as_ref().map_or(&target, |row| &row.active);
-            let agent = self.inner.providers.get(native.provider)?;
             let limit = params.limit;
             let read = self
                 .inner
@@ -444,9 +437,11 @@ impl HostRpcService {
             let revision = self.inner.router.list_revision();
             let started = std::time::Instant::now();
             let mut response = if let Some(row) = &row {
-                Self::conversation_page(self.conversation_history(row, false).await?, None, limit)?
+                Self::conversation_page(self.conversation_history(row, conversations::HistoryUse::Read).await?, None, limit)?
             } else {
+                let agent = self.inner.providers.get(native.provider)?;
                 let mut response = agent.open(&target.id, limit, params.include_activity).await?;
+                response.thread.capabilities = Some(agent.capabilities());
                 let options = self.inner.model_selections.resolve(native, response.model.as_ref(), response.effort.as_deref(), response.service_tier.as_deref())?;
                 (response.model, response.effort, response.service_tier) = (options.model, options.effort, options.service_tier);
                 response
@@ -456,7 +451,7 @@ impl HostRpcService {
             if response.thread.id.as_ref() != Some(&target) {
                 return Err(anyhow::anyhow!("native session identity changed"));
             }
-            let capabilities = response.thread.capabilities.unwrap_or_else(|| agent.capabilities());
+            let capabilities = response.thread.capabilities.unwrap_or_default();
             describe_thread(
                 &mut response.thread,
                 capabilities,
@@ -637,6 +632,19 @@ impl HostRpcService {
         describe_thread(&mut response.thread, agent.capabilities(), &projects);
         self.notify_session_updated(response.thread.clone(), &projects.projects);
         Ok(response)
+    }
+}
+
+fn require_capability<C: agent_protocol::protocol::contracts::Contract>(
+    supported: bool,
+) -> Result<(), Failure> {
+    if supported {
+        Ok(())
+    } else {
+        Err(Failure::new(
+            "unsupported_operation",
+            format!("{} is unsupported by this provider", C::METHOD),
+        ))
     }
 }
 

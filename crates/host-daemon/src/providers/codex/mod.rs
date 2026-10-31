@@ -283,7 +283,11 @@ impl Codex {
                 Arc::new(turn)
             })
             .collect();
-        Ok(agent_protocol::session::HistoryPage { turns, next_cursor })
+        Ok(agent_protocol::session::HistoryPage {
+            turns,
+            next_cursor,
+            history_read_state: None,
+        })
     }
 
     async fn item_page(

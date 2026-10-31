@@ -366,6 +366,7 @@ fn page_turns(
 ) -> Result<agent_protocol::session::HistoryPage> {
     let start = end.saturating_sub(limit);
     Ok(agent_protocol::session::HistoryPage {
+        history_read_state: None,
         turns: turns
             .get(start..end)
             .context("Claude history cursor is no longer valid")?

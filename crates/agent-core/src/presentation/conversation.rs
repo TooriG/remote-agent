@@ -2022,15 +2022,42 @@ mod history_notice_tests {
     use crate::session::{HistoryPage, HistoryReadKind, HistoryReadState};
 
     #[test]
+    fn history_pages_keep_source_errors_visible_and_can_clear_them_after_recovery() {
+        let mut thread = models::Thread::default();
+        HistoryPage {
+            turns: Vec::new(),
+            next_cursor: None,
+            history_read_state: Some(HistoryReadState::new(
+                HistoryReadKind::Incomplete,
+                vec!["claude: Claude failed to start".into()],
+            )),
+        }
+        .prepend_to(&mut thread);
+        assert_eq!(
+            history_notice(&thread).as_deref(),
+            Some("履歴の一部を読み取れませんでした。\nclaude: Claude failed to start")
+        );
+        HistoryPage {
+            turns: Vec::new(),
+            next_cursor: None,
+            history_read_state: Some(HistoryReadState::new(HistoryReadKind::Complete, Vec::new())),
+        }
+        .prepend_to(&mut thread);
+        assert_eq!(history_notice(&thread), None);
+    }
+
+    #[test]
     fn normal_pagination_has_no_warning_before_or_after_loading_the_remaining_history() {
         let mut thread = models::Thread::default();
         HistoryPage {
+            history_read_state: None,
             turns: Vec::new(),
             next_cursor: Some("older-page".into()),
         }
         .prepend_to(&mut thread);
         assert_eq!(history_notice(&thread), None);
         HistoryPage {
+            history_read_state: None,
             turns: Vec::new(),
             next_cursor: None,
         }

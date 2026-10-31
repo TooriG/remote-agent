@@ -30,13 +30,14 @@ pub(in crate::host_rpc::service) struct NativeAgent {
     directory: PathBuf,
     pub(in crate::host_rpc::service) records: Arc<Mutex<HashMap<String, ThreadResponse>>>,
     pub(in crate::host_rpc::service) idle_warning: Option<&'static str>,
+    deferred_history: bool,
     inputs: Arc<Mutex<Vec<op::Submission>>>,
     injected: Arc<Mutex<Vec<(String, handoff::Context)>>>,
     released: Arc<Mutex<Vec<String>>>,
     next: Arc<AtomicUsize>,
     fail_submit: AtomicUsize,
     fail_inject: AtomicUsize,
-    fail_open: AtomicUsize,
+    open_error: Mutex<Option<Failure>>,
     pub(in crate::host_rpc::service) fail_list: AtomicUsize,
     pub(in crate::host_rpc::service) fail_accounts: AtomicUsize,
     events: mpsc::Sender<AgentEvent>,
@@ -58,13 +59,14 @@ impl NativeAgent {
             directory,
             records: Default::default(),
             idle_warning: None,
+            deferred_history: false,
             inputs: Default::default(),
             injected: Default::default(),
             released: Default::default(),
             next: Default::default(),
             fail_submit: AtomicUsize::new(0),
             fail_inject: AtomicUsize::new(0),
-            fail_open: AtomicUsize::new(0),
+            open_error: Mutex::new(None),
             fail_list: AtomicUsize::new(0),
             fail_accounts: AtomicUsize::new(0),
             events,
@@ -78,13 +80,14 @@ impl NativeAgent {
             directory: self.directory.clone(),
             records: self.records.clone(),
             idle_warning: self.idle_warning,
+            deferred_history: self.deferred_history,
             inputs: self.inputs.clone(),
             injected: self.injected.clone(),
             released: self.released.clone(),
             next: self.next.clone(),
             fail_submit: AtomicUsize::new(0),
             fail_inject: AtomicUsize::new(0),
-            fail_open: AtomicUsize::new(0),
+            open_error: Mutex::new(None),
             fail_list: AtomicUsize::new(0),
             fail_accounts: AtomicUsize::new(0),
             events,
@@ -199,11 +202,8 @@ impl Agent for NativeAgent {
         })
     }
     async fn open(&self, id: &str, limit: usize, _: bool) -> Result<ThreadResponse, Failure> {
-        if self.fail_open.swap(0, Ordering::SeqCst) != 0 {
-            return Err(Failure::new(
-                "native_resume_failed",
-                "native session cannot be loaded",
-            ));
+        if let Some(error) = self.open_error.lock().unwrap().take() {
+            return Err(error);
         }
         let mut response = self
             .records
@@ -217,6 +217,9 @@ impl Agent for NativeAgent {
         response.thread.turns = Some(turns[start..].to_vec());
         response.thread.history_cursor = (start > 0).then(|| start.to_string());
         response.thread.history_has_more = Some(start > 0);
+        if self.deferred_history {
+            response.thread.defer_item_details(0);
+        }
         Ok(response)
     }
     async fn read_history(&self, id: &str, cursor: &str, _: bool) -> Result<HistoryPage, Failure> {
@@ -231,6 +234,7 @@ impl Agent for NativeAgent {
         let start = end.saturating_sub(100);
         let turns = response.thread.turns.unwrap();
         Ok(HistoryPage {
+            history_read_state: None,
             turns: turns[start..end].to_vec(),
             next_cursor: (start > 0).then(|| start.to_string()),
         })
@@ -684,6 +688,66 @@ async fn history(
     .response
 }
 
+struct HandoffFixture {
+    codex: Arc<NativeAgent>,
+    claude: Arc<NativeAgent>,
+    root: SessionRef,
+    original: TurnId,
+    current: TurnId,
+}
+
+async fn saved_handoff(directory: &Path) -> HandoffFixture {
+    let canonical = dunce::canonicalize(directory).unwrap();
+    let directory = canonical.as_path();
+    let codex = NativeAgent::new(ProviderKind::Codex, directory.join("codex"));
+    let claude = NativeAgent::new(ProviderKind::Claude, directory.join("claude"));
+    let host = service(directory, &codex, &claude);
+    let client = host.open_session();
+    let created: agent_protocol::session::OpenedSession = call(
+        &host,
+        client.id(),
+        Call::CreateSession(op::CreateSession {
+            provider: ProviderKind::Codex,
+            cwd: Some(directory.to_str().unwrap().into()),
+            model: None,
+        }),
+    )
+    .await
+    .unwrap();
+    let root = created.session;
+    let original = send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "original",
+        "Original task",
+    )
+    .await
+    .unwrap()
+    .turn_id
+    .unwrap();
+    let current = send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Claude,
+        "review",
+        "Review the task",
+    )
+    .await
+    .unwrap()
+    .turn_id
+    .unwrap();
+    HandoffFixture {
+        codex,
+        claude,
+        root,
+        original,
+        current,
+    }
+}
+
 #[tokio::test]
 async fn native_fork_rejects_an_unsupported_provider_before_execution() {
     let directory = tempfile::tempdir().unwrap();
@@ -710,6 +774,7 @@ async fn native_fork_rejects_an_unsupported_provider_before_execution() {
     .unwrap()
     .turn_id
     .unwrap();
+    let before = b.records.lock().unwrap().len();
     let denied = call::<ThreadResponse>(
         &host,
         client.id(),
@@ -717,6 +782,7 @@ async fn native_fork_rejects_an_unsupported_provider_before_execution() {
     )
     .await
     .unwrap_err();
+    assert_eq!(b.records.lock().unwrap().len(), before);
     assert_eq!(denied.code, "unsupported_operation");
     assert_eq!(
         denied.message,
@@ -727,44 +793,13 @@ async fn native_fork_rejects_an_unsupported_provider_before_execution() {
 #[tokio::test]
 async fn unavailable_current_provider_does_not_block_earlier_segments_or_local_rename() {
     let directory = tempfile::tempdir().unwrap();
-    let a = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));
-    let b = NativeAgent::new(ProviderKind::Claude, directory.path().join("claude"));
-    let root = a
-        .create(directory.path().to_str().unwrap(), None, None)
-        .await
-        .unwrap()
-        .thread
-        .id
-        .unwrap();
-    let host = service(directory.path(), &a, &b);
-    let client = host.open_session();
-    let original = send(
-        &host,
-        client.id(),
-        &root,
-        ProviderKind::Codex,
-        "original",
-        "Original task",
-    )
-    .await
-    .unwrap()
-    .turn_id
-    .unwrap();
-    let current = send(
-        &host,
-        client.id(),
-        &root,
-        ProviderKind::Claude,
-        "review",
-        "Review the task",
-    )
-    .await
-    .unwrap()
-    .turn_id
-    .unwrap();
-    let cached = history(&host, client.id(), &root).await;
-    drop(client);
-    drop(host);
+    let HandoffFixture {
+        codex: a,
+        root,
+        original,
+        current,
+        ..
+    } = saved_handoff(directory.path()).await;
 
     // The saved handoff survives a restart, while only its current provider fails.
     let host = HostRpcService::new(
@@ -775,15 +810,71 @@ async fn unavailable_current_provider_does_not_block_earlier_segments_or_local_r
         ProjectStore::new(directory.path().join("worktrees.json")),
     );
     let mut client = host.open_session();
-    // Detail reads hydrate the established stream, independently of provider startup.
-    let lease = host.inner.router.retain_execution(root.clone()).unwrap();
-    let mut updates = host
-        .inner
-        .router
-        .finish_session_read(lease, client.id(), cached)
-        .unwrap()
-        .updates
+    let opened = host
+        .dispatch(
+            client.id(),
+            &Call::OpenSession(agent_protocol::session::OpenSession {
+                session: root.clone(),
+                limit: 100,
+                include_activity: true,
+            }),
+        )
+        .await
         .unwrap();
+    let opened_session: agent_protocol::session::OpenedSession =
+        match agent_protocol::protocol::decode::<Response<agent_protocol::session::OpenedSession>>(
+            &opened.initial,
+        )
+        .unwrap()
+        {
+            Response::Success { result } => result,
+            Response::Failure { error } => panic!("open failed: {error:?}"),
+        };
+    assert_eq!(
+        opened_session.response.thread.active_provider,
+        Some(ProviderKind::Claude)
+    );
+    let state = opened_session
+        .response
+        .thread
+        .history_read_state
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        state.kind,
+        agent_protocol::session::HistoryReadKind::Incomplete
+    );
+    assert_eq!(state.issues, ["claude: Claude failed to start"]);
+    assert!(opened_session.response.thread.capabilities.unwrap().rename);
+    assert!(
+        !opened_session
+            .response
+            .thread
+            .capabilities
+            .unwrap()
+            .additional_input
+    );
+    assert!(
+        !opened_session
+            .response
+            .thread
+            .capabilities
+            .unwrap()
+            .model_change
+    );
+    assert!(opened_session.response.thread.capabilities.unwrap().fork);
+    assert!(
+        opened_session
+            .response
+            .thread
+            .turns
+            .as_ref()
+            .unwrap()
+            .iter()
+            .all(|turn| turn.provider == Some(ProviderKind::Codex)
+                && turn.supports_fork == Some(true))
+    );
+    let mut updates = opened.updates.unwrap();
     let _: Empty = call(
         &host,
         client.id(),
@@ -859,6 +950,53 @@ async fn unavailable_current_provider_does_not_block_earlier_segments_or_local_r
         .map(|message| message.text)
         .collect::<Vec<_>>();
     assert_eq!(texts, ["Original task", "answer original"]);
+    for search_term in ["", "Local title"] {
+        let listed: agent_protocol::models::ThreadList = call(
+            &host,
+            client.id(),
+            Call::ListSessions(op::ListSessions {
+                query: agent_protocol::models::ListQuery {
+                    search_term: search_term.into(),
+                    ..Default::default()
+                },
+            }),
+        )
+        .await
+        .unwrap();
+        let thread = listed
+            .data
+            .iter()
+            .find(|thread| thread.id.as_ref() == Some(&root))
+            .expect("saved conversation stays discoverable");
+        assert!(thread.capabilities.unwrap().rename);
+        assert!(thread.capabilities.unwrap().fork);
+        assert!(!thread.capabilities.unwrap().model_change);
+        assert!(listed.provider_errors.is_some());
+    }
+    let send_error = send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Claude,
+        "unavailable",
+        "Continue",
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(send_error.code, "provider_unavailable");
+    assert_eq!(send_error.message, "Claude failed to start");
+    let switch_error = send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "switch-unavailable",
+        "Change model",
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(switch_error.code, "provider_unavailable");
+    assert_eq!(switch_error.message, "Claude failed to start");
     let error = call::<Empty>(
         &host,
         client.id(),
@@ -871,6 +1009,433 @@ async fn unavailable_current_provider_does_not_block_earlier_segments_or_local_r
     .unwrap_err();
     assert_eq!(error.code, "provider_unavailable");
     assert_eq!(error.message, "Claude failed to start");
+}
+
+#[tokio::test]
+async fn unavailable_conversations_keep_project_membership_and_page_warnings() {
+    let directory = tempfile::tempdir().unwrap();
+    let HandoffFixture { codex, root, .. } = saved_handoff(directory.path()).await;
+    let projects = ProjectStore::new(directory.path().join("worktrees.json"));
+    projects.register(directory.path()).await.unwrap();
+    let project_id = projects.load().await.unwrap().projects[0].id.clone();
+    let host = HostRpcService::new(
+        [
+            codex.restarted().backend(),
+            Backend::unavailable(ProviderKind::Claude, "Claude failed to start"),
+        ],
+        projects,
+    );
+    let client = host.open_session();
+    let listed: agent_protocol::models::ThreadList = call(
+        &host,
+        client.id(),
+        Call::ListProjectSessions(op::ListProjectSessions {
+            project_id: project_id.clone(),
+            limit: 20,
+            search_term: String::new(),
+        }),
+    )
+    .await
+    .unwrap();
+    let summary = listed
+        .data
+        .iter()
+        .find(|thread| thread.id.as_ref() == Some(&root))
+        .unwrap();
+    assert_eq!(summary.project_id.as_deref(), Some(project_id.as_str()));
+    assert_eq!(
+        summary.status,
+        agent_protocol::models::SessionStatus::Unavailable
+    );
+    let page: agent_protocol::session::HistoryPage = call(
+        &host,
+        client.id(),
+        Call::ReadHistory(agent_protocol::session::ReadHistory {
+            session: root,
+            cursor: "1".into(),
+            include_activity: true,
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(page.turns.len(), 1);
+    assert!(page.next_cursor.is_none());
+    let state = page.history_read_state.unwrap();
+    assert_eq!(
+        state.kind,
+        agent_protocol::session::HistoryReadKind::Incomplete
+    );
+    assert_eq!(state.issues, ["claude: Claude failed to start"]);
+}
+
+#[tokio::test]
+async fn unavailable_past_provider_keeps_current_history_and_operations_usable() {
+    let directory = tempfile::tempdir().unwrap();
+    let HandoffFixture {
+        claude,
+        root,
+        original,
+        current,
+        ..
+    } = saved_handoff(directory.path()).await;
+    let host = HostRpcService::new(
+        [
+            crate::providers::codex::Codex::new(Err("Codex failed to start".into())).into(),
+            claude.restarted().backend(),
+        ],
+        ProjectStore::new(directory.path().join("worktrees.json")),
+    );
+    let client = host.open_session();
+    let opened: agent_protocol::session::OpenedSession = call(
+        &host,
+        client.id(),
+        Call::OpenSession(agent_protocol::session::OpenSession {
+            session: root.clone(),
+            limit: 100,
+            include_activity: true,
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        opened
+            .response
+            .thread
+            .turns
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|turn| turn.id.clone())
+            .collect::<Vec<_>>(),
+        [current]
+    );
+    assert_eq!(
+        opened
+            .response
+            .thread
+            .history_read_state
+            .as_ref()
+            .unwrap()
+            .issues,
+        ["codex: Codex failed to start"]
+    );
+    assert_eq!(
+        opened.response.thread.turns.as_ref().unwrap()[0].supports_fork,
+        Some(false)
+    );
+    assert!(opened.response.thread.capabilities.unwrap().model_change);
+    assert!(!opened.response.thread.capabilities.unwrap().fork);
+    let failed = call::<Empty>(
+        &host,
+        client.id(),
+        Call::ReadTurnItems(agent_protocol::session::ReadTurnItems {
+            session: root.clone(),
+            turn_id: original.clone(),
+        }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        (failed.code.as_str(), failed.message.as_str()),
+        ("provider_unavailable", "Codex failed to start")
+    );
+    let failed = call::<ThreadResponse>(
+        &host,
+        client.id(),
+        Call::ForkSession(op::ForkSession::new(root.clone(), original)),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        (failed.code.as_str(), failed.message.as_str()),
+        ("provider_unavailable", "Codex failed to start")
+    );
+    let page: handoff::Page = call(
+        &host,
+        client.id(),
+        Call::ReadHandoffHistory(handoff::ReadHistory {
+            session: root.clone(),
+            offset: 0,
+            limit: 20,
+            text_offset: 0,
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        page.history_read_state.unwrap().issues,
+        ["codex: Codex failed to start"]
+    );
+    assert_eq!(
+        page.items
+            .iter()
+            .map(|item| item.message.text.as_str())
+            .collect::<Vec<_>>(),
+        ["Review the task", "answer review"]
+    );
+    assert!(
+        send(
+            &host,
+            client.id(),
+            &root,
+            ProviderKind::Claude,
+            "still-current",
+            "Continue"
+        )
+        .await
+        .unwrap()
+        .turn_id
+        .is_some()
+    );
+}
+
+#[tokio::test]
+async fn loaded_provider_failure_keeps_the_handoff_open_and_discoverable() {
+    let directory = tempfile::tempdir().unwrap();
+    let HandoffFixture {
+        codex,
+        claude,
+        root,
+        ..
+    } = saved_handoff(directory.path()).await;
+    let healthy = service(directory.path(), &codex.restarted(), &claude.restarted());
+    let client = healthy.open_session();
+    send(
+        &healthy,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "return",
+        "Continue",
+    )
+    .await
+    .unwrap();
+    drop(client);
+    drop(healthy);
+    let host = HostRpcService::new(
+        [
+            crate::providers::codex::Codex::new(Err("Codex failed to start".into())).into(),
+            claude.restarted().backend(),
+        ],
+        ProjectStore::new(directory.path().join("worktrees.json")),
+    );
+    let client = host.open_session();
+    let opened: agent_protocol::session::OpenedSession = call(
+        &host,
+        client.id(),
+        Call::OpenSession(agent_protocol::session::OpenSession {
+            session: root.clone(),
+            limit: 100,
+            include_activity: true,
+        }),
+    )
+    .await
+    .unwrap();
+    let turns = opened.response.thread.turns.unwrap();
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0].provider, Some(ProviderKind::Claude));
+    assert_eq!(opened.response.thread.status, SessionStatus::Unavailable);
+    assert_eq!(
+        opened.response.thread.history_read_state.unwrap().issues,
+        ["codex: Codex failed to start"]
+    );
+    assert!(!opened.response.thread.capabilities.unwrap().model_change);
+    assert!(!opened.response.thread.capabilities.unwrap().fork);
+    let listed: agent_protocol::models::ThreadList = call(
+        &host,
+        client.id(),
+        Call::ListSessions(op::ListSessions {
+            query: Default::default(),
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        listed
+            .data
+            .iter()
+            .filter(|thread| thread.id.as_ref() == Some(&root))
+            .count(),
+        1
+    );
+    let error = send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "unavailable",
+        "Continue",
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        (error.code.as_str(), error.message.as_str()),
+        ("provider_unavailable", "Codex failed to start")
+    );
+}
+
+#[tokio::test]
+async fn opening_does_not_hide_native_history_errors_as_startup_failures() {
+    for code in ["native_resume_failed", "provider_unavailable"] {
+        let directory = tempfile::tempdir().unwrap();
+        let HandoffFixture { codex, root, .. } = saved_handoff(directory.path()).await;
+        let codex = codex.restarted();
+        *codex.open_error.lock().unwrap() =
+            Some(Failure::new(code, "native session cannot be loaded"));
+        let host = HostRpcService::new(
+            [
+                codex.backend(),
+                Backend::unavailable(ProviderKind::Claude, "Claude failed to start"),
+            ],
+            ProjectStore::new(directory.path().join("worktrees.json")),
+        );
+        let client = host.open_session();
+        let error = call::<agent_protocol::session::OpenedSession>(
+            &host,
+            client.id(),
+            Call::OpenSession(agent_protocol::session::OpenSession {
+                session: root,
+                limit: 100,
+                include_activity: true,
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code, "session_open_failed");
+        assert_eq!(error.message, "native session cannot be loaded");
+    }
+}
+
+#[tokio::test]
+async fn handoff_does_not_silently_transfer_only_the_readable_sources() {
+    for unavailable in [
+        Backend::unavailable(ProviderKind::Codex, "Codex failed to start"),
+        crate::providers::codex::Codex::new(Err("Codex failed to start".into())).into(),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let HandoffFixture { claude, root, .. } = saved_handoff(directory.path()).await;
+        let deepseek = NativeAgent::new(ProviderKind::DeepSeek, directory.path().join("deepseek"));
+        let host = HostRpcService::new(
+            [
+                unavailable,
+                claude.restarted().backend(),
+                deepseek.backend(),
+            ],
+            ProjectStore::new(directory.path().join("worktrees.json")),
+        );
+        let client = host.open_session();
+        let error = send(
+            &host,
+            client.id(),
+            &root,
+            ProviderKind::DeepSeek,
+            "transfer",
+            "Continue",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            (error.code.as_str(), error.message.as_str()),
+            ("provider_unavailable", "Codex failed to start")
+        );
+        assert!(deepseek.injected.lock().unwrap().is_empty());
+        assert!(deepseek.inputs.lock().unwrap().is_empty());
+        let opened: agent_protocol::session::OpenedSession = call(
+            &host,
+            client.id(),
+            Call::OpenSession(agent_protocol::session::OpenSession {
+                session: root,
+                limit: 100,
+                include_activity: true,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            opened.response.thread.active_provider,
+            Some(ProviderKind::Claude)
+        );
+    }
+}
+
+#[tokio::test]
+async fn all_unavailable_providers_still_open_saved_metadata_and_report_each_failure() {
+    let directory = tempfile::tempdir().unwrap();
+    let HandoffFixture { root, .. } = saved_handoff(directory.path()).await;
+    let host = HostRpcService::new(
+        [
+            Backend::unavailable(ProviderKind::Codex, "Codex failed to start"),
+            Backend::unavailable(ProviderKind::Claude, "Claude failed to start"),
+        ],
+        ProjectStore::new(directory.path().join("worktrees.json")),
+    );
+    let client = host.open_session();
+    let opened: agent_protocol::session::OpenedSession = call(
+        &host,
+        client.id(),
+        Call::OpenSession(agent_protocol::session::OpenSession {
+            session: root.clone(),
+            limit: 100,
+            include_activity: true,
+        }),
+    )
+    .await
+    .unwrap();
+    assert!(opened.response.thread.turns.as_ref().unwrap().is_empty());
+    assert_eq!(
+        opened.response.thread.status,
+        agent_protocol::models::SessionStatus::Unavailable
+    );
+    assert_eq!(opened.response.thread.id.as_ref(), Some(&root));
+    assert_eq!(
+        opened.response.model.unwrap().provider,
+        ProviderKind::Claude
+    );
+    assert!(opened.response.effort.is_none());
+    assert!(opened.response.service_tier.is_none());
+    assert_eq!(
+        opened.response.thread.history_read_state.unwrap().kind,
+        agent_protocol::session::HistoryReadKind::Unavailable
+    );
+    assert_eq!(
+        opened.response.thread.capabilities.unwrap(),
+        Capabilities {
+            rename: true,
+            additional_input: false,
+            model_change: false,
+            fork: false
+        }
+    );
+    let listed: agent_protocol::models::ThreadList = call(
+        &host,
+        client.id(),
+        Call::ListSessions(op::ListSessions {
+            query: Default::default(),
+        }),
+    )
+    .await
+    .unwrap();
+    assert!(
+        listed
+            .data
+            .iter()
+            .any(|thread| thread.id.as_ref() == Some(&root))
+    );
+    let create_error = call::<agent_protocol::session::OpenedSession>(
+        &host,
+        client.id(),
+        Call::CreateSession(op::CreateSession {
+            provider: ProviderKind::Claude,
+            cwd: Some(directory.path().to_str().unwrap().into()),
+            model: None,
+        }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        (create_error.code.as_str(), create_error.message.as_str()),
+        ("provider_unavailable", "Claude failed to start")
+    );
 }
 
 #[tokio::test]
@@ -1547,7 +2112,10 @@ async fn a_running_source_blocks_switching_and_a_failed_resume_gets_full_context
     )
     .await
     .unwrap();
-    a.fail_open.store(1, Ordering::SeqCst);
+    *a.open_error.lock().unwrap() = Some(Failure::new(
+        "native_resume_failed",
+        "native session cannot be loaded",
+    ));
     send(
         &host,
         client.id(),
@@ -1810,4 +2378,132 @@ async fn long_history_is_transferred_beyond_the_visible_page_and_older_pages_kee
         "Original requirement outside the first native page"
     );
     assert_eq!(page.next_offset, Some(1));
+}
+
+#[test]
+fn conversation_pages_distinguish_continuation_from_completion() {
+    use agent_protocol::session::HistoryReadKind;
+    let response = ThreadResponse {
+        thread: Thread {
+            turns: Some(
+                (0..8)
+                    .map(|id| {
+                        Arc::new(Turn {
+                            id: id.to_string().into(),
+                            ..Default::default()
+                        })
+                    })
+                    .collect(),
+            ),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    for (end, ids, cursor, kind) in [
+        (
+            None,
+            vec!["3", "4", "5", "6", "7"],
+            Some("3"),
+            HistoryReadKind::Partial,
+        ),
+        (
+            Some(3),
+            vec!["0", "1", "2"],
+            None,
+            HistoryReadKind::Complete,
+        ),
+        (Some(0), vec![], None, HistoryReadKind::Complete),
+    ] {
+        let page = HostRpcService::conversation_page(response.clone(), end, 5).unwrap();
+        let turns = page.thread.turns.unwrap();
+        assert_eq!(
+            turns
+                .iter()
+                .map(|turn| turn.id.as_str())
+                .collect::<Vec<_>>(),
+            ids
+        );
+        assert_eq!(page.thread.history_cursor.as_deref(), cursor);
+        assert_eq!(page.thread.history_has_more, Some(cursor.is_some()));
+        let state = page.thread.history_read_state.unwrap();
+        assert_eq!(state.kind, kind);
+        assert!(state.issues.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn handoff_and_excerpts_recover_deferred_native_messages() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut codex = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));
+    Arc::get_mut(&mut codex).unwrap().deferred_history = true;
+    let claude = NativeAgent::new(ProviderKind::Claude, directory.path().join("claude"));
+    let host = service(directory.path(), &codex, &claude);
+    let client = host.open_session();
+    let created: agent_protocol::session::OpenedSession = call(
+        &host,
+        client.id(),
+        Call::CreateSession(op::CreateSession {
+            provider: ProviderKind::Codex,
+            cwd: Some(directory.path().to_str().unwrap().into()),
+            model: None,
+        }),
+    )
+    .await
+    .unwrap();
+    let root = created.session;
+    let text = "Keep this historical constraint. ".repeat(40);
+    send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "original",
+        &text,
+    )
+    .await
+    .unwrap();
+    let opened: agent_protocol::session::OpenedSession = call(
+        &host,
+        client.id(),
+        Call::OpenSession(agent_protocol::session::OpenSession {
+            session: root.clone(),
+            limit: 100,
+            include_activity: true,
+        }),
+    )
+    .await
+    .unwrap();
+    assert!(
+        opened.response.thread.turns.as_ref().unwrap()[0]
+            .items
+            .as_ref()
+            .unwrap()[0]
+            .is_deferred()
+    );
+    send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Claude,
+        "review",
+        "Review",
+    )
+    .await
+    .unwrap();
+    assert!(claude.inputs.lock().unwrap()[0].input.iter().any(|input| {
+        matches!(input, op::Input::Text { text: input } if input.contains(&text))
+    }));
+    let page: handoff::Page = call(
+        &host,
+        client.id(),
+        Call::ReadHandoffHistory(handoff::ReadHistory {
+            session: root,
+            offset: 0,
+            limit: 20,
+            text_offset: 0,
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(page.items[0].message.text, text);
 }

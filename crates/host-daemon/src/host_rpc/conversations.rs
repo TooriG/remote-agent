@@ -8,6 +8,7 @@ use agent_protocol::{
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::BTreeSet,
     io::Write,
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -347,6 +348,28 @@ impl Conversations {
             thread.parent_id = Some(row.id.clone());
         }
         Ok(Some(thread))
+    }
+
+    /// Saved title metadata, independent of native provider discovery.
+    pub fn summaries(&self) -> Result<Vec<(Thread, BTreeSet<ProviderKind>)>, Failure> {
+        let state = self.state.lock().unwrap();
+        let rows = state
+            .as_ref()
+            .map_err(|error| Failure::new("conversation_storage_failed", error))?;
+        Ok(rows
+            .iter()
+            .map(|row| {
+                let mut thread = Thread::default();
+                row.describe(&mut thread);
+                (
+                    thread,
+                    row.segments
+                        .iter()
+                        .map(|segment| segment.session.provider)
+                        .collect(),
+                )
+            })
+            .collect())
     }
 
     pub fn active_bindings(&self) -> Result<Vec<(SessionRef, ProviderKind)>, Failure> {

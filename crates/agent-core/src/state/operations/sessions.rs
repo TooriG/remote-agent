@@ -451,21 +451,30 @@ pub(super) fn refresh_thread(snapshot: &mut Snapshot, incoming: Thread) {
                 .and_then(|_| thread.history_cursor.as_ref()?.parse::<usize>().ok())
                 .and_then(|start| start.checked_add(count)?.checked_sub(turns.len()));
             thread.turns = Some(turns);
-            if let Some(start) = managed_start {
+            let pagination_state = if let Some(start) = managed_start {
                 thread.history_cursor = (start > 0).then(|| start.to_string());
                 thread.history_has_more = Some(start > 0);
-                thread.history_read_state = Some(crate::session::HistoryReadState::new(
+                Some(crate::session::HistoryReadState::new(
                     if start > 0 {
                         crate::session::HistoryReadKind::Partial
                     } else {
                         crate::session::HistoryReadKind::Complete
                     },
                     vec![],
-                ));
+                ))
             } else {
                 thread.history_cursor = cached.history_cursor.clone();
                 thread.history_has_more = cached.history_has_more;
-                thread.history_read_state = cached.history_read_state.clone();
+                cached.history_read_state.clone()
+            };
+            if thread.history_read_state.as_ref().is_none_or(|state| {
+                matches!(
+                    state.kind,
+                    crate::session::HistoryReadKind::Complete
+                        | crate::session::HistoryReadKind::Partial
+                ) && state.issues.is_empty()
+            }) {
+                thread.history_read_state = pagination_state;
             }
         } else {
             thread.turns = Some(turns[turns.len() - count..].to_vec());
@@ -585,7 +594,61 @@ impl Operation for OpenRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::{ProviderKind, SessionRef};
+    use crate::session::{HistoryReadKind, ProviderKind, SessionRef};
+
+    #[rstest::rstest]
+    #[case(HistoryReadKind::Incomplete, vec!["claude: Claude failed to start".into()])]
+    #[case(HistoryReadKind::Incomplete, vec![])]
+    #[case(HistoryReadKind::Unavailable, vec![])]
+    #[case(HistoryReadKind::Partial, vec!["claude: Claude failed to start".into()])]
+    fn retaining_older_pages_preserves_source_errors_until_a_successful_refresh(
+        #[case] kind: HistoryReadKind,
+        #[case] issues: Vec<String>,
+    ) {
+        use crate::{presentation::conversation::history_notice, session::HistoryReadState};
+        use agent_protocol::{execution::TurnStatus, models::Turn};
+        let id = SessionRef {
+            provider: ProviderKind::Codex,
+            id: "conversation".into(),
+        };
+        let turns: Vec<_> = ["one", "two", "three"]
+            .into_iter()
+            .map(|id| {
+                Arc::new(Turn {
+                    id: id.into(),
+                    status: TurnStatus::Completed,
+                    ..Default::default()
+                })
+            })
+            .collect();
+        let mut snapshot = Snapshot::default();
+        let cached = Thread {
+            id: Some(id.clone()),
+            active_provider: Some(ProviderKind::Claude),
+            turns: Some(turns.clone()),
+            ..Default::default()
+        };
+        Arc::make_mut(&mut snapshot.conversations).insert(id.clone(), Arc::new(cached));
+        let source_state = HistoryReadState::new(kind, issues);
+        let mut incoming = Thread {
+            id: Some(id.clone()),
+            active_provider: Some(ProviderKind::Claude),
+            turns: Some(turns[1..].to_vec()),
+            history_cursor: Some("1".into()),
+            history_has_more: Some(true),
+            history_read_state: Some(source_state.clone()),
+            ..Default::default()
+        };
+        refresh_thread(&mut snapshot, incoming.clone());
+        let retained = &snapshot.conversations[&id];
+        assert_eq!(retained.turns.as_ref().unwrap().len(), 3);
+        assert!(retained.history_cursor.is_none());
+        assert_eq!(retained.history_read_state.as_ref(), Some(&source_state));
+        assert!(history_notice(retained).is_some());
+        incoming.history_read_state = Some(HistoryReadState::new(HistoryReadKind::Partial, vec![]));
+        refresh_thread(&mut snapshot, incoming);
+        assert_eq!(history_notice(&snapshot.conversations[&id]), None);
+    }
 
     #[rstest::rstest]
     fn missing_native_options_keep_saved_options_only_for_the_same_model(
