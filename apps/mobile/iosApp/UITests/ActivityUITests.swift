@@ -161,7 +161,8 @@ extension LaunchUITests {
         app.buttons["request.toggle"].tap()
         XCTAssertFalse(app.buttons["続ける"].exists)
         XCTAssertTrue(send.exists)
-        app.buttons["request.toggle"].tap()
+        // The docked panel's header moves down as its options close.
+        tapWhenStable(app.buttons["request.toggle"])
         XCTAssertEqual(answer.value as? String, "Keep this draft")
         app.buttons["続ける"].tap()
         XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 15))

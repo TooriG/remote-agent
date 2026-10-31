@@ -108,6 +108,7 @@ struct QuestionPanel: View {
     let skip: () -> Void
     /// Collapsing applies to one question; the next question opens again.
     @State private var collapsedQuestionId: String?
+    @State private var choicesHeight: CGFloat = 0
 
     var body: some View {
         let question = prompt.question
@@ -144,11 +145,13 @@ struct QuestionPanel: View {
                 if question.multiple {
                     Text("複数選択できます").font(.caption).foregroundStyle(.secondary)
                 }
-                ViewThatFits(in: .vertical) {
+                // Natural height, scrolling only when the options exceed the limit.
+                ScrollView {
                     choices(question)
-                    ScrollView { choices(question) }
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { choicesHeight = $0 }
                 }
-                .frame(maxHeight: 280)
+                .scrollBounceBehavior(.basedOnSize)
+                .frame(height: min(choicesHeight, 240))
                 HStack {
                     Spacer(minLength: 0)
                     Button("スキップする", action: skip)
@@ -257,7 +260,8 @@ extension ThreadScreen {
 
     /// The composer text is the active question's own answer.
     func answerField(_ question: QuestionPrompt) -> some View {
-        BufferedTextInput(value: Binding(get: { question.text }, set: {
+        // Read the published answer, not this render's copy, as the draft field does.
+        BufferedTextInput(value: Binding(get: { model.questionPrompt?.text ?? "" }, set: {
             model.answerQuestion(question.requestId, .edit(text: $0))
         })) { input in
             Group {

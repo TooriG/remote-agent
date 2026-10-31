@@ -227,6 +227,11 @@ extension AppViewModel {
         }
     }
 
+    /// The question the open conversation's composer answers.
+    var questionPrompt: QuestionPrompt? {
+        selectedThreadId.flatMap { snapshot.questionPrompt(threadId: $0) }
+    }
+
     func answerQuestion(_ requestId: String, _ action: QuestionAction) {
         perform(.answerQuestion(requestId: requestId, action: action))
     }

@@ -8,7 +8,7 @@ import UniformTypeIdentifiers
 extension ThreadScreen {
     var composer: some View {
         let attachments = model.snapshot.draft(key: model.coreDraftKey).attachments
-        let question = model.selectedThreadId.flatMap { model.snapshot.questionPrompt(threadId: $0) }
+        let question = model.questionPrompt
         let runningTurnId = model.selectedThreadId.flatMap { model.snapshot.conversation(id: $0)?.activeTurnId() }
         // Dictation in progress finishes into the draft before the composer answers.
         let answering = dictation.isRecording || dictation.requestingPermission || model.transcribing ? nil : question
