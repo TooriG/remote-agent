@@ -84,7 +84,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          printf 'Mac and TestFlight build %s.\n\nSource commit: %s\n\nNative clients verification: https://github.com/%s/actions/runs/%s\n' \
+          printf 'Mac and TestFlight build %s.\n\n[iPhone: Get on TestFlight](https://testflight.apple.com/join/UJbK9Ww7)\n\nSource commit: %s\n\nNative clients verification: https://github.com/%s/actions/runs/%s\n' \
             "$AGENT_BUILD_NUMBER" "$AGENT_RELEASE_SHA" "$GITHUB_REPOSITORY" \
             "${{ github.event.workflow_run.id || github.run_id }}" > target/apple-release/release-notes.txt
           gh release create "$AGENT_RELEASE_TAG" target/apple-release/bex-macOS-arm64.zip \
