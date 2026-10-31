@@ -260,7 +260,7 @@ extension ThreadScreen {
         } label: {
             Image(systemName: "arrow.up")
         }
-        .buttonStyle(ComposerSendButtonStyle())
+        .buttonStyle(ComposerActionButtonStyle())
         .accessibilityLabel(dictation.isRecording ? "文字起こしして送信" : "送信")
         .disabled(!model.isConnected || (!model.isNewThread && conversation == nil) || model
             .snapshot.modelProviderForDraft(threadId: model.coreDraftKey) == nil || model
@@ -296,10 +296,7 @@ extension ThreadScreen {
         Button { model.interrupt(turnId) } label: {
             Image(systemName: "stop.fill").font(.system(size: 15))
         }
-        .buttonStyle(.borderedProminent)
-        .tint(.red)
-        .buttonBorderShape(.circle)
-        .controlSize(.large)
+        .buttonStyle(ComposerActionButtonStyle(tint: .red))
         .disabled(model.interruptingTurnId == turnId)
         .accessibilityLabel(model.interruptingTurnId == turnId ? "停止中" : "停止")
         .accessibilityIdentifier("turn.interrupt.\(turnId)")
@@ -356,15 +353,16 @@ extension ThreadScreen {
     }
 }
 
-private struct ComposerSendButtonStyle: ButtonStyle {
+private struct ComposerActionButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
+    var tint: Color = .accentColor
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 16, weight: .semibold))
             .foregroundStyle(isEnabled ? Color.white : Color.primary)
             .frame(width: 32, height: 32)
-            .background(isEnabled ? Color.accentColor : Color(UIColor.systemGray4), in: Circle())
+            .background(isEnabled ? tint : Color(UIColor.systemGray4), in: Circle())
             .opacity(configuration.isPressed ? 0.7 : 1)
             .frame(width: 44, height: 44)
             .contentShape(Rectangle())
