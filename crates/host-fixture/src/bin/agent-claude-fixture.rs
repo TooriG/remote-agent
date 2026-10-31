@@ -274,16 +274,42 @@ struct Fixture {
 }
 
 impl Fixture {
+    /// Claude Code withdraws an open prompt, rejects its tool and ends the
+    /// stopped response with an execution error.
     fn interrupt(&mut self, value: &Value) {
+        let prompted = matches!(
+            self.waiting,
+            Some(
+                Waiting::Permission
+                    | Waiting::Question
+                    | Waiting::Background
+                    | Waiting::BackgroundSettled
+            )
+        );
+        if prompted {
+            emit(
+                &self.session,
+                json!({"type":"control_cancel_request","request_id":"permission-1"}),
+            );
+        }
         emit(
             &self.session,
             json!({"type":"control_response","response":{"subtype":"success","request_id":value["request_id"],"response":{}}}),
         );
-        // A settled response has no result to end; its shell keeps running.
-        if self.waiting != Some(Waiting::BackgroundShell) {
+        if prompted {
             emit(
                 &self.session,
-                json!({"type":"result","session_id":self.session,"is_error":false,"result":"interrupted"}),
+                json!({"type":"user","uuid":format!("tool-result-{}", self.inputs.len()),
+                    "message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-1","content":"The user doesn't want to proceed with this tool use.","is_error":true}]}}),
+            );
+        }
+        // A settled response has no result to end; its shell keeps running.
+        if self.waiting != Some(Waiting::BackgroundShell) {
+            let stop_reason = if prompted { "tool_use" } else { "null" };
+            emit(
+                &self.session,
+                json!({"type":"result","session_id":self.session,"subtype":"error_during_execution","is_error":true,
+                    "errors":[format!("[ede_diagnostic] result_type=user last_content_type=n/a stop_reason={stop_reason}")]}),
             );
         }
         self.waiting = None;
@@ -413,6 +439,8 @@ impl Fixture {
 
     fn control_response(&mut self, value: &Value) {
         match self.waiting {
+            // The SDK still answers a prompt that a stop withdrew.
+            None => assert_eq!(value["response"]["request_id"], "permission-1"),
             Some(Waiting::Control(control)) => {
                 assert_eq!(value["response"]["request_id"], "control-1");
                 match control {

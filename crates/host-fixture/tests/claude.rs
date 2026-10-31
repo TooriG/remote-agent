@@ -696,9 +696,42 @@ async fn claude_approval_snapshot_after_disconnect_denial_is_effective_and_inter
             }))
             .await
             .unwrap();
-        completed(&store, &id, 4, "interrupted").await;
+        let snapshot = completed(&store, &id, 4, "interrupted").await;
+        let turn = snapshot.conversations[&id]
+            .turns
+            .as_ref()
+            .unwrap()
+            .last()
+            .unwrap();
+        assert!(turn.error.is_none(), "{:?}", turn.error);
+        // Stopping while Claude awaits an answer withdraws the question.
+        send(&store, "question", "stopped-question").await;
+        let snapshot = until(&store, |snapshot| snapshot.requests().next().is_some()).await;
+        store
+            .dispatch(Intent::Interrupt(op::Interrupt {
+                thread_id: id.clone(),
+                turn_id: snapshot.conversations[&id]
+                    .turns
+                    .as_ref()
+                    .unwrap()
+                    .last()
+                    .unwrap()
+                    .id
+                    .clone(),
+            }))
+            .await
+            .unwrap();
+        let snapshot = completed(&store, &id, 5, "interrupted").await;
+        let turn = snapshot.conversations[&id]
+            .turns
+            .as_ref()
+            .unwrap()
+            .last()
+            .unwrap();
+        assert!(turn.error.is_none(), "{:?}", turn.error);
+        assert!(snapshot.requests().next().is_none());
         send(&store, "after interruption", "recovered").await;
-        let snapshot = completed(&store, &id, 5, "completed").await;
+        let snapshot = completed(&store, &id, 6, "completed").await;
         assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
         assert!(snapshot.requests().next().is_none() && snapshot.pending_submissions.is_empty());
         assert!(
@@ -1286,6 +1319,8 @@ async fn live_claude_subscription_completes_and_resumes_through_store_and_host()
         store.dispatch(Intent::Interrupt(op::Interrupt { thread_id: id.clone(), turn_id })).await.unwrap();
         let snapshot = completed(&store, &id, 3, "interrupted").await;
         assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
+        let turn = &snapshot.conversations[&id].turns.as_ref().unwrap()[2];
+        assert!(turn.error.is_none(), "{:?}", turn.error);
         send(&store, "Reply with exactly AGENT_CLAUDE_RECOVERED. Do not use tools.", "live-recovery").await;
         let snapshot = completed(&store, &id, 4, "completed").await;
         assert!(snapshot.error.is_none());
@@ -1894,6 +1929,8 @@ async fn claude_keeps_loading_through_background_results_and_follow_up_after_rec
             .unwrap();
         let snapshot = completed(&store, &id, 3, "interrupted").await;
         assert!(snapshot.requests().next().is_none());
+        let turn = &snapshot.conversations[&id].turns.as_ref().unwrap()[2];
+        assert!(turn.error.is_none(), "{:?}", turn.error);
         // A settings change replaces the retained CLI. The same native
         // conversation must resume after its background work was stopped.
         store

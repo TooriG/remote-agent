@@ -900,9 +900,15 @@ impl Worker {
                     message = process.read() => message?.ok_or("Claude SDK exited before the turn completed")?,
                     command = input.recv() => {
                         let command = command.ok_or("Claude input queue is closed")?;
+                        let stops = matches!(command.value, SdkInput::Interrupt { .. });
                         let delivery = response.delivery();
                         if let Some(id) = self.deliver_command(&mut process, command, delivery).await? {
                             response.accept(id, delivery);
+                        }
+                        // A requested stop owns the response's terminal result,
+                        // which can reach the Host before its acknowledgement.
+                        if stops {
+                            response.interrupt();
                         }
                         continue;
                     }
@@ -954,6 +960,10 @@ impl Worker {
                 }
             }
         }.await;
+        // The stopped response ended; a still unacknowledged stop has its effect.
+        if response.interrupted() && self.interrupt.borrow().is_none() {
+            self.interrupt.send_replace(Some(Ok(())));
+        }
         // Reject commands that lost the race with completion before retaining the process.
         drop(input);
         let _ = emit(&self.events, AgentChange::SourceClosed(self.instance)).await;
@@ -2585,6 +2595,96 @@ for await (const line of createInterface({input: process.stdin})) {
                 .unwrap()
                 .unwrap();
             assigned.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn stop_ends_the_response_interrupted_in_either_acknowledgement_order() {
+        let path = std::env::var_os("PATH");
+        let node = process::executable(Path::new("node"), path.as_deref()).unwrap();
+        // Claude Code ends a stopped response, here one awaiting an answer,
+        // with an execution error result.
+        let script = r#"
+import { createInterface } from 'node:readline';
+const emit = events => process.stdout.write(events.map(event => JSON.stringify(event)).join('\n') + '\n');
+emit([{ type: 'ready', initialized: {} }]);
+for await (const line of createInterface({input: process.stdin})) {
+  const { type, requestId } = JSON.parse(line);
+  if (type !== 'interrupt') continue;
+  const acknowledged = { type: 'interrupted', requestId };
+  const ended = [
+    { type: 'message', message: { type: 'result', subtype: 'error_during_execution', is_error: true,
+      errors: ['[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use'] } },
+    { type: 'message', message: { type: 'system', subtype: 'session_state_changed', state: 'idle' } },
+  ];
+  emit(process.argv[1] === 'acknowledged' ? [acknowledged, ...ended] : [...ended, acknowledged]);
+}
+"#;
+        for first in ["acknowledged", "ended"] {
+            let mut command = tokio::process::Command::new(&node);
+            command
+                .arg("--input-type=module")
+                .arg("-e")
+                .arg(script)
+                .arg(first)
+                .kill_on_drop(true);
+            let mut process = Process::spawn_command(command).unwrap();
+            assert!(matches!(
+                process.read().await.unwrap(),
+                Some(SdkEvent::Ready { .. })
+            ));
+            let (_, _, mut worker) = routed_worker();
+            let (events, mut changes) = mpsc::channel::<AgentEvent>(256);
+            worker.events = events;
+            let stopped = worker
+                .record
+                .lock()
+                .await
+                .running
+                .as_ref()
+                .unwrap()
+                .interrupt
+                .clone();
+            let (input, receiver) = mpsc::channel(1);
+            input
+                .send(Command {
+                    value: SdkInput::Interrupt {
+                        request_id: "interrupt".into(),
+                    },
+                    user: None,
+                    delivered: None,
+                })
+                .await
+                .unwrap();
+            let run = tokio::spawn(worker.run(process, receiver));
+            let ended = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                while let Some(event) = changes.recv().await {
+                    if let Some(applied) = event.applied {
+                        let _ = applied.send(Ok(()));
+                    }
+                    if let AgentChange::Session { change, .. } = event.change {
+                        match change {
+                            SessionChange::Error { error, .. } => panic!("{first}: {error:?}"),
+                            SessionChange::Turn {
+                                turn,
+                                completed: true,
+                            } => return turn,
+                            _ => {}
+                        }
+                    }
+                }
+                panic!("{first}: the stopped turn did not end")
+            })
+            .await
+            .unwrap();
+            drop(changes);
+            tokio::time::timeout(std::time::Duration::from_secs(5), run)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(ended.status, TurnStatus::Interrupted, "{first}");
+            assert!(ended.error.is_none(), "{first}: {:?}", ended.error);
+            assert_eq!(*stopped.borrow(), Some(Ok(())), "{first}");
         }
     }
 

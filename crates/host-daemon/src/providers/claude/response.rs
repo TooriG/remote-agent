@@ -45,14 +45,10 @@ impl ResponseState {
         self.interrupted = true;
     }
 
+    /// A refused stop leaves the response running.
     pub(super) fn interrupt_result(&mut self, error: Option<String>) -> Result<(), String> {
-        match error {
-            Some(error) => Err(error),
-            None => {
-                self.interrupt();
-                Ok(())
-            }
-        }
+        self.interrupted = error.is_none();
+        error.map_or(Ok(()), Err)
     }
 
     pub(super) fn answered(&self) -> bool {
@@ -194,7 +190,10 @@ impl ResponseState {
                 self.idle = message["state"] == "idle";
             }
             "result" => {
-                if message["is_error"] == true {
+                // Claude Code ends a stopped response, including one awaiting
+                // an answer, with an execution error. The stop is its outcome,
+                // as in T3 Code.
+                if message["is_error"] == true && !self.interrupted {
                     return MessageDisposition::Failed;
                 }
                 if message["origin"]["kind"] == "task-notification" {
@@ -358,6 +357,24 @@ mod tests {
         assert_eq!(
             observe(&mut response, json!({"type":"result"})),
             MessageDisposition::Interrupted
+        );
+    }
+
+    #[test]
+    fn a_requested_stop_owns_the_error_result_unless_it_is_refused() {
+        let mut stopped = ResponseState::default();
+        stopped.interrupt();
+        assert_eq!(
+            observe(&mut stopped, json!({"type":"result","is_error":true})),
+            MessageDisposition::Interrupted
+        );
+        let mut refused = ResponseState::default();
+        refused.interrupt();
+        assert!(refused.interrupt_result(Some("refused".into())).is_err());
+        assert!(!refused.interrupted());
+        assert_eq!(
+            observe(&mut refused, json!({"type":"result","is_error":true})),
+            MessageDisposition::Failed
         );
     }
 
