@@ -33,17 +33,18 @@ pub fn evaluate(
         serde_json::to_string(expression).unwrap()
     );
     let block = block2::RcBlock::new(move |value: *mut AnyObject, error: *mut NSError| {
-        let result = unsafe {
-            error
-                .is_null()
-                .then_some(value.as_ref())
-                .flatten()
-                .and_then(|v| v.downcast_ref::<NSString>())
-                .and_then(|v| serde_json::from_str::<Value>(&v.to_string()).ok())
-                .ok_or_else(|| {
-                    "ページの処理に失敗しました。ページ移動中は画面を確認してください。".into()
-                })
-        };
+        // SAFETY: WebKit supplies a nullable object valid for this callback;
+        // the borrowed reference is used only while parsing the result here.
+        let value = unsafe { value.as_ref() };
+        let result = error
+            .is_null()
+            .then_some(value)
+            .flatten()
+            .and_then(|v| v.downcast_ref::<NSString>())
+            .and_then(|v| serde_json::from_str::<Value>(&v.to_string()).ok())
+            .ok_or_else(|| {
+                "ページの処理に失敗しました。ページ移動中は画面を確認してください。".into()
+            });
         let _ = tx.try_send(result);
     });
     let mtm = MainThreadMarker::new().unwrap();
@@ -68,20 +69,24 @@ pub fn evaluate(
 pub fn snapshot(view: &wry::WebView, width: u32) -> Receiver<Result<Vec<u8>, String>> {
     let (tx, rx) = bounded(1);
     let block = block2::RcBlock::new(move |image: *mut NSImage, _error: *mut NSError| {
-        let result = unsafe {
-            image
-                .as_ref()
-                .and_then(|image| image.TIFFRepresentation())
-                .and_then(|data| NSBitmapImageRep::initWithData(NSBitmapImageRep::alloc(), &data))
-                .and_then(|rep| {
+        // SAFETY: WebKit keeps the nullable image alive for this callback;
+        // we finish encoding it before the callback returns.
+        let image = unsafe { image.as_ref() };
+        let result = image
+            .and_then(|image| image.TIFFRepresentation())
+            .and_then(|data| NSBitmapImageRep::initWithData(NSBitmapImageRep::alloc(), &data))
+            .and_then(|rep| {
+                // SAFETY: the empty properties dictionary requests the default
+                // JPEG encoding and contains no incorrectly typed values.
+                unsafe {
                     rep.representationUsingType_properties(
                         NSBitmapImageFileType::JPEG,
                         &NSDictionary::new(),
                     )
-                })
-                .map(|data| data.to_vec())
-                .ok_or_else(|| "ブラウザ画像を取得できません。".into())
-        };
+                }
+            })
+            .map(|data| data.to_vec())
+            .ok_or_else(|| "ブラウザ画像を取得できません。".into());
         let _ = tx.try_send(result);
     });
     unsafe {

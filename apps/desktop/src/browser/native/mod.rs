@@ -15,10 +15,7 @@ use objc2_foundation::{NSCopying, NSString, NSUUID};
 use objc2_web_kit::{WKWebViewConfiguration, WKWebsiteDataStore};
 use serde::{Deserialize, Serialize};
 use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc, time::Duration};
-use wry::{
-    WebViewBuilderExtMacos, WebViewExtMacOS,
-    raw_window_handle::{HasWindowHandle, WindowHandle},
-};
+use wry::{WebViewBuilderExtMacos, WebViewExtMacOS, raw_window_handle::HasWindowHandle};
 
 #[derive(Clone, Serialize, Deserialize)]
 struct SavedTab {
@@ -175,7 +172,7 @@ struct Ticket {
 }
 
 fn build(
-    parent: usize,
+    parent: &impl HasWindowHandle,
     scope: &str,
     id: &str,
     config: Retained<WKWebViewConfiguration>,
@@ -189,10 +186,6 @@ fn build(
     ),
     String,
 > {
-    let handle = wry::raw_window_handle::AppKitWindowHandle::new(
-        std::ptr::NonNull::new(parent as *mut _).ok_or("ウィンドウがありません。")?,
-    );
-    let parent_handle = unsafe { WindowHandle::borrow_raw(handle.into()) };
     let config = config.copy();
     let input = input::InputAck::install(&config);
     let loaded = changed.clone();
@@ -215,7 +208,7 @@ fn build(
                 let _ = loaded.try_send(event);
             }
         })
-        .build_as_child(&parent_handle)
+        .build_as_child(parent)
         .map_err(|e| e.to_string())?;
     // A phone may use a conversation whose native child is hidden on the PC.
     // Keep that page's timers and layout alive using WebKit's public policy.
@@ -225,8 +218,7 @@ fn build(
             .preferences()
             .setInactiveSchedulingPolicy(objc2_web_kit::WKInactiveSchedulingPolicy::None);
     }
-    let delegate =
-        delegate::Delegate::install(&raw, scope.into(), id.into(), parent, effects, changed);
+    let delegate = delegate::Delegate::install(&raw, scope.into(), id.into(), effects, changed);
     Ok((raw, delegate, input))
 }
 
@@ -406,7 +398,14 @@ impl NativeBrowser {
         owner.update(cx, |owner, _| -> Result<(), String> {
             for saved in restore {
                 browser_url(&saved.url)?;
-                let (raw, delegate, input) = owner.create(window, &saved.scope, &saved.id)?;
+                let (raw, delegate, input) = build(
+                    window,
+                    &saved.scope,
+                    &saved.id,
+                    owner.profile.clone(),
+                    owner.effects.clone(),
+                    owner.changed.clone(),
+                )?;
                 raw.load_url(&saved.url).map_err(|e| e.to_string())?;
                 owner.attach(saved, raw, delegate, input);
             }
@@ -455,34 +454,6 @@ impl NativeBrowser {
             })
             .detach();
         Ok(owner)
-    }
-    fn create(
-        &self,
-        window: &Window,
-        scope: &str,
-        id: &str,
-    ) -> Result<
-        (
-            wry::WebView,
-            Retained<delegate::Delegate>,
-            Retained<input::InputAck>,
-        ),
-        String,
-    > {
-        let handle = HasWindowHandle::window_handle(window)
-            .map_err(|e| e.to_string())?
-            .as_raw();
-        let wry::raw_window_handle::RawWindowHandle::AppKit(handle) = handle else {
-            return Err("AppKitウィンドウがありません。".into());
-        };
-        build(
-            handle.ns_view.as_ptr() as usize,
-            scope,
-            id,
-            self.profile.clone(),
-            self.effects.clone(),
-            self.changed.clone(),
-        )
     }
     fn attach(
         &mut self,
@@ -638,7 +609,14 @@ impl NativeBrowser {
             return Err("タブは会話ごとに24個までです。".into());
         }
         let id = uuid::Uuid::new_v4().to_string();
-        let (raw, delegate, input) = self.create(window, scope, &id)?;
+        let (raw, delegate, input) = build(
+            window,
+            scope,
+            &id,
+            self.profile.clone(),
+            self.effects.clone(),
+            self.changed.clone(),
+        )?;
         raw.load_url(url).map_err(|e| e.to_string())?;
         let page = self.pages.entry(scope.into()).or_default();
         page.active = id.clone();

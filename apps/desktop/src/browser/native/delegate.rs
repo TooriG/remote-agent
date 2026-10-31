@@ -14,7 +14,10 @@ use objc2_web_kit::{
     WKWebViewConfiguration, WKWindowFeatures,
 };
 use std::{cell::RefCell, rc::Rc};
-use wry::WebViewExtMacOS;
+use wry::{
+    WebViewExtMacOS,
+    raw_window_handle::{AppKitWindowHandle, WindowHandle},
+};
 
 enum Completion {
     Alert(RcBlock<dyn Fn()>),
@@ -49,7 +52,6 @@ impl Drop for Pending {
 pub struct Ivars {
     scope: String,
     id: String,
-    parent: usize,
     effects: Rc<RefCell<Vec<Effect>>>,
     changed: Sender<Event>,
     dialog: RefCell<Option<Pending>>,
@@ -65,12 +67,12 @@ define_class!(
         #[unsafe(method_id(webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:))]
         unsafe fn popup(
             &self,
-            _web: &WKWebView,
+            web: &WKWebView,
             configuration: &WKWebViewConfiguration,
             action: &WKNavigationAction,
             _features: &WKWindowFeatures,
         ) -> Option<Retained<WKWebView>> {
-            self.create_popup(configuration, action)
+            self.create_popup(web, configuration, action)
         }
         #[unsafe(method(webViewDidClose:))]
         unsafe fn closed(&self, _web: &WKWebView) {
@@ -89,13 +91,7 @@ define_class!(
             frame: &WKFrameInfo,
             completion: &DynBlock<dyn Fn()>,
         ) {
-            self.pending(
-                message,
-                frame,
-                Completion::Alert(unsafe {
-                    RcBlock::copy(completion as *const _ as *mut _).unwrap()
-                }),
-            );
+            self.pending(message, frame, Completion::Alert(completion.copy()));
         }
         #[unsafe(method(webView:runJavaScriptConfirmPanelWithMessage:initiatedByFrame:completionHandler:))]
         unsafe fn confirm(
@@ -105,13 +101,7 @@ define_class!(
             frame: &WKFrameInfo,
             completion: &DynBlock<dyn Fn(Bool)>,
         ) {
-            self.pending(
-                message,
-                frame,
-                Completion::Confirm(unsafe {
-                    RcBlock::copy(completion as *const _ as *mut _).unwrap()
-                }),
-            );
+            self.pending(message, frame, Completion::Confirm(completion.copy()));
         }
         #[unsafe(method(webView:runJavaScriptTextInputPanelWithPrompt:defaultText:initiatedByFrame:completionHandler:))]
         unsafe fn prompt(
@@ -122,13 +112,7 @@ define_class!(
             frame: &WKFrameInfo,
             completion: &DynBlock<dyn Fn(*mut NSString)>,
         ) {
-            self.pending(
-                message,
-                frame,
-                Completion::Prompt(unsafe {
-                    RcBlock::copy(completion as *const _ as *mut _).unwrap()
-                }),
-            );
+            self.pending(message, frame, Completion::Prompt(completion.copy()));
         }
         #[unsafe(method(webView:runOpenPanelWithParameters:initiatedByFrame:completionHandler:))]
         unsafe fn files(
@@ -158,6 +142,7 @@ define_class!(
 impl Delegate {
     fn create_popup(
         &self,
+        web: &WKWebView,
         configuration: &WKWebViewConfiguration,
         action: &WKNavigationAction,
     ) -> Option<Retained<WKWebView>> {
@@ -167,10 +152,18 @@ impl Delegate {
         if agent_protocol::browser::browser_url(&url).is_err() {
             return None;
         }
+        // SAFETY: GPUI owns the parent until window shutdown drops its Wry
+        // children, which detach themselves. This callback runs on the main
+        // thread, so the parent cannot be destroyed while we retain it.
+        let parent = unsafe { web.superview() }?;
+        let handle = AppKitWindowHandle::new(std::ptr::NonNull::from(&*parent).cast());
+        // SAFETY: the retained NSView stays alive through build; the borrowed
+        // handle never escapes this callback.
+        let handle = unsafe { WindowHandle::borrow_raw(handle.into()) };
         let i = self.ivars();
         let id = uuid::Uuid::new_v4().to_string();
         let (raw, delegate, input) = build(
-            i.parent,
+            &handle,
             &i.scope,
             &id,
             configuration.into(),
@@ -194,7 +187,6 @@ impl Delegate {
         raw: &wry::WebView,
         scope: String,
         id: String,
-        parent: usize,
         effects: Rc<RefCell<Vec<Effect>>>,
         changed: Sender<Event>,
     ) -> Retained<Self> {
@@ -204,7 +196,6 @@ impl Delegate {
             .set_ivars(Ivars {
                 scope,
                 id,
-                parent,
                 effects,
                 changed,
                 dialog: RefCell::new(None),

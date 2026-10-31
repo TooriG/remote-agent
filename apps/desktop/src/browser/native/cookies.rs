@@ -4,6 +4,8 @@ fn native_chrome_cookie(
     use objc2::runtime::AnyObject;
     use objc2_foundation::*;
     // Preserve Chrome's leading dot: cookie::Cookie::domain() strips it and changes host scope.
+    // SAFETY: the framework property keys are immutable NSString constants;
+    // each value has the NSString or NSDate type required by its cookie key.
     unsafe {
         let properties: objc2::rc::Retained<
             NSMutableDictionary<NSHTTPCookiePropertyKey, AnyObject>,
@@ -64,50 +66,55 @@ pub async fn install(
     let (tx, rx) = async_channel::unbounded();
     for cookie in &native {
         let tx = tx.clone();
+        let completion = block2::RcBlock::new(move || {
+            let _ = tx.try_send(());
+        });
+        // SAFETY: the cookie is a validated NSHTTPCookie. WebKit copies the
+        // completion block, which owns its sender and can outlive this await.
         unsafe {
-            store.setCookie_completionHandler(
-                cookie,
-                Some(&block2::RcBlock::new(move || {
-                    let _ = tx.try_send(());
-                })),
-            );
+            store.setCookie_completionHandler(cookie, Some(&completion));
         }
+        drop(completion);
         rx.recv()
             .await
             .map_err(|_| "Cookieの保存完了を確認できません")?;
     }
     let (tx, rx) = async_channel::bounded(1);
-    unsafe {
-        store.getAllCookies(&block2::RcBlock::new(
-            move |stored: std::ptr::NonNull<
-                objc2_foundation::NSArray<objc2_foundation::NSHTTPCookie>,
-            >| {
-                let identity = |cookie: &objc2_foundation::NSHTTPCookie| {
-                    (
-                        cookie.domain().to_string(),
-                        cookie.path().to_string(),
-                        cookie.name().to_string(),
-                    )
-                };
-                let stored: std::collections::HashMap<_, _> = stored
-                    .as_ref()
-                    .iter()
-                    .map(|cookie| (identity(&cookie), cookie))
-                    .collect();
-                let matches = native.iter().all(|expected| {
-                    stored.get(&identity(expected)).is_some_and(|actual| {
-                        actual.value() == expected.value()
-                            && actual.isHTTPOnly() == expected.isHTTPOnly()
-                            && actual.isSecure() == expected.isSecure()
-                            && actual.isSessionOnly() == expected.isSessionOnly()
-                            && actual.expiresDate() == expected.expiresDate()
-                            && actual.sameSitePolicy() == expected.sameSitePolicy()
-                    })
-                });
-                let _ = tx.try_send(matches);
-            },
-        ));
-    }
+    let completion = block2::RcBlock::new(
+        move |stored: std::ptr::NonNull<
+            objc2_foundation::NSArray<objc2_foundation::NSHTTPCookie>,
+        >| {
+            let identity = |cookie: &objc2_foundation::NSHTTPCookie| {
+                (
+                    cookie.domain().to_string(),
+                    cookie.path().to_string(),
+                    cookie.name().to_string(),
+                )
+            };
+            // SAFETY: WebKit keeps this non-null NSArray<NSHTTPCookie> alive
+            // for the callback; the borrowed array is used only here.
+            let stored = unsafe { stored.as_ref() };
+            let stored: std::collections::HashMap<_, _> = stored
+                .iter()
+                .map(|cookie| (identity(&cookie), cookie))
+                .collect();
+            let matches = native.iter().all(|expected| {
+                stored.get(&identity(expected)).is_some_and(|actual| {
+                    actual.value() == expected.value()
+                        && actual.isHTTPOnly() == expected.isHTTPOnly()
+                        && actual.isSecure() == expected.isSecure()
+                        && actual.isSessionOnly() == expected.isSessionOnly()
+                        && actual.expiresDate() == expected.expiresDate()
+                        && actual.sameSitePolicy() == expected.sameSitePolicy()
+                })
+            });
+            let _ = tx.try_send(matches);
+        },
+    );
+    // SAFETY: WebKit copies this completion block. It owns the expected cookies
+    // and sender and reads the supplied array only during the callback.
+    unsafe { store.getAllCookies(&completion) };
+    drop(completion);
     if !rx
         .recv()
         .await
