@@ -164,6 +164,7 @@ pub enum Answer {
     Questions {
         answers: BTreeMap<String, QuestionAnswer>,
     },
+    SkipQuestions,
     Elicitation {
         action: ElicitationAnswer,
     },
@@ -231,6 +232,7 @@ pub fn validate_answer(body: &RequestBody, answer: &Answer) -> Result<(), String
                 }
             }
         }
+        (RequestBody::Question { .. }, Answer::SkipQuestions) => {}
         (RequestBody::Elicitation { input, .. }, Answer::Elicitation { action }) => {
             if let ElicitationAnswer::Accept { values } = action {
                 match input {
@@ -342,5 +344,90 @@ impl StringFormat {
             }
             Self::DateTime => chrono::DateTime::parse_from_rfc3339(value).is_ok(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn skipping_questions_is_explicit_and_cannot_answer_an_approval() {
+        let question = RequestBody::Question {
+            questions: vec![Question {
+                id: "question".into(),
+                header: String::new(),
+                prompt: "Choose one".into(),
+                secret: false,
+                allow_free_text: false,
+                multiple: false,
+                choices: vec![QuestionChoice {
+                    id: "choice".into(),
+                    label: "Continue".into(),
+                    description: String::new(),
+                }],
+            }],
+        };
+        assert!(validate_answer(&question, &Answer::SkipQuestions).is_ok());
+        assert!(
+            validate_answer(
+                &question,
+                &Answer::Questions {
+                    answers: BTreeMap::new()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            validate_answer(
+                &question,
+                &Answer::Questions {
+                    answers: [(
+                        "question".into(),
+                        QuestionAnswer::SingleChoice {
+                            choice_id: String::new()
+                        }
+                    )]
+                    .into(),
+                }
+            )
+            .is_err()
+        );
+        for body in [
+            RequestBody::Approval {
+                kind: ApprovalKind::Command,
+                description: String::new(),
+                details: String::new(),
+                choices: vec![],
+            },
+            RequestBody::Permission {
+                description: String::new(),
+                details: String::new(),
+                choices: vec![],
+            },
+            RequestBody::Elicitation {
+                server: "server".into(),
+                message: String::new(),
+                input: ElicitationInput::Url {
+                    url: "https://example.com".into(),
+                },
+            },
+            RequestBody::ToolExecution {
+                tool: "tool".into(),
+                namespace: None,
+                arguments: Value::Null,
+            },
+        ] {
+            assert!(validate_answer(&body, &Answer::SkipQuestions).is_err());
+        }
+        assert_eq!(
+            serde_json::to_value(Answer::SkipQuestions).unwrap(),
+            json!("skipQuestions")
+        );
+        assert_eq!(
+            serde_json::from_value::<Answer>(json!("skipQuestions")).unwrap(),
+            Answer::SkipQuestions
+        );
     }
 }

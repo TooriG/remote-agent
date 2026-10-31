@@ -145,6 +145,18 @@ pub(super) async fn run(
             if stop.is_cancelled() || (scenario == "approval" && !matches!(response["decision"].as_str(), Some("accept" | "acceptForSession"))) {
                 return context.finish(&thread, &turn, "interrupted", None);
             }
+            if scenario == "request" {
+                let expected = if prompt.contains("[choice]") {
+                    Some(json!({"answers":{"continue":{"answers":["続ける"]}}}))
+                } else if prompt.contains("[skip]") {
+                    Some(json!({"answers":{}}))
+                } else {
+                    None
+                };
+                if expected.is_some_and(|expected| response != expected) {
+                    return context.finish(&thread, &turn, "failed", Some(json!({"message":"Unexpected question answer"})));
+                }
+            }
         }
         "items" => {
             for item in [

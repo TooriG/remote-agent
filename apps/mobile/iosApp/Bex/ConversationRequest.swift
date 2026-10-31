@@ -4,40 +4,58 @@ import SwiftUI
 struct ThreadRequestRow: View {
     let request: Request
     let respond: (Answer, @escaping (String?) -> Void) -> Void
-    @State private var answers: [String: String] = [:]
-    @State private var selections: [String: [String]] = [:]
+    @State private var answers: [String: QuestionAnswer] = [:]
     @State private var response = ""
     @State private var busy = false
     @State private var error: String?
+    @State private var questionExpanded = true
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            if case let .question(questions) = request.requestBody {
+                questionCard(questions)
+            } else {
+                requestForm
+            }
+            if busy {
+                ProgressView()
+            }
+            if let error {
+                Text(error).foregroundColor(.red)
+            }
+        }
+        .onAppear { response = requestInputDefault(body: request.requestBody) }
+        .disabled(busy || !request.canRespond)
+        .padding(isQuestion ? 16 : 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(isQuestion ? Color(uiColor: .secondarySystemGroupedBackground) : Color.orange.opacity(0.14))
+        .clipShape(RoundedRectangle(cornerRadius: isQuestion ? 24 : 10))
+        .overlay {
+            if isQuestion {
+                RoundedRectangle(cornerRadius: 24).strokeBorder(Color.primary.opacity(0.15), lineWidth: 1)
+            }
+        }
+    }
+
+    private var isQuestion: Bool {
+        if case .question = request.requestBody {
+            return true
+        }
+        return false
+    }
+
+    private var requestForm: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(request.title).font(.subheadline.weight(.semibold))
                 .accessibilityIdentifier("request.\(request.id)")
-            if case .question = request.requestBody {} else {
-                Text(request.body).textSelection(.enabled)
-            }
+            Text(request.body).textSelection(.enabled)
             if !request.details.isEmpty {
                 DisclosureGroup("詳細") { Text(request.details).font(.caption.monospaced()).textSelection(.enabled) }
             }
             switch request.requestBody {
             case let .approval(_, _, _, choices): choiceButtons(choices, permission: false)
             case let .permission(_, _, choices): choiceButtons(choices, permission: true)
-            case let .question(questions):
-                ForEach(questions, id: \.id) { question in questionView(question) }
-                Button("回答を送信") {
-                    let values = Dictionary(uniqueKeysWithValues: questions.map { question in
-                        (
-                            question.id,
-                            buildQuestionAnswer(
-                                multiple: question.multiple,
-                                text: answers[question.id] ?? "",
-                                choiceIds: selections[question.id] ?? []
-                            )
-                        )
-                    })
-                    submit(.questions(answers: values))
-                }
+            case .question: EmptyView()
             case let .elicitation(_, _, input):
                 if case let .url(url) = input {
                     if let url = URL(string: url) {
@@ -63,19 +81,52 @@ struct ThreadRequestRow: View {
                 responseEditor
                 Button("実行結果を送信") { submitResponse() }
             }
-            if busy {
-                ProgressView()
+        }
+    }
+
+    private func questionCard(_ questions: [Question]) -> some View {
+        VStack(alignment: .leading, spacing: 24) {
+            HStack {
+                Label(request.canRespond ? "質問" : request.title, systemImage: "questionmark.bubble")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("request.\(request.id)")
+                Spacer()
+                Button {
+                    questionExpanded.toggle()
+                } label: {
+                    Image(systemName: questionExpanded ? "xmark" : "chevron.down")
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel(questionExpanded ? "質問を閉じる" : "質問を開く")
+                .accessibilityIdentifier("request.toggle")
             }
-            if let error {
-                Text(error).foregroundColor(.red)
+            if questionExpanded {
+                ForEach(questions, id: \.id) { question in
+                    VStack(alignment: .leading, spacing: 20) { questionView(question) }
+                }
+                HStack(spacing: 8) {
+                    Spacer(minLength: 0)
+                    Button("スキップする") { submit(.skipQuestions) }
+                        .padding(.horizontal, 20).padding(.vertical, 12)
+                        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.15), lineWidth: 1))
+                        .accessibilityIdentifier("request.skip")
+                    let answer = Answer.questions(answers: answers)
+                    let canSend = requestAnswerIsValid(body: request.requestBody, answer: answer)
+                    Button("送信") { submit(answer) }
+                        .padding(.horizontal, 20).padding(.vertical, 12)
+                        .foregroundStyle(Color(uiColor: .systemBackground))
+                        .background(Color.primary, in: Capsule())
+                        .disabled(!canSend)
+                        .opacity(canSend ? 1 : 0.35)
+                        .accessibilityIdentifier("request.send")
+                }
+                .font(.body.weight(.semibold))
             }
         }
-        .onAppear { response = requestInputDefault(body: request.requestBody) }
-        .disabled(busy || !request.canRespond)
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.orange.opacity(0.14))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .buttonStyle(.plain)
     }
 
     private var responseEditor: some View {
@@ -96,70 +147,104 @@ struct ThreadRequestRow: View {
 
     @ViewBuilder private func questionView(_ question: Question) -> some View {
         let id = question.id
-        let binding = Binding<String>(get: { answers[id] ?? "" }, set: { answers[id] = $0 })
         if !question.header.isEmpty {
             Text(question.header).font(.subheadline.weight(.semibold))
         }
         Text(question.prompt).textSelection(.enabled)
-        ForEach(Array(question.choices.enumerated()), id: \.element.id) { index, choice in
-            let selected = (selections[id] ?? []).contains(choice.id)
-            Button {
-                var selected = selections[id] ?? []
-                if question.multiple {
-                    if selected.contains(choice.id) {
-                        selected.removeAll { $0 == choice.id }
-                    } else {
-                        selected.append(choice.id)
-                    }
-                } else {
-                    selected = [choice.id]
+        VStack(spacing: 0) {
+            ForEach(question.choices, id: \.id) { choice in
+                let selected = selectedChoiceIds(answers[id]).contains(choice.id)
+                Button {
+                    selectChoice(choice.id, questionId: id, multiple: question.multiple)
                 }
-                selections[id] = selected
-                answers[id] = ""
+                label: {
+                    questionChoiceLabel(label: choice.label, description: choice.description, selected: selected)
+                }
+                .accessibilityLabel(choice.label)
+                .accessibilityHint(choice.description)
+                .accessibilityValue(selected ? "選択済み" : "未選択")
+                .accessibilityAddTraits(selected ? [.isSelected] : [])
+                .accessibilityIdentifier("request.choice.\(choice.id)")
+                if choice.id != question.choices.last?.id {
+                    Divider()
+                }
             }
-            label: {
-                questionChoiceLabel(
-                    number: index + 1, label: choice.label, description: choice.description, selected: selected
-                )
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("\(index + 1). \(choice.label)")
-            .accessibilityHint(choice.description)
-            .accessibilityValue(selected ? "選択済み" : "未選択")
         }
         if question.allowFreeText {
-            if question.secret {
-                SecureField("回答", text: binding)
+            questionReply(id: id, secret: question.secret)
+        }
+    }
+
+    private func selectChoice(_ choiceId: String, questionId: String, multiple: Bool) {
+        if multiple {
+            var selected = selectedChoiceIds(answers[questionId])
+            if selected.contains(choiceId) {
+                selected.removeAll { $0 == choiceId }
             } else {
-                TextField("回答", text: binding).textFieldStyle(.roundedBorder).accessibilityIdentifier("request.answer")
+                selected.append(choiceId)
+            }
+            answers[questionId] = .multipleChoices(choiceIds: selected)
+        } else {
+            answers[questionId] = .singleChoice(choiceId: choiceId)
+            let answer = Answer.questions(answers: answers)
+            if requestAnswerIsValid(body: request.requestBody, answer: answer) {
+                submit(answer)
             }
         }
     }
 
-    private func questionChoiceLabel(number: Int, label: String, description: String, selected: Bool) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Text("\(number)")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(minWidth: 24, minHeight: 24)
-                .background(Color.secondary.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 4))
+    private func selectedChoiceIds(_ answer: QuestionAnswer?) -> [String] {
+        switch answer {
+        case let .singleChoice(id): [id]
+        case let .multipleChoices(ids): ids
+        default: []
+        }
+    }
+
+    private func questionReply(id: String, secret: Bool) -> some View {
+        let binding = Binding<String>(get: {
+            if case let .freeText(text) = answers[id] {
+                return text
+            }
+            return ""
+        }, set: { answers[id] = .freeText(text: $0) })
+        return Group {
+            if secret {
+                SecureField("返信…", text: binding)
+            } else {
+                TextField("返信…", text: binding)
+            }
+        }
+        .padding(12)
+        .frame(minHeight: 48)
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.primary.opacity(0.15), lineWidth: 1))
+        .accessibilityLabel("回答")
+        .accessibilityIdentifier("request.answer")
+    }
+
+    private func questionChoiceLabel(label: String, description: String, selected: Bool) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            ZStack {
+                Circle().strokeBorder(Color.primary.opacity(0.2), lineWidth: 2)
+                if selected {
+                    Circle().fill(Color.primary)
+                    Image(systemName: "checkmark")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color(uiColor: .systemBackground))
+                }
+            }
+            .frame(width: 24, height: 24)
+            .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
-                Text(label).font(.subheadline.weight(.medium))
+                Text(label).font(.body)
                 if !description.isEmpty {
                     Text(description).font(.caption).foregroundStyle(.secondary)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            Image(systemName: "checkmark")
-                .frame(width: 20, height: 24)
-                .opacity(selected ? 1 : 0)
-                .accessibilityHidden(true)
         }
-        .padding(10)
+        .padding(.vertical, 16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(selected ? Color.accentColor.opacity(0.12) : Color.secondary.opacity(0.06))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
         .contentShape(Rectangle())
     }
 
@@ -172,6 +257,7 @@ struct ThreadRequestRow: View {
     }
 
     private func submit(_ answer: Answer) {
+        guard !busy, request.canRespond else { return }
         busy = true
         error = nil
         respond(answer) { message in busy = false; error = message }

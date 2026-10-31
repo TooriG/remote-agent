@@ -111,6 +111,10 @@ conversation-ui:
         testSimulatorNativeTerminalDoesNotDuplicateQueryResponses \
         testSimulatorShowsAcceptedAdditionalInputBeforeCodexProcessesIt \
         testSimulatorKeepsFailedWorkCollapsedWithVisibleTerminalError \
+        testSimulatorKeepsInputRequestVisibleUntilResolved \
+        testSimulatorQuestionCardPreservesDraftWhenClosedAndSendsChoiceOnTap \
+        testSimulatorSendsQuestionChoiceOnTap \
+        testSimulatorCanSkipQuestionCard \
         testSimulatorRetriesAFailedTaskOpenWithoutLosingItsDraft \
         testSimulatorLoadsEarlierHistoryOnTapAndRetriesFailedPage \
         testSimulatorWorkbenchStartsEmptyAndOwnsOnlyOpenedTabs \

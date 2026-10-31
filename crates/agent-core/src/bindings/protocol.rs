@@ -588,6 +588,7 @@ enum Answer {
     Questions {
         answers: std::collections::BTreeMap<String, QuestionAnswer>,
     },
+    SkipQuestions,
     Elicitation {
         action: ElicitationAnswer,
     },

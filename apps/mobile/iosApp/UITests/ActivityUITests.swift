@@ -130,17 +130,67 @@ extension LaunchUITests {
         let app = try connectedSimulatorApp()
         try startSimulatorConversation(app, promptText: "[request] Ask user")
 
-        let request = app.staticTexts["回答待ち"]
+        let request = prefixedElement(app, prefix: "request.")
         XCTAssertTrue(request.waitForExistence(timeout: 10), "Pending request was not visible")
-        XCTAssertTrue(app.staticTexts["回答待ち"].exists)
+        XCTAssertTrue(app.staticTexts["質問"].exists)
         let answer = app.textFields["request.answer"]
         XCTAssertTrue(answer.waitForExistence(timeout: 5))
         answer.tap(); answer.typeText("Continue")
-        app.buttons["回答を送信"].tap()
+        app.buttons["request.send"].tap()
         XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 15))
         let resolved = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: request)
         wait(for: [resolved], timeout: 10)
         XCTAssertTrue(prefixedButton(app, prefix: "turn.activity.fixture-turn-").exists)
+    }
+
+    func testSimulatorQuestionCardPreservesDraftWhenClosedAndSendsChoiceOnTap() throws {
+        #if !targetEnvironment(simulator)
+            throw XCTSkip("Simulator-only conversation display E2E")
+        #endif
+        let app = try connectedSimulatorApp()
+        try startSimulatorConversation(app, promptText: "[request] [choice] Choose an answer")
+
+        let send = app.buttons["request.send"]
+        XCTAssertTrue(send.waitForExistence(timeout: 10))
+        XCTAssertFalse(send.isEnabled)
+        let answer = app.textFields["request.answer"]
+        XCTAssertTrue(answer.waitForExistence(timeout: 5))
+        answer.tap(); answer.typeText("Keep this draft")
+        XCTAssertTrue(send.isEnabled)
+        app.buttons["request.toggle"].tap()
+        XCTAssertFalse(send.exists)
+        app.buttons["request.toggle"].tap()
+        XCTAssertEqual(answer.value as? String, "Keep this draft")
+        app.buttons["続ける"].tap()
+        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 15))
+    }
+
+    func testSimulatorSendsQuestionChoiceOnTap() throws {
+        #if !targetEnvironment(simulator)
+            throw XCTSkip("Simulator-only conversation display E2E")
+        #endif
+        let app = try connectedSimulatorApp()
+        try startSimulatorConversation(app, promptText: "[request] [choice] Tap an answer")
+
+        let choice = app.buttons["続ける"]
+        XCTAssertTrue(choice.waitForExistence(timeout: 10))
+        choice.tap()
+        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 15))
+        XCTAssertFalse(app.buttons["request.send"].exists)
+    }
+
+    func testSimulatorCanSkipQuestionCard() throws {
+        #if !targetEnvironment(simulator)
+            throw XCTSkip("Simulator-only conversation display E2E")
+        #endif
+        let app = try connectedSimulatorApp()
+        try startSimulatorConversation(app, promptText: "[request] [skip] Skip this question")
+
+        let skip = app.buttons["request.skip"]
+        XCTAssertTrue(skip.waitForExistence(timeout: 10))
+        skip.tap()
+        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 15))
+        XCTAssertFalse(skip.exists)
     }
 
     func testSimulatorRendersEveryActivityFamilyAndHidesStateOnlyItems() throws {

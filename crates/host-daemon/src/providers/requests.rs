@@ -38,6 +38,13 @@ impl NativeAnswers {
                 .get(choice_id)
                 .ok_or("request choice mapping is missing")?
                 .clone(),
+            (Self::Questions { claude_input, .. }, Answer::SkipQuestions) => {
+                if claude_input.is_some() {
+                    json!({"behavior":"deny","message":"The user skipped these questions."})
+                } else {
+                    json!({"answers":{}})
+                }
+            }
             (
                 Self::Questions {
                     questions,
@@ -1076,6 +1083,26 @@ mod tests {
     }
 
     #[test]
+    fn skipping_codex_questions_returns_no_answers() {
+        let adapted = codex(
+            "request".into(),
+            "item/tool/requestUserInput",
+            &json!({"turnId":"turn","questions":[
+                {"id":"first","question":"Choose one","options":[{"label":"Continue"}]},
+                {"id":"second","question":"Anything else?"}
+            ]}),
+        )
+        .unwrap();
+        assert_eq!(
+            adapted
+                .answers
+                .translate(&adapted.request.body, &Answer::SkipQuestions)
+                .unwrap(),
+            json!({"answers":{}})
+        );
+    }
+
+    #[test]
     fn claude_questions_restore_native_labels_only_at_the_answer_boundary() {
         let input = json!({"questions":[{"question":"Choose colors","header":"colors","multiSelect":true,"options":[{"label":"Red"},{"label":"Blue"}]}],"otherInput":"retained"});
         let adapted = claude(
@@ -1112,6 +1139,13 @@ mod tests {
         let mut expected = input.clone();
         expected["answers"] = json!({"Choose colors":"Red, Blue"});
         assert_eq!(result, json!({"behavior":"allow","updatedInput":expected}));
+        assert_eq!(
+            adapted
+                .answers
+                .translate(&adapted.request.body, &Answer::SkipQuestions)
+                .unwrap(),
+            json!({"behavior":"deny","message":"The user skipped these questions."})
+        );
         assert!(
             claude(
                 "request".into(),

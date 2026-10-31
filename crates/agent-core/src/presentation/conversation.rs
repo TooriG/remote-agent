@@ -702,6 +702,14 @@ pub fn build_question_answer(
     }
 }
 
+#[cfg_attr(feature = "bindings", uniffi::export)]
+pub fn request_answer_is_valid(
+    body: agent_protocol::requests::RequestBody,
+    answer: agent_protocol::requests::Answer,
+) -> bool {
+    agent_protocol::requests::validate_answer(&body, &answer).is_ok()
+}
+
 pub fn answer_from_json(
     body: &agent_protocol::requests::RequestBody,
     text: &str,
@@ -835,6 +843,60 @@ mod tests {
     use crate::state::{Draft, Snapshot};
     use serde_json::json;
     use std::collections::HashSet;
+
+    #[test]
+    fn question_drafts_require_valid_answers_before_sending() {
+        use agent_protocol::requests::{Answer, Question, QuestionChoice, RequestBody};
+        let question = Question {
+            id: "first".into(),
+            header: String::new(),
+            prompt: "Choose one".into(),
+            secret: false,
+            allow_free_text: true,
+            multiple: false,
+            choices: vec![QuestionChoice {
+                id: "choice".into(),
+                label: "Continue".into(),
+                description: String::new(),
+            }],
+        };
+        for (text, choices, expected) in [
+            ("", vec![], false),
+            (" ", vec![], false),
+            ("", vec!["unknown"], false),
+            ("", vec!["choice"], true),
+            ("Custom answer", vec![], true),
+        ] {
+            let answer = Answer::Questions {
+                answers: [(
+                    question.id.clone(),
+                    build_question_answer(
+                        false,
+                        text.into(),
+                        choices.into_iter().map(Into::into).collect(),
+                    ),
+                )]
+                .into(),
+            };
+            assert_eq!(
+                request_answer_is_valid(
+                    RequestBody::Question {
+                        questions: vec![question.clone()]
+                    },
+                    answer.clone()
+                ),
+                expected
+            );
+            let mut second = question.clone();
+            second.id = "second".into();
+            assert!(!request_answer_is_valid(
+                RequestBody::Question {
+                    questions: vec![question.clone(), second]
+                },
+                answer
+            ));
+        }
+    }
 
     #[rstest::rstest]
     #[case::initial_viewport_needs_more(true, false, true, true, true, true)]

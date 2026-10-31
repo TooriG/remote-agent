@@ -63,6 +63,9 @@ if [[ $# == 0 ]]; then
         testSimulatorGroupsLiveCommandsBetweenCommentaryAndExpandsOnTap \
         testSimulatorApprovalEditorAndDraftSurviveReconnect \
         testSimulatorKeepsInputRequestVisibleUntilResolved \
+        testSimulatorQuestionCardPreservesDraftWhenClosedAndSendsChoiceOnTap \
+        testSimulatorSendsQuestionChoiceOnTap \
+        testSimulatorCanSkipQuestionCard \
         testSimulatorShowsRetryingStreamErrorThenRecovers \
         testSimulatorKeepsFailedWorkCollapsedWithVisibleTerminalError \
         testSimulatorRendersEveryActivityFamilyAndHidesStateOnlyItems \
