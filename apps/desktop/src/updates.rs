@@ -42,8 +42,8 @@ pub fn build_number() -> u64 {
 /// Published releases replace only the distributed app. Development bundles
 /// may carry a build number to label local deployments; they never install a
 /// release or resume one staged by an earlier build.
-fn receives_releases() -> bool {
-    build_number() != 0 && !crate::platform::development_app()
+fn receives_releases(build: u64, development: bool) -> bool {
+    build != 0 && !development
 }
 
 /// Handle updater workers before starting GPUI or connecting to the Host.
@@ -72,7 +72,7 @@ pub fn run_command() -> bool {
 
 impl Updates {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let directory = receives_releases()
+        let directory = receives_releases(build_number(), crate::platform::development_app())
             .then(crate::platform::state_dir)
             .and_then(Result::ok);
         let result = directory
@@ -128,7 +128,7 @@ impl Updates {
     }
 
     fn check(&mut self, cx: &mut Context<Self>) {
-        if !receives_releases() {
+        if !receives_releases(build_number(), crate::platform::development_app()) {
             return;
         }
         if let Ok(directory) = crate::platform::state_dir() {
@@ -449,13 +449,27 @@ async fn download(
 
 #[cfg(test)]
 mod tests {
-    use super::{Download, RefreshThreads, State, Updates, download, install, receives_releases};
+    use super::{
+        Download, RefreshThreads, State, Updates, build_number, download, install,
+        receives_releases,
+    };
     use gpui_kit as gpui;
     use gpui_kit::{
         Modifiers,
         http_client::{AsyncBody, FakeHttpClient, Response},
     };
     use std::{cell::Cell, rc::Rc, sync::Arc};
+
+    #[test]
+    fn only_numbered_production_builds_receive_releases() {
+        for build in [0, 1, 120, u64::MAX] {
+            assert!(!receives_releases(build, true));
+        }
+        assert!(!receives_releases(0, false));
+        for build in [1, 120, u64::MAX] {
+            assert!(receives_releases(build, false));
+        }
+    }
 
     fn release() -> Download {
         Download {
@@ -567,7 +581,7 @@ mod tests {
         window.simulate_click(bounds.center(), Modifiers::default());
         window.run_until_parked();
         assert_eq!(refreshes.get(), 1);
-        if !receives_releases() {
+        if build_number() == 0 {
             view.update(window, |view, _| {
                 assert!(matches!(view.state, State::Current))
             });
