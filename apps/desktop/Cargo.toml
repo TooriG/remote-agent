@@ -17,7 +17,7 @@ agent-core = { path = "../../crates/agent-core", features = ["diagrams"] }
 agent-local-host = { path = "../../crates/agent-local-host" }
 directories = "6"
 rfd = "0.17.2"
-gpui-kit = { version = "=0.8.1", features = ["tree-sitter-languages"] }
+gpui-kit = { version = "=0.8.1", features = ["tree-sitter-languages", "profiler"] }
 # Keep GPUI icons inside development bundles as well as release bundles.
 rust-embed = { version = "8.13", features = ["debug-embed"] }
 gpui-http = { package = "gpui-pre-reqwest-client", version = "0.3.10" }

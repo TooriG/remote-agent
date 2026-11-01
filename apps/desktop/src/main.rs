@@ -4,6 +4,7 @@ mod appearance;
 mod browser;
 mod composition;
 mod diff;
+mod frame_diagnostics;
 mod localization;
 mod platform;
 mod store_session;
@@ -192,6 +193,7 @@ fn main() {
         .detach();
         appearance::init(cx);
         localization::init(cx);
+        frame_diagnostics::init(cx);
         cx.bind_keys([KeyBinding::new(
             "ctrl-v",
             gpui_kit::component::input::Paste,
