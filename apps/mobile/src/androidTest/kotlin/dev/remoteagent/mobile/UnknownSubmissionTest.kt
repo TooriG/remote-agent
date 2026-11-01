@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import dev.remoteagent.core.AgentStore
@@ -31,6 +32,7 @@ class UnknownSubmissionTest {
         val pending =
             JSONObject()
                 .put("sequence", 0)
+                .put("submitted_at_ms", 1_700_000_000_000L)
                 .put("draft_key", key)
                 .put("draft", draft)
                 .put("accepted", false)
@@ -144,12 +146,18 @@ class UnknownSubmissionTest {
     }
 
     @Test
-    fun sendingInputHasNoDiscardOrRestoreActions() {
+    fun sendingInputShowsTimeAndCopyWithoutDeliveryOrRecoveryLabels() {
         fixture(false).use { snapshot ->
             val item =
                 requireNotNull(projectConversationRows(snapshot, snapshot.conversationSource(), null)).queued.single()
             compose.setContent { MaterialTheme { ThreadMessageCard(item, true, "/fixture", { _, _ -> }) } }
-            compose.onNodeWithText("送信中…").assertIsDisplayed()
+            val sentTime =
+                java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT)
+                    .format(java.util.Date(1_700_000_000_000L))
+            compose.onNodeWithText(sentTime).assertIsDisplayed()
+            compose.onNodeWithContentDescription("コピー").assertIsDisplayed()
+            compose.onNodeWithText("送信中…").assertDoesNotExist()
+            compose.onNodeWithText("送信済み").assertDoesNotExist()
             compose.onNodeWithText("表示を削除").assertDoesNotExist()
             compose.onNodeWithText("下書きに戻す").assertDoesNotExist()
         }

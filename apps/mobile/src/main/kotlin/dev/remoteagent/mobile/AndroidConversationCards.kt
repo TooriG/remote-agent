@@ -89,7 +89,8 @@ internal fun ThreadMessageCard(
                     }
                 } else ConversationBody(body, cwd, perform)
             }
-        if (isUser || showActions) MessageFooter(content.body.orEmpty(), timestampMs, fork, forkPhase)
+        if (isUser || showActions)
+            MessageFooter(content.body.orEmpty(), timestampMs ?: content.timestampMs, fork, forkPhase)
         if (isUser && content.nativeId == null) {
             content.title?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             val submissionId = remember(item) { item.unknownSubmissionId() }

@@ -1064,7 +1064,16 @@ async fn new_conversation_moves_draft_to_pending_before_creation_reply() {
         rendered.queued[0].data.body.as_deref(),
         Some("first message")
     );
-    assert_eq!(rendered.queued[0].data.title.as_deref(), Some("送信中…"));
+    assert!(rendered.queued[0].data.title.is_none());
+    let submitted_at = rendered.queued[0].data.timestamp_ms.unwrap();
+    assert!(submitted_at > 0);
+    let saved =
+        agent_core::persistence::decode(&agent_core::persistence::encode(&pending).unwrap())
+            .unwrap();
+    assert_eq!(
+        saved.pending_submissions["client"].submitted_at_ms,
+        Some(submitted_at)
+    );
     assert_eq!(
         request["params"]["initialInput"]["input"][0]["text"]["text"],
         "first message"
@@ -1075,6 +1084,10 @@ async fn new_conversation_moves_draft_to_pending_before_creation_reply() {
         Outcome::StartedThread { .. }
     ));
     let current = store.snapshot();
+    assert_eq!(
+        current.pending_submissions["client"].submitted_at_ms,
+        Some(submitted_at)
+    );
     assert_eq!(
         current.navigation.draft_key,
         DraftKey::from(SessionRef {
@@ -1136,6 +1149,10 @@ async fn successful_submission_does_not_erase_a_newer_draft() {
         assert_eq!(request["method"], "host/session/submit");
         assert_eq!(request["params"]["input"][0]["text"]["text"], "sent");
         assert_eq!(request["params"]["serviceTierForTurn"], "priority");
+        let submitted_at = store.snapshot().pending_submissions["fixture-message"]
+            .submitted_at_ms
+            .unwrap();
+        assert!(submitted_at > 0);
         assert!(
             store.snapshot().drafts[&DraftKey::from(SessionRef {
                 provider: ProviderKind::Codex,
@@ -1172,6 +1189,10 @@ async fn successful_submission_does_not_erase_a_newer_draft() {
             Outcome::Submitted {
                 turn_id: Some("turn-new".into())
             }
+        );
+        assert_eq!(
+            store.snapshot().pending_submissions["fixture-message"].submitted_at_ms,
+            Some(submitted_at)
         );
         let expected: Draft = serde_json::from_value(case["expected"].clone()).unwrap();
         assert_eq!(
@@ -3218,6 +3239,7 @@ async fn restored_snapshot_discards_session_authority_and_preserves_unknown_dict
         "unsent".into(),
         Arc::new(PendingSubmission {
             sequence: 0,
+            submitted_at_ms: None,
             draft_key: SessionRef {
                 provider: ProviderKind::Codex,
                 id: "thread".into(),

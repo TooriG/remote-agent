@@ -462,6 +462,7 @@ fn local_storage_keeps_user_work_without_host_caches() {
                 "send-id".into(),
                 Arc::new(PendingSubmission {
                     sequence: 0,
+                    submitted_at_ms: None,
                     draft_key: SessionRef {
                         provider: ProviderKind::Codex,
                         id: "native".into(),

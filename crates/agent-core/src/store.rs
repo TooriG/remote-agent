@@ -915,7 +915,24 @@ fn publication_key(snapshot: &Snapshot) -> impl PartialEq + '_ {
     )
 }
 
-fn publish_locked(current: &mut Arc<Snapshot>, next: Snapshot) -> bool {
+fn publish_locked(current: &mut Arc<Snapshot>, mut next: Snapshot) -> bool {
+    // The Store owns the clock. Stamp local input before its first publication,
+    // including dictation, while keeping state transitions deterministic.
+    if next
+        .pending_submissions
+        .values()
+        .any(|pending| pending.submitted_at_ms.is_none())
+    {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        for pending in Arc::make_mut(&mut next.pending_submissions).values_mut() {
+            if pending.submitted_at_ms.is_none() {
+                Arc::make_mut(pending).submitted_at_ms = Some(now);
+            }
+        }
+    }
     if publication_key(current) == publication_key(&next) {
         return false;
     }
@@ -1994,6 +2011,7 @@ mod tests {
             "initial-input".into(),
             Arc::new(crate::state::PendingSubmission {
                 sequence: 0,
+                submitted_at_ms: None,
                 draft_key: "local".into(),
                 draft: operation.draft.clone(),
                 turn_id: None,

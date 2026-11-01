@@ -78,7 +78,7 @@ extension ThreadScreen {
         case let .historyNotice(message): AppText(message).font(.caption).foregroundStyle(.secondary)
         case let .native(content, item): nativeConversationRow(content, item: item)
         case let .queued(item):
-            userMessageRow(item)
+            userMessageRow(item, timestampMs: item.data.timestampMs)
         }
     }
 

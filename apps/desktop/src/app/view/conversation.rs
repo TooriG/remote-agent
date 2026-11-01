@@ -582,7 +582,11 @@ impl ConversationView {
                 let edit = button(format!("edit-{id}"), "", cx, move |_, _, cx| {
                     cx.emit(ConversationAction::Edit(copied.clone()));
                 });
-                let timestamp = turn.and_then(|turn| turn.started_at.map(|time| time as i64));
+                let timestamp = projected
+                    .data
+                    .timestamp_ms
+                    .and_then(|time| i64::try_from(time / 1000).ok())
+                    .or_else(|| turn.and_then(|turn| turn.started_at.map(|time| time as i64)));
                 user_message_row(&id, text, body, timestamp, edit, language).into_any_element()
             }
             agent_protocol::items::ItemBody::CommandExecution {
@@ -1162,8 +1166,8 @@ impl ConversationView {
             agent_core::presentation::conversation::ItemSource::Native(native) => {
                 self.item(item, native, Some(turn), cx)
             }
-            agent_core::presentation::conversation::ItemSource::Pending(id, pending) => {
-                self.pending_item(id, pending, cx)
+            agent_core::presentation::conversation::ItemSource::Pending(_, pending) => {
+                self.pending_item(&item.data, &pending.draft, cx)
             }
         }
     }
@@ -1211,12 +1215,12 @@ impl ConversationView {
     }
     pub(super) fn pending_item(
         &mut self,
-        id: &str,
-        pending: &agent_core::state::PendingSubmission,
+        data: &agent_core::presentation::conversation::ItemPresentation,
+        draft: &agent_core::state::Draft,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let language = crate::localization::language(cx);
-        let draft = &pending.draft;
+        let id = &data.id;
         let mut body = user_message_bubble();
         if !draft.text.is_empty() {
             body = body.child(
@@ -1248,19 +1252,25 @@ impl ConversationView {
                 .map(|file| file.path.as_str()),
             cx,
         );
+        let text = data.body.as_deref().unwrap_or_default();
+        let copied = text.to_owned();
+        let edit = button(format!("edit-{id}"), "", cx, move |_, _, cx| {
+            cx.emit(ConversationAction::Edit(copied.clone()));
+        });
+        let timestamp = data
+            .timestamp_ms
+            .and_then(|time| i64::try_from(time / 1000).ok());
         v_flex()
             .w_full()
             .min_w_0()
             .items_end()
             .gap_2()
-            .my_4()
-            .child(body)
-            .child(div().text_sm().text_color(rgb(appearance::MUTED)).child(
-                agent_core::localization::localized_ui_text(
-                    language,
-                    pending.delivery_label().into(),
-                ),
-            ))
+            .child(user_message_row(id, text, body, timestamp, edit, language))
+            .when_some(data.title.as_deref(), |row, label| {
+                row.child(div().text_sm().text_color(rgb(appearance::MUTED)).child(
+                    agent_core::localization::localized_ui_text(language, label.into()),
+                ))
+            })
             .into_any_element()
     }
 
@@ -1816,9 +1826,9 @@ impl ConversationView {
                                     native,
                                 ) => view.item(&item, native, None, cx),
                                 agent_core::presentation::conversation::ItemSource::Pending(
-                                    id,
+                                    _,
                                     pending,
-                                ) => view.pending_item(id, pending, cx),
+                                ) => view.pending_item(&item.data, &pending.draft, cx),
                             };
                             h_flex()
                                 .justify_center()
@@ -2884,6 +2894,7 @@ mod rendering_tests {
                 "pending".into(),
                 Arc::new(agent_core::state::PendingSubmission {
                     sequence: 0,
+                    submitted_at_ms: None,
                     draft_key: agent_protocol::session::SessionRef {
                         provider: agent_protocol::session::ProviderKind::Codex,
                         id: "fixture".into(),

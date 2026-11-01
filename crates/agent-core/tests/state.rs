@@ -147,6 +147,7 @@ fn snapshot_preserves_history_drafts_and_navigation() {
         "sent".into(),
         Arc::new(agent_core::state::PendingSubmission {
             sequence: 0,
+            submitted_at_ms: None,
             draft_key: SessionRef {
                 provider: ProviderKind::Codex,
                 id: "thread".into(),
@@ -1205,6 +1206,7 @@ fn unknown_submission_can_be_restored_or_discarded() {
     let pending = |text: &str| {
         Arc::new(agent_core::state::PendingSubmission {
             sequence: 0,
+            submitted_at_ms: None,
             draft_key: SessionRef {
                 provider: ProviderKind::Codex,
                 id: "thread".into(),
@@ -1303,6 +1305,7 @@ fn unresolved_submission_actions_ignore_known_delivery_states() {
             "sending".into(),
             Arc::new(agent_core::state::PendingSubmission {
                 sequence: 0,
+                submitted_at_ms: None,
                 draft_key: SessionRef {
                     provider: ProviderKind::Codex,
                     id: "thread".into(),

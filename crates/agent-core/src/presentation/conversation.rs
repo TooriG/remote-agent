@@ -247,10 +247,12 @@ impl RenderedItem {
         item: &Arc<models::Item>,
         provider: Option<crate::session::ProviderKind>,
         deferred: bool,
+        timestamp_ms: Option<u64>,
         previous: Option<&Arc<Self>>,
     ) -> Arc<Self> {
         if let Some(previous) = previous
             && previous.data.deferred == deferred
+            && previous.data.timestamp_ms == timestamp_ms
         {
             return previous.clone();
         }
@@ -268,6 +270,7 @@ impl RenderedItem {
                     .unwrap_or(item.id.as_str())
                     .to_owned(),
                 native_id: Some(item.id.clone()),
+                timestamp_ms,
                 kind: presentation.kind.into(),
                 title: presentation.title,
                 collapsible: presentation.collapsible,
@@ -292,8 +295,11 @@ impl RenderedItem {
             data: ItemPresentation {
                 id: id.into(),
                 native_id: None,
+                timestamp_ms: pending.submitted_at_ms,
                 kind: "user".into(),
-                title: Some(pending.delivery_label().into()),
+                title: pending
+                    .delivery_unknown
+                    .then(|| "送信結果不明（自動再送しません）".into()),
                 collapsible: false,
                 body: body.text,
                 image_sources: body.images,
@@ -438,6 +444,10 @@ pub fn project_conversation(
                     &item,
                     source.active_provider,
                     false,
+                    snapshot
+                        .pending_submissions
+                        .get(id)
+                        .and_then(|pending| pending.submitted_at_ms),
                     previous
                         .into_iter()
                         .flat_map(|old| &old.queued)
@@ -554,6 +564,7 @@ mod preparation_tests {
             "input".into(),
             Arc::new(PendingSubmission {
                 sequence: 0,
+                submitted_at_ms: Some(12_000),
                 draft_key: id.clone().into(),
                 draft: Arc::new(crate::state::Draft {
                     text: "accepted text".into(),
@@ -567,6 +578,7 @@ mod preparation_tests {
         );
         let prepared = project_conversation(&snapshot, Arc::new(thread.clone()), &None);
         assert_eq!(prepared.queued.len(), 1);
+        assert_eq!(prepared.queued[0].data.timestamp_ms, Some(12_000));
         assert_eq!(
             prepared.queued[0].data.body.as_deref(),
             Some("accepted text")
@@ -689,6 +701,7 @@ fn render_turn(
             item,
             provider,
             item.is_deferred(),
+            None,
             cached.get(&(None, Arc::as_ptr(item).cast())).copied(),
         )
     };
@@ -734,7 +747,10 @@ fn render_turn(
                 .map(|seconds| (seconds * 1000.) as u64)
         });
         let timestamp_ms = match &content {
-            User { item } if item.data.native_id.is_some() => started,
+            User { item } => item
+                .data
+                .timestamp_ms
+                .or(item.data.native_id.as_ref().and(started)),
             Response {
                 show_actions: true, ..
             } => source.completed_at_ms.or_else(|| {
@@ -1034,6 +1050,7 @@ pub type PendingItems = Vec<(agent_protocol::ids::ClientInputId, Arc<PendingSubm
 pub struct ItemPresentation {
     pub id: String,
     pub native_id: Option<agent_protocol::ids::ItemId>,
+    pub timestamp_ms: Option<u64>,
     pub body: Option<String>,
     pub image_sources: Vec<String>,
     pub image_placeholder: bool,
@@ -1729,6 +1746,7 @@ mod tests {
                 id.into(),
                 Arc::new(PendingSubmission {
                     sequence: sequence as u64,
+                    submitted_at_ms: None,
                     draft_key: agent_protocol::session::SessionRef {
                         provider: agent_protocol::session::ProviderKind::Codex,
                         id: "thread".into(),
@@ -1765,13 +1783,70 @@ mod tests {
         ));
     }
 
+    #[rstest::rstest]
+    #[case::sending(false, false, None)]
+    #[case::accepted(true, false, None)]
+    #[case::unknown(false, true, Some("送信結果不明（自動再送しません）"))]
+    #[case::accepted_then_unknown(true, true, Some("送信結果不明（自動再送しません）"))]
+    fn pending_input_delivery_status_is_shared_in_history_and_queue(
+        #[case] accepted: bool,
+        #[case] delivery_unknown: bool,
+        #[case] title: Option<&str>,
+        #[values(false, true)] history_loaded: bool,
+    ) {
+        let mut snapshot = fixture();
+        let session = snapshot.conversations.keys().next().unwrap().clone();
+        if !history_loaded {
+            Arc::make_mut(
+                Arc::make_mut(&mut snapshot.conversations)
+                    .get_mut(&session)
+                    .unwrap(),
+            )
+            .turns = None;
+        }
+        Arc::make_mut(&mut snapshot.pending_submissions).insert(
+            "pending".into(),
+            Arc::new(PendingSubmission {
+                sequence: 0,
+                submitted_at_ms: Some(12_000),
+                draft_key: session.into(),
+                draft: Arc::new(Draft {
+                    text: "waiting for echo".into(),
+                    ..Default::default()
+                }),
+                turn_id: Some("live".into()),
+                after_item_id: None,
+                accepted,
+                delivery_unknown,
+            }),
+        );
+        let rendered = project_snapshot(snapshot, None);
+        let item = rendered
+            .queued
+            .iter()
+            .chain(rendered.turns.iter().flat_map(|turn| turn.items()))
+            .find(|item| item.data.id == "pending")
+            .unwrap();
+        assert_eq!(item.data.title.as_deref(), title);
+        assert_eq!(item.data.body.as_deref(), Some("waiting for echo"));
+        assert_eq!(item.data.timestamp_ms, Some(12_000));
+        assert!(item.data.native_id.is_none());
+        if history_loaded {
+            let row = rendered.turns.iter().flat_map(|turn| &turn.rows)
+                .find(|row| matches!(&row.content, ConversationRowContent::User { item } if item.data.id == "pending"))
+                .unwrap();
+            assert_eq!(row.timestamp_ms, Some(12_000));
+        }
+    }
+
     #[test]
-    fn pending_input_remains_visible_until_its_turn_is_loaded() {
+    fn local_input_keeps_its_footer_while_acceptance_and_history_are_pending() {
         let mut snapshot = fixture();
         Arc::make_mut(&mut snapshot.pending_submissions).insert(
             "pending".into(),
             Arc::new(PendingSubmission {
                 sequence: 0,
+                submitted_at_ms: Some(12_000),
                 draft_key: agent_protocol::session::SessionRef {
                     provider: agent_protocol::session::ProviderKind::Codex,
                     id: "thread".into(),
@@ -1783,12 +1858,23 @@ mod tests {
                 }),
                 turn_id: Some("unloaded".into()),
                 after_item_id: None,
-                accepted: true,
+                accepted: false,
                 delivery_unknown: false,
             }),
         );
-        let first = project_snapshot(snapshot.clone(), None);
+        let sending = project_snapshot(snapshot.clone(), None);
+        assert!(sending.queued[0].data.title.is_none());
+        assert_eq!(sending.queued[0].data.timestamp_ms, Some(12_000));
+        Arc::make_mut(
+            Arc::make_mut(&mut snapshot.pending_submissions)
+                .get_mut("pending")
+                .unwrap(),
+        )
+        .accepted = true;
+        let first = project_snapshot(snapshot.clone(), Some(&sending));
         assert_eq!(first.queued.len(), 1);
+        assert!(first.queued[0].data.title.is_none());
+        assert_eq!(first.queued[0].data.timestamp_ms, Some(12_000));
         assert_eq!(
             first.queued[0].data.body.as_deref(),
             Some("waiting for history")
@@ -1915,6 +2001,7 @@ mod tests {
         let pending = |turn_id| {
             Arc::new(PendingSubmission {
                 sequence: 0,
+                submitted_at_ms: None,
                 draft_key: agent_protocol::session::SessionRef {
                     provider: agent_protocol::session::ProviderKind::Codex,
                     id: "thread".into(),

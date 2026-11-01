@@ -167,23 +167,13 @@ pub struct AccountState {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PendingSubmission {
     pub sequence: u64,
+    pub submitted_at_ms: Option<u64>,
     pub draft_key: DraftKey,
     pub draft: Arc<Draft>,
     pub turn_id: Option<agent_protocol::ids::TurnId>,
     pub after_item_id: Option<agent_protocol::ids::ItemId>,
     pub accepted: bool,
     pub delivery_unknown: bool,
-}
-impl PendingSubmission {
-    pub fn delivery_label(&self) -> &'static str {
-        if self.delivery_unknown {
-            "送信結果不明（自動再送しません）"
-        } else if self.accepted {
-            "送信済み"
-        } else {
-            "送信中…"
-        }
-    }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
@@ -1635,6 +1625,7 @@ fn submission(
         client_user_message_id.clone(),
         Arc::new(PendingSubmission {
             sequence,
+            submitted_at_ms: None,
             draft_key: draft_key.clone(),
             draft: draft.clone(),
             turn_id: anchor.map(|turn| turn.id.clone()),
