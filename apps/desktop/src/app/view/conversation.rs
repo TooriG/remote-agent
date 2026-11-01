@@ -1962,14 +1962,8 @@ impl ConversationView {
             .get(&id)
             .is_none_or(|cached| cached.source != source)
         {
-            let (rendered, images) =
-                agent_core::presentation::markdown::markdown_without_images(source);
+            let presentation = agent_core::presentation::markdown::markdown_presentation(source);
             let source: SharedString = source.to_owned().into();
-            let rendered: SharedString =
-                agent_core::presentation::markdown::markdown_display_source(&rendered).into();
-            let code_headers = Arc::new(agent_core::presentation::markdown::markdown_code_headers(
-                &rendered,
-            ));
             let (wrap_code, compact_tables) = self
                 .timeline
                 .markdown
@@ -1981,9 +1975,9 @@ impl ConversationView {
                 id.clone(),
                 MarkdownContent {
                     source,
-                    rendered,
-                    images: images.into(),
-                    code_headers,
+                    rendered: presentation.source.into(),
+                    images: presentation.images.into(),
+                    code_headers: Arc::new(presentation.code_headers),
                     diagrams: HashMap::new(),
                     wrap_code,
                     compact_tables,

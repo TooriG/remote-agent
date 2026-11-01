@@ -1,4 +1,4 @@
-use super::{MarkdownBlock, MarkdownRun, definitions, parse};
+use super::{MarkdownBlock, MarkdownRun, definitions};
 use markdown::mdast::Node;
 use percent_encoding::percent_decode_str;
 
@@ -294,8 +294,10 @@ fn chip_markdown(file: &MarkdownFileReference, target: &str) -> String {
     format!("[{fence}{}{fence}](<{target}>)", file.label)
 }
 
-/// Keep GPUI's retained selectable renderer; rewrite only file references.
-pub fn markdown_display_source(source: &str) -> String {
+pub(super) fn file_reference_edits(
+    source: &str,
+    root: &Node,
+) -> Vec<(std::ops::Range<usize>, String)> {
     fn visit(
         node: &Node,
         definitions: &std::collections::HashMap<&str, &str>,
@@ -340,16 +342,16 @@ pub fn markdown_display_source(source: &str) -> String {
             visit(child, definitions, source, edits);
         }
     }
-    let root = parse(source);
     let mut edits = Vec::new();
-    visit(&root, &definitions(&root), source, &mut edits);
-    let mut result = source.to_owned();
+    visit(root, &definitions(root), source, &mut edits);
     let labels = file_labels(edits.iter().map(|(_, _, file, _)| file.clone()));
-    for (range, prefix, mut file, target) in edits.into_iter().rev() {
-        relabel(&mut file, &labels);
-        result.replace_range(range, &format!("{prefix}{}", chip_markdown(&file, &target)));
-    }
-    result
+    edits
+        .into_iter()
+        .map(|(range, prefix, mut file, target)| {
+            relabel(&mut file, &labels);
+            (range, format!("{prefix}{}", chip_markdown(&file, &target)))
+        })
+        .collect()
 }
 
 fn file_labels(
@@ -534,7 +536,11 @@ mod tests {
             );
         }
         assert!(markdown_file_target("~".into(), "/workspace".into()).is_none());
-        assert!(markdown_display_source(source).contains("`~` 演算子と semver `~1.2`"));
+        assert!(
+            super::super::markdown_presentation(source)
+                .source
+                .contains("`~` 演算子と semver `~1.2`")
+        );
     }
 
     #[rstest::rstest]
@@ -578,7 +584,7 @@ mod tests {
         assert!(
             matches!(&blocks[1], MarkdownBlock::Paragraph { runs, .. } if runs.iter().all(|run| run.file.is_none()))
         );
-        let displayed = markdown_display_source(source);
+        let displayed = super::super::markdown_presentation(source).source;
         assert!(
             displayed.contains("[設計資料](docs/overview.md) [`overview.md`](<docs/overview.md>)")
         );
@@ -606,7 +612,7 @@ mod tests {
             let file = markdown_file_target(source.clone(), "/workspace".into()).unwrap();
             proptest::prop_assert_eq!(file.path, format!("/workspace/src/{name}.rs"));
             proptest::prop_assert_eq!((file.line, file.column), (Some(line), Some(column)));
-            let markdown = markdown_display_source(&format!("`{source}`"));
+            let markdown = super::super::markdown_presentation(&format!("`{source}`")).source;
             proptest::prop_assert!(markdown.contains(&source));
         }
     }

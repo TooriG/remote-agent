@@ -795,10 +795,7 @@ impl HitboxId {
         if window.captured_hitbox == Some(self) {
             return true;
         }
-        if window.last_input_was_keyboard() {
-            return false;
-        }
-        self.hit_test(window)
+        self.hit_test(window) && !window.last_input_was_keyboard()
     }
 
     /// Checks if the hitbox with this ID is currently hovered, regardless of the last
@@ -1332,6 +1329,7 @@ pub struct Window {
     #[cfg(feature = "profiler")]
     pub(crate) window_profiler: profiler::WindowProfiler,
     last_input_modality: InputModality,
+    input_modality_views: RefCell<FxHashSet<EntityId>>,
     touch_gestures: TouchGestureRecognizer,
     touch_prediction_enabled: bool,
     long_press_timer: Option<Task<()>>,
@@ -2233,6 +2231,7 @@ impl Window {
             #[cfg(feature = "profiler")]
             window_profiler: profiler::WindowProfiler::new(handle.window_id())?,
             last_input_modality: InputModality::Mouse,
+            input_modality_views: RefCell::default(),
             touch_gestures: TouchGestureRecognizer::new(
                 cx.platform
                     .gestures()
@@ -2433,6 +2432,14 @@ impl Window {
     pub fn refresh(&mut self) {
         if self.invalidator.not_drawing() {
             self.refreshing = true;
+            self.invalidator.set_dirty(true);
+        }
+    }
+
+    /// Redraw a view and its ancestors without invalidating unrelated cached views.
+    pub(crate) fn refresh_view(&mut self, view: EntityId) {
+        if self.invalidator.not_drawing() {
+            self.mark_view_dirty(view);
             self.invalidator.set_dirty(true);
         }
     }
@@ -3467,12 +3474,24 @@ impl Window {
     /// Returns true if the last input event was keyboard-based (key press, tab navigation, etc.)
     /// This is used for focus-visible styling to show focus indicators only for keyboard navigation.
     pub fn last_input_was_keyboard(&self) -> bool {
+        self.track_input_modality();
         self.last_input_modality == InputModality::Keyboard
     }
 
     /// Returns whether the last input event came from a touch screen.
     pub fn last_input_was_touch(&self) -> bool {
+        self.track_input_modality();
         self.last_input_modality == InputModality::Touch
+    }
+
+    pub(crate) fn track_input_modality(&self) {
+        if let Some(view) = self.rendered_entity_stack.last() {
+            self.input_modality_views.borrow_mut().insert(*view);
+        }
+    }
+
+    pub(crate) fn reset_input_modality_dependency(&self, view: EntityId) {
+        self.input_modality_views.borrow_mut().remove(&view);
     }
 
     /// The current state of the keyboard's capslock
@@ -3575,6 +3594,13 @@ impl Window {
         let previous_window_active = self.rendered_frame.window_active;
         mem::swap(&mut self.rendered_frame, &mut self.next_frame);
         self.next_frame.clear();
+        self.input_modality_views.get_mut().retain(|view| {
+            self.rendered_frame
+                .dispatch_tree
+                .view_path_reversed(*view)
+                .next()
+                .is_some()
+        });
         let current_focus_path = self.rendered_frame.focus_path();
         let current_window_active = self.rendered_frame.window_active;
         let mut focus_before_listeners = self.focus;
@@ -5741,7 +5767,10 @@ impl Window {
             _ => self.last_input_modality,
         };
         if self.last_input_modality != old_modality {
-            self.refresh();
+            let views: Vec<_> = self.input_modality_views.borrow().iter().copied().collect();
+            for view in views {
+                self.refresh_view(view);
+            }
         }
 
         // Handlers may set this to false by calling `stop_propagation`.

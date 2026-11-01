@@ -2993,6 +2993,7 @@ impl Interactivity {
         }
 
         if let Some(element_state) = element_state {
+            let current_view = window.current_view();
             if !click_listeners.is_empty()
                 || !aux_click_listeners.is_empty()
                 || drag_listener.is_some()
@@ -3022,7 +3023,7 @@ impl Interactivity {
                             && hitbox.is_hovered(window)
                         {
                             *pending_mouse_down.borrow_mut() = Some(event.clone());
-                            window.refresh();
+                            window.refresh_view(current_view);
                         }
                     }
                 });
@@ -3150,7 +3151,7 @@ impl Interactivity {
                             let mut pending_mouse_down = pending_mouse_down.borrow_mut();
                             if pending_mouse_down.is_some() && hitbox.is_hovered(window) {
                                 captured_mouse_down = pending_mouse_down.take();
-                                window.refresh();
+                                window.refresh_view(current_view);
                             } else if pending_mouse_down.is_some() {
                                 // Clear the pending mouse down event (without firing click handlers)
                                 // if the hitbox is not being hovered.
@@ -3158,7 +3159,7 @@ impl Interactivity {
                                 // immediately after being clicked.
                                 // See https://github.com/zed-industries/zed/issues/24600 for more details
                                 pending_mouse_down.take();
-                                window.refresh();
+                                window.refresh_view(current_view);
                             }
                         }
                         // Fire click handlers during the bubble phase.
@@ -3244,6 +3245,10 @@ impl Interactivity {
             }
 
             if let Some(tooltip_builder) = self.tooltip_builder.take() {
+                // Tooltips also depend on modality when their owner has no hover style.
+                if hitbox.id.is_hovered_ignoring_last_input(window) {
+                    window.track_input_modality();
+                }
                 let active_tooltip = element_state
                     .active_tooltip
                     .get_or_insert_with(Default::default)
@@ -3266,9 +3271,9 @@ impl Interactivity {
                     let pending_mouse_down = pending_mouse_down.clone();
                     let source_bounds = hitbox.bounds;
                     move |window: &Window| {
-                        !window.last_input_was_keyboard()
-                            && pending_mouse_down.borrow().is_none()
+                        pending_mouse_down.borrow().is_none()
                             && source_bounds.contains(&window.mouse_position())
+                            && !window.last_input_was_keyboard()
                     }
                 });
                 let check_is_hovered = Rc::new({
@@ -3301,7 +3306,7 @@ impl Interactivity {
                 window.on_mouse_event(move |_: &MouseUpEvent, phase, window, _cx| {
                     if phase == DispatchPhase::Capture && active_state.borrow().is_clicked() {
                         *active_state.borrow_mut() = ElementClickedState::default();
-                        window.refresh();
+                        window.refresh_view(current_view);
                     }
                 });
             }
@@ -3322,7 +3327,7 @@ impl Interactivity {
                                 group: group_hovered,
                                 element: element_hovered,
                             };
-                            window.refresh();
+                            window.refresh_view(current_view);
                         }
                     }
                 });
@@ -3497,14 +3502,14 @@ impl Interactivity {
             if let Some(group_hover) = self.group_hover_style.as_ref() {
                 let is_group_hovered =
                     if let Some(group_hitbox_id) = GroupHitboxes::get(&group_hover.group, cx) {
-                        !window.last_input_was_touch() && group_hitbox_id.is_hovered(window)
+                        group_hitbox_id.is_hovered(window) && !window.last_input_was_touch()
                     } else if let Some(element_state) = element_state.as_ref() {
-                        !window.last_input_was_touch()
-                            && element_state
-                                .hover_state
-                                .as_ref()
-                                .map(|state| state.borrow().group)
-                                .unwrap_or(false)
+                        element_state
+                            .hover_state
+                            .as_ref()
+                            .map(|state| state.borrow().group)
+                            .unwrap_or(false)
+                            && !window.last_input_was_touch()
                     } else {
                         false
                     };
@@ -3516,14 +3521,14 @@ impl Interactivity {
 
             if let Some(hover_style) = self.hover_style.as_ref() {
                 let is_hovered = if let Some(hitbox) = hitbox {
-                    !window.last_input_was_touch() && hitbox.is_hovered(window)
+                    hitbox.is_hovered(window) && !window.last_input_was_touch()
                 } else if let Some(element_state) = element_state.as_ref() {
-                    !window.last_input_was_touch()
-                        && element_state
-                            .hover_state
-                            .as_ref()
-                            .map(|state| state.borrow().element)
-                            .unwrap_or(false)
+                    element_state
+                        .hover_state
+                        .as_ref()
+                        .map(|state| state.borrow().element)
+                        .unwrap_or(false)
+                        && !window.last_input_was_touch()
                 } else {
                     false
                 };
@@ -3716,12 +3721,14 @@ pub(crate) enum ActiveTooltip {
     WaitingForShow { _task: Task<()> },
     /// Tooltip is visible, element was hovered or for hoverable tooltips, the tooltip was hovered.
     Visible {
+        owner: EntityId,
         tooltip: AnyTooltip,
         is_hoverable: bool,
     },
     /// Tooltip is visible and hoverable, but the mouse is no longer hovering. Currently delaying
     /// before hiding it.
     WaitingForHide {
+        owner: EntityId,
         tooltip: AnyTooltip,
         _task: Task<()>,
     },
@@ -3734,8 +3741,8 @@ pub(crate) fn clear_active_tooltip(
     match active_tooltip.borrow_mut().take() {
         None => {}
         Some(ActiveTooltip::WaitingForShow { .. }) => {}
-        Some(ActiveTooltip::Visible { .. }) => window.refresh(),
-        Some(ActiveTooltip::WaitingForHide { .. }) => window.refresh(),
+        Some(ActiveTooltip::Visible { owner, .. })
+        | Some(ActiveTooltip::WaitingForHide { owner, .. }) => window.refresh_view(owner),
     }
 }
 
@@ -3750,8 +3757,7 @@ pub(crate) fn clear_active_tooltip_if_not_hoverable(
         Some(ActiveTooltip::WaitingForHide { .. }) => false,
     };
     if should_clear {
-        active_tooltip.borrow_mut().take();
-        window.refresh();
+        clear_active_tooltip(active_tooltip, window);
     }
 }
 
@@ -3827,6 +3833,7 @@ pub(crate) fn register_tooltip_mouse_handlers(
                         &build_tooltip,
                         &check_is_hovered_during_prepaint,
                         Some(long_press_tooltip_active.clone()),
+                        current_view,
                         window,
                         cx,
                     ) {
@@ -3953,6 +3960,7 @@ fn handle_tooltip_mouse_move(
                             &build_tooltip,
                             &check_is_hovered_during_prepaint,
                             None,
+                            current_view,
                             window,
                             cx,
                         );
@@ -3975,6 +3983,7 @@ fn show_tooltip(
     build_tooltip: &Rc<dyn Fn(&mut Window, &mut App) -> Option<(AnyView, bool)>>,
     check_is_hovered_during_prepaint: &Rc<dyn Fn(&Window) -> bool>,
     long_press_tooltip_active: Option<Rc<Cell<bool>>>,
+    owner: EntityId,
     window: &mut Window,
     cx: &mut App,
 ) -> bool {
@@ -3982,6 +3991,7 @@ fn show_tooltip(
         let weak_active_tooltip = Rc::downgrade(active_tooltip);
         let check_is_hovered_during_prepaint = check_is_hovered_during_prepaint.clone();
         ActiveTooltip::Visible {
+            owner,
             tooltip: AnyTooltip {
                 view,
                 mouse_position: window.mouse_position(),
@@ -4010,7 +4020,7 @@ fn show_tooltip(
     });
     let did_show = new_tooltip.is_some();
     *active_tooltip.borrow_mut() = new_tooltip;
-    window.refresh();
+    window.refresh_view(owner);
     did_show
 }
 
@@ -4030,27 +4040,27 @@ fn handle_tooltip_check_visible_and_update(
     enum Action {
         None,
         Hide,
-        ScheduleHide(AnyTooltip),
-        CancelHide(AnyTooltip),
+        ScheduleHide(EntityId, AnyTooltip),
+        CancelHide(EntityId, AnyTooltip),
     }
 
     let is_hovered = check_is_hovered(window)
         || (tooltip_is_hoverable && tooltip_bounds.contains(&window.mouse_position()));
     let action = match active_tooltip.borrow().as_ref() {
-        Some(ActiveTooltip::Visible { tooltip, .. }) => {
+        Some(ActiveTooltip::Visible { owner, tooltip, .. }) => {
             if is_hovered {
                 Action::None
             } else {
                 if tooltip_is_hoverable {
-                    Action::ScheduleHide(tooltip.clone())
+                    Action::ScheduleHide(*owner, tooltip.clone())
                 } else {
                     Action::Hide
                 }
             }
         }
-        Some(ActiveTooltip::WaitingForHide { tooltip, .. }) => {
+        Some(ActiveTooltip::WaitingForHide { owner, tooltip, .. }) => {
             if is_hovered {
-                Action::CancelHide(tooltip.clone())
+                Action::CancelHide(*owner, tooltip.clone())
             } else {
                 Action::None
             }
@@ -4061,7 +4071,7 @@ fn handle_tooltip_check_visible_and_update(
     match action {
         Action::None => {}
         Action::Hide => clear_active_tooltip(active_tooltip, window),
-        Action::ScheduleHide(tooltip) => {
+        Action::ScheduleHide(owner, tooltip) => {
             let delayed_hide_task = window.spawn(cx, {
                 let weak_active_tooltip = Rc::downgrade(active_tooltip);
                 async move |cx| {
@@ -4071,21 +4081,22 @@ fn handle_tooltip_check_visible_and_update(
                     let Some(active_tooltip) = weak_active_tooltip.upgrade() else {
                         return;
                     };
-                    if active_tooltip.borrow_mut().take().is_some() {
-                        cx.update(|window, _cx| window.refresh()).ok();
-                    }
+                    cx.update(|window, _cx| clear_active_tooltip(&active_tooltip, window))
+                        .ok();
                 }
             });
             active_tooltip
                 .borrow_mut()
                 .replace(ActiveTooltip::WaitingForHide {
+                    owner,
                     tooltip,
                     _task: delayed_hide_task,
                 });
         }
-        Action::CancelHide(tooltip) => {
+        Action::CancelHide(owner, tooltip) => {
             // Cancel waiting to hide tooltip when it becomes hovered.
             active_tooltip.borrow_mut().replace(ActiveTooltip::Visible {
+                owner,
                 tooltip,
                 is_hoverable: true,
             });

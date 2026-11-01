@@ -11,8 +11,8 @@ mod diagram;
 pub use diagram::{MarkdownDiagram, markdown_diagram};
 mod links;
 pub use links::{
-    MarkdownFileKind, MarkdownFileReference, file_requires_download, markdown_display_source,
-    markdown_file_kind, markdown_file_target,
+    MarkdownFileKind, MarkdownFileReference, file_requires_download, markdown_file_kind,
+    markdown_file_target,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -250,9 +250,55 @@ pub fn markdown_table_csv(rows: Vec<Vec<String>>) -> String {
         .join("\r\n")
 }
 
-/// Header labels keyed by source offset for renderers that retain the original Markdown AST.
-pub fn markdown_code_headers(source: &str) -> HashMap<usize, String> {
-    fn visit(node: &Node, headers: &mut HashMap<usize, String>) {
+/// Desktop Markdown and its code labels share a parse. Image removal can change
+/// block boundaries, so it precedes parsing; file chips only replace inline nodes.
+pub struct MarkdownPresentation {
+    pub source: String,
+    pub images: Vec<String>,
+    pub code_headers: HashMap<usize, String>,
+}
+
+pub fn markdown_presentation(source: &str) -> MarkdownPresentation {
+    let (source, images) = markdown_without_images(source);
+    // File chips need a link or inline-code opener. Fenced labels need a fence;
+    // ordinary prose and indented code can go straight to the retained renderer.
+    if !source.contains(['[', '<', '`', '~']) {
+        return MarkdownPresentation {
+            source: source.into_owned(),
+            images,
+            code_headers: HashMap::new(),
+        };
+    }
+    let root = parse(&source);
+    let edits = links::file_reference_edits(&source, &root);
+    let mut headers = code_headers(&root).into_iter().peekable();
+    let mut code_headers = HashMap::new();
+    let mut rendered = String::with_capacity(source.len());
+    let mut previous = 0;
+    for (range, replacement) in &edits {
+        while let Some((offset, _)) = headers.peek()
+            && *offset < range.start
+        {
+            let (offset, label) = headers.next().unwrap();
+            code_headers.insert(rendered.len() + offset - previous, label);
+        }
+        rendered.push_str(&source[previous..range.start]);
+        rendered.push_str(replacement);
+        previous = range.end;
+    }
+    for (offset, label) in headers {
+        code_headers.insert(rendered.len() + offset - previous, label);
+    }
+    rendered.push_str(&source[previous..]);
+    MarkdownPresentation {
+        source: rendered,
+        images,
+        code_headers,
+    }
+}
+
+fn code_headers(root: &Node) -> Vec<(usize, String)> {
+    fn visit(node: &Node, headers: &mut Vec<(usize, String)>) {
         if let Node::Code(code) = node
             && let Some(position) = node.position()
         {
@@ -260,14 +306,14 @@ pub fn markdown_code_headers(source: &str) -> HashMap<usize, String> {
                 .or_else(|| code::fence_filename(code.lang.as_deref()))
                 .or_else(|| code.lang.clone())
                 .unwrap_or_else(|| "CODE".into());
-            headers.insert(position.start.offset, label);
+            headers.push((position.start.offset, label));
         }
         for child in node.children().into_iter().flatten() {
             visit(child, headers);
         }
     }
-    let mut headers = HashMap::new();
-    visit(&parse(source), &mut headers);
+    let mut headers = Vec::new();
+    visit(root, &mut headers);
     headers
 }
 
@@ -868,6 +914,57 @@ mod tests {
     }
 
     #[test]
+    fn presentation_preserves_plain_text_and_converts_file_autolinks() {
+        let source = "日本語の文章🌸\n\n    plain code";
+        let presentation = markdown_presentation(source);
+        assert_eq!(presentation.source, source);
+        assert!(presentation.images.is_empty());
+        assert!(presentation.code_headers.is_empty());
+        assert_eq!(
+            markdown_presentation("<file:///tmp/main.rs>").source,
+            "[`main.rs`](<file:///tmp/main.rs>)"
+        );
+    }
+
+    #[test]
+    fn presentation_keeps_code_labels_at_displayed_offsets() {
+        let source = "[長い説明](src/first.rs)\n\n```rust filename=src/一.rs\nfn first() {}\n```\n\n![証拠](image.png)\n\n`src/a/index.ts` and `src/b/index.ts`\n\n~~~ts title=src/second.ts\nconst second = 2;\n~~~\n\n`src/last.rs`";
+        let presentation = markdown_presentation(source);
+        assert_eq!(presentation.images, ["image.png"]);
+        assert!(!presentation.source.contains("![証拠]"));
+        assert!(
+            presentation
+                .source
+                .contains("[`a/index.ts`](<src/a/index.ts>)")
+        );
+        assert!(
+            presentation
+                .source
+                .contains("[`b/index.ts`](<src/b/index.ts>)")
+        );
+        assert_eq!(presentation.code_headers.len(), 2);
+        assert_eq!(
+            presentation.code_headers[&presentation.source.find("```rust").unwrap()],
+            "src/一.rs"
+        );
+        assert_eq!(
+            presentation.code_headers[&presentation.source.find("~~~ts").unwrap()],
+            "src/second.ts"
+        );
+        for end in source
+            .char_indices()
+            .map(|(end, _)| end)
+            .chain([source.len()])
+        {
+            let partial = markdown_presentation(&source[..end]);
+            for offset in partial.code_headers.keys() {
+                assert!(partial.source.is_char_boundary(*offset));
+                assert!(partial.source[*offset..].starts_with(['`', '~']));
+            }
+        }
+    }
+
+    #[test]
     fn disclosure_images_remain_valid_at_every_stream_boundary() {
         let source = "[receipt]: images/receipt.png\n\n<details>\n<summary>日本語の説明🌸</summary>\n\n![証拠][receipt]\n\n</details>";
         for end in source
@@ -880,7 +977,7 @@ mod tests {
             assert!(images.len() <= 1);
             assert!(images.iter().all(|url| url == "images/receipt.png"));
             markdown_blocks(partial.into());
-            markdown_code_headers(&rendered);
+            markdown_presentation(&rendered);
         }
         assert_eq!(markdown_without_images(source).1, ["images/receipt.png"]);
     }

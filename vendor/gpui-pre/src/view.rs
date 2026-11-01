@@ -336,6 +336,9 @@ struct ViewElementCacheKey {
 #[cfg(not(gpui_hot_reload))]
 #[inline]
 fn render_view<V: View>(view: V, window: &mut Window, cx: &mut App) -> AnyElement {
+    if let Some(id) = view.entity_id() {
+        window.reset_input_modality_dependency(id);
+    }
     view.render(window, cx).into_any_element()
 }
 
@@ -345,6 +348,9 @@ fn render_view<V: View>(view: V, window: &mut Window, cx: &mut App) -> AnyElemen
 fn render_view<V: View>(view: V, window: &mut Window, cx: &mut App) -> AnyElement {
     #[inline(never)]
     fn render_view_impl<V: View>(view: V, window: &mut Window, cx: &mut App) -> AnyElement {
+        if let Some(id) = view.entity_id() {
+            window.reset_input_modality_dependency(id);
+        }
         view.render(window, cx).into_any_element()
     }
 

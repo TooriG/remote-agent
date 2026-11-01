@@ -149,6 +149,7 @@ pub(crate) struct Desktop {
     snapshot: Arc<Snapshot>,
     runtime: Runtime,
     updates: async_channel::Sender<(u64, Update)>,
+    snapshot_pending: Option<u64>,
     epoch: u64,
     connecting: bool,
     remote: Option<RemoteHost>,
@@ -493,6 +494,7 @@ impl Desktop {
             snapshot: Arc::default(),
             runtime: cx.global::<Runtime>().clone(),
             updates,
+            snapshot_pending: None,
             epoch: 0,
             connecting: false,
             remote,
@@ -718,10 +720,28 @@ impl Desktop {
                 }
             }
             Update::Snapshot => {
-                if !self.accept_snapshot(window, cx) {
-                    self.sync_composer(cx);
+                if self.snapshot_pending == Some(epoch) {
                     return;
                 }
+                self.snapshot_pending = Some(epoch);
+                let view = cx.entity().downgrade();
+                window.on_next_frame(move |window, cx| {
+                    let _ = view.update(cx, |view, cx| {
+                        if view.snapshot_pending != Some(epoch) {
+                            return;
+                        }
+                        view.snapshot_pending = None;
+                        if view.epoch != epoch {
+                            return;
+                        }
+                        if view.accept_snapshot(window, cx) {
+                            cx.notify();
+                        } else {
+                            view.sync_composer(cx);
+                        }
+                    });
+                });
+                return;
             }
             Update::Completed(kind, result) => {
                 if !self.operation_completed(kind, result, window, cx) {

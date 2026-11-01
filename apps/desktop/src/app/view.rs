@@ -386,6 +386,294 @@ mod cache_tests {
     use core::prelude::v1::test;
     use gpui_kit as gpui;
 
+    const TOOLTIP_DELAY: std::time::Duration = std::time::Duration::from_millis(1);
+
+    fn init(cx: &mut TestAppContext) -> (tokio::runtime::Runtime, Runtime) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let app_runtime = Runtime {
+            handle: runtime.handle().clone(),
+            connections: Arc::default(),
+            closing: tokio_util::task::TaskTracker::new(),
+            logging_error: None,
+        };
+        cx.update(|cx| {
+            crate::appearance::init(cx);
+            cx.set_global(app_runtime.clone());
+        });
+        (runtime, app_runtime)
+    }
+
+    struct CachedRegion {
+        renders: std::rc::Rc<std::cell::Cell<usize>>,
+        interactive: bool,
+        hover: bool,
+    }
+
+    struct RegionTooltip;
+
+    impl Render for RegionTooltip {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .debug_selector(|| "cache-test-tooltip".into())
+                .child("Tooltip")
+        }
+    }
+
+    impl Render for CachedRegion {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            self.renders.set(self.renders.get() + 1);
+            let selector = if self.interactive {
+                "cache-test-target"
+            } else {
+                "cache-test-static"
+            };
+            div()
+                .id("cache-test-region")
+                .debug_selector(move || selector.into())
+                .size_full()
+                .when(self.interactive, |region| {
+                    region
+                        .when(self.hover, |region| {
+                            region.hover(|style| style.bg(rgb(0x123456)))
+                        })
+                        .active(|style| style.bg(rgb(0x654321)))
+                        .tooltip_show_delay(TOOLTIP_DELAY)
+                        .tooltip(|_, cx| cx.new(|_| RegionTooltip).into())
+                        .on_click(|_, _, _| {})
+                })
+        }
+    }
+
+    struct CachedRegions([gpui::AnyView; 2]);
+
+    impl Render for CachedRegions {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            h_flex()
+                .size_full()
+                .children(self.0.iter().cloned().map(|region| {
+                    region.cached(gpui::StyleRefinement::default().w(px(100.)).h(px(100.)))
+                }))
+        }
+    }
+
+    #[gpui::test]
+    fn pointer_and_tooltip_changes_reuse_unrelated_cached_views(cx: &mut TestAppContext) {
+        for hover in [false, true] {
+            let counts = [
+                std::rc::Rc::new(std::cell::Cell::new(0)),
+                std::rc::Rc::new(std::cell::Cell::new(0)),
+            ];
+            let (_, window) = cx.add_window_view(|_, cx| {
+                CachedRegions([
+                    cx.new(|_| CachedRegion {
+                        renders: counts[0].clone(),
+                        interactive: true,
+                        hover,
+                    })
+                    .into(),
+                    cx.new(|_| CachedRegion {
+                        renders: counts[1].clone(),
+                        interactive: false,
+                        hover: false,
+                    })
+                    .into(),
+                ])
+            });
+            window.update(|window, cx| window.draw(cx).clear(cx));
+            window.run_until_parked();
+            let baseline = counts[1].get();
+            let pointer = window.debug_bounds("cache-test-target").unwrap().center();
+            let moved_pointer = pointer + point(px(1.), px(0.));
+            let outside = window.debug_bounds("cache-test-static").unwrap().center();
+            window.simulate_mouse_move(pointer, None, gpui::Modifiers::default());
+            window.executor().advance_clock(TOOLTIP_DELAY);
+            window.run_until_parked();
+            assert!(window.debug_bounds("cache-test-tooltip").is_some());
+            assert_eq!(
+                counts[1].get(),
+                baseline,
+                "showing a tooltip must reuse the other view"
+            );
+
+            let hovered = counts[0].get();
+            window.update(|window, cx| {
+                window.dispatch_keystroke(gpui::Keystroke::parse("a").unwrap(), cx);
+            });
+            window.run_until_parked();
+            assert!(
+                counts[0].get() > hovered,
+                "keyboard input must suppress hover and its tooltip"
+            );
+            assert!(window.debug_bounds("cache-test-tooltip").is_none());
+            assert_eq!(counts[1].get(), baseline);
+
+            window.simulate_mouse_move(moved_pointer, None, gpui::Modifiers::default());
+            window.executor().advance_clock(TOOLTIP_DELAY);
+            window.run_until_parked();
+            assert!(window.debug_bounds("cache-test-tooltip").is_some());
+            window.simulate_click(moved_pointer, gpui::Modifiers::default());
+            window.run_until_parked();
+            assert_eq!(
+                counts[1].get(),
+                baseline,
+                "click feedback must reuse the other view"
+            );
+            window.simulate_mouse_move(outside, None, gpui::Modifiers::default());
+            window.run_until_parked();
+            assert!(window.debug_bounds("cache-test-tooltip").is_none());
+            assert_eq!(counts[1].get(), baseline);
+        }
+    }
+
+    #[gpui::test]
+    fn focus_visible_changes_preserve_other_view_caches(cx: &mut TestAppContext) {
+        struct FocusRegion(gpui::FocusHandle);
+        impl Render for FocusRegion {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div()
+                    .track_focus(&self.0)
+                    .size_full()
+                    .focus_visible(|style| style.pl(px(10.)))
+                    .child(
+                        div()
+                            .debug_selector(|| "focus-visible-marker".into())
+                            .size(px(10.)),
+                    )
+            }
+        }
+        let renders = std::rc::Rc::new(std::cell::Cell::new(0));
+        let mut focus = None;
+        let (_, window) = cx.add_window_view(|_, cx| {
+            let handle = cx.focus_handle();
+            focus = Some(handle.clone());
+            CachedRegions([
+                cx.new(|_| FocusRegion(handle)).into(),
+                cx.new(|_| CachedRegion {
+                    renders: renders.clone(),
+                    interactive: false,
+                    hover: false,
+                })
+                .into(),
+            ])
+        });
+        window.simulate_mouse_move(point(px(150.), px(50.)), None, gpui::Modifiers::default());
+        window.update(|window, cx| window.focus(focus.as_ref().unwrap(), cx));
+        window.run_until_parked();
+        let baseline = renders.get();
+        let resting = window.debug_bounds("focus-visible-marker").unwrap().left();
+        window.update(|window, cx| {
+            window.dispatch_keystroke(gpui::Keystroke::parse("a").unwrap(), cx);
+        });
+        window.run_until_parked();
+        assert_eq!(
+            window.debug_bounds("focus-visible-marker").unwrap().left(),
+            resting + px(10.)
+        );
+        assert_eq!(renders.get(), baseline);
+        window.simulate_mouse_move(point(px(151.), px(50.)), None, gpui::Modifiers::default());
+        window.run_until_parked();
+        assert_eq!(
+            window.debug_bounds("focus-visible-marker").unwrap().left(),
+            resting
+        );
+        assert_eq!(renders.get(), baseline);
+    }
+
+    #[gpui::test]
+    fn snapshot_bursts_adopt_the_latest_state_once_per_frame(cx: &mut TestAppContext) {
+        let (runtime, app_runtime) = init(cx);
+        let store = runtime
+            .block_on(async { Arc::new(agent_core::store::Store::offline(Snapshot::default())) });
+        let mut session = Some(runtime.block_on(async {
+            let (updates, receive) = async_channel::unbounded();
+            tokio::spawn(StoreSession::publish(
+                Ok(store.clone()),
+                app_runtime,
+                updates,
+                Some,
+                |_| None,
+            ));
+            receive.recv().await.unwrap().unwrap().unwrap()
+        }));
+        let (desktop, window) = cx.add_window_view(|window, cx| {
+            let mut desktop = Desktop::new(
+                Mode::SideChat {
+                    remote: None,
+                    cwd: String::new(),
+                },
+                window,
+                cx,
+            );
+            desktop.snapshot = store.snapshot();
+            desktop.session = session.take();
+            desktop.epoch += 1;
+            desktop.connecting = false;
+            desktop
+        });
+        window.run_until_parked();
+        let key = desktop.read_with(window, |view, _| view.draft_key().clone());
+        for expected in ["first batch", "次のフレーム🌸"] {
+            for text in ["intermediate", expected] {
+                runtime
+                    .block_on(store.dispatch(Intent::SetDraftText {
+                        thread_id: key.clone(),
+                        text: text.into(),
+                    }))
+                    .unwrap();
+                window.update(|window, cx| {
+                    desktop.update(cx, |view, cx| {
+                        view.receive((view.epoch, Update::Snapshot), window, cx);
+                    });
+                });
+            }
+            assert_ne!(
+                desktop.read_with(window, |view, _| view.draft().text.clone()),
+                expected
+            );
+            let callbacks = window.update(|window, cx| window.simulate_next_frame(cx));
+            assert_eq!(
+                callbacks, 1,
+                "a burst must schedule only one snapshot adoption"
+            );
+            window.run_until_parked();
+            assert_eq!(
+                desktop.read_with(window, |view, _| view.draft().text.clone()),
+                expected
+            );
+            assert!(desktop.read_with(window, |view, _| view.snapshot_pending.is_none()));
+        }
+        for publish_current in [false, true] {
+            let previous = desktop.read_with(window, |view, _| view.draft().text.clone());
+            let text = format!("new generation {publish_current}");
+            runtime
+                .block_on(store.dispatch(Intent::SetDraftText {
+                    thread_id: key.clone(),
+                    text: text.clone(),
+                }))
+                .unwrap();
+            window.update(|window, cx| {
+                desktop.update(cx, |view, cx| {
+                    view.receive((view.epoch, Update::Snapshot), window, cx);
+                    view.epoch += 1;
+                    if publish_current {
+                        view.receive((view.epoch, Update::Snapshot), window, cx);
+                    }
+                });
+                window.simulate_next_frame(cx);
+            });
+            window.run_until_parked();
+            assert_eq!(
+                desktop.read_with(window, |view, _| view.draft().text.clone()),
+                if publish_current { text } else { previous },
+                "a replaced connection's callback must neither adopt its state nor clear the current callback"
+            );
+            assert!(desktop.read_with(window, |view, _| view.snapshot_pending.is_none()));
+        }
+    }
+
     #[gpui::test]
     fn loading_images_pulse_without_rebuilding_their_content(cx: &mut TestAppContext) {
         struct Loading(std::rc::Rc<std::cell::Cell<usize>>);
@@ -432,20 +720,7 @@ mod cache_tests {
 
     #[gpui::test]
     fn browser_frames_do_not_broadcast_desktop_notifications(cx: &mut TestAppContext) {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let app_runtime = Runtime {
-            handle: runtime.handle().clone(),
-            connections: Arc::default(),
-            closing: tokio_util::task::TaskTracker::new(),
-            logging_error: None,
-        };
-        cx.update(|cx| {
-            crate::appearance::init(cx);
-            cx.set_global(app_runtime.clone());
-        });
+        let (runtime, app_runtime) = init(cx);
         let mut snapshot = Snapshot {
             connected: true,
             ..Default::default()
@@ -553,19 +828,7 @@ mod cache_tests {
 
     #[gpui::test]
     fn open_model_menu_updates_when_its_trigger_is_unchanged(cx: &mut TestAppContext) {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        cx.update(|cx| {
-            crate::appearance::init(cx);
-            cx.set_global(Runtime {
-                handle: runtime.handle().clone(),
-                connections: Arc::default(),
-                closing: tokio_util::task::TaskTracker::new(),
-                logging_error: None,
-            });
-        });
+        let (_runtime, _) = init(cx);
         let mut owner = None;
         let (_, window) = cx.add_window_view(|window, cx| {
             let desktop = cx.new(|cx| {
@@ -620,19 +883,7 @@ mod cache_tests {
 
     #[gpui::test]
     fn typing_streaming_and_animation_rebuild_only_the_affected_views(cx: &mut TestAppContext) {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        cx.update(|cx| {
-            crate::appearance::init(cx);
-            cx.set_global(Runtime {
-                handle: runtime.handle().clone(),
-                connections: Arc::default(),
-                closing: tokio_util::task::TaskTracker::new(),
-                logging_error: None,
-            });
-        });
+        let (runtime, _) = init(cx);
         let session = SessionRef {
             provider: agent_protocol::session::ProviderKind::Codex,
             id: "selected".into(),
@@ -709,6 +960,11 @@ mod cache_tests {
                 .unwrap();
             for _ in 0..20 {
                 runtime.block_on(tokio::task::yield_now());
+                cx.run_until_parked();
+                // Store publications are adopted on a display frame, as on the platform.
+                window
+                    .update(cx, |_, window, cx| window.simulate_next_frame(cx))
+                    .unwrap();
                 cx.run_until_parked();
                 if desktop.read_with(cx, |view, _| view.composer.text.pending.is_none()) {
                     break;
@@ -837,6 +1093,10 @@ mod cache_tests {
             .unwrap();
         for _ in 0..20 {
             runtime.block_on(tokio::task::yield_now());
+            cx.run_until_parked();
+            window
+                .update(cx, |_, window, cx| window.simulate_next_frame(cx))
+                .unwrap();
             cx.run_until_parked();
             if desktop.read_with(cx, |view, _| {
                 view.snapshot.navigation.cwd == "/next-project"
