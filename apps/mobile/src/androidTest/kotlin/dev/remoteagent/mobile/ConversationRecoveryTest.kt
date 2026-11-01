@@ -71,9 +71,11 @@ class ConversationRecoveryTest {
                     val id = requireNotNull(model.snapshot.navigation().threadId)
                     while (true) {
                         val thread = model.snapshot.threadJson(id)
-                        val turns = thread.getJSONArray("turns")
+                        // Submission acceptance can precede the subscribed history snapshot.
+                        val turns = thread.optJSONArray("turns")
                         if (
-                            turns.length() > 0 &&
+                            turns != null &&
+                                turns.length() > 0 &&
                                 turns.getJSONObject(turns.length() - 1).getString("status") == "completed"
                         ) {
                             assertTrue(thread.toString().contains("Recovery fixture input"))
@@ -108,8 +110,12 @@ class ConversationRecoveryTest {
                     perform(Intent.Submit(id, UUID.randomUUID().toString())).getOrThrow()
                     while (true) {
                         val thread = model.snapshot.threadJson(id)
-                        val turns = thread.getJSONArray("turns")
-                        if (turns.length() == 2 && turns.getJSONObject(1).getString("status") == "completed") {
+                        val turns = thread.optJSONArray("turns")
+                        if (
+                            turns != null &&
+                                turns.length() == 2 &&
+                                turns.getJSONObject(1).getString("status") == "completed"
+                        ) {
                             assertTrue(turns.getJSONObject(1).toString().contains("preserved draft"))
                             break
                         }
