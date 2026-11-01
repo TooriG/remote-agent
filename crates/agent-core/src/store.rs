@@ -311,6 +311,21 @@ impl Scope {
 }
 impl Scheduled {
     fn new(mut effect: Effect, snapshot: &mut Snapshot, continuation: Option<&Scope>) -> Self {
+        // Stamp the input being sent before publication, including dictation.
+        // Restoring cached input never schedules a send or invents a send time.
+        if let Some(id) = effect.operation.submission_id()
+            && snapshot
+                .pending_submissions
+                .get(id)
+                .is_some_and(|pending| pending.submitted_at_ms.is_none())
+        {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            let inputs = Arc::make_mut(&mut snapshot.pending_submissions);
+            Arc::make_mut(inputs.get_mut(id).unwrap()).submitted_at_ms = Some(now);
+        }
         let operation = effect.operation.key().map(|key| {
             let generation = if (matches!(key, op::OperationKey::Item { .. })
                 || continuation
@@ -915,24 +930,7 @@ fn publication_key(snapshot: &Snapshot) -> impl PartialEq + '_ {
     )
 }
 
-fn publish_locked(current: &mut Arc<Snapshot>, mut next: Snapshot) -> bool {
-    // The Store owns the clock. Stamp local input before its first publication,
-    // including dictation, while keeping state transitions deterministic.
-    if next
-        .pending_submissions
-        .values()
-        .any(|pending| pending.submitted_at_ms.is_none())
-    {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-        for pending in Arc::make_mut(&mut next.pending_submissions).values_mut() {
-            if pending.submitted_at_ms.is_none() {
-                Arc::make_mut(pending).submitted_at_ms = Some(now);
-            }
-        }
-    }
+fn publish_locked(current: &mut Arc<Snapshot>, next: Snapshot) -> bool {
     if publication_key(current) == publication_key(&next) {
         return false;
     }
@@ -2389,6 +2387,62 @@ mod tests {
         ));
         store.close().await.unwrap();
     }
+    #[test]
+    fn scheduling_a_submission_dates_only_that_input_once() {
+        let pending = |submitted_at_ms| {
+            Arc::new(crate::state::PendingSubmission {
+                sequence: 0,
+                submitted_at_ms,
+                draft_key: "draft".into(),
+                draft: Arc::default(),
+                turn_id: None,
+                after_item_id: None,
+                accepted: false,
+                delivery_unknown: false,
+            })
+        };
+        let mut current = Snapshot {
+            pending_submissions: Arc::new(
+                [
+                    ("unknown-time".into(), pending(None)),
+                    ("known-time".into(), pending(Some(12_000))),
+                    ("new".into(), pending(None)),
+                ]
+                .into(),
+            ),
+            ..Default::default()
+        };
+        let send = |id: &str| {
+            Effect::execute(op::StartSubmission {
+                provider: crate::session::ProviderKind::Codex,
+                draft_key: "draft".into(),
+                cwd: None,
+                client_user_message_id: id.into(),
+                draft: Arc::default(),
+            })
+        };
+        let before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        Scheduled::new(send("new"), &mut current, None);
+        let after = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let submitted_at = current.pending_submissions["new"].submitted_at_ms.unwrap();
+        assert!((before..=after).contains(&submitted_at));
+        assert_eq!(
+            current.pending_submissions["unknown-time"].submitted_at_ms,
+            None
+        );
+        Scheduled::new(send("known-time"), &mut current, None);
+        assert_eq!(
+            current.pending_submissions["known-time"].submitted_at_ms,
+            Some(12_000)
+        );
+    }
+
     #[test]
     // Reading store.snapshot() after a receipt cannot prove subscribers were
     // notified. Keep publication coverage independent of operation behavior.
