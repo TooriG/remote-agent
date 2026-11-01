@@ -13,8 +13,8 @@ extension LaunchUITests {
         openModelChoices(app)
         app.buttons["model.choice.fixture-model"].tap()
         dismissModelSettings(app)
-        let prompt = app.textFields["task.message"]
-        prompt.tap(); prompt.typeText("[success] Inherit this question")
+        let composer = app.textFields["task.message"]
+        composer.tap(); composer.typeText("[success] Inherit this question")
         app.buttons["task.send"].tap()
         let answer = prefixedElement(app, prefix: "item.fixture-final-")
         XCTAssertTrue(answer.waitForExistence(timeout: 25))
@@ -23,7 +23,6 @@ extension LaunchUITests {
         XCTAssertTrue(firstFork.waitForExistence(timeout: 10))
         switchFixtureAccount(app)
         XCTAssertTrue(app.descendants(matching: .any)[originalAnswerID].exists)
-        let composer = app.textFields["task.message"]
         composer.tap(); composer.typeText("[success] This later question stays in the original")
         app.buttons["task.send"].tap()
         let nextID = String(originalAnswerID.dropLast()) + "2"

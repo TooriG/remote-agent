@@ -70,7 +70,22 @@ impl SessionActor {
             // Native transcripts do not identify a still-running local process.
             // Its owned turn is authoritative, even if persisted messages look complete.
             let turns = thread.turns.get_or_insert_default();
-            if let Some(index) = turns.iter().rposition(|old| old.id == turn.id) {
+            // Some providers reuse a turn ID. Shared item IDs identify the
+            // owned occurrence before falling back to the latest matching ID.
+            let index = turns
+                .iter()
+                .enumerate()
+                .filter(|(_, old)| old.id == turn.id)
+                .max_by_key(|(_, old)| {
+                    old.items.iter().flatten().any(|item| {
+                        turn.items
+                            .iter()
+                            .flatten()
+                            .any(|current| current.id == item.id)
+                    })
+                })
+                .map(|(index, _)| index);
+            if let Some(index) = index {
                 turns[index] = turn.clone();
             } else {
                 turns.push(turn.clone());
@@ -92,6 +107,52 @@ impl SessionActor {
 mod tests {
     use super::*;
     use agent_protocol::session::SubmissionDelivery;
+
+    #[test]
+    fn live_response_overlays_its_own_items_when_turn_ids_repeat() {
+        use agent_protocol::models::Turn;
+        use std::sync::Arc;
+        let turn = |item: &str| -> Arc<Turn> {
+            Arc::new(
+                serde_json::from_value(serde_json::json!({
+                    "id":"repeated", "status":"completed", "items":[{
+                        "id":item, "status":"completed", "body":{"inline":{"body":{
+                            "assistantText":{"text":item,"phase":"final"}
+                        }}}
+                    }]
+                }))
+                .unwrap(),
+            )
+        };
+        let persisted = turn("current");
+        let mut current = persisted.as_ref().clone();
+        current.status = agent_protocol::execution::TurnStatus::Running;
+        let current = Arc::new(current);
+        let previous = turn("previous");
+        let actor = SessionActor {
+            timeline: agent_protocol::session::Timeline {
+                turns: Some(vec![current.clone()]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        for (history, expected) in [
+            (
+                vec![persisted.clone(), previous.clone()],
+                vec![current.clone(), previous.clone()],
+            ),
+            (
+                vec![previous.clone(), persisted.clone()],
+                vec![previous.clone(), current.clone()],
+            ),
+        ] {
+            let projected = actor.overlay(Thread {
+                turns: Some(history),
+                ..Default::default()
+            });
+            assert_eq!(projected.turns.as_ref().unwrap(), &expected);
+        }
+    }
 
     #[test]
     fn finished_echo_retires_only_confirmed_input_and_stale_execution_status() {
