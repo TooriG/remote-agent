@@ -51,7 +51,8 @@ extension LaunchUITests {
         captureScreen(app, named: "Fork inherits the selected answer and accepts a new turn")
         app.navigationBars.buttons.element(boundBy: 0).tap()
         let number = try XCTUnwrap(originalAnswerID.split(separator: "-").dropLast().last)
-        let original = app.descendants(matching: .any)["tasks.row.codex:fixture-thread-\(number)"]
+        let original = try app
+            .descendants(matching: .any)[simulatorTaskRowIdentifier("session-identity/fixture-thread-\(number)")]
         XCTAssertTrue(original.waitForExistence(timeout: 15)); original.tap()
         XCTAssertTrue(app.descendants(matching: .any)[nextID].waitForExistence(timeout: 20))
     }

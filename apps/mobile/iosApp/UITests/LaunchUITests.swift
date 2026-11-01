@@ -152,6 +152,21 @@ final class LaunchUITests: XCTestCase {
         confirm.tap()
     }
 
+    func simulatorTaskRowIdentifier(_ path: String) throws -> String {
+        struct Session: Decodable {
+            let provider: String
+            let id: String
+        }
+
+        struct TaskIdentity: Decodable {
+            let threadId: Session
+        }
+
+        let response = try simulatorFixture(path, expectedStatus: 200, timeout: 15)
+        let session = try JSONDecoder().decode(TaskIdentity.self, from: response).threadId
+        return "tasks.row.\(session.provider):\(session.id)"
+    }
+
     func startSimulatorConversation(_ app: XCUIApplication, promptText: String) throws {
         let projectCompose = app.buttons["tasks.new.project.simulator-project"]
         XCTAssertTrue(

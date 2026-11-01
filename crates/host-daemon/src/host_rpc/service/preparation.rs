@@ -289,6 +289,8 @@ impl HostRpcService {
             // Cancellation must not lose a checkout that has already been made.
             self.change_preparation(id, StartupChange::Workspace { cwd })
                 .await?;
+        } else if row.bindings.is_empty() {
+            self.restore_workspace(&row.cwd).await?;
         }
         let Some(row) = self.preparing_task(id)? else {
             return Ok(());

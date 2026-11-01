@@ -3,21 +3,6 @@ import XCTest
 
 /// XCTest selectors remain on LaunchUITests for the fixture runner.
 extension LaunchUITests {
-    private func createBackgroundTaskRowIdentifier() throws -> String {
-        struct Session: Decodable {
-            let provider: String
-            let id: String
-        }
-
-        struct CreatedTask: Decodable {
-            let threadId: Session
-        }
-
-        let response = try simulatorFixture("background-task", expectedStatus: 200, timeout: 15)
-        let session = try JSONDecoder().decode(CreatedTask.self, from: response).threadId
-        return "tasks.row.\(session.provider):\(session.id)"
-    }
-
     func testSimulatorOpensTasksBeforeHistoryReadFinishes() throws {
         let app = try connectedSimulatorApp()
         try useSimulatorListFixture("external-conversation")
@@ -63,7 +48,7 @@ extension LaunchUITests {
 
     func testSimulatorRetriesAFailedTaskOpenWithoutLosingItsDraft() throws {
         let app = try connectedSimulatorApp()
-        let identifier = try createBackgroundTaskRowIdentifier()
+        let identifier = try simulatorTaskRowIdentifier("background-task")
         app.buttons["tasks.menu"].tap()
         app.buttons["tasks.refresh"].tap()
         let row = app.buttons[identifier]
@@ -128,7 +113,8 @@ extension LaunchUITests {
         app.navigationBars.buttons.element(boundBy: 0).tap()
         let number = firstAnswerID.replacingOccurrences(of: "item.fixture-final-", with: "")
             .split(separator: "-")[0]
-        let row = app.descendants(matching: .any)["tasks.row.codex:fixture-thread-\(number)"]
+        let row = try app
+            .descendants(matching: .any)[simulatorTaskRowIdentifier("session-identity/fixture-thread-\(number)")]
         XCTAssertTrue(row.waitForExistence(timeout: 10)); row.tap()
         XCTAssertTrue(app.descendants(matching: .any)[secondAnswerID].waitForExistence(timeout: 20))
         XCTAssertFalse(banner.exists)
@@ -190,7 +176,7 @@ extension LaunchUITests {
         let app = try connectedSimulatorApp()
         XCUIDevice.shared.press(.home)
         XCTAssertTrue(app.wait(for: .runningBackground, timeout: 5))
-        let identifier = try createBackgroundTaskRowIdentifier()
+        let identifier = try simulatorTaskRowIdentifier("background-task")
         app.activate()
         XCTAssertTrue(app.descendants(matching: .any)["tasks.list"].waitForExistence(timeout: 15))
         XCTAssertTrue(app.descendants(matching: .any)[identifier].waitForExistence(timeout: 20),
@@ -213,7 +199,7 @@ extension LaunchUITests {
         let app = try connectedSimulatorApp()
         try startSimulatorConversation(app, promptText: "[success] Keep another conversation open")
         XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 25))
-        let identifier = try createBackgroundTaskRowIdentifier()
+        let identifier = try simulatorTaskRowIdentifier("background-task")
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(app.descendants(matching: .any)["tasks.list"].waitForExistence(timeout: 15))
         XCTAssertTrue(app.descendants(matching: .any)[identifier].waitForExistence(timeout: 20),
@@ -229,8 +215,10 @@ extension LaunchUITests {
         XCTAssertFalse(app.buttons.matching(NSPredicate(format: "value == %@", "完了・未確認")).firstMatch.exists)
         try startSimulatorConversation(app, promptText: "[success] Notify when this task finishes")
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        let row = prefixedElement(app, prefix: "tasks.row.codex:fixture-thread-")
+        let row = prefixedElement(app, prefix: "tasks.row.codex:bex-task:")
         XCTAssertTrue(row.waitForExistence(timeout: 10))
+        let running = expectation(for: NSPredicate(format: "value == %@", "実行中"), evaluatedWith: row)
+        wait(for: [running], timeout: 10)
         XCTAssertEqual(row.value as? String, "実行中")
         captureScreen(app, named: "Task running in list")
         let completed = expectation(for: NSPredicate(format: "value == %@", "完了・未確認"), evaluatedWith: row)

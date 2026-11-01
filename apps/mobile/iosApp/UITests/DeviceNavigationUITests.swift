@@ -208,7 +208,7 @@ extension LaunchUITests {
         let path = app.textFields["絶対パス"]
         replaceFieldText(path, text: "relative-path")
         app.buttons["files.open-path"].tap()
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "絶対パスを入力"))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "絶対パスを入力"))
             .firstMatch.waitForExistence(timeout: 10))
         closeWorkbench(app)
         XCTAssertFalse(app.staticTexts["notice"].exists)

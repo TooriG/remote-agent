@@ -183,7 +183,7 @@ extension LaunchUITests {
         XCTAssertTrue(app.staticTexts["attachment-fixture.txt"].waitForExistence(timeout: 15))
         app.terminate()
         let reopened = try connectedSimulatorApp()
-        let row = prefixedElement(reopened, prefix: "tasks.row.codex:fixture-thread-")
+        let row = prefixedElement(reopened, prefix: "tasks.row.codex:bex-task:")
         XCTAssertTrue(row.waitForExistence(timeout: 10)); row.tap()
         XCTAssertTrue(reopened.staticTexts["attachment-fixture.txt"].waitForExistence(timeout: 10))
         let message = reopened.descendants(matching: .any)["task.message"]

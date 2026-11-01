@@ -554,10 +554,7 @@ mod tests {
             panic!()
         };
         assert!(folder.directory);
-        assert_eq!(
-            folder.path,
-            directory.path().join("Movies").to_str().unwrap()
-        );
+        assert_eq!(Path::new(&folder.path), directory.path().join("Movies"));
         let Body::Files(listing) = files
             .dispatch(
                 1,

@@ -357,22 +357,13 @@ impl HostRpcService {
             response.thread.cwd.as_deref(),
         )
         .map_err(|e| Failure::new("submission_unavailable", e))?;
-        let mut reload = state.needs_reload;
-        if let crate::providers::SubmissionTarget::Start { cwd } = route
-            && let Some(directory) = self
-                .inner
-                .worktrees
-                .ensure_available(cwd)
-                .await
-                .map_err(|e| Failure::new("worktree_creation_failed", e))?
-        {
-            self.inner
-                .providers
-                .discard_workspace_processes(&directory)
-                .await?;
-            reload = true;
-        }
-        let starts_turn = matches!(route, crate::providers::SubmissionTarget::Start { .. });
+        let (reload, starts_turn) = match route {
+            crate::providers::SubmissionTarget::Start { cwd } => (
+                self.restore_workspace(cwd).await? || state.needs_reload,
+                true,
+            ),
+            _ => (state.needs_reload, false),
+        };
         let receipt = agent
             .submit(
                 input,

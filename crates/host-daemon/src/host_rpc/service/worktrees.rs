@@ -31,6 +31,24 @@ impl WorktreeBlockers {
 }
 
 impl HostRpcService {
+    // Callers hold worktree_access so removal cannot race restoration.
+    pub(super) async fn restore_workspace(&self, cwd: &str) -> Result<bool, Failure> {
+        let Some(directory) = self
+            .inner
+            .worktrees
+            .ensure_available(cwd)
+            .await
+            .map_err(|error| Failure::new("worktree_creation_failed", error))?
+        else {
+            return Ok(false);
+        };
+        self.inner
+            .providers
+            .discard_workspace_processes(&directory)
+            .await?;
+        Ok(true)
+    }
+
     pub(super) async fn worktree_list(
         &self,
     ) -> Result<Vec<agent_protocol::models::Worktree>, Failure> {
@@ -61,7 +79,7 @@ impl HostRpcService {
                 )
             })
             .collect::<Vec<_>>();
-        for thread in threads {
+        for (thread, from_provider) in threads {
             let thread = match thread.id.clone() {
                 Some(id) => self.inner.router.overlay_execution(&id, thread),
                 None => thread,
@@ -96,7 +114,14 @@ impl HostRpcService {
             // Resolve provider-specific uncertainty once per matching session,
             // reusing the history scan instead of rereading it for every tree.
             let idle_warning = if !active && let Some(id) = &thread.id {
-                let native = match self.inner.conversations.get(id)? {
+                // Keep native IDs for conservative occupancy checks, including
+                // released sessions. Public snapshots need their active binding.
+                let row = if from_provider {
+                    None
+                } else {
+                    self.inner.conversations.get(id)?
+                };
+                let native = match row {
                     Some(row) => (!row.bindings.is_empty()).then_some(row.active),
                     None => Some(id.clone()),
                 };
@@ -110,9 +135,10 @@ impl HostRpcService {
             } else {
                 None
             };
-            let display = match thread.id.as_ref().and_then(|id| saved.get(id)).cloned() {
-                Some(thread) => Some(thread),
-                None => self.inner.conversations.summary(thread)?,
+            let display = if from_provider {
+                self.inner.conversations.summary(thread)?
+            } else {
+                Some(thread)
             };
             for index in matching {
                 let (worktree, blockers) = &mut worktrees[index];
@@ -164,7 +190,7 @@ impl HostRpcService {
     async fn worktree_threads(
         &self,
         saved: &std::collections::BTreeMap<agent_protocol::session::SessionRef, Thread>,
-    ) -> Result<(Vec<agent_protocol::models::Thread>, Option<String>), Failure> {
+    ) -> Result<(Vec<(Thread, bool)>, Option<String>), Failure> {
         let mut warnings = std::collections::BTreeMap::new();
         let mut threads = Vec::new();
         for (provider, agent) in self.inner.providers.all() {
@@ -180,7 +206,9 @@ impl HostRpcService {
             futures_util::pin_mut!(pages);
             while let Some(result) = pages.next().await {
                 match result {
-                    Ok(page) => threads.extend(page.into_iter().map(|summary| summary.thread)),
+                    Ok(page) => {
+                        threads.extend(page.into_iter().map(|summary| (summary.thread, true)))
+                    }
                     Err(error) if error.code == "invalid_session_list" => return Err(error),
                     Err(error) => {
                         warnings.insert(provider, error.to_string());
@@ -194,7 +222,7 @@ impl HostRpcService {
         for target in self.inner.router.execution_targets() {
             if threads
                 .iter()
-                .any(|thread| thread.id.as_ref() == Some(&target))
+                .any(|(thread, _)| thread.id.as_ref() == Some(&target))
             {
                 continue;
             }
@@ -216,7 +244,7 @@ impl HostRpcService {
                     "native session identity changed",
                 ));
             }
-            threads.push(response.thread);
+            threads.push((response.thread, false));
         }
         for thread in saved.values() {
             if let Some(provider) = thread.active_provider
@@ -225,7 +253,7 @@ impl HostRpcService {
                 warnings.insert(provider, error.to_string());
             }
         }
-        threads.extend(saved.values().cloned());
+        threads.extend(saved.values().cloned().map(|thread| (thread, false)));
         Ok((threads, self.inner.providers.error_summary(warnings)))
     }
     pub(super) async fn remove_worktree(&self, path: String) -> Result<(), Failure> {
@@ -307,8 +335,10 @@ pub(super) fn worktree_active<'a>(
 }
 
 #[cfg(test)]
-mod tests {
-    fn repository(directory: &std::path::Path) -> std::path::PathBuf {
+pub(super) mod tests {
+    pub(in crate::host_rpc::service) fn repository(
+        directory: &std::path::Path,
+    ) -> std::path::PathBuf {
         let repository = directory.join("repository");
         std::fs::create_dir(&repository).unwrap();
         crate::git::text(&repository, &["init", "--quiet", "--initial-branch=main"]).unwrap();
@@ -330,6 +360,74 @@ mod tests {
         )
         .unwrap();
         repository
+    }
+
+    #[tokio::test]
+    async fn worktree_resolves_public_tasks_and_preserves_native_idle_warnings() {
+        use super::*;
+        use crate::host_rpc::{
+            conversations::Conversation, service::conversations::tests::NativeAgent,
+        };
+        for warning in [None, Some("native idle warning")] {
+            let directory = tempfile::tempdir().unwrap();
+            let repository = repository(directory.path());
+            let mut agent = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));
+            Arc::get_mut(&mut agent).unwrap().idle_warning = warning;
+            let host = HostRpcService::new(
+                [agent.backend()],
+                ProjectStore::new(directory.path().join("worktrees.json")),
+            );
+            host.inner
+                .worktrees
+                .settings(Some(agent_protocol::models::WorktreeSettings {
+                    create_on_new_session: true,
+                    ..Default::default()
+                }))
+                .await
+                .unwrap();
+            let checkout = host
+                .inner
+                .worktrees
+                .prepare(repository.to_str())
+                .await
+                .unwrap()
+                .unwrap();
+            let response = agent
+                .create(checkout.to_str().unwrap(), None, None)
+                .await
+                .unwrap();
+            let mut conversation = Conversation::new(&response.thread).unwrap();
+            conversation.id = agent_protocol::session::SessionRef::new(
+                ProviderKind::Codex,
+                "bex-task:managed".into(),
+            )
+            .unwrap();
+            let public = conversation.id.clone();
+            host.inner.conversations.save(conversation).unwrap();
+            // Also exercise the public execution snapshot alongside its native
+            // listing, as happens while clients retain an admitted task.
+            let _execution = host.inner.router.retain_execution(public.clone()).unwrap();
+            let entries = host.worktree_list().await.unwrap();
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].threads.len(), 1);
+            assert_eq!(entries[0].threads[0].id, public);
+            assert!(!entries[0].threads[0].active);
+            assert_eq!(entries[0].blocked_reason.is_some(), warning.is_some());
+            if let Some(warning) = warning {
+                assert!(
+                    entries[0]
+                        .blocked_reason
+                        .as_ref()
+                        .unwrap()
+                        .contains(warning)
+                );
+                assert!(host.remove_worktree(entries[0].path.clone()).await.is_err());
+            } else {
+                host.remove_worktree(entries[0].path.clone()).await.unwrap();
+                assert!(!checkout.exists());
+                assert!(host.inner.conversations.get(&public).unwrap().is_some());
+            }
+        }
     }
 
     #[tokio::test]

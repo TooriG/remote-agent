@@ -86,15 +86,7 @@ extension ThreadScreen {
     func nativeConversationRow(_ row: ConversationRow, item: ConversationItem?) -> some View {
         switch (row.content, item) {
         case let (.preparation(preparation), _):
-            VStack(alignment: .leading, spacing: 8) {
-                AppText(preparation.text).font(.caption).foregroundStyle(.secondary)
-                if let retry = preparation.retry {
-                    Button("再試行") { model.perform(.retryPreparation(retry)) }
-                }
-                if let interrupt = preparation.interrupt {
-                    Button("停止") { model.perform(.interrupt(interrupt)) }
-                }
-            }.accessibilityIdentifier("task.preparation")
+            ThreadPreparationRow(preparation: preparation) { model.perform($0) }
         case let (.providerHandoff(text), _):
             Text(text).font(.caption).foregroundStyle(.secondary).padding(.vertical, 8)
         case let (.user, item?):
@@ -228,6 +220,23 @@ extension ThreadScreen {
             }
         }.count
         return "turns=\(thread.source.turnCount());items=\(itemCount)"
+    }
+}
+
+private struct ThreadPreparationRow: View {
+    let preparation: PreparationPresentation
+    let perform: (Intent) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            AppText(preparation.text).font(.caption).foregroundStyle(.secondary)
+            if let retry = preparation.retry {
+                Button("再試行") { perform(.retryPreparation(retry)) }
+            }
+            if let interrupt = preparation.interrupt {
+                Button("停止") { perform(.interrupt(interrupt)) }
+            }
+        }.accessibilityIdentifier("task.preparation")
     }
 }
 

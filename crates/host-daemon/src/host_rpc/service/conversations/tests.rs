@@ -278,7 +278,11 @@ impl Agent for NativeAgent {
         _: Option<serde_json::Value>,
     ) -> Result<ThreadResponse, Failure> {
         self.create_started.notify_one();
-        let _permit = self.create_gate.acquire().await.unwrap();
+        let _permit = self
+            .create_gate
+            .acquire()
+            .await
+            .map_err(|_| Failure::new("fixture_create_failed", "native creation failed"))?;
         let id = format!(
             "{}-{}",
             self.provider.key(),

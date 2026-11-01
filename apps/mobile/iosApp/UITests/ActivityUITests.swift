@@ -137,10 +137,13 @@ extension LaunchUITests {
         XCTAssertTrue(turn.exists)
         let number = try XCTUnwrap(turn.identifier.split(separator: "-").dropLast().last)
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        let waiting = app.descendants(matching: .any)["tasks.waiting.codex:fixture-thread-\(number)"]
+        let rowIdentifier = try simulatorTaskRowIdentifier("session-identity/fixture-thread-\(number)")
+        let waiting = app.descendants(matching: .any)[
+            rowIdentifier.replacingOccurrences(of: "tasks.row.", with: "tasks.waiting.")
+        ]
         XCTAssertTrue(waiting.waitForExistence(timeout: 10))
         XCTAssertEqual(waiting.label, "確認待ち")
-        let row = app.buttons["tasks.row.codex:fixture-thread-\(number)"]
+        let row = app.buttons[rowIdentifier]
         XCTAssertEqual(row.value as? String, "確認待ち")
         row.tap()
         XCTAssertTrue(request.waitForExistence(timeout: 10))

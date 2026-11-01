@@ -12,7 +12,7 @@ struct Selection {
     options: SelectedOptions,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(PartialEq, Serialize, Deserialize)]
 pub(super) struct SelectedOptions {
     pub model: Option<ModelRef>,
     pub effort: Option<String>,
@@ -21,7 +21,12 @@ pub(super) struct SelectedOptions {
 
 pub(super) struct ModelSelections {
     path: PathBuf,
-    selections: Mutex<Result<Vec<Selection>, String>>,
+    state: Mutex<Result<Selections, String>>,
+}
+
+struct Selections {
+    entries: Vec<Selection>,
+    dirty: bool,
 }
 
 impl ModelSelections {
@@ -33,7 +38,10 @@ impl ModelSelections {
         };
         Self {
             path,
-            selections: Mutex::new(selections),
+            state: Mutex::new(selections.map(|entries| Selections {
+                entries,
+                dirty: false,
+            })),
         }
     }
 
@@ -44,12 +52,13 @@ impl ModelSelections {
         effort: Option<&str>,
         service_tier: Option<&str>,
     ) -> Result<SelectedOptions, Failure> {
-        let selections = self.selections.lock().unwrap();
-        let selections = selections
+        let state = self.state.lock().unwrap();
+        let state = state
             .as_ref()
             .map_err(|error| Failure::new("model_selection_storage_failed", error))?;
         // An externally changed native model takes precedence over old options.
-        let saved = selections
+        let saved = state
+            .entries
             .iter()
             .find(|saved| &saved.session == session)
             .filter(|saved| model.is_none() || model == saved.options.model.as_ref())
@@ -74,8 +83,8 @@ impl ModelSelections {
         effort: Option<&str>,
         service_tier: Option<&str>,
     ) {
-        let mut selections = self.selections.lock().unwrap();
-        let Ok(selections) = selections.as_mut() else {
+        let mut state = self.state.lock().unwrap();
+        let Ok(state) = state.as_mut() else {
             return;
         };
         let next = Selection {
@@ -86,18 +95,32 @@ impl ModelSelections {
                 service_tier: service_tier.map(str::to_owned),
             },
         };
-        if let Some(saved) = selections
+        // Apply new live options even when an earlier save is still pending.
+        state.dirty |= match state
+            .entries
             .iter_mut()
             .find(|saved| &saved.session == session)
         {
-            *saved = next;
-        } else {
-            selections.push(next);
+            Some(saved) if saved.options == next.options => false,
+            Some(saved) => {
+                *saved = next;
+                true
+            }
+            None => {
+                state.entries.push(next);
+                true
+            }
+        };
+        if !state.dirty {
+            return;
         }
         // Submission is already accepted. Keep the live fact and never invite a
         // duplicate send by reporting a storage failure as a submission failure.
-        if let Err(error) = agent_local_host::save_private_json(&self.path, selections) {
-            tracing::warn!(target: "agent", operation = "host.model_selection.record", message = %error);
+        match agent_local_host::save_private_json(&self.path, &state.entries) {
+            Ok(()) => state.dirty = false,
+            Err(error) => {
+                tracing::warn!(target: "agent", operation = "host.model_selection.record", message = %error);
+            }
         }
     }
 }
@@ -154,6 +177,49 @@ mod tests {
 
     #[test]
     fn failed_writes_keep_accepted_settings_live_and_later_writes_recover() {
+        for (effort, tier) in [("high", "priority"), ("low", "default")] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("models.json");
+            let store = ModelSelections::new(path.clone());
+            let session = SessionRef::new(ProviderKind::Codex, "task".into()).unwrap();
+            let model = ModelRef {
+                provider: session.provider,
+                id: "saved".into(),
+            };
+            std::fs::create_dir(&path).unwrap();
+            store.record(&session, Some(&model), Some("high"), Some("priority"));
+            assert_eq!(
+                store
+                    .resolve(&session, None, None, None)
+                    .unwrap()
+                    .effort
+                    .as_deref(),
+                Some("high")
+            );
+            std::fs::remove_dir(&path).unwrap();
+            store.record(&session, Some(&model), Some(effort), Some(tier));
+            let recovered = ModelSelections::new(path.clone())
+                .resolve(&session, None, None, None)
+                .unwrap();
+            assert_eq!(recovered.effort.as_deref(), Some(effort));
+            assert_eq!(recovered.service_tier.as_deref(), Some(tier));
+            store.record(&session, Some(&model), Some("low"), Some("default"));
+            let resolved = ModelSelections::new(path.clone())
+                .resolve(&session, None, None, None)
+                .unwrap();
+            assert_eq!(resolved.effort.as_deref(), Some("low"));
+            assert_eq!(resolved.service_tier.as_deref(), Some("default"));
+            std::fs::write(&path, "broken").unwrap();
+            assert!(
+                ModelSelections::new(path)
+                    .resolve(&session, None, None, None)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn unchanged_accepted_settings_do_not_rewrite_storage_including_after_restart() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("models.json");
         let store = ModelSelections::new(path.clone());
@@ -162,28 +228,18 @@ mod tests {
             provider: session.provider,
             id: "saved".into(),
         };
-        std::fs::create_dir(&path).unwrap();
         store.record(&session, Some(&model), Some("high"), Some("priority"));
-        assert_eq!(
-            store
-                .resolve(&session, None, None, None)
-                .unwrap()
-                .effort
-                .as_deref(),
-            Some("high")
-        );
-        std::fs::remove_dir(&path).unwrap();
-        store.record(&session, Some(&model), Some("low"), Some("default"));
-        let resolved = ModelSelections::new(path.clone())
-            .resolve(&session, None, None, None)
+        let reopened = ModelSelections::new(path.clone());
+        let file = std::fs::File::options().write(true).open(&path).unwrap();
+        file.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1))
             .unwrap();
-        assert_eq!(resolved.effort.as_deref(), Some("low"));
-        assert_eq!(resolved.service_tier.as_deref(), Some("default"));
-        std::fs::write(&path, "broken").unwrap();
-        assert!(
-            ModelSelections::new(path)
-                .resolve(&session, None, None, None)
-                .is_err()
-        );
+        let modified = file.metadata().unwrap().modified().unwrap();
+        for store in [&store, &reopened] {
+            store.record(&session, Some(&model), Some("high"), Some("priority"));
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().modified().unwrap(),
+                modified
+            );
+        }
     }
 }

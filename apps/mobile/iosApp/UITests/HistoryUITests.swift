@@ -93,7 +93,7 @@ extension LaunchUITests {
         let latest = prefixedElement(app, prefix: "item.fixture-final-")
         XCTAssertTrue(latest.waitForExistence(timeout: 20))
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        let row = prefixedElement(app, prefix: "tasks.row.codex:fixture-thread-")
+        let row = prefixedElement(app, prefix: "tasks.row.codex:bex-task:")
         XCTAssertTrue(row.waitForExistence(timeout: 30)); row.tap()
         XCTAssertTrue(app.descendants(matching: .any)["task.detail"].waitForExistence(timeout: 30))
         XCTAssertTrue(latest.waitForExistence(timeout: 20),
@@ -111,7 +111,7 @@ extension LaunchUITests {
         let latest = prefixedElement(app, prefix: "item.fixture-final-")
         XCTAssertTrue(latest.waitForExistence(timeout: 20))
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        let row = prefixedElement(app, prefix: "tasks.row.codex:fixture-thread-")
+        let row = prefixedElement(app, prefix: "tasks.row.codex:bex-task:")
         XCTAssertTrue(row.waitForExistence(timeout: 20)); row.tap()
         XCTAssertTrue(latest.waitForExistence(timeout: 20))
         for id in ["item.history-answer-1", "item.history-answer-2"] {
@@ -143,7 +143,7 @@ extension LaunchUITests {
         verify()
         captureScreen(app, named: "Visualization selected second icon")
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        let row = prefixedElement(app, prefix: "tasks.row.codex:fixture-thread-")
+        let row = prefixedElement(app, prefix: "tasks.row.codex:bex-task:")
         XCTAssertTrue(row.waitForExistence(timeout: 20)); row.tap()
         XCTAssertTrue(expand.waitForExistence(timeout: 20))
         verify()
@@ -166,7 +166,7 @@ extension LaunchUITests {
         verifyMarkdownTable(app)
         captureScreen(app, named: "Japanese Markdown table right columns")
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        let row = prefixedElement(app, prefix: "tasks.row.codex:fixture-thread-")
+        let row = prefixedElement(app, prefix: "tasks.row.codex:bex-task:")
         XCTAssertTrue(row.waitForExistence(timeout: 20)); row.tap()
         XCTAssertTrue(message.waitForExistence(timeout: 20))
         verifyMarkdownTable(app)
@@ -213,7 +213,7 @@ extension LaunchUITests {
         message.tap(); message.typeText("Keep this draft")
         waitForDraftText(message, text: "Keep this draft")
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        let row = prefixedElement(app, prefix: "tasks.row.codex:fixture-thread-")
+        let row = prefixedElement(app, prefix: "tasks.row.codex:bex-task:")
         XCTAssertTrue(row.waitForExistence(timeout: 20)); row.tap()
         XCTAssertTrue(message.waitForExistence(timeout: 20))
         waitForDraftText(message, text: "Keep this draft")
@@ -252,7 +252,7 @@ extension LaunchUITests {
 
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(app.descendants(matching: .any)["tasks.list"].waitForExistence(timeout: 10))
-        let newestTask = prefixedElement(app, prefix: "tasks.row.codex:fixture-thread-")
+        let newestTask = prefixedElement(app, prefix: "tasks.row.codex:bex-task:")
         XCTAssertTrue(newestTask.waitForExistence(timeout: 10))
         newestTask.tap()
 

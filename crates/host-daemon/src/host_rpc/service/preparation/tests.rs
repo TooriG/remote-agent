@@ -268,6 +268,98 @@ async fn admitted_public_identity_keeps_native_history_through_provider_switchin
 }
 
 #[tokio::test]
+async fn retry_restores_a_removed_workspace_before_creating_the_first_provider_session() {
+    let directory = tempfile::tempdir().unwrap();
+    let repository = crate::host_rpc::service::worktrees::tests::repository(directory.path());
+    let state_path = directory.path().join("worktrees.json");
+    let agent = NativeAgent::new(ProviderKind::Codex, directory.path().join("native"));
+    agent.create_gate.close();
+    let host = HostRpcService::new([agent.backend()], ProjectStore::new(state_path.clone()));
+    host.inner
+        .worktrees
+        .settings(Some(agent_protocol::models::WorktreeSettings {
+            create_on_new_session: true,
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    let checkout = host
+        .inner
+        .worktrees
+        .prepare(repository.to_str())
+        .await
+        .unwrap()
+        .unwrap();
+    host.inner
+        .worktrees
+        .settings(Some(agent_protocol::models::WorktreeSettings {
+            create_on_new_session: false,
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    let client = host.open_session();
+    let (opened, mut updates) = admit(&host, client.id(), &request(&checkout)).await;
+    until(&mut updates, |change| matches!(change, SessionChange::Preparation { preparation: Some(preparation) } if matches!(preparation.status, PreparationStatus::Failed { .. }))).await;
+    let row = host
+        .inner
+        .conversations
+        .get(&opened.session)
+        .unwrap()
+        .unwrap();
+    assert!(row.bindings.is_empty());
+    assert!(row.startup.unwrap().workspace_ready);
+    host.remove_worktree(checkout.to_str().unwrap().into())
+        .await
+        .unwrap();
+    assert!(!checkout.exists());
+    drop(updates);
+    drop(client);
+    drop(host);
+
+    let agent = agent.restarted();
+    let blocked = agent.create_gate.acquire().await.unwrap();
+    let host = HostRpcService::new([agent.backend()], ProjectStore::new(state_path));
+    let client = host.open_session();
+    let mut updates = host
+        .dispatch(
+            client.id(),
+            &Call::OpenSession(OpenSession {
+                session: opened.session.clone(),
+                limit: 5,
+                include_activity: true,
+            }),
+        )
+        .await
+        .unwrap()
+        .updates
+        .unwrap();
+    let _: Empty = call(
+        &host,
+        client.id(),
+        Call::RetryPreparation(op::RetryPreparation {
+            thread_id: opened.session,
+        }),
+    )
+    .await
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(30), agent.create_started.notified())
+        .await
+        .unwrap();
+    assert!(
+        checkout.is_dir(),
+        "restore the saved workspace before provider creation"
+    );
+    drop(blocked);
+    until(&mut updates, |change| {
+        matches!(change, SessionChange::Preparation { preparation: None })
+    })
+    .await;
+    assert_eq!(agent.next.load(Ordering::SeqCst), 1);
+    assert_eq!(agent.inputs.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn refused_initial_input_retries_in_the_same_native_binding() {
     let directory = tempfile::tempdir().unwrap();
     let agent = NativeAgent::new(ProviderKind::Codex, directory.path().join("native"));

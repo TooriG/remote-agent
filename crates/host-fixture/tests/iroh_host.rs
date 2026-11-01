@@ -712,6 +712,27 @@ async fn new_live_conversation_avoids_unmaterialized_history_and_survives_reconn
             })
             .await
             .unwrap();
+        let id = store.snapshot().navigation.thread_id.clone().unwrap();
+        assert!(
+            store.snapshot().subscriptions.contains_key(&id),
+            "input must have an active subscription before it reaches the provider"
+        );
+        let mut updates = store.subscribe();
+        // Admission precedes provider acknowledgement; native history is still
+        // deliberately unmaterialized after that acknowledgement.
+        updates
+            .wait_for(|snapshot| {
+                snapshot.conversations.get(&id).is_some_and(|thread| {
+                    thread.preparation.is_none()
+                        && thread.turns.as_ref().is_some_and(|turns| {
+                            turns.iter().any(|turn| {
+                                turn.status == agent_protocol::execution::TurnStatus::Running
+                            })
+                        })
+                })
+            })
+            .await
+            .unwrap();
         let trace = std::fs::read_to_string(directory.path().join("rpc-trace.jsonl")).unwrap();
         let methods: Vec<Value> = trace
             .lines()
@@ -724,11 +745,6 @@ async fn new_live_conversation_avoids_unmaterialized_history_and_survives_reconn
                 Some("thread/turns/list" | "thread/items/list" | "thread/timeline/list")
             )),
             "first submission must not wait for an empty history read"
-        );
-        let id = store.snapshot().navigation.thread_id.clone().unwrap();
-        assert!(
-            store.snapshot().subscriptions.contains_key(&id),
-            "input must have an active subscription before it reaches the provider"
         );
         let client = fixture.local().await.unwrap();
         let current = open_session(&client.peer, &json!(id), 5).await.0;

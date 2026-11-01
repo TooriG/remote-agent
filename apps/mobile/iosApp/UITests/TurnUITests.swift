@@ -99,7 +99,7 @@ extension LaunchUITests {
         captureScreen(app, named: "Assistant selection added to an existing draft")
         app.terminate()
         let reopened = try connectedSimulatorApp()
-        let row = prefixedElement(reopened, prefix: "tasks.row.codex:fixture-thread-")
+        let row = prefixedElement(reopened, prefix: "tasks.row.codex:bex-task:")
         XCTAssertTrue(row.waitForExistence(timeout: 10)); row.tap()
         let restored = reopened.textFields["task.message"]
         XCTAssertTrue(restored.waitForExistence(timeout: 10))
@@ -219,7 +219,8 @@ extension LaunchUITests {
         app.terminate()
         let reopened = try connectedSimulatorApp()
         let number = try XCTUnwrap(sideID.split(separator: "-").dropLast().last)
-        let row = reopened.descendants(matching: .any)["tasks.row.codex:fixture-thread-\(number)"]
+        let row = try reopened
+            .descendants(matching: .any)[simulatorTaskRowIdentifier("session-identity/fixture-thread-\(number)")]
         XCTAssertTrue(row.waitForExistence(timeout: 15)); row.tap()
         XCTAssertTrue(reopened.descendants(matching: .any)[sideID].waitForExistence(timeout: 20))
         XCTAssertTrue(reopened.textViews.matching(NSPredicate(
@@ -289,7 +290,8 @@ extension LaunchUITests {
         app.terminate()
         _ = try connectedSimulatorApp(expandProject: false)
         let number = try XCTUnwrap(answerID.split(separator: "-").dropLast().last)
-        let row = app.descendants(matching: .any)["tasks.row.codex:fixture-thread-\(number)"]
+        let row = try app
+            .descendants(matching: .any)[simulatorTaskRowIdentifier("session-identity/fixture-thread-\(number)")]
         XCTAssertTrue(row.waitForExistence(timeout: 20), "The chat must be outside collapsed projects")
         row.tap()
         XCTAssertTrue(app.descendants(matching: .any)[answerID].waitForExistence(timeout: 20))
@@ -341,7 +343,7 @@ extension LaunchUITests {
 
         app.terminate()
         let reopened = try connectedSimulatorApp()
-        let row = prefixedElement(reopened, prefix: "tasks.row.codex:fixture-thread-")
+        let row = prefixedElement(reopened, prefix: "tasks.row.codex:bex-task:")
         XCTAssertTrue(row.waitForExistence(timeout: 10)); row.tap()
         let restored = reopened.descendants(matching: .any)["task.message"]
         XCTAssertTrue(restored.waitForExistence(timeout: 10))
