@@ -261,9 +261,10 @@ async fn shared_browser_live() {
         (snapshot.width, snapshot.height),
         "phone input uses CSS viewport coordinates"
     );
+    assert_eq!(snapshot.input_kind, None);
     assert!(!snapshot.page_text.contains("private-fixture-password"));
     assert!(snapshot.page_text.contains("ref="));
-    action(
+    let filled = action(
         &browser,
         &a,
         BrowserAction::Fill {
@@ -273,6 +274,7 @@ async fn shared_browser_live() {
     )
     .await
     .unwrap();
+    assert_eq!(filled.input_kind, Some(BrowserInputKind::Text));
     assert_eq!(
         evaluate(&browser, &a, "document.querySelector('#field').value").await,
         "phone-tool"
@@ -330,6 +332,45 @@ async fn shared_browser_live() {
     assert_eq!(
         evaluate(&browser, &a, "document.querySelector('#field').value").await,
         "phone-too"
+    );
+    action(
+        &browser,
+        &a,
+        BrowserAction::Key {
+            key: BrowserKey::SelectAll,
+        },
+    )
+    .await
+    .unwrap();
+    let typed = action(
+        &browser,
+        &a,
+        BrowserAction::Type {
+            text: "スマホから入力🙂".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(typed.input_kind, Some(BrowserInputKind::Text));
+    assert_eq!(
+        evaluate(&browser, &a, "document.querySelector('#field').value").await,
+        "スマホから入力🙂"
+    );
+    evaluate(&browser, &a, "document.querySelector('#secret').focus()").await;
+    assert_eq!(
+        action(&browser, &a, BrowserAction::Read)
+            .await
+            .unwrap()
+            .input_kind,
+        Some(BrowserInputKind::Password)
+    );
+    evaluate(&browser, &a, "document.activeElement.blur()").await;
+    assert_eq!(
+        action(&browser, &a, BrowserAction::Read)
+            .await
+            .unwrap()
+            .input_kind,
+        None
     );
     action(
         &browser,

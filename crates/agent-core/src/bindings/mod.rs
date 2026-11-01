@@ -21,6 +21,14 @@ pub fn browser_fit_action(
 }
 
 #[uniffi::export]
+pub fn browser_input_focus(
+    action: crate::browser::BrowserAction,
+    input_kind: Option<crate::browser::BrowserInputKind>,
+) -> Option<bool> {
+    crate::browser_view::input_focus(&action, input_kind)
+}
+
+#[uniffi::export]
 pub fn account_error_message(message: String) -> String {
     crate::presentation::error::error_message(&message)
 }

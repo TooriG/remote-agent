@@ -1098,6 +1098,15 @@ async fn capture_frame(
                 && (matches!(capture, Capture::Snapshot)
                     || (matches!(capture, Capture::Viewer) && renderer != frame.renderer_id))
             {
+                frame.input_kind = serde_json::from_value(
+                    platform::receive(platform::evaluate(
+                        &ticket.view,
+                        agent_protocol::browser::INPUT_KIND_SCRIPT,
+                        true,
+                    ))
+                    .await?,
+                )
+                .map_err(|_| "ページの入力先を取得できません。")?;
                 frame.image =
                     platform::receive(platform::snapshot(&ticket.view, ticket.width)).await?;
                 if frame.image.len() > 4 * 1024 * 1024 {

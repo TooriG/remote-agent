@@ -318,6 +318,7 @@ struct BrowserFrame {
     pub image: Vec<u8>,
     pub image_id: String,
     pub dialog: Option<BrowserDialog>,
+    pub input_kind: Option<BrowserInputKind>,
     pub generation: u64,
     pub can_go_back: bool,
     pub can_go_forward: bool,
@@ -326,6 +327,11 @@ struct BrowserFrame {
     pub value: String,
     pub credentials: Option<BrowserCredentials>,
     pub renderer_id: String,
+}
+#[uniffi::remote(Enum)]
+enum BrowserInputKind {
+    Text,
+    Password,
 }
 #[uniffi::remote(Enum)]
 enum InvocationKind {

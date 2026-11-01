@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -29,14 +31,20 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -47,10 +55,12 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.remoteagent.core.BrowserAction
 import dev.remoteagent.core.BrowserCredentials
 import dev.remoteagent.core.BrowserFrame
+import dev.remoteagent.core.BrowserInputKind
 import dev.remoteagent.core.BrowserKey
 import dev.remoteagent.core.BrowserRequest
 import dev.remoteagent.core.SessionRef
 import dev.remoteagent.core.browserFitAction
+import dev.remoteagent.core.browserInputFocus
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -90,8 +100,15 @@ private class BrowserSession(private val thread: SessionRef) {
     var connectionError by mutableStateOf<String?>(null)
     var notice by mutableStateOf<String?>(null)
     var credentials by mutableStateOf<BrowserCredentials?>(null)
+    var keyboardRequest by mutableStateOf(0)
+        private set
+
     private var viewportWidth = 0.0
     private var viewportHeight = 0.0
+
+    fun toggleKeyboard() {
+        keyboardRequest = if (keyboardRequest == 0) 1 else 0
+    }
 
     fun fitViewport() {
         browserFitAction(viewportWidth, viewportHeight, frame?.width ?: 0u, frame?.height ?: 0u)?.let(::send)
@@ -132,13 +149,16 @@ private class BrowserSession(private val thread: SessionRef) {
         }
     }
 
-    private suspend fun apply(result: BrowserFrame) {
+    private suspend fun apply(result: BrowserFrame, action: BrowserAction) {
         image =
             if (result.tabId.isEmpty() || result.imageId.isEmpty()) null else decodeBrowserImage(result.image) ?: image
         frame = result
         credentials = result.credentials ?: credentials
         notice = result.value.takeIf(String::isNotEmpty) ?: notice
         connectionError = null
+        browserInputFocus(action, result.inputKind)?.let { focus ->
+            keyboardRequest = if (focus) keyboardRequest + 1 else 0
+        }
     }
 
     suspend fun run(profile: String?, browser: suspend (String?, BrowserRequest) -> BrowserFrame) {
@@ -147,7 +167,7 @@ private class BrowserSession(private val thread: SessionRef) {
                 val request = nextRequest()
                 val reading = request.action == BrowserAction.Read
                 try {
-                    apply(browser(profile, request))
+                    apply(browser(profile, request), request.action)
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (failure: dev.remoteagent.core.AgentException) {
@@ -197,8 +217,7 @@ private fun BrowserPane(
     LaunchedEffect(thread, active) { if (active) session.run(profile, browser) }
     session.credentials?.let { BrowserCredentialsDialog(it, session::send) { session.credentials = null } }
     val frame = session.frame
-    val enabled = frame != null
-    var showKeyboard by remember { mutableStateOf(false) }
+    val enabled = frame != null && active && session.connectionError == null
     val tab = frame?.tabs?.firstOrNull { it.id == frame.tabId }
     val density = LocalDensity.current.density
     val colors = MaterialTheme.colorScheme
@@ -213,7 +232,7 @@ private fun BrowserPane(
             frame?.canGoForward == true,
             session::send,
             session::fitViewport,
-            { showKeyboard = !showKeyboard },
+            session::toggleKeyboard,
         ) {
             session.error = it
         }
@@ -233,7 +252,9 @@ private fun BrowserPane(
                 session.setViewport((size.width / density).toDouble(), (size.height / density).toDouble())
             },
         )
-        if (showKeyboard) BrowserTextInput(session::send)
+        if (session.keyboardRequest > 0) {
+            BrowserTextInput(frame?.inputKind, session.keyboardRequest, enabled, session::send)
+        }
     }
 }
 
@@ -314,27 +335,61 @@ private fun BrowserImage(
 }
 
 @Composable
-private fun BrowserTextInput(send: (BrowserAction) -> Unit) {
+private fun BrowserTextInput(
+    kind: BrowserInputKind?,
+    focusRequest: Int,
+    enabled: Boolean,
+    send: (BrowserAction) -> Unit,
+) {
     val language = LocalUiLanguage.current
-    var text by remember { mutableStateOf("") }
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        OutlinedTextField(
-            text,
-            { text = it },
-            Modifier.weight(1f),
-            placeholder = { Text(language.text("選択した欄に入力")) },
-            visualTransformation = PasswordVisualTransformation(),
-        )
-        TextButton(
-            onClick = {
-                send(BrowserAction.Type(text))
-                text = ""
-            },
-            enabled = text.isNotEmpty(),
-        ) {
-            Text(language.text("入力"))
+    var text by remember(kind) { mutableStateOf("") }
+    val focus = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val submit = {
+        if (enabled && text.isNotEmpty()) {
+            send(BrowserAction.Type(text))
+            text = ""
         }
-        TextButton(onClick = { send(BrowserAction.Key(BrowserKey.ENTER)) }) { Text("Enter") }
+    }
+    LaunchedEffect(focusRequest) {
+        focus.requestFocus()
+        keyboard?.show()
+    }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = { send(BrowserAction.Key(BrowserKey.TAB)) }, enabled = enabled) { Text("Tab") }
+            TextButton(onClick = { send(BrowserAction.Key(BrowserKey.SELECT_ALL)) }, enabled = enabled) {
+                Text(language.text("すべて選択"))
+            }
+            TextButton(onClick = { send(BrowserAction.Key(BrowserKey.BACKSPACE)) }, enabled = enabled) {
+                Text(language.text("1文字削除"))
+            }
+            TextButton(onClick = { send(BrowserAction.Key(BrowserKey.ENTER)) }, enabled = enabled) { Text("Enter") }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                text,
+                { text = it },
+                Modifier.weight(1f).focusRequester(focus),
+                enabled = enabled,
+                placeholder = { Text(language.text("選択した欄に入力")) },
+                visualTransformation =
+                    if (kind == BrowserInputKind.TEXT) VisualTransformation.None else PasswordVisualTransformation(),
+                keyboardOptions =
+                    KeyboardOptions(
+                        keyboardType = if (kind == BrowserInputKind.TEXT) KeyboardType.Text else KeyboardType.Password,
+                        imeAction = ImeAction.Done,
+                    ),
+                keyboardActions = KeyboardActions(onDone = { submit() }),
+                maxLines = 4,
+            )
+            TextButton(
+                onClick = submit,
+                enabled = enabled && text.isNotEmpty(),
+            ) {
+                Text(language.text("入力"))
+            }
+        }
     }
 }
 

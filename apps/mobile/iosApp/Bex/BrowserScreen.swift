@@ -16,6 +16,7 @@ struct WorkspaceBrowserScreen: View {
     @State private var connectionError: String?
     @State private var commands: [BrowserRequest] = []
     @FocusState private var addressFocused: Bool
+    @FocusState private var textFocused: Bool
     @State private var showKeyboard = false
     @State private var dialogText = ""
     @State private var viewportSize = CGSize.zero
@@ -72,22 +73,7 @@ struct WorkspaceBrowserScreen: View {
                         .onChange(of: geometry.size) { _, size in viewportSize = size }
                 })
             if showKeyboard {
-                Divider()
-                HStack {
-                    Button { showKeyboard.toggle() } label: { Image(systemName: "keyboard") }.accessibilityLabel("文字入力")
-                    Spacer()
-                    Button("Tab") { send(.key(key: .tab)) }
-                    Button { send(.key(key: .backspace)) } label: { Image(systemName: "delete.left") }
-                        .accessibilityLabel("1文字削除")
-                    Button("Enter") { send(.key(key: .enter)) }
-                }.padding(12).disabled(!acceptsInput)
-                HStack {
-                    SecureField("選択した欄に入力", text: $text)
-                        .textInputAutocapitalization(.never).disableAutocorrection(true)
-                        .textFieldStyle(.roundedBorder).onSubmit(insertText).accessibilityIdentifier("browser.text")
-                    Button("入力", action: insertText).disabled(text.isEmpty || !acceptsInput)
-                        .accessibilityIdentifier("browser.type")
-                }.padding(.horizontal).padding(.bottom, 8)
+                inputPanel
             }
         }
         .toolbar {
@@ -97,6 +83,9 @@ struct WorkspaceBrowserScreen: View {
                 Spacer()
                 Button { send(.forward) } label: { Label("次のページ", systemImage: "chevron.right") }
                     .disabled(!acceptsInput || frame?.canGoForward != true)
+                Spacer()
+                Button { showKeyboard.toggle() } label: { Label("文字入力", systemImage: "keyboard") }
+                    .disabled(!acceptsInput).accessibilityIdentifier("browser.keyboard")
                 Spacer()
                 browserMenu.disabled(!acceptsInput)
             }
@@ -119,6 +108,37 @@ struct WorkspaceBrowserScreen: View {
             }
         }
         .onDisappear { commands.removeAll(); text = "" }
+    }
+
+    private var inputPanel: some View {
+        VStack {
+            Divider()
+            HStack {
+                Button { showKeyboard = false } label: { Image(systemName: "keyboard.chevron.compact.down") }
+                    .accessibilityLabel("閉じる").accessibilityIdentifier("browser.keyboard.dismiss")
+                Button("Tab") { send(.key(key: .tab)) }
+                Button("すべて選択") { send(.key(key: .selectAll)) }
+                Spacer()
+                Button { send(.key(key: .backspace)) } label: { Image(systemName: "delete.left") }
+                    .accessibilityLabel("1文字削除")
+                Button("Enter") { send(.key(key: .enter)) }
+            }
+            HStack {
+                Group {
+                    if frame?.inputKind == .text {
+                        TextField("選択した欄に入力", text: $text, axis: .vertical).lineLimit(1 ... 4)
+                    } else {
+                        SecureField("選択した欄に入力", text: $text)
+                    }
+                }
+                .textInputAutocapitalization(.never).disableAutocorrection(true)
+                .textFieldStyle(.roundedBorder).focused($textFocused)
+                .onSubmit(insertText).accessibilityIdentifier("browser.text")
+                Button("入力", action: insertText).disabled(text.isEmpty)
+                    .accessibilityIdentifier("browser.type")
+            }
+        }.padding(.horizontal).padding(.bottom, 8).disabled(!acceptsInput)
+            .onAppear { textFocused = true }
     }
 
     private var browserMenu: some View {
@@ -154,7 +174,6 @@ struct WorkspaceBrowserScreen: View {
             Button("モバイル · 390 × 844") { send(.resize(width: 390, height: 844)) }
 
             Button("URL をコピー") { UIPasteboard.general.string = currentTab?.url }
-            Button("文字入力") { showKeyboard.toggle() }
         } label: { Label("ブラウザのメニュー", systemImage: "ellipsis") }
             .accessibilityLabel("ブラウザのメニュー").accessibilityIdentifier("browser.menu")
     }
@@ -190,27 +209,39 @@ struct WorkspaceBrowserScreen: View {
                        generation: frame?.generation ?? 0, action: action, rendererId: "")
     }
 
+    private func apply(_ result: BrowserFrame, action: BrowserAction) {
+        if frame?.inputKind != result.inputKind {
+            text = ""
+        }
+        frame = result
+        if let focus = browserInputFocus(action: action, inputKind: result.inputKind) {
+            showKeyboard = focus
+            textFocused = showKeyboard
+            addressFocused = false
+        }
+        if result.tabId.isEmpty || result.imageId.isEmpty {
+            image = nil
+        }
+        if let metadata = result.credentials {
+            credentials = metadata
+        }
+        if !result.value.isEmpty {
+            notice = result.value
+        }
+        if !result.image.isEmpty {
+            image = UIImage(data: result.image)
+        }
+        if !addressFocused {
+            address = currentTab?.url == "about:blank" ? "" : (currentTab?.url ?? "")
+        }
+        connectionError = nil
+    }
+
     private func perform(_ request: BrowserRequest) async {
         do {
             let result = try await store.browser(request: request)
             guard !Task.isCancelled, scenePhase == .active else { return }
-            frame = result
-            if result.tabId.isEmpty || result.imageId.isEmpty {
-                image = nil
-            }
-            if let metadata = result.credentials {
-                credentials = metadata
-            }
-            if !result.value.isEmpty {
-                notice = result.value
-            }
-            if !result.image.isEmpty {
-                image = UIImage(data: result.image)
-            }
-            if !addressFocused {
-                address = currentTab?.url == "about:blank" ? "" : (currentTab?.url ?? "")
-            }
-            connectionError = nil
+            apply(result, action: request.action)
         } catch {
             guard !Task.isCancelled else { return }
             let message: String = if case let AgentError.Failed(reason) = error {

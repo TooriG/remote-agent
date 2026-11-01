@@ -118,7 +118,10 @@ internal fun BrowserToolbar(
                 }
             },
         )
-        BrowserMenu(tab?.id, enabled, send, fit, type)
+        IconButton(onClick = type, enabled = enabled, modifier = Modifier.size(40.dp)) {
+            Icon(painterResource(R.drawable.ic_keyboard), language.text("文字入力"), Modifier.size(20.dp))
+        }
+        BrowserMenu(tab?.id, enabled, send, fit)
     }
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
 }
@@ -129,7 +132,6 @@ private fun BrowserMenu(
     enabled: Boolean,
     send: (BrowserAction) -> Unit,
     fit: () -> Unit,
-    type: () -> Unit,
 ) {
     val language = LocalUiLanguage.current
     var menuOpen by remember { mutableStateOf(false) }
@@ -143,7 +145,6 @@ private fun BrowserMenu(
             HorizontalDivider()
             BrowserMenuItem(language.text("新しいタブ"), close) { send(BrowserAction.OpenTab("about:blank")) }
             BrowserMenuItem(language.text("タブを閉じる"), close) { tabId?.let { send(BrowserAction.CloseTab(it)) } }
-            BrowserMenuItem(language.text("文字入力"), close, type)
             HorizontalDivider()
             BrowserMenuItem(language.text("画面に合わせる"), close, fit)
             BrowserMenuItem(language.text("デスクトップ · 1280 × 800"), close) { send(BrowserAction.Resize(1280u, 800u)) }

@@ -8,6 +8,9 @@ pub const MIN_HEIGHT: u32 = 240;
 pub const MAX_WIDTH: u32 = 7680;
 pub const MAX_HEIGHT: u32 = 4320;
 
+/// Observe only the focused editor's kind, never its value or selection.
+pub const INPUT_KIND_SCRIPT: &str = include_str!("browser_input.js");
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct BrowserRequest {
     pub thread_id: crate::session::SessionRef,
@@ -200,6 +203,12 @@ pub struct BrowserDialog {
     pub prompt: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BrowserInputKind {
+    Text,
+    Password,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BrowserImportProfile {
     pub id: String,
@@ -225,6 +234,7 @@ pub struct BrowserFrame {
     /// the image with this identity (for example while a dialog blocks capture).
     pub image_id: String,
     pub dialog: Option<BrowserDialog>,
+    pub input_kind: Option<BrowserInputKind>,
     pub generation: u64,
     pub can_go_back: bool,
     pub can_go_forward: bool,
@@ -429,6 +439,7 @@ mod tests {
         }
         let frame = BrowserFrame {
             image: vec![0, 255, 128],
+            input_kind: Some(BrowserInputKind::Password),
             ..Default::default()
         };
         assert_eq!(

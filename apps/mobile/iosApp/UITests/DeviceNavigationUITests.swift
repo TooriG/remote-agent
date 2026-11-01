@@ -59,6 +59,16 @@ extension LaunchUITests {
         XCTAssertTrue(menu.waitForExistence(timeout: 20))
         // A cold Host launch has a 20-second deadline, followed by page setup or a reconnect.
         wait(for: [expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: menu)], timeout: 60)
+        let keyboard = app.buttons["browser.keyboard"]
+        XCTAssertTrue(keyboard.exists)
+        keyboard.tap()
+        let input = app.secureTextFields["browser.text"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        input.typeText("mobile input")
+        XCTAssertTrue(app.buttons["browser.type"].isEnabled)
+        app.buttons["browser.keyboard.dismiss"].tap()
+        XCTAssertFalse(input.exists)
         XCTAssertFalse(app.buttons["個人用"].exists)
         menu.tap()
         app.buttons["browser.credentials"].tap()

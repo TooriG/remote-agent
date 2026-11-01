@@ -1,4 +1,4 @@
-//! Shared address-bar decisions. Automation navigation accepts URLs, never search terms.
+//! Shared browser presentation and input decisions.
 pub fn address_url(input: &str) -> Result<String, String> {
     let input = input.trim();
     if input.is_empty() || input.len() > 8192 {
@@ -48,9 +48,58 @@ pub fn fit_action(
         .then_some(BrowserAction::Resize { width, height })
 }
 
+/// A pointer click or Tab explicitly chooses a page editor. Polling must not
+/// reopen a keyboard the user dismissed, or steal focus from the address bar.
+pub fn input_focus(
+    action: &agent_protocol::browser::BrowserAction,
+    input_kind: Option<agent_protocol::browser::BrowserInputKind>,
+) -> Option<bool> {
+    use agent_protocol::browser::{BrowserAction, BrowserKey};
+    match action {
+        BrowserAction::Click { .. }
+        | BrowserAction::Key {
+            key: BrowserKey::Tab,
+        } => Some(input_kind.is_some()),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_explicit_editor_selection_changes_keyboard_focus() {
+        use agent_protocol::browser::{BrowserAction, BrowserInputKind, BrowserKey};
+        for (kind, opens_keyboard) in [
+            (None, false),
+            (Some(BrowserInputKind::Text), true),
+            (Some(BrowserInputKind::Password), true),
+        ] {
+            for action in [
+                BrowserAction::Click { x: 10., y: 20. },
+                BrowserAction::Key {
+                    key: BrowserKey::Tab,
+                },
+            ] {
+                assert_eq!(input_focus(&action, kind), Some(opens_keyboard));
+            }
+            for action in [
+                BrowserAction::Read,
+                BrowserAction::Type {
+                    text: "日本語".into(),
+                },
+                BrowserAction::Key {
+                    key: BrowserKey::Enter,
+                },
+                BrowserAction::Key {
+                    key: BrowserKey::Backspace,
+                },
+            ] {
+                assert_eq!(input_focus(&action, kind), None);
+            }
+        }
+    }
 
     #[test]
     fn follows_the_view_and_preserves_protocol_limits() {

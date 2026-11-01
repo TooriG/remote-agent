@@ -384,6 +384,16 @@ impl Browser {
         };
         let targets = chrome.targets().await?;
         let (can_go_back, can_go_forward) = chrome.history(&session).await?;
+        let input_kind = if !matches!(capture, Capture::None) && chrome.dialog(&session).is_none() {
+            serde_json::from_value(
+                chrome
+                    .evaluate(&session, agent_protocol::browser::INPUT_KIND_SCRIPT)
+                    .await?,
+            )
+            .map_err(|_| "ページの入力先を取得できません。")?
+        } else {
+            None
+        };
         Ok(BrowserFrame {
             tabs: page
                 .tabs
@@ -401,6 +411,7 @@ impl Browser {
             image,
             image_id,
             dialog: chrome.dialog(&session),
+            input_kind,
             generation: page.generation + chrome.navigation(&page.active),
             can_go_back,
             can_go_forward,
