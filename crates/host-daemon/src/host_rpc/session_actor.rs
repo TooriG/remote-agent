@@ -48,16 +48,24 @@ impl SessionActor {
             self.timeline.turns = None;
         }
         if self.timeline.turns.is_none()
-            && self.timeline.status != agent_protocol::models::SessionStatus::Running
+            && !agent_protocol::models::task_active(None, self.timeline.status)
         {
             self.timeline.status = agent_protocol::models::SessionStatus::Unknown;
         }
         !self.timeline.submissions.is_empty()
+            || self
+                .timeline
+                .preparation
+                .as_ref()
+                .is_some_and(Option::is_some)
             || !self.timeline.requests.is_empty()
             || self.timeline.turns.is_some()
     }
 
     pub(super) fn overlay(&self, mut thread: Thread) -> Thread {
+        if let Some(cwd) = &self.timeline.cwd {
+            thread.cwd = Some(cwd.clone());
+        }
         for turn in self.timeline.turns.iter().flatten() {
             // Native transcripts do not identify a still-running local process.
             // Its owned turn is authoritative, even if persisted messages look complete.
@@ -73,6 +81,9 @@ impl SessionActor {
         }
         thread.requests = self.timeline.requests.clone();
         thread.submissions = self.timeline.submissions.clone();
+        if let Some(preparation) = &self.timeline.preparation {
+            thread.preparation = preparation.clone();
+        }
         thread
     }
 }

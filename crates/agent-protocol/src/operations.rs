@@ -529,10 +529,28 @@ impl ForkSession {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateSession {
     pub provider: crate::session::ProviderKind,
     pub cwd: Option<String>,
     pub model: Option<crate::models::ModelRef>,
+    pub initial_input: Option<InitialInput>,
+}
+
+/// Creating a task admits its first input before workspace/provider preparation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitialInput {
+    pub client_user_message_id: crate::ids::ClientInputId,
+    pub input: Vec<Input>,
+    pub effort: Option<String>,
+    pub service_tier: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetryPreparation {
+    pub thread_id: crate::session::SessionRef,
 }
 
 impl RpcMethod for CreateSession {
@@ -551,7 +569,7 @@ impl RpcMethod for CreateSession {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Interrupt {
     pub thread_id: crate::session::SessionRef,
@@ -623,7 +641,7 @@ impl ReadItem {
 }
 
 /// Input intent. The Host chooses start, steer or queue from its current execution.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Submission {
     pub thread_id: crate::session::SessionRef,

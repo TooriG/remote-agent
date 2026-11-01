@@ -138,6 +138,7 @@ pub enum Intent {
         project_id: String,
     },
     CreateSession(CreateSession),
+    RetryPreparation(RetryPreparation),
     ReadThread(ReadThread),
     OpenRequest(OpenRequest),
     ReadItem(ReadItem),

@@ -3,6 +3,7 @@
 mod activity;
 mod conversations;
 mod model_selections;
+mod preparation;
 mod project_import;
 mod sessions;
 mod titles;
@@ -193,21 +194,32 @@ impl HostRpcService {
             return self.session_open(session, params).await;
         }
         if let Call::CreateSession(params) = message {
-            let _workspace = self.inner.worktree_access.read().await;
             let result = async {
-                let response = self.create_session(params.clone()).await?;
+                let (response, prepare) = if params.initial_input.is_some() {
+                    self.admit_task(params).await?
+                } else {
+                    let _workspace = self.inner.worktree_access.read().await;
+                    (self.create_session(params.clone()).await?, false)
+                };
                 let target = response.thread.id.clone().ok_or_else(|| {
                     Failure::new("invalid_thread", "created session ID is missing")
                 })?;
                 let read = self
                     .inner
                     .router
-                    .retain_execution(target)
+                    .retain_execution(target.clone())
                     .map_err(|error| Failure::new("invalid_thread", error))?;
-                self.inner
+                let reply = self
+                    .inner
                     .router
                     .finish_session_read(read, session, response)
-                    .map_err(|error| Failure::new("session_create_failed", error))
+                    .map_err(|error| Failure::new("session_create_failed", error));
+                // Attach the creating client before work can complete. A
+                // disconnected caller still owns an admitted durable task.
+                if prepare {
+                    self.schedule_preparation(target);
+                }
+                reply
             }
             .await;
             return match result {
@@ -228,7 +240,10 @@ impl HostRpcService {
             let _serial = if let Some(target) = target.as_ref().filter(|_| {
                 matches!(
                     message,
-                    Call::Submit(_) | Call::RenameSession(_) | Call::ForkSession(_)
+                    Call::Submit(_)
+                        | Call::RenameSession(_)
+                        | Call::ForkSession(_)
+                        | Call::RetryPreparation(_)
                 )
             }) {
                 Some(self.inner.router.submission_lock(target).lock_owned().await)
@@ -406,6 +421,9 @@ impl HostRpcService {
             }
 
             Call::CreateSession(_) => unreachable!("creation owns its subscription"),
+            Call::RetryPreparation(params) => {
+                self.retry_preparation(&params.thread_id).await?.into()
+            }
             Call::StartTerminal(params) => (self
                 .inner
                 .terminals
@@ -638,6 +656,7 @@ fn session_target(request: &Call) -> (Option<&agent_protocol::session::SessionRe
         Call::Submit(p) => (Some(&p.thread_id), Some(p.client_user_message_id.as_str())),
         Call::ForkSession(p) => (Some(&p.thread_id), None),
         Call::Interrupt(p) => (Some(&p.thread_id), None),
+        Call::RetryPreparation(p) => (Some(&p.thread_id), None),
         Call::ReadItem(p) => (Some(&p.thread_id), None),
         Call::ReadTurnItems(p) => (Some(&p.session), None),
         Call::RenameSession(p) => (Some(&p.thread_id), None),
@@ -799,6 +818,7 @@ mod tests {
             .dispatch(
                 session.id(),
                 &Call::CreateSession(op::CreateSession {
+                    initial_input: None,
                     provider: ProviderKind::Claude,
                     cwd: Some(root.path().to_string_lossy().into_owned()),
                     model: None,

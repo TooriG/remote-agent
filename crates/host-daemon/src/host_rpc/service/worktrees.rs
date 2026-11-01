@@ -43,12 +43,12 @@ impl HostRpcService {
         if worktrees.is_empty() {
             return Ok(worktrees);
         }
-        let unavailable = self
-            .unavailable_conversation_titles("")?
+        let saved = self
+            .saved_conversation_titles("")?
             .into_iter()
             .filter_map(|thread| Some((thread.id.clone()?, thread)))
             .collect::<std::collections::BTreeMap<_, _>>();
-        let (threads, warning) = self.worktree_threads(&unavailable).await?;
+        let (threads, warning) = self.worktree_threads(&saved).await?;
         let mut worktrees = worktrees
             .into_iter()
             .map(|tree| {
@@ -96,19 +96,21 @@ impl HostRpcService {
             // Resolve provider-specific uncertainty once per matching session,
             // reusing the history scan instead of rereading it for every tree.
             let idle_warning = if !active && let Some(id) = &thread.id {
-                match self.inner.providers.get(id.provider) {
-                    Ok(agent) => agent.workspace_idle_warning(&id.id).await,
-                    Err(_) => None,
+                let native = match self.inner.conversations.get(id)? {
+                    Some(row) => (!row.bindings.is_empty()).then_some(row.active),
+                    None => Some(id.clone()),
+                };
+                if let Some(native) = native
+                    && let Ok(agent) = self.inner.providers.get(native.provider)
+                {
+                    agent.workspace_idle_warning(&native.id).await
+                } else {
+                    None
                 }
             } else {
                 None
             };
-            let display = match thread
-                .id
-                .as_ref()
-                .and_then(|id| unavailable.get(id))
-                .cloned()
-            {
+            let display = match thread.id.as_ref().and_then(|id| saved.get(id)).cloned() {
                 Some(thread) => Some(thread),
                 None => self.inner.conversations.summary(thread)?,
             };
@@ -161,7 +163,7 @@ impl HostRpcService {
     }
     async fn worktree_threads(
         &self,
-        unavailable: &std::collections::BTreeMap<agent_protocol::session::SessionRef, Thread>,
+        saved: &std::collections::BTreeMap<agent_protocol::session::SessionRef, Thread>,
     ) -> Result<(Vec<agent_protocol::models::Thread>, Option<String>), Failure> {
         let mut warnings = std::collections::BTreeMap::new();
         let mut threads = Vec::new();
@@ -216,14 +218,14 @@ impl HostRpcService {
             }
             threads.push(response.thread);
         }
-        for thread in unavailable.values() {
+        for thread in saved.values() {
             if let Some(provider) = thread.active_provider
                 && let Err(error) = self.inner.providers.get(provider)
             {
                 warnings.insert(provider, error.to_string());
             }
         }
-        threads.extend(unavailable.values().cloned());
+        threads.extend(saved.values().cloned());
         Ok((threads, self.inner.providers.error_summary(warnings)))
     }
     pub(super) async fn remove_worktree(&self, path: String) -> Result<(), Failure> {
@@ -283,10 +285,8 @@ pub(super) fn worktree_active<'a>(
     has_requests: bool,
     mut submissions: impl Iterator<Item = &'a agent_protocol::session::SubmissionDelivery>,
 ) -> bool {
-    use agent_protocol::{
-        execution::TurnStatus, models::SessionStatus, session::SubmissionDelivery,
-    };
-    status == SessionStatus::Running
+    use agent_protocol::{execution::TurnStatus, session::SubmissionDelivery};
+    agent_protocol::models::task_active(None, status)
         || has_requests
         || turns.iter().any(|turn| turn.status == TurnStatus::Running)
         || submissions.any(|delivery| match delivery {

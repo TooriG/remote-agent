@@ -864,6 +864,54 @@ fn assert_submission_items(
     ) && item_text(item).is_some_and(|text| !text.is_empty())));
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn chat_preparation_recovers_in_the_same_conversation_after_reconnecting() {
+    use agent_core::{
+        state::Intent,
+        store::{Outcome, Store},
+    };
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let directory = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(directory.path()).unwrap();
+        let fixture = start_host(&root).await;
+        let endpoint = Endpoint::bind(fixture.credentials.local_identity().await, Relays::Disabled).await.unwrap();
+        let store = Store::connect(&endpoint, &fixture.ticket, codex_chat_snapshot(), None, "Fixture device").await.unwrap();
+        let blocked = root.join("bex-chats");
+        std::fs::write(&blocked, "not a directory").unwrap();
+        store.dispatch(Intent::NewChat { cwd: String::new() }).await.unwrap();
+        store.dispatch(Intent::SetDraftText { thread_id: store.snapshot().navigation.draft_key.clone(), text: "[success] recover preparation".into() }).await.unwrap();
+        assert!(matches!(store.dispatch(Intent::Submit { thread_id: None, client_user_message_id: "recover-chat".into() }).await.unwrap(), Outcome::StartedThread { .. }));
+        let id = store.snapshot().navigation.thread_id.clone().unwrap();
+        let mut updates = store.subscribe();
+        loop {
+            let snapshot = updates.borrow_and_update().clone();
+            if let Some(preparation) = snapshot.conversations[&id].preparation.as_ref().filter(|preparation| matches!(preparation.status, agent_protocol::session::PreparationStatus::Failed { .. })) {
+                assert!(preparation.submission.input.iter().any(|input| matches!(input, op::Input::Text { text } if text == "[success] recover preparation")));
+                assert!(snapshot.pending_submissions.is_empty());
+                assert!(snapshot.selected_directory().is_empty());
+                break;
+            }
+            updates.changed().await.unwrap();
+        }
+        std::fs::remove_file(&blocked).unwrap();
+        store.disconnect().await.unwrap();
+        store.reconnect(&endpoint, &fixture.ticket, None, "Fixture device").await.unwrap();
+        store.dispatch(Intent::RetryPreparation(op::RetryPreparation { thread_id: id.clone() })).await.unwrap();
+        loop {
+            let snapshot = updates.borrow_and_update().clone();
+            if snapshot.conversations[&id].preparation.is_none() && snapshot.conversations[&id].turns.as_ref().is_some_and(|turns| turns.len() == 1 && turns[0].status == agent_protocol::execution::TurnStatus::Completed) {
+                assert_eq!(snapshot.navigation.thread_id.as_ref(), Some(&id));
+                assert_eq!(Path::new(&snapshot.navigation.cwd), blocked);
+                break;
+            }
+            updates.changed().await.unwrap();
+        }
+        store.close().await.unwrap();
+        endpoint.close().await;
+        fixture.close().await.unwrap();
+    }).await.unwrap();
+}
+
 #[rstest::rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn submissions_complete_across_saved_worktree_settings_and_chat_scopes(
@@ -925,26 +973,8 @@ async fn submissions_complete_across_saved_worktree_settings_and_chat_scopes(
                 let current = store.snapshot();
                 Some(current.drafts[&current.navigation.draft_key].attachments[0].path.clone())
             } else { None };
-            if !project && number == 0 {
-                let blocked = root.join("bex-chats");
-                std::fs::write(&blocked, "not a directory").unwrap();
-                let before = store.snapshot();
-                let failed = store.dispatch(Intent::Submit { thread_id: None, client_user_message_id: "failed-chat".into() }).await;
-                assert!(failed.is_err(), "an unavailable chat directory must fail before creating a conversation");
-                let after = store.snapshot();
-                assert!(after.navigation.thread_id.is_none());
-                assert!(after.navigation.cwd.is_empty());
-                assert!(after.selected_directory().is_empty());
-                assert!(after.pending_submissions.is_empty());
-                assert_eq!(after.drafts[&after.navigation.draft_key], before.drafts[&before.navigation.draft_key]);
-                std::fs::remove_file(blocked).unwrap();
-                // Foreground reconnection reloads Host state and clears the
-                // previous connection's reported error without discarding drafts.
-                store.disconnect().await.unwrap();
-                store.reconnect(&endpoint, &fixture.ticket, None, "Fixture device").await.unwrap();
-            }
-            let sent = store.dispatch(Intent::Submit { thread_id: thread_id.clone(), client_user_message_id: format!("client-{number}").into() }).await;
-            assert!(matches!(sent.unwrap_or_else(|error| panic!("{prompt}: {error}")), Outcome::Submitted { .. }));
+            let sent = store.dispatch(Intent::Submit { thread_id: thread_id.clone(), client_user_message_id: format!("client-{number}").into() }).await.unwrap_or_else(|error| panic!("{prompt}: {error}"));
+            assert!(if number == 0 { matches!(sent, Outcome::StartedThread { .. }) } else { matches!(sent, Outcome::Submitted { .. }) });
             let id = store.snapshot().navigation.thread_id.clone().unwrap();
             if let Some(previous) = &thread_id { assert_eq!(&id, previous); }
             let mut updates = store.subscribe();
@@ -2693,13 +2723,13 @@ async fn worktree_management_preserves_conversations_and_recreates_deleted_check
         store.dispatch(Intent::SetDraftText { thread_id: key, text: "[success] [delayed-input] keep running".into() }).await.unwrap();
         store.dispatch(Intent::Submit { thread_id: None, client_user_message_id: "managed".into() }).await.unwrap();
         let id = store.snapshot().navigation.thread_id.clone().unwrap();
-        let path = store.snapshot().navigation.cwd.clone();
         let mut updates = store.subscribe();
         let turn_id = loop {
             let snapshot = updates.borrow_and_update().clone();
             if let Some(turn) = snapshot.conversations[&id].turns.as_ref().and_then(|turns| turns.first()) { break turn.id.clone(); }
             updates.changed().await.unwrap();
         };
+        let path = store.snapshot().navigation.cwd.clone();
         store.dispatch(Intent::ListWorktrees(op::ListWorktrees {})).await.unwrap();
         let snapshot = store.snapshot();
         let entries = snapshot.workspace.worktrees.as_ref().unwrap();
@@ -2851,6 +2881,7 @@ async fn merged_worktree_cleanup_defers_live_work_and_rechecks_new_commits() {
             let response = local
                 .peer
                 .call(&rpc::CreateSession {
+                    initial_input: None,
                     provider: agent_protocol::session::ProviderKind::Codex,
                     cwd: Some(project.to_str().unwrap().into()),
                     model: None,
@@ -3639,6 +3670,7 @@ async fn adding_a_chat_folder_registers_a_project_before_submission() {
             .clone();
         let created = peer
             .call(&op::CreateSession {
+                initial_input: None,
                 provider: agent_protocol::session::ProviderKind::Codex,
                 cwd: Some(folder.to_str().unwrap().into()),
                 model: None,
@@ -3727,6 +3759,7 @@ async fn host_routes_client_intents_and_replays_delivery_before_native_echo() {
         let thread = first
             .peer
             .call(&op::CreateSession {
+                initial_input: None,
                 provider: agent_protocol::session::ProviderKind::Codex,
                 cwd: None,
                 model: None,

@@ -570,7 +570,7 @@ impl SessionRouter {
             change,
             SessionChange::Status { .. } | SessionChange::Turn { .. }
         ) {
-            let active = actor.timeline.status == agent_protocol::models::SessionStatus::Running;
+            let active = agent_protocol::models::task_active(None, actor.timeline.status);
             let frame = protocol::encode(Notification::Activity {
                 session: target.clone(),
                 active,

@@ -91,6 +91,7 @@ fn prompt(provider: ProviderKind, scenario: &str) -> &str {
 async fn create(client: &Client, provider: ProviderKind, root: &Path) -> SessionRef {
     client
         .call(&op::CreateSession {
+            initial_input: None,
             provider,
             cwd: Some(root.to_string_lossy().into_owned()),
             model: None,
@@ -1498,6 +1499,7 @@ async fn adapter_initialization_failure_preserves_the_other_provider_and_host() 
         local
             .peer
             .call(&op::CreateSession {
+                initial_input: None,
                 provider: ProviderKind::Claude,
                 cwd: Some(root.to_string_lossy().into_owned()),
                 model: None

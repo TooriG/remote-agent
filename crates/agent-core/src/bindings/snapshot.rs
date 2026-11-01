@@ -144,8 +144,8 @@ impl RenderedConversation {
     pub fn queued(&self) -> Vec<Arc<RenderedItem>> {
         self.queued.clone()
     }
-    pub fn unplaced_requests(&self) -> Vec<crate::presentation::conversation::ConversationRow> {
-        self.request_rows.clone()
+    pub fn session_rows(&self) -> Vec<crate::presentation::conversation::ConversationRow> {
+        self.session_rows.clone()
     }
 }
 #[uniffi::export]

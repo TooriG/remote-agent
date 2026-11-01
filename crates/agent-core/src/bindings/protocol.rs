@@ -696,6 +696,25 @@ struct CreateSession {
     pub provider: ProviderKind,
     pub cwd: Option<String>,
     pub model: Option<crate::models::ModelRef>,
+    pub initial_input: Option<InitialInput>,
+}
+#[uniffi::remote(Record)]
+struct InitialInput {
+    pub client_user_message_id: agent_protocol::ids::ClientInputId,
+    pub input: Vec<Input>,
+    pub effort: Option<String>,
+    pub service_tier: Option<String>,
+}
+#[uniffi::remote(Enum)]
+enum Input {
+    Text { text: String },
+    Skill { name: String, path: String },
+    LocalImage { path: String },
+    Mention { path: String, name: String },
+}
+#[uniffi::remote(Record)]
+struct RetryPreparation {
+    pub thread_id: SessionRef,
 }
 #[uniffi::remote(Record)]
 struct Interrupt {

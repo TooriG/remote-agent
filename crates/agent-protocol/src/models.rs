@@ -97,6 +97,7 @@ pub struct Thread {
     pub requests: BTreeMap<crate::ids::RequestId, Arc<crate::requests::Request>>,
     #[serde(default)]
     pub submissions: BTreeMap<crate::ids::ClientInputId, crate::session::SubmissionDelivery>,
+    pub preparation: Option<crate::session::SessionPreparation>,
     pub id: Option<crate::session::SessionRef>,
     /// The public identity remains stable across provider handoffs.
     pub active_provider: Option<crate::session::ProviderKind>,
@@ -512,7 +513,10 @@ pub fn compact_title(value: &str) -> String {
 }
 
 pub fn task_active(observed: Option<bool>, status: SessionStatus) -> bool {
-    observed.unwrap_or(status == SessionStatus::Running)
+    observed.unwrap_or(matches!(
+        status,
+        SessionStatus::Preparing | SessionStatus::Running
+    ))
 }
 pub fn task_title<'a>(name: Option<&'a str>, preview: Option<&'a str>) -> &'a str {
     name.filter(|name| !name.is_empty())

@@ -76,6 +76,9 @@ impl HostRpcService {
         params: &op::ListAgents,
     ) -> Result<Vec<agent_protocol::models::AgentObservation>, Failure> {
         let row = self.inner.conversations.get(&params.thread_id)?;
+        if row.as_ref().is_some_and(|row| row.bindings.is_empty()) {
+            return Ok(Vec::new());
+        }
         let native = row.as_ref().map_or(&params.thread_id, |row| &row.active);
         let agent = self.inner.providers.get(native.provider)?;
         let deadline = tokio::time::Instant::now() + SESSION_LIST_TIMEOUT;
@@ -136,6 +139,18 @@ impl HostRpcService {
         params: &op::Interrupt,
     ) -> Result<agent_protocol::models::Empty, Failure> {
         let row = self.inner.conversations.get(target)?;
+        if let Some(row) = row.as_ref().filter(|row| {
+            row.startup.as_ref().is_some_and(|startup| {
+                startup
+                    .preparation
+                    .submission
+                    .client_user_message_id
+                    .as_str()
+                    == params.turn_id.as_str()
+            })
+        }) {
+            return self.interrupt_preparation(&row.id, &params.turn_id).await;
+        }
         let native = row.as_ref().map_or(target, |row| &row.active);
         let turn = if let Some(row) = row.as_ref() {
             let (source, id) = row.source(&params.turn_id)?;
@@ -185,7 +200,34 @@ impl HostRpcService {
         target: &agent_protocol::session::SessionRef,
         input: &op::Submission,
     ) -> Result<op::SubmissionReceipt, Failure> {
-        let row = self.inner.conversations.get(target)?;
+        let mut row = self.inner.conversations.get(target)?;
+        if let Some(current) = row.as_ref().filter(|row| {
+            row.startup.as_ref().is_some_and(|startup| {
+                startup.preparation.status == agent_protocol::session::PreparationStatus::Unknown
+            })
+        }) {
+            self.preparation_history(current).await?;
+            row = self.inner.conversations.get(target)?;
+            if let Some(receipt) = self
+                .inner
+                .router
+                .submission_receipt(target, &input.client_user_message_id)
+            {
+                return Ok(receipt);
+            }
+        }
+        if let Some(startup) = row.as_ref().and_then(|row| row.startup.as_ref()) {
+            if startup.preparation.status == agent_protocol::session::PreparationStatus::Unknown {
+                return Err(Failure::unknown(
+                    "submission_delivery_unknown",
+                    "最初の送信結果を確認できません。会話を確認してから送信してください。",
+                ));
+            }
+            return Err(Failure::new(
+                "preparation_unfinished",
+                "タスクの準備を再試行してください。",
+            ));
+        }
         if let Some(receipt) = row
             .as_ref()
             .and_then(|row| {
@@ -558,14 +600,22 @@ impl HostRpcService {
     }
     pub(super) async fn create_session(
         &self,
-        mut params: agent_protocol::operations::CreateSession,
+        params: agent_protocol::operations::CreateSession,
     ) -> Result<ThreadResponse, Failure> {
-        let provider = params.provider;
-        if params
-            .model
-            .as_ref()
-            .is_some_and(|model| model.provider != provider || model.id.trim().is_empty())
-        {
+        let agent = self.creation_agent(params.provider, params.model.as_ref())?;
+        let cwd = self.prepare_directory(params.cwd.as_deref()).await?;
+        self.start_thread(agent.as_ref(), |browser| {
+            agent.create(&cwd, params.model.as_ref().map(|m| m.id.as_str()), browser)
+        })
+        .await
+    }
+
+    pub(super) fn creation_agent(
+        &self,
+        provider: ProviderKind,
+        model: Option<&agent_protocol::models::ModelRef>,
+    ) -> Result<Arc<dyn Agent>, Failure> {
+        if model.is_some_and(|model| model.provider != provider || model.id.trim().is_empty()) {
             return Err(Failure::new(
                 "provider_mismatch",
                 "model must name a model of the requested provider",
@@ -573,14 +623,14 @@ impl HostRpcService {
         }
         let agent = self.inner.providers.get(provider)?;
         agent.validate_create()?;
+        Ok(agent)
+    }
+
+    pub(super) async fn prepare_directory(&self, cwd: Option<&str>) -> Result<String, Failure> {
         // A missing selection must not inherit the App Server's checkout.
         // Keep the real cwd on the thread; project enrichment identifies
         // this persisted location as a chat even after a Host restart.
-        if params
-            .cwd
-            .as_deref()
-            .is_none_or(|cwd| cwd.trim().is_empty())
-        {
+        if cwd.is_none_or(|cwd| cwd.trim().is_empty()) {
             let directory = self.inner.projects.chat_directory();
             tokio::fs::create_dir_all(&directory)
                 .await
@@ -589,28 +639,18 @@ impl HostRpcService {
                 .await
                 .map_err(|error| Failure::new("chat_directory_unavailable", error))?;
             let directory = dunce::simplified(&directory).to_owned();
-            params.cwd = Some(directory.into_os_string().into_string().map_err(|_| {
-                Failure::new("chat_directory_unavailable", "chat path is not UTF-8")
-            })?);
-        } else {
-            match self.inner.worktrees.prepare(params.cwd.as_deref()).await {
-                Ok(Some(cwd)) => {
-                    params.cwd = Some(cwd.into_os_string().into_string().map_err(|_| {
-                        Failure::new("worktree_creation_failed", "worktree path is not UTF-8")
-                    })?)
-                }
-                Ok(None) => {}
-                Err(error) => return Err(Failure::new("worktree_creation_failed", error)),
-            }
+            return directory
+                .into_os_string()
+                .into_string()
+                .map_err(|_| Failure::new("chat_directory_unavailable", "chat path is not UTF-8"));
         }
-        self.start_thread(agent.as_ref(), |browser| {
-            agent.create(
-                params.cwd.as_deref().unwrap_or_default(),
-                params.model.as_ref().map(|m| m.id.as_str()),
-                browser,
-            )
-        })
-        .await
+        match self.inner.worktrees.prepare(cwd).await {
+            Ok(Some(cwd)) => cwd.into_os_string().into_string().map_err(|_| {
+                Failure::new("worktree_creation_failed", "worktree path is not UTF-8")
+            }),
+            Ok(None) => Ok(cwd.unwrap_or_default().into()),
+            Err(error) => Err(Failure::new("worktree_creation_failed", error)),
+        }
     }
     /// New threads browse under a provisional scope until their native ID exists.
     pub(super) async fn start_thread<F>(

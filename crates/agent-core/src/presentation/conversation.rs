@@ -36,7 +36,7 @@ pub struct RenderedConversation {
     pending: PendingItems,
     pub turns: Vec<Arc<RenderedTurn>>,
     pub queued: Vec<Arc<RenderedItem>>,
-    pub request_rows: Vec<ConversationRow>,
+    pub session_rows: Vec<ConversationRow>,
 }
 
 #[cfg_attr(feature = "bindings", derive(uniffi::Object))]
@@ -57,6 +57,9 @@ pub struct ConversationRow {
 #[derive(Clone)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
 pub enum ConversationRowContent {
+    Preparation {
+        preparation: PreparationPresentation,
+    },
     ProviderHandoff {
         text: String,
     },
@@ -83,6 +86,14 @@ pub enum ConversationRowContent {
     InProgress {
         turn_id: agent_protocol::ids::TurnId,
     },
+}
+
+#[derive(Clone, PartialEq)]
+#[cfg_attr(feature = "bindings", derive(uniffi::Record))]
+pub struct PreparationPresentation {
+    pub text: String,
+    pub retry: Option<agent_protocol::operations::RetryPreparation>,
+    pub interrupt: Option<agent_protocol::operations::Interrupt>,
 }
 #[derive(Clone, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
@@ -303,10 +314,26 @@ pub fn project_conversation(
         .as_ref()
         .map(crate::state::DraftKey::from)
         .unwrap_or_else(|| snapshot.navigation.draft_key.clone());
+    let preparation = source.preparation.as_ref();
+    let preparation_echoed = preparation.is_some_and(|preparation| {
+        source
+            .turns
+            .iter()
+            .flatten()
+            .flat_map(|turn| turn.items.iter().flatten())
+            .any(|item| {
+                item.client_input_id.as_ref()
+                    == Some(&preparation.submission.client_user_message_id)
+            })
+    });
     let mut pending: PendingItems = snapshot
         .pending_submissions
         .iter()
         .filter(|(_, pending)| pending.draft_key == draft_key)
+        .filter(|(id, _)| {
+            preparation
+                .is_none_or(|preparation| &preparation.submission.client_user_message_id != *id)
+        })
         .map(|(id, pending)| (id.clone(), pending.clone()))
         .collect();
     pending.sort_by_key(|(_, pending)| pending.sequence);
@@ -378,7 +405,7 @@ pub fn project_conversation(
         .flat_map(|old| &old.queued)
         .map(|item| (item.key(), item))
         .collect();
-    let queued = pending
+    let mut queued: Vec<_> = pending
         .iter()
         .filter(|(_, p)| pending_turn(p).is_none())
         .map(|(id, p)| {
@@ -391,7 +418,37 @@ pub fn project_conversation(
             )
         })
         .collect();
-    let request_rows = requests
+    if let Some(preparation) = preparation {
+        let id = &preparation.submission.client_user_message_id;
+        if !preparation_echoed {
+            let item = Arc::new(models::Item::new(
+                id.to_string().into(),
+                models::ItemStatus::Completed,
+                models::ItemBody::UserMessage {
+                    text: None,
+                    content: agent_protocol::operations::Input::message_parts(
+                        &preparation.submission.input,
+                    ),
+                },
+            ));
+            queued.insert(
+                0,
+                RenderedItem::native(
+                    &item,
+                    source.active_provider,
+                    false,
+                    previous
+                        .into_iter()
+                        .flat_map(|old| &old.queued)
+                        .find(|old| {
+                            matches!(&old.source, ItemSource::Native(_))
+                                && old.data.id == id.as_str()
+                        }),
+                ),
+            );
+        }
+    }
+    let mut session_rows: Vec<_> = requests
         .values()
         .filter(|request| match &request.target {
             agent_protocol::requests::RequestTarget::Session => true,
@@ -407,13 +464,174 @@ pub fn project_conversation(
             },
         })
         .collect();
+    if let Some(preparation) = preparation.filter(|preparation| {
+        !(preparation_echoed
+            && preparation.status == agent_protocol::session::PreparationStatus::Unknown)
+    }) {
+        session_rows.push(ConversationRow {
+            id: "preparation".into(),
+            timestamp_ms: None,
+            content: ConversationRowContent::Preparation {
+                preparation: preparation_presentation(preparation),
+            },
+        });
+    }
     Arc::new(RenderedConversation {
         source,
         pending,
         turns,
         queued,
-        request_rows,
+        session_rows,
     })
+}
+
+fn preparation_presentation(
+    preparation: &agent_protocol::session::SessionPreparation,
+) -> PreparationPresentation {
+    use agent_protocol::{
+        operations::{Interrupt, RetryPreparation},
+        session::PreparationStatus,
+    };
+    let input = &preparation.submission;
+    let (text, retry, interrupt) = match &preparation.status {
+        PreparationStatus::Preparing => ("タスクを準備中…".into(), false, true),
+        PreparationStatus::Sending => ("AIに送信中…".into(), false, false),
+        PreparationStatus::Failed { error } => (
+            format!("準備に失敗しました: {}", error.message),
+            true,
+            false,
+        ),
+        PreparationStatus::Interrupted => ("準備を停止しました。".into(), true, false),
+        PreparationStatus::Unknown => (
+            "送信結果を確認できません。二重実行を避けるため再送していません。".into(),
+            false,
+            false,
+        ),
+    };
+    PreparationPresentation {
+        text,
+        retry: retry.then(|| RetryPreparation {
+            thread_id: input.thread_id.clone(),
+        }),
+        interrupt: interrupt.then(|| Interrupt {
+            thread_id: input.thread_id.clone(),
+            turn_id: input.client_user_message_id.to_string().into(),
+        }),
+    }
+}
+
+#[cfg(test)]
+mod preparation_tests {
+    use super::*;
+    use agent_protocol::{
+        operations::{Input, Submission},
+        session::{PreparationStatus, ProviderKind, SessionPreparation, SessionRef},
+    };
+
+    #[test]
+    fn admitted_input_is_visible_once_through_failure_retry_and_native_echo() {
+        let id = SessionRef::new(ProviderKind::Codex, "admitted".into()).unwrap();
+        let mut thread = models::Thread {
+            id: Some(id.clone()),
+            preparation: Some(SessionPreparation {
+                submission: Submission {
+                    thread_id: id.clone(),
+                    client_user_message_id: "input".into(),
+                    input: vec![Input::Text {
+                        text: "accepted text".into(),
+                    }],
+                    model: None,
+                    effort: None,
+                    service_tier: None,
+                },
+                status: PreparationStatus::Preparing,
+            }),
+            ..Default::default()
+        };
+        let mut snapshot = Snapshot::default();
+        Arc::make_mut(&mut snapshot.pending_submissions).insert(
+            "input".into(),
+            Arc::new(PendingSubmission {
+                sequence: 0,
+                draft_key: id.clone().into(),
+                draft: Arc::new(crate::state::Draft {
+                    text: "accepted text".into(),
+                    ..Default::default()
+                }),
+                turn_id: None,
+                after_item_id: None,
+                accepted: false,
+                delivery_unknown: false,
+            }),
+        );
+        let prepared = project_conversation(&snapshot, Arc::new(thread.clone()), &None);
+        assert_eq!(prepared.queued.len(), 1);
+        assert_eq!(
+            prepared.queued[0].data.body.as_deref(),
+            Some("accepted text")
+        );
+        let ConversationRowContent::Preparation { preparation } = &prepared.session_rows[0].content
+        else {
+            panic!("missing preparation")
+        };
+        assert!(preparation.interrupt.is_some() && preparation.retry.is_none());
+        thread.preparation.as_mut().unwrap().status = PreparationStatus::Sending;
+        thread.turns = Some(vec![Arc::new(models::Turn {
+            id: "starting".into(),
+            status: models::TurnStatus::Running,
+            ..Default::default()
+        })]);
+        let starting =
+            project_conversation(&snapshot, Arc::new(thread.clone()), &Some(prepared.clone()));
+        assert_eq!(starting.queued.len(), 1);
+        assert!(
+            !starting.turns[0]
+                .rows
+                .iter()
+                .any(|row| matches!(row.content, ConversationRowContent::User { .. }))
+        );
+        thread.turns = None;
+        thread.preparation.as_mut().unwrap().status = PreparationStatus::Failed {
+            error: Default::default(),
+        };
+        let failed =
+            project_conversation(&snapshot, Arc::new(thread.clone()), &Some(prepared.clone()));
+        assert!(Arc::ptr_eq(&prepared.queued[0], &failed.queued[0]));
+        let ConversationRowContent::Preparation { preparation } = &failed.session_rows[0].content
+        else {
+            panic!("missing failure")
+        };
+        assert!(preparation.retry.is_some() && preparation.interrupt.is_none());
+        let mut user = models::Item::new(
+            "native-input".into(),
+            models::ItemStatus::Completed,
+            models::ItemBody::UserMessage {
+                text: Some("accepted text".into()),
+                content: Vec::new(),
+            },
+        );
+        user.client_input_id = Some("input".into());
+        thread.preparation.as_mut().unwrap().status = PreparationStatus::Unknown;
+        thread.turns = Some(vec![Arc::new(models::Turn {
+            id: "native-turn".into(),
+            items: Some(vec![Arc::new(user)]),
+            ..Default::default()
+        })]);
+        let echoed = project_conversation(&snapshot, Arc::new(thread.clone()), &Some(failed));
+        assert!(echoed.queued.is_empty());
+        assert!(echoed.session_rows.is_empty());
+        thread.preparation = None;
+        let complete = project_conversation(&snapshot, Arc::new(thread), &Some(echoed));
+        assert!(complete.session_rows.is_empty());
+        assert_eq!(
+            complete.turns[0]
+                .rows
+                .iter()
+                .filter(|row| matches!(row.content, ConversationRowContent::User { .. }))
+                .count(),
+            1
+        );
+    }
 }
 
 fn render_turn(
@@ -501,6 +719,7 @@ fn render_turn(
             PendingRequest { request } => format!("history-request:{}", request.id),
             Error { .. } => format!("history-error:{}", source.id),
             InProgress { turn_id } => format!("in-progress:{turn_id}"),
+            Preparation { .. } => "preparation".into(),
         };
         let occurrence = occurrences.entry(id.clone()).or_insert(0usize);
         let id = format!("{id}:occurrence:{occurrence}");
@@ -1023,8 +1242,8 @@ mod tests {
         let awaiting =
             project_conversation(&Snapshot::default(), make(RequestDelivery::Awaiting), &None);
         assert!(awaiting.turns.is_empty());
-        assert_eq!(awaiting.request_rows.len(), 1);
-        let ConversationRowContent::PendingRequest { request } = &awaiting.request_rows[0].content
+        assert_eq!(awaiting.session_rows.len(), 1);
+        let ConversationRowContent::PendingRequest { request } = &awaiting.session_rows[0].content
         else {
             panic!("request row")
         };
@@ -1034,14 +1253,14 @@ mod tests {
             make(RequestDelivery::Sent),
             &Some(awaiting.clone()),
         );
-        let ConversationRowContent::PendingRequest { request } = &sent.request_rows[0].content
+        let ConversationRowContent::PendingRequest { request } = &sent.session_rows[0].content
         else {
             panic!("request row")
         };
         assert!(!request.can_respond);
         assert_ne!(
             &request.title,
-            match &awaiting.request_rows[0].content {
+            match &awaiting.session_rows[0].content {
                 ConversationRowContent::PendingRequest { request } => &request.title,
                 _ => unreachable!(),
             }

@@ -523,7 +523,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
         RevokeDevice, ListFiles, ResolveFile, ReadFile,
         SaveFile, ReviewWorkspace, ReadWorktreeSettings,
         UpdateWorktreeSettings, ListWorktrees, RemoveWorktree, ListProjectSessions,
-        ListAgents, AddProject, ScanProjects, ImportProjects, CreateSession,
+        ListAgents, AddProject, ScanProjects, ImportProjects, CreateSession, RetryPreparation,
         ReadThread, OpenRequest, ReadItem, ResizeTerminal,
         Interrupt,
         WriteTerminal, DownloadFile, LoadSessionImages, LoadVisualization,
@@ -1338,7 +1338,7 @@ impl Snapshot {
 }
 
 fn has_session_status(thread: &Thread) -> bool {
-    thread.status == crate::models::SessionStatus::Running
+    crate::models::task_active(None, thread.status)
         || thread
             .turns
             .iter()
@@ -1346,7 +1346,7 @@ fn has_session_status(thread: &Thread) -> bool {
             .any(|turn| turn.status == agent_protocol::execution::TurnStatus::Running)
 }
 fn clear_session_status(thread: &mut Thread) {
-    if thread.status == crate::models::SessionStatus::Running {
+    if crate::models::task_active(None, thread.status) {
         thread.status = crate::models::SessionStatus::Unknown;
     }
     for turn in thread.turns.iter_mut().flatten() {
@@ -1832,24 +1832,28 @@ fn reconcile_pending(snapshot: &mut Snapshot, thread_id: &crate::session::Sessio
         }
     }
     let thread = &snapshot.conversations[thread_id];
-    let echoed = |id: &agent_protocol::ids::ClientInputId, pending: &Arc<PendingSubmission>| {
-        pending.draft_key == DraftKey::from(thread_id)
-            && thread
-                .turns
-                .iter()
-                .flatten()
-                .flat_map(|turn| turn.items.iter().flatten())
-                .any(|item| {
-                    matches!(item.body(), crate::models::ItemBody::UserMessage { .. })
-                        && item.client_input_id.as_ref() == Some(id)
-                })
-    };
+    let confirmed =
+        |id: &agent_protocol::ids::ClientInputId, pending: &Arc<PendingSubmission>| {
+            pending.draft_key == DraftKey::from(thread_id)
+                && (thread.preparation.as_ref().is_some_and(|preparation| {
+                    &preparation.submission.client_user_message_id == id
+                }) || thread
+                    .turns
+                    .iter()
+                    .flatten()
+                    .flat_map(|turn| turn.items.iter().flatten())
+                    .any(|item| {
+                        matches!(item.body(), crate::models::ItemBody::UserMessage { .. })
+                            && item.client_input_id.as_ref() == Some(id)
+                    }))
+        };
     if snapshot
         .pending_submissions
         .iter()
-        .any(|(id, pending)| echoed(id, pending))
+        .any(|(id, pending)| confirmed(id, pending))
     {
-        Arc::make_mut(&mut snapshot.pending_submissions).retain(|id, pending| !echoed(id, pending));
+        Arc::make_mut(&mut snapshot.pending_submissions)
+            .retain(|id, pending| !confirmed(id, pending));
     }
 }
 

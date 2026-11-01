@@ -262,6 +262,9 @@ impl HostRpcService {
         row: &Conversation,
         usage: HistoryUse,
     ) -> Result<ThreadResponse, Failure> {
+        if row.startup.is_some() {
+            return self.preparation_history(row).await;
+        }
         let mut sources = BTreeMap::new();
         for segment in &row.segments {
             let Entry::Vacant(slot) = sources.entry(segment.session.clone()) else {

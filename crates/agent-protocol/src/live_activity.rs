@@ -211,7 +211,7 @@ impl TaskState {
         ) {
             return ("unknown", false);
         }
-        if self.status == SessionStatus::Running {
+        if crate::models::task_active(None, self.status) {
             return ("running", true);
         }
         match self.latest {
@@ -227,6 +227,16 @@ impl TaskState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn preparing_tasks_count_as_active_without_a_provider_turn() {
+        let task = TaskState {
+            status: crate::models::SessionStatus::Preparing,
+            ..Default::default()
+        };
+        assert_eq!(task.phase(), ("running", true));
+        assert_eq!(task.session_status(), crate::models::SessionStatus::Running);
+        assert!(crate::models::task_active(None, task.status));
+    }
     #[test]
     fn fresh_unknown_tasks_do_not_hide_running_or_waiting_tasks() {
         let display = TaskActivitySummary {

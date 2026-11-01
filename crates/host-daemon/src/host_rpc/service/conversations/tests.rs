@@ -31,11 +31,13 @@ pub(in crate::host_rpc::service) struct NativeAgent {
     pub(in crate::host_rpc::service) records: Arc<Mutex<HashMap<String, ThreadResponse>>>,
     pub(in crate::host_rpc::service) idle_warning: Option<&'static str>,
     deferred_history: bool,
-    inputs: Arc<Mutex<Vec<op::Submission>>>,
+    pub(in crate::host_rpc::service) inputs: Arc<Mutex<Vec<op::Submission>>>,
     injected: Arc<Mutex<Vec<(String, handoff::Context)>>>,
     released: Arc<Mutex<Vec<String>>>,
-    next: Arc<AtomicUsize>,
-    fail_submit: AtomicUsize,
+    pub(in crate::host_rpc::service) next: Arc<AtomicUsize>,
+    pub(in crate::host_rpc::service) fail_submit: AtomicUsize,
+    pub(in crate::host_rpc::service) create_gate: tokio::sync::Semaphore,
+    pub(in crate::host_rpc::service) create_started: tokio::sync::Notify,
     fail_inject: AtomicUsize,
     open_error: Mutex<Option<Failure>>,
     pub(in crate::host_rpc::service) fail_list: AtomicUsize,
@@ -65,6 +67,8 @@ impl NativeAgent {
             released: Default::default(),
             next: Default::default(),
             fail_submit: AtomicUsize::new(0),
+            create_gate: tokio::sync::Semaphore::new(1),
+            create_started: tokio::sync::Notify::new(),
             fail_inject: AtomicUsize::new(0),
             open_error: Mutex::new(None),
             fail_list: AtomicUsize::new(0),
@@ -73,7 +77,7 @@ impl NativeAgent {
             receiver: Mutex::new(Some(receiver)),
         })
     }
-    fn restarted(&self) -> Arc<Self> {
+    pub(in crate::host_rpc::service) fn restarted(&self) -> Arc<Self> {
         let (events, receiver) = mpsc::channel(32);
         Arc::new(Self {
             provider: self.provider,
@@ -86,6 +90,8 @@ impl NativeAgent {
             released: self.released.clone(),
             next: self.next.clone(),
             fail_submit: AtomicUsize::new(0),
+            create_gate: tokio::sync::Semaphore::new(1),
+            create_started: tokio::sync::Notify::new(),
             fail_inject: AtomicUsize::new(0),
             open_error: Mutex::new(None),
             fail_list: AtomicUsize::new(0),
@@ -271,6 +277,8 @@ impl Agent for NativeAgent {
         model: Option<&str>,
         _: Option<serde_json::Value>,
     ) -> Result<ThreadResponse, Failure> {
+        self.create_started.notify_one();
+        let _permit = self.create_gate.acquire().await.unwrap();
         let id = format!(
             "{}-{}",
             self.provider.key(),
@@ -707,6 +715,7 @@ async fn saved_handoff(directory: &Path) -> HandoffFixture {
         &host,
         client.id(),
         Call::CreateSession(op::CreateSession {
+            initial_input: None,
             provider: ProviderKind::Codex,
             cwd: Some(directory.to_str().unwrap().into()),
             model: None,
@@ -1425,6 +1434,7 @@ async fn all_unavailable_providers_still_open_saved_metadata_and_report_each_fai
         &host,
         client.id(),
         Call::CreateSession(op::CreateSession {
+            initial_input: None,
             provider: ProviderKind::Claude,
             cwd: Some(directory.path().to_str().unwrap().into()),
             model: None,
@@ -2443,6 +2453,7 @@ async fn handoff_and_excerpts_recover_deferred_native_messages() {
         &host,
         client.id(),
         Call::CreateSession(op::CreateSession {
+            initial_input: None,
             provider: ProviderKind::Codex,
             cwd: Some(directory.path().to_str().unwrap().into()),
             model: None,

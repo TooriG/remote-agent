@@ -154,6 +154,17 @@ impl Operation for StartSubmission {
                 provider: self.provider,
                 cwd: self.cwd.clone(),
                 model: self.draft.model.clone(),
+                initial_input: Some(rpc::InitialInput {
+                    client_user_message_id: self.client_user_message_id.clone(),
+                    input: submission_input(
+                        &self.draft.text,
+                        &self.draft.attachments,
+                        &self.draft.invocations,
+                        Some(self.provider),
+                    ),
+                    effort: self.draft.effort.clone(),
+                    service_tier: self.draft.service_tier.clone(),
+                }),
             })
             .await
     }
@@ -164,7 +175,12 @@ impl Operation for StartSubmission {
 }
 
 impl StartSubmission {
-    fn complete(self, snapshot: &mut Snapshot, thread: Thread, current_view: bool) -> Vec<Effect> {
+    fn complete(
+        self,
+        snapshot: &mut Snapshot,
+        mut thread: Thread,
+        current_view: bool,
+    ) -> Vec<Effect> {
         let Self {
             draft_key,
             client_user_message_id,
@@ -175,6 +191,10 @@ impl StartSubmission {
             snapshot.error = Some("thread ID is missing".into());
             return Vec::new();
         };
+        thread
+            .submissions
+            .entry(client_user_message_id.clone())
+            .or_insert(crate::session::SubmissionDelivery::Accepted { turn_id: None });
         Arc::make_mut(&mut snapshot.draft_sessions).insert(draft_key.clone(), id.clone());
         let current = snapshot.drafts.get(&draft_key);
         let empty = Arc::new(Draft {
@@ -197,7 +217,7 @@ impl StartSubmission {
         } else if let Some(workspace) = Arc::make_mut(&mut snapshot.workspaces).remove(&draft_key) {
             Arc::make_mut(&mut snapshot.workspaces).insert(id.clone().into(), workspace);
         }
-        let mut effects = if current_view {
+        let effects = if current_view {
             open_thread(snapshot, thread, None, None, None)
         } else {
             refresh_thread(snapshot, thread);
@@ -214,11 +234,7 @@ impl StartSubmission {
         {
             Arc::make_mut(pending).draft_key = id.clone().into();
         }
-        effects.push(Effect::execute(SendSubmission {
-            thread_id: id,
-            client_user_message_id,
-            draft,
-        }));
+        reconcile_pending(snapshot, &id);
         effects
     }
 }
@@ -271,39 +287,17 @@ impl Operation for SendSubmission {
                 .await
                 .map(|opened| SubmissionProgress::Opened(Box::new(opened)));
         }
-        let mut input = Vec::with_capacity(
-            self.draft.attachments.len() + usize::from(!self.draft.text.is_empty()),
-        );
-        if !self.draft.text.is_empty() {
-            input.push(Input::Text {
-                text: self.draft.text.clone(),
-            });
-        }
-        input.extend(
-            self.draft
-                .invocations
-                .iter()
-                .filter(|item| Some(item.provider) == provider && item.is_in(&self.draft.text))
-                .map(agent_protocol::composer::Invocation::input),
-        );
-        for attachment in &self.draft.attachments {
-            input.push(if attachment.is_image {
-                Input::LocalImage {
-                    path: attachment.path.clone(),
-                }
-            } else {
-                Input::Mention {
-                    path: attachment.path.clone(),
-                    name: attachment.name.clone(),
-                }
-            });
-        }
         let reply = context
             .client
             .call(&Submission {
                 thread_id: self.thread_id.clone(),
                 client_user_message_id: self.client_user_message_id.clone(),
-                input,
+                input: submission_input(
+                    &self.draft.text,
+                    &self.draft.attachments,
+                    &self.draft.invocations,
+                    provider,
+                ),
                 model: self.draft.model.clone(),
                 effort: self.draft.effort.clone(),
                 service_tier: self.draft.service_tier.clone(),
@@ -336,6 +330,37 @@ impl Operation for SendSubmission {
 
         Vec::new()
     }
+}
+
+fn submission_input(
+    text: &str,
+    attachments: &[Attachment],
+    invocations: &[agent_protocol::composer::Invocation],
+    provider: Option<crate::session::ProviderKind>,
+) -> Vec<Input> {
+    let mut input = Vec::with_capacity(attachments.len() + usize::from(!text.is_empty()));
+    if !text.is_empty() {
+        input.push(Input::Text { text: text.into() });
+    }
+    input.extend(
+        invocations
+            .iter()
+            .filter(|item| Some(item.provider) == provider && item.is_in(text))
+            .map(agent_protocol::composer::Invocation::input),
+    );
+    input.extend(attachments.iter().map(|attachment| {
+        if attachment.is_image {
+            Input::LocalImage {
+                path: attachment.path.clone(),
+            }
+        } else {
+            Input::Mention {
+                path: attachment.path.clone(),
+                name: attachment.name.clone(),
+            }
+        }
+    }));
+    input
 }
 
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
@@ -402,7 +427,7 @@ mod startup_identity_tests {
         let navigation = snapshot.navigation.clone();
         let thread: Thread =
             serde_json::from_value(serde_json::json!({"id":session, "cwd":"/project"})).unwrap();
-        let _ = StartSubmission {
+        let effects = StartSubmission {
             provider: session.provider,
             draft_key: draft_key.clone(),
             cwd: Some("/project".into()),
@@ -410,6 +435,7 @@ mod startup_identity_tests {
             draft: Arc::default(),
         }
         .complete(&mut snapshot, thread, current_view);
+        assert!(effects.is_empty(), "the Host owns the admitted first input");
         assert!(snapshot.pending_submissions.is_empty());
         assert_eq!(snapshot.draft_sessions.get(&draft_key), Some(&session));
         if current_view {

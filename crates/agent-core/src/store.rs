@@ -1935,6 +1935,86 @@ mod tests {
         include!("../tests/support/host.rs");
     }
 
+    #[tokio::test]
+    async fn new_task_admits_the_initial_input_in_one_rpc() {
+        use crate::state::operations::Operation;
+        use serde_json::json;
+        let ((client, _events), mut reader, writer) =
+            host_fixture::connect(&Snapshot::default()).await;
+        let mut subscriptions = Vec::new();
+        let mut context = Execution {
+            client: &client,
+            session: None,
+            subscriptions: &mut subscriptions,
+        };
+        let operation = op::StartSubmission {
+            provider: agent_protocol::session::ProviderKind::Codex,
+            draft_key: "local".into(),
+            cwd: Some("/project".into()),
+            client_user_message_id: "initial-input".into(),
+            draft: Arc::new(crate::state::Draft {
+                text: "initial message".into(),
+                attachments: vec![crate::state::Attachment {
+                    path: "/image.png".into(),
+                    name: "image.png".into(),
+                    is_image: true,
+                }],
+                model: Some(agent_protocol::models::ModelRef {
+                    provider: agent_protocol::session::ProviderKind::Codex,
+                    id: "chosen-model".into(),
+                }),
+                effort: Some("high".into()),
+                service_tier: Some("fast".into()),
+                ..Default::default()
+            }),
+        };
+        let reply = async {
+            let request = reader.read_request().await.unwrap().unwrap();
+            assert_eq!(request["method"], "host/session/create");
+            assert_eq!(
+                request["params"]["initialInput"]["clientUserMessageId"],
+                "initial-input"
+            );
+            assert_eq!(
+                request["params"]["initialInput"]["input"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                2
+            );
+            assert_eq!(request["params"]["initialInput"]["effort"], "high");
+            assert_eq!(request["params"]["initialInput"]["serviceTier"], "fast");
+            let mut submission = request["params"]["initialInput"].clone();
+            submission["threadId"] = json!({"provider":"codex","id":"admitted"});
+            submission["model"] = request["params"]["model"].clone();
+            writer.reply(&request, json!({"result":{"thread":{"id":{"provider":"codex","id":"admitted"},"cwd":"/project","status":"preparing","preparation":{"submission":submission,"status":"preparing"}}}})).await.unwrap();
+        };
+        let (opened, ()) = tokio::join!(operation.run((), &mut context), reply);
+        let mut snapshot = Snapshot::default();
+        Arc::make_mut(&mut snapshot.pending_submissions).insert(
+            "initial-input".into(),
+            Arc::new(crate::state::PendingSubmission {
+                sequence: 0,
+                draft_key: "local".into(),
+                draft: operation.draft.clone(),
+                turn_id: None,
+                after_item_id: None,
+                accepted: false,
+                delivery_unknown: false,
+            }),
+        );
+        let effects = operation.apply(&mut snapshot, opened.unwrap());
+        assert!(
+            snapshot.pending_submissions.is_empty(),
+            "durable admission owns the input"
+        );
+        assert!(
+            effects.is_empty(),
+            "acceptance must not schedule another send"
+        );
+        client.close().await;
+    }
+
     #[rstest::rstest]
     #[case("ready")]
     #[case("failed")]

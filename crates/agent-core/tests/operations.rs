@@ -36,6 +36,7 @@ async fn execute(client: &Client, command: &Value) -> Result<Value, PeerError> {
         "startThread" => serde_json::to_value(
             client
                 .call(&CreateSession {
+                    initial_input: None,
                     provider: agent_protocol::session::ProviderKind::Codex,
                     cwd: optional(command, "cwd").map(str::to_owned),
                     model: serde_json::from_value(command["model"].clone()).unwrap(),

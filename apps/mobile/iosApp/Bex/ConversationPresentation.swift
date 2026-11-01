@@ -53,7 +53,7 @@ struct ConversationPresentation: Sendable {
             let item = Self.item($0, id: $0.id(), previous: previous?.queued ?? [:], next: &nextQueued)
             return ThreadConversationRow(id: item.data.id, content: .queued(item))
         }
-        rows += rendered.unplacedRequests().map { row in
+        rows += rendered.sessionRows().map { row in
             ThreadConversationRow(id: row.id, content: .native(row, nil))
         }
         return Self(

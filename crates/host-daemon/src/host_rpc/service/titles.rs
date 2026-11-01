@@ -65,24 +65,22 @@ impl HostRpcService {
         }))
     }
 
-    pub(super) fn unavailable_conversation_titles(
-        &self,
-        search: &str,
-    ) -> Result<Vec<Thread>, Failure> {
+    pub(super) fn saved_conversation_titles(&self, search: &str) -> Result<Vec<Thread>, Failure> {
         let search = search.trim().to_lowercase();
         let mut threads = Vec::new();
         for (mut thread, sources) in self.inner.conversations.summaries()? {
             let Some(provider) = thread.active_provider else {
                 continue;
             };
-            let Err(error) = self
+            let error = self
                 .inner
                 .providers
                 .get(provider)
                 .and_then(|agent| agent.availability())
-            else {
+                .err();
+            if error.is_none() && thread.preparation.is_none() {
                 continue;
-            };
+            }
             let text = format!(
                 "{} {}",
                 thread.name.as_deref().unwrap_or_default(),
@@ -92,37 +90,54 @@ impl HostRpcService {
             if !text.contains(&search) {
                 continue;
             }
-            thread.status = agent_protocol::models::SessionStatus::Unavailable;
-            thread.history_read_state = Some(agent_protocol::session::HistoryReadState::new(
-                agent_protocol::session::HistoryReadKind::Unavailable,
-                vec![format!("{}: {}", provider.key(), error.message)],
-            ));
+            if let Some(error) = error
+                && thread.preparation.is_none()
+            {
+                thread.status = agent_protocol::models::SessionStatus::Unavailable;
+                thread.history_read_state = Some(agent_protocol::session::HistoryReadState::new(
+                    agent_protocol::session::HistoryReadKind::Unavailable,
+                    vec![format!("{}: {}", provider.key(), error.message)],
+                ));
+            }
             thread.capabilities =
                 Some(self.conversation_capabilities(provider, sources.into_iter()));
             threads.push(thread);
         }
-        threads.sort_by(|a, b| a.id.cmp(&b.id));
+        threads.sort_by(|a, b| {
+            b.updated_at
+                .unwrap_or_default()
+                .total_cmp(&a.updated_at.unwrap_or_default())
+                .then_with(|| a.id.cmp(&b.id))
+        });
         Ok(threads)
     }
 
-    fn add_unavailable_titles(
+    /// A Host-owned name can match even when its native provider title does not.
+    async fn named_conversation_titles(
         &self,
-        titles: &mut crate::projects::titles::TitleList<'_>,
         search: &str,
-        projects: &crate::projects::state::Snapshot,
-        listed: &std::collections::HashSet<agent_protocol::session::SessionRef>,
-    ) -> Result<bool, Failure> {
-        let threads = self.unavailable_conversation_titles(search)?;
-        let found = !threads.is_empty();
-        for mut thread in threads {
-            if thread.id.as_ref().is_some_and(|id| listed.contains(id)) {
-                continue;
-            }
-            let capabilities = thread.capabilities.unwrap_or_default();
-            describe_thread(&mut thread, capabilities, projects);
-            titles.push(thread);
+        deadline: tokio::time::Instant,
+    ) -> Result<Vec<(ProviderKind, ThreadResponse)>, Failure> {
+        if search.trim().is_empty() {
+            return Ok(Vec::new());
         }
-        Ok(found)
+        let targets = self.inner.conversations.search_targets(search)?;
+        let found = futures_util::future::join_all(targets.into_iter().map(|target| async move {
+            let response = tokio::time::timeout_at(deadline, async {
+                self.inner
+                    .providers
+                    .get(target.provider)?
+                    .open(&target.id, 1, false)
+                    .await
+            })
+            .await;
+            (target.provider, response)
+        }))
+        .await;
+        Ok(found
+            .into_iter()
+            .filter_map(|(provider, result)| result.ok()?.ok().map(|response| (provider, response)))
+            .collect())
     }
 
     pub(super) async fn host_title_list(
@@ -159,44 +174,27 @@ impl HostRpcService {
         // Reuse the first pages and give subsequent reads only the time left.
         let deadline =
             tokio::time::Instant::now() + SESSION_LIST_TIMEOUT.saturating_sub(first_pages_elapsed);
-        if !search.trim().is_empty() {
-            let targets = self.inner.conversations.search_targets(search)?;
-            let found =
-                futures_util::future::join_all(targets.into_iter().map(|target| async move {
-                    let response = tokio::time::timeout_at(deadline, async {
-                        self.inner
-                            .providers
-                            .get(target.provider)?
-                            .open(&target.id, 1, false)
-                            .await
-                    })
-                    .await;
-                    (target.provider, response)
-                }))
-                .await;
-            for (provider, result) in found {
-                if let Ok(Ok(response)) = result
-                    && let Some(index) = agents
-                        .iter()
-                        .position(|(candidate, _)| *candidate == provider)
-                    && let Ok(page) = &mut first_pages[index]
-                    && !page
-                        .data
-                        .iter()
-                        .any(|summary| summary.thread.id == response.thread.id)
-                {
-                    page.data.push(crate::providers::SessionSummary {
-                        branch: response.thread.git_branch.clone(),
-                        thread: response.thread,
-                    });
-                    page.data.sort_by(|left, right| {
-                        right
-                            .thread
-                            .updated_at
-                            .unwrap_or_default()
-                            .total_cmp(&left.thread.updated_at.unwrap_or_default())
-                    });
-                }
+        for (provider, response) in self.named_conversation_titles(search, deadline).await? {
+            if let Some(index) = agents
+                .iter()
+                .position(|(candidate, _)| *candidate == provider)
+                && let Ok(page) = &mut first_pages[index]
+                && !page
+                    .data
+                    .iter()
+                    .any(|summary| summary.thread.id == response.thread.id)
+            {
+                page.data.push(crate::providers::SessionSummary {
+                    branch: response.thread.git_branch.clone(),
+                    thread: response.thread,
+                });
+                page.data.sort_by(|left, right| {
+                    right
+                        .thread
+                        .updated_at
+                        .unwrap_or_default()
+                        .total_cmp(&left.thread.updated_at.unwrap_or_default())
+                });
             }
         }
         let initial_elapsed = started.elapsed();
@@ -219,6 +217,28 @@ impl HostRpcService {
             },
         ))
         .await;
+        let saved_titles = self.saved_conversation_titles(search)?;
+        let saved = !saved_titles.is_empty();
+        let mut saved_by_provider = std::collections::BTreeMap::<_, Vec<_>>::new();
+        for thread in saved_titles {
+            saved_by_provider
+                .entry(thread.active_provider.expect("saved title provider"))
+                .or_default()
+                .push(Ok(crate::providers::SessionSummary {
+                    branch: thread.git_branch.clone(),
+                    thread,
+                }));
+        }
+        for (provider, saved) in saved_by_provider {
+            let mut threads = futures_util::stream::iter(saved).boxed();
+            let head = threads.try_next().await;
+            listings.push((
+                provider,
+                agent_protocol::session::Capabilities::default(),
+                threads,
+                head,
+            ));
+        }
         let mut titles = crate::projects::titles::TitleList::new(&snapshot.projects, query);
         let mut provider_errors = self
             .provider_errors()
@@ -258,7 +278,12 @@ impl HostRpcService {
             }
             group.sort_by(|(a, _), (b, _)| a.thread.id.cmp(&b.thread.id));
             for (summary, capabilities) in group {
-                let Some(mut thread) = self.inner.conversations.summary(summary.thread)? else {
+                let Some(mut thread) = self
+                    .inner
+                    .conversations
+                    .summary(summary.thread)?
+                    .filter(|thread| thread.id.as_ref().is_none_or(|id| !listed.contains(id)))
+                else {
                     continue;
                 };
                 thread.git_branch = summary.branch;
@@ -287,7 +312,6 @@ impl HostRpcService {
                 provider_errors.insert(provider.key().to_owned(), serde_json::to_value(error)?);
             }
         }
-        let saved = self.add_unavailable_titles(&mut titles, search, &snapshot, &listed)?;
         if !successful && !saved && !provider_errors.is_empty() {
             return Err(Failure::new(
                 "sessions_unavailable",

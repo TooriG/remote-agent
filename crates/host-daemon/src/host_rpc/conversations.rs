@@ -1,6 +1,7 @@
-//! A conversation keeps its first native identity as its stable public address.
+//! A conversation keeps its public address while native bindings change.
 //! Provider bindings and ordered native-history ranges belong to the Host. Text
-//! remains in native transcripts; only the exact delivered handoff is copied.
+//! remains in native transcripts. Admitted input is retained until delivery;
+//! provider switches retain only the exact delivered handoff.
 use crate::providers::{AgentChange, Failure};
 use agent_protocol::{
     handoff::Context, ids::ClientInputId, models::*, operations::SubmissionReceipt, session::*,
@@ -55,13 +56,121 @@ pub(super) struct Conversation {
     pub bindings: Vec<Binding>,
     pub segments: Vec<Segment>,
     pub handoffs: Vec<Handoff>,
+    pub startup: Option<Startup>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub(super) struct Startup {
+    pub preparation: SessionPreparation,
+    pub started_at: f64,
+    pub workspace_ready: bool,
+}
+
+/// Resource results are committed against the latest row, so an interrupt or
+/// rename received during filesystem/provider IO cannot be overwritten.
+pub(super) enum StartupChange {
+    Workspace { cwd: String },
+    Binding { native: SessionRef },
+    Sending,
+    Failed { status: PreparationStatus },
+    Retry { started_at: f64 },
+    Interrupt { input_id: String },
+    Finished,
+}
+
+fn change_startup(
+    row: &Conversation,
+    change: StartupChange,
+) -> Result<Option<Conversation>, Failure> {
+    let mut row = row.clone();
+    if row.startup.is_none()
+        && matches!(
+            change,
+            StartupChange::Finished | StartupChange::Failed { .. }
+        )
+    {
+        return Ok(None);
+    }
+    let startup = row
+        .startup
+        .as_mut()
+        .ok_or_else(|| Failure::new("preparation_finished", "準備は完了しています。"))?;
+    match change {
+        StartupChange::Workspace { cwd } => {
+            row.cwd = cwd;
+            startup.workspace_ready = true;
+        }
+        StartupChange::Binding { native } => {
+            row.bindings.push(Binding {
+                session: native.clone(),
+                seen: 0,
+            });
+            row.segments.push(Segment {
+                session: native.clone(),
+                from: 0,
+                end: None,
+            });
+            row.active = native;
+        }
+        StartupChange::Sending => {
+            if startup.preparation.status != PreparationStatus::Preparing {
+                return Err(Failure::new(
+                    "preparation_interrupted",
+                    "準備を停止しました。",
+                ));
+            }
+            startup.preparation.status = PreparationStatus::Sending;
+        }
+        StartupChange::Failed { status } => {
+            if !startup.preparation.status.is_active() {
+                return Ok(None);
+            }
+            startup.preparation.status = status;
+        }
+        StartupChange::Retry { started_at } => match startup.preparation.status {
+            PreparationStatus::Failed { .. } | PreparationStatus::Interrupted => {
+                startup.preparation.status = PreparationStatus::Preparing;
+                startup.started_at = started_at;
+            }
+            PreparationStatus::Preparing | PreparationStatus::Sending => return Ok(None),
+            PreparationStatus::Unknown => {
+                return Err(Failure::unknown(
+                    "submission_delivery_unknown",
+                    "送信結果が不明なため、自動で再送できません。",
+                ));
+            }
+        },
+        StartupChange::Interrupt { input_id } => {
+            if startup
+                .preparation
+                .submission
+                .client_user_message_id
+                .as_str()
+                != input_id
+                || startup.preparation.status != PreparationStatus::Preparing
+            {
+                return Err(Failure::new(
+                    "invalid_turn",
+                    "準備の停止を受け付けられません。",
+                ));
+            }
+            startup.preparation.status = PreparationStatus::Interrupted;
+        }
+        StartupChange::Finished => row.startup = None,
+    }
+    Ok(Some(row))
 }
 
 impl Conversation {
-    /// Preserve IDs that existed before switching. Other provider sessions,
+    /// Preserve the first native binding's IDs, independently of the public
+    /// conversation address. Other provider sessions,
     /// including replacement sessions of the same AI, have separate namespaces.
     pub fn identity(&self, session: &SessionRef, id: &str) -> String {
-        if session == &self.id {
+        if self
+            .bindings
+            .first()
+            .is_some_and(|binding| &binding.session == session)
+        {
             id.into()
         } else {
             qualified(session, id)
@@ -72,7 +181,12 @@ impl Conversation {
         if id.starts_with("bex:") {
             source(id)
         } else {
-            Ok((self.id.clone(), id.into()))
+            Ok((
+                self.bindings
+                    .first()
+                    .map_or_else(|| self.id.clone(), |binding| binding.session.clone()),
+                id.into(),
+            ))
         }
     }
     pub fn new(thread: &Thread) -> Result<Self, Failure> {
@@ -99,6 +213,7 @@ impl Conversation {
             }],
             id,
             handoffs: Vec::new(),
+            startup: None,
         })
     }
 
@@ -153,8 +268,25 @@ impl Conversation {
         thread.id = Some(self.id.clone());
         thread.active_provider = Some(self.active.provider);
         thread.cwd = Some(self.cwd.clone());
-        thread.name = self.name.clone();
-        thread.preview = self.preview.clone();
+        if let Some(name) = &self.name {
+            thread.name = Some(name.clone());
+        }
+        if let Some(preview) = &self.preview {
+            thread.preview = Some(preview.clone());
+        }
+        if let Some(startup) = &self.startup {
+            thread.preparation = Some(startup.preparation.clone());
+            thread.status = match startup.preparation.status {
+                PreparationStatus::Preparing | PreparationStatus::Sending => {
+                    SessionStatus::Preparing
+                }
+                PreparationStatus::Unknown => SessionStatus::Unknown,
+                PreparationStatus::Failed { .. } | PreparationStatus::Interrupted => {
+                    SessionStatus::Idle
+                }
+            };
+            thread.updated_at = Some(startup.started_at);
+        }
     }
 
     pub fn restore_source(&mut self, session: SessionRef) {
@@ -285,6 +417,18 @@ impl Conversations {
                 .and_then(|mut rows| {
                     validate(&rows)?;
                     for row in &mut rows {
+                        if let Some(startup) = &mut row.startup {
+                            startup.preparation.status = match startup.preparation.status {
+                                PreparationStatus::Preparing => PreparationStatus::Failed {
+                                    error: agent_protocol::execution::ExecutionError {
+                                        message: "Hostの再起動で準備が中断されました。再試行してください。".into(),
+                                        ..Default::default()
+                                    },
+                                },
+                                PreparationStatus::Sending => PreparationStatus::Unknown,
+                                ref status => status.clone(),
+                            };
+                        }
                         for handoff in &mut row.handoffs {
                             if handoff.submission == SubmissionDelivery::Sending {
                                 handoff.submission = SubmissionDelivery::Unknown;
@@ -379,6 +523,7 @@ impl Conversations {
             .map_err(|error| Failure::new("conversation_storage_failed", error))?;
         Ok(rows
             .iter()
+            .filter(|row| !row.bindings.is_empty())
             .map(|row| (row.id.clone(), row.active.provider))
             .collect())
     }
@@ -391,6 +536,7 @@ impl Conversations {
         let search = search.trim().to_lowercase();
         Ok(rows
             .iter()
+            .filter(|row| !row.bindings.is_empty())
             .filter(|row| {
                 row.name
                     .as_deref()
@@ -419,6 +565,50 @@ impl Conversations {
         } else {
             next.push(conversation);
         }
+        self.save_rows(&mut state, next)
+    }
+
+    pub fn admit(&self, conversation: Conversation) -> Result<(Conversation, bool), Failure> {
+        let mut state = self.state.lock().unwrap();
+        let mut rows = state
+            .as_ref()
+            .cloned()
+            .map_err(|error| Failure::new("conversation_storage_failed", error))?;
+        if let Some(row) = rows.iter().find(|row| row.id == conversation.id) {
+            return Ok((row.clone(), false));
+        }
+        rows.push(conversation.clone());
+        self.save_rows(&mut state, rows)?;
+        Ok((conversation, true))
+    }
+
+    pub fn update_startup(
+        &self,
+        id: &SessionRef,
+        change: StartupChange,
+    ) -> Result<(Conversation, bool), Failure> {
+        let mut state = self.state.lock().unwrap();
+        let mut rows = state
+            .as_ref()
+            .cloned()
+            .map_err(|error| Failure::new("conversation_storage_failed", error))?;
+        let index = rows
+            .iter()
+            .position(|row| &row.id == id)
+            .ok_or_else(|| Failure::new("invalid_thread", "task is unavailable"))?;
+        let Some(row) = change_startup(&rows[index], change)? else {
+            return Ok((rows[index].clone(), false));
+        };
+        rows[index] = row.clone();
+        self.save_rows(&mut state, rows)?;
+        Ok((row, true))
+    }
+
+    fn save_rows(
+        &self,
+        state: &mut Result<Vec<Conversation>, String>,
+        next: Vec<Conversation>,
+    ) -> Result<(), Failure> {
         validate(&next).map_err(|error| Failure::new("invalid_conversation", error))?;
         let bytes = serde_json::to_vec(&next)?;
         if let Some(parent) = self.path.parent() {
@@ -491,8 +681,14 @@ impl Conversations {
                 }
             }
             AgentChange::Renamed { session, name } => {
-                if owner(rows, &session).is_some() {
-                    return Ok(None);
+                if let Some(row) = owner(rows, &session) {
+                    if row.active != session || row.name.is_some() {
+                        return Ok(None);
+                    }
+                    return Ok(Some(AgentChange::Renamed {
+                        session: row.id.clone(),
+                        name,
+                    }));
                 }
                 AgentChange::Renamed { session, name }
             }
@@ -512,27 +708,45 @@ fn owner<'a>(rows: &'a [Conversation], native: &SessionRef) -> Option<&'a Conver
 
 fn validate(rows: &[Conversation]) -> Result<(), String> {
     let mut identities = std::collections::HashSet::new();
+    let public: std::collections::HashSet<_> = rows.iter().map(|row| &row.id).collect();
+    if public.len() != rows.len() {
+        return Err("Duplicate public conversation".into());
+    }
     for row in rows {
         row.id.validate().map_err(str::to_owned)?;
-        if row
-            .bindings
-            .first()
-            .is_none_or(|binding| binding.session != row.id)
-            || !row
+        let unbound = row.bindings.is_empty()
+            && row.segments.is_empty()
+            && row.active == row.id
+            && row.startup.is_some();
+        if row.startup.as_ref().is_some_and(|startup| {
+            let input = &startup.preparation.submission;
+            input.thread_id != row.id
+                || input.client_user_message_id.is_empty()
+                || input.client_user_message_id.len() > 256
+                || (startup.preparation.status == PreparationStatus::Sending
+                    && row.bindings.is_empty())
+        }) {
+            return Err("Invalid admitted task input or native binding".into());
+        }
+        if (!unbound
+            && (!row
                 .bindings
                 .iter()
                 .any(|binding| binding.session == row.active)
-            || row
-                .segments
-                .last()
-                .is_none_or(|segment| segment.session != row.active)
+                || row
+                    .segments
+                    .last()
+                    .is_none_or(|segment| segment.session != row.active)))
             || row.cwd.trim().is_empty()
         {
             return Err("Invalid conversation identity or workspace".into());
         }
         for binding in &row.bindings {
             binding.session.validate().map_err(str::to_owned)?;
-            if !identities.insert(binding.session.clone()) || binding.seen > row.segments.len() {
+            if !identities.insert(binding.session.clone())
+                || binding.seen > row.segments.len()
+                || (binding.session != row.id && public.contains(&binding.session))
+            {
                 return Err("Duplicate native owner or invalid history coverage".into());
             }
         }
@@ -620,6 +834,53 @@ mod tests {
             ..Default::default()
         })
         .unwrap()
+    }
+
+    #[test]
+    fn restart_retains_admitted_input_and_distinguishes_preparation_from_uncertain_delivery() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("conversations.json");
+        let store = Conversations::new(path.clone());
+        for status in [PreparationStatus::Preparing, PreparationStatus::Sending] {
+            let mut row = conversation();
+            let submission = agent_protocol::operations::Submission {
+                thread_id: row.id.clone(),
+                client_user_message_id: "input".into(),
+                input: vec![agent_protocol::operations::Input::Text {
+                    text: "retained initial input".into(),
+                }],
+                model: None,
+                effort: Some("high".into()),
+                service_tier: Some("fast".into()),
+            };
+            row.startup = Some(Startup {
+                preparation: SessionPreparation {
+                    submission: submission.clone(),
+                    status: status.clone(),
+                },
+                started_at: 1.,
+                workspace_ready: true,
+            });
+            store.save(row.clone()).unwrap();
+            let restored = Conversations::new(path.clone())
+                .get(&row.id)
+                .unwrap()
+                .unwrap();
+            let startup = restored.startup.unwrap();
+            assert_eq!(startup.preparation.submission, submission);
+            assert!(startup.workspace_ready);
+            assert_eq!(restored.active, row.active);
+            match status {
+                PreparationStatus::Preparing => assert!(matches!(
+                    startup.preparation.status,
+                    PreparationStatus::Failed { .. }
+                )),
+                PreparationStatus::Sending => {
+                    assert_eq!(startup.preparation.status, PreparationStatus::Unknown)
+                }
+                _ => unreachable!(),
+            }
+        }
     }
 
     #[test]

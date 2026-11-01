@@ -24,8 +24,8 @@ impl ProviderKind {
     }
 }
 
-/// A native provider ID, scoped by provider. Paths and abbreviated IDs are not
-/// resolved here; only the provider adapter can resolve a native session.
+/// A conversation address, scoped by its originating provider. The Host may
+/// bind an admitted task to a native provider session after issuing its address.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "SessionIdentity")]
 pub struct SessionRef {
@@ -113,6 +113,12 @@ pub enum UpdateError {
     rename_all_fields = "camelCase"
 )]
 pub enum SessionChange {
+    Workspace {
+        cwd: String,
+    },
+    Preparation {
+        preparation: Option<SessionPreparation>,
+    },
     Submission {
         id: crate::ids::ClientInputId,
         delivery: SubmissionDelivery,
@@ -176,6 +182,30 @@ pub enum SubmissionDelivery {
     Rejected,
 }
 
+/// Durable Host admission, independent of the provider acknowledging execution.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionPreparation {
+    pub submission: crate::operations::Submission,
+    pub status: PreparationStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum PreparationStatus {
+    Preparing,
+    Sending,
+    Failed { error: ExecutionError },
+    Interrupted,
+    Unknown,
+}
+
+impl PreparationStatus {
+    pub fn is_active(&self) -> bool {
+        matches!(self, Self::Preparing | Self::Sending)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RequestDelivery {
@@ -188,27 +218,34 @@ pub enum RequestDelivery {
 /// Conversation content independent of list metadata, navigation and native history IO.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Timeline {
+    pub cwd: Option<String>,
     pub status: SessionStatus,
     pub turns: Option<Vec<Arc<Turn>>>,
     pub requests: std::collections::BTreeMap<crate::ids::RequestId, Arc<crate::requests::Request>>,
     pub submissions: std::collections::BTreeMap<crate::ids::ClientInputId, SubmissionDelivery>,
+    /// None means no observation; Some(None) explicitly clears preparation.
+    pub preparation: Option<Option<SessionPreparation>>,
 }
 
 impl SessionChange {
     pub fn apply(&self, previous: &Thread) -> Result<Thread, UpdateError> {
         let next = previous.clone();
         let (timeline, result) = self.apply_timeline(Timeline {
+            cwd: None,
             status: next.status,
             turns: next.turns,
             requests: next.requests,
             submissions: next.submissions,
+            preparation: Some(next.preparation),
         });
         result?;
         Ok(Thread {
+            cwd: timeline.cwd.or(next.cwd),
             status: timeline.status,
             turns: timeline.turns,
             requests: timeline.requests,
             submissions: timeline.submissions,
+            preparation: timeline.preparation.flatten(),
             ..next
         })
     }
@@ -220,6 +257,14 @@ impl SessionChange {
         let result = (|| {
             match self {
                 Self::Unsupported => return Ok(()),
+                Self::Workspace { cwd } => {
+                    next.cwd = Some(cwd.clone());
+                    return Ok(());
+                }
+                Self::Preparation { preparation } => {
+                    next.preparation = Some(preparation.clone());
+                    return Ok(());
+                }
                 Self::Submission { id, delivery } => {
                     next.submissions.insert(id.clone(), delivery.clone());
                     return Ok(());
@@ -256,6 +301,8 @@ impl SessionChange {
                 | Self::ReasoningPart { turn_id, .. }
                 | Self::Error { turn_id, .. } => turn_id,
                 Self::Status { .. }
+                | Self::Workspace { .. }
+                | Self::Preparation { .. }
                 | Self::Submission { .. }
                 | Self::Request { .. }
                 | Self::RequestDelivery { .. }
@@ -383,7 +430,9 @@ impl SessionChange {
                     }
                     turn.error = Some(error.clone());
                 }
-                Self::Submission { .. }
+                Self::Workspace { .. }
+                | Self::Preparation { .. }
+                | Self::Submission { .. }
                 | Self::Status { .. }
                 | Self::Turn { .. }
                 | Self::Request { .. }

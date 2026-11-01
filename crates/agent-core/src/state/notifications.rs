@@ -371,7 +371,19 @@ pub(super) fn session_update(
     } else {
         Vec::new()
     };
-    let active = thread.status == crate::models::SessionStatus::Running;
+    let workspace_changed = previous.navigation.thread_id.as_ref() == Some(id)
+        && matches!(update.change, SessionChange::Workspace { .. })
+        && thread.cwd.as_deref() != Some(previous.navigation.cwd.as_str());
+    if workspace_changed {
+        navigate(
+            &mut next,
+            Navigation {
+                cwd: thread.cwd.clone().unwrap_or_default(),
+                ..previous.navigation.as_ref().clone()
+            },
+        );
+    }
+    let active = crate::models::task_active(None, thread.status);
     let refresh_workspace = (completed || matches!(update.change, SessionChange::Item { .. }))
         && current.cwd.as_deref() == Some(&next.navigation.cwd);
     Arc::make_mut(&mut next.conversations).insert(id.clone(), Arc::new(thread));
@@ -401,7 +413,7 @@ pub(super) fn session_update(
     {
         Arc::make_mut(&mut next.subscriptions).remove(id);
     }
-    if refresh_workspace {
+    if refresh_workspace || workspace_changed {
         effects.extend(op::review_workspace(&mut next));
     }
     (next, effects)
@@ -428,7 +440,8 @@ impl Snapshot {
             }
             for (id, status) in &state.statuses {
                 let active = match status {
-                    crate::models::SessionStatus::Running => Some(true),
+                    crate::models::SessionStatus::Preparing
+                    | crate::models::SessionStatus::Running => Some(true),
                     crate::models::SessionStatus::Idle => Some(false),
                     _ => None,
                 };
@@ -510,6 +523,66 @@ mod tests {
     use crate::state::operations::Operation;
     use proptest::prelude::*;
     use serde_json::json;
+
+    #[rstest::rstest]
+    fn prepared_workspace_updates_only_its_open_panel_without_losing_new_draft_edits(
+        #[values(true, false)] selected: bool,
+    ) {
+        let id = SessionRef::new(ProviderKind::Codex, "admitted".into()).unwrap();
+        let subscription = uuid::Uuid::new_v4();
+        let draft_key = if selected {
+            DraftKey::from(id.clone())
+        } else {
+            DraftKey::from("another")
+        };
+        let snapshot = Snapshot {
+            connected: true,
+            navigation: Arc::new(Navigation {
+                thread_id: selected.then_some(id.clone()),
+                draft_key: draft_key.clone(),
+                cwd: "/project".into(),
+            }),
+            conversations: Arc::new(
+                [(
+                    id.clone(),
+                    Arc::new(Thread {
+                        id: Some(id.clone()),
+                        cwd: Some("/project".into()),
+                        ..Default::default()
+                    }),
+                )]
+                .into(),
+            ),
+            subscriptions: Arc::new([(id.clone(), subscription)].into()),
+            drafts: Arc::new(
+                [(
+                    draft_key.clone(),
+                    Arc::new(Draft {
+                        text: "typed while preparing".into(),
+                        ..Default::default()
+                    }),
+                )]
+                .into(),
+            ),
+            ..Default::default()
+        };
+        let (next, effects) = session_update(
+            &snapshot,
+            crate::session::SessionUpdate {
+                subscription_id: subscription,
+                change: crate::session::SessionChange::Workspace {
+                    cwd: "/worktree".into(),
+                },
+            },
+        );
+        assert_eq!(next.conversations[&id].cwd.as_deref(), Some("/worktree"));
+        assert_eq!(
+            next.navigation.cwd,
+            if selected { "/worktree" } else { "/project" }
+        );
+        assert_eq!(next.drafts[&draft_key].text, "typed while preparing");
+        assert_eq!(effects.len(), usize::from(selected));
+    }
 
     #[rstest::rstest]
     fn known_child_activity_updates_rows_without_refetching(

@@ -71,8 +71,9 @@ pub(super) enum ConversationRow {
         index: usize,
         last: bool,
     },
-    Pending(String, Arc<PendingSubmission>),
+    Queued(Arc<agent_core::presentation::conversation::RenderedItem>),
     Request(Box<agent_core::presentation::conversation::Request>),
+    Preparation(agent_core::presentation::conversation::PreparationPresentation),
 }
 impl ConversationRow {
     pub(super) fn same_identity(&self, other: &Self) -> bool {
@@ -86,8 +87,9 @@ impl ConversationRow {
                     turn: b, index: bi, ..
                 },
             ) => a.source.id == b.source.id && a.rows[*ai].id == b.rows[*bi].id,
-            (Self::Pending(a, _), Self::Pending(b, _)) => a == b,
+            (Self::Queued(a), Self::Queued(b)) => a.data.id == b.data.id,
             (Self::Request(a), Self::Request(b)) => a.id == b.id,
+            (Self::Preparation(_), Self::Preparation(_)) => true,
             _ => false,
         }
     }
@@ -156,8 +158,9 @@ impl ConversationRow {
                     _ => false,
                 }
             }
-            (Self::Pending(a, x), Self::Pending(b, y)) => a == b && Arc::ptr_eq(x, y),
+            (Self::Queued(a), Self::Queued(b)) => Arc::ptr_eq(a, b),
             (Self::Request(a), Self::Request(b)) => a == b,
+            (Self::Preparation(a), Self::Preparation(b)) => a == b,
             _ => false,
         }
     }
@@ -369,26 +372,20 @@ fn conversation_rows(
                 *last = true;
             }
         }
-        rows.extend(rendered.queued.iter().filter_map(|item| {
-            if let agent_core::presentation::conversation::ItemSource::Pending(id, pending) =
-                &item.source
-            {
-                Some(ConversationRow::Pending(id.clone(), pending.clone()))
-            } else {
-                None
-            }
-        }));
+        rows.extend(rendered.queued.iter().cloned().map(ConversationRow::Queued));
     }
     rows.extend(
         rendered
             .iter()
-            .flat_map(|conversation| &conversation.request_rows)
-            .filter_map(|row| {
-                if let ConversationRowContent::PendingRequest { request } = &row.content {
+            .flat_map(|conversation| &conversation.session_rows)
+            .filter_map(|row| match &row.content {
+                ConversationRowContent::PendingRequest { request } => {
                     Some(ConversationRow::Request(request.clone()))
-                } else {
-                    None
                 }
+                ConversationRowContent::Preparation { preparation } => {
+                    Some(ConversationRow::Preparation(preparation.clone()))
+                }
+                _ => None,
             }),
     );
     rows

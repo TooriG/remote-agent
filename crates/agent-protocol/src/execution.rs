@@ -90,6 +90,7 @@ pub struct RetryEvidence {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SessionStatus {
+    Preparing,
     Running,
     Idle,
     Unavailable,

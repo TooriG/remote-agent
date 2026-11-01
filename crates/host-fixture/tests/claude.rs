@@ -76,14 +76,19 @@ async fn draft(store: &Store, text: &str) {
 
 async fn send(store: &Store, text: &str, client_id: &str) -> agent_protocol::session::SessionRef {
     draft(store, text).await;
+    let thread_id = store.snapshot().navigation.thread_id.clone();
     let outcome = store
         .dispatch(Intent::Submit {
-            thread_id: store.snapshot().navigation.thread_id.clone(),
+            thread_id: thread_id.clone(),
             client_user_message_id: client_id.into(),
         })
         .await
         .unwrap();
-    assert!(matches!(outcome, Outcome::Submitted { .. }));
+    assert!(if thread_id.is_some() {
+        matches!(outcome, Outcome::Submitted { .. })
+    } else {
+        matches!(outcome, Outcome::StartedThread { .. })
+    });
     store.snapshot().navigation.thread_id.clone().unwrap()
 }
 
@@ -340,6 +345,7 @@ async fn claude_execution_delegates_model_and_effort_to_cli_without_catalog_read
             let response = local
                 .peer
                 .call(&op::CreateSession {
+                    initial_input: None,
                     provider: agent_protocol::session::ProviderKind::Claude,
                     cwd: Some(root.path().to_string_lossy().into()),
                     model: Some(agent_protocol::models::ModelRef {
@@ -1200,69 +1206,28 @@ async fn claude_authentication_and_inference_failures_are_visible_and_retry_pres
             .await
             .unwrap();
         draft(&store, "keep my draft").await;
-        assert!(
-            store
-                .dispatch(Intent::Submit {
-                    thread_id: None,
-                    client_user_message_id: "auth-failure".into()
-                })
-                .await
-                .is_err()
-        );
-        let snapshot = store.snapshot();
-        let id = snapshot.navigation.thread_id.clone().unwrap();
-        let submission = op::OperationKey::Submission {
-            draft_key: (&id).into(),
+        store.dispatch(Intent::Submit {
+            thread_id: None,
+            client_user_message_id: "auth-failure".into(),
+        }).await.unwrap();
+        let id = store.snapshot().navigation.thread_id.clone().unwrap();
+        let failed_preparation = |snapshot: &Snapshot| {
+            snapshot.conversations[&id].preparation.as_ref().is_some_and(|preparation| matches!(preparation.status, agent_protocol::session::PreparationStatus::Failed { .. }))
         };
-        assert!(
-            snapshot
-                .operation_error(submission.clone())
-                .unwrap()
-                .contains("サブスク認証")
-        );
-        assert_eq!(
-            snapshot.drafts[&agent_core::state::DraftKey::from(&id)].text,
-            "keep my draft"
-        );
+        let snapshot = until(&store, failed_preparation).await;
+        let preparation = snapshot.conversations[&id].preparation.as_ref().unwrap();
+        assert!(matches!(&preparation.status, agent_protocol::session::PreparationStatus::Failed { error } if error.message.contains("サブスク認証")));
+        assert!(preparation.submission.input.iter().any(|input| matches!(input, op::Input::Text { text } if text == "keep my draft")));
         assert!(snapshot.pending_submissions.is_empty());
-        assert!(
-            snapshot.conversations[&id]
-                .turns
-                .as_ref()
-                .unwrap()
-                .is_empty()
-        );
+        assert!(snapshot.conversations[&id].turns.as_ref().is_none_or(|turns| turns.is_empty()));
         std::fs::write(&config, json!({"initializeError":true}).to_string()).unwrap();
-        assert!(
-            store
-                .dispatch(Intent::Submit {
-                    thread_id: Some(id.clone()),
-                    client_user_message_id: "init-failure".into()
-                })
-                .await
-                .is_err()
-        );
-        assert!(
-            store
-                .snapshot()
-                .operation_error(submission.clone())
-                .as_ref()
-                .unwrap()
-                .contains("fixture initialization failed")
-        );
-        assert_eq!(
-            store.snapshot().drafts[&agent_core::state::DraftKey::from(&id)].text,
-            "keep my draft"
-        );
-        assert!(
-            store.snapshot().conversations[&id]
-                .turns
-                .as_ref()
-                .unwrap()
-                .is_empty()
-        );
+        store.dispatch(Intent::RetryPreparation(op::RetryPreparation { thread_id: id.clone() })).await.unwrap();
+        let snapshot = until(&store, |snapshot| {
+            snapshot.conversations[&id].preparation.as_ref().is_some_and(|preparation| matches!(&preparation.status, agent_protocol::session::PreparationStatus::Failed { error } if error.message.contains("fixture initialization failed")))
+        }).await;
+        assert!(snapshot.conversations[&id].turns.as_ref().is_none_or(|turns| turns.is_empty()));
         std::fs::write(&config, json!({"resultError":true}).to_string()).unwrap();
-        send(&store, "inference failure", "failed-turn").await;
+        store.dispatch(Intent::RetryPreparation(op::RetryPreparation { thread_id: id.clone() })).await.unwrap();
         let snapshot = completed(&store, &id, 1, "failed").await;
         assert_eq!(
             snapshot.conversations[&id].turns.as_ref().unwrap()[0]
@@ -1275,7 +1240,7 @@ async fn claude_authentication_and_inference_failures_are_visible_and_retry_pres
         std::fs::write(&config, "{}").unwrap();
         send(&store, "retry", "retry").await;
         let snapshot = completed(&store, &id, 2, "completed").await;
-        assert!(snapshot.operation_error(submission).is_none());
+        assert!(snapshot.operation_error(op::OperationKey::Submission { draft_key: (&id).into() }).is_none());
         assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
         assert!(
             snapshot.drafts[&agent_core::state::DraftKey::from(&id)]
@@ -2495,6 +2460,7 @@ async fn creating_default_claude_chat_does_not_launch_the_cli_or_read_models() {
     let response = local
         .peer
         .call(&op::CreateSession {
+            initial_input: None,
             provider: ProviderKind::Claude,
             cwd: Some(root.path().to_string_lossy().into()),
             model: None,

@@ -187,7 +187,7 @@ fn route(
                 runtime,
                 ticket,
                 identity,
-                &agent_core::state::operations::CreateSession {provider: agent_protocol::session::ProviderKind::Codex, cwd: Some(root.join("project").to_string_lossy().into_owned()), model: None},
+                &agent_core::state::operations::CreateSession { initial_input: None,provider: agent_protocol::session::ProviderKind::Codex, cwd: Some(root.join("project").to_string_lossy().into_owned()), model: None},
             )?;
             return Ok((
                 200,

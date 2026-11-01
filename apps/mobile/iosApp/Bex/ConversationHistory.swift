@@ -85,6 +85,16 @@ extension ThreadScreen {
     @ViewBuilder
     func nativeConversationRow(_ row: ConversationRow, item: ConversationItem?) -> some View {
         switch (row.content, item) {
+        case let (.preparation(preparation), _):
+            VStack(alignment: .leading, spacing: 8) {
+                AppText(preparation.text).font(.caption).foregroundStyle(.secondary)
+                if let retry = preparation.retry {
+                    Button("再試行") { model.perform(.retryPreparation(retry)) }
+                }
+                if let interrupt = preparation.interrupt {
+                    Button("停止") { model.perform(.interrupt(interrupt)) }
+                }
+            }.accessibilityIdentifier("task.preparation")
         case let (.providerHandoff(text), _):
             Text(text).font(.caption).foregroundStyle(.secondary).padding(.vertical, 8)
         case let (.user, item?):

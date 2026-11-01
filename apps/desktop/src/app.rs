@@ -15,7 +15,7 @@ use agent_core::{
         conversation::{ActivityExpansion, ConversationRowContent},
         error::ErrorScope,
     },
-    state::{Attachment, Draft, DraftKey, Intent, ModelDefaultsScope, PendingSubmission, Snapshot},
+    state::{Attachment, Draft, DraftKey, Intent, ModelDefaultsScope, Snapshot},
     store::Outcome,
 };
 use agent_protocol::{
@@ -1350,6 +1350,7 @@ impl Desktop {
             async move {
                 let Outcome::StartedThread { id } = store
                     .dispatch(Intent::CreateSession(op::CreateSession {
+                        initial_input: None,
                         provider,
                         cwd: Some(cwd),
                         model: None,

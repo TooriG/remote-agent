@@ -114,7 +114,7 @@ internal fun ThreadDetailScreen(
                 pendingInputs(projection?.queued.orEmpty(), snapshot.navigation().cwd, perform, recoveryExpanded) {
                     recoveryExpanded = it
                 }
-                conversationRows(projection?.requestRows.orEmpty(), activityExpansion, renderRow)
+                conversationRows(projection?.sessionRows.orEmpty(), activityExpansion, renderRow)
             }
             LatestMessageButton(listState) { following = true }
         }
@@ -178,6 +178,7 @@ private fun ConversationContent(
     val language = LocalUiLanguage.current
     val timestampMs = row.timestampMs
     when (val content = row.content) {
+        is ConversationRowContent.Preparation -> PreparationCard(content.preparation, perform)
         is ConversationRowContent.ProviderHandoff ->
             Text(
                 content.text,

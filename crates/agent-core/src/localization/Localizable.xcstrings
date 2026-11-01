@@ -17632,6 +17632,86 @@
           }
         }
       }
+    },
+    "タスクを準備中…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preparing task…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "タスクを準備中…"
+          }
+        }
+      }
+    },
+    "AIに送信中…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sending to AI…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AIに送信中…"
+          }
+        }
+      }
+    },
+    "準備に失敗しました: {0}": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preparation failed: {0}"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "準備に失敗しました: {0}"
+          }
+        }
+      }
+    },
+    "準備を停止しました。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preparation stopped."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "準備を停止しました。"
+          }
+        }
+      }
+    },
+    "送信結果を確認できません。二重実行を避けるため再送していません。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delivery could not be confirmed. The message has not been resent to avoid running it twice."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "送信結果を確認できません。二重実行を避けるため再送していません。"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

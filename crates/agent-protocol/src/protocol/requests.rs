@@ -93,6 +93,7 @@ contracts! {
     ReadListDecorations, "host/session/decorations/read" => (op::ReadListDecorations, op::ListDecorations) [clone],
     ListAgents, "host/session/agents" => (op::ListAgents, Vec<m::AgentObservation>) [clone],
     CreateSession, "host/session/create" => (op::CreateSession, s::OpenedSession),
+    RetryPreparation, "host/session/preparation/retry" => (op::RetryPreparation, m::Empty) [clone],
     ForkSession, "host/session/fork" => (op::ForkSession, m::ThreadResponse) [clone, op::ForkSession::validate],
     Submit, "host/session/submit" => (op::Submission, op::SubmissionReceipt) [clone],
     Interrupt, "host/session/interrupt" => (op::Interrupt, m::Empty) [clone],

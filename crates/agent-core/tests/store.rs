@@ -1065,19 +1065,15 @@ async fn new_conversation_moves_draft_to_pending_before_creation_reply() {
         Some("first message")
     );
     assert_eq!(rendered.queued[0].data.title.as_deref(), Some("送信中…"));
-    writer.reply(&request, json!({ "result": {"thread": {"id":{"provider":"codex","id":"created"}, "cwd":"/fixture", "status":"idle", "turns":[]}}})).await.unwrap();
-    let request = read_after_reviews(&mut reader, &mut writer).await;
-    assert_eq!(request["method"], "host/session/submit");
     assert_eq!(
-        request["params"]["input"][0]["text"]["text"],
+        request["params"]["initialInput"]["input"][0]["text"]["text"],
         "first message"
     );
-    writer.notify(json!({"method":"fixture/session/change","session":{"provider":"codex","id":"created"},"change":{"type":"item","turnId":"turn","item":{"id":"native","status":"unknown","clientInputId":"client","body":{"inline":{"body":{"userMessage":{"text":null,"content":[{"text":{"text":"first message"}}]}}}}}}})).await.unwrap();
-    writer
-        .reply(&request, json!({ "result":{"turn":{"id":"turn"}}}))
-        .await
-        .unwrap();
-    sending.await.unwrap();
+    writer.reply(&request, json!({ "result": {"thread": {"id":{"provider":"codex","id":"created"}, "cwd":"/fixture", "status":"preparing", "turns":[]}}})).await.unwrap();
+    assert!(matches!(
+        sending.await.unwrap(),
+        Outcome::StartedThread { .. }
+    ));
     let current = store.snapshot();
     assert_eq!(
         current.navigation.draft_key,
@@ -1222,6 +1218,10 @@ async fn new_submission_keeps_edits_and_navigation_while_creation_is_pending() {
         let create = read_after_reviews(&mut reader, &mut writer).await;
         assert_eq!(create["method"], "host/session/create");
         assert_eq!(create["params"]["cwd"], "/fixture");
+        assert_eq!(
+            create["params"]["initialInput"]["input"][0]["text"]["text"],
+            "sent"
+        );
         store
             .dispatch(Intent::SetDraft {
                 thread_id: key.clone(),
@@ -1236,22 +1236,13 @@ async fn new_submission_keeps_edits_and_navigation_while_creation_is_pending() {
             new_chat(&store, &mut reader, &mut writer, "/other").await;
         }
         writer.reply(&create, json!({"result":{"thread":{"id":{"provider":"codex","id":"created"},"cwd":"/fixture","turns":[],"status":"idle"}}})).await.unwrap();
-        let submit = read_after_reviews(&mut reader, &mut writer).await;
-        assert_eq!(submit["method"], "host/session/submit");
-        assert_eq!(submit["params"]["threadId"]["id"], "created");
-        assert_eq!(submit["params"]["input"][0]["text"]["text"], "sent");
-        assert!(
-            !sending.is_finished(),
-            "dispatch must wait for submission, not just thread creation"
-        );
-        writer
-            .reply(&submit, json!({"result":{"turnId":"turn"}}))
-            .await
-            .unwrap();
         assert_eq!(
             sending.await.unwrap().unwrap(),
-            Outcome::Submitted {
-                turn_id: Some("turn".into())
+            Outcome::StartedThread {
+                id: SessionRef {
+                    provider: ProviderKind::Codex,
+                    id: "created".into()
+                }
             }
         );
         let state = store.snapshot();
@@ -1291,92 +1282,53 @@ async fn new_submission_keeps_edits_and_navigation_while_creation_is_pending() {
 }
 
 #[tokio::test]
-async fn failed_new_submission_keeps_retry_at_the_last_successful_step() {
-    for fail_creation in [false, true] {
-        let (store, mut reader, mut writer) = setup(authenticated_snapshot()).await;
-        new_chat(&store, &mut reader, &mut writer, "/fixture").await;
-        store
-            .dispatch(Intent::SetDraft {
-                thread_id: store.snapshot().navigation.draft_key.clone(),
-                draft: Draft {
-                    text: "retry me".into(),
-                    ..Default::default()
-                },
-            })
-            .await
-            .unwrap();
-        let sending = tokio::spawn({
-            let store = store.clone();
-            async move {
-                store
-                    .dispatch(Intent::Submit {
-                        thread_id: None,
-                        client_user_message_id: "client".into(),
-                    })
-                    .await
-            }
-        });
-        let create = read_after_reviews(&mut reader, &mut writer).await;
-        assert_eq!(create["method"], "host/session/create");
-        let failed = if fail_creation {
-            create
-        } else {
-            writer.reply(&create, json!({"result":{"thread":{"id":{"provider":"codex","id":"created"},"cwd":"/fixture","turns":[],"status":"idle"}}})).await.unwrap();
-            let submit = read_after_reviews(&mut reader, &mut writer).await;
-            assert_eq!(submit["method"], "host/session/submit");
-            submit
-        };
-        writer
-            .reply(
-                &failed,
-                json!({"error":{"code":"request_failed","message":"fixture failure","delivery":"notSent"}}),
-            )
-            .await
-            .unwrap();
-        assert!(matches!(
-            sending.await.unwrap(),
-            Err(PeerError::Remote { .. })
-        ));
-        let state = store.snapshot();
-        assert!(state.pending_submissions.is_empty());
-        assert_eq!(state.drafts[&state.navigation.draft_key].text, "retry me");
-        let retry = tokio::spawn({
-            let store = store.clone();
-            async move {
-                store
-                    .dispatch(Intent::Submit {
-                        thread_id: None,
-                        client_user_message_id: "retry".into(),
-                    })
-                    .await
-            }
-        });
-        let request = read_after_reviews(&mut reader, &mut writer).await;
-        assert!(
-            store.snapshot().error.is_none(),
-            "retry must clear the previous submission error"
-        );
-        assert_eq!(
-            request["method"],
-            if fail_creation {
-                "host/session/create"
-            } else {
-                "host/session/submit"
-            }
-        );
-        if !fail_creation {
-            assert_eq!(request["params"]["threadId"]["id"], "created");
-        }
-        writer
-            .reply(
-                &request,
-                json!({"error":{"code":"request_failed","message":"end fixture"}}),
-            )
-            .await
-            .unwrap();
-        assert!(retry.await.unwrap().is_err());
-        store.close().await.unwrap();
-    }
+async fn failed_new_task_admission_keeps_retryable_input() {
+    let (store, mut reader, mut writer) = setup(authenticated_snapshot()).await;
+    new_chat(&store, &mut reader, &mut writer, "/fixture").await;
+    store
+        .dispatch(Intent::SetDraft {
+            thread_id: store.snapshot().navigation.draft_key.clone(),
+            draft: Draft {
+                text: "retry me".into(),
+                ..Default::default()
+            },
+        })
+        .await
+        .unwrap();
+    let sending = store.dispatch(Intent::Submit {
+        thread_id: None,
+        client_user_message_id: "client".into(),
+    });
+    let create = read_after_reviews(&mut reader, &mut writer).await;
+    assert_eq!(create["method"], "host/session/create");
+    writer.reply(&create, json!({"error":{"code":"request_failed","message":"fixture failure","delivery":"notSent"}})).await.unwrap();
+    assert!(matches!(sending.await, Err(PeerError::Remote { .. })));
+    let state = store.snapshot();
+    assert!(state.pending_submissions.is_empty());
+    assert_eq!(state.drafts[&state.navigation.draft_key].text, "retry me");
+    let retry = store.dispatch(Intent::Submit {
+        thread_id: None,
+        client_user_message_id: "retry".into(),
+    });
+    let request = read_after_reviews(&mut reader, &mut writer).await;
+    assert!(
+        store.snapshot().error.is_none(),
+        "retry must clear the previous submission error"
+    );
+    assert_eq!(request["method"], "host/session/create");
+    assert_eq!(
+        request["params"]["initialInput"]["input"][0]["text"]["text"],
+        "retry me"
+    );
+    writer
+        .reply(
+            &request,
+            json!({"error":{"code":"request_failed","message":"end fixture"}}),
+        )
+        .await
+        .unwrap();
+    assert!(retry.await.is_err());
+    store.close().await.unwrap();
 }
 
 fn file(path: &str, revision: &str, text: &str) -> Value {
@@ -1551,18 +1503,15 @@ async fn new_chat_dictation_preserves_text_and_images_for_draft_and_direct_send(
         let start = read(&mut reader).await;
         assert_eq!(start["method"], "host/session/create");
         assert!(start["params"]["cwd"].is_null());
-        writer.reply(&start, json!({"result":{"thread":{"id":{"provider":"codex","id":"created"},"cwd":"/fixture","projectId":null,"status":"idle","turns":[]}}})).await.unwrap();
-        let submit = read_after_reviews(&mut reader, &mut writer).await;
-        assert_eq!(submit["method"], "host/session/submit");
         let input =
             json!([{"text":{"text":"typed\nspoken"}},{"localImage":{"path":"/fixture/photo.png"}}]);
-        assert_eq!(submit["params"]["input"], input);
-        writer
-            .reply(&submit, json!({"result":{"turnId":"turn"}}))
-            .await
-            .unwrap();
+        assert_eq!(start["params"]["initialInput"]["input"], input);
+        writer.reply(&start, json!({"result":{"thread":{"id":{"provider":"codex","id":"created"},"cwd":"/fixture","projectId":null,"status":"idle","turns":[]}}})).await.unwrap();
         writer.notify(json!({"method":"fixture/session/change","session":{"provider":"codex","id":"created"},"change":{"type":"turn","turn":{"id":"turn","status":"completed","items":[{"id":"native","status":"unknown","clientInputId":"dictation","body":{"inline":{"body":{"userMessage":{"text":null,"content":[]}}}}},{"id":"answer","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"done","phase":"final"}}}}}]},"completed":true}})).await.unwrap();
-        assert!(matches!(sending.await.unwrap(), Outcome::Submitted { .. }));
+        assert!(matches!(
+            sending.await.unwrap(),
+            Outcome::StartedThread { .. }
+        ));
         wait_for(&store, |snapshot| {
             snapshot.conversations[&SessionRef {
                 provider: ProviderKind::Codex,
@@ -2372,7 +2321,6 @@ async fn creating_a_chat_updates_matching_search_results_without_reading_the_lis
                 "host/session/open" => writer.current(
                     &serde_json::from_value(request["params"]["session"].clone()).unwrap(),
                 ),
-                "host/session/submit" => json!({"turnId":"turn"}),
                 "host/workspace/review" => review(),
                 other => panic!("unexpected method {other}"),
             };
@@ -4388,20 +4336,13 @@ async fn selected_invocations_reach_submission_and_return_after_failure() {
             .invocations,
         vec![invocation.clone()]
     );
-    writer.reply(&request, json!({"result":{"thread":{"id":{"provider":"codex","id":"created"},"cwd":"/fixture","status":"idle","turns":[]}}})).await.unwrap();
-    let request = read_after_reviews(&mut reader, &mut writer).await;
-    assert_eq!(request["method"], "host/session/submit");
     assert_eq!(
-        request["params"]["input"][1],
+        request["params"]["initialInput"]["input"][1],
         json!({"skill":{"name":"review","path":"/fixture/review/SKILL.md"}})
     );
     store
         .dispatch(Intent::SetDraftText {
-            thread_id: SessionRef {
-                provider: ProviderKind::Codex,
-                id: "created".into(),
-            }
-            .into(),
+            thread_id: key.clone(),
             text: "newer input".into(),
         })
         .await
@@ -4415,30 +4356,9 @@ async fn selected_invocations_reach_submission_and_return_after_failure() {
         .unwrap();
     assert!(sending.await.is_err());
     let snapshot = store.snapshot();
-    assert_eq!(
-        snapshot.drafts[&DraftKey::from(SessionRef {
-            provider: ProviderKind::Codex,
-            id: "created".into()
-        })]
-            .invocations,
-        vec![invocation]
-    );
-    assert!(
-        snapshot.drafts[&DraftKey::from(SessionRef {
-            provider: ProviderKind::Codex,
-            id: "created".into()
-        })]
-            .text
-            .contains("newer input")
-    );
-    assert!(
-        snapshot.drafts[&DraftKey::from(SessionRef {
-            provider: ProviderKind::Codex,
-            id: "created".into()
-        })]
-            .text
-            .contains("$review")
-    );
+    assert_eq!(snapshot.drafts[&key].invocations, vec![invocation]);
+    assert!(snapshot.drafts[&key].text.contains("newer input"));
+    assert!(snapshot.drafts[&key].text.contains("$review"));
     store.close().await.unwrap();
 }
 

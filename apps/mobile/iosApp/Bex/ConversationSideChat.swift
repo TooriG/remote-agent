@@ -61,7 +61,8 @@ final class SideChatRequest: ObservableObject {
                 let result = try await model.outcome(for: .createSession(CreateSession(
                     provider: provider,
                     cwd: cwd,
-                    model: nil
+                    model: nil,
+                    initialInput: nil
                 )))
                 guard case let .startedThread(id) = result else { throw CocoaError(.coderInvalidValue) }
                 threadId = id

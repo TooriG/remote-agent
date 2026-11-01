@@ -1134,6 +1134,9 @@ impl ConversationView {
                         )),
                 );
             }
+            ConversationRowContent::Preparation { preparation } => {
+                body = body.child(self.preparation_card(preparation, cx));
+            }
         }
         let selector = format!("conversation-row-{}", row.id);
         h_flex()
@@ -1159,6 +1162,48 @@ impl ConversationView {
                 self.pending_item(id, pending, cx)
             }
         }
+    }
+    fn preparation_card(
+        &self,
+        preparation: &agent_core::presentation::conversation::PreparationPresentation,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let language = crate::localization::language(cx);
+        let mut body = v_flex()
+            .gap_2()
+            .px_6()
+            .pb_4()
+            .debug_selector(|| "task-preparation".into())
+            .child(div().text_sm().text_color(rgb(appearance::MUTED)).child(
+                agent_core::localization::localized_ui_text(language, preparation.text.clone()),
+            ));
+        if let Some(retry) = &preparation.retry {
+            let retry = retry.clone();
+            body = body.child(button(
+                "retry-preparation",
+                language.text("再試行"),
+                cx,
+                move |_, _, cx| {
+                    cx.emit(ConversationAction::Dispatch(Intent::RetryPreparation(
+                        retry.clone(),
+                    )));
+                },
+            ));
+        }
+        if let Some(interrupt) = &preparation.interrupt {
+            let interrupt = interrupt.clone();
+            body = body.child(button(
+                "interrupt-preparation",
+                language.text("停止"),
+                cx,
+                move |_, _, cx| {
+                    cx.emit(ConversationAction::Dispatch(Intent::Interrupt(
+                        interrupt.clone(),
+                    )));
+                },
+            ));
+        }
+        body.into_any_element()
     }
     pub(super) fn pending_item(
         &mut self,
@@ -1761,8 +1806,16 @@ impl ConversationView {
                                 .and_then(|conversation| conversation.source.id.clone());
                             view.turn_row(session.as_ref(), &turn, index, last, window, cx)
                         }
-                        Some(ConversationRow::Pending(id, pending)) => {
-                            let row = view.pending_item(&id, &pending, cx);
+                        Some(ConversationRow::Queued(item)) => {
+                            let row = match &item.source {
+                                agent_core::presentation::conversation::ItemSource::Native(
+                                    native,
+                                ) => view.item(&item, native, None, cx),
+                                agent_core::presentation::conversation::ItemSource::Pending(
+                                    id,
+                                    pending,
+                                ) => view.pending_item(id, pending, cx),
+                            };
                             h_flex()
                                 .justify_center()
                                 .w_full()
@@ -1772,6 +1825,9 @@ impl ConversationView {
                                 .into_any_element()
                         }
                         Some(ConversationRow::Request(request)) => view.request_card(&request, cx),
+                        Some(ConversationRow::Preparation(preparation)) => {
+                            view.preparation_card(&preparation, cx)
+                        }
                         None => div().into_any_element(),
                     }
                 })

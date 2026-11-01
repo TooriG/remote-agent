@@ -529,6 +529,16 @@ impl Operation for ForkSession {
     }
 }
 pub use agent_protocol::operations::CreateSession;
+pub use agent_protocol::operations::RetryPreparation;
+
+impl Operation for RetryPreparation {
+    fn key(&self) -> Option<OperationKey> {
+        Some(OperationKey::Submission {
+            draft_key: self.thread_id.clone().into(),
+        })
+    }
+    rpc_operation!();
+}
 
 impl Operation for CreateSession {
     rpc_operation!();
