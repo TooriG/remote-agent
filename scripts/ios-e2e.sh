@@ -56,7 +56,7 @@ if [[ $# == 0 ]]; then
         testSimulatorDictationPermissionDenialPreservesDraftAndSend \
         testSimulatorDictationContinuesPastThirtySecondsAndReachesHost \
         testSimulatorOpensOnlyTheTappedImageAndSavesIt \
-        testSimulatorCopiesOnlySelectedMessageText \
+        testSimulatorCopiesSelectedOrWholeUserMessageText \
         testSimulatorSelectsAssistantTextInPlaceAndAddsOnlySelectionToDraft \
         testSimulatorOpensSideChatWithoutLosingOriginalDraft \
         testSimulatorRetriesSideChatPreparationWithoutLosingOriginalDraft \

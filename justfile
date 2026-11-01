@@ -95,7 +95,7 @@ conversation-ui:
         testSimulatorMarksMergedWorktreesToTheRightOfRunningStatus \
         testSimulatorNativeTerminalRetainsShellAfterReopening \
         testSimulatorKeepsDraftDuringLongMarkdownStreamAndReopensFinalText \
-        testSimulatorCopiesOnlySelectedMessageText \
+        testSimulatorCopiesSelectedOrWholeUserMessageText \
         testSimulatorOpensLongInterruptedHistoryAtLatestMessage \
         testSimulatorKeepsLatestVisibleAcrossRepeatedLongHistorySubmissions \
         testSimulatorRepeatedlyReopensTasksAndNewDraftsAfterBackNavigation \
