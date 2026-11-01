@@ -61,11 +61,15 @@ private data class FilePreview(
     val directory: FileList? = null,
 )
 
-/** File previews always read through the authenticated Host transfer. */
+/**
+ * File previews always read through the authenticated Host transfer. Conversation links may name a folder or a Host
+ * home path, so only they ask the Host what the path is before reading it.
+ */
 @Composable
 internal fun ConversationFilePreview(
     reference: MarkdownFileReference,
     perform: ((Intent, (Result<Outcome>) -> Unit) -> Unit)?,
+    resolveLink: Boolean = false,
     dismiss: () -> Unit,
 ) {
     val language = LocalUiLanguage.current
@@ -84,7 +88,7 @@ internal fun ConversationFilePreview(
         try {
             loading = true
             error = null
-            content = loadFilePreview(target, path, reference.kind, page, perform)
+            content = loadFilePreview(target, path, reference.kind.takeUnless { resolveLink }, page, perform)
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             throw cancelled
         } catch (expectedFailure: Exception) {
@@ -128,19 +132,19 @@ internal fun ConversationFilePreview(
 private suspend fun loadFilePreview(
     target: File,
     path: String,
-    fallbackKind: MarkdownFileKind,
+    knownKind: MarkdownFileKind?,
     page: Int,
     perform: ((Intent, (Result<Outcome>) -> Unit) -> Unit)?,
 ): FilePreview {
     val entry =
-        if (path.startsWith("data:image/")) null
+        if (knownKind != null || path.startsWith("data:image/")) null
         else (previewOperation(Intent.ResolveFile(ResolveFile(path)), perform) as Outcome.ResolvedFile).entry
     if (entry?.directory == true) {
         val listing = (previewOperation(Intent.ListFiles(ListFiles(entry.path)), perform) as Outcome.Directory).listing
         return FilePreview(directory = listing)
     }
     val source = entry?.path ?: path
-    val kind = entry?.path?.let { dev.remoteagent.core.markdownFileKind(it) } ?: fallbackKind
+    val kind = knownKind ?: dev.remoteagent.core.markdownFileKind(source)
     downloadPreview(target, source, perform)
     return withContext(Dispatchers.IO) { readFilePreview(target, kind, source, page) }
 }

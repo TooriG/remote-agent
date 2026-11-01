@@ -160,13 +160,14 @@ private struct WorkspaceDirectoryScreen: View {
     private func load(_ directory: String) {
         path = directory
         busy = true; error = nil
-        perform(.listFiles(ListFiles(path: directory))) { _, result in
+        perform(.listFiles(ListFiles(path: directory))) { snapshot, result in
             busy = false
             if case let .failure(failure) = result {
                 error = failure.localizedDescription; return
             }
+            // Path validation fails before any request and records its reason on the operation.
             guard case let .success(.directory(listing)) = result else {
-                error = "フォルダを読み込めませんでした"
+                error = snapshot.operationError(key: .directory)
                 return
             }
             path = listing.path

@@ -134,7 +134,7 @@ internal fun ConversationBlocks(
             }
         }
     }
-    file?.let { target -> ConversationFilePreview(target, perform) { file = null } }
+    file?.let { target -> ConversationFilePreview(target, perform, resolveLink = true) { file = null } }
 }
 
 @Composable
