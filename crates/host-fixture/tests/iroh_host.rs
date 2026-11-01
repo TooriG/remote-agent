@@ -1281,10 +1281,9 @@ async fn repeated_turn_history_preserves_both_responses_after_reopening_and_rest
         let mut updates = store.subscribe();
         loop {
             let snapshot = updates.borrow_and_update().clone();
-            if snapshot.conversations[&id]
-                .turns
-                .as_ref()
-                .is_some_and(|turns| {
+            let thread = &snapshot.conversations[&id];
+            if thread.preparation.is_none()
+                && thread.turns.as_ref().is_some_and(|turns| {
                     turns.first().is_some_and(|turn| {
                         turn.status == agent_protocol::execution::TurnStatus::Completed
                     })
