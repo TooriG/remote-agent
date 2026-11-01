@@ -2197,13 +2197,27 @@ async fn input_while_only_a_background_shell_runs_opens_the_turn_history_shows()
     fixture.close().await.unwrap();
 }
 
+#[rstest::rstest]
+#[case::folded(false, 1, 2)]
+#[case::after_result(true, 2, 1)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn claude_accepts_running_input_and_reads_past_the_previous_result() {
+async fn claude_accepts_running_input_and_reads_past_the_previous_result(
+    #[case] after_result: bool,
+    #[case] turns_per_wait: usize,
+    #[case] users_in_waiting_turn: usize,
+) {
     let root = tempfile::tempdir().unwrap();
+    std::fs::write(
+        root.path().join("claude-fixture.json"),
+        json!({"inputAfterResult":after_result}).to_string(),
+    )
+    .unwrap();
     let fixture = host(root.path(), Arc::new(Memory::default()), fixture_program()).await;
     let (store, endpoint) = connect(&fixture, Snapshot::default()).await;
     store
-        .dispatch(Intent::NewChat { cwd: String::new() })
+        .dispatch(Intent::NewChat {
+            cwd: root.path().to_str().unwrap().into(),
+        })
         .await
         .unwrap();
     let key = store.snapshot().navigation.draft_key.clone();
@@ -2254,8 +2268,13 @@ async fn claude_accepts_running_input_and_reads_past_the_previous_result() {
             .is_err()
     );
     send(&store, "follow-up", "steered").await;
-    let snapshot = completed(&store, &id, 1, "completed").await;
-    let items = snapshot.conversations[&id].turns.as_ref().unwrap()[0]
+    let snapshot = completed(&store, &id, turns_per_wait, "completed").await;
+    let items = snapshot.conversations[&id]
+        .turns
+        .as_ref()
+        .unwrap()
+        .last()
+        .unwrap()
         .items
         .as_ref()
         .unwrap();
@@ -2280,15 +2299,13 @@ async fn claude_accepts_running_input_and_reads_past_the_previous_result() {
     let turns = refreshed.conversations[&id].turns.as_ref().unwrap();
     assert_eq!(
         turns.len(),
-        1,
+        turns_per_wait,
         "queued input must retain its live turn in history"
     );
     assert_eq!(
-        turns[0]
-            .items
-            .as_ref()
-            .unwrap()
+        turns
             .iter()
+            .flat_map(|turn| turn.items.iter().flatten())
             .filter(|item| { item_text(item) == Some("reply 2: follow-up") })
             .count(),
         1
@@ -2299,7 +2316,7 @@ async fn claude_accepts_running_input_and_reads_past_the_previous_result() {
             .conversations
             .get(&id)
             .and_then(|thread| thread.turns.as_ref())
-            .and_then(|turns| turns.get(1))
+            .and_then(|turns| turns.get(turns_per_wait))
             .and_then(|turn| turn.items.as_ref())
             .is_some_and(|items| {
                 items
@@ -2308,6 +2325,14 @@ async fn claude_accepts_running_input_and_reads_past_the_previous_result() {
             })
     })
     .await;
+    let waiting_turn = store.snapshot().conversations[&id]
+        .turns
+        .as_ref()
+        .unwrap()
+        .last()
+        .unwrap()
+        .id
+        .clone();
     let queued = local
         .peer
         .call(&rpc::Submission {
@@ -2322,15 +2347,17 @@ async fn claude_accepts_running_input_and_reads_past_the_previous_result() {
         })
         .await
         .unwrap();
-    let snapshot = completed(&store, &id, 2, "completed").await;
-    let items = snapshot.conversations[&id].turns.as_ref().unwrap()[1]
+    let snapshot = completed(&store, &id, 2 * turns_per_wait, "completed").await;
+    let items = snapshot.conversations[&id]
+        .turns
+        .as_ref()
+        .unwrap()
+        .last()
+        .unwrap()
         .items
         .as_ref()
         .unwrap();
-    assert_eq!(
-        queued.turn_id.as_ref(),
-        Some(&snapshot.conversations[&id].turns.as_ref().unwrap()[1].id)
-    );
+    assert_eq!(queued.turn_id.as_ref(), Some(&waiting_turn));
     assert!(
         items
             .iter()
@@ -2342,7 +2369,7 @@ async fn claude_accepts_running_input_and_reads_past_the_previous_result() {
             .any(|item| item_text(item) == Some("reply 4: queued follow-up"))
     );
     send(&store, "after completion", "last").await;
-    completed(&store, &id, 3, "completed").await;
+    completed(&store, &id, 2 * turns_per_wait + 1, "completed").await;
     let inputs = session_inputs(session_trace(Path::new(&snapshot.navigation.cwd)));
     let inputs = inputs.as_array().unwrap();
     assert_eq!(inputs.len(), 5);
@@ -2357,7 +2384,7 @@ async fn claude_accepts_running_input_and_reads_past_the_previous_result() {
             .turns
             .as_ref()
             .unwrap()
-            .get(3)
+            .get(2 * turns_per_wait + 1)
             .and_then(|turn| turn.items.as_ref())
             .is_some_and(|items| {
                 items
@@ -2376,7 +2403,7 @@ async fn claude_accepts_running_input_and_reads_past_the_previous_result() {
     let turns = refreshed.conversations[&id].turns.as_ref().unwrap();
     assert_eq!(
         turns.len(),
-        4,
+        3 * turns_per_wait + 1,
         "live overlay must not append a duplicate queued turn"
     );
     let turn = turns.last().unwrap();
@@ -2391,7 +2418,7 @@ async fn claude_accepts_running_input_and_reads_past_the_previous_result() {
                 agent_protocol::items::ItemBody::UserMessage { .. }
             ))
             .count(),
-        2
+        users_in_waiting_turn
     );
     store
         .dispatch(Intent::Interrupt(op::Interrupt {
@@ -2400,7 +2427,7 @@ async fn claude_accepts_running_input_and_reads_past_the_previous_result() {
         }))
         .await
         .unwrap();
-    completed(&store, &id, 4, "interrupted").await;
+    completed(&store, &id, 3 * turns_per_wait + 1, "interrupted").await;
     local.close().await;
     store.close().await.unwrap();
     endpoint.close().await;

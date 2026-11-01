@@ -388,12 +388,10 @@ impl Fixture {
             self.model.as_deref(),
             Some(self.config["expectedModel"].as_str().unwrap_or("default"))
         );
-        if self.waiting.take() == Some(Waiting::Wait) {
-            // The previous input can finish before the queued input is consumed.
-            emit(
-                &self.session,
-                json!({"type":"result","session_id":self.session,"is_error":false,"result":"finished waiting"}),
-            );
+        let waiting = self.waiting.take() == Some(Waiting::Wait);
+        if waiting && self.config["inputAfterResult"] != true {
+            // Input folded into the answering response is saved as a queued
+            // command and consumed before that response's terminal result.
             native(
                 &self.session,
                 json!({"type":"attachment","attachment":{
@@ -403,6 +401,17 @@ impl Fixture {
             );
             output(value.clone());
         } else {
+            if waiting {
+                // A separately run prompt follows the result without idle and
+                // is saved as a standalone user message, as Claude Code does.
+                output(
+                    json!({"type":"result","session_id":self.session,"is_error":false,"result":"finished waiting"}),
+                );
+            }
+            emit(
+                &self.session,
+                json!({"type":"system","subtype":"init","session_id":self.session,"user_message_uuids":[value["uuid"]]}),
+            );
             emit(&self.session, value.clone());
         }
         let content = value["message"]["content"].clone();
@@ -422,10 +431,6 @@ impl Fixture {
         for input in &self.inputs[if written { self.inputs.len() - 1 } else { 0 }..] {
             write_json_line(&mut trace, input).unwrap();
         }
-        emit(
-            &self.session,
-            json!({"type":"system","subtype":"init","session_id":self.session}),
-        );
         output(session_state(&self.session, "running"));
         let text = content
             .as_array()
