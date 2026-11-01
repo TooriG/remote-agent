@@ -217,14 +217,8 @@ extension AppViewModel {
         )))
     }
 
-    func respond(_ request: Request, answer: Answer, completion: @escaping (String?) -> Void) {
-        perform(.respond(Respond(requestId: request.id, answer: answer))) { result in
-            if case let .failure(error) = result {
-                completion(error.localizedDescription)
-            } else {
-                completion(nil)
-            }
-        }
+    func respond(_ requestId: String, _ answer: Answer) {
+        perform(.respond(Respond(requestId: requestId, answer: answer)))
     }
 
     /// The question the open conversation's composer answers.
@@ -232,12 +226,16 @@ extension AppViewModel {
         selectedThreadId.flatMap { snapshot.questionPrompt(threadId: $0) }
     }
 
-    func answerQuestion(_ requestId: String, _ action: QuestionAction) {
-        perform(.answerQuestion(requestId: requestId, action: action))
+    /// The other request the composer answers; the question panel owns questions.
+    var dockedRequest: Request? {
+        selectedThreadId.flatMap { snapshot.dockedRequests(session: $0) }?.first { request in
+            if case .question = request.requestBody { return false }
+            return true
+        }
     }
 
-    func skipQuestions(_ requestId: String) {
-        perform(.respond(Respond(requestId: requestId, answer: .skipQuestions)))
+    func answerQuestion(_ requestId: String, _ action: QuestionAction) {
+        perform(.answerQuestion(requestId: requestId, action: action))
     }
 
     func readItemDetails(threadId: SessionRef, turnId: String, itemId: String) async -> String? {

@@ -11,7 +11,7 @@ use agent_protocol::{
     models::*,
     operations as op,
     permissions::{PermissionMode, PermissionSettings},
-    requests::{Answer, Choice, Request, RequestBody, RequestTarget},
+    requests::{Answer, Choice, ChoiceEffect, Request, RequestBody, RequestTarget},
     session::{Capabilities, ProviderKind, RequestDelivery, SessionChange, SessionRef},
 };
 use agent_transport::peer::{JsonlReader, JsonlWriter};
@@ -517,13 +517,7 @@ impl DeepSeek {
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(|option| {
-                Some(Choice {
-                    id: option["optionId"].as_str()?.into(),
-                    label: option["name"].as_str().unwrap_or("Permission").into(),
-                    description: option["kind"].as_str().unwrap_or_default().into(),
-                })
-            })
+            .filter_map(permission_choice)
             .collect();
         let request = Request {
             id: format!("deepseek:{}:{}", rpc.instance, value["id"]).into(),
@@ -1365,10 +1359,46 @@ async fn prompt(input: &[op::Input]) -> Result<Vec<Value>, Failure> {
 }
 // NanoGPT is an OpenAI-compatible custom route, not an installed pi-ai catalog.
 // Model IDs/capabilities: https://nano-gpt.com/api/v1/models?detailed=true
+/// ACP option kinds say what each permission option does.
+fn permission_choice(option: &Value) -> Option<Choice> {
+    let effect = match option["kind"].as_str()? {
+        "allow_once" => ChoiceEffect::Allow,
+        "allow_always" => ChoiceEffect::AllowLasting,
+        "reject_once" | "reject_always" => ChoiceEffect::Deny,
+        _ => return None,
+    };
+    Some(Choice {
+        id: option["optionId"].as_str()?.into(),
+        label: option["name"].as_str().unwrap_or("Permission").into(),
+        description: String::new(),
+        effect,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    #[test]
+    fn permission_options_keep_what_each_acp_kind_does() {
+        for (kind, effect) in [
+            ("allow_once", Some(ChoiceEffect::Allow)),
+            ("allow_always", Some(ChoiceEffect::AllowLasting)),
+            ("reject_once", Some(ChoiceEffect::Deny)),
+            ("reject_always", Some(ChoiceEffect::Deny)),
+            ("future_kind", None),
+        ] {
+            let choice =
+                permission_choice(&json!({"optionId":"option","name":"Name","kind":kind}));
+            assert_eq!(choice.as_ref().map(|choice| choice.effect), effect);
+            if let Some(choice) = choice {
+                assert_eq!((choice.id.as_str(), choice.label.as_str()), ("option", "Name"));
+                assert!(choice.description.is_empty());
+            }
+        }
+        assert_eq!(permission_choice(&json!({"name":"Name","kind":"allow_once"})), None);
+    }
 
     #[tokio::test]
     async fn stalled_harness_catalog_returns_provider_errors_before_the_client_deadline() {

@@ -1,101 +1,205 @@
 import AgentCore
 import SwiftUI
 
-struct ThreadRequestRow: View {
+/// The request the composer answers other than a question, docked above it as in T3 Code.
+struct RequestPanel: View {
     let request: Request
-    let respond: (Answer, @escaping (String?) -> Void) -> Void
+    let busy: Bool
+    let error: String?
+    let respond: (Answer) -> Void
     @State private var response = ""
-    @State private var busy = false
-    @State private var error: String?
+    @State private var inputError: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            requestForm
-            if busy {
-                ProgressView()
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Label(LocalizedStringKey(request.title), systemImage: "hand.raised")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("request.\(request.id)")
+                Spacer(minLength: 0)
+                if busy {
+                    ProgressView()
+                }
             }
-            if let error {
-                AppText(error).foregroundColor(.red)
+            if !request.body.isEmpty {
+                Text(request.body).textSelection(.enabled)
+            }
+            if !request.details.isEmpty {
+                DisclosureGroup("詳細") {
+                    BoundedScroll(maxHeight: 200) {
+                        Text(request.details).font(.caption.monospaced()).textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+            answerControls
+            if let error = inputError ?? error {
+                AppText(error).font(.caption).foregroundColor(.red)
             }
         }
         .onAppear { response = requestInputDefault(body: request.requestBody) }
         .disabled(busy || !request.canRespond)
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.orange.opacity(0.14))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .dockedPanel()
     }
 
-    private var requestForm: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(request.title).font(.subheadline.weight(.semibold))
-                .accessibilityIdentifier("request.\(request.id)")
-            Text(request.body).textSelection(.enabled)
-            if !request.details.isEmpty {
-                DisclosureGroup("詳細") { Text(request.details).font(.caption.monospaced()).textSelection(.enabled) }
-            }
-            switch request.requestBody {
-            case let .approval(_, _, _, choices): choiceButtons(choices, permission: false)
-            case let .permission(_, _, choices): choiceButtons(choices, permission: true)
-            // The composer answers questions.
-            case .question: EmptyView()
-            case let .elicitation(_, _, input):
-                if case let .url(url) = input {
-                    if let url = URL(string: url) {
-                        Link("リンクを開く", destination: url)
-                    }
-                } else {
-                    if case let .form(fields) = input {
-                        ForEach(fields, id: \.name) { field in
-                            Text("\(field.title) (\(field.name))\(field.required ? " *" : "")")
-                            if !field.description.isEmpty {
-                                Text(field.description).font(.caption)
-                            }
+    @ViewBuilder
+    private var answerControls: some View {
+        switch request.requestBody {
+        case let .approval(_, _, _, choices): choiceButtons(choices) { .approval(choiceId: $0) }
+        case let .permission(_, _, choices): choiceButtons(choices) { .permission(choiceId: $0) }
+        // The question panel answers questions.
+        case .question: EmptyView()
+        case let .elicitation(_, _, input):
+            if case let .url(url) = input {
+                if let url = URL(string: url) {
+                    Link("リンクを開く", destination: url)
+                }
+            } else {
+                if case let .form(fields) = input {
+                    ForEach(fields, id: \.name) { field in
+                        Text("\(field.title) (\(field.name))\(field.required ? " *" : "")")
+                        if !field.description.isEmpty {
+                            Text(field.description).font(.caption)
                         }
                     }
-                    responseEditor
                 }
-                Button("確認して送信") { submitResponse() }
-                HStack {
-                    Button("辞退") { submit(.elicitation(action: .decline)) }
-                    Button("キャンセル") { submit(.elicitation(action: .cancel)) }
-                }
-            case .toolExecution:
                 responseEditor
-                Button("実行結果を送信") { submitResponse() }
             }
+            FlowLayout {
+                Button("確認して送信") { submitResponse() }.buttonStyle(RequestButtonStyle(.primary))
+                Button("辞退") { respond(.elicitation(action: .decline)) }.buttonStyle(RequestButtonStyle(.danger))
+                Button("キャンセル") { respond(.elicitation(action: .cancel)) }
+                    .buttonStyle(RequestButtonStyle(.secondary))
+            }
+        case .toolExecution:
+            responseEditor
+            Button("実行結果を送信") { submitResponse() }.buttonStyle(RequestButtonStyle(.primary))
         }
     }
 
     private var responseEditor: some View {
-        TextEditor(text: $response).font(.body.monospaced()).frame(minHeight: 100)
+        TextEditor(text: $response).font(.body.monospaced()).frame(minHeight: 100, maxHeight: 200)
     }
 
-    private func choiceButtons(_ choices: [Choice], permission: Bool) -> some View {
-        ForEach(choices, id: \.id) { choice in
-            Button(choice.label) {
-                submit(permission ? .permission(choiceId: choice.id) : .approval(choiceId: choice.id))
+    private func choiceButtons(_ choices: [Choice], answer: @escaping (String) -> Answer) -> some View {
+        // Choices sharing a description, such as the scopes of one permission, explain it once.
+        let notes = choices.map(\.description).filter { !$0.isEmpty }
+            .reduce(into: [String]()) { notes, note in if !notes.contains(note) { notes.append(note) } }
+        return VStack(alignment: .leading, spacing: 8) {
+            FlowLayout {
+                ForEach(choices, id: \.id) { choice in
+                    Button(choice.label) { respond(answer(choice.id)) }
+                        .buttonStyle(RequestButtonStyle(choiceTone(effect: choice.effect)))
+                        .accessibilityIdentifier(
+                            choice.id == choices.first?.id ? "request.accept" : "request.choice.\(choice.id)"
+                        )
+                }
             }
-            .accessibilityIdentifier(choice.id == choices.first?.id ? "request.accept" : "request.choice.\(choice.id)")
-            if !choice.description.isEmpty {
-                Text(choice.description).font(.caption)
-            }
+            ForEach(notes, id: \.self) { Text($0).font(.caption).foregroundStyle(.secondary) }
         }
     }
 
     private func submitResponse() {
         do {
-            try submit(requestAnswerFromJson(body: request.requestBody, text: response))
+            let answer = try requestAnswerFromJson(body: request.requestBody, text: response)
+            inputError = nil
+            respond(answer)
         } catch {
-            self.error = error.localizedDescription
+            inputError = error.localizedDescription
+        }
+    }
+}
+
+/// Request actions in the tone the core ranks them.
+struct RequestButtonStyle: ButtonStyle {
+    let tone: ActionTone
+    @Environment(\.isEnabled) private var isEnabled
+
+    init(_ tone: ActionTone) {
+        self.tone = tone
+    }
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(tone == .primary ? Color.white : tone == .danger ? Color.red : Color.primary)
+            .padding(.horizontal, 14).padding(.vertical, 12)
+            .background(background, in: RoundedRectangle(cornerRadius: 14))
+            .opacity(configuration.isPressed ? 0.7 : isEnabled ? 1 : 0.5)
+    }
+
+    private var background: Color {
+        switch tone {
+        case .primary: .accentColor
+        case .danger: .red.opacity(0.12)
+        case .secondary: Color(uiColor: .tertiarySystemFill)
+        }
+    }
+}
+
+/// Wraps actions onto new rows when they do not fit on one.
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 10
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache _: inout ()) -> CGSize {
+        let frames = frames(subviews, width: proposal.width ?? .infinity)
+        return CGSize(
+            width: proposal.width ?? frames.map(\.maxX).max() ?? 0,
+            height: frames.map(\.maxY).max() ?? 0
+        )
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal _: ProposedViewSize, subviews: Subviews, cache _: inout ()) {
+        for (subview, frame) in zip(subviews, frames(subviews, width: bounds.width)) {
+            subview.place(
+                at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
+                proposal: ProposedViewSize(frame.size)
+            )
         }
     }
 
-    private func submit(_ answer: Answer) {
-        guard !busy, request.canRespond else { return }
-        busy = true
-        error = nil
-        respond(answer) { message in busy = false; error = message }
+    private func frames(_ subviews: Subviews, width: CGFloat) -> [CGRect] {
+        var frames: [CGRect] = []
+        var origin = CGPoint.zero
+        var rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(ProposedViewSize(width: width.isFinite ? width : nil, height: nil))
+            if origin.x > 0, origin.x + size.width > width {
+                origin = CGPoint(x: 0, y: origin.y + rowHeight + spacing)
+                rowHeight = 0
+            }
+            frames.append(CGRect(origin: origin, size: size))
+            origin.x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+        return frames
+    }
+}
+
+/// Natural height, scrolling only when the content exceeds the limit, so a
+/// docked panel never pushes the conversation away.
+struct BoundedScroll<Content: View>: View {
+    let maxHeight: CGFloat
+    @ViewBuilder let content: Content
+    @State private var height: CGFloat = 0
+
+    var body: some View {
+        ScrollView {
+            content.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(height: min(height, maxHeight))
+    }
+}
+
+extension View {
+    /// The card shared by the panels docked above the composer.
+    func dockedPanel() -> some View {
+        padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(uiColor: .secondarySystemGroupedBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 24))
+            .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(Color.primary.opacity(0.15), lineWidth: 1))
     }
 }
 
@@ -108,7 +212,6 @@ struct QuestionPanel: View {
     let skip: () -> Void
     /// Collapsing applies to one question; the next question opens again.
     @State private var collapsedQuestionId: String?
-    @State private var choicesHeight: CGFloat = 0
 
     var body: some View {
         let question = prompt.question
@@ -145,13 +248,7 @@ struct QuestionPanel: View {
                 if question.multiple {
                     Text("複数選択できます").font(.caption).foregroundStyle(.secondary)
                 }
-                // Natural height, scrolling only when the options exceed the limit.
-                ScrollView {
-                    choices(question)
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { choicesHeight = $0 }
-                }
-                .scrollBounceBehavior(.basedOnSize)
-                .frame(height: min(choicesHeight, 240))
+                BoundedScroll(maxHeight: 240) { choices(question) }
                 HStack {
                     Spacer(minLength: 0)
                     Button("スキップする", action: skip)
@@ -169,11 +266,7 @@ struct QuestionPanel: View {
         }
         .disabled(busy || !prompt.canRespond)
         .buttonStyle(.plain)
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(uiColor: .secondarySystemGroupedBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 24))
-        .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(Color.primary.opacity(0.15), lineWidth: 1))
+        .dockedPanel()
     }
 
     private func choices(_ question: Question) -> some View {

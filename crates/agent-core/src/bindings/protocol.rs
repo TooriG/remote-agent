@@ -505,6 +505,15 @@ struct Choice {
     pub id: String,
     pub label: String,
     pub description: String,
+    pub effect: ChoiceEffect,
+}
+
+#[uniffi::remote(Enum)]
+enum ChoiceEffect {
+    Allow,
+    AllowLasting,
+    Deny,
+    Cancel,
 }
 
 #[uniffi::remote(Record)]
