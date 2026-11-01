@@ -224,6 +224,7 @@ extension LaunchUITests {
         prompt.tap(); prompt.typeText("[success] Keep the conversation agent")
         app.buttons["task.send"].tap()
         XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 25))
+        expandComposer(app)
         app.buttons["model.settings"].tap()
         XCTAssertTrue(app.segmentedControls["model.provider"].buttons["Codex"].isSelected)
         XCTAssertTrue(app.buttons["model.choice.fixture-model"].exists)
@@ -240,6 +241,7 @@ extension LaunchUITests {
         XCTAssertTrue(row.waitForExistence(timeout: 15)); row.tap()
         XCTAssertTrue(app.descendants(matching: .any)["item.answer-fixture-external-thread"]
             .waitForExistence(timeout: 15))
+        expandComposer(app)
         captureScreen(app, named: "Model controls on an externally created conversation")
         let model = app.buttons["model.settings"]
         XCTAssertEqual(model.value as? String, "Fixture Model",
@@ -249,6 +251,7 @@ extension LaunchUITests {
         prompt.tap(); prompt.typeText("[delayed-input] Keep model settings available while working")
         app.buttons["task.send"].tap()
         XCTAssertTrue(prefixedButton(app, prefix: "turn.interrupt.").waitForExistence(timeout: 10))
+        expandComposer(app)
         XCTAssertTrue(model.isHittable)
         XCTAssertEqual(model.value as? String, "Fixture Model")
         captureScreen(app, named: "Model selection remains visible during a running turn")
@@ -310,6 +313,7 @@ extension LaunchUITests {
     }
 
     private func switchFixtureAccount(_ app: XCUIApplication) {
+        expandComposer(app)
         app.buttons["model.settings"].tap()
         openAccountManagement(app)
         XCTAssertTrue(app.buttons["account.actions.desktop"].waitForExistence(timeout: 10))

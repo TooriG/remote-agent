@@ -86,7 +86,6 @@ struct ThreadMessageRow: View, Equatable {
     var restoreUnknown: ((String) -> Void)?
     var discardUnknown: ((String) -> Void)?
     @State private var copied = false
-    @State private var selectingText = false
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.item === rhs.item && lhs.isUser == rhs.isUser
@@ -140,23 +139,8 @@ struct ThreadMessageRow: View, Equatable {
             .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("item.\(item.data.id)")
-            .contextMenu {
-                if isUser, let text = item.data.body, !text.isEmpty {
-                    Button {
-                        UIPasteboard.general.string = text
-                    } label: {
-                        Label("コピー", systemImage: "doc.on.doc")
-                    }
-                    Button {
-                        selectingText = true
-                    } label: {
-                        Label("テキストを選択", systemImage: "text.cursor")
-                    }
-                }
-            }
-            if isUser, let timestampMs {
-                Text(Date(timeIntervalSince1970: Double(timestampMs) / 1000), style: .time)
-                    .font(.caption).foregroundStyle(.secondary)
+            if isUser || item.data.kind == "agent" {
+                actions
             }
             if isUser, item.data.nativeId == nil {
                 if let title = item.data.title {
@@ -178,44 +162,45 @@ struct ThreadMessageRow: View, Equatable {
                     .buttonStyle(.plain)
                 }
             }
-            if item.data.kind == "agent", let text = item.data.body {
-                HStack(spacing: 20) {
-                    Button { UIPasteboard.general.string = text; copied = true } label: {
-                        Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    }.accessibilityLabel(LocalizedStringKey(copied ? "コピーしました" : "回答をコピー"))
-                    if let fork {
-                        Button(action: fork) {
-                            Image(systemName: "arrow.triangle.branch")
-                        }
-                        .disabled(forking)
-                        .accessibilityLabel("ここから会話を分岐")
-                        .accessibilityIdentifier("response.fork." + item.data.id)
-                    }
-                    if let timestampMs {
-                        Text(Date(timeIntervalSince1970: Double(timestampMs) / 1000), style: .time).font(.caption)
-                    }
-                }
-                .font(.system(size: 19)).foregroundColor(.secondary).buttonStyle(.plain)
-                .padding(.vertical, 4)
-                if let forkError {
-                    AppText(forkError).font(.caption).foregroundColor(.red)
-                }
+            if let forkError {
+                AppText(forkError).font(.caption).foregroundColor(.red)
             }
         }
         .padding(.bottom, isUser ? 12 : 8)
-        .sheet(isPresented: $selectingText) {
-            NavigationStack {
-                if let text = item.data.body {
-                    MessageTextSelection(text: text)
-                        .navigationTitle("テキストを選択")
-                        .navigationBarTitleDisplayMode(.inline)
-                        .toolbar {
-                            ToolbarItem(placement: .confirmationAction) {
-                                Button("完了") { selectingText = false }
-                            }
-                        }
-                }
+    }
+
+    /// Both speakers share copy and time; the user's row mirrors toward its bubble and cannot fork.
+    private var actions: some View {
+        let text = item.data.body ?? ""
+        return HStack(spacing: 20) {
+            if isUser {
+                time
             }
+            if !text.isEmpty {
+                Button { UIPasteboard.general.string = text; copied = true } label: {
+                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                }
+                .accessibilityLabel(LocalizedStringKey(copied ? "コピーしました" : isUser ? "発言をコピー" : "回答をコピー"))
+            }
+            if let fork {
+                Button(action: fork) {
+                    Image(systemName: "arrow.triangle.branch")
+                }
+                .disabled(forking)
+                .accessibilityLabel("ここから会話を分岐")
+                .accessibilityIdentifier("response.fork." + item.data.id)
+            }
+            if !isUser {
+                time
+            }
+        }
+        .font(.system(size: 19)).foregroundColor(.secondary).buttonStyle(.plain)
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder private var time: some View {
+        if let timestampMs {
+            Text(Date(timeIntervalSince1970: Double(timestampMs) / 1000), style: .time).font(.caption)
         }
     }
 }
@@ -299,28 +284,5 @@ struct ThreadItemRow: View, Equatable {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
-    }
-}
-
-/// UIKit supplies selection handles and copies only the selected range.
-private struct MessageTextSelection: UIViewRepresentable {
-    let text: String
-
-    func makeUIView(context _: Context) -> UITextView {
-        let view = UITextView()
-        view.scrollsToTop = false
-        view.isEditable = false
-        view.isSelectable = true
-        view.font = .systemFont(ofSize: 18)
-        view.textContainerInset = UIEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
-        view.backgroundColor = .clear
-        view.accessibilityIdentifier = "message.text-selection"
-        return view
-    }
-
-    func updateUIView(_ view: UITextView, context _: Context) {
-        if view.text != text {
-            view.text = text
-        }
     }
 }

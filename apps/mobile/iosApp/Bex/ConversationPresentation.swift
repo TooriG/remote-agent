@@ -1,5 +1,14 @@
 import AgentCore
 
+struct ThreadConversationRow: Identifiable, Sendable {
+    let id: String
+    let content: Content
+    enum Content: Sendable {
+        case historyNotice(String)
+        case native(ConversationRow, ConversationItem?), queued(ConversationItem)
+    }
+}
+
 /// Immutable native render values; Rust owns projection policy.
 struct ConversationPresentation: Sendable {
     let source: AgentCore.Thread

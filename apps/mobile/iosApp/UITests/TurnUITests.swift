@@ -79,13 +79,12 @@ extension LaunchUITests {
         XCTAssertTrue(text.waitForExistence(timeout: 5))
         XCTAssertTrue((text.value as? String ?? "").contains("Second paragraph"))
         text.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 25, dy: 10)).press(forDuration: 1.2)
-        XCTAssertFalse(
-            app.textViews["message.text-selection"].exists,
-            "Assistant selection must stay in the conversation"
-        )
         let copy = app.menuItems["コピー"]
         XCTAssertTrue(copy.waitForExistence(timeout: 5)); copy.tap()
         let message = app.textFields["task.message"]
+        // Focus expands the idle composer before its edit menu opens.
+        message.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         message.press(forDuration: 1.2)
         let paste = app.menuItems.matching(NSPredicate(format: "label IN %@", ["Paste", "ペースト"])).firstMatch
         XCTAssertTrue(paste.waitForExistence(timeout: 5)); paste.tap()
@@ -228,7 +227,7 @@ extension LaunchUITests {
         )).firstMatch.exists)
     }
 
-    func testSimulatorCopiesOnlySelectedMessageText() throws {
+    func testSimulatorCopiesSelectedOrWholeUserMessageText() throws {
         let app = try connectedSimulatorApp()
         let text = "Needle Alpha Bravo [success]"
         try startSimulatorConversation(app, promptText: text)
@@ -237,35 +236,11 @@ extension LaunchUITests {
             format: "identifier == %@ AND value == %@", "message.user-text", text
         )).firstMatch
         waitForStableFrame(sent)
-        sent.press(forDuration: 1.2)
-        let fullCopy = app.buttons["コピー"]
-        XCTAssertTrue(fullCopy.waitForExistence(timeout: 10)); fullCopy.tap()
-        let composer = app.textFields["task.message"]
-        composer.tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
-        composer.press(forDuration: 1.2)
-        let fullPaste = app.menuItems.matching(NSPredicate(format: "label IN %@", ["Paste", "ペースト"])).firstMatch
-        XCTAssertTrue(fullPaste.waitForExistence(timeout: 5)); fullPaste.tap()
-        let fullText = expectation(for: NSPredicate(format: "value == %@", text), evaluatedWith: composer)
-        wait(for: [fullText], timeout: 5)
-        composer.press(forDuration: 1.2)
-        let selectAll = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label == 'Select All' OR label == 'すべてを選択'")).firstMatch
-        XCTAssertTrue(selectAll.waitForExistence(timeout: 5)); selectAll.tap()
-        composer.typeText(XCUIKeyboardKey.delete.rawValue)
-        waitForDraftText(composer, text: composer.placeholderValue ?? "")
-        waitForStableFrame(sent)
-        sent.press(forDuration: 1.2)
-        let select = app.buttons["テキストを選択"]
-        XCTAssertTrue(select.waitForExistence(timeout: 5)); select.tap()
-        let selection = app.textViews["message.text-selection"]
-        XCTAssertTrue(selection.waitForExistence(timeout: 5))
-        XCTAssertEqual(selection.value as? String, text)
-        selection.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(dx: 40, dy: 27)).press(forDuration: 1.2)
-        let copy = app.menuItems.matching(NSPredicate(format: "label IN %@", ["Copy", "コピー"])).firstMatch
+        // User messages select in place like answers.
+        sent.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 25, dy: 10)).press(forDuration: 1.2)
+        let copy = app.menuItems["コピー"]
         XCTAssertTrue(copy.waitForExistence(timeout: 5)); copy.tap()
-        app.buttons["完了"].tap()
+        let composer = app.textFields["task.message"]
         composer.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         composer.press(forDuration: 1.2)
@@ -273,8 +248,20 @@ extension LaunchUITests {
         XCTAssertTrue(paste.waitForExistence(timeout: 5)); paste.tap()
         let selectedText = expectation(for: NSPredicate(format: "value == %@", "Needle"), evaluatedWith: composer)
         wait(for: [selectedText], timeout: 5)
+        composer.press(forDuration: 1.2)
+        let selectAll = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == 'Select All' OR label == 'すべてを選択'")).firstMatch
+        XCTAssertTrue(selectAll.waitForExistence(timeout: 5)); selectAll.tap()
+        composer.typeText(XCUIKeyboardKey.delete.rawValue)
+        waitForDraftText(composer, text: composer.placeholderValue ?? "")
+        let fullCopy = app.buttons["発言をコピー"]
+        XCTAssertTrue(fullCopy.waitForExistence(timeout: 5)); fullCopy.tap()
+        composer.press(forDuration: 1.2)
+        XCTAssertTrue(paste.waitForExistence(timeout: 5)); paste.tap()
+        let fullText = expectation(for: NSPredicate(format: "value == %@", text), evaluatedWith: composer)
+        wait(for: [fullText], timeout: 5)
         XCTAssertFalse(app.staticTexts["notice"].exists)
-        captureScreen(app, named: "Only the selected word was copied")
+        captureScreen(app, named: "User message copied in place or whole")
     }
 
     func testSimulatorKeepsChatUnassignedAfterSendingAndReopening() throws {

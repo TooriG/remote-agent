@@ -252,13 +252,24 @@ extension LaunchUITests {
         wait(for: [dismissed], timeout: 10)
     }
 
+    /// An idle reply composer shows its model controls once focused.
+    func expandComposer(_ app: XCUIApplication) {
+        let settings = app.buttons["model.settings"]
+        if !settings.exists {
+            app.textFields["task.message"].tap()
+            XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        }
+    }
+
     func chooseFixtureEffort(_ app: XCUIApplication, _ value: String) {
+        expandComposer(app)
         let control = app.buttons["model.effort"]
         XCTAssertTrue(control.waitForExistence(timeout: 10)); control.tap()
         app.buttons["model.effort." + value].tap()
     }
 
     func chooseFixtureModel(_ app: XCUIApplication) {
+        expandComposer(app)
         tapWhenStable(app.buttons["model.settings"])
         selectFixtureProvider(app, "Codex")
         let choice = app.buttons["model.choice.fixture-model"]
@@ -268,6 +279,7 @@ extension LaunchUITests {
     }
 
     func verifyRestoredModelSettings(_ app: XCUIApplication, settings: XCUIElement) {
+        expandComposer(app)
         XCTAssertTrue(settings.waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["model.choice.fixture-model"].exists)
         XCTAssertGreaterThan(settings.frame.midY, app.descendants(matching: .any)["task.message"].frame.midY)
@@ -277,6 +289,7 @@ extension LaunchUITests {
         XCTAssertEqual(choice.value as? String, "選択中")
         captureScreen(app, named: "Restored model and account picker")
         dismissModelSettings(app)
+        expandComposer(app)
         XCTAssertEqual(app.buttons["model.effort"].value as? String, "high")
         chooseFixtureEffort(app, "medium")
         XCTAssertEqual(app.buttons["model.effort"].value as? String, "medium")

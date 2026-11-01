@@ -7601,22 +7601,6 @@
         }
       }
     },
-    "テキストを選択": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "テキストを選択"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Select text"
-          }
-        }
-      }
-    },
     "テキスト差分はありません": {
       "localizations": {
         "ja": {

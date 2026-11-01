@@ -12,6 +12,10 @@ extension ThreadScreen {
         let runningTurnId = model.selectedThreadId.flatMap { model.snapshot.conversation(id: $0)?.activeTurnId() }
         // Dictation in progress finishes into the draft before the composer answers.
         let answering = dictation.isRecording || dictation.requestingPermission || model.transcribing ? nil : question
+        // An idle reply collapses to one row; focus expands it without recreating the field.
+        let collapsed = !model.isNewThread && !composerFocused && model.draft.isEmpty && attachments.isEmpty
+            && answering == nil && !dictation.isRecording && !dictation.requestingPermission && !model.transcribing
+            && !model.transferring && !preparingMedia
         return VStack(spacing: 12) {
             if !isSideChat, !model.isNewThread, let review = model.snapshot.review(), review.fileCount() > 0 {
                 Button { openTools?(.diff) } label: {
@@ -77,113 +81,47 @@ extension ThreadScreen {
                     }
                     .frame(height: attachments.contains(where: \.isImage) ? 136 : 60)
                 }
-                Group {
-                    if dictation.isRecording {
-                        Canvas { context, size in
-                            let spacing = size.width / CGFloat(dictation.levels.count)
-                            for (index, level) in dictation.levels.enumerated() {
-                                let height = 3 + CGFloat(level.squareRoot()) * (size.height - 3)
-                                let bar = CGRect(x: CGFloat(index) * spacing, y: (size.height - height) / 2,
-                                                 width: 3, height: height)
-                                context.fill(Path(roundedRect: bar, cornerRadius: 1.5), with: .foreground)
+                HStack(spacing: 0) {
+                    if collapsed {
+                        attachMenu
+                    }
+                    Group {
+                        if dictation.isRecording {
+                            Canvas { context, size in
+                                let spacing = size.width / CGFloat(dictation.levels.count)
+                                for (index, level) in dictation.levels.enumerated() {
+                                    let height = 3 + CGFloat(level.squareRoot()) * (size.height - 3)
+                                    let bar = CGRect(x: CGFloat(index) * spacing, y: (size.height - height) / 2,
+                                                     width: 3, height: height)
+                                    context.fill(Path(roundedRect: bar, cornerRadius: 1.5), with: .foreground)
+                                }
                             }
+                            .frame(height: 48)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel("録音中")
+                            .accessibilityIdentifier("dictation.recording")
+                        } else if dictation.requestingPermission {
+                            ProgressView("マイクの許可を確認中…")
+                        } else if model.transcribing {
+                            ProgressView(sendRecordedText ? "文字起こしして送信中…" : "文字起こし中…")
+                                .accessibilityIdentifier("dictation.processing")
+                        } else if let answering {
+                            answerField(answering)
+                                .font(.body)
+                        } else {
+                            messageField
+                                .font(.body)
                         }
-                        .frame(height: 48)
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("録音中")
-                        .accessibilityIdentifier("dictation.recording")
-                    } else if dictation.requestingPermission {
-                        ProgressView("マイクの許可を確認中…")
-                    } else if model.transcribing {
-                        ProgressView(sendRecordedText ? "文字起こしして送信中…" : "文字起こし中…")
-                            .accessibilityIdentifier("dictation.processing")
-                    } else if let answering {
-                        answerField(answering)
-                            .font(.body)
-                    } else {
-                        messageField
-                            .font(.body)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.top, collapsed ? 0 : 6)
+                    if collapsed {
+                        trailingActions(answering: nil, runningTurnId: runningTurnId, hasAttachments: false)
                     }
                 }
-                .padding(.horizontal, 8)
-                .padding(.top, 6)
-                .padding(.bottom, 0)
-                HStack(spacing: 0) {
-                    if dictation.isRecording || dictation.requestingPermission {
-                        Button { dictation.cancel() } label: {
-                            Image(systemName: "xmark").frame(width: 40, height: 40)
-                        }
-                        .accessibilityLabel("録音を取り消す")
-                        .accessibilityIdentifier("dictation.cancel")
-                    } else if answering == nil {
-                        Menu {
-                            Button { composerFocused = false; showingPhotos = true } label: {
-                                Label("写真・動画", systemImage: "photo.on.rectangle")
-                            }.accessibilityIdentifier("task.attach.photos")
-                            Button { openCamera() } label: {
-                                Label("カメラ", systemImage: "camera")
-                            }.accessibilityIdentifier("task.attach.camera")
-                            Button { composerFocused = false; importing = true } label: {
-                                Label("ファイル", systemImage: "doc")
-                            }.accessibilityIdentifier("task.attach.file")
-                        } label: {
-                            Image(systemName: "plus").font(.title2.weight(.regular)).frame(width: 40, height: 40)
-                        }
-                        .disabled((!model.isNewThread && conversation == nil) || model
-                            .transferring || preparingMedia || model.sending || model.transcribing)
-                        .accessibilityLabel("添付").accessibilityIdentifier("task.attach")
-                    }
-                    if model.transferring || preparingMedia {
-                        ProgressView().frame(height: 40)
-                    }
-                    Spacer(minLength: 0)
-                    let controls = model.snapshot.modelQuickControls(threadId: model.coreDraftKey)
-                    if let next = controls.toggleFastTo {
-                        Button { model.chooseServiceTier(next) } label: {
-                            Image(systemName: controls.fast ? "bolt.fill" : "bolt")
-                                .foregroundStyle(controls.fast ? Color.primary : .secondary)
-                                .frame(width: 44, height: 44)
-                        }
-                        .accessibilityLabel("Fast")
-                        .accessibilityValue(controls.fast ? "オン" : "オフ")
-                        .accessibilityIdentifier("model.fast")
-                        .disabled(!model.isConnected || model.sending)
-                    }
-                    let modelName = model.currentModel?.displayName ?? "モデル"
-                    Button { composerFocused = false; showingModelSettings = true } label: {
-                        Text(modelName)
-                            .foregroundStyle(.primary)
-                            .font(.subheadline).lineLimit(1).truncationMode(.middle)
-                            .frame(minWidth: 44, minHeight: 44)
-                            .contentShape(Rectangle())
-                    }
-                    .layoutPriority(1)
-                    .accessibilityLabel("モデル設定")
-                    .accessibilityValue(modelName)
-                    .accessibilityIdentifier("model.settings")
-                    if !controls.efforts.isEmpty {
-                        Menu {
-                            ForEach(controls.efforts, id: \.self) { effort in
-                                Button { model.chooseEffort(effort) } label: {
-                                    if effort == controls.effort {
-                                        Label(effort, systemImage: "checkmark")
-                                    } else {
-                                        Text(effort)
-                                    }
-                                }
-                                .accessibilityIdentifier("model.effort." + effort)
-                            }
-                        } label: {
-                            ReasoningStrengthIcon(level: controls.effortLevel, count: controls.efforts.count)
-                                .frame(width: 44, height: 44)
-                        }
-                        .accessibilityLabel("推論の強度")
-                        .accessibilityValue(controls.effort)
-                        .accessibilityIdentifier("model.effort")
-                        .disabled(!model.isConnected || model.sending)
-                    }
-                    trailingActions(answering: answering, runningTurnId: runningTurnId,
-                                    hasAttachments: !attachments.isEmpty)
+                if !collapsed {
+                    controlRow(answering: answering, runningTurnId: runningTurnId,
+                               hasAttachments: !attachments.isEmpty)
                 }
             }
             .buttonStyle(.plain)
@@ -196,6 +134,95 @@ extension ThreadScreen {
             startPoint: .top,
             endPoint: .bottom
         ))
+    }
+
+    /// The expanded composer's attachment, model, and primary actions.
+    func controlRow(answering: QuestionPrompt?, runningTurnId: String?, hasAttachments: Bool) -> some View {
+        HStack(spacing: 0) {
+            if dictation.isRecording || dictation.requestingPermission {
+                Button { dictation.cancel() } label: {
+                    Image(systemName: "xmark").frame(width: 40, height: 40)
+                }
+                .accessibilityLabel("録音を取り消す")
+                .accessibilityIdentifier("dictation.cancel")
+            } else if answering == nil {
+                attachMenu
+            }
+            if model.transferring || preparingMedia {
+                ProgressView().frame(height: 40)
+            }
+            Spacer(minLength: 0)
+            modelControls
+            trailingActions(answering: answering, runningTurnId: runningTurnId, hasAttachments: hasAttachments)
+        }
+    }
+
+    @ViewBuilder
+    var modelControls: some View {
+        let controls = model.snapshot.modelQuickControls(threadId: model.coreDraftKey)
+        if let next = controls.toggleFastTo {
+            Button { model.chooseServiceTier(next) } label: {
+                Image(systemName: controls.fast ? "bolt.fill" : "bolt")
+                    .foregroundStyle(controls.fast ? Color.primary : .secondary)
+                    .frame(width: 44, height: 44)
+            }
+            .accessibilityLabel("Fast")
+            .accessibilityValue(controls.fast ? "オン" : "オフ")
+            .accessibilityIdentifier("model.fast")
+            .disabled(!model.isConnected || model.sending)
+        }
+        let modelName = model.currentModel?.displayName ?? "モデル"
+        Button { composerFocused = false; showingModelSettings = true } label: {
+            Text(modelName)
+                .foregroundStyle(.primary)
+                .font(.subheadline).lineLimit(1).truncationMode(.middle)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .layoutPriority(1)
+        .accessibilityLabel("モデル設定")
+        .accessibilityValue(modelName)
+        .accessibilityIdentifier("model.settings")
+        if !controls.efforts.isEmpty {
+            Menu {
+                ForEach(controls.efforts, id: \.self) { effort in
+                    Button { model.chooseEffort(effort) } label: {
+                        if effort == controls.effort {
+                            Label(effort, systemImage: "checkmark")
+                        } else {
+                            Text(effort)
+                        }
+                    }
+                    .accessibilityIdentifier("model.effort." + effort)
+                }
+            } label: {
+                ReasoningStrengthIcon(level: controls.effortLevel, count: controls.efforts.count)
+                    .frame(width: 44, height: 44)
+            }
+            .accessibilityLabel("推論の強度")
+            .accessibilityValue(controls.effort)
+            .accessibilityIdentifier("model.effort")
+            .disabled(!model.isConnected || model.sending)
+        }
+    }
+
+    var attachMenu: some View {
+        Menu {
+            Button { composerFocused = false; showingPhotos = true } label: {
+                Label("写真・動画", systemImage: "photo.on.rectangle")
+            }.accessibilityIdentifier("task.attach.photos")
+            Button { openCamera() } label: {
+                Label("カメラ", systemImage: "camera")
+            }.accessibilityIdentifier("task.attach.camera")
+            Button { composerFocused = false; importing = true } label: {
+                Label("ファイル", systemImage: "doc")
+            }.accessibilityIdentifier("task.attach.file")
+        } label: {
+            Image(systemName: "plus").font(.title2.weight(.regular)).frame(width: 40, height: 40)
+        }
+        .disabled((!model.isNewThread && conversation == nil) || model
+            .transferring || preparingMedia || model.sending || model.transcribing)
+        .accessibilityLabel("添付").accessibilityIdentifier("task.attach")
     }
 
     /// Dictation and the primary action, which answers an awaiting question.
@@ -366,14 +393,5 @@ private struct ComposerActionButtonStyle: ButtonStyle {
             .opacity(configuration.isPressed ? 0.7 : 1)
             .frame(width: 44, height: 44)
             .contentShape(Rectangle())
-    }
-}
-
-struct ThreadConversationRow: Identifiable, Sendable {
-    let id: String
-    let content: Content
-    enum Content: Sendable {
-        case historyNotice(String)
-        case native(ConversationRow, ConversationItem?), queued(ConversationItem)
     }
 }
