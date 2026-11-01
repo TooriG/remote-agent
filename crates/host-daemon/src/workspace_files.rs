@@ -431,7 +431,10 @@ fn absolute_path(path: &impl AsRef<Path>) -> Result<PathBuf> {
     let path = path.as_ref();
     if let Ok(relative) = path.strip_prefix("~") {
         let home = directories::BaseDirs::new().context("Host home directory is unavailable")?;
-        return Ok(home.home_dir().join(relative));
+        // Rebuild from components so Windows Hosts do not keep the link's `/` separators.
+        let mut resolved = home.home_dir().to_owned();
+        resolved.extend(relative.components());
+        return Ok(resolved);
     }
     if path.is_absolute() {
         Ok(path.to_owned())
@@ -629,6 +632,10 @@ mod tests {
         client.read_to_end(&mut bytes).await.unwrap();
         assert_eq!(bytes, b"video");
         assert_eq!(absolute_path(&"~").unwrap(), home.home_dir());
+        assert_eq!(
+            absolute_path(&"~/Movies/video.mp4").unwrap().to_str(),
+            home.home_dir().join("Movies").join("video.mp4").to_str()
+        );
     }
 
     #[cfg(unix)]
