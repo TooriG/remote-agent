@@ -46,11 +46,7 @@ extension LaunchUITests {
         message.tap(); message.typeText("[delayed-input] Keep the reading position")
         let send = app.buttons["task.send"]
         XCTAssertTrue(send.waitForExistence(timeout: 10)); send.tap()
-        let keyboardHidden = expectation(
-            for: NSPredicate(format: "exists == false"),
-            evaluatedWith: app.keyboards.firstMatch
-        )
-        wait(for: [keyboardHidden], timeout: 5)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
         XCTAssertTrue(prefixedButton(app, prefix: "turn.interrupt.").waitForExistence(timeout: 10))
         let initialDetailValue = detail.value as? String ?? ""
         XCTAssertFalse(initialDetailValue.isEmpty)

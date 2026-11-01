@@ -33,9 +33,7 @@ extension LaunchUITests {
             message.tap(); message.typeText(prompt)
             XCTAssertTrue(app.keyboards.firstMatch.exists)
             app.buttons["task.send"].tap()
-            let keyboardHidden = expectation(for: NSPredicate(format: "exists == false"),
-                                             evaluatedWith: app.keyboards.firstMatch)
-            wait(for: [keyboardHidden], timeout: 5)
+            XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
             XCTAssertTrue(approval.waitForExistence(timeout: 20))
             XCTAssertTrue(approval.isHittable, "New rows must stay visible after the keyboard and draft shrink")
             XCTAssertFalse(latestButton.exists, "Sending at the bottom must continue following the latest content")
