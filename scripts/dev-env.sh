@@ -131,4 +131,34 @@ if [[ ! -f $CARGO_HOME/.seeded || $(< "$CARGO_HOME/.seeded") != "$agent_seed_key
     fi
     printf '%s\n' "$agent_seed_key" > "$CARGO_HOME/.seeded"
 fi
+# Cargo checks and tests, and recipes in the portable group, run on the
+# configured Linux builder. Builds for Apple targets and all else stay here.
+agent_portable() {
+    if [[ ${1-} == env ]]; then
+        shift
+        while [[ ${1-} == -u || ${1-} == *=* ]]; do
+            [[ $1 == -u ]] && shift
+            shift
+        done
+    fi
+    case "${1-} ${2-}" in
+        "cargo check" | "cargo clippy" | "cargo test" | "cargo nextest" | "cargo mutants")
+            local previous='' argument
+            for argument; do
+                [[ $argument == --target=*-apple-* || ($previous == --target && $argument == *-apple-*) ]] && return 1
+                previous=$argument
+            done
+            ;;
+        "just "[!-]*)
+            just --dump --dump-format json |
+                jq -e --arg recipe "$2" '.recipes[$recipe].attributes // [] | any(.group? == "portable")' > /dev/null
+            ;;
+        *) return 1 ;;
+    esac
+}
+export AGENT_REMOTE_BUILDER
+AGENT_REMOTE_BUILDER=$(git config --get bex.remoteBuilder || true)
+if [[ -n $AGENT_REMOTE_BUILDER ]] && agent_portable "$@"; then
+    exec scripts/remote-run.sh "$AGENT_REMOTE_BUILDER" "$@"
+fi
 exec "$@"

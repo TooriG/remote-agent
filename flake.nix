@@ -88,6 +88,15 @@
             systemImageTypes = [ "google_apis" ];
             abiVersions = [ (if pkgs.stdenv.hostPlatform.isAarch64 then "arm64-v8a" else "x86_64") ];
           }).androidsdk;
+          nativeBuildTools = with pkgs; [ pkg-config cmake clang ];
+          # The desktop, Host and their tests link these on Linux.
+          linuxDesktopLibraries = with pkgs; [
+            lsof
+            alsa-lib fontconfig freetype libxkbcommon wayland libGL vulkan-loader
+            libxcb libX11 libXcursor libXi libXrandr
+            openssl procps
+          ];
+          linuxDesktopLibraryPath = pkgs.lib.makeLibraryPath [ pkgs.vulkan-loader pkgs.libGL pkgs.libxkbcommon pkgs.wayland ];
           mkDevShell = attrs: pkgs.mkShell (attrs // {
             packages = [ pkgs.zsh ] ++ (attrs.packages or [ ]);
             shellHook = (attrs.shellHook or "") + ''
@@ -109,15 +118,9 @@
             AGENT_NODE_RUNTIME = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "${nodeRuntime}";
             RUST_TOOLCHAIN_VERSION = rustToolchain.version;
             NEXTEST_VERSION = pkgs.cargo-nextest.version;
-            packages = with pkgs; [ rustToolchain kache cccc cargo-mutants cargo-nextest just jq git pkg-config cmake clang workflowLinter nodejs powershell ]
-              ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
-                lsof
-                alsa-lib fontconfig freetype libxkbcommon wayland libGL vulkan-loader
-                libxcb libX11 libXcursor libXi libXrandr
-                openssl procps
-              ];
-            LD_LIBRARY_PATH = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux
-              (pkgs.lib.makeLibraryPath [ pkgs.vulkan-loader pkgs.libGL pkgs.libxkbcommon pkgs.wayland ]);
+            packages = with pkgs; [ rustToolchain kache cccc cargo-mutants cargo-nextest just jq git ] ++ nativeBuildTools
+              ++ [ workflowLinter nodejs powershell ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux linuxDesktopLibraries;
+            LD_LIBRARY_PATH = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux linuxDesktopLibraryPath;
             shellHook = kacheHook + pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
               export PATH="/usr/sbin:$PATH"
             '';
@@ -142,14 +145,15 @@
               cccc
               cargo-mutants
               cargo-nextest
-            ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
-              lsof
+            ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux (nativeBuildTools ++ linuxDesktopLibraries ++ [
+              # Host worktree management needs a newer Git than many distributions ship.
+              git
               gradle
               jdk21
               cargo-ndk
               kotlin-language-server
               androidSdk
-            ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
+            ]) ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
               pkgs.swiftlint
               pkgs.swiftformat
             ];
@@ -168,6 +172,7 @@
               fi
             '';
           } // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+            LD_LIBRARY_PATH = linuxDesktopLibraryPath;
             JAVA_HOME = pkgs.jdk21.home;
             ANDROID_HOME = "${androidSdk}/libexec/android-sdk";
             ANDROID_SDK_ROOT = "${androidSdk}/libexec/android-sdk";
