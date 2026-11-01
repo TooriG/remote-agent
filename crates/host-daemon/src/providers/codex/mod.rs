@@ -6,6 +6,7 @@ mod composer;
 mod fork;
 pub(crate) mod native;
 mod permissions;
+mod retention;
 mod usage;
 
 use crate::providers::Failure;
@@ -82,6 +83,7 @@ pub struct Codex {
     process: Result<Arc<CodexAppServer>, String>,
     stopped: tokio_util::sync::CancellationToken,
     processed: tokio::sync::watch::Sender<u64>,
+    subscriptions: Arc<retention::Subscriptions>,
 }
 pub use codex_app_server::AppServerConfig as Config;
 
@@ -136,6 +138,7 @@ impl Codex {
             process,
             stopped: Default::default(),
             processed: tokio::sync::watch::channel(0).0,
+            subscriptions: Arc::default(),
         }
     }
     pub async fn enable_accounts(
@@ -189,6 +192,26 @@ impl Codex {
         params: &P,
     ) -> Result<ThreadResponse, Failure> {
         native::parse_thread_response(self.request(method, params).await?).map_err(Into::into)
+    }
+
+    fn subscribed(&self, response: &ThreadResponse) {
+        if let Some(thread) = &response.thread.id {
+            self.subscriptions.touch(&thread.id);
+        }
+    }
+
+    async fn resume(
+        &self,
+        id: &str,
+        cwd: Option<&str>,
+        browser: Option<Value>,
+        reload: bool,
+    ) -> Result<(), Failure> {
+        let params = thread_config(serde_json::json!({"threadId":id,"cwd":cwd}), browser);
+        let resume = self
+            .thread_response("thread/resume", &params)
+            .map(|reply| reply.map(drop).map_err(Failure::before_submission));
+        self.subscriptions.start(id, reload, resume).await
     }
 
     async fn wait_for_events(&self, sequence: u64) -> Result<(), Failure> {
@@ -350,9 +373,13 @@ fn native_failure(native: &serde_json::value::RawValue) -> Failure {
     failure
 }
 
-fn with_browser_config(mut params: Value, browser: Option<Value>) -> Value {
+/// Configuration of threads this Host subscribes to. The Host decides when a
+/// thread is idle, so app-server unloads it soon after the subscription ends
+/// (older app-servers otherwise keep it for 30 more minutes).
+fn thread_config(mut params: Value, browser: Option<Value>) -> Value {
+    params["config"] = serde_json::json!({"thread_unload_delay_secs": 60});
     if let Some(browser) = browser {
-        params["config"] = serde_json::json!({"mcp_servers.agent_browser":browser});
+        params["config"]["mcp_servers.agent_browser"] = browser;
     }
     params
 }
@@ -865,11 +892,14 @@ impl Agent for Codex {
         model: Option<&str>,
         browser_config: Option<Value>,
     ) -> Result<ThreadResponse, Failure> {
-        self.thread_response(
-            "thread/start",
-            &with_browser_config(serde_json::json!({"cwd":cwd,"model":model}), browser_config),
-        )
-        .await
+        let response = self
+            .thread_response(
+                "thread/start",
+                &thread_config(serde_json::json!({"cwd":cwd,"model":model}), browser_config),
+            )
+            .await?;
+        self.subscribed(&response);
+        Ok(response)
     }
     async fn inject_history(
         &self,
@@ -877,14 +907,13 @@ impl Agent for Codex {
         context: &agent_protocol::handoff::Context,
     ) -> Result<bool, Failure> {
         let state = self.state(id).await?;
-        if state.needs_reload {
-            self.thread_response(
-                "thread/resume",
-                &serde_json::json!({"threadId":id,"cwd":state.response.thread.cwd}),
-            )
-            .await
-            .map_err(Failure::before_submission)?;
-        }
+        self.resume(
+            id,
+            state.response.thread.cwd.as_deref(),
+            None,
+            state.needs_reload,
+        )
+        .await?;
         match self
             .request::<_, Value>(
                 "thread/inject_items",
@@ -909,9 +938,10 @@ impl Agent for Codex {
         }
     }
     async fn unload(&self, id: &str) -> Result<(), Failure> {
-        self.request::<_, Value>("thread/unsubscribe", &serde_json::json!({"threadId":id}))
-            .await?;
-        Ok(())
+        self.subscriptions
+            .release(self.server()?, id, false)
+            .await
+            .map_err(|error| Failure::unknown("provider_unload_failed", error))
     }
     async fn state(&self, id: &str) -> Result<SubmissionState, Failure> {
         if let Some(error) = self.restoration_error.borrow().as_ref() {
@@ -958,17 +988,8 @@ impl Agent for Codex {
                 None
             }
             SubmissionTarget::Start { cwd } => {
-                if reload {
-                    self.thread_response(
-                        "thread/resume",
-                        &with_browser_config(
-                            serde_json::json!({"threadId":input.thread_id.id,"cwd":cwd}),
-                            browser,
-                        ),
-                    )
-                    .await
-                    .map_err(Failure::before_submission)?;
-                }
+                self.resume(&input.thread_id.id, Some(cwd), browser, reload)
+                    .await?;
                 params["model"] = serde_json::json!(input.model.as_ref().map(|model| &model.id));
                 params["effort"] = serde_json::json!(input.effort);
                 params["serviceTierForTurn"] = serde_json::json!(input.service_tier);
@@ -1047,7 +1068,7 @@ impl Agent for Codex {
         last_turn_id: &str,
         browser_config: Option<Value>,
     ) -> Result<ThreadResponse, Failure> {
-        let params = with_browser_config(
+        let params = thread_config(
             serde_json::json!({"threadId":id,"lastTurnId":last_turn_id,"excludeTurns":false}),
             browser_config,
         );
@@ -1055,7 +1076,9 @@ impl Agent for Codex {
             self.request(method, &params).await
         })
         .await?;
-        native::parse_thread_response(value).map_err(Into::into)
+        let response = native::parse_thread_response(value)?;
+        self.subscribed(&response);
+        Ok(response)
     }
     async fn rename(&self, id: &str, name: &str) -> Result<agent_protocol::models::Empty, Failure> {
         self.request(
@@ -1077,6 +1100,10 @@ impl Agent for Codex {
         let processed = self.processed.clone();
         let accounts = self.accounts.clone();
         let process = codex.clone();
+        let subscriptions = self.subscriptions.clone();
+        subscriptions
+            .clone()
+            .spawn_releaser(codex.clone(), stopped.clone());
         let (output, receiver) = tokio::sync::mpsc::channel(256);
         tokio::spawn(async move {
             let (cause, reason) = loop {
@@ -1122,7 +1149,10 @@ impl Agent for Codex {
                             }
                         } else {
                             let result = match event_change(instance, &request) {
-                                Ok(Some(change)) => emit(&output, change).await,
+                                Ok(Some(change)) => {
+                                    subscriptions.observe(&change);
+                                    emit(&output, change).await
+                                }
                                 Ok(None) => Ok(()),
                                 Err(error) => Err(error),
                             };
