@@ -24,8 +24,10 @@ rust-version = "1.98"
 [profile.dev]
 debug = "line-tables-only"
 
-# Keep compression off the slow C debug path in development Hosts and clients.
-[profile.dev.package.zstd-sys]
+# Development Hosts and clients run daily. Unoptimized GPUI layout and rendering
+# keep desktop frames over budget, and debug compression is slow; workspace
+# crates stay unoptimized for incremental builds.
+[profile.dev.package."*"]
 opt-level = 3
 
 # GPUI's Windows debug renderer reads HLSL from its build-time Cargo source
