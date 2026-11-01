@@ -306,9 +306,10 @@ impl Desktop {
         }
         let running = model.running.clone();
         let empty = model.empty;
-        let inactive = empty && running.is_none();
         let phase = model.phase;
-        let send = if let Some(id) = running.filter(|_| empty) {
+        // Dictation in progress finishes into the draft before the composer answers.
+        let answering = model.question.as_ref().filter(|_| phase.is_none());
+        let stop = running.clone().map(|id| {
             icon_button(
                 "stop",
                 Icon::default().path("icons/stop.svg"),
@@ -322,116 +323,167 @@ impl Desktop {
                 },
             )
             .disabled(!model.connected || model.busy)
+        });
+        let trailing: Vec<AnyElement> = if let Some(question) = answering {
+            stop.map(|stop| round_action(stop, false, cx))
+                .into_iter()
+                .chain(Self::question_actions(question, cx))
+                .map(IntoElement::into_any_element)
+                .collect()
         } else {
-            icon_button(
-                "send",
-                IconName::ArrowUp,
-                language.text("送信"),
-                cx,
-                |s, _, cx| s.send(cx),
-            )
-            .disabled(
-                !model.connected
-                    || !model.provider_available
-                    || model.busy
-                    || empty
-                    || model.input_unavailable,
-            )
-        };
-        let microphone = Button::new("dictation-toggle")
-            .icon(Icon::default().path("icons/microphone.svg").size(px(20.)))
-            .ghost()
-            .w(px(40.))
-            .h(px(40.))
-            .large()
-            .tooltip(language.text("音声をCodexで文字起こし"))
-            .accessibility_label(language.text("音声をCodexで文字起こし"))
-            .disabled(!model.connected || model.busy)
-            .on_click(cx.listener(|s, _, window, cx| {
-                s.composer.input.read(cx).focus_handle(cx).focus(window, cx);
-                s.start_dictation();
-                cx.notify();
-            }));
-        let composer = v_flex()
-            .key_context("ChatComposer")
-            .track_focus(&input.read(cx).focus_handle(cx))
-            .capture_key_down(cx.listener(|s, event: &KeyDownEvent, window, cx| {
-                let modifiers = event.keystroke.modifiers;
-                if !(modifiers.shift || modifiers.control || modifiers.alt || modifiers.platform)
-                    && s.completion_key(&event.keystroke.key, window, cx)
-                {
-                    return;
-                }
-                if event.keystroke.key == "escape"
-                    && s.dictation
-                        .as_ref()
-                        .is_some_and(|state| state.phase != Phase::Transcribing)
-                {
-                    s.cancel_recording();
-                    cx.stop_propagation();
+            let send = stop.filter(|_| empty).unwrap_or_else(|| {
+                icon_button(
+                    "send",
+                    IconName::ArrowUp,
+                    language.text("送信"),
+                    cx,
+                    |s, _, cx| s.send(cx),
+                )
+                .disabled(
+                    !model.connected
+                        || !model.provider_available
+                        || model.busy
+                        || empty
+                        || model.input_unavailable,
+                )
+            });
+            let microphone = Button::new("dictation-toggle")
+                .icon(Icon::default().path("icons/microphone.svg").size(px(20.)))
+                .ghost()
+                .w(px(40.))
+                .h(px(40.))
+                .large()
+                .tooltip(language.text("音声をCodexで文字起こし"))
+                .accessibility_label(language.text("音声をCodexで文字起こし"))
+                .disabled(!model.connected || model.busy)
+                .on_click(cx.listener(|s, _, window, cx| {
+                    s.composer.input.read(cx).focus_handle(cx).focus(window, cx);
+                    s.start_dictation();
                     cx.notify();
+                }));
+            vec![
+                microphone.into_any_element(),
+                round_action(send, empty && running.is_none(), cx).into_any_element(),
+            ]
+        };
+        // The answer field replaces the draft's while a question awaits it.
+        let (field, focus) = match answering {
+            Some(question) => {
+                let prompt = &question.prompt;
+                let secret = prompt.question.secret;
+                let disabled = !prompt.question.allow_free_text || !prompt.can_respond;
+                let field = if secret {
+                    Input::new(&self.question.secret)
+                        .appearance(false)
+                        .bordered(false)
+                        .text_size(px(14.))
+                        .aria_label(prompt.question.prompt.clone())
+                        .disabled(disabled)
+                        .into_any_element()
+                } else {
+                    Textarea::new(&self.question.input)
+                        .appearance(false)
+                        .bordered(false)
+                        .text_size(px(14.))
+                        .aria_label(prompt.question.prompt.clone())
+                        .disabled(disabled)
+                        .into_any_element()
+                };
+                (field, self.question.focus_handle(secret, cx))
+            }
+            None => (
+                Textarea::new(input)
+                    .appearance(false)
+                    .bordered(false)
+                    .text_size(px(14.))
+                    .aria_label(language.text("AI に依頼する"))
+                    .readonly(!model.connected)
+                    .into_any_element(),
+                input.read(cx).focus_handle(cx),
+            ),
+        };
+        let composer = v_flex()
+            .track_focus(&focus)
+            .map(|composer| {
+                if answering.is_some() {
+                    return composer.capture_action(cx.listener(Self::answer_enter));
                 }
-            }))
-            .capture_action(cx.listener(Self::paste_image))
-            .capture_action(cx.listener(Self::composer_enter))
-            .capture_action(
-                cx.listener(|s, _: &gpui_kit::component::input::MoveUp, window, cx| {
-                    s.composer_arrow("up", window, cx);
-                }),
-            )
-            .capture_action(cx.listener(
-                |s, _: &gpui_kit::component::input::MoveDown, window, cx| {
-                    s.composer_arrow("down", window, cx);
-                },
-            ))
+                composer
+                    .key_context("ChatComposer")
+                    .capture_key_down(cx.listener(|s, event: &KeyDownEvent, window, cx| {
+                        let modifiers = event.keystroke.modifiers;
+                        if !(modifiers.shift
+                            || modifiers.control
+                            || modifiers.alt
+                            || modifiers.platform)
+                            && s.completion_key(&event.keystroke.key, window, cx)
+                        {
+                            return;
+                        }
+                        if event.keystroke.key == "escape"
+                            && s.dictation
+                                .as_ref()
+                                .is_some_and(|state| state.phase != Phase::Transcribing)
+                        {
+                            s.cancel_recording();
+                            cx.stop_propagation();
+                            cx.notify();
+                        }
+                    }))
+                    .capture_action(cx.listener(Self::paste_image))
+                    .capture_action(cx.listener(Self::composer_enter))
+                    .capture_action(cx.listener(
+                        |s, _: &gpui_kit::component::input::MoveUp, window, cx| {
+                            s.composer_arrow("up", window, cx);
+                        },
+                    ))
+                    .capture_action(cx.listener(
+                        |s, _: &gpui_kit::component::input::MoveDown, window, cx| {
+                            s.composer_arrow("down", window, cx);
+                        },
+                    ))
+                    .child(Self::completion_menu(
+                        model.suggestions.as_ref(),
+                        model.completion_index,
+                        cx,
+                    ))
+                    // A question's answer has no attachments; the draft keeps them.
+                    .when(!attachments.is_empty(), |composer| composer.child(files))
+            })
             .w_full()
             .max_w(px(CHAT_WIDTH))
             .p(px(7.))
             .gap_2()
             .rounded(px(22.))
-            .child(Self::completion_menu(
-                model.suggestions.as_ref(),
-                model.completion_index,
-                cx,
-            ))
-            .when(!attachments.is_empty(), |composer| composer.child(files))
             .bg(rgb(appearance::SURFACE))
             .border_1()
             .border_color(rgb(appearance::BORDER))
             .when(phase.is_none(), |composer| {
-                composer.child(
-                    div().px_2().pt(px(10.)).pb_1().child(
-                        Textarea::new(input)
-                            .appearance(false)
-                            .bordered(false)
-                            .text_size(px(14.))
-                            .aria_label(language.text("AI に依頼する"))
-                            .readonly(!model.connected),
-                    ),
-                )
+                composer.child(div().px_2().pt(px(10.)).pb_1().child(field))
             })
             .when(phase.is_none(), |composer| {
                 composer.child(
                     h_flex()
-                        .child(
-                            icon_button(
-                                "attach",
-                                IconName::Plus,
-                                language.text("ファイルを添付"),
-                                cx,
-                                |s, _, _| s.attach(),
+                        .when(answering.is_none(), |row| {
+                            row.child(
+                                icon_button(
+                                    "attach",
+                                    IconName::Plus,
+                                    language.text("ファイルを添付"),
+                                    cx,
+                                    |s, _, _| s.attach(),
+                                )
+                                .debug_selector(|| "attach".into())
+                                .w(px(40.))
+                                .h(px(40.))
+                                .large()
+                                .disabled(
+                                    !model.connected
+                                        || (!model.remote.is_none() && model.cwd.is_empty())
+                                        || model.busy,
+                                ),
                             )
-                            .debug_selector(|| "attach".into())
-                            .w(px(40.))
-                            .h(px(40.))
-                            .large()
-                            .disabled(
-                                !model.connected
-                                    || (!model.remote.is_none() && model.cwd.is_empty())
-                                    || model.busy
-                                    || phase.is_some(),
-                            ),
-                        )
+                        })
                         .child(Self::permission_menu(
                             model.permission_label,
                             model.permission_mode,
@@ -459,30 +511,7 @@ impl Desktop {
                             false,
                             cx,
                         ))
-                        .child(microphone)
-                        .child(
-                            send.large().rounded_full().w(px(40.)).h(px(40.)).custom(
-                                ButtonCustomVariant::new(cx)
-                                    .color(
-                                        rgb(if inactive {
-                                            appearance::BORDER
-                                        } else {
-                                            0xffffff
-                                        })
-                                        .into(),
-                                    )
-                                    .foreground(
-                                        rgb(if inactive {
-                                            appearance::MUTED
-                                        } else {
-                                            appearance::SIDEBAR
-                                        })
-                                        .into(),
-                                    )
-                                    .hover(rgb(0xd4d4d4).into())
-                                    .active(rgb(appearance::MUTED).into()),
-                            ),
-                        ),
+                        .children(trailing),
                 )
             })
             .when(phase.is_some(), |composer| {
@@ -511,6 +540,9 @@ impl Desktop {
                     ))
                 },
             )
+            .when_some(model.question.as_ref(), |column, question| {
+                column.child(Self::question_panel(question, cx))
+            })
             .child(Self::composer_context(model, cx))
             .child(composer);
         h_flex()
@@ -521,6 +553,31 @@ impl Desktop {
             .child(controls)
             .into_any_element()
     }
+}
+
+/// The round primary action, inactive while there is nothing to send or stop.
+fn round_action(button: Button, inactive: bool, cx: &App) -> Button {
+    button.large().rounded_full().w(px(40.)).h(px(40.)).custom(
+        ButtonCustomVariant::new(cx)
+            .color(
+                rgb(if inactive {
+                    appearance::BORDER
+                } else {
+                    0xffffff
+                })
+                .into(),
+            )
+            .foreground(
+                rgb(if inactive {
+                    appearance::MUTED
+                } else {
+                    appearance::SIDEBAR
+                })
+                .into(),
+            )
+            .hover(rgb(0xd4d4d4).into())
+            .active(rgb(appearance::MUTED).into()),
+    )
 }
 
 #[derive(PartialEq)]
@@ -549,6 +606,7 @@ struct ComposerModel {
     controls_enabled: bool,
     suggestions: Option<agent_core::composer::ComposerSuggestions>,
     completion_index: usize,
+    question: Option<question::ComposerQuestion>,
 }
 impl Desktop {
     pub(super) fn model_controls_enabled(&self) -> bool {
@@ -597,6 +655,7 @@ impl Desktop {
             controls_enabled: self.model_controls_enabled(),
             suggestions: self.completion_suggestions(cx),
             completion_index: self.composer.completion_index,
+            question: self.composer_question(),
         }
     }
 }
@@ -968,6 +1027,133 @@ mod composer_tests {
         window.run_until_parked();
         assert!(window.debug_bounds("conversation-history-load").is_none());
         assert!(window.debug_bounds("conversation-history-error").is_none());
+    }
+
+    #[gpui::test]
+    fn a_question_docks_above_the_composer_until_it_is_collapsed(cx: &mut TestAppContext) {
+        use agent_protocol::requests::{Question, QuestionChoice, Request, RequestBody};
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        cx.update(|cx| {
+            crate::appearance::init(cx);
+            cx.set_global(crate::Runtime {
+                handle: runtime.handle().clone(),
+                connections: Arc::new(crate::platform::Connections::default()),
+                closing: tokio_util::task::TaskTracker::new(),
+                logging_error: None,
+            });
+        });
+        let session = SessionRef {
+            provider: agent_protocol::session::ProviderKind::Claude,
+            id: "asking".into(),
+        };
+        let question = |id: &str, multiple| Question {
+            id: id.into(),
+            header: format!("{id} header"),
+            prompt: format!("{id}?"),
+            secret: false,
+            allow_free_text: true,
+            multiple,
+            choices: ["a", "b"]
+                .map(|choice| QuestionChoice {
+                    id: format!("{id}-{choice}"),
+                    label: choice.into(),
+                    description: format!("{choice} description"),
+                })
+                .into(),
+        };
+        let mut handle = None;
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let desktop = cx.new(|cx| {
+                Desktop::new(
+                    Mode::SideChat {
+                        remote: Some(RemoteHost {
+                            id: "fixture".into(),
+                            name: "fixture".into(),
+                            ticket: "invalid".into(),
+                        }),
+                        cwd: "/fixture".into(),
+                    },
+                    window,
+                    cx,
+                )
+            });
+            desktop.update(cx, |view, cx| {
+                let snapshot = Arc::make_mut(&mut view.snapshot);
+                let navigation = Arc::make_mut(&mut snapshot.navigation);
+                navigation.thread_id = Some(session.clone());
+                navigation.draft_key = session.clone().into();
+                let mut thread = Thread {
+                    id: Some(session.clone()),
+                    turns: Some(Vec::new()),
+                    ..Default::default()
+                };
+                thread.requests.insert(
+                    "request".into(),
+                    Arc::new(Request {
+                        id: "request".into(),
+                        target: agent_protocol::requests::RequestTarget::Session,
+                        delivery: agent_protocol::session::RequestDelivery::Awaiting,
+                        body: RequestBody::Question {
+                            questions: vec![question("scope", false), question("notes", true)],
+                        },
+                    }),
+                );
+                Arc::make_mut(&mut snapshot.conversations).insert(session.clone(), Arc::new(thread));
+                view.sync_conversation(window, cx);
+            });
+            handle = Some(desktop.clone());
+            ComposerView(desktop)
+        });
+        let desktop = handle.unwrap();
+        window.simulate_resize(size(px(800.), px(700.)));
+        window.run_until_parked();
+        window.update(|_, cx| {
+            desktop.update(cx, |view, cx| {
+                assert!(
+                    view.conversation.read(cx).timeline.requests.is_empty(),
+                    "the timeline keeps no answer inputs for a question"
+                );
+            })
+        });
+        assert!(window.debug_bounds("question-choice-scope-a").is_some());
+        assert!(window.debug_bounds("question-choice-notes-a").is_none());
+        assert!(window.debug_bounds("question-advance").is_some());
+        assert!(window.debug_bounds("question-back").is_none());
+        assert!(
+            window.debug_bounds("attach").is_none(),
+            "an answer has no attachments"
+        );
+        let toggle = window.debug_bounds("question-toggle").unwrap();
+        window.simulate_click(toggle.center(), Modifiers::default());
+        window.run_until_parked();
+        assert!(window.debug_bounds("question-choice-scope-a").is_none());
+        assert!(window.debug_bounds("question-skip").is_none());
+        let toggle = window.debug_bounds("question-toggle").unwrap();
+        window.simulate_click(toggle.center(), Modifiers::default());
+        window.run_until_parked();
+        assert!(window.debug_bounds("question-choice-scope-a").is_some());
+        assert!(window.debug_bounds("question-skip").is_some());
+        window.update(|_, cx| {
+            desktop.update(cx, |view, cx| {
+                let snapshot = Arc::make_mut(&mut view.snapshot);
+                Arc::make_mut(&mut snapshot.conversations)
+                    .get_mut(&session)
+                    .map(Arc::make_mut)
+                    .unwrap()
+                    .requests
+                    .clear();
+                cx.notify();
+            })
+        });
+        window.run_until_parked();
+        assert!(window.debug_bounds("question-toggle").is_none());
+        assert!(
+            window.debug_bounds("attach").is_some(),
+            "the draft returns once the question is gone"
+        );
     }
 
     #[gpui::test]

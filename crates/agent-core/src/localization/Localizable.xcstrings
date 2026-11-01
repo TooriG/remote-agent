@@ -10049,6 +10049,22 @@
         }
       }
     },
+    "上の選択肢から選んでください": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上の選択肢から選んでください"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose an option above"
+          }
+        }
+      }
+    },
     "上へ移動": {
       "localizations": {
         "ja": {
@@ -12317,6 +12333,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Enter your answer"
+          }
+        }
+      }
+    },
+    "回答を入力（空欄なら選んだ選択肢で回答）": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "回答を入力（空欄なら選んだ選択肢で回答）"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter your answer (leave blank to answer with the chosen option)"
           }
         }
       }
@@ -14749,6 +14781,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Next page"
+          }
+        }
+      }
+    },
+    "次の質問": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "次の質問"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Next question"
           }
         }
       }

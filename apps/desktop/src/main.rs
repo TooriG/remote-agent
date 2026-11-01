@@ -70,6 +70,10 @@ impl DesktopAssets {
         ("icons/merge.svg", include_bytes!("../assets/merge.svg")),
         ("icons/diff.svg", include_bytes!("../assets/diff.svg")),
         ("icons/monitor.svg", include_bytes!("../assets/monitor.svg")),
+        (
+            "icons/message-circle-question.svg",
+            include_bytes!("../assets/message-circle-question.svg"),
+        ),
         ("icons/qr-code.svg", include_bytes!("../assets/qr-code.svg")),
     ];
 }

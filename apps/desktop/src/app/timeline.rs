@@ -3,13 +3,7 @@
 use super::*;
 use crate::diff::DiffView;
 
-pub(super) struct Question {
-    pub(super) definition: agent_protocol::requests::Question,
-    pub(super) input: Entity<InputState>,
-    pub(super) selected: HashSet<String>,
-}
 pub(super) struct RequestInputs {
-    pub(super) questions: Vec<Question>,
     pub(super) response: Entity<TextareaState>,
     pub(super) sent: bool,
 }
@@ -360,6 +354,9 @@ fn conversation_rows(
                         );
                     }
                     ConversationRowContent::Activity { .. } if !expanded => continue,
+                    ConversationRowContent::PendingRequest { request } if docked(request) => {
+                        continue;
+                    }
                     _ => (),
                 }
                 rows.push(ConversationRow::Turn {
@@ -381,7 +378,7 @@ fn conversation_rows(
             .iter()
             .flat_map(|conversation| &conversation.session_rows)
             .filter_map(|row| match &row.content {
-                ConversationRowContent::PendingRequest { request } => {
+                ConversationRowContent::PendingRequest { request } if !docked(request) => {
                     Some(ConversationRow::Request(request.clone()))
                 }
                 ConversationRowContent::Preparation { preparation } => {
@@ -393,12 +390,83 @@ fn conversation_rows(
     rows
 }
 
+/// The composer answers questions from its docked panel, as on iOS and in T3 Code.
+fn docked(request: &agent_core::presentation::conversation::Request) -> bool {
+    matches!(
+        request.request_body,
+        agent_protocol::requests::RequestBody::Question { .. }
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         Arc, ConversationRow, ConversationRowContent, Snapshot, Thread, conversation_rows,
     };
     use agent_core::presentation::conversation::{RenderedTurn, project_conversation};
+
+    #[test]
+    fn questions_are_answered_from_the_composer_instead_of_the_timeline() {
+        use agent_protocol::requests::{Request, RequestBody, RequestTarget};
+        let mut source: Arc<Thread> = Arc::new(serde_json::from_value(serde_json::json!({
+            "id": {"provider": "claude", "id": "thread"},
+            "turns": [{"id": "turn", "status": "running", "items": [
+                {"id": "answer", "body": {"inline": {"body": {"assistantText": {"text": "Answer", "phase": "unknown"}}}}}
+            ]}]
+        })).unwrap());
+        let question = RequestBody::Question {
+            questions: vec![agent_protocol::requests::Question {
+                id: "question".into(),
+                header: String::new(),
+                prompt: "Which?".into(),
+                secret: false,
+                allow_free_text: true,
+                multiple: false,
+                choices: Vec::new(),
+            }],
+        };
+        let elicitation = RequestBody::Elicitation {
+            server: "fixture".into(),
+            message: "input".into(),
+            input: agent_protocol::requests::ElicitationInput::Form { fields: vec![] },
+        };
+        let turn = RequestTarget::Turn {
+            turn_id: "turn".into(),
+            item_id: None,
+        };
+        for (id, target, body) in [
+            ("session-question", RequestTarget::Session, question.clone()),
+            ("turn-question", turn.clone(), question),
+            ("session-input", RequestTarget::Session, elicitation.clone()),
+            ("turn-input", turn, elicitation),
+        ] {
+            Arc::make_mut(&mut source).requests.insert(
+                id.into(),
+                Arc::new(Request {
+                    id: id.into(),
+                    target,
+                    delivery: agent_protocol::session::RequestDelivery::Awaiting,
+                    body,
+                }),
+            );
+        }
+        let rendered = Some(project_conversation(&Snapshot::default(), source, &None));
+        let mut requests: Vec<_> = conversation_rows(&rendered, &Default::default())
+            .iter()
+            .filter_map(|row| match row {
+                ConversationRow::Request(request) => Some(request.id.to_string()),
+                ConversationRow::Turn { turn, index, .. } => match &turn.rows[*index].content {
+                    ConversationRowContent::PendingRequest { request } => {
+                        Some(request.id.to_string())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        requests.sort();
+        assert_eq!(requests, ["session-input", "turn-input"]);
+    }
 
     #[test]
     fn completing_a_response_refreshes_actions_without_changing_its_text() {

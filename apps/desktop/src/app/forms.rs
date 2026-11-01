@@ -1,7 +1,12 @@
 //! Window-local input state. Saved values always come from the core snapshot;
 //! these types only decide when local input may replace or be replaced by them.
-use agent_core::state::{DraftKey, ModelDefaultsScope};
-use agent_protocol::{dsh::KeyProvider, models::WorktreeSettings, session::ProviderKind};
+use agent_core::{
+    questions::QuestionPrompt,
+    state::{DraftKey, ModelDefaultsScope},
+};
+use agent_protocol::{
+    dsh::KeyProvider, ids::RequestId, models::WorktreeSettings, session::ProviderKind,
+};
 use gpui_kit::{
     component::input::{EditorState, InputState, TextareaState},
     *,
@@ -80,6 +85,80 @@ impl ComposerInput {
         self.completion_index = 0;
         self.completion_dismissed = false;
         Some(self.text.record(value))
+    }
+}
+
+/// The composer's field while it answers a question. Its text is the active
+/// question's own answer, saved to core like a draft.
+pub(super) struct QuestionInput {
+    pub(super) input: Entity<TextareaState>,
+    /// Only a single-line input can mask a secret answer.
+    pub(super) secret: Entity<InputState>,
+    pub(super) text: DraftText,
+    /// The question shown; another question replaces the text instead of adopting it.
+    shown: Option<(RequestId, String)>,
+    /// Collapsing applies to one question; the next question opens again.
+    pub(super) collapsed: Option<String>,
+}
+
+impl QuestionInput {
+    pub(super) fn new(window: &mut Window, cx: &mut App) -> Self {
+        Self {
+            input: cx.new(|cx| TextareaState::new(window, cx).auto_grow(1, 6)),
+            secret: cx.new(|cx| InputState::new(window, cx).masked(true)),
+            text: DraftText::default(),
+            shown: None,
+            collapsed: None,
+        }
+    }
+
+    pub(super) fn focus_handle(&self, secret: bool, cx: &App) -> FocusHandle {
+        if secret {
+            self.secret.read(cx).focus_handle(cx)
+        } else {
+            self.input.read(cx).focus_handle(cx)
+        }
+    }
+
+    /// Whether Enter commits IME composition rather than answering.
+    pub(super) fn composing(&self, secret: bool, window: &mut Window, cx: &mut App) -> bool {
+        if secret {
+            self.secret
+                .update(cx, |input, cx| input.marked_text_range(window, cx).is_some())
+        } else {
+            self.input
+                .update(cx, |input, cx| input.marked_text_range(window, cx).is_some())
+        }
+    }
+
+    pub(super) fn set_placeholder(&self, placeholder: &str, window: &mut Window, cx: &mut App) {
+        let placeholder = SharedString::from(placeholder.to_owned());
+        self.input.update(cx, |input, cx| {
+            input.set_placeholder(placeholder.clone(), window, cx)
+        });
+        self.secret
+            .update(cx, |input, cx| input.set_placeholder(placeholder, window, cx));
+    }
+
+    pub(super) fn set_value(&self, value: SharedString, window: &mut Window, cx: &mut App) {
+        self.input
+            .update(cx, |input, cx| input.set_value(value.clone(), window, cx));
+        self.secret
+            .update(cx, |input, cx| input.set_value(value, window, cx));
+    }
+
+    /// Returns the text to show for `prompt`, if the field must change.
+    pub(super) fn show(&mut self, prompt: Option<&QuestionPrompt>) -> Option<SharedString> {
+        let Some(prompt) = prompt else {
+            self.shown = None;
+            return None;
+        };
+        let shown = (prompt.request_id.clone(), prompt.question.id.clone());
+        if self.shown.as_ref() != Some(&shown) {
+            self.shown = Some(shown);
+            return Some(self.text.replace(&prompt.text));
+        }
+        self.text.adopt(&prompt.text)
     }
 }
 

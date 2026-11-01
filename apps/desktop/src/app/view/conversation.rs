@@ -1331,21 +1331,13 @@ impl ConversationView {
         let Some(inputs) = self.timeline.requests.get(key) else {
             return div().into_any_element();
         };
-        let is_question = matches!(request.request_body, RequestBody::Question { .. });
         let mut body = v_flex()
             .gap_3()
             .p_4()
             .rounded_lg()
-            .bg(rgb(if is_question {
-                appearance::SURFACE
-            } else {
-                0x30312a
-            }))
+            .bg(rgb(0x30312a))
             .child(request.title.clone())
-            .when(
-                !is_question || inputs.sent || !request.can_respond,
-                |body| body.child(request.body.clone()),
-            );
+            .child(request.body.clone());
         if let Some(error) = self
             .model
             .failures
@@ -1371,136 +1363,8 @@ impl ConversationView {
             return body.into_any_element();
         }
         match &request.request_body {
-            RequestBody::Question { .. } => {
-                for question in &inputs.questions {
-                    if !question.definition.header.is_empty() {
-                        body = body.child(
-                            div()
-                                .text_sm()
-                                .font_semibold()
-                                .child(question.definition.header.clone()),
-                        );
-                    }
-                    body = body.child(question.definition.prompt.clone());
-                    for (index, option) in question.definition.choices.iter().enumerate() {
-                        let request_key = key.to_owned();
-                        let question_id = question.definition.id.clone();
-                        let choice_id = option.id.clone();
-                        let selected = question.selected.contains(&option.id);
-                        let number = index + 1;
-                        body = body.child(
-                            Button::new(format!("answer-{key}-{}-{}", question_id, option.id))
-                                .accessibility_label(format!(
-                                    "{number}. {} {}",
-                                    option.label, option.description
-                                ))
-                                .ghost()
-                                .selected(selected)
-                                .toggled(selected)
-                                .w_full()
-                                .h_auto()
-                                .py_2()
-                                .child(
-                                    h_flex()
-                                        .w_full()
-                                        .min_w_0()
-                                        .items_start()
-                                        .gap_3()
-                                        .child(
-                                            div()
-                                                .flex_shrink_0()
-                                                .min_w_6()
-                                                .h_6()
-                                                .px_1()
-                                                .rounded_sm()
-                                                .bg(rgb(appearance::RAISED))
-                                                .text_sm()
-                                                .text_color(rgb(appearance::MUTED))
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .child(number.to_string()),
-                                        )
-                                        .child(
-                                            v_flex()
-                                                .flex_1()
-                                                .min_w_0()
-                                                .gap_1()
-                                                .whitespace_normal()
-                                                .text_left()
-                                                .child(option.label.clone())
-                                                .when(!option.description.is_empty(), |column| {
-                                                    column.child(
-                                                        div()
-                                                            .text_xs()
-                                                            .text_color(rgb(appearance::MUTED))
-                                                            .child(option.description.clone()),
-                                                    )
-                                                }),
-                                        )
-                                        .child(div().flex_shrink_0().size_6().children(
-                                            selected.then(|| Icon::new(IconName::Check).size_4()),
-                                        )),
-                                )
-                                .on_click(cx.listener(move |view, _, window, cx| {
-                                    let Some(question) =
-                                        view.timeline.requests.get_mut(&request_key).and_then(
-                                            |inputs| {
-                                                inputs.questions.iter_mut().find(|question| {
-                                                    question.definition.id == question_id
-                                                })
-                                            },
-                                        )
-                                    else {
-                                        return;
-                                    };
-                                    if question.definition.multiple {
-                                        toggle_set(&mut question.selected, &choice_id);
-                                    } else {
-                                        question.selected.clear();
-                                        question.selected.insert(choice_id.clone());
-                                    }
-                                    question
-                                        .input
-                                        .update(cx, |input, cx| input.set_value("", window, cx));
-                                    cx.notify();
-                                })),
-                        );
-                    }
-                    if question.definition.allow_free_text {
-                        body = body.child(Input::new(&question.input));
-                    }
-                }
-                let key = key.to_owned();
-                body = body.child(button(
-                    format!("respond-{key}"),
-                    language.text("回答を送信"),
-                    cx,
-                    move |view, _, cx| {
-                        let Some(inputs) = view.timeline.requests.get(&key) else {
-                            return;
-                        };
-                        let answers = inputs
-                            .questions
-                            .iter()
-                            .map(|question| {
-                                (
-                                    question.definition.id.clone(),
-                                    agent_core::presentation::conversation::build_question_answer(
-                                        question.definition.multiple,
-                                        question.input.read(cx).value().to_string(),
-                                        question.selected.iter().cloned().collect(),
-                                    ),
-                                )
-                            })
-                            .collect();
-                        cx.emit(ConversationAction::Respond(
-                            key.clone(),
-                            Answer::Questions { answers },
-                        ));
-                    },
-                ));
-            }
+            // The composer answers questions from its docked panel.
+            RequestBody::Question { .. } => {}
             RequestBody::Approval { choices, .. } | RequestBody::Permission { choices, .. } => {
                 let permission = matches!(request.request_body, RequestBody::Permission { .. });
                 let mut row = h_flex().gap_2().flex_wrap();
@@ -1626,34 +1490,23 @@ impl ConversationView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let language = crate::localization::language(cx);
         self.timeline
             .requests
             .retain(|key, _| requests.iter().any(|request| &request.id == key));
         for request in requests {
             let key = &request.id;
-            if self.timeline.requests.contains_key(key) {
+            // The composer's answer field answers questions.
+            if self.timeline.requests.contains_key(key)
+                || matches!(
+                    request.body,
+                    agent_protocol::requests::RequestBody::Question { .. }
+                )
+            {
                 continue;
             }
-            let questions = match &request.body {
-                agent_protocol::requests::RequestBody::Question { questions } => questions
-                    .iter()
-                    .map(|question| Question {
-                        definition: question.clone(),
-                        selected: HashSet::new(),
-                        input: cx.new(|cx| {
-                            InputState::new(window, cx)
-                                .placeholder(language.text("回答を入力"))
-                                .masked(question.secret)
-                        }),
-                    })
-                    .collect(),
-                _ => Vec::new(),
-            };
             self.timeline.requests.insert(
                 key.clone(),
                 RequestInputs {
-                    questions,
                     response: cx.new(|cx| {
                         TextareaState::new(window, cx)
                             .default_value(

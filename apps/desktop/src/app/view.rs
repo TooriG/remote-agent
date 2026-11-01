@@ -9,6 +9,7 @@ mod model_settings;
 mod onboarding;
 mod permissions;
 mod project_management;
+mod question;
 mod settings;
 mod sidebar;
 mod workbench;

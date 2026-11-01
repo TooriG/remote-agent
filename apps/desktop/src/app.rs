@@ -45,7 +45,7 @@ use std::{
     sync::{Arc, Weak},
 };
 use timeline::{
-    ConversationRow, ImageGallery, ImageState, MarkdownContent, Media, Question, RequestInputs,
+    ConversationRow, ImageGallery, ImageState, MarkdownContent, Media, RequestInputs,
     Timeline,
 };
 use view::icon_button;
@@ -61,6 +61,7 @@ enum OperationCompletion {
     ProjectImport,
     Busy,
     Composer(u64),
+    Answer(u64),
     Editor(u64),
     Item {
         generation: u64,
@@ -163,6 +164,7 @@ pub(crate) struct Desktop {
     busy: usize,
     local_errors: BTreeMap<ErrorScope, String>,
     composer: forms::ComposerInput,
+    question: forms::QuestionInput,
     selection: Entity<selection::ConversationSelection>,
     pending_quote: Option<String>,
     pending_explanation: Option<String>,
@@ -308,6 +310,7 @@ impl Desktop {
         })
         .detach();
         let composer = forms::ComposerInput::new(window, cx);
+        let question = forms::QuestionInput::new(window, cx);
         let editor = forms::FileEditor::new(window, cx);
         let model_controls = forms::ModelControls::new(window, cx);
         let account = forms::AccountForm::new(window, cx);
@@ -350,6 +353,10 @@ impl Desktop {
                 view.composer.input.update(cx, |input, cx| {
                     input.set_placeholder(language.text("AI に依頼する"), window, cx)
                 });
+                if let Some(prompt) = view.question_prompt() {
+                    view.question
+                        .set_placeholder(language.text(&prompt.placeholder), window, cx);
+                }
                 cx.notify();
             }),
             cx.observe_in(&owner, window, |view, _, window, cx| {
@@ -410,6 +417,16 @@ impl Desktop {
                         );
                     }
                     view.sync_composer(cx);
+                }
+            }),
+            cx.subscribe(&question.input, |view, input, event, cx| {
+                if matches!(event, InputEvent::Change) {
+                    view.answer_typed(input.read(cx).value());
+                }
+            }),
+            cx.subscribe(&question.secret, |view, input, event, cx| {
+                if matches!(event, InputEvent::Change) {
+                    view.answer_typed(input.read(cx).value());
                 }
             }),
             cx.subscribe(&editor.input, |view, input, event, cx| {
@@ -510,6 +527,7 @@ impl Desktop {
             busy: 0,
             local_errors: BTreeMap::new(),
             composer,
+            question,
             selection,
             pending_quote: None,
             pending_explanation: None,
@@ -826,7 +844,9 @@ impl Desktop {
     ) -> bool {
         let input_save = matches!(
             kind,
-            OperationCompletion::Composer(_) | OperationCompletion::Editor(_)
+            OperationCompletion::Composer(_)
+                | OperationCompletion::Answer(_)
+                | OperationCompletion::Editor(_)
         );
         match kind {
             OperationCompletion::OpenFile(epoch) => {
@@ -867,6 +887,7 @@ impl Desktop {
                 return true;
             }
             OperationCompletion::Composer(revision) => self.composer.text.saved(revision),
+            OperationCompletion::Answer(revision) => self.question.text.saved(revision),
             OperationCompletion::Editor(revision) => self.editor.text.saved(revision),
             OperationCompletion::Busy => {
                 self.busy = self.busy.saturating_sub(1);
@@ -1136,6 +1157,14 @@ impl Desktop {
                 .input
                 .update(cx, |input, cx| input.set_value(value, window, cx));
         }
+        let prompt = self.question_prompt();
+        let answer = self.question.show(prompt.as_ref());
+        if let (Some(prompt), Some(answer)) = (prompt, answer) {
+            let language = crate::localization::language(cx);
+            self.question
+                .set_placeholder(language.text(&prompt.placeholder), window, cx);
+            self.question.set_value(answer, window, cx);
+        }
         let file = self.snapshot.workspace.file.as_ref();
         let text = file.map_or("", |file| {
             self.snapshot
@@ -1300,6 +1329,7 @@ impl Desktop {
             view.timeline.clear();
             cx.notify();
         });
+        self.question.text.pending = None;
         let value = self.composer.text.replace("");
         self.composer
             .input
