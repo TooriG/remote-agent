@@ -79,12 +79,14 @@ async fn admission_lists_and_reopens_the_same_task_before_workspace_preparation(
         [agent.backend()],
         ProjectStore::new(directory.path().join("worktrees.json")),
     );
-    let project = host
-        .inner
+    host.inner
         .projects
         .register(directory.path())
         .await
         .unwrap();
+    let project = host.inner.projects.load().await.unwrap().projects[0]
+        .id
+        .clone();
     let blocked = host.inner.worktree_access.write().await;
     let client = host.open_session();
     let other = host.open_session();
@@ -92,6 +94,10 @@ async fn admission_lists_and_reopens_the_same_task_before_workspace_preparation(
     let (opened, _) = admit(&host, client.id(), &input).await;
     let root = opened.session.clone();
     assert_eq!(opened.response.thread.status, SessionStatus::Preparing);
+    assert_eq!(
+        opened.response.thread.project_id.as_deref(),
+        Some(project.as_str())
+    );
     assert_eq!(agent.next.load(Ordering::SeqCst), 0);
     let list: ThreadList = call(
         &host,
@@ -106,7 +112,8 @@ async fn admission_lists_and_reopens_the_same_task_before_workspace_preparation(
         list.data
             .iter()
             .any(|thread| thread.id.as_ref() == Some(&root)
-                && thread.project_id.as_deref() == Some(project.as_str()))
+                && thread.project_id.as_deref() == Some(project.as_str())),
+        "admitted task {root:?} must be listed in project {project}: {list:?}"
     );
     let reply = host
         .dispatch(
@@ -135,13 +142,14 @@ async fn admission_lists_and_reopens_the_same_task_before_workspace_preparation(
         matches!(change, SessionChange::Preparation { preparation: None })
     })
     .await;
-    let sent = agent.inputs.lock().unwrap();
-    assert_eq!(sent.len(), 1);
-    assert_ne!(sent[0].thread_id, root);
-    assert_eq!(sent[0].effort.as_deref(), Some("high"));
-    assert_eq!(sent[0].service_tier.as_deref(), Some("fast"));
-    assert_eq!(sent[0].input.len(), 2);
-    drop(sent);
+    {
+        let sent = agent.inputs.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert_ne!(sent[0].thread_id, root);
+        assert_eq!(sent[0].effort.as_deref(), Some("high"));
+        assert_eq!(sent[0].service_tier.as_deref(), Some("fast"));
+        assert_eq!(sent[0].input.len(), 2);
+    }
     let history: OpenedSession = call(
         &host,
         other.id(),

@@ -211,6 +211,20 @@ impl HostRpcService {
                 )
                 .map_ok(|page| futures_util::stream::iter(page.into_iter().map(Ok::<_, Failure>)))
                 .try_flatten()
+                .try_filter_map(|summary| {
+                    let branch = summary.branch;
+                    futures_util::future::ready(
+                        self.inner
+                            .conversations
+                            .summary(summary.thread)
+                            .map(|thread| {
+                                thread.map(|thread| crate::providers::SessionSummary {
+                                    thread,
+                                    branch,
+                                })
+                            }),
+                    )
+                })
                 .boxed();
                 let head = threads.try_next().await;
                 (*provider, agent.capabilities(), threads, head)
@@ -278,11 +292,12 @@ impl HostRpcService {
             }
             group.sort_by(|(a, _), (b, _)| a.thread.id.cmp(&b.thread.id));
             for (summary, capabilities) in group {
-                let Some(mut thread) = self
-                    .inner
-                    .conversations
-                    .summary(summary.thread)?
-                    .filter(|thread| thread.id.as_ref().is_none_or(|id| !listed.contains(id)))
+                let Some(mut thread) = summary
+                    .thread
+                    .id
+                    .as_ref()
+                    .is_none_or(|id| !listed.contains(id))
+                    .then_some(summary.thread)
                 else {
                     continue;
                 };

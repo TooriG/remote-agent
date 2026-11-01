@@ -93,6 +93,23 @@ async fn send(store: &Store, text: &str, client_id: &str) -> agent_protocol::ses
 }
 
 /// Read the inputs the Claude fixture appended to its workspace trace.
+// Native fixture traces use the provider's private ID, independently of the
+// public task address. These cases each own one Claude conversation per cwd.
+fn session_trace(cwd: &Path) -> std::path::PathBuf {
+    let traces: Vec<_> = std::fs::read_dir(cwd)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name().is_some_and(|name| {
+                let name = name.to_string_lossy();
+                name.starts_with("claude-session-") && name.ends_with(".jsonl")
+            })
+        })
+        .collect();
+    assert_eq!(traces.len(), 1, "one native session trace in {cwd:?}");
+    traces.into_iter().next().unwrap()
+}
+
 fn session_inputs(path: impl AsRef<Path>) -> serde_json::Value {
     std::fs::read_to_string(path)
         .unwrap()
@@ -457,8 +474,7 @@ async fn claude_submission_preserves_inputs_settings_workspaces_and_history_acro
             let user = items.iter().find(|item| matches!(item.body(), agent_protocol::items::ItemBody::UserMessage { .. })).unwrap();
             assert_eq!(user.client_input_id.as_deref(), Some(format!("client-{number}").as_str()));
             assert!(matches!(user.body(), agent_protocol::items::ItemBody::UserMessage { content, .. } if content.first() == Some(&agent_protocol::items::MessagePart::Text { text: format!("message {number}") })));
-            let session = &id.id;
-            let inputs = session_inputs(Path::new(&cwd).join(format!("claude-session-{session}.jsonl")));
+            let inputs = session_inputs(session_trace(Path::new(&cwd)));
             assert_eq!(inputs.as_array().unwrap().len(), number + 1);
             assert_eq!(inputs[number]["effort"], "low");
             assert_eq!(inputs[number]["content"].as_array().unwrap().len(), if attachment == "none" { 1 } else { 2 });
@@ -1217,8 +1233,8 @@ async fn claude_authentication_and_inference_failures_are_visible_and_retry_pres
         let snapshot = until(&store, failed_preparation).await;
         let preparation = snapshot.conversations[&id].preparation.as_ref().unwrap();
         assert!(matches!(&preparation.status, agent_protocol::session::PreparationStatus::Failed { error } if error.message.contains("サブスク認証")));
-        assert!(preparation.submission.input.iter().any(|input| matches!(input, op::Input::Text { text } if text == "keep my draft")));
-        assert!(snapshot.pending_submissions.is_empty());
+        assert!(preparation.submission.input.iter().any(|input| matches!(input, rpc::Input::Text { text } if text == "keep my draft")));
+        assert!(snapshot.pending_submissions[&agent_protocol::ids::ClientInputId::from("auth-failure")].accepted);
         assert!(snapshot.conversations[&id].turns.as_ref().is_none_or(|turns| turns.is_empty()));
         std::fs::write(&config, json!({"initializeError":true}).to_string()).unwrap();
         store.dispatch(Intent::RetryPreparation(op::RetryPreparation { thread_id: id.clone() })).await.unwrap();
@@ -1340,10 +1356,7 @@ async fn consecutive_claude_inputs_reuse_one_native_process() {
     completed(&store, &id, 1, "completed").await;
     send(&store, "second", "reuse-2").await;
     let snapshot = completed(&store, &id, 2, "completed").await;
-    let native = &id.id;
-    let inputs = session_inputs(
-        Path::new(&snapshot.navigation.cwd).join(format!("claude-session-{native}.jsonl")),
-    );
+    let inputs = session_inputs(session_trace(Path::new(&snapshot.navigation.cwd)));
     assert!(inputs[0]["process"].is_string());
     assert_eq!(
         inputs[0]["process"], inputs[1]["process"],
@@ -1406,7 +1419,7 @@ async fn deleted_claude_worktree_restarts_the_retained_process_and_continues_the
         let id = send(&store, "first", "before-removal").await;
         let snapshot = completed(&store, &id, 1, "completed").await;
         let cwd = snapshot.navigation.cwd.clone();
-        let inputs_path = Path::new(&cwd).join(format!("claude-session-{}.jsonl", id.id));
+        let inputs_path = session_trace(Path::new(&cwd));
         let before = session_inputs(&inputs_path);
         std::fs::remove_dir_all(&cwd).unwrap();
         assert_eq!(send(&store, "second", "after-removal").await, id);
@@ -1925,7 +1938,7 @@ async fn claude_keeps_loading_through_background_results_and_follow_up_after_rec
                 .iter()
                 .any(|item| item_text(item) == Some("reply 4: after stop"))
         );
-        let inputs = session_inputs(root.path().join(format!("claude-session-{}.jsonl", id.id)));
+        let inputs = session_inputs(session_trace(root.path()));
         assert_eq!(inputs[3]["effort"], "high");
         assert_ne!(inputs[2]["process"], inputs[3]["process"]);
         store.close().await.unwrap();
@@ -2330,10 +2343,7 @@ async fn claude_accepts_running_input_and_reads_past_the_previous_result() {
     );
     send(&store, "after completion", "last").await;
     completed(&store, &id, 3, "completed").await;
-    let native_id = &id.id;
-    let inputs = session_inputs(
-        Path::new(&snapshot.navigation.cwd).join(format!("claude-session-{native_id}.jsonl")),
-    );
+    let inputs = session_inputs(session_trace(Path::new(&snapshot.navigation.cwd)));
     let inputs = inputs.as_array().unwrap();
     assert_eq!(inputs.len(), 5);
     assert!(

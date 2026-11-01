@@ -1452,7 +1452,7 @@ async fn transcription_preserves_newer_input_and_restores_audio_text_on_send_fai
 #[tokio::test]
 async fn new_chat_dictation_preserves_text_and_images_for_draft_and_direct_send() {
     for direct in [false, true] {
-        let (store, mut reader, mut writer) = setup(authenticated_snapshot()).await;
+        let (store, mut reader, writer) = setup(authenticated_snapshot()).await;
         store
             .dispatch(Intent::NewChat { cwd: String::new() })
             .await
@@ -2307,10 +2307,9 @@ async fn creating_a_chat_updates_matching_search_results_without_reading_the_lis
     })
     .await;
     let server = tokio::spawn(async move {
-        while let Some(request) =
+        while let Ok(Some(request)) =
             tokio::time::timeout(Duration::from_secs(2), reader.read_request())
                 .await
-                .unwrap()
                 .unwrap()
         {
             let result = match request["method"].as_str().unwrap() {
@@ -2324,10 +2323,14 @@ async fn creating_a_chat_updates_matching_search_results_without_reading_the_lis
                 "host/workspace/review" => review(),
                 other => panic!("unexpected method {other}"),
             };
-            writer
+            // Close may cancel an automatic workspace read after creation.
+            if writer
                 .reply(&request, json!({"result":result}))
                 .await
-                .unwrap();
+                .is_err()
+            {
+                break;
+            }
         }
     });
     store
@@ -2359,6 +2362,7 @@ async fn creating_a_chat_updates_matching_search_results_without_reading_the_lis
     })
     .await;
     assert_eq!(store.snapshot().list_query.search_term, "created");
+    assert!(store.snapshot().connected);
     store.close().await.unwrap();
     server.await.unwrap();
 }
@@ -3786,7 +3790,12 @@ async fn item_transfer_releases_wire_order_and_preserves_newer_items() {
             } else {
                 transfer.write_all(&invalid).await.unwrap();
                 transfer.shutdown().await.unwrap();
-                assert!(matches!(failed_read.await, Err(PeerError::InvalidMessage(_))));
+                let result = failed_read.await;
+                if wrong_id {
+                    assert!(matches!(&result, Err(PeerError::InvalidMessage(reason)) if reason.contains("item ID")), "{failure}: {result:?}");
+                } else {
+                    assert!(matches!(&result, Err(PeerError::Transfer(reason)) if reason.contains("digest")), "{failure}: {result:?}");
+                }
             }
             assert!(Arc::ptr_eq(&before, &store.snapshot().conversations));
             let interrupt = store.dispatch(Intent::Interrupt(op::Interrupt {thread_id:SessionRef { provider: ProviderKind::Codex, id: "A".into() },turn_id:"turn".into()}));

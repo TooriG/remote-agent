@@ -43,7 +43,7 @@ fn subagent_work_and_requests_share_the_root_conversation_activity() {
         let waiting = router.task_activity(Vec::new(), 0);
         assert_eq!(waiting.display.current.total, 2);
         assert_eq!(waiting.display.current.label, "確認待ち 1件 · 実行中 1件");
-        assert_eq!(waiting.waiting, [root.clone()]);
+        assert_eq!(waiting.waiting.as_slice(), std::slice::from_ref(&root));
         router.session_change(
             &grandchild,
             SessionChange::RequestDelivery {
@@ -330,7 +330,7 @@ fn task_state_is_authoritative_without_apns_or_conversation_subscriptions() {
         router.session_change(&target, SessionChange::Request { request });
         let waiting = router.task_activity(Vec::new(), 0);
         assert_eq!(waiting.display.current.label, "確認待ち 1件 · 実行中 1件");
-        assert_eq!(waiting.waiting, [target.clone()]);
+        assert_eq!(waiting.waiting.as_slice(), std::slice::from_ref(&target));
         router.session_change(
             &target,
             SessionChange::RequestDelivery {

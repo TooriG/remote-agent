@@ -1832,28 +1832,24 @@ fn reconcile_pending(snapshot: &mut Snapshot, thread_id: &crate::session::Sessio
         }
     }
     let thread = &snapshot.conversations[thread_id];
-    let confirmed =
-        |id: &agent_protocol::ids::ClientInputId, pending: &Arc<PendingSubmission>| {
-            pending.draft_key == DraftKey::from(thread_id)
-                && (thread.preparation.as_ref().is_some_and(|preparation| {
-                    &preparation.submission.client_user_message_id == id
-                }) || thread
-                    .turns
-                    .iter()
-                    .flatten()
-                    .flat_map(|turn| turn.items.iter().flatten())
-                    .any(|item| {
-                        matches!(item.body(), crate::models::ItemBody::UserMessage { .. })
-                            && item.client_input_id.as_ref() == Some(id)
-                    }))
-        };
+    let echoed = |id: &agent_protocol::ids::ClientInputId, pending: &Arc<PendingSubmission>| {
+        pending.draft_key == DraftKey::from(thread_id)
+            && thread
+                .turns
+                .iter()
+                .flatten()
+                .flat_map(|turn| turn.items.iter().flatten())
+                .any(|item| {
+                    matches!(item.body(), crate::models::ItemBody::UserMessage { .. })
+                        && item.client_input_id.as_ref() == Some(id)
+                })
+    };
     if snapshot
         .pending_submissions
         .iter()
-        .any(|(id, pending)| confirmed(id, pending))
+        .any(|(id, pending)| echoed(id, pending))
     {
-        Arc::make_mut(&mut snapshot.pending_submissions)
-            .retain(|id, pending| !confirmed(id, pending));
+        Arc::make_mut(&mut snapshot.pending_submissions).retain(|id, pending| !echoed(id, pending));
     }
 }
 

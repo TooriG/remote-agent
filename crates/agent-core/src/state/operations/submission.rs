@@ -234,6 +234,7 @@ impl StartSubmission {
         {
             Arc::make_mut(pending).draft_key = id.clone().into();
         }
+        // Keep the accepted local input until the provider echoes its body.
         reconcile_pending(snapshot, &id);
         effects
     }

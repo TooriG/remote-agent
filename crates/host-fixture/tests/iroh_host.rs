@@ -886,8 +886,8 @@ async fn chat_preparation_recovers_in_the_same_conversation_after_reconnecting()
         loop {
             let snapshot = updates.borrow_and_update().clone();
             if let Some(preparation) = snapshot.conversations[&id].preparation.as_ref().filter(|preparation| matches!(preparation.status, agent_protocol::session::PreparationStatus::Failed { .. })) {
-                assert!(preparation.submission.input.iter().any(|input| matches!(input, op::Input::Text { text } if text == "[success] recover preparation")));
-                assert!(snapshot.pending_submissions.is_empty());
+                assert!(preparation.submission.input.iter().any(|input| matches!(input, rpc::Input::Text { text } if text == "[success] recover preparation")));
+                assert!(snapshot.pending_submissions[&agent_protocol::ids::ClientInputId::from("recover-chat")].accepted);
                 assert!(snapshot.selected_directory().is_empty());
                 break;
             }

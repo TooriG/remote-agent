@@ -1987,6 +1987,12 @@ mod tests {
             let mut submission = request["params"]["initialInput"].clone();
             submission["threadId"] = json!({"provider":"codex","id":"admitted"});
             submission["model"] = request["params"]["model"].clone();
+            let tier = submission
+                .as_object_mut()
+                .unwrap()
+                .remove("serviceTier")
+                .unwrap();
+            submission["serviceTierForTurn"] = tier;
             writer.reply(&request, json!({"result":{"thread":{"id":{"provider":"codex","id":"admitted"},"cwd":"/project","status":"preparing","preparation":{"submission":submission,"status":"preparing"}}}})).await.unwrap();
         };
         let (opened, ()) = tokio::join!(operation.run((), &mut context), reply);
@@ -2004,9 +2010,43 @@ mod tests {
             }),
         );
         let effects = operation.apply(&mut snapshot, opened.unwrap());
-        assert!(
-            snapshot.pending_submissions.is_empty(),
-            "durable admission owns the input"
+        assert!(snapshot.pending_submissions["initial-input"].accepted);
+        let thread = snapshot.conversations.values().next().unwrap();
+        assert_eq!(
+            thread
+                .preparation
+                .as_ref()
+                .unwrap()
+                .submission
+                .service_tier
+                .as_deref(),
+            Some("fast")
+        );
+        let rendered = crate::presentation::conversation::project_conversation(
+            &snapshot,
+            thread.clone(),
+            &None,
+        );
+        assert_eq!(rendered.queued.len(), 1);
+        assert_eq!(
+            rendered.queued[0].data.body.as_deref(),
+            Some("initial message")
+        );
+        let mut accepted = thread.as_ref().clone();
+        accepted.preparation = None;
+        let rendered = crate::presentation::conversation::project_conversation(
+            &snapshot,
+            Arc::new(accepted),
+            &Some(rendered),
+        );
+        assert_eq!(
+            rendered.queued.len(),
+            1,
+            "acceptance can precede the provider echo"
+        );
+        assert_eq!(
+            rendered.queued[0].data.body.as_deref(),
+            Some("initial message")
         );
         assert!(
             effects.is_empty(),
