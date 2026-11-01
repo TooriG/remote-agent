@@ -22,17 +22,42 @@ pub(crate) fn prepare(directory: &Path, source: &str) -> io::Result<(TempDir, Pa
     let directory = tempfile::Builder::new()
         .prefix("open-")
         .tempdir_in(directory)?;
-    // Only the extension is needed for app association. Host filenames can
-    // contain characters or reserved names that Windows cannot represent.
-    let extension = source
+    let path = directory.path().join(file_name(source)?);
+    Ok((directory, path))
+}
+
+/// Viewers title their window with the filename, so keep the Host's name.
+/// Names that Windows cannot represent keep only the extension, which is all
+/// app association needs.
+fn file_name(source: &str) -> io::Result<String> {
+    let name = source.rsplit(['/', '\\']).next().unwrap_or(source);
+    let (stem, extension) = name
         .rsplit_once('.')
-        .map(|(_, extension)| extension)
-        .filter(|extension| {
+        .filter(|(_, extension)| {
             !extension.is_empty() && extension.bytes().all(|b| b.is_ascii_alphanumeric())
         })
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "file extension is invalid"))?;
-    let path = directory.path().join(format!("preview.{extension}"));
-    Ok((directory, path))
+    let device = stem.split('.').next().unwrap_or(stem).trim_end();
+    let reserved = ["CON", "PRN", "AUX", "NUL"]
+        .iter()
+        .any(|name| device.eq_ignore_ascii_case(name))
+        || (device.len() == 4
+            && device.is_ascii()
+            && ["COM", "LPT"]
+                .iter()
+                .any(|prefix| device[..3].eq_ignore_ascii_case(prefix))
+            && device.as_bytes()[3].is_ascii_digit());
+    let portable = !stem.trim().is_empty()
+        && name.len() <= 255
+        && !reserved
+        && !name
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*'));
+    Ok(if portable {
+        name.to_owned()
+    } else {
+        format!("preview.{extension}")
+    })
 }
 
 pub(crate) fn cleanup(directory: &Path, now: SystemTime) -> io::Result<()> {
@@ -76,7 +101,7 @@ mod tests {
         let (first, path) = prepare(cache.path(), r"C:\Movies\promo.MP4").unwrap();
         let (_second, other) = prepare(cache.path(), "/movies/promo.MP4").unwrap();
         assert_ne!(path, other);
-        assert_eq!(path.file_name().unwrap(), "preview.MP4");
+        assert_eq!(path.file_name().unwrap(), "promo.MP4");
         assert!(
             !path.exists(),
             "authenticated transfer creates the destination"
@@ -84,6 +109,28 @@ mod tests {
         fs::write(&path, b"video").unwrap();
         drop(first);
         assert!(!path.exists(), "failed or cancelled preparation is removed");
+    }
+
+    #[test]
+    fn viewers_see_the_host_filename_unless_windows_cannot_represent_it() {
+        for (source, expected) in [
+            ("~/Movies/bex-promo-ja.mp4", "bex-promo-ja.mp4"),
+            (r"C:\Docs\週報 2026.11.PDF", "週報 2026.11.PDF"),
+            ("/docs/con.pdf", "preview.pdf"),
+            ("/docs/Com1.final.pdf", "preview.pdf"),
+            ("/docs/lpt9 .mp3", "preview.mp3"),
+            ("/docs/a:b.mp4", "preview.mp4"),
+            ("/docs/what?.mov", "preview.mov"),
+            ("/docs/.mp4", "preview.mp4"),
+            ("/docs/console.pdf", "console.pdf"),
+            ("/docs/com10.pdf", "com10.pdf"),
+            ("/docs/aあ.pdf", "aあ.pdf"),
+        ] {
+            assert_eq!(file_name(source).unwrap(), expected, "{source}");
+        }
+        for source in ["/docs/README", "/docs/archive.tar-", "/docs/movie."] {
+            assert!(file_name(source).is_err(), "{source}");
+        }
     }
 
     #[test]
