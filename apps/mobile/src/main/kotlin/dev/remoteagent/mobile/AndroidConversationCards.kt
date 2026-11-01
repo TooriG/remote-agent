@@ -64,6 +64,7 @@ internal fun ThreadMessageCard(
     cwd: String,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
     timestampMs: ULong? = null,
+    showActions: Boolean = false,
     fork: (() -> Unit)? = null,
     forkPhase: OperationPhase? = null,
 ) {
@@ -88,8 +89,7 @@ internal fun ThreadMessageCard(
                     }
                 } else ConversationBody(body, cwd, perform)
             }
-        if (!isUser && content.kind == "agent") MessageFooter(content.body.orEmpty(), timestampMs, fork, forkPhase)
-        if (isUser) MessageFooter(content.body.orEmpty(), timestampMs, null)
+        if (isUser || showActions) MessageFooter(content.body.orEmpty(), timestampMs, fork, forkPhase)
         if (isUser && content.nativeId == null) {
             content.title?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             val submissionId = remember(item) { item.unknownSubmissionId() }

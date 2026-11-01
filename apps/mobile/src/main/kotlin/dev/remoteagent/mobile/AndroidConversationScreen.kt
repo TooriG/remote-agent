@@ -193,6 +193,7 @@ private fun ConversationContent(
                 cwd,
                 perform,
                 timestampMs,
+                showActions = content.showActions,
                 fork =
                     if (threadId != null && content.forkTurnId != null)
                         ({

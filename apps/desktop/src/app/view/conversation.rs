@@ -1001,9 +1001,13 @@ impl ConversationView {
                         }),
                 );
             }
-            ConversationRowContent::Response { item, fork_turn_id } => {
+            ConversationRowContent::Response {
+                item,
+                show_actions,
+                fork_turn_id,
+            } => {
                 body = body.child(self.projected_item(item, turn, cx));
-                if item.data.kind == "agent" {
+                if *show_actions {
                     let text = item.data.body.clone().expect("assistant message has text");
                     body = body.child(
                         h_flex()
@@ -2609,10 +2613,13 @@ mod rendering_tests {
                 ConversationView::new(Snapshot::default(), source, window, cx)
             });
             window.run_until_parked();
-            assert_eq!(
-                window.debug_bounds("response-fork").is_some(),
-                status == "completed"
-            );
+            for selector in ["response-fork", "response-copy"] {
+                assert_eq!(
+                    window.debug_bounds(selector).is_some(),
+                    status == "completed",
+                    "{selector}/{status}"
+                );
+            }
         }
     }
 
@@ -2642,7 +2649,10 @@ mod rendering_tests {
                 let progress = window.debug_bounds("conversation-in-progress");
                 if status == "running" {
                     let progress = progress.expect("background work must remain visible");
-                    let response = window.debug_bounds("response-copy").unwrap();
+                    let response = window
+                        .debug_bounds("conversation-row-history-item:turn:answer:occurrence:0")
+                        .expect("the response must remain visible while background work runs");
+                    assert!(window.debug_bounds("response-copy").is_none());
                     assert!(progress.top() >= response.bottom());
                     assert!(progress.size.height > px(0.));
                 } else {

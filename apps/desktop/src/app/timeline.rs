@@ -125,13 +125,15 @@ impl ConversationRow {
                     (
                         ConversationRowContent::Response {
                             item: a,
+                            show_actions: a_actions,
                             fork_turn_id: af,
                         },
                         ConversationRowContent::Response {
                             item: b,
+                            show_actions: b_actions,
                             fork_turn_id: bf,
                         },
-                    ) => Arc::ptr_eq(a, b) && af == bf,
+                    ) => Arc::ptr_eq(a, b) && a_actions == b_actions && af == bf,
                     (
                         ConversationRowContent::ActivityHeader { activity: x },
                         ConversationRowContent::ActivityHeader { activity: y },
@@ -396,6 +398,37 @@ mod tests {
     use super::{
         Arc, ConversationRow, ConversationRowContent, Snapshot, Thread, conversation_rows,
     };
+    use agent_core::presentation::conversation::{RenderedTurn, project_conversation};
+
+    #[test]
+    fn completing_a_response_refreshes_actions_without_changing_its_text() {
+        let snapshot = Snapshot::default();
+        let mut source: Arc<Thread> = Arc::new(serde_json::from_value(serde_json::json!({
+            "id": {"provider": "deepseek", "id": "thread"},
+            "turns": [{"id": "turn", "status": "running", "items": [
+                {"id": "answer", "body": {"inline": {"body": {"assistantText": {"text": "Answer", "phase": "unknown"}}}}}
+            ]}]
+        })).unwrap());
+        let response_row = |turn: &Arc<RenderedTurn>| ConversationRow::Turn {
+            turn: turn.clone(),
+            index: turn
+                .rows
+                .iter()
+                .position(|row| matches!(row.content, ConversationRowContent::Response { .. }))
+                .unwrap(),
+            last: false,
+        };
+        let live = project_conversation(&snapshot, source.clone(), &None);
+        let before = response_row(&live.turns[0]);
+        Arc::make_mut(&mut Arc::make_mut(&mut source).turns.as_mut().unwrap()[0]).status =
+            agent_protocol::execution::TurnStatus::Completed;
+        let completed = project_conversation(&snapshot, source, &Some(live));
+        let after = response_row(&completed.turns[0]);
+        assert!(
+            !before.unchanged(&after),
+            "completion must reveal the copy action"
+        );
+    }
 
     #[test]
     fn row_projection_keeps_repeated_turns_and_scopes_requests_without_changing_input() {

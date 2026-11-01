@@ -81,6 +81,7 @@ pub enum ConversationRowContent {
     },
     Response {
         item: Arc<RenderedItem>,
+        show_actions: bool,
         fork_turn_id: Option<agent_protocol::ids::TurnId>,
     },
     InProgress {
@@ -734,13 +735,13 @@ fn render_turn(
         });
         let timestamp_ms = match &content {
             User { item } if item.data.native_id.is_some() => started,
-            Response { .. } if source.status != models::TurnStatus::Running => {
-                source.completed_at_ms.or_else(|| {
-                    started
-                        .zip(source.duration_ms)
-                        .and_then(|(start, duration)| start.checked_add(duration))
-                })
-            }
+            Response {
+                show_actions: true, ..
+            } => source.completed_at_ms.or_else(|| {
+                started
+                    .zip(source.duration_ms)
+                    .and_then(|(start, duration)| start.checked_add(duration))
+            }),
             _ => None,
         };
         rows.push(ConversationRow {
@@ -814,8 +815,11 @@ fn render_turn(
         }
         let mut responses = group(Role::Response).peekable();
         while let Some(item) = responses.next() {
+            // A provider message can end while the response is still running.
+            let show_actions =
+                source.status != models::TurnStatus::Running && item.data.kind == "agent";
             let can_fork =
-                supports_fork && !in_progress && segment.last && responses.peek().is_none();
+                supports_fork && show_actions && segment.last && responses.peek().is_none();
             if item.data.deferred {
                 push(Activity {
                     item,
@@ -824,6 +828,7 @@ fn render_turn(
             } else {
                 push(Response {
                     item,
+                    show_actions,
                     fork_turn_id: can_fork.then(|| source.id.clone()),
                 });
             }
@@ -1381,7 +1386,7 @@ mod tests {
         let completed = project_snapshot(snapshot, Some(&rendered));
         let rows = completed.turns[1].conversation_rows();
         assert!(
-            matches!(&rows.last().unwrap().content, ConversationRowContent::Response { item, fork_turn_id: Some(id) } if id.as_str() == "live" && item.data.native_id.as_deref() == Some("stream"))
+            matches!(&rows.last().unwrap().content, ConversationRowContent::Response { item, fork_turn_id: Some(id), .. } if id.as_str() == "live" && item.data.native_id.as_deref() == Some("stream"))
         );
         assert!(rows.iter().any(|row| row.id == accepted_id));
         for row in rows {
@@ -1403,6 +1408,88 @@ mod tests {
                 ));
             }
         }
+    }
+
+    #[rstest::rstest]
+    #[case::codex("codex", "commentary", "final")]
+    #[case::claude("claude", "commentary", "final")]
+    #[case::deepseek("deepseek", "unknown", "unknown")]
+    fn response_actions_wait_for_turn_completion_and_only_belong_to_the_answer(
+        #[case] provider: &str,
+        #[case] progress_phase: &str,
+        #[case] answer_phase: &str,
+        #[values(false, true)] supports_fork: bool,
+    ) {
+        let snapshot = Snapshot::default();
+        let mut thread: Arc<models::Thread> = Arc::new(serde_json::from_value(json!({
+            "id": {"provider": provider, "id": "thread"},
+            "capabilities": {"fork": supports_fork},
+            "turns": [{"id": "turn", "status": "running", "items": [
+                {"id": "progress", "status": "completed", "body": {"inline": {"body": {"assistantText": {"text": "Working", "phase": progress_phase}}}}},
+                {"id": "tool", "status": "completed", "body": {"inline": {"body": {"commandExecution": {"command": "pwd", "output": "/work"}}}}},
+                {"id": "update", "status": "completed", "body": {"inline": {"body": {"assistantText": {"text": "Waiting", "phase": progress_phase}}}}},
+                {"id": "answer", "status": "completed", "body": {"inline": {"body": {"assistantText": {"text": "Done", "phase": answer_phase}}}}}
+            ]}]
+        })).unwrap());
+        let live = project_conversation(&snapshot, thread.clone(), &None);
+        let responses: Vec<_> = live.turns[0]
+            .rows
+            .iter()
+            .filter_map(|row| match &row.content {
+                ConversationRowContent::Response {
+                    item,
+                    show_actions,
+                    fork_turn_id,
+                } => {
+                    assert!(
+                        !show_actions,
+                        "live messages must not expose answer actions"
+                    );
+                    assert!(fork_turn_id.is_none());
+                    Some(item)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(responses.len(), 3);
+        let live_answer = responses.last().unwrap();
+
+        Arc::make_mut(&mut Arc::make_mut(&mut thread).turns.as_mut().unwrap()[0]).status =
+            models::TurnStatus::Completed;
+        let completed = project_conversation(&snapshot, thread, &Some(live.clone()));
+        let actions: Vec<_> = completed.turns[0]
+            .rows
+            .iter()
+            .filter_map(|row| match &row.content {
+                ConversationRowContent::Response {
+                    item,
+                    show_actions: true,
+                    fork_turn_id,
+                } => {
+                    assert_eq!(fork_turn_id.is_some(), supports_fork);
+                    Some(item)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].data.native_id.as_deref(), Some("answer"));
+        assert!(Arc::ptr_eq(live_answer, actions[0]));
+        let reopened = project_conversation(&snapshot, completed.source.clone(), &None);
+        assert_eq!(
+            reopened.turns[0]
+                .rows
+                .iter()
+                .filter(|row| matches!(
+                    row.content,
+                    ConversationRowContent::Response {
+                        show_actions: true,
+                        ..
+                    }
+                ))
+                .count(),
+            1
+        );
     }
 
     #[test]

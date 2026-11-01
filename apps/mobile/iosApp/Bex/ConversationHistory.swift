@@ -103,12 +103,13 @@ extension ThreadScreen {
                     .top,
                     16
                 )
-        case (let .response(_, turnId), let item?):
+        case (let .response(_, showActions, turnId), let item?):
             ThreadMessageRow(
                 item: item,
                 isUser: false,
                 media: mediaAccess,
                 selection: selectionActions,
+                showActions: showActions,
                 timestampMs: row.timestampMs,
                 fork: turnId
                     .map { id in { model.forkAndOpen(through: id) { _ in } } },

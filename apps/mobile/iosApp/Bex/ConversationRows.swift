@@ -79,6 +79,7 @@ struct ThreadMessageRow: View, Equatable {
     let isUser: Bool
     let media: ConversationMediaAccess
     let selection: ConversationSelectionActions
+    var showActions = false
     var timestampMs: UInt64?
     var fork: (() -> Void)?
     var forking = false
@@ -89,6 +90,7 @@ struct ThreadMessageRow: View, Equatable {
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.item === rhs.item && lhs.isUser == rhs.isUser
+            && lhs.showActions == rhs.showActions
             && lhs.media.host == rhs.media.host && lhs.media.cwd == rhs.media.cwd && lhs.media.draft == rhs.media.draft
             && lhs.timestampMs == rhs.timestampMs && lhs.forking == rhs.forking && lhs.forkError == rhs.forkError
             && (lhs.fork == nil) == (rhs.fork == nil)
@@ -139,7 +141,7 @@ struct ThreadMessageRow: View, Equatable {
             .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("item.\(item.data.id)")
-            if isUser || item.data.kind == "agent" {
+            if isUser || showActions {
                 actions
             }
             if isUser, item.data.nativeId == nil {
