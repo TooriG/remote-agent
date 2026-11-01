@@ -2038,7 +2038,7 @@ impl ConversationView {
                 .style(style)
                 .selection_format(gpui_kit::component::text::SelectionFormat::Source)
                 .code_block_actions(move |block, _, _| {
-                    let text = block.code().to_string();
+                    let text = block.code();
                     let label = block
                         .span
                         .and_then(|span| headers.get(&span.start))
@@ -2087,7 +2087,9 @@ impl ConversationView {
                                 .ghost()
                                 .tooltip(language.text("コードをコピー"))
                                 .on_click(move |_, _, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
+                                    cx.write_to_clipboard(ClipboardItem::new_string(
+                                        text.to_string(),
+                                    ))
                                 }),
                         )
                 })
@@ -2097,7 +2099,6 @@ impl ConversationView {
                     let markdown = table.markdown.clone();
                     let mut rows = vec![table.headers.clone()];
                     rows.extend(table.rows.clone());
-                    let csv = agent_core::presentation::markdown::markdown_table_csv(rows);
                     h_flex()
                         .gap_2()
                         .justify_end()
@@ -2139,7 +2140,11 @@ impl ConversationView {
                                 .small()
                                 .ghost()
                                 .on_click(move |_, _, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(csv.clone()))
+                                    cx.write_to_clipboard(ClipboardItem::new_string(
+                                        agent_core::presentation::markdown::markdown_table_csv(
+                                            rows.clone(),
+                                        ),
+                                    ))
                                 }),
                         )
                 })

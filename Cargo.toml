@@ -25,10 +25,14 @@ rust-version = "1.98"
 debug = "line-tables-only"
 
 # Development Hosts and clients run daily. Unoptimized GPUI layout and rendering
-# keep desktop frames over budget, and debug compression is slow; workspace
-# crates stay unoptimized for incremental builds.
+# keep desktop frames over budget, and debug compression is slow.
 [profile.dev.package."*"]
 opt-level = 3
+
+# UI builders and their GPUI monomorphizations compile in the desktop crate,
+# not in GPUI. Keep them responsive in the development app as well.
+[profile.dev.package.agent-desktop]
+opt-level = 1
 
 # GPUI's Windows debug renderer reads HLSL from its build-time Cargo source
 # directory. Embed compiled shaders so development packages also run on other PCs.
