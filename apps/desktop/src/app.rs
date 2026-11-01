@@ -215,7 +215,7 @@ fn general_snapshot_changed(before: &Snapshot, after: &Snapshot) -> bool {
             workspace, workspaces, navigation, activity, management, list_query, subscriptions],
         optional: [permission_settings, task_activity, threads],
         values: [recent_chats, operation_sequence, model_defaults, host_name, host_ticket, storage_scope,
-            observed_agents, epoch, connected, connection_generation, connection_attempt, error]
+            observed_agents, epoch, connected, connection_generation, connection_failure, error]
     );
     let empty = Draft::default();
     macro_rules! controls {

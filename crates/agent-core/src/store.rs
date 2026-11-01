@@ -131,40 +131,6 @@ fn introduce(
     .boxed()
 }
 
-/// Cancellation and superseded attempts must finish only their own notice state.
-struct ConnectionAttempt<'a> {
-    token: CancellationToken,
-    id: uuid::Uuid,
-    publications: &'a Mutex<Option<watch::Sender<Arc<Snapshot>>>>,
-}
-impl<'a> ConnectionAttempt<'a> {
-    fn new(
-        token: CancellationToken,
-        publications: &'a Mutex<Option<watch::Sender<Arc<Snapshot>>>>,
-    ) -> Self {
-        let id = uuid::Uuid::new_v4();
-        let updates = publications.lock().unwrap().clone();
-        if let Some(updates) = updates {
-            apply(&updates, Event::Connecting(id));
-        }
-        Self {
-            token,
-            id,
-            publications,
-        }
-    }
-}
-impl Drop for ConnectionAttempt<'_> {
-    fn drop(&mut self) {
-        // Attach acknowledges transferred ownership before successful setup returns.
-        self.token.cancel();
-        let updates = self.publications.lock().unwrap().clone();
-        if let Some(updates) = updates {
-            apply(&updates, Event::ConnectionFinished(self.id));
-        }
-    }
-}
-
 impl Connection {
     /// A scope cached from this Host lets attach start before the Host confirms it.
     async fn open(
@@ -398,11 +364,10 @@ impl Store {
         Self::start(Some(peer), snapshot)
     }
     pub fn offline(snapshot: Snapshot) -> Self {
-        let (snapshot, _) = reduce(&snapshot, Event::Disconnected(None));
+        let (snapshot, _) = reduce(&snapshot, Event::Disconnected);
         Self::start(None, snapshot)
     }
-    fn start(peer: Option<(Client, Updates)>, mut snapshot: Snapshot) -> Self {
-        snapshot.connection_attempt = None;
+    fn start(peer: Option<(Client, Updates)>, snapshot: Snapshot) -> Self {
         let (writer, updates) = watch::channel(Arc::new(snapshot));
         let connection = peer.map(|(peer, events)| {
             (
@@ -439,7 +404,7 @@ impl Store {
                     break;
                 }
             }
-            apply(&publications, Event::Disconnected(None));
+            apply(&publications, Event::Disconnected);
             finished_tx.send_replace(true);
         });
         Self {
@@ -499,8 +464,10 @@ impl Store {
             let mut current = self.connection_attempt.lock().unwrap();
             current.cancel();
             *current = self.stop.child_token();
-            ConnectionAttempt::new(current.clone(), &self.publications)
+            current.clone()
         };
+        // Attach acknowledges transferred ownership before successful setup returns.
+        let _cancel = attempt.clone().drop_guard();
         let setup = async {
             endpoint.network_change().await;
             let (complete, receiver) = oneshot::channel();
@@ -584,7 +551,7 @@ impl Store {
                 // Only a fully authorized replacement may retire the old session.
                 // Cancellation and the disconnect enqueue share the attempt lock.
                 let _current = self.connection_attempt.lock().unwrap();
-                if attempt.token.is_cancelled() {
+                if attempt.is_cancelled() {
                     return Err(
                         PeerError::ConnectionClosed("connection attempt cancelled".into()).into(),
                     );
@@ -594,16 +561,18 @@ impl Store {
             disconnected
                 .await
                 .map_err(|_| PeerError::ConnectionClosed("store is closed".into()))??;
-            self.attach_connection(connection, storage_scope, attempt.token.clone())
+            self.attach_connection(connection, storage_scope, attempt.clone())
                 .await?;
             Ok(performance)
         };
-        tokio::select! {
+        let result = tokio::select! {
             biased;
-            _ = attempt.token.cancelled() => Err(PeerError::ConnectionClosed("connection attempt cancelled".into()).into()),
+            _ = attempt.cancelled() => Err(PeerError::ConnectionClosed("connection attempt cancelled".into()).into()),
             result = tokio::time::timeout(std::time::Duration::from_secs(45), setup) => result
                 .unwrap_or_else(|_| Err(crate::transport::TransportError::Connection("Host recovery timed out".into()))),
-        }
+        };
+        self.report_attempt(&attempt, &result);
+        result
     }
     /// Replace transport while retaining local edits. A newer reconnect or
     /// disconnect cancels setup before it can attach an obsolete connection.
@@ -619,11 +588,9 @@ impl Store {
             current.cancel();
             *current = self.stop.child_token();
             // Explicit replacement releases the old connection before pairing.
-            (
-                ConnectionAttempt::new(current.clone(), &self.publications),
-                self.request_disconnect()?,
-            )
+            (current.clone(), self.request_disconnect()?)
         };
+        let _cancel = attempt.clone().drop_guard();
         let setup = async {
             disconnected
                 .await
@@ -636,14 +603,37 @@ impl Store {
                 &self.snapshot().storage_scope,
             )
             .await?;
-            self.attach_connection(connection, scope, attempt.token.clone())
+            self.attach_connection(connection, scope, attempt.clone())
                 .await?;
             Ok::<_, crate::transport::TransportError>(performance)
         };
-        tokio::select! {
+        let result = tokio::select! {
             biased;
-            _ = attempt.token.cancelled() => Err(PeerError::ConnectionClosed("connection attempt cancelled".into()).into()),
+            _ = attempt.cancelled() => Err(PeerError::ConnectionClosed("connection attempt cancelled".into()).into()),
             result = setup => result,
+        };
+        self.report_attempt(&attempt, &result);
+        result
+    }
+    /// A newer attempt or disconnect owns the outcome of the attempt it cancelled.
+    /// An attached connection reports through its own lifecycle, because its
+    /// Host can still reject the introduction after setup returns.
+    fn report_attempt(
+        &self,
+        attempt: &CancellationToken,
+        result: &Result<ConnectionPerformance, crate::transport::TransportError>,
+    ) {
+        let failure = match result {
+            Ok(performance) if !performance.reused => return,
+            Ok(_) => None,
+            Err(error) => Some(error.to_string()),
+        };
+        let _current = self.connection_attempt.lock().unwrap();
+        let updates = self.publications.lock().unwrap().clone();
+        if !attempt.is_cancelled()
+            && let Some(updates) = updates
+        {
+            apply(&updates, Event::ConnectionChecked { failure });
         }
     }
     async fn attach_connection(
@@ -863,7 +853,7 @@ fn publication_key(snapshot: &Snapshot) -> impl PartialEq + '_ {
         epoch,
         connected,
         connection_generation,
-        connection_attempt,
+        connection_failure,
         subscriptions,
         error,
     } = snapshot;
@@ -919,7 +909,7 @@ fn publication_key(snapshot: &Snapshot) -> impl PartialEq + '_ {
             epoch,
             connected,
             connection_generation,
-            connection_attempt,
+            connection_failure,
             error,
         ),
     )
@@ -1279,7 +1269,7 @@ async fn run(
     let mut disconnected = None;
     let mut introduction = connection.introduction.take();
     let mut held = Vec::new();
-    let reason = loop {
+    loop {
         let unused: Vec<_> = subscriptions
             .keys()
             .filter(|id| {
@@ -1314,9 +1304,9 @@ async fn run(
             jobs.push(perform(Some(peer), session.as_ref(), scheduled));
         }
         tokio::select! {
-            _ = stop.cancelled() => break None,
+            _ = stop.cancelled() => break,
             command = commands.recv() => {
-                let Some(command) = command else { break None };
+                let Some(command) = command else { break };
                 let command = match command {
                     Command::PrepareDictation { id, cancel } => {
                         if preparation_jobs.len() < MAX_RPC_JOBS {
@@ -1350,7 +1340,7 @@ async fn run(
                     }
                     Command::Disconnect(complete) => {
                         disconnected = Some(complete);
-                        break None;
+                        break;
                     }
                     Command::Attach { connection, complete, .. } => {
                         drop(connection);
@@ -1371,7 +1361,11 @@ async fn run(
                 introduction = None;
                 let introduced = match introduced {
                     Ok(introduced) => introduced,
-                    Err(error) => break Some(error.to_string()),
+                    // The Host never confirmed this connection, so its setup failed.
+                    Err(error) => {
+                        apply(&updates, Event::ConnectionChecked { failure: Some(error.to_string()) });
+                        break;
+                    }
                 };
                 if introduced.storage_scope == updates.borrow().storage_scope {
                     effects.append(&mut held);
@@ -1406,16 +1400,15 @@ async fn run(
             Some((id, update)) = subscriptions.next(), if !subscriptions.is_empty() => {
                 match update {
                     Ok(change) => effects.extend(apply(&updates, Event::SessionUpdate(Box::new(crate::session::SessionUpdate { subscription_id: id, change })))),
-                    Err(error) => break Some(error.to_string()),
+                    Err(_) => break,
                 }
             }
             event = events.read::<crate::protocol::Notification>() => match event {
                 Ok(Some(notification)) => effects.extend(apply(&updates, Event::Notification(notification))),
-                Ok(None) => break Some("Host event stream ended".into()),
-                Err(error) => break Some(error.to_string()),
+                Ok(None) | Err(_) => break,
             }
         }
-    };
+    }
     // The Host owns connection-scoped PTYs and grants, including starts in flight.
     // Replacement must not wait for delivery acknowledgments from the old peer.
     let replacing = disconnected.is_some() && session.is_some();
@@ -1428,7 +1421,7 @@ async fn run(
     drop(preparation_jobs);
     peer.close().await;
     drop(connection);
-    apply(&updates, Event::Disconnected(reason));
+    apply(&updates, Event::Disconnected);
     if let Some(complete) = disconnected {
         let _ = complete.send(Ok(()));
     }
@@ -2058,9 +2051,11 @@ mod tests {
     #[rstest::rstest]
     #[case("ready")]
     #[case("failed")]
-    #[case("cancelled")]
+    #[case("rejected")]
+    #[case("aborted")]
+    #[case("disconnected")]
     #[tokio::test]
-    async fn foreground_recovery_defers_the_old_disconnect_notice_until_the_check_finishes(
+    async fn only_a_failed_connection_attempt_reports_that_the_host_is_unreachable(
         #[case] outcome: &str,
     ) {
         use crate::{
@@ -2069,7 +2064,21 @@ mod tests {
         };
         use serde_json::json;
         tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            let client = Endpoint::bind(Identity::generate(), Relays::Loopback)
+                .await
+                .unwrap();
+            let host = Endpoint::bind(Identity::generate(), Relays::Loopback)
+                .await
+                .unwrap();
+            let trust = Trust {
+                allowed: [client.node_id()].into(),
+                ..Default::default()
+            };
             let mut initial = Snapshot::default();
+            if outcome == "rejected" {
+                // A cached scope attaches before the Host answers the introduction.
+                initial.storage_scope = format!("{}:cached", host.node_id());
+            }
             let draft_key = initial.navigation.draft_key.clone();
             Arc::make_mut(&mut initial.drafts).insert(
                 draft_key.clone(),
@@ -2086,19 +2095,11 @@ mod tests {
                 .wait_for(|snapshot| !snapshot.connected)
                 .await
                 .unwrap();
-            let previous = store.snapshot().error_notices(ErrorScope::Application);
-            assert_eq!(previous.len(), 1);
-
-            let client = Endpoint::bind(Identity::generate(), Relays::Loopback)
-                .await
-                .unwrap();
-            let host = Endpoint::bind(Identity::generate(), Relays::Loopback)
-                .await
-                .unwrap();
-            let trust = Trust {
-                allowed: [client.node_id()].into(),
-                ..Default::default()
-            };
+            let notices = || store.snapshot().error_notices(ErrorScope::Application);
+            assert!(
+                notices().is_empty(),
+                "losing an established connection, for example while suspended, is not a failure"
+            );
             let recovering = tokio::spawn({
                 let store = store.clone();
                 let endpoint = client.clone();
@@ -2115,14 +2116,7 @@ mod tests {
             let (session, mut reader, writer) = host_fixture::accept(incoming).await;
             let scope = reader.read_request().await.unwrap().unwrap();
             assert_eq!(scope["method"], "host/device/identify");
-            assert!(store.snapshot().connection_attempt.is_some());
-            assert!(
-                store
-                    .snapshot()
-                    .error_notices(ErrorScope::Application)
-                    .is_empty(),
-                "a background disconnect is not a failed foreground connection check"
-            );
+            assert!(notices().is_empty());
             match outcome {
                 "ready" => {
                     writer
@@ -2134,12 +2128,7 @@ mod tests {
                         .unwrap();
                     recovering.await.unwrap().unwrap();
                     assert!(store.snapshot().connected);
-                    assert!(
-                        store
-                            .snapshot()
-                            .error_notices(ErrorScope::Application)
-                            .is_empty()
-                    );
+                    assert!(notices().is_empty());
                 }
                 "failed" => {
                     writer
@@ -2150,22 +2139,47 @@ mod tests {
                         .await
                         .unwrap();
                     assert!(recovering.await.unwrap().is_err());
-                    assert_eq!(
-                        store.snapshot().error_notices(ErrorScope::Application),
-                        previous
+                    let notices = notices();
+                    assert_eq!(notices.len(), 1, "{notices:?}");
+                    assert_eq!(notices[0].title, "Hostに接続できません");
+                    assert!(
+                        notices[0].message.contains("Host unavailable"),
+                        "{notices:?}"
                     );
                 }
-                "cancelled" => {
+                "rejected" => {
+                    recovering.await.unwrap().unwrap();
+                    writer
+                        .reply(
+                            &scope,
+                            json!({"error":{"code":"unavailable","message":"Host unavailable"}}),
+                        )
+                        .await
+                        .unwrap();
+                    snapshots
+                        .wait_for(|snapshot| !snapshot.connected)
+                        .await
+                        .unwrap();
+                    let notices = notices();
+                    assert_eq!(notices.len(), 1, "{notices:?}");
+                    assert_eq!(notices[0].title, "Hostに接続できません");
+                    assert!(
+                        notices[0].message.contains("Host unavailable"),
+                        "{notices:?}"
+                    );
+                }
+                "aborted" => {
                     recovering.abort();
                     assert!(recovering.await.unwrap_err().is_cancelled());
-                    assert_eq!(
-                        store.snapshot().error_notices(ErrorScope::Application),
-                        previous
-                    );
+                    assert!(notices().is_empty());
+                }
+                "disconnected" => {
+                    store.disconnect().await.unwrap();
+                    assert!(recovering.await.unwrap().is_err());
+                    assert!(notices().is_empty(), "a cancelled attempt is not a failure");
                 }
                 _ => unreachable!(),
             }
-            assert!(store.snapshot().connection_attempt.is_none());
             assert_eq!(store.snapshot().drafts[&draft_key].text, "unsent draft");
             store.close().await.unwrap();
             session.close();
@@ -2173,7 +2187,7 @@ mod tests {
             host.close().await;
         })
         .await
-        .expect("foreground recovery did not settle");
+        .expect("connection recovery did not settle");
     }
 
     #[tokio::test]
@@ -2206,7 +2220,7 @@ mod tests {
     #[case("close")]
     #[case("transport loss")]
     #[tokio::test]
-    async fn only_unexpected_connection_loss_reports_a_failure(#[case] action: &str) {
+    async fn losing_a_connection_publishes_it_without_reporting_a_failure(#[case] action: &str) {
         use crate::presentation::error::ErrorScope;
         let initial = Snapshot::default();
         let (peer, _reader, writer) = host_fixture::connect(&initial).await;
@@ -2225,23 +2239,12 @@ mod tests {
         .await
         .expect("the disconnection must be published")
         .unwrap();
-        let notices = store.snapshot().error_notices(ErrorScope::Application);
-        if action == "transport loss" {
-            assert_eq!(notices.len(), 1);
-            assert!(!notices[0].message.is_empty());
-            assert!(
-                store
-                    .dispatch(Intent::LoadModels(op::LoadModels {}))
-                    .await
-                    .is_err()
-            );
-            assert_eq!(
-                store.snapshot().error_notices(ErrorScope::Application),
-                notices
-            );
-        } else {
-            assert!(notices.is_empty());
-        }
+        assert!(
+            store
+                .snapshot()
+                .error_notices(ErrorScope::Application)
+                .is_empty()
+        );
         store.close().await.unwrap();
     }
 
@@ -2474,8 +2477,8 @@ mod tests {
             }),
             ("epoch", |snapshot| snapshot.epoch += 1),
             ("connected", |snapshot| snapshot.connected = true),
-            ("connection_attempt", |snapshot| {
-                snapshot.connection_attempt = Some(uuid::Uuid::new_v4())
+            ("connection_failure", |snapshot| {
+                snapshot.connection_failure = Some("fixture failure".into())
             }),
             ("error", |snapshot| {
                 snapshot.error = Some("fixture failure".into())

@@ -152,23 +152,23 @@ impl Snapshot {
 
     pub fn error_notices(&self, scope: ErrorScope) -> Vec<ErrorNotice> {
         let mut notices = Vec::new();
-        if scope == ErrorScope::Application
-            && (self.connected || self.connection_attempt.is_none())
-            && let Some(error) = &self.error
-        {
-            notices.push(ErrorNotice {
-                id: ErrorId::Application {
-                    message: error_message(error),
-                },
-                context: if self.connected { "操作" } else { "接続" }.into(),
-                title: if self.connected {
-                    "操作に失敗しました"
-                } else {
-                    "Hostに接続できません"
+        if scope == ErrorScope::Application {
+            let application = [
+                (&self.connection_failure, "接続", "Hostに接続できません"),
+                (&self.error, "操作", "操作に失敗しました"),
+            ];
+            for (error, context, title) in application {
+                if let Some(error) = error {
+                    notices.push(ErrorNotice {
+                        id: ErrorId::Application {
+                            message: error_message(error),
+                        },
+                        context: context.into(),
+                        title: title.into(),
+                        message: error_message(error),
+                    });
                 }
-                .into(),
-                message: error_message(error),
-            });
+            }
         }
         for (key, state) in self.operations.iter() {
             let OperationPhase::Failed { message } = &state.phase else {
@@ -315,7 +315,7 @@ mod notice_tests {
     fn connection_and_operation_failures_have_separate_context_and_dismissal() {
         let draft = DraftKey::default();
         let mut snapshot = Snapshot {
-            error: Some("connection lost".into()),
+            connection_failure: Some("connection lost".into()),
             ..Default::default()
         };
         failed(
@@ -331,6 +331,8 @@ mod notice_tests {
         assert_eq!(global.len(), 1);
         assert_eq!(global[0].context, "接続");
         assert_eq!(global[0].title, "Hostに接続できません");
+        let (recovered, _) = reduce(&snapshot, Event::Connected);
+        assert!(recovered.error_notices(ErrorScope::Application).is_empty());
         assert_eq!(local.len(), 1);
         assert_eq!(local[0].context, "この会話");
         assert_eq!(local[0].title, "メッセージを送信できませんでした");
@@ -350,7 +352,7 @@ mod notice_tests {
                 id: global[0].id.clone(),
             }),
         );
-        assert!(next.error.is_none());
+        assert!(next.error_notices(ErrorScope::Application).is_empty());
     }
 
     #[test]
@@ -388,7 +390,7 @@ mod notice_tests {
     #[test]
     fn validation_failure_preserves_connection_error_and_belongs_to_workspace() {
         let snapshot = Snapshot {
-            error: Some("connection lost".into()),
+            connection_failure: Some("connection lost".into()),
             ..Default::default()
         };
         let (next, effects) = reduce(
@@ -398,7 +400,10 @@ mod notice_tests {
             })),
         );
         assert!(effects.is_empty());
-        assert_eq!(next.error, snapshot.error);
+        assert_eq!(
+            next.error_notices(ErrorScope::Application),
+            snapshot.error_notices(ErrorScope::Application)
+        );
         let notices = next.error_notices(ErrorScope::Workspace);
         assert_eq!(notices.len(), 1);
         assert_eq!(notices[0].message, "絶対パスを入力してください。");
@@ -519,36 +524,6 @@ mod notice_tests {
         assert_eq!(next.error, newer.error);
         let (next, _) = reduce(&next, Event::Connected);
         assert!(next.error_notices(ErrorScope::Application).is_empty());
-    }
-
-    #[test]
-    fn superseded_connection_checks_cannot_reveal_a_previous_disconnect_error() {
-        let previous = Snapshot {
-            error: Some("background timeout".into()),
-            ..Default::default()
-        };
-        let first = uuid::Uuid::new_v4();
-        let second = uuid::Uuid::new_v4();
-        let (checking, _) = reduce(&previous, Event::Connecting(first));
-        let (checking, _) = reduce(&checking, Event::Connecting(second));
-        let (checking, _) = reduce(&checking, Event::ConnectionFinished(first));
-        assert_eq!(checking.connection_attempt, Some(second));
-        assert!(checking.error_notices(ErrorScope::Application).is_empty());
-        let (finished, _) = reduce(&checking, Event::ConnectionFinished(second));
-        assert!(finished.connection_attempt.is_none());
-        assert_eq!(
-            finished.error_notices(ErrorScope::Application),
-            previous.error_notices(ErrorScope::Application)
-        );
-        let connected = Snapshot {
-            connected: true,
-            error: Some("save failed".into()),
-            ..checking
-        };
-        assert_eq!(
-            connected.error_notices(ErrorScope::Application)[0].message,
-            "save failed"
-        );
     }
 
     #[tokio::test]

@@ -55,9 +55,37 @@ impl Desktop {
     }
 
     pub(super) fn error_notices(&self, scope: ErrorScope, cx: &Context<Self>) -> Div {
-        let reconnect = (scope == ErrorScope::Application && !self.snapshot.connected)
-            .then_some(self.connecting);
-        Self::error_list(&self.error_rows(&scope), scope, reconnect, cx)
+        let disconnected = scope == ErrorScope::Application && !self.snapshot.connected;
+        let rows = self.error_rows(&scope);
+        // A lost connection is not an error, but desktop waits for the user to reconnect.
+        let idle = disconnected && !self.connecting && rows.is_empty();
+        Self::error_list(&rows, scope, disconnected.then_some(self.connecting), cx)
+            .when(idle, |list| list.child(Self::disconnected_notice(cx)))
+    }
+
+    fn disconnected_notice(cx: &Context<Self>) -> impl IntoElement {
+        let language = crate::localization::language(cx);
+        h_flex()
+            .debug_selector(|| "host-disconnected".into())
+            .items_center()
+            .gap_3()
+            .p_3()
+            .min_w_0()
+            .rounded_lg()
+            .bg(rgb(appearance::RAISED))
+            .child(
+                div()
+                    .flex_1()
+                    .text_sm()
+                    .text_color(rgb(appearance::MUTED))
+                    .child(language.text("Host に接続していません")),
+            )
+            .child(button(
+                "reconnect-host",
+                language.text("再接続"),
+                cx,
+                |view, window, cx| view.switch_host(view.remote.clone(), window, cx),
+            ))
     }
 
     /// `reconnect` offers to reconnect, disabled while connecting.
@@ -267,5 +295,57 @@ mod tests {
         window.run_until_parked();
         assert!(window.debug_bounds("error-notice-この会話-0").is_none());
         assert!(window.debug_bounds("error-notice-アプリ全体-0").is_some());
+    }
+
+    #[gpui::test]
+    fn lost_connection_offers_reconnect_without_reporting_an_error(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        cx.update(|cx| {
+            appearance::init(cx);
+            cx.set_global(Runtime {
+                handle: runtime.handle().clone(),
+                connections: Arc::new(platform::Connections::default()),
+                closing: tokio_util::task::TaskTracker::new(),
+                logging_error: None,
+            });
+        });
+        let mut handle = None;
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let desktop = Desktop::new(
+                Mode::SideChat {
+                    remote: None,
+                    cwd: "/fixture".into(),
+                },
+                window,
+                cx,
+            );
+            handle = Some(cx.entity());
+            desktop
+        });
+        let desktop = handle.unwrap();
+        window.simulate_resize(size(px(900.), px(700.)));
+        let mut show = |connected: bool, connecting: bool, failure: Option<&str>| {
+            window.update(|_, cx| {
+                desktop.update(cx, |view, cx| {
+                    let snapshot = Arc::make_mut(&mut view.snapshot);
+                    snapshot.connected = connected;
+                    snapshot.connection_failure = failure.map(Into::into);
+                    view.connecting = connecting;
+                    cx.notify();
+                })
+            });
+            window.run_until_parked();
+            (
+                window.debug_bounds("host-disconnected").is_some(),
+                window.debug_bounds("error-notice-アプリ全体-0").is_some(),
+            )
+        };
+        assert_eq!(show(false, false, None), (true, false));
+        assert_eq!(show(false, true, None), (false, false));
+        assert_eq!(show(false, false, Some("Host unavailable")), (false, true));
+        assert_eq!(show(true, false, None), (false, false));
     }
 }

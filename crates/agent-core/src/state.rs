@@ -317,8 +317,11 @@ pub struct Snapshot {
     pub connected: bool,
     #[serde(skip)]
     pub connection_generation: u64,
+    /// Why the latest connection attempt failed. Losing an established
+    /// connection is not a failure, for example a socket the OS closed while
+    /// the app was suspended: its replacement reports none until it fails.
     #[serde(skip)]
-    pub connection_attempt: Option<uuid::Uuid>,
+    pub connection_failure: Option<String>,
     #[serde(skip)]
     pub subscriptions: Arc<BTreeMap<crate::session::SessionRef, uuid::Uuid>>,
     #[serde(skip)]
@@ -444,22 +447,16 @@ pub struct ScopedData {
 pub enum Event {
     StorageScope(String),
     HostTicket(String),
-    TerminalFailed {
-        handle: String,
-        reason: String,
-    },
+    TerminalFailed { handle: String, reason: String },
     Intent(Intent),
     SubmissionFailed(agent_protocol::ids::ClientInputId),
     SubmissionUnknown(agent_protocol::ids::ClientInputId),
 
     Notification(crate::protocol::Notification),
     SessionUpdate(Box<crate::session::SessionUpdate>),
-    Connecting(uuid::Uuid),
-    ConnectionFinished(uuid::Uuid),
+    ConnectionChecked { failure: Option<String> },
     Connected,
-    /// Initial offline state and intentional shutdown have no failure reason.
-    Disconnected(Option<String>),
-    Failed(String),
+    Disconnected,
 }
 pub use crate::store::Effect;
 
@@ -537,8 +534,10 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 }) { Arc::make_mut(&mut next.operations).remove(&key); }
             }
             op::ErrorId::Application { message } => {
-                if next.error.as_deref().map(crate::presentation::error::error_message).as_deref() == Some(message.as_str()) {
-                    next.error = None;
+                for error in [&mut next.connection_failure, &mut next.error] {
+                    if error.as_deref().map(crate::presentation::error::error_message).as_deref() == Some(message.as_str()) {
+                        *error = None;
+                    }
                 }
             }
         },
@@ -1184,12 +1183,7 @@ fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
                 }
             }
         }
-        Event::Connecting(attempt) => next.connection_attempt = Some(attempt),
-        Event::ConnectionFinished(attempt) => {
-            if next.connection_attempt == Some(attempt) {
-                next.connection_attempt = None;
-            }
-        }
+        Event::ConnectionChecked { failure } => next.connection_failure = failure,
         Event::Connected => {
             next.connection_generation = previous.connection_generation.saturating_add(1);
             next.reset_list_revisions();
@@ -1198,11 +1192,12 @@ fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
             next.connected = true;
             next.task_activity = None;
             next.error = None;
+            next.connection_failure = None;
             next.list_query = Arc::new((*next.list_query).clone().for_connection());
             let effects = next.prepare_connection_refresh();
             return (next, effects);
         }
-        Event::Disconnected(reason) => {
+        Event::Disconnected => {
             next.operations = Arc::default();
             next.reset_session();
             next.connected = false;
@@ -1214,9 +1209,8 @@ fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
                     Arc::make_mut(terminal).phase = TerminalPhase::Suspended;
                 }
             }
-            next.error = reason;
+            next.error = None;
         }
-        Event::Failed(error) => next.error = Some(error),
         Event::Intent(_) | Event::Notification(_) | Event::SessionUpdate(_) => {
             unreachable!("handled by the reducer router")
         }
