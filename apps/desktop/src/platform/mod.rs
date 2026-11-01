@@ -42,7 +42,7 @@ pub(crate) fn state_dir() -> Result<PathBuf, String> {
         .ok_or_else(|| "application data directory unavailable".into())
 }
 
-fn development_app() -> bool {
+pub(crate) fn development_app() -> bool {
     #[cfg(target_os = "macos")]
     {
         objc2_foundation::NSBundle::mainBundle()

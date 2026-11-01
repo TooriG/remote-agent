@@ -39,6 +39,13 @@ pub fn build_number() -> u64 {
         .unwrap_or(0)
 }
 
+/// Published releases replace only the distributed app. Development bundles
+/// may carry a build number to label local deployments; they never install a
+/// release or resume one staged by an earlier build.
+fn receives_releases() -> bool {
+    build_number() != 0 && !crate::platform::development_app()
+}
+
 /// Handle updater workers before starting GPUI or connecting to the Host.
 pub fn run_command() -> bool {
     let mut args = std::env::args_os().skip(1);
@@ -65,7 +72,9 @@ pub fn run_command() -> bool {
 
 impl Updates {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let directory = crate::platform::state_dir().ok();
+        let directory = receives_releases()
+            .then(crate::platform::state_dir)
+            .and_then(Result::ok);
         let result = directory
             .as_ref()
             .and_then(|dir| std::fs::read(dir.join(install::RESULT_FILE)).ok())
@@ -119,7 +128,7 @@ impl Updates {
     }
 
     fn check(&mut self, cx: &mut Context<Self>) {
-        if build_number() == 0 {
+        if !receives_releases() {
             return;
         }
         if let Ok(directory) = crate::platform::state_dir() {
@@ -440,7 +449,7 @@ async fn download(
 
 #[cfg(test)]
 mod tests {
-    use super::{Download, RefreshThreads, State, Updates, build_number, download, install};
+    use super::{Download, RefreshThreads, State, Updates, download, install, receives_releases};
     use gpui_kit as gpui;
     use gpui_kit::{
         Modifiers,
@@ -558,7 +567,7 @@ mod tests {
         window.simulate_click(bounds.center(), Modifiers::default());
         window.run_until_parked();
         assert_eq!(refreshes.get(), 1);
-        if build_number() == 0 {
+        if !receives_releases() {
             view.update(window, |view, _| {
                 assert!(matches!(view.state, State::Current))
             });
