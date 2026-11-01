@@ -901,9 +901,8 @@ impl Worker {
                     command = input.recv() => {
                         let command = command.ok_or("Claude input queue is closed")?;
                         let stops = matches!(command.value, SdkInput::Interrupt { .. });
-                        let delivery = response.delivery();
-                        if let Some(id) = self.deliver_command(&mut process, command, delivery).await? {
-                            response.accept(id, delivery);
+                        if let Some(id) = self.deliver_command(&mut process, command, response.delivery()).await? {
+                            response.accept(id);
                         }
                         // A requested stop owns the response's terminal result,
                         // which can reach the Host before its acknowledgement.
@@ -2485,7 +2484,7 @@ emit([
   { type: 'ready', initialized: {} },
   mode === 'started'
     ? event({ type: 'system', subtype: 'task_started', task_id: 'shell', task_type: 'local_bash', is_backgrounded: true })
-    : event({ type: 'system', subtype: 'background_tasks_changed', tasks: mode === 'settled' ? [] : [{task_id: 'shell', task_type: 'local_bash'}] }),
+    : event({ type: 'system', subtype: 'background_tasks_changed', tasks: ['settled', 'answering'].includes(mode) ? [] : [{task_id: 'shell', task_type: 'local_bash'}] }),
   ...(settled ? terminal : []),
 ]);
 const inputs = [];
@@ -2495,7 +2494,10 @@ for await (const line of createInterface({input: process.stdin})) {
   inputs.push(input.id);
   if (mode === 'batched' && inputs.length < 2) continue;
   emit([
-    ...(settled ? [] : terminal),
+    // Claude Code runs input it did not fold into the answering response as
+    // the next prompt, right after the result and without an idle level.
+    ...(settled ? [] : mode === 'answering' ? [terminal[0],
+      event({type: 'system', subtype: 'init', user_message_uuids: [input.id]})] : terminal),
     ...(mode === 'child-notice' ? [event({type: 'user', uuid: 'child',
       origin: {kind: 'task-notification', runId: 'shell'}, parent_tool_use_id: 'agent',
       message: {content: 'task notification'}})] : []),
@@ -2518,10 +2520,11 @@ for await (const line of createInterface({input: process.stdin})) {
             "stamped",
             "batched",
             "result-stamped",
+            "answering",
         ]
         .into_iter()
         .cycle()
-        .take(18)
+        .take(20)
         {
             let mut command = tokio::process::Command::new(&node);
             command
@@ -2572,7 +2575,11 @@ for await (const line of createInterface({input: process.stdin})) {
                         .unwrap()
                         .unwrap()
                         .unwrap(),
-                    (mode == "settled").then(|| "next".into())
+                    match mode {
+                        "settled" => Some("next".into()),
+                        "answering" => Some("turn".into()),
+                        _ => None,
+                    }
                 );
             }
             let assigned = tokio::time::timeout(std::time::Duration::from_secs(5), async {

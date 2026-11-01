@@ -4,7 +4,7 @@ use super::native;
 use agent_protocol::ids::ItemId;
 use background::Reports;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum InputDelivery {
@@ -30,7 +30,7 @@ pub(super) struct Observation<'a> {
 #[derive(Default)]
 pub(super) struct ResponseState {
     interrupted: bool,
-    pending_inputs: HashMap<ItemId, bool>,
+    pending_inputs: HashSet<ItemId>,
     result_received: bool,
     idle: bool,
     background: Reports,
@@ -69,9 +69,8 @@ impl ResponseState {
         }
     }
 
-    pub(super) fn accept(&mut self, id: ItemId, delivery: InputDelivery) {
-        self.pending_inputs
-            .insert(id, delivery == InputDelivery::Background);
+    pub(super) fn accept(&mut self, id: ItemId) {
+        self.pending_inputs.insert(id);
     }
 
     pub(super) fn observe<'a>(&mut self, message: &'a Value) -> Result<Observation<'a>, String> {
@@ -103,20 +102,16 @@ impl ResponseState {
         };
         let consumed: Vec<_> = echoes
             .into_iter()
-            .filter_map(|id| {
-                self.pending_inputs
-                    .remove(id)
-                    .map(|background| (id, background))
-            })
+            .filter(|id| self.pending_inputs.remove(*id))
             .collect();
-        let opens_turn = self.result_received
-            && self.idle
-            && !self.interrupted
-            && consumed.iter().any(|(_, background)| *background);
+        // Claude runs input it did not fold into a response as the next prompt,
+        // right after the result and without an idle level. As in the
+        // transcript, input consumed after a result starts its own turn.
+        let opens_turn = self.result_received && !self.interrupted;
         consumed
             .into_iter()
             .enumerate()
-            .map(|(index, (id, _))| (id, opens_turn && index == 0))
+            .map(|(index, id)| (id, opens_turn && index == 0))
             .collect()
     }
 
@@ -264,9 +259,8 @@ mod tests {
             json!({"type":"system","subtype":"background_tasks_changed","tasks":[{"run_id":"shell","task_type":"local_bash"}]}),
         );
         settle(&mut response);
-        let delivery = response.delivery();
-        assert_eq!(delivery, InputDelivery::Background);
-        response.accept("queued".into(), delivery);
+        assert_eq!(response.delivery(), InputDelivery::Background);
+        response.accept("queued".into());
         assert!(!response.answered());
         assert_eq!(
             observe(
@@ -345,7 +339,7 @@ mod tests {
             MessageDisposition::Applied
         );
         assert!(response.finished());
-        response.accept("pending".into(), InputDelivery::CurrentTurn);
+        response.accept("pending".into());
         assert!(
             response
                 .interrupt_result(Some("not interrupted".into()))
@@ -405,7 +399,7 @@ mod tests {
     #[test]
     fn delivery_waits_for_echoes_and_interruption_keeps_input_in_the_current_turn() {
         let mut response = ResponseState::default();
-        response.accept("input".into(), response.delivery());
+        response.accept("input".into());
         settle(&mut response);
         assert_eq!(response.delivery(), InputDelivery::CurrentTurn);
         observe(&mut response, json!({"type":"user","uuid":"input"}));
@@ -416,6 +410,24 @@ mod tests {
     }
 
     #[test]
+    fn input_sent_while_answering_opens_a_turn_only_when_run_after_the_result() {
+        let mut response = ResponseState::default();
+        assert_eq!(response.delivery(), InputDelivery::CurrentTurn);
+        response.accept("folded".into());
+        response.accept("next".into());
+        let folded = json!({"type":"user","uuid":"folded"});
+        assert_eq!(
+            response.observe(&folded).unwrap().echoes,
+            [("folded", false)]
+        );
+        // Claude Code starts the next prompt right after the result, without idle.
+        observe(&mut response, json!({"type":"result"}));
+        let next = json!({"type":"system","subtype":"init","user_message_uuids":["next"]});
+        assert_eq!(response.observe(&next).unwrap().echoes, [("next", true)]);
+        assert!(!response.answered());
+    }
+
+    #[test]
     fn a_batch_consumes_each_pending_echo_once_in_sdk_order_and_opens_one_turn() {
         let mut response = ResponseState::default();
         observe(
@@ -423,8 +435,8 @@ mod tests {
             json!({"type":"system","subtype":"task_started","task_id":"shell","task_type":"local_bash"}),
         );
         settle(&mut response);
-        response.accept("first".into(), response.delivery());
-        response.accept("second".into(), response.delivery());
+        response.accept("first".into());
+        response.accept("second".into());
         let message =
             json!({"type":"assistant","user_message_uuids":["unknown","second","first","second"]});
         let observation = response.observe(&message).unwrap();
@@ -441,7 +453,7 @@ mod tests {
             json!({"type":"system","subtype":"task_started","task_id":"shell","task_type":"local_bash"}),
         );
         settle(&mut response);
-        response.accept("queued".into(), response.delivery());
+        response.accept("queued".into());
         response.interrupt();
         let message = json!({"type":"user","uuid":"queued"});
         assert_eq!(
@@ -535,7 +547,7 @@ mod tests {
             &mut response,
             json!({"type":"system","subtype":"session_state_changed","state":"idle"}),
         );
-        response.accept("human".into(), response.delivery());
+        response.accept("human".into());
         let reply = json!({"type":"assistant","user_message_uuid":"human"});
         assert_eq!(response.observe(&reply).unwrap().echoes, [("human", true)]);
         settle(&mut response);
@@ -561,7 +573,7 @@ mod tests {
             json!({"type":"system","subtype":"task_started","task_id":"shell","task_type":"local_bash"}),
         );
         settle(&mut response);
-        response.accept("queued".into(), response.delivery());
+        response.accept("queued".into());
         observe(&mut response, json!({"type":"system","subtype":"init"}));
         let echo = json!({"type":"user","uuid":"queued"});
         assert_eq!(response.observe(&echo).unwrap().echoes, [("queued", true)]);
