@@ -1,5 +1,5 @@
 //! AppKit operations target the selected WKWebView, never the system's active
-//! window or first responder. Hidden conversations must not type into the PC's page.
+//! window. Hidden conversations must not type into the PC's page or keep its keyboard.
 use agent_protocol::browser::BrowserKey;
 use async_channel::{Receiver, bounded};
 use objc2::{AnyThread, MainThreadMarker, msg_send, rc::Retained, runtime::AnyObject};
@@ -222,13 +222,15 @@ pub fn key(view: &wry::WebView, key: BrowserKey) -> Result<(), String> {
         .window()
         .ok_or("ブラウザのウィンドウが閉じています。")?;
     let text = NSString::from_str(chars);
-    for kind in [NSEventType::KeyDown, NSEventType::KeyUp] {
-        let event = NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(kind, NSPoint::new(0.,0.), NSEventModifierFlags::empty(), NSProcessInfo::processInfo().systemUptime(), window.windowNumber(), None, &text, &text, false, code).ok_or("キー入力を作成できません。")?;
-        if kind == NSEventType::KeyDown {
-            input.keyDown(&event);
-        } else {
-            input.keyUp(&event);
-        }
+    let event = |kind| {
+        NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(kind, NSPoint::new(0.,0.), NSEventModifierFlags::empty(), NSProcessInfo::processInfo().systemUptime(), window.windowNumber(), None, &text, &text, false, code).ok_or("キー入力を作成できません。")
+    };
+    let (down, up) = (event(NSEventType::KeyDown)?, event(NSEventType::KeyUp)?);
+    if !super::focus::with_keyboard(&input, || {
+        input.keyDown(&down);
+        input.keyUp(&up);
+    }) {
+        return Err("ページにキー入力を送れません。".into());
     }
     Ok(())
 }

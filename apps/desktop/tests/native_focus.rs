@@ -31,6 +31,26 @@ mod appkit {
         }
     }
 
+    define_class!(
+        #[unsafe(super(NSView))]
+        #[thread_kind = MainThreadOnly]
+        struct RefusingView;
+        unsafe impl NSObjectProtocol for RefusingView {}
+        impl RefusingView {
+            #[unsafe(method(becomeFirstResponder))]
+            fn become_first_responder(&self) -> bool {
+                false
+            }
+        }
+    );
+
+    impl RefusingView {
+        fn new(mtm: MainThreadMarker) -> Retained<Self> {
+            // SAFETY: NSView's initializer accepts this main-thread subclass.
+            unsafe { msg_send![super(mtm.alloc::<Self>().set_ivars(())), init] }
+        }
+    }
+
     pub fn run() {
         let mtm = MainThreadMarker::new().expect("AppKit test runs on the main thread");
         let _app = NSApplication::sharedApplication(mtm);
@@ -73,6 +93,22 @@ mod appkit {
         assert!(window.makeFirstResponder(Some(&other)));
         focus::hide(&page);
         focus::release(&page);
+        assert!(window.firstResponder().unwrap().isEqual(Some(&other)));
+
+        // Remote keys reach a hidden page's input and leave the field focused.
+        let mut dispatched = false;
+        assert!(focus::with_keyboard(&field, || {
+            dispatched = window.firstResponder().unwrap().isEqual(Some(&field));
+        }));
+        assert!(dispatched);
+        assert!(window.firstResponder().unwrap().isEqual(Some(&other)));
+        let refusing = RefusingView::new(mtm);
+        page.addSubview(&refusing);
+        for unavailable in [&**refusing, &InputView::new(mtm)] {
+            assert!(!focus::with_keyboard(unavailable, || {
+                panic!("keys must not reach a refusing or detached view")
+            }));
+        }
         assert!(window.firstResponder().unwrap().isEqual(Some(&other)));
         page.setHidden(false);
         assert!(window.makeFirstResponder(Some(&field)));
