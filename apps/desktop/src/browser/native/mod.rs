@@ -2,6 +2,7 @@
 //! tool operations to this owner; losing one RPC never destroys its tabs.
 mod cookies;
 mod delegate;
+mod focus;
 mod input;
 mod platform;
 
@@ -102,7 +103,7 @@ struct Tab {
 }
 impl Drop for Tab {
     fn drop(&mut self) {
-        let _ = self.view.set_visible(false);
+        focus::hide(&self.view.webview());
     }
 }
 
@@ -309,7 +310,20 @@ pub fn has_focus(scope: &str, tab: &str, cx: &App) -> bool {
                 .iter()
                 .find(|view| view.saved.scope == scope && view.saved.id == tab)
         })
-        .is_some_and(|tab| platform::has_focus(&tab.view))
+        .is_some_and(|tab| focus::has_focus(&tab.view.webview()))
+}
+
+/// A click delivered to GPUI must also return AppKit's keyboard destination.
+/// Native WebKit clicks bypass this handler and retain the page's own focus.
+pub fn focus_parent(cx: &App) {
+    if let Some(owner) = cx
+        .try_global::<NativeGlobal>()
+        .and_then(|global| global.0.as_ref())
+    {
+        for tab in &owner.read(cx).tabs {
+            focus::release(&tab.view.webview());
+        }
+    }
 }
 
 /// Layout, visibility and canonical CSS viewport are updated by the same owner.
@@ -492,7 +506,7 @@ impl NativeBrowser {
                 let scale = (f64::from(bounds.size.width / px(1.)) / f64::from(page.width))
                     .min(f64::from(bounds.size.height / px(1.)) / f64::from(page.height));
                 if scale <= 0. {
-                    let _ = view.set_visible(false);
+                    focus::hide(&view.webview());
                     continue;
                 }
                 let width = f64::from(page.width) * scale;
@@ -510,7 +524,7 @@ impl NativeBrowser {
                 });
                 let _ = view.set_visible(true);
             } else {
-                let _ = view.set_visible(false);
+                focus::hide(&view.webview());
                 let _ = view.zoom(1.);
                 let _ = view.set_bounds(wry::Rect {
                     position: wry::dpi::LogicalPosition::new(0., 0.).into(),

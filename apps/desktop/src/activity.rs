@@ -110,7 +110,7 @@ impl ActivityWindow {
 impl Render for ActivityWindow {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let started = self.started;
-        div()
+        let root = div()
             .relative()
             .size_full()
             .child(
@@ -125,7 +125,10 @@ impl Render for ActivityWindow {
                 )
                 .absolute()
                 .size_full(),
-            )
+            );
+        #[cfg(target_os = "macos")]
+        let root = root.capture_any_mouse_down(|_, _, cx| crate::browser::native::focus_parent(cx));
+        root
     }
 }
 

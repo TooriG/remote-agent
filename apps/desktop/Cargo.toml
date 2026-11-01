@@ -58,3 +58,7 @@ proptest = "1.12"
 [[bin]]
 name = "agent-desktop"
 path = "src/main.rs"
+
+[[test]]
+name = "native_focus"
+harness = false
