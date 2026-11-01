@@ -164,6 +164,15 @@ fn main() {
         .build()
         .expect("start async runtime");
     let handle = runtime.handle().clone();
+    runtime.spawn_blocking(|| {
+        let result = platform::downloads::cache_directory().and_then(|directory| {
+            platform::downloads::cleanup(&directory, std::time::SystemTime::now())
+                .map_err(|error| error.to_string())
+        });
+        if let Err(error) = result {
+            tracing::warn!(target: "agent", operation = "downloads.cleanup", message = %error);
+        }
+    });
     let closing = tokio_util::task::TaskTracker::new();
     let shutdown = closing.clone();
     let application = gpui_kit::application()

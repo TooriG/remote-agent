@@ -2,6 +2,7 @@ use agent_core::state::operations as op;
 mod clipboard;
 mod completions;
 mod dictation;
+mod files;
 mod forms;
 mod hosts;
 mod selection;
@@ -92,7 +93,7 @@ enum Update {
     PersistenceError(String),
     LocalCompleted {
         scope: ErrorScope,
-        result: Result<(), String>,
+        result: Result<Option<PathBuf>, String>,
     },
     OnboardingCompleted(Result<(), String>),
 }
@@ -776,8 +777,12 @@ impl Desktop {
             }
             Update::LocalCompleted { scope, result } => {
                 self.busy = self.busy.saturating_sub(1);
-                if let Err(error) = result {
-                    self.local_errors.insert(scope, error);
+                match result {
+                    Ok(Some(path)) => cx.open_with_system(&path),
+                    Ok(None) => {}
+                    Err(error) => {
+                        self.local_errors.insert(scope, error);
+                    }
                 }
                 self.accept_snapshot(window, cx);
             }
@@ -1720,45 +1725,7 @@ impl Desktop {
             },
             move |result| Update::LocalCompleted {
                 scope: error_scope,
-                result,
-            },
-        );
-    }
-    fn download(&mut self, source: String) {
-        let Some(store) = self.session.as_ref().map(|session| session.store.clone()) else {
-            return;
-        };
-        self.busy += 1;
-        let error_scope = ErrorScope::Conversation {
-            draft_key: self.draft_key().clone(),
-        };
-        self.effect(
-            async move {
-                let name = Path::new(&source)
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned();
-                let destination =
-                    tokio::task::spawn_blocking(move || platform::choose_destination(&name))
-                        .await
-                        .map_err(|error| error.to_string())?;
-                if let Some(destination) = destination {
-                    let _ = store
-                        .dispatch(Intent::DownloadFile(op::DownloadFile {
-                            source,
-                            destination: destination
-                                .into_os_string()
-                                .into_string()
-                                .map_err(|_| "download destination is not UTF-8")?,
-                        }))
-                        .await;
-                }
-                Ok(())
-            },
-            move |result| Update::LocalCompleted {
-                scope: error_scope,
-                result,
+                result: result.map(|()| None),
             },
         );
     }

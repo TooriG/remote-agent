@@ -1,6 +1,102 @@
 {
   "sourceLanguage": "ja",
   "strings": {
+    "ファイルを開けません: {0}": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイルを開けません: {0}"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not open file: {0}"
+          }
+        }
+      }
+    },
+    "ファイルを開けません: 通常のファイルではありません": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイルを開けません: 通常のファイルではありません"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not open file: this is not a regular file."
+          }
+        }
+      }
+    },
+    "ファイルを取得・保存できません: {0}": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイルを取得・保存できません: {0}"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not download or save file: {0}"
+          }
+        }
+      }
+    },
+    "一時ファイルを作成できません: {0}": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "一時ファイルを作成できません: {0}"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not create temporary file: {0}"
+          }
+        }
+      }
+    },
+    "保存先のパスを読み取れません": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保存先のパスを読み取れません"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The destination path is not valid UTF-8."
+          }
+        }
+      }
+    },
+    "保存先を選択できません: {0}": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保存先を選択できません: {0}"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not choose a destination: {0}"
+          }
+        }
+      }
+    },
     "\n提案された変更:\n{0}": {
       "localizations": {
         "ja": {

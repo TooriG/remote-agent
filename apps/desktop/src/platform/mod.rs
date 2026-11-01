@@ -23,6 +23,7 @@ use macos as os;
 #[cfg(target_os = "windows")]
 use windows as os;
 
+pub(crate) mod downloads;
 mod microphone;
 #[cfg(target_os = "macos")]
 pub(crate) use microphone::prepare_microphone;
@@ -298,6 +299,20 @@ pub(crate) async fn discover_local_host() -> anyhow::Result<LocalHost> {
         registry.resolve(&preferred)
     })
     .await?
+}
+
+pub(crate) async fn host_is_local(remote: Option<&str>) -> bool {
+    let Some(remote) = remote else {
+        return true;
+    };
+    let Ok(remote) = remote.parse::<Ticket>() else {
+        return false;
+    };
+    matches!(
+        discover_local_host().await,
+        Ok(LocalHost { state: LocalHostState::Ready(local), .. })
+            if local.node_id() == remote.node_id()
+    )
 }
 
 fn start_host(directory: &std::path::Path, isolated: bool) -> anyhow::Result<std::process::Child> {

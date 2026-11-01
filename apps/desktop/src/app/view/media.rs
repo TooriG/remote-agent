@@ -73,19 +73,14 @@ impl Desktop {
                         };
                         return Ok(entry.path);
                     }
-                    store
-                        .dispatch(Intent::DownloadFile(op::DownloadFile {
-                            source: path
-                                .into_os_string()
-                                .into_string()
-                                .map_err(|_| "download source is not UTF-8")?,
-                            destination: destination
-                                .to_str()
-                                .ok_or("download destination is not UTF-8")?
-                                .into(),
-                        }))
-                        .await
-                        .map_err(|error| error.to_string())?;
+                    files::download_to(
+                        &store,
+                        path.into_os_string()
+                            .into_string()
+                            .map_err(|_| "download source is not UTF-8")?,
+                        destination.clone(),
+                    )
+                    .await?;
                     Ok(destination.to_string_lossy().into_owned())
                 },
                 move |result| Update::Image {
@@ -212,10 +207,19 @@ impl Desktop {
     }
 
     pub(in crate::app) fn open_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        if agent_core::presentation::markdown::file_requires_download(&path.to_string_lossy()) {
-            self.download(path.to_string_lossy().into_owned());
-            cx.notify();
-            return;
+        use agent_core::presentation::files::{FileOpenAction, file_open_action};
+        match file_open_action(&path.to_string_lossy()) {
+            FileOpenAction::OpenWithSystem => {
+                self.open_file_with_system(path.to_string_lossy().into_owned());
+                cx.notify();
+                return;
+            }
+            FileOpenAction::Save => {
+                self.download(path.to_string_lossy().into_owned());
+                cx.notify();
+                return;
+            }
+            FileOpenAction::InApp => {}
         }
         if path
             .extension()
