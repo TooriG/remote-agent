@@ -39,6 +39,7 @@ scopeguard = "1.2"
 atomicwrites = "0.4.4"
 anyhow.workspace = true
 dunce.workspace = true
+libc = "0.2"
 alacritty_terminal = "=0.26.0"
 
 [dev-dependencies]
@@ -53,7 +54,6 @@ agent-core = { path = "../agent-core" }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-libc = "0.2"
 aes = "0.9"
 cbc = { version = "0.2", features = ["alloc"] }
 pbkdf2 = "0.13"

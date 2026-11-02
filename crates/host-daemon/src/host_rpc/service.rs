@@ -489,6 +489,8 @@ impl HostRpcService {
                 .into()
             }
             Call::ListFiles(_)
+            | Call::ReadFilePreviewMetadata(_)
+            | Call::ReadFileSlice(_)
             | Call::ResolveFile(_)
             | Call::ReadFile(_)
             | Call::WriteFile(_)

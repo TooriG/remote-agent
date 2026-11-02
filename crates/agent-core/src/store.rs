@@ -47,6 +47,12 @@ pub enum Outcome {
     ResolvedFile {
         entry: crate::models::FileEntry,
     },
+    FilePreviewMetadata {
+        metadata: agent_protocol::file_preview::FilePreviewMetadata,
+    },
+    FileSlice {
+        slice: agent_protocol::file_preview::FileSlice,
+    },
     Directory {
         listing: crate::models::FileList,
     },

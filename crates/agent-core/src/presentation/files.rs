@@ -105,3 +105,5 @@ mod tests {
         }
     }
 }
+mod preview;
+pub use preview::{FilePreviewKind, file_preview_kind, media_preview_kind, preview_mime_type};
