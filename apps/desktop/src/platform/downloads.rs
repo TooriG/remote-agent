@@ -180,7 +180,7 @@ mod tests {
         let cache = tempfile::tempdir().unwrap();
         let (directory, path) = prepare(cache.path(), "video.mp4").unwrap();
         fs::write(&path, b"video").unwrap();
-        directory.keep();
+        let _ = directory.keep();
         let held = fs::OpenOptions::new()
             .read(true)
             .share_mode(1)

@@ -74,7 +74,8 @@ async fn fetch_system_file(
             .map_err(|error| format!("一時ファイルを作成できません: {error}"))?
             .map_err(|error| format!("一時ファイルを作成できません: {error}"))?;
     download_to(store, source, path.clone()).await?;
-    directory.keep();
+    // The viewer reads the file after this returns; retention cleanup removes it.
+    let _ = directory.keep();
     Ok(path)
 }
 
