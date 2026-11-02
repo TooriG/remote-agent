@@ -1204,6 +1204,11 @@ mod composer_tests {
                 cx.notify();
             });
         });
+        window.run_until_parked();
+        let toggle = window.debug_bounds("question-toggle").unwrap();
+        window.simulate_click(toggle.center(), Modifiers::default());
+        window.run_until_parked();
+        assert!(window.debug_bounds("question-choice-notes-a").is_none());
         window.update(|_, cx| {
             desktop.update(cx, |view, cx| {
                 let snapshot = Arc::make_mut(&mut view.snapshot);
@@ -1221,6 +1226,34 @@ mod composer_tests {
         assert!(
             window.debug_bounds("attach").is_some(),
             "the draft returns once the question is gone"
+        );
+        window.update(|window, cx| {
+            desktop.update(cx, |view, cx| {
+                let snapshot = Arc::make_mut(&mut view.snapshot);
+                Arc::make_mut(&mut snapshot.conversations)
+                    .get_mut(&session)
+                    .map(Arc::make_mut)
+                    .unwrap()
+                    .requests
+                    .insert(
+                        "next-request".into(),
+                        Arc::new(Request {
+                            id: "next-request".into(),
+                            target: agent_protocol::requests::RequestTarget::Session,
+                            delivery: agent_protocol::session::RequestDelivery::Awaiting,
+                            body: RequestBody::Question {
+                                questions: vec![question("notes", true)],
+                            },
+                        }),
+                    );
+                view.sync_inputs(window, cx);
+                cx.notify();
+            });
+        });
+        window.run_until_parked();
+        assert!(
+            window.debug_bounds("question-choice-notes-a").is_some(),
+            "a new request opens even when it reuses the previous question's ID"
         );
     }
 

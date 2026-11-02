@@ -97,8 +97,8 @@ pub(super) struct QuestionInput {
     pub(super) text: DraftText,
     /// The question shown; another question replaces the text instead of adopting it.
     shown: Option<(RequestId, String)>,
-    /// Collapsing applies to one question; the next question opens again.
-    pub(super) collapsed: Option<String>,
+    /// A collapse belongs to one request and question.
+    pub(super) collapsed: Option<(RequestId, String)>,
 }
 
 impl QuestionInput {

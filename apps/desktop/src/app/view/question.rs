@@ -26,7 +26,13 @@ impl Desktop {
         Some(ComposerQuestion {
             can_advance: prompt.can_advance && self.snapshot.connected && !busy,
             error: self.snapshot.operation_error(key),
-            collapsed: self.question.collapsed.as_ref() == Some(&prompt.question.id),
+            collapsed: self
+                .question
+                .collapsed
+                .as_ref()
+                .is_some_and(|(request, id)| {
+                    request == &prompt.request_id && id == &prompt.question.id
+                }),
             busy,
             prompt,
         })
@@ -85,7 +91,7 @@ impl Desktop {
         let prompt = &question.prompt;
         let definition = &prompt.question;
         let inactive = question.busy || !prompt.can_respond;
-        let question_id = definition.id.clone();
+        let question_key = (prompt.request_id.clone(), definition.id.clone());
         let collapsed = question.collapsed;
         let header = h_flex()
             .gap_2()
@@ -143,7 +149,7 @@ impl Desktop {
                     }),
                     cx,
                     move |s, _, _| {
-                        s.question.collapsed = (!collapsed).then(|| question_id.clone());
+                        s.question.collapsed = (!collapsed).then(|| question_key.clone());
                     },
                 )
                 .debug_selector(|| "question-toggle".into())
