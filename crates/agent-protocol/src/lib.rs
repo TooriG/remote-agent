@@ -8,7 +8,6 @@ pub mod dsh;
 pub mod editors;
 pub mod error;
 pub mod execution;
-pub mod file_preview;
 pub mod handoff;
 pub mod ids;
 pub mod items;

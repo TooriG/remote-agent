@@ -207,29 +207,6 @@ impl Desktop {
     }
 
     pub(in crate::app) fn open_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        use agent_core::presentation::files::{FileOpenAction, file_open_action};
-        match file_open_action(&path.to_string_lossy()) {
-            FileOpenAction::OpenWithSystem => {
-                self.open_file_with_system(path.to_string_lossy().into_owned());
-                cx.notify();
-                return;
-            }
-            FileOpenAction::Save => {
-                self.download(path.to_string_lossy().into_owned());
-                cx.notify();
-                return;
-            }
-            FileOpenAction::InApp => {}
-        }
-        if path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .and_then(image::ImageFormat::from_extension)
-            .is_some()
-        {
-            self.open_image_gallery(Arc::new(path.to_string_lossy().into_owned()), false, cx);
-            return;
-        }
         if let Some(parent) = path.parent() {
             self.browse(parent.to_string_lossy().into_owned(), cx);
         }
@@ -592,24 +569,15 @@ mod file_panel_tests {
     }
 
     #[gpui::test]
-    fn file_panel_opens_large_images_in_gallery_and_preserves_text_draft(cx: &mut TestAppContext) {
+    fn file_references_use_the_panel_without_previews_or_implicit_downloads(
+        cx: &mut TestAppContext,
+    ) {
         use agent_protocol::models::{FileEntry, FileList};
 
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("large.PNG");
-        let image = image::RgbaImage::from_fn(1024, 1024, |x, y| {
-            let n = (y * 1024 + x)
-                .wrapping_mul(747796405)
-                .wrapping_add(2891336453);
-            let n = ((n >> ((n >> 28) + 4)) ^ n).wrapping_mul(277803737);
-            image::Rgba([(n >> 16) as u8, (n >> 8) as u8, n as u8, 255])
-        });
-        image.save(&path).unwrap();
-        let size = std::fs::metadata(&path).unwrap().len();
-        assert!(
-            size > 1024 * 1024,
-            "regression fixture must exceed the editor limit"
-        );
+        // Routing must not depend on a preview decoder or the text-size limit.
+        let size = 2 * 1024 * 1024;
         let cwd = directory.path().to_string_lossy().into_owned();
         let source = path.to_string_lossy().into_owned();
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -678,78 +646,77 @@ mod file_panel_tests {
         window.run_until_parked();
         window.update(|window, cx| {
             desktop.update(cx, |view, cx| {
-                let gallery = view
-                    .media
-                    .gallery
-                    .as_ref()
-                    .expect("file click must open the image gallery");
-                assert_eq!(gallery.current_image().0.as_str(), source);
+                assert!(
+                    view.media.gallery.is_none(),
+                    "file references must not open a media preview"
+                );
+                assert_eq!(view.panels.get(view.panel_scope()).kind(), Panel::File);
+                assert_eq!(
+                    view.panels
+                        .get(view.panel_scope())
+                        .selected()
+                        .unwrap()
+                        .path
+                        .as_deref(),
+                    Some(source.as_str())
+                );
                 assert_eq!(
                     view.composer.input.read(cx).value().as_ref(),
                     "Keep this draft"
                 );
-                assert!(
-                    view.snapshot.workspace.file.is_none(),
-                    "images must bypass the text editor"
-                );
-                view.media.gallery = None;
-                for link in [source.as_str(), "~/large.PNG"] {
-                    view.open_conversation_link(link, cx);
-                    // This view fixture has no connection; deliver the Host's
-                    // metadata result through the production completion path.
+                for name in [
+                    "large.PNG",
+                    "clip.mp4",
+                    "song.mp3",
+                    "document.pdf",
+                    "installer.EXE",
+                    "archive.zip",
+                    "notes.docx",
+                    "font.ttf",
+                    "readme.txt",
+                ] {
+                    let target = directory.path().join(name).to_string_lossy().into_owned();
+                    view.panels.set_open(view.panel_scope(), false);
+                    view.open_conversation_link(&target, cx);
+                    // The fixture is offline; deliver the Host's resolution
+                    // through the same production completion used by links.
                     view.operation_completed(
                         OperationCompletion::OpenFile(view.snapshot.epoch),
-                        Ok(resolved(&source, false)),
+                        Ok(resolved(&target, false)),
                         window,
                         cx,
                     );
-                    assert!(
-                        view.media.gallery.is_some(),
-                        "Markdown links use the same image viewer"
+                    let panel = view.panels.get(view.panel_scope());
+                    assert!(panel.open);
+                    assert_eq!(panel.kind(), Panel::File, "{name}");
+                    assert_eq!(
+                        panel.selected().unwrap().path.as_deref(),
+                        Some(target.as_str())
+                    );
+                    assert!(view.media.gallery.is_none());
+                    assert_eq!(
+                        view.busy, 0,
+                        "{name} must not start an implicit download or OS launch"
                     );
                     assert_eq!(
-                        view.media
-                            .gallery
-                            .as_ref()
-                            .unwrap()
-                            .current_image()
-                            .0
-                            .as_str(),
-                        source
+                        view.composer.input.read(cx).value().as_ref(),
+                        "Keep this draft"
                     );
-                    view.media.gallery = None;
                 }
-                view.panels.set_open(view.panel_scope(), false);
-                let installer = directory
-                    .path()
-                    .join("ImoutoTank-Multiplayer.EXE")
-                    .to_string_lossy()
-                    .into_owned();
-                view.open_conversation_link(&installer, cx);
-                view.operation_completed(
-                    OperationCompletion::OpenFile(view.snapshot.epoch),
-                    Ok(resolved(&installer, false)),
-                    window,
-                    cx,
-                );
-                assert!(
-                    !view.panels.get(view.panel_scope()).open,
-                    "installers must bypass the editor panel"
-                );
-                assert!(view.media.gallery.is_none());
+                // The existing gallery remains available to its explicit image
+                // entry points; only file-reference routing is being replaced.
+                view.open_image_gallery(Arc::new(source.clone()), false, cx);
                 assert_eq!(
-                    view.composer.input.read(cx).value().as_ref(),
-                    "Keep this draft"
+                    view.media
+                        .gallery
+                        .as_ref()
+                        .unwrap()
+                        .current_image()
+                        .0
+                        .as_str(),
+                    source
                 );
-                view.open_file(directory.path().join("readme.txt"), cx);
-                assert!(
-                    view.media.gallery.is_none(),
-                    "text files must retain the editor route"
-                );
-                assert!(
-                    view.panels.get(view.panel_scope()).open
-                        && view.panels.get(view.panel_scope()).kind() == Panel::File
-                );
+                view.media.gallery = None;
                 view.open_conversation_link("~/Documents", cx);
                 view.operation_completed(
                     OperationCompletion::OpenFile(view.snapshot.epoch),
@@ -758,6 +725,7 @@ mod file_panel_tests {
                     cx,
                 );
                 assert_eq!(view.panels.get(view.panel_scope()).kind(), Panel::Files);
+                let before = view.panels.get(view.panel_scope());
                 view.operation_completed(
                     OperationCompletion::OpenFile(view.snapshot.epoch + 1),
                     Ok(resolved(&source, false)),
@@ -768,6 +736,7 @@ mod file_panel_tests {
                     view.media.gallery.is_none(),
                     "a stale Host response must not open a file"
                 );
+                assert_eq!(view.panels.get(view.panel_scope()), before);
             });
         });
     }

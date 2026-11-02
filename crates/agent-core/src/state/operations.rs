@@ -68,8 +68,6 @@ pub enum Intent {
     RevokeDevice(RevokeDevice),
     ListFiles(ListFiles),
     ResolveFile(ResolveFile),
-    ReadFilePreviewMetadata(ReadFilePreviewMetadata),
-    ReadFileSlice(ReadFileSlice),
     ReadFileOpenCapabilities(ReadFileOpenCapabilities),
     OpenInEditor(OpenInEditor),
     ReadFile(ReadFile),

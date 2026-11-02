@@ -93,7 +93,7 @@ enum Update {
     PersistenceError(String),
     LocalCompleted {
         scope: ErrorScope,
-        result: Result<Option<PathBuf>, String>,
+        result: Result<(), String>,
     },
     OnboardingCompleted(Result<(), String>),
 }
@@ -802,8 +802,7 @@ impl Desktop {
             Update::LocalCompleted { scope, result } => {
                 self.busy = self.busy.saturating_sub(1);
                 match result {
-                    Ok(Some(path)) => cx.open_with_system(&path),
-                    Ok(None) => {}
+                    Ok(()) => {}
                     Err(error) => {
                         self.local_errors.insert(scope, error);
                     }
@@ -1749,7 +1748,7 @@ impl Desktop {
             },
             move |result| Update::LocalCompleted {
                 scope: error_scope,
-                result: result.map(|()| None),
+                result,
             },
         );
     }

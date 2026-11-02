@@ -62,6 +62,18 @@ pub enum MarkdownFileSurface {
     Mobile,
 }
 
+pub fn file_workspace_relative_path(path: &str, workspace_root: &str) -> Option<String> {
+    paths::relative(path, workspace_root)
+}
+
+pub fn file_path_for_clipboard(path: &str, host_path: &str) -> String {
+    if paths::windows(host_path) {
+        path.replace('/', "\\")
+    } else {
+        path.into()
+    }
+}
+
 pub(super) fn file_reference(source: &str, syntax: Syntax) -> Option<MarkdownFileReference> {
     let candidate = detection::candidate(source, syntax)?;
     let source = candidate.trim();

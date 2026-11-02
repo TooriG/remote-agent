@@ -2,33 +2,11 @@
 
 use crate::{models::*, session::*};
 use agent_protocol::editors::*;
-use agent_protocol::file_preview::*;
 use agent_protocol::live_activity::*;
 use agent_protocol::permissions::*;
 use agent_protocol::project_import::ScanProjects;
 use agent_protocol::{browser::*, composer::*, diagnostics::*, operations::*, requests::*};
 use serde_json::Value;
-#[uniffi::remote(Record)]
-struct ReadFilePreviewMetadata {
-    pub path: String,
-}
-#[uniffi::remote(Record)]
-struct FilePreviewMetadata {
-    pub entry: FileEntry,
-    pub mime_type: Option<String>,
-    pub revision: String,
-}
-#[uniffi::remote(Record)]
-struct ReadFileSlice {
-    pub path: String,
-    pub offset: u64,
-    pub length: u32,
-    pub revision: String,
-}
-#[uniffi::remote(Record)]
-struct FileSlice {
-    pub bytes: Vec<u8>,
-}
 #[uniffi::remote(Enum)]
 enum EditorId {
     Cursor,

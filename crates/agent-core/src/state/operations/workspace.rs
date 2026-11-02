@@ -31,30 +31,8 @@ mod path_tests {
     }
 }
 
-pub use agent_protocol::file_preview::{ReadFilePreviewMetadata, ReadFileSlice};
 pub use agent_protocol::operations::ListFiles;
 pub use agent_protocol::operations::ResolveFile;
-
-impl Operation for ReadFilePreviewMetadata {
-    rpc_operation!();
-    fn outcome(output: &mut Self::Output) -> Outcome {
-        Outcome::FilePreviewMetadata {
-            metadata: output.clone(),
-        }
-    }
-}
-
-impl Operation for ReadFileSlice {
-    rpc_operation!();
-    fn prepare(&mut self, _: &mut Snapshot) -> Result<(), String> {
-        self.validate().map_err(str::to_owned)
-    }
-    fn outcome(output: &mut Self::Output) -> Outcome {
-        Outcome::FileSlice {
-            slice: std::mem::take(output),
-        }
-    }
-}
 
 impl Operation for ResolveFile {
     rpc_operation!();

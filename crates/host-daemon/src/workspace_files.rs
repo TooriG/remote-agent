@@ -24,7 +24,6 @@ use ring::{
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::SessionId;
-mod preview;
 
 const EDIT_LIMIT: u64 = 1024 * 1024;
 pub(crate) const TRANSFER_LIMIT: u64 = 512 * 1024 * 1024;
@@ -154,10 +153,6 @@ impl WorkspaceFiles {
 
     fn file_request(&self, session: SessionId, request: Call) -> Result<Body> {
         match request {
-            Call::ReadFilePreviewMetadata(params) => {
-                preview::metadata(&params.path).map(Body::from)
-            }
-            Call::ReadFileSlice(params) => preview::read(params).map(Body::from),
             Call::ListFiles(params) => {
                 let path = dunce::canonicalize(absolute_path(&params.path)?)?;
                 let mut entries = Vec::new();

@@ -23,7 +23,6 @@ use macos as os;
 #[cfg(target_os = "windows")]
 use windows as os;
 
-pub(crate) mod downloads;
 mod microphone;
 #[cfg(target_os = "macos")]
 pub(crate) use microphone::prepare_microphone;
