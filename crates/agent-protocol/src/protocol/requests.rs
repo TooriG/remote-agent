@@ -110,7 +110,7 @@ contracts! {
     ListFiles, "host/file/list" => (op::ListFiles, m::FileList) [clone],
     ResolveFile, "host/file/resolve" => (op::ResolveFile, m::FileEntry) [clone],
     ReadFilePreviewMetadata, "host/file/previewMetadata" => (crate::file_preview::ReadFilePreviewMetadata, crate::file_preview::FilePreviewMetadata) [clone],
-    ReadFileSlice, "host/file/readSlice" => (crate::file_preview::ReadFileSlice, crate::file_preview::FileSlice) [clone],
+    ReadFileSlice, "host/file/readSlice" => (crate::file_preview::ReadFileSlice, crate::file_preview::FileSlice) [clone, crate::file_preview::ReadFileSlice::validate_output],
     ReadFileOpenCapabilities, "host/file/openCapabilities" => (crate::editors::ReadFileOpenCapabilities, crate::editors::FileOpenCapabilities) [clone],
     OpenInEditor, "host/file/openInEditor" => (crate::editors::OpenInEditor, m::Empty) [clone],
     ReadFile, "host/file/read" => (op::ListFiles, m::FileContent),

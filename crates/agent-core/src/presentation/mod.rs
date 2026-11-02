@@ -11,8 +11,8 @@
 pub mod agents;
 pub mod connections;
 pub mod diff;
-pub mod error;
 pub mod editors;
+pub mod error;
 pub mod files;
 pub mod model_settings;
 pub mod permissions;

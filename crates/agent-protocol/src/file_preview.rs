@@ -40,6 +40,13 @@ impl ReadFileSlice {
         }
         Ok(())
     }
+
+    pub fn validate_output(&self, slice: &FileSlice) -> Result<(), &'static str> {
+        if slice.bytes.len() > self.length as usize {
+            return Err("file slice exceeds the requested length");
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,6 +66,67 @@ impl std::fmt::Debug for FileSlice {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slice_contract_rejects_invalid_paths_revisions_and_oversized_replies() {
+        let request = ReadFileSlice {
+            path: "/file".into(),
+            offset: 0,
+            length: 4,
+            revision: "revision".into(),
+        };
+        for path in ["", "\0", "/file\0.txt"] {
+            assert!(
+                ReadFileSlice {
+                    path: path.into(),
+                    ..request.clone()
+                }
+                .validate()
+                .is_err()
+            );
+        }
+        for revision in [String::new(), "x".repeat(257)] {
+            assert!(
+                ReadFileSlice {
+                    revision,
+                    ..request.clone()
+                }
+                .validate()
+                .is_err()
+            );
+        }
+        assert!(
+            ReadFileSlice {
+                revision: "x".repeat(256),
+                ..request.clone()
+            }
+            .validate()
+            .is_ok()
+        );
+        for size in [0, 3, 4] {
+            assert!(
+                request
+                    .validate_output(&FileSlice {
+                        bytes: vec![0; size]
+                    })
+                    .is_ok()
+            );
+        }
+        assert!(
+            request
+                .validate_output(&FileSlice { bytes: vec![0; 5] })
+                .is_err()
+        );
+        assert!(
+            ReadFileSlice {
+                length: 0,
+                offset: u64::MAX,
+                ..request
+            }
+            .validate()
+            .is_ok()
+        );
+    }
     #[test]
     fn slices_are_bounded_and_debug_never_exposes_file_contents() {
         let mut request = ReadFileSlice {

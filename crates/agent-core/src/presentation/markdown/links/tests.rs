@@ -16,7 +16,7 @@ use super::*;
 #[case("docs/My%20Folder/", "docs/My Folder/", None, None)]
 #[case("資料.備份", "資料.備份", None, None)]
 #[case("Résumé%20final.pdf", "Résumé final.pdf", None, None)]
-#[case("src/notes%23one.md?view=1#L2", "src/notes#one.md", Some(2), None)]
+#[case("/tmp/notes%23one.md?view=1#L2", "/tmp/notes#one.md", Some(2), None)]
 fn explicit_destinations(
     #[case] source: &str,
     #[case] path: &str,
@@ -34,7 +34,8 @@ fn explicit_destinations(
 #[case("Makefile:12", true, false)]
 #[case("README.md", false, false)]
 #[case("origin/main", false, false)]
-#[case("z-ai/glm-5.3", false, false)]
+// The mobile renderer enriches code with its own regex, which accepts model-like paths.
+#[case("z-ai/glm-5.3", false, true)]
 #[case("share/man/ls.1", true, true)]
 #[case("src/main.rs/", false, false)]
 #[case("./patches/", true, true)]
@@ -61,6 +62,7 @@ fn code_span_grammars(#[case] text: &str, #[case] desktop: bool, #[case] mobile:
 #[case("TODO:12")]
 #[case("patches")]
 #[case("/chat/settings#L3")]
+#[case("src/notes%23one.md?view=1#L2")]
 fn other_destinations_are_not_files(#[case] text: &str) {
     assert!(file_reference(text, Syntax::Link).is_none());
 }

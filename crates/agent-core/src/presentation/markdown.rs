@@ -908,7 +908,8 @@ mod tests {
         assert!(presentation.code_headers.is_empty());
         assert_eq!(
             markdown_presentation("<file:///tmp/main.rs>").source,
-            "[`main.rs`](<file:///tmp/main.rs>)"
+            // T3 treats the authored file URL as a descriptive label, retaining it before the chip.
+            "file:///tmp/main.rs [`main.rs`](<file:///tmp/main.rs>)"
         );
     }
 

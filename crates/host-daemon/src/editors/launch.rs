@@ -55,15 +55,97 @@ pub(super) async fn spawn(command: &Path, arguments: &[String]) -> Result<(), St
             "This editor launcher cannot open paths containing line breaks or double quotes".into(),
         );
     }
-    tokio::process::Command::new(command)
+    let mut process = tokio::process::Command::new(command);
+    process
         .args(arguments)
+        .env_remove("ELECTRON_RUN_AS_NODE")
+        .envs(graphical_session_env().await)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .kill_on_drop(false)
+        .kill_on_drop(false);
+    detach(&mut process);
+    process
         .spawn()
         .map(|_| ())
         .map_err(|error| format!("Unable to launch {}: {error}", command.display()))
+}
+
+fn detach(process: &mut tokio::process::Command) {
+    #[cfg(unix)]
+    // Like T3's detached launches, the editor owns a session independent of the Host.
+    // SAFETY: setsid is async-signal-safe and the callback touches no shared Rust state.
+    unsafe {
+        process.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    #[cfg(windows)]
+    {
+        // Detached native Windows PowerShell exits without executing its script.
+        let powershell = process
+            .as_std()
+            .get_program()
+            .as_encoded_bytes()
+            .rsplit(|byte| matches!(*byte, b'/' | b'\\'))
+            .next()
+            .is_some_and(|name| name.eq_ignore_ascii_case(b"powershell.exe"));
+        if !powershell {
+            process.creation_flags(0x00000008 | 0x00000200);
+        }
+    }
+}
+
+async fn graphical_session_env() -> Vec<(String, String)> {
+    if !cfg!(target_os = "linux")
+        || ["DISPLAY", "WAYLAND_DISPLAY"]
+            .iter()
+            .any(|name| std::env::var(name).is_ok_and(|value| !value.trim().is_empty()))
+    {
+        return Vec::new();
+    }
+    let mut command = tokio::process::Command::new("busctl");
+    command
+        .args([
+            "--user",
+            "--json=short",
+            "get-property",
+            "org.freedesktop.systemd1",
+            "/org/freedesktop/systemd1",
+            "org.freedesktop.systemd1.Manager",
+            "Environment",
+        ])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let Ok(Ok(output)) = tokio::time::timeout(Duration::from_secs(2), command.output()).await
+    else {
+        return Vec::new();
+    };
+    decode_graphical_env(&output.stdout)
+}
+
+fn decode_graphical_env(bytes: &[u8]) -> Vec<(String, String)> {
+    #[derive(serde::Deserialize)]
+    struct Environment {
+        data: Vec<String>,
+    }
+    let Ok(environment) = serde_json::from_slice::<Environment>(bytes) else {
+        return Vec::new();
+    };
+    environment
+        .data
+        .into_iter()
+        .filter_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            ["DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY"]
+                .contains(&key)
+                .then(|| (key.to_owned(), value.to_owned()))
+        })
+        .collect()
 }
 
 pub(super) fn powershell_path() -> PathBuf {
@@ -216,6 +298,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn manager_environment_preserves_raw_values_and_only_imports_graphical_keys() {
+        assert_eq!(decode_graphical_env(br#"{"data":["DISPLAY=:0","XAUTHORITY=/run/user/1000/path with spaces","WAYLAND_DISPLAY=wayland-1","PATH=/unrelated/bin","OTHER=value=with=equals","malformed"]}"#), [
+            ("DISPLAY".into(), ":0".into()),
+            ("XAUTHORITY".into(), "/run/user/1000/path with spaces".into()),
+            ("WAYLAND_DISPLAY".into(), "wayland-1".into()),
+        ]);
+        for invalid in [
+            b"not JSON".as_slice(),
+            br#"{"data":null}"#,
+            br#"{"other":[]}"#,
+        ] {
+            assert!(decode_graphical_env(invalid).is_empty());
+        }
+    }
+
+    #[test]
     fn powershell_source_preserves_quotes_and_selects_the_original_path() {
         let source = reveal_source(r"C:\資料\a'b.txt", r"C:\資料");
         assert!(source.contains("'C:\\資料\\a''b.txt'"));
@@ -225,7 +323,9 @@ mod tests {
             .decode(args.last().unwrap())
             .unwrap();
         let units = bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
             .collect::<Vec<_>>();
         assert_eq!(String::from_utf16(&units).unwrap(), source);

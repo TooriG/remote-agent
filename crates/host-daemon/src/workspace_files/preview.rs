@@ -108,26 +108,24 @@ fn header_mime(bytes: &[u8]) -> Option<&'static str> {
         .next()
         .unwrap_or_default()
         .to_owned();
-    let words = line
-        .split(|char: char| !char.is_ascii_alphanumeric() && char != '.' && char != '_')
-        .collect::<Vec<_>>();
-    if words.iter().any(|word| {
-        word.strip_prefix("python").is_some_and(|suffix| {
-            suffix
-                .chars()
-                .all(|char| char.is_ascii_digit() || char == '.')
-        })
-    }) {
-        return Some("text/x-python");
-    }
-    [
-        (&["node", "nodejs"][..], "text/javascript"),
-        (&["ruby"][..], "text/x-ruby"),
-        (&["sh", "bash", "zsh", "fish"][..], "text/x-shellscript"),
-    ]
-    .into_iter()
-    .find(|(interpreters, _)| words.iter().any(|word| interpreters.contains(word)))
-    .map(|(_, mime)| mime)
+    // JavaScript's word boundaries are ASCII, including next to non-Latin text.
+    static INTERPRETERS: std::sync::LazyLock<[(regex::Regex, &str); 4]> =
+        std::sync::LazyLock::new(|| {
+            [
+                (r"(?-u:\b)python[0-9.]*(?-u:\b)", "text/x-python"),
+                (r"(?-u:\b)(?:node|nodejs)(?-u:\b)", "text/javascript"),
+                (r"(?-u:\b)ruby(?-u:\b)", "text/x-ruby"),
+                (
+                    r"(?-u:\b)(?:sh|bash|zsh|fish)(?-u:\b)",
+                    "text/x-shellscript",
+                ),
+            ]
+            .map(|(pattern, mime)| (regex::Regex::new(pattern).unwrap(), mime))
+        });
+    INTERPRETERS
+        .iter()
+        .find(|(pattern, _)| pattern.is_match(&line))
+        .map(|(_, mime)| *mime)
 }
 
 #[cfg(test)]
@@ -151,10 +149,58 @@ mod tests {
         assert_eq!(read(last).unwrap().bytes, b"89");
         fs::write(&path, b"changed length").unwrap();
         assert!(
-            read(request)
+            read(request.clone())
                 .unwrap_err()
                 .to_string()
                 .contains("revision_conflict")
+        );
+        let refreshed = super::metadata(path.to_str().unwrap()).unwrap();
+        let request = ReadFileSlice {
+            offset: 0,
+            revision: refreshed.revision,
+            ..request
+        };
+        assert_eq!(read(request.clone()).unwrap().bytes, b"chan");
+        assert!(
+            read(ReadFileSlice {
+                offset: 14,
+                ..request.clone()
+            })
+            .unwrap()
+            .bytes
+            .is_empty()
+        );
+        assert!(
+            read(ReadFileSlice {
+                offset: 15,
+                ..request
+            })
+            .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preview_metadata_and_reads_preserve_a_symlinks_display_name() {
+        let root = tempfile::tempdir().unwrap();
+        let contents = root.path().join("contents");
+        fs::write(&contents, b"<svg/>").unwrap();
+        let named_path = root.path().join("chart.svg");
+        std::os::unix::fs::symlink(&contents, &named_path).unwrap();
+        let metadata = metadata(named_path.to_str().unwrap()).unwrap();
+        assert_eq!(metadata.entry.path, named_path.to_str().unwrap());
+        assert_eq!(metadata.entry.name, "chart.svg");
+        assert!(!metadata.entry.directory);
+        assert_eq!(
+            read(ReadFileSlice {
+                path: metadata.entry.path,
+                offset: 0,
+                length: 6,
+                revision: metadata.revision,
+            })
+            .unwrap()
+            .bytes,
+            b"<svg/>"
         );
     }
     #[test]
@@ -169,5 +215,15 @@ mod tests {
             Some("text/javascript")
         );
         assert_eq!(header_mime(b"plain text"), None);
+        assert_eq!(
+            header_mime(b"#!/bin/bash.exe\n"),
+            Some("text/x-shellscript")
+        );
+        assert_eq!(
+            header_mime("#!/usr/bin/python日本語\n".as_bytes()),
+            Some("text/x-python")
+        );
+        assert_eq!(header_mime(b"#!/usr/bin/python_helper\n"), None);
+        assert_eq!(header_mime(b"#!/usr/bin/ruby.rb\n"), Some("text/x-ruby"));
     }
 }
