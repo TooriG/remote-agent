@@ -98,6 +98,7 @@ pub struct Claude {
     native_home: PathBuf,
     native_inherited: bool,
     accounts: AsyncMutex<accounts::Accounts>,
+    account_discovery: AsyncMutex<()>,
     records: AsyncMutex<HashMap<String, Arc<AsyncMutex<Record>>>>,
     processes: Arc<Semaphore>,
     events: mpsc::Sender<AgentEvent>,
@@ -174,6 +175,7 @@ impl Claude {
         let (events, event_receiver) = mpsc::channel(256);
         Ok(Self {
             accounts: AsyncMutex::new(accounts),
+            account_discovery: AsyncMutex::new(()),
             program,
             directory,
             native_home,
@@ -1678,13 +1680,18 @@ fn now_ms() -> u64 {
 #[async_trait::async_trait]
 impl crate::providers::Identity for Claude {
     async fn list(&self) -> Result<op::Accounts, crate::providers::Failure> {
-        let (accounts, selected) = self
-            .accounts
-            .lock()
-            .await
-            .list()
-            .await
-            .map_err(|e| crate::providers::Failure::new("account_operation_failed", e))?;
+        // Serialize native identity discovery without holding the account state
+        // lock across CLI/OAuth I/O. Cached models and skills still need to read
+        // the selected home while that discovery is running.
+        let _discovery = self.account_discovery.lock().await;
+        let refresh = self.accounts.lock().await.native_refresh();
+        if let Some((revision, refresh)) = refresh {
+            let info = refresh
+                .await
+                .map_err(|e| crate::providers::Failure::new("account_operation_failed", e))?;
+            self.accounts.lock().await.accept_native(revision, info);
+        }
+        let (accounts, selected) = self.accounts.lock().await.list();
         Ok(op::Accounts {
             accounts,
             selected: selected

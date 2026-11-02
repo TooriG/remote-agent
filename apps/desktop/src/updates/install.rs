@@ -239,6 +239,34 @@ fn detached(command: &mut Command) {
     }
 }
 
+fn app_launch_command(
+    destination: &Path,
+    executable: &Path,
+    directory: &Path,
+    isolated: bool,
+) -> Command {
+    if cfg!(target_os = "macos") {
+        // LaunchServices starts an application, rather than inheriting the
+        // detached updater's process type and QoS ceiling. Keep the same state
+        // scope even when the app was originally launched with custom paths.
+        let mut command = Command::new("/usr/bin/open");
+        command
+            .args(["-n", "-a"])
+            .arg(destination)
+            .args(["--env", "AGENT_STATE_DIR", "--env", "AGENT_ISOLATED_HOST"])
+            .env("AGENT_STATE_DIR", directory)
+            .env("AGENT_ISOLATED_HOST", if isolated { "1" } else { "0" });
+        for key in ["AGENT_ACCOUNT_STATE_DIR", "AGENT_CODEX", "AGENT_CLAUDE"] {
+            if std::env::var_os(key).is_some() {
+                command.args(["--env", key]);
+            }
+        }
+        command
+    } else {
+        Command::new(executable)
+    }
+}
+
 pub async fn apply(path: &Path) -> Result<()> {
     let plan: Plan = serde_json::from_slice(&fs::read(path)?)?;
     let job = path.parent().context("updater directory unavailable")?;
@@ -299,9 +327,22 @@ pub async fn apply(path: &Path) -> Result<()> {
             error: result.as_ref().err().map(|e| format!("{e:#}")),
         },
     )?;
-    let mut command = Command::new(&plan.executable);
+    let mut command = app_launch_command(
+        &plan.destination,
+        &plan.executable,
+        &plan.directory,
+        plan.isolated,
+    );
     detached(&mut command);
-    command.spawn()?;
+    let mut child = command
+        .spawn()
+        .context("更新後のBexを起動できませんでした。")?;
+    if cfg!(target_os = "macos") {
+        ensure!(
+            child.wait()?.success(),
+            "更新後のBexを起動できませんでした。"
+        );
+    }
     if result.is_ok() {
         if plan.backup.exists() {
             fs::remove_dir_all(&plan.backup)?;
@@ -407,6 +448,39 @@ async fn wait_for_recovery(directory: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relaunch_preserves_the_state_scope_and_uses_the_platform_application_launcher() {
+        let bundle = Path::new("/Applications/Bex Dev.app");
+        let executable = bundle.join("Contents/MacOS/bex");
+        let state = Path::new("/fixture/custom state");
+        for isolated in [false, true] {
+            let command = app_launch_command(bundle, &executable, state, isolated);
+            if cfg!(target_os = "macos") {
+                assert_eq!(command.get_program(), "/usr/bin/open");
+                assert_eq!(
+                    command.get_args().take(3).collect::<Vec<_>>(),
+                    [
+                        std::ffi::OsStr::new("-n"),
+                        std::ffi::OsStr::new("-a"),
+                        bundle.as_os_str()
+                    ]
+                );
+                let environment: std::collections::HashMap<_, _> = command.get_envs().collect();
+                assert_eq!(
+                    environment[std::ffi::OsStr::new("AGENT_STATE_DIR")],
+                    Some(state.as_os_str())
+                );
+                assert_eq!(
+                    environment[std::ffi::OsStr::new("AGENT_ISOLATED_HOST")],
+                    Some(std::ffi::OsStr::new(if isolated { "1" } else { "0" }))
+                );
+            } else {
+                assert_eq!(command.get_program(), executable.as_os_str());
+                assert_eq!(command.get_args().count(), 0);
+            }
+        }
+    }
 
     fn plan(directory: &Path) -> Plan {
         let destination = directory.join("installed");

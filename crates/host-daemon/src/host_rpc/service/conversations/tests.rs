@@ -42,6 +42,8 @@ pub(in crate::host_rpc::service) struct NativeAgent {
     open_error: Mutex<Option<Failure>>,
     pub(in crate::host_rpc::service) fail_list: AtomicUsize,
     pub(in crate::host_rpc::service) fail_accounts: AtomicUsize,
+    pub(in crate::host_rpc::service) accounts_gate: tokio::sync::Semaphore,
+    pub(in crate::host_rpc::service) accounts_started: tokio::sync::Notify,
     events: mpsc::Sender<AgentEvent>,
     receiver: Mutex<Option<mpsc::Receiver<AgentEvent>>>,
 }
@@ -73,6 +75,8 @@ impl NativeAgent {
             open_error: Mutex::new(None),
             fail_list: AtomicUsize::new(0),
             fail_accounts: AtomicUsize::new(0),
+            accounts_gate: tokio::sync::Semaphore::new(1),
+            accounts_started: tokio::sync::Notify::new(),
             events,
             receiver: Mutex::new(Some(receiver)),
         })
@@ -96,6 +100,8 @@ impl NativeAgent {
             open_error: Mutex::new(None),
             fail_list: AtomicUsize::new(0),
             fail_accounts: AtomicUsize::new(0),
+            accounts_gate: tokio::sync::Semaphore::new(1),
+            accounts_started: tokio::sync::Notify::new(),
             events,
             receiver: Mutex::new(Some(receiver)),
         })
@@ -112,6 +118,8 @@ impl NativeAgent {
 #[async_trait::async_trait]
 impl Identity for NativeAgent {
     async fn list(&self) -> Result<op::Accounts, Failure> {
+        self.accounts_started.notify_one();
+        let _permit = self.accounts_gate.acquire().await.unwrap();
         if self.fail_accounts.swap(0, Ordering::SeqCst) != 0 {
             return Err(Failure::new(
                 "fixture_accounts_failed",

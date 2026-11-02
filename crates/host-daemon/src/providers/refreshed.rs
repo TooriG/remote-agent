@@ -8,6 +8,7 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
+use tokio::sync::OnceCell;
 
 /// Discovery runs again in the background once a result is this old.
 pub(crate) const DISCOVERY_FRESH: Duration = Duration::from_secs(30);
@@ -16,10 +17,14 @@ const ENTRIES: usize = 64;
 
 pub(crate) struct Refreshed<K, V> {
     fresh: Duration,
-    entries: Arc<Mutex<HashMap<K, Entry<V>>>>,
+    entries: Mutex<HashMap<K, Arc<Entry<V>>>>,
 }
 
 struct Entry<V> {
+    ready: OnceCell<Mutex<Cached<V>>>,
+}
+
+struct Cached<V> {
     value: V,
     at: Instant,
     refreshing: bool,
@@ -27,7 +32,7 @@ struct Entry<V> {
 
 impl<K, V> Refreshed<K, V>
 where
-    K: Eq + Hash + Clone + Send + 'static,
+    K: Eq + Hash,
     V: Clone + Send + 'static,
 {
     pub(crate) fn new(fresh: Duration) -> Self {
@@ -42,54 +47,148 @@ where
     where
         L: Future<Output = Result<V, String>> + Send + 'static,
     {
-        let cached = {
+        let entry = {
             let mut entries = self.entries.lock().unwrap();
-            entries.get_mut(&key).map(|entry| {
-                let stale = !entry.refreshing && entry.at.elapsed() >= self.fresh;
-                entry.refreshing |= stale;
-                (entry.value.clone(), stale)
-            })
+            if entries.len() >= ENTRIES && !entries.contains_key(&key) {
+                entries.clear();
+            }
+            entries
+                .entry(key)
+                .or_insert_with(|| {
+                    Arc::new(Entry {
+                        ready: OnceCell::new(),
+                    })
+                })
+                .clone()
         };
-        let Some((value, stale)) = cached else {
-            let value = load().await?;
-            self.store(key, value.clone());
-            return Ok(value);
+        let Some(cached) = entry.ready.get() else {
+            // Concurrent first readers share one discovery. Cancelling its
+            // caller releases OnceCell's initializer so another reader can retry.
+            return entry
+                .ready
+                .get_or_try_init(|| async {
+                    load().await.map(|value| {
+                        Mutex::new(Cached {
+                            value,
+                            at: Instant::now(),
+                            refreshing: false,
+                        })
+                    })
+                })
+                .await
+                .map(|cached| cached.lock().unwrap().value.clone());
+        };
+        let (value, stale) = {
+            let mut cached = cached.lock().unwrap();
+            let stale = !cached.refreshing && cached.at.elapsed() >= self.fresh;
+            cached.refreshing |= stale;
+            (cached.value.clone(), stale)
         };
         if stale {
-            let (entries, refresh) = (self.entries.clone(), load());
+            let refresh = load();
             tokio::spawn(async move {
                 let refreshed = refresh.await;
-                let mut entries = entries.lock().unwrap();
-                if let Some(entry) = entries.get_mut(&key) {
-                    entry.refreshing = false;
-                    if let Ok(value) = refreshed {
-                        (entry.value, entry.at) = (value, Instant::now());
-                    }
+                let mut cached = entry.ready.get().unwrap().lock().unwrap();
+                cached.refreshing = false;
+                if let Ok(value) = refreshed {
+                    (cached.value, cached.at) = (value, Instant::now());
                 }
             });
         }
         Ok(value)
-    }
-
-    fn store(&self, key: K, value: V) {
-        let mut entries = self.entries.lock().unwrap();
-        if entries.len() >= ENTRIES && !entries.contains_key(&key) {
-            entries.clear();
-        }
-        entries.insert(
-            key,
-            Entry {
-                value,
-                at: Instant::now(),
-                refreshing: false,
-            },
-        );
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn concurrent_first_reads_share_discovery_without_blocking_other_keys() {
+        let cache = Arc::new(Refreshed::new(Duration::from_secs(60)));
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let first = {
+            let (cache, started, release) = (cache.clone(), started.clone(), release.clone());
+            tokio::spawn(async move {
+                cache
+                    .read("key", || async move {
+                        started.notify_one();
+                        release.notified().await;
+                        Ok(7)
+                    })
+                    .await
+            })
+        };
+        tokio::time::timeout(Duration::from_secs(3), started.notified())
+            .await
+            .unwrap();
+        let mut second = Box::pin(cache.read("key", || async {
+            panic!("the first discovery is already running")
+        }));
+        assert!(futures_util::poll!(&mut second).is_pending());
+        let mut other = Box::pin(cache.read("other", || async { Ok(11) }));
+        assert!(matches!(
+            futures_util::poll!(&mut other),
+            std::task::Poll::Ready(Ok(11))
+        ));
+        release.notify_one();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(3), first)
+                .await
+                .unwrap()
+                .unwrap(),
+            Ok(7)
+        );
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(3), second)
+                .await
+                .unwrap(),
+            Ok(7)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_first_reader_leaves_discovery_retryable() {
+        let cache = Arc::new(Refreshed::new(Duration::from_secs(60)));
+        let started = Arc::new(tokio::sync::Notify::new());
+        let first = {
+            let (cache, started) = (cache.clone(), started.clone());
+            tokio::spawn(async move {
+                cache
+                    .read("key", || async move {
+                        started.notify_one();
+                        std::future::pending::<Result<u32, String>>().await
+                    })
+                    .await
+            })
+        };
+        tokio::time::timeout(Duration::from_secs(3), started.notified())
+            .await
+            .unwrap();
+        first.abort();
+        assert!(first.await.unwrap_err().is_cancelled());
+        assert_eq!(cache.read("key", || async { Ok(7) }).await, Ok(7));
+    }
+
+    #[tokio::test]
+    async fn full_cache_keeps_existing_keys_until_another_key_is_discovered() {
+        let cache = Refreshed::new(Duration::from_secs(60));
+        for key in 0..ENTRIES {
+            assert_eq!(cache.read(key, || async move { Ok(key) }).await, Ok(key));
+        }
+        assert_eq!(
+            cache
+                .read(0, || async { Err("fresh entry was lost".into()) })
+                .await,
+            Ok(0)
+        );
+        assert_eq!(
+            cache.read(ENTRIES, || async { Ok(ENTRIES) }).await,
+            Ok(ENTRIES)
+        );
+        assert_eq!(cache.read(0, || async { Ok(123) }).await, Ok(123));
+    }
 
     #[tokio::test]
     async fn stale_metadata_answers_at_once_and_the_next_read_sees_the_refresh() {
@@ -118,8 +217,13 @@ mod tests {
             "a stale read must not wait for discovery"
         );
         // One refresh at a time: a read during it neither waits nor starts another.
-        let during = cache.read("key", || async { panic!("refresh is already running") });
+        let mut duplicated = false;
+        let during = cache.read("key", || {
+            duplicated = true;
+            async { Ok(3) }
+        });
         assert_eq!(during.await, Ok(1));
+        assert!(!duplicated, "refresh is already running");
         release.notify_one();
         tokio::time::timeout(Duration::from_secs(1), async {
             while cache.read("key", || async { Ok(3) }).await != Ok(2) {
@@ -135,7 +239,14 @@ mod tests {
             Ok(2)
         );
         tokio::time::timeout(Duration::from_secs(1), async {
-            while cache.entries.lock().unwrap()["key"].refreshing {
+            while cache.entries.lock().unwrap()["key"]
+                .ready
+                .get()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .refreshing
+            {
                 tokio::task::yield_now().await;
             }
         })

@@ -587,7 +587,7 @@ mod tests {
         assert!(weak.upgrade().is_none());
     }
     #[tokio::test]
-    async fn reconnect_reloads_selected_state_without_native_dispatch() {
+    async fn reconnect_reloads_history_and_catalogs_while_accounts_are_pending() {
         use crate::transport::Trust;
         use serde_json::json;
         for recovery in ["silent", "disconnected", "closed"] {
@@ -628,6 +628,7 @@ mod tests {
                 methods.insert(request["method"].as_str().unwrap().to_owned());
             }
             assert_eq!(methods, ["host/session/list", "host/session/open", "host/model/list", "host/account/list", "host/taskActivity/read"].map(str::to_owned).into());
+            let (release_accounts, accounts_released) = tokio::sync::oneshot::channel();
             let server = async {
                 assert!(!matches!(old.read_request().await, Ok(Some(_))),
                     "reconnect must close the old stream without probing it with list/history reads");
@@ -637,7 +638,6 @@ mod tests {
                     let request = reader.read_request().await.unwrap().unwrap();
                     assert!(requests.insert(request["method"].as_str().unwrap().to_owned(), request).is_none());
                 }
-                writer.reply(&requests["host/account/list"], json!({"result":{"accounts":[],"selected":{}}})).await.unwrap();
                 writer.reply(&requests["host/taskActivity/read"], json!({"result":{"revision":0,"statuses":[],"waiting":[],"unread":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()}})).await.unwrap();
                 let list = &requests["host/session/list"];
                 assert_eq!(list["params"]["limit"], 60);
@@ -648,6 +648,8 @@ mod tests {
                 writer.reply(open, json!({"result":{"session":{"provider":"codex","id":"thread"},"subscriptionId":uuid::Uuid::new_v4(),"revision":0,"response":{"thread":{"id":{"provider":"codex","id":"thread"},"turns":[{"id":"turn","items":[{"id":"answer","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"after reconnect","phase":"unknown"}}}}}],"status":"unknown"}]}}}})).await.unwrap();
                 writer.reply(&requests["host/model/list"], json!({ "result":{"data":[{"id":"fresh-model","model":{"provider": "codex", "id": "fresh-model"},"displayName":"Fresh", "settings": {"defaultReasoningEffort":"medium","supportedReasoningEfforts":[]}}],"nextCursor":null}})).await.unwrap();
                 writer.reply(list, json!({ "result":{"data":[{"id":{"provider":"codex","id":"thread"},"name":"reloaded"}],"projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,}})).await.unwrap();
+                accounts_released.await.unwrap();
+                writer.reply(&requests["host/account/list"], json!({"result":{"accounts":[],"selected":{}}})).await.unwrap();
                 assert!(!matches!(reader.read_request().await, Ok(Some(_))));
                 next.close();
             };
@@ -660,7 +662,7 @@ mod tests {
                 loop {
                     let ready = {
                         let snapshot = updates.borrow_and_update();
-                        snapshot.account.accounts.is_some() && snapshot.threads.is_some() && !snapshot.models.is_empty() && snapshot.conversations.contains_key(&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() })
+                        snapshot.threads.is_some() && !snapshot.models.is_empty() && snapshot.conversations.contains_key(&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() })
                     };
                     if ready { break; }
                     updates.changed().await.unwrap();
@@ -673,6 +675,11 @@ mod tests {
                 assert_eq!(item_text(&(snapshot.conversations[&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() }].turns.as_ref().unwrap()[0].items.as_ref().unwrap()[0])), Some("after reconnect"));
                 assert_eq!(snapshot.models[0].model, agent_protocol::models::ModelRef {provider:agent_protocol::session::ProviderKind::Codex,id:"fresh-model".into()});
                 assert_eq!(snapshot.drafts[&crate::state::DraftKey::from(agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() })].text, "preserved");
+                assert!(snapshot.account.accounts.is_none(), "account discovery must not gate connection, history or catalogs");
+                release_accounts.send(()).unwrap();
+                while store.snapshot().account.accounts.is_none() {
+                    updates.changed().await.unwrap();
+                }
                 store.shutdown().await.unwrap();
             };
             tokio::join!(server, client);

@@ -91,8 +91,12 @@ impl Registry {
             error: None,
         };
         let mut errors = BTreeMap::new();
-        for (provider, agent) in self.all() {
-            match Identity::list(agent.as_ref()).await {
+        let listings = futures_util::future::join_all(self.all().into_iter().map(
+            |(provider, agent)| async move { (provider, Identity::list(agent.as_ref()).await) },
+        ))
+        .await;
+        for (provider, result) in listings {
+            match result {
                 Ok(accounts) => {
                     combined.accounts.extend(accounts.accounts);
                     combined.selected.extend(accounts.selected);

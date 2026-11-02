@@ -159,11 +159,15 @@ impl HostRpcService {
             async {
                 let started = tokio::time::Instant::now();
                 let deadline = started + SESSION_LIST_TIMEOUT;
-                let pages = futures_util::future::join_all(agents.iter().map(|(_, agent)| {
-                    read_session_page(
+                let pages = futures_util::future::join_all(agents.iter().map(|(provider, agent)| async move {
+                    let read_started = std::time::Instant::now();
+                    let page = read_session_page(
                         Agent::list(agent.as_ref(), search, None, scope, first_page_size),
                         deadline,
-                    )
+                    ).await;
+                    tracing::info!(target: "agent", operation = "host.provider.list",
+                        message = %format_args!("provider={} elapsed_ms={} code={}", provider.key(), read_started.elapsed().as_millis(), page.as_ref().err().map_or("ok", |error| error.code)));
+                    page
                 }))
                 .await;
                 (pages, started.elapsed())

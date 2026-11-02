@@ -710,6 +710,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn account_providers_are_read_in_parallel_without_blocking_conversation_lists() {
+        use super::conversations::tests::{NativeAgent, call};
+        use super::*;
+        let directory = tempfile::tempdir().unwrap();
+        let a = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));
+        let b = NativeAgent::new(ProviderKind::Claude, directory.path().join("claude"));
+        a.accounts_gate.forget_permits(1);
+        b.accounts_gate.forget_permits(1);
+        let host = HostRpcService::new(
+            [a.backend(), b.backend()],
+            ProjectStore::new(directory.path().join("worktrees.json")),
+        );
+        let client = host.open_session();
+        let mut accounts = Box::pin(call::<op::Accounts>(
+            &host,
+            client.id(),
+            Call::ListAccounts(agent_protocol::models::Empty {}),
+        ));
+        tokio::select! {
+            result = &mut accounts => panic!("withheld accounts returned early: {result:?}"),
+            result = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                a.accounts_started.notified().await;
+                b.accounts_started.notified().await;
+            }) => result.expect("both providers must start before either one finishes"),
+        }
+        let list = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            call::<agent_protocol::models::ThreadList>(
+                &host,
+                client.id(),
+                Call::ListSessions(op::ListSessions::new(Default::default())),
+            ),
+        )
+        .await
+        .expect("conversation lists must not wait for accounts")
+        .unwrap();
+        assert!(list.provider_errors.is_none());
+        a.accounts_gate.add_permits(1);
+        b.accounts_gate.add_permits(1);
+        assert!(accounts.await.unwrap().error.is_none());
+    }
+
+    #[tokio::test]
     async fn account_read_failures_are_ordered_with_other_providers_startup_errors() {
         use super::conversations::tests::{NativeAgent, call};
         use super::*;

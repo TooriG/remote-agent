@@ -29,7 +29,7 @@ struct Registry {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Info {
+pub(super) struct Info {
     email: Option<String>,
     subscription_type: Option<String>,
     token_source: Option<String>,
@@ -162,48 +162,57 @@ impl Accounts {
             .map_err(|_| "Claude アカウントを保存できません。".into())
     }
 
-    async fn info(&self, home: &Path) -> Result<Info, String> {
-        let cwd = tempfile::tempdir_in(&self.directory).map_err(|error| error.to_string())?;
-        let probe = super::process::Process::probe(
-            &self.program,
-            super::process::homes(&self.native_home, self.native_inherited, home)
-                .map(|(_, home)| (home, home)),
-            cwd.path(),
-        )
-        .await?;
-        serde_json::from_value(probe.initialized["account"].clone())
-            .map_err(|_| "Claude の認証状態を読み取れません。".into())
+    fn info(&self, home: &Path) -> impl Future<Output = Result<Info, String>> + use<> {
+        let (program, directory) = (self.program.clone(), self.directory.clone());
+        let home = super::process::homes(&self.native_home, self.native_inherited, home)
+            .map(|(_, home)| home.to_owned());
+        async move {
+            let cwd = tempfile::tempdir_in(directory).map_err(|error| error.to_string())?;
+            let probe = super::process::Process::probe(
+                &program,
+                home.as_deref().map(|home| (home, home)),
+                cwd.path(),
+            )
+            .await?;
+            serde_json::from_value(probe.initialized["account"].clone())
+                .map_err(|_| "Claude の認証状態を読み取れません。".into())
+        }
     }
 
-    pub(crate) async fn list(&mut self) -> Result<(Vec<Account>, Option<String>), String> {
-        // Opening settings must not launch a CLI for every refresh. Selection
-        // still verifies credentials, and native logout invalidates this label cache.
-        if self
-            .native_checked_at
+    pub(super) fn native_refresh(
+        &self,
+    ) -> Option<(u64, impl Future<Output = Result<Info, String>> + use<>)> {
+        self.native_checked_at
             .is_none_or(|at| at.elapsed() >= Duration::from_secs(60))
-        {
-            let native = self
-                .info(&self.native_home)
-                .await?
-                .account("claude:desktop".into());
-            let previous = self
-                .registry
-                .accounts
-                .iter()
-                .find(|account| account.id == "claude:desktop");
-            if previous.and_then(|account| account.email.as_deref())
-                != native.as_ref().and_then(|account| account.email.as_deref())
-            {
-                self.usage.remove("claude:desktop");
-            }
-            self.registry
-                .accounts
-                .retain(|account| account.id != "claude:desktop");
-            if let Some(account) = native {
-                self.registry.accounts.insert(0, account);
-            }
-            self.native_checked_at = Some(Instant::now());
+            .then(|| (self.revision, self.info(&self.native_home)))
+    }
+
+    pub(super) fn accept_native(&mut self, revision: u64, info: Info) {
+        // An explicit account change wins over a discovery started before it.
+        if self.revision != revision {
+            return;
         }
+        let native = info.account("claude:desktop".into());
+        let previous = self
+            .registry
+            .accounts
+            .iter()
+            .find(|account| account.id == "claude:desktop");
+        if previous.and_then(|account| account.email.as_deref())
+            != native.as_ref().and_then(|account| account.email.as_deref())
+        {
+            self.usage.remove("claude:desktop");
+        }
+        self.registry
+            .accounts
+            .retain(|account| account.id != "claude:desktop");
+        if let Some(account) = native {
+            self.registry.accounts.insert(0, account);
+        }
+        self.native_checked_at = Some(Instant::now());
+    }
+
+    pub(crate) fn list(&self) -> (Vec<Account>, Option<String>) {
         let selected = self
             .registry
             .selected_id
@@ -215,7 +224,7 @@ impl Accounts {
                     .any(|account| &account.id == *id)
             })
             .cloned();
-        Ok((self.registry.accounts.clone(), selected))
+        (self.registry.accounts.clone(), selected)
     }
 
     pub(crate) fn usage_request(
@@ -610,7 +619,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn sdk_status_waits_for_usage_and_keeps_identity_when_usage_fails() {
+    async fn slow_status_keeps_cached_metadata_readable_and_preserves_identity_when_usage_fails() {
         use std::os::unix::fs::PermissionsExt;
         tokio::time::timeout(Duration::from_secs(30), async {
             let directory = tempfile::tempdir().unwrap();
@@ -650,7 +659,7 @@ for await (const line of createInterface({ input: process.stdin })) {
 }
 "#).unwrap();
             std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
-            let mut accounts = Accounts::load(program, directory.path().join("accounts"), native.clone(), false).await.unwrap();
+            let mut accounts = Accounts::load(program.clone(), directory.path().join("accounts"), native.clone(), false).await.unwrap();
             let mut info = Box::pin(accounts.info(&native));
             tokio::select! {
                 _ = &mut info => panic!("status returned before usage completed"),
@@ -666,13 +675,34 @@ for await (const line of createInterface({ input: process.stdin })) {
             assert_eq!(account.plan_type.as_deref(), Some("max"));
             assert_eq!(std::fs::read_to_string(native.join("operations")).unwrap(), "initialize\nget_usage\n");
 
+            std::fs::remove_file(native.join("usage-requested")).unwrap();
+            std::fs::remove_file(native.join("usage-release")).unwrap();
+            let claude = super::super::Claude::load(program, directory.path().join("adapter"), Some(native.clone())).await.unwrap();
+            claude.models.read(native.clone(), || async { Ok(Vec::new()) }).await.unwrap();
+            let mut listing = Box::pin(crate::providers::Identity::list(&claude));
+            tokio::select! {
+                _ = &mut listing => panic!("status returned before usage completed"),
+                _ = async {
+                    while !native.join("usage-requested").exists() {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                } => {}
+            }
+            let mut models = Box::pin(claude.models());
+            assert!(matches!(futures_util::poll!(&mut models), std::task::Poll::Ready(Ok(value)) if value.is_empty()),
+                "a native identity check must not block cached model reads");
+            std::fs::write(native.join("usage-release"), "").unwrap();
+            assert_eq!(listing.await.unwrap().accounts, vec![account.clone()]);
+
             std::fs::write(native.join("usage-error"), "").unwrap();
-            let (listed, selected) = accounts.list().await.unwrap();
+            let (revision, refresh) = accounts.native_refresh().unwrap();
+            accounts.accept_native(revision, refresh.await.unwrap());
+            let (listed, selected) = accounts.list();
             assert_eq!(listed, vec![account]);
             assert_eq!(selected.as_deref(), Some("claude:desktop"));
             std::fs::write(native.join("invalid-account"), "").unwrap();
             accounts.native_checked_at = None;
-            assert!(accounts.list().await.is_err());
+            assert!(accounts.native_refresh().unwrap().1.await.is_err());
             assert_eq!(accounts.registry.accounts, listed);
         }).await.unwrap();
     }
@@ -696,11 +726,12 @@ for await (const line of createInterface({ input: process.stdin })) {
             usage: None,
         });
         accounts.native_checked_at = Some(Instant::now());
-        let (listed, selected) = accounts.list().await.unwrap();
+        assert!(accounts.native_refresh().is_none());
+        let (listed, selected) = accounts.list();
         assert_eq!(listed.len(), 1);
         assert_eq!(selected.as_deref(), Some("claude:desktop"));
         accounts.native_checked_at = Some(Instant::now() - Duration::from_secs(61));
-        assert!(accounts.list().await.is_err());
+        assert!(accounts.native_refresh().unwrap().1.await.is_err());
         accounts.native_checked_at = Some(Instant::now());
         assert!(
             accounts
@@ -711,5 +742,49 @@ for await (const line of createInterface({ input: process.stdin })) {
                 .is_err()
         );
         assert!(accounts.native_checked_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn discovery_started_before_logout_cannot_restore_the_old_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut accounts = Accounts::load(
+            directory.path().join("missing-claude"),
+            directory.path().join("accounts"),
+            directory.path().join("native"),
+            false,
+        )
+        .await
+        .unwrap();
+        accounts.registry.accounts.push(Account {
+            id: "claude:desktop".into(),
+            provider: ProviderKind::Claude,
+            email: Some("before@example.invalid".into()),
+            plan_type: None,
+            usage: None,
+        });
+        let revision = accounts.native_refresh().unwrap().0;
+        assert!(
+            accounts
+                .request(AccountCommand::Logout {
+                    id: "claude:desktop".into()
+                })
+                .await
+                .is_err()
+        );
+        accounts.accept_native(
+            revision,
+            Info {
+                email: Some("stale@example.invalid".into()),
+                subscription_type: Some("max".into()),
+                token_source: Some("oauth".into()),
+                api_key_source: Some("none".into()),
+            },
+        );
+        assert!(accounts.registry.selected_id.is_none());
+        assert!(accounts.native_checked_at.is_none());
+        assert_eq!(
+            accounts.registry.accounts[0].email.as_deref(),
+            Some("before@example.invalid")
+        );
     }
 }
