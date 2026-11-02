@@ -165,7 +165,9 @@ impl Activity {
     fn due(&self, now: Instant) -> Vec<String> {
         self.threads
             .iter()
-            .filter(|(id, thread)| thread.subscribed && thread.parent.is_none() && self.releasable(id, now))
+            .filter(|(id, thread)| {
+                thread.subscribed && thread.parent.is_none() && self.releasable(id, now)
+            })
             .map(|(id, _)| id.clone())
             .collect()
     }
@@ -176,8 +178,7 @@ impl Activity {
         };
         let silence = now.saturating_duration_since(last);
         let pinned = tree.iter().any(|thread| !thread.running.is_empty());
-        !tree.iter().any(|thread| thread.active)
-            && silence >= if pinned { MAX_PIN } else { IDLE }
+        !tree.iter().any(|thread| thread.active) && silence >= if pinned { MAX_PIN } else { IDLE }
     }
     fn forget(&mut self, id: &str) {
         let ids = self.tree_ids(id);
@@ -203,7 +204,10 @@ impl Activity {
                 .iter()
                 .filter(|(id, thread)| {
                     !ids.contains(*id)
-                        && thread.parent.as_ref().is_some_and(|parent| ids.contains(parent))
+                        && thread
+                            .parent
+                            .as_ref()
+                            .is_some_and(|parent| ids.contains(parent))
                 })
                 .map(|(id, _)| id.clone())
                 .collect();
@@ -261,7 +265,11 @@ mod tests {
         activity.touch("root", start);
         activity.observe(&status("root", SessionStatus::Running), start);
         activity.observe(&status("root", SessionStatus::Idle), start);
-        assert!(activity.due(start + IDLE - Duration::from_secs(1)).is_empty());
+        assert!(
+            activity
+                .due(start + IDLE - Duration::from_secs(1))
+                .is_empty()
+        );
         assert_eq!(activity.due(start + IDLE), ["root"]);
         activity.forget("root");
         assert!(activity.due(start + MAX_PIN).is_empty());
@@ -319,7 +327,11 @@ mod tests {
         assert!(activity.due(start + IDLE * 2).is_empty());
         let finished = start + IDLE;
         activity.observe(&status("child", SessionStatus::Idle), finished);
-        assert!(activity.due(finished + IDLE - Duration::from_secs(1)).is_empty());
+        assert!(
+            activity
+                .due(finished + IDLE - Duration::from_secs(1))
+                .is_empty()
+        );
         assert_eq!(activity.due(finished + IDLE), ["root"]);
         activity.forget("root");
         assert!(activity.threads.is_empty());
