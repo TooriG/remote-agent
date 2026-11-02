@@ -118,10 +118,8 @@ extension ThreadScreen {
             ).equatable()
         case let (.activityHeader(activity), _): activityHeader(activity)
         case (let .activity(_, turnId), let item?): activityItem(item, turnId: turnId)
-        // The composer answers requests from its docked panels.
-        case (.pendingRequest, _): EmptyView()
         case let (.error(error), _): ThreadErrorRow(error: error)
-        case (.inProgress, _), (_, nil): EmptyView()
+        case (.inProgress, _), (.pendingRequest, _), (_, nil): EmptyView()
         }
     }
 
@@ -246,7 +244,9 @@ func conversationRows(_ rows: [ThreadConversationRow],
             expanded = AgentCore.activityIsExpanded(activity: activity, choice: expansion[activity.id])
             return true
         case .activity: return expanded
-        case .inProgress: return false
+        // Only rendered rows can own the latest-boundary marker.
+        // Requests live in the composer's dock, rather than in the history.
+        case .inProgress, .pendingRequest: return false
         default: return true
         }
     }
