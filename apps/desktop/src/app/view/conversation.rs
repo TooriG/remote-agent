@@ -2853,6 +2853,61 @@ mod rendering_tests {
         (snapshot, source)
     }
 
+    fn user_bubble_bounds(
+        text: &str,
+        viewport_width: f32,
+        cx: &mut TestAppContext,
+    ) -> gpui::Bounds<gpui::Pixels> {
+        let (snapshot, source) = user_message_fixture(text, None, false);
+        let (view, window) =
+            cx.add_window_view(|window, cx| ConversationView::new(snapshot, source, window, cx));
+        window.simulate_resize(size(px(viewport_width), px(600.)));
+        window.run_until_parked();
+        view.update(window, |_, cx| cx.notify());
+        window.run_until_parked();
+        window.debug_bounds("user-message-bubble").unwrap()
+    }
+
+    fn assert_user_list_bodies_visible(cx: &mut TestAppContext) {
+        let _runtime = init(cx);
+        for width in [780., 360.] {
+            for (source, body) in [
+                ("3. Hello world", "Hello world"),
+                ("3. はい", "はい"),
+                ("3. 長めの内容をここに書いた", "長めの内容をここに書いた"),
+                ("- はい", "はい"),
+                ("はい\n\n- はい", "はい"),
+                ("- 親\n  - はい", "はい"),
+                ("- [ ] はい", "はい"),
+                ("- [x] はい", "はい"),
+            ] {
+                let plain = user_bubble_bounds(body, width, cx);
+                let list = user_bubble_bounds(source, width, cx);
+                assert!(
+                    list.size.width > plain.size.width,
+                    "list must include its marker and full text: {source:?}, {list:?}, {plain:?}"
+                );
+                assert!(list.left() >= px(0.) && list.right() <= px(width));
+            }
+        }
+    }
+
+    #[gpui::test]
+    fn user_lists_keep_their_bodies_visible(cx: &mut TestAppContext) {
+        assert_user_list_bodies_visible(cx);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn user_lists_keep_their_bodies_visible_with_native_fonts() {
+        let mut cx = TestAppContext::build_with_text_system(
+            gpui::TestDispatcher::new(0),
+            None,
+            Arc::new(gpui_apple::AppleTextSystem::new()),
+        );
+        assert_user_list_bodies_visible(&mut cx);
+    }
+
     #[gpui::test]
     fn user_messages_keep_readable_widths(cx: &mut TestAppContext) {
         let _runtime = init(cx);
@@ -2874,7 +2929,6 @@ mod rendering_tests {
                     if short {
                         assert!(bubble.size.width < px(120.), "short message: {bubble:?}");
                     } else {
-                        // List items keep the bullet column outside their measured text.
                         assert!(
                             bubble.size.width >= px((viewport_width - 48.).min(560.) * 0.9),
                             "long message must use the available width (pending={pending}): {bubble:?}"
