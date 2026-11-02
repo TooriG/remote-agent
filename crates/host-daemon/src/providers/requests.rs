@@ -139,8 +139,7 @@ pub(crate) fn codex(id: RequestId, method: &str, params: &Value) -> Result<Adapt
     };
     let (body, answers) = match method {
         "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
-            let defaults =
-                ["accept", "acceptForSession", "decline", "cancel"].map(|value| json!(value));
+            let defaults = ["accept", "acceptForSession", "decline"].map(|value| json!(value));
             let decisions = if method == "item/fileChange/requestApproval" {
                 defaults.as_slice()
             } else {
@@ -153,6 +152,11 @@ pub(crate) fn codex(id: RequestId, method: &str, params: &Value) -> Result<Adapt
             let mut choices = Vec::new();
             let mut mapping = BTreeMap::new();
             for (index, decision) in decisions.iter().enumerate() {
+                // The stop button already denies and ends the turn, so T3 Code
+                // offers no separate cancel choice.
+                if decision == "cancel" {
+                    continue;
+                }
                 let (label, effect, description) = approval_choice(decision)?;
                 if matches!(effect, ChoiceEffect::Allow | ChoiceEffect::AllowLasting)
                     && params
@@ -441,7 +445,6 @@ fn approval_choice(decision: &Value) -> Result<(&'static str, ChoiceEffect, Stri
         Some("accept") => ("承認", ChoiceEffect::Allow),
         Some("acceptForSession") => ("このセッションで承認", ChoiceEffect::AllowLasting),
         Some("decline") => ("拒否", ChoiceEffect::Deny),
-        Some("cancel") => ("キャンセル", ChoiceEffect::Cancel),
         _ => {
             let fields = decision
                 .as_object()
@@ -915,7 +918,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn approval_choices_preserve_native_effects_and_describe_their_lifetime() {
+    fn approval_choices_preserve_native_effects_and_leave_cancelling_to_stop() {
         let decisions = json!(["accept", "acceptForSession", "decline", "cancel",
             {"acceptWithExecpolicyAmendment":{"execpolicy_amendment":["git","status"]}},
             {"applyNetworkPolicyAmendment":{"network_policy_amendment":{"host":"example.com","action":"allow"}}},
@@ -939,13 +942,17 @@ mod tests {
                 ChoiceEffect::Allow,
                 ChoiceEffect::AllowLasting,
                 ChoiceEffect::Deny,
-                ChoiceEffect::Cancel,
                 ChoiceEffect::AllowLasting,
                 ChoiceEffect::AllowLasting,
                 ChoiceEffect::Deny,
             ]
         );
-        for (index, choice) in adapted.request.body.choices().iter().enumerate() {
+        let offered = decisions
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|decision| *decision != "cancel");
+        for (choice, decision) in adapted.request.body.choices().iter().zip(offered) {
             assert_eq!(
                 adapted
                     .answers
@@ -956,11 +963,11 @@ mod tests {
                         }
                     )
                     .unwrap(),
-                json!({"decision":decisions[index]})
+                json!({"decision":decision})
             );
             assert_ne!(choice.id, choice.label);
         }
-        for choice in &adapted.request.body.choices()[4..] {
+        for choice in &adapted.request.body.choices()[3..] {
             assert!(!choice.description.contains("Amendment"));
         }
         let default = codex(
@@ -969,9 +976,10 @@ mod tests {
             &json!({"turnId":"turn"}),
         )
         .unwrap();
-        assert_eq!(default.request.body.choices().len(), 4);
+        assert_eq!(default.request.body.choices().len(), 3);
         for invalid in [
             json!([]),
+            json!(["cancel"]),
             json!(["future-decision"]),
             json!({"not":"choices"}),
             json!([{"acceptWithExecpolicyAmendment":{"future":true}}]),

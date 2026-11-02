@@ -932,15 +932,15 @@ pub enum ActionTone {
     Danger,
 }
 
-/// T3 Code leads with a one-time grant and marks denial; broader grants and
-/// cancelling stay secondary.
+/// T3 Code leads with a one-time grant and marks denial; broader grants stay
+/// secondary.
 #[cfg_attr(feature = "bindings", uniffi::export)]
 pub fn choice_tone(effect: agent_protocol::requests::ChoiceEffect) -> ActionTone {
     use agent_protocol::requests::ChoiceEffect;
     match effect {
         ChoiceEffect::Allow => ActionTone::Primary,
         ChoiceEffect::Deny => ActionTone::Danger,
-        ChoiceEffect::AllowLasting | ChoiceEffect::Cancel => ActionTone::Secondary,
+        ChoiceEffect::AllowLasting => ActionTone::Secondary,
     }
 }
 
@@ -1291,7 +1291,6 @@ mod tests {
             (ChoiceEffect::Allow, ActionTone::Primary),
             (ChoiceEffect::AllowLasting, ActionTone::Secondary),
             (ChoiceEffect::Deny, ActionTone::Danger),
-            (ChoiceEffect::Cancel, ActionTone::Secondary),
         ] {
             assert_eq!(choice_tone(effect), tone);
         }
@@ -2093,9 +2092,9 @@ mod tests {
     fn requests_and_pending_submissions_have_one_shared_native_projection() {
         let mut snapshot = fixture();
         for value in [
-            json!({"id": "1", "target": {"turn": {"turnId": "done", "itemId": null}}, "delivery": "awaiting", "body": {"approval": {"kind": "command", "description": "run command", "details": "", "choices": [{"id": "choice-0", "label": "承認", "description": "", "effect": "allow"}, {"id": "choice-1", "label": "このセッションで承認", "description": "", "effect": "allowLasting"}, {"id": "choice-2", "label": "拒否", "description": "", "effect": "deny"}, {"id": "choice-3", "label": "キャンセル", "description": "", "effect": "cancel"}]}}}),
+            json!({"id": "1", "target": {"turn": {"turnId": "done", "itemId": null}}, "delivery": "awaiting", "body": {"approval": {"kind": "command", "description": "run command", "details": "", "choices": [{"id": "choice-0", "label": "承認", "description": "", "effect": "allow"}, {"id": "choice-1", "label": "このセッションで承認", "description": "", "effect": "allowLasting"}, {"id": "choice-2", "label": "拒否", "description": "", "effect": "deny"}]}}}),
             json!({"id": "question", "target": {"turn":{"turnId":"live","itemId":null}}, "delivery": "awaiting", "body": {"question": {"questions": [{"id": "question-0", "header": "", "prompt": "which?", "secret": false, "allowFreeText": true, "multiple": false, "choices": []}]}}}),
-            json!({"id": "3", "target": "session", "delivery": "awaiting", "body": {"approval": {"kind": "fileChange", "description": "", "details": "", "choices": [{"id": "choice-0", "label": "承認", "description": "", "effect": "allow"}, {"id": "choice-1", "label": "このセッションで承認", "description": "", "effect": "allowLasting"}, {"id": "choice-2", "label": "拒否", "description": "", "effect": "deny"}, {"id": "choice-3", "label": "キャンセル", "description": "", "effect": "cancel"}]}}}),
+            json!({"id": "3", "target": "session", "delivery": "awaiting", "body": {"approval": {"kind": "fileChange", "description": "", "details": "", "choices": [{"id": "choice-0", "label": "承認", "description": "", "effect": "allow"}, {"id": "choice-1", "label": "このセッションで承認", "description": "", "effect": "allowLasting"}, {"id": "choice-2", "label": "拒否", "description": "", "effect": "deny"}]}}}),
         ] {
             let request: WireRequest = serde_json::from_value(value).unwrap();
             let request = Arc::new(request);
@@ -2162,7 +2161,7 @@ mod tests {
                 .iter()
                 .map(|choice| choice.label.as_str())
                 .collect::<Vec<_>>(),
-            ["承認", "このセッションで承認", "拒否", "キャンセル"]
+            ["承認", "このセッションで承認", "拒否"]
         );
         let live: Vec<_> = rendered.turns[1]
             .rows

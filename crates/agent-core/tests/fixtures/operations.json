@@ -1894,12 +1894,6 @@
                 "label": "拒否",
                 "description": "",
                 "effect": "deny"
-              },
-              {
-                "id": "choice-3",
-                "label": "キャンセル",
-                "description": "",
-                "effect": "cancel"
               }
             ]
           }
@@ -1948,12 +1942,6 @@
                 "label": "実行ルールを追加して承認",
                 "description": "",
                 "effect": "allowLasting"
-              },
-              {
-                "id": "choice-1",
-                "label": "キャンセル",
-                "description": "",
-                "effect": "cancel"
               }
             ]
           }
@@ -2002,12 +1990,6 @@
                 "label": "実行ルールを追加して承認",
                 "description": "",
                 "effect": "allowLasting"
-              },
-              {
-                "id": "choice-1",
-                "label": "キャンセル",
-                "description": "",
-                "effect": "cancel"
               }
             ]
           }

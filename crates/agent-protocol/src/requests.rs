@@ -79,8 +79,6 @@ pub enum ChoiceEffect {
     /// Grants this request and matching later ones, for a scope or by a rule.
     AllowLasting,
     Deny,
-    /// Denies the request and stops the turn.
-    Cancel,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

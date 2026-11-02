@@ -513,7 +513,6 @@ enum ChoiceEffect {
     Allow,
     AllowLasting,
     Deny,
-    Cancel,
 }
 
 #[uniffi::remote(Record)]
