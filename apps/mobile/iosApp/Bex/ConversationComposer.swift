@@ -1,8 +1,6 @@
 import AgentCore
-import AVFoundation
 import SwiftUI
 import UIKit
-import UniformTypeIdentifiers
 
 /// Composer and dictation
 extension ThreadScreen {
@@ -281,12 +279,7 @@ extension ThreadScreen {
     func sendButton(hasAttachments: Bool) -> some View {
         Button {
             // Commit native text before Store can clear the accepted draft.
-            UIApplication.shared.sendAction(
-                #selector(UIResponder.resignFirstResponder),
-                to: nil,
-                from: nil,
-                for: nil
-            )
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             composerFocused = false
             if dictation.isRecording {
                 sendRecordedText = true
