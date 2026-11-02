@@ -4802,6 +4802,7 @@ dependencies = [
  "futures-io",
  "futures-util",
  "image",
+ "libc",
  "pbkdf2 0.13.0",
  "proptest",
  "regex",

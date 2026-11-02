@@ -53,6 +53,7 @@ agent-core = { path = "../agent-core" }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
 aes = "0.9"
 cbc = { version = "0.2", features = ["alloc"] }
 pbkdf2 = "0.13"
