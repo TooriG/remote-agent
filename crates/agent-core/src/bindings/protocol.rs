@@ -2,11 +2,17 @@
 
 use crate::{models::*, session::*};
 use agent_protocol::editors::*;
+use agent_protocol::file_tree::EntryKind;
 use agent_protocol::live_activity::*;
 use agent_protocol::permissions::*;
 use agent_protocol::project_import::ScanProjects;
 use agent_protocol::{browser::*, composer::*, diagnostics::*, operations::*, requests::*};
 use serde_json::Value;
+#[uniffi::remote(Enum)]
+enum EntryKind {
+    Directory,
+    File,
+}
 #[uniffi::remote(Enum)]
 enum EditorId {
     Cursor,

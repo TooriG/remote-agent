@@ -108,6 +108,8 @@ contracts! {
     PrepareDictation, "host/dictation/prepare" => (op::DictationPreparation, m::Empty),
     CancelDictation, "host/dictation/cancel" => (op::DictationPreparation, m::Empty),
     ListFiles, "host/file/list" => (op::ListFiles, m::FileList) [clone],
+    ListTreeEntries, "host/file/tree" => (crate::file_tree::ListTreeEntries, crate::file_tree::TreeEntries) [clone],
+    SearchTreeEntries, "host/file/search" => (crate::file_tree::SearchTreeEntries, crate::file_tree::TreeEntries) [clone],
     ResolveFile, "host/file/resolve" => (op::ResolveFile, m::FileEntry) [clone],
     ReadFileOpenCapabilities, "host/file/openCapabilities" => (crate::editors::ReadFileOpenCapabilities, crate::editors::FileOpenCapabilities) [clone],
     OpenInEditor, "host/file/openInEditor" => (crate::editors::OpenInEditor, m::Empty) [clone],

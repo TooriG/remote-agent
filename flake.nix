@@ -88,7 +88,7 @@
             systemImageTypes = [ "google_apis" ];
             abiVersions = [ (if pkgs.stdenv.hostPlatform.isAarch64 then "arm64-v8a" else "x86_64") ];
           }).androidsdk;
-          nativeBuildTools = with pkgs; [ pkg-config cmake clang ];
+          nativeBuildTools = with pkgs; [ pkg-config cmake clang zig ];
           # The desktop, Host and their tests link these on Linux.
           linuxDesktopLibraries = with pkgs; [
             lsof
@@ -98,6 +98,7 @@
           ];
           linuxDesktopLibraryPath = pkgs.lib.makeLibraryPath [ pkgs.vulkan-loader pkgs.libGL pkgs.libxkbcommon pkgs.wayland ];
           mkDevShell = attrs: pkgs.mkShell (attrs // {
+            LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
             packages = [ pkgs.zsh ] ++ (attrs.packages or [ ]);
             shellHook = (attrs.shellHook or "") + ''
               # Nix initializes its build environment with Bash. Child processes
@@ -154,6 +155,7 @@
               kotlin-language-server
               androidSdk
             ]) ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
+              pkgs.zig
               pkgs.swiftlint
               pkgs.swiftformat
             ];

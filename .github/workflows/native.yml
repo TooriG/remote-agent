@@ -408,6 +408,9 @@ jobs:
           $verified = gh run list --repo "$env:GITHUB_REPOSITORY" --workflow native.yml --branch main --event push --commit "$revision" --status success --limit 1 --json headSha --jq '.[0].headSha // ""'
           if ($LASTEXITCODE -ne 0 -or $verified -ne $revision) { throw "This revision has not passed Native clients." }
       # Native Windows consumes the version evaluated from the pinned flake.
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: 0.16.0
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
           toolchain: ${{ needs.toolchain.outputs.rust-version }}

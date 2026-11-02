@@ -131,6 +131,7 @@ results! {
     Agents(Vec<crate::models::AgentObservation>),
     ComposerCatalog(crate::composer::ComposerCatalog),
     FileOpenCapabilities(crate::editors::FileOpenCapabilities),
+    TreeEntries(crate::file_tree::TreeEntries),
     PermissionSettings(crate::permissions::PermissionSettings),
     Models(crate::operations::ModelPage), WorktreeSettings(crate::models::WorktreeSettings),
     Worktrees(Vec<crate::models::Worktree>), Review(crate::models::WorkspaceReview),

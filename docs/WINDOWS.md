@@ -29,6 +29,12 @@ Windows SDK, in addition to the runtime prerequisites above. Use the Rust
 version pinned by the repository's Nix flake (as shown in the **Native clients**
 toolchain job).
 
+Workspace file search uses T3 Code's FFF Rust engine. Source builds also need
+Zig 0.16.0 on `PATH` and LLVM's `libclang.dll` (the LLVM installer includes it).
+If LLVM is installed outside its standard directory, set `LIBCLANG_PATH` to
+the directory containing that DLL. The pinned Nix environment supplies both
+tools on macOS/Linux; Windows CI installs the same Zig version.
+
 ```powershell
 ./scripts/package-windows.ps1
 # Faster local development package:

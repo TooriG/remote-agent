@@ -1,6 +1,6 @@
 //! Import directly into the Host's browser. Clients receive profile names and usernames only.
 use agent_protocol::browser::{BrowserAction, BrowserCredentials};
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 use zeroize::Zeroizing;
 
 #[cfg(target_os = "macos")]

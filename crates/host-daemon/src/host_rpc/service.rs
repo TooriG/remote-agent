@@ -489,6 +489,8 @@ impl HostRpcService {
                 .into()
             }
             Call::ListFiles(_)
+            | Call::ListTreeEntries(_)
+            | Call::SearchTreeEntries(_)
             | Call::ResolveFile(_)
             | Call::ReadFile(_)
             | Call::WriteFile(_)

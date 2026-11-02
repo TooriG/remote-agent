@@ -1,8 +1,5 @@
 use super::*;
-use agent_protocol::{
-    browser::*,
-    session::{ProviderKind, SessionRef},
-};
+use agent_protocol::session::{ProviderKind, SessionRef};
 
 fn request(thread: &SessionRef, frame: &BrowserFrame, action: BrowserAction) -> BrowserRequest {
     BrowserRequest {

@@ -24,6 +24,7 @@ use ring::{
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::SessionId;
+mod tree;
 
 const EDIT_LIMIT: u64 = 1024 * 1024;
 pub(crate) const TRANSFER_LIMIT: u64 = 512 * 1024 * 1024;
@@ -35,6 +36,7 @@ mod transfer_tests;
 
 #[derive(Clone)]
 pub(crate) struct WorkspaceFiles {
+    search_indexes: Arc<tree::SearchIndexes>,
     upload_directory: Arc<Path>,
     // Serialize our compare-and-replace writes across all authenticated peers.
     writes: Arc<Mutex<()>>,
@@ -60,6 +62,7 @@ enum GrantFile {
 impl WorkspaceFiles {
     pub(crate) fn new(upload_directory: PathBuf) -> Self {
         Self {
+            search_indexes: Arc::default(),
             upload_directory: upload_directory.into(),
             writes: Default::default(),
             grants: Default::default(),
@@ -71,6 +74,20 @@ impl WorkspaceFiles {
         session: SessionId,
         request: Call,
     ) -> Result<Body, crate::providers::Failure> {
+        if let Call::ListTreeEntries(params) = request {
+            return tree::list(params)
+                .await
+                .map(Body::from)
+                .map_err(file_failure);
+        }
+        if let Call::SearchTreeEntries(params) = request {
+            return self
+                .search_indexes
+                .search(params)
+                .await
+                .map(Body::from)
+                .map_err(file_failure);
+        }
         let files = self.clone();
         tokio::task::spawn_blocking(move || files.dispatch(session, request))
             .await

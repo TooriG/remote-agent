@@ -1,11 +1,15 @@
 /// Host paths are independent of the client's OS. Android's native path parser,
 /// for example, does not recognize Windows drive and UNC paths as absolute.
 pub fn is_absolute_host_path(path: &str) -> bool {
-    if path.is_empty() || path.contains('\0') {
-        return false;
-    }
     if path.starts_with('/') {
-        return true;
+        return !path.contains('\0');
+    }
+    is_windows_absolute_host_path(path)
+}
+
+pub fn is_windows_absolute_host_path(path: &str) -> bool {
+    if path.contains('\0') {
+        return false;
     }
     let bytes = path.as_bytes();
     if bytes.len() >= 3
@@ -21,4 +25,36 @@ pub fn is_absolute_host_path(path: &str) -> bool {
             && components.next().is_some_and(|share| !share.is_empty());
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn host_paths_are_classified_without_using_the_clients_platform() {
+        for path in [
+            "C:/workspace",
+            r"D:\workspace",
+            r"\\server\share",
+            r"\\server/share/dir",
+        ] {
+            assert!(is_absolute_host_path(path));
+            assert!(is_windows_absolute_host_path(path));
+        }
+        for path in ["/workspace", "/:data"] {
+            assert!(is_absolute_host_path(path));
+            assert!(!is_windows_absolute_host_path(path));
+        }
+        for path in [
+            "",
+            "C:",
+            "relative",
+            r"\drive-relative",
+            r"\\server",
+            "C:/null\0",
+        ] {
+            assert!(!is_absolute_host_path(path));
+            assert!(!is_windows_absolute_host_path(path));
+        }
+    }
 }

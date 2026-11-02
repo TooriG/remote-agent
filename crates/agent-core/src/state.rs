@@ -72,6 +72,8 @@ pub struct FileDraft {
 }
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Workspace {
+    #[serde(skip)]
+    pub file_trees: crate::presentation::files::FileTrees,
     pub file: Option<Arc<FileContent>>,
     pub review_cwd: Option<String>,
     pub review: Option<Arc<WorkspaceReview>>,
@@ -522,6 +524,10 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
         LoadHostName, LoadHostManagement, LoadModels, ReadModelSettings,
         Respond, Transcribe, UploadAttachment, PairRemoteHost,
     ], {
+        Intent::FileTree { key, action } => {
+            let effects = op::file_tree_action(&mut next, key, action);
+            return (next, effects);
+        }
         Intent::DismissError { id } => match id {
             op::ErrorId::Operation { key, generation } => {
                 if next.operations.get(&key).is_some_and(|state| {
@@ -1282,6 +1288,7 @@ impl Snapshot {
     /// Cached history and drafts survive; IDs and activity belong to one connection.
     /// Pending submissions are persisted only to recover dictation after a crash.
     fn reset_session(&mut self) {
+        Arc::make_mut(&mut self.workspace).file_trees.disconnected();
         self.file_open_capabilities = None;
         self.composer_catalog = None;
         self.permission_settings = None;

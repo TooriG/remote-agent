@@ -39,6 +39,10 @@ macro_rules! rpc_operation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
 pub enum Intent {
+    FileTree {
+        key: crate::presentation::files::FileTreeKey,
+        action: crate::presentation::files::FileTreeAction,
+    },
     DismissError {
         id: ErrorId,
     },
@@ -483,6 +487,8 @@ mod hosts;
 pub use hosts::*;
 mod workspace;
 pub use workspace::*;
+mod file_tree;
+pub(crate) use file_tree::file_tree_action;
 mod lists;
 pub use lists::*;
 mod models;
