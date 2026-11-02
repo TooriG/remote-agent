@@ -306,7 +306,7 @@ impl HostRpcService {
         }
         let agent = self.inner.providers.get(target.provider)?;
         agent.availability()?;
-        let state = agent.state(&target.id).await?;
+        let (state, projects) = tokio::try_join!(agent.state(&target.id), self.project_snapshot())?;
         let mut response = state.response;
         let options = self.inner.model_selections.resolve(
             target,
@@ -323,7 +323,6 @@ impl HostRpcService {
             ));
         }
         response.thread = self.inner.router.overlay_execution(root, response.thread);
-        let projects = self.project_snapshot().await?;
         describe_thread(&mut response.thread, agent.capabilities(), &projects);
         if response
             .thread

@@ -357,12 +357,18 @@ impl Claude {
         threads
     }
 
-    /// Read native history on each open; the router overlays only owned execution.
-    async fn read(&self, id: &str, requested: usize) -> anyhow::Result<ThreadResponse> {
+    /// A missing limit reads metadata only; opening history overlays owned execution later.
+    async fn read(&self, id: &str, requested: Option<usize>) -> anyhow::Result<ThreadResponse> {
         let native = Uuid::parse_str(id)?;
         let home = self.native_home.clone();
         let history: anyhow::Result<ThreadResponse> = tokio::task::spawn_blocking(move || {
             let path = history::resolve(&home, native)?;
+            let Some(requested) = requested else {
+                return Ok(ThreadResponse {
+                    thread: history::summary(&path)?.thread,
+                    ..Default::default()
+                });
+            };
             match history::read(&path, requested) {
                 Ok(response) => Ok(response),
                 Err(error) => {
@@ -385,9 +391,9 @@ impl Claude {
             Err(error) => {
                 // A newly created execution can precede its first native write.
                 // Only execution metadata lives here; the router overlays live output.
-                let records = self.records.lock().await;
-                let record = match records.get(id) {
-                    Some(record) => record.lock().await,
+                let record = self.records.lock().await.get(id).cloned();
+                let record = match record {
+                    Some(record) => record.lock_owned().await,
                     None => return Err(error),
                 };
                 let mut thread = Thread {
@@ -1877,7 +1883,7 @@ impl Agent for Claude {
         limit: usize,
         _include_activity: bool,
     ) -> Result<ThreadResponse, Failure> {
-        self.read(id, limit)
+        self.read(id, Some(limit))
             .await
             .map_err(|e| Failure::new("session_read_failed", e))
     }
@@ -1926,11 +1932,27 @@ impl Agent for Claude {
             .map_err(|e| Failure::new("provider_unavailable", e))
     }
     async fn state(&self, id: &str) -> Result<SubmissionState, Failure> {
+        // Queued input needs the owned runtime and current titles, not a replay
+        // of its transcript. Idle sessions still observe native history changes.
+        let record = self.records.lock().await.get(id).cloned();
+        let running_model = if let Some(record) = record {
+            let record = record.lock().await;
+            record.running.as_ref().map(|_| record.model.clone())
+        } else {
+            None
+        };
         let mut response = self
-            .read(id, 1)
+            .read(id, running_model.is_none().then_some(1))
             .await
             .map_err(|e| Failure::new("session_read_failed", e))?;
-        if let Some(record) = self.records.lock().await.get(id).cloned() {
+        if let Some(model) = running_model {
+            response.model = Some(agent_protocol::models::ModelRef {
+                provider: ProviderKind::Claude,
+                id: model,
+            });
+        }
+        let record = self.records.lock().await.get(id).cloned();
+        if let Some(record) = record {
             let record = record.lock().await;
             if let Some(running) = &record.running {
                 response.thread.status = SessionStatus::Running;
@@ -2152,7 +2174,7 @@ impl Agent for Claude {
         )
         .await
         .map_err(failure)?;
-        self.read(&forked, usize::MAX)
+        self.read(&forked, Some(usize::MAX))
             .await
             .map_err(|error| failure(format!("{error:#}")))
     }
@@ -2187,6 +2209,81 @@ impl Agent for Claude {
 #[cfg(test)]
 mod execution_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn queued_input_reads_only_metadata_and_keeps_owned_execution() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(directory.path()).unwrap();
+        let native = root.join("native-home");
+        let claude = Claude::load(
+            root.join("unused"),
+            root.join("adapter"),
+            Some(native.clone()),
+        )
+        .await
+        .unwrap();
+        let session = claude
+            .create(root.to_str().unwrap(), "owned-model")
+            .await
+            .unwrap()
+            .thread
+            .id
+            .unwrap();
+        let project = native.join("projects/project");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join(format!("{}.jsonl", session.id)),
+            format!(
+                "{}\n{}\nmalformed transcript body\n",
+                json!({"sessionId":session.id,"cwd":root,"type":"user","message":{"role":"user","content":"Original input"}}),
+                json!({"sessionId":session.id,"type":"custom-title","customTitle":"Preserved title"}),
+            ),
+        )
+        .unwrap();
+        let record = claude.record(&session.id).await.unwrap();
+        let (input, _receiver) = mpsc::channel(1);
+        let (_interrupt, interrupt) = watch::channel(None);
+        {
+            let mut record = record.lock().await;
+            record.resumable = true;
+            record.running = Some(Running {
+                turn_id: "owned-turn".into(),
+                input,
+                interrupt,
+            });
+        }
+        let state = Agent::state(&claude, &session.id).await.unwrap();
+        assert!(!state.needs_reload);
+        assert_eq!(state.response.thread.id.as_ref(), Some(&session));
+        assert_eq!(state.response.thread.cwd.as_deref(), root.to_str());
+        assert_eq!(
+            state.response.thread.name.as_deref(),
+            Some("Preserved title")
+        );
+        assert_eq!(
+            state.response.thread.preview.as_deref(),
+            Some("Original input")
+        );
+        assert_eq!(state.response.thread.status, SessionStatus::Running);
+        assert_eq!(
+            state.response.thread.turns.unwrap()[0].id.as_str(),
+            "owned-turn"
+        );
+        assert_eq!(state.response.model.unwrap().id, "owned-model");
+        assert!(state.response.thread.history_read_state.is_none());
+
+        record.lock().await.running = None;
+        let state = Agent::state(&claude, &session.id).await.unwrap();
+        assert!(
+            state
+                .response
+                .thread
+                .history_read_state
+                .is_some_and(|state| {
+                    state.kind == agent_protocol::session::HistoryReadKind::Incomplete
+                })
+        );
+    }
 
     #[tokio::test]
     async fn loaded_pages_keep_owned_activity_without_opening_native_history() {
