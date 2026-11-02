@@ -1,5 +1,10 @@
 mod actions;
+mod explorer;
 mod icons;
+pub use explorer::{
+    EXPLORER_CONTENT_MIN_WIDTH, EXPLORER_DEFAULT_WIDTH, EXPLORER_MIN_WIDTH, explorer_key_width,
+    explorer_max_width, explorer_width,
+};
 pub mod tree;
 pub use actions::{FileAction, FileMenuItem, file_reference_menu, file_tree_menu};
 pub use icons::desktop_file_icon;

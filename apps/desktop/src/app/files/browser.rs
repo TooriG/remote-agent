@@ -165,7 +165,9 @@ impl Desktop {
             }
             let open = tree.open_file.clone();
             let menu = tree.context_menu.clone();
-            browser.model.tree = Arc::new(tree);
+            if *browser.model.tree != tree {
+                browser.model.tree = Arc::new(tree);
+            }
             browser.revision = revision;
             if !waiting_reveal && let Some(request) = open {
                 self.open_file_from_tree(&key, &request, cx);

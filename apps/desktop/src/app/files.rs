@@ -1,7 +1,9 @@
 use super::*;
 use agent_core::{presentation::error::error_message, store::Store};
 mod browser;
+mod explorer;
 pub(super) use browser::{FileBrowser, FileBrowserModel};
+pub(super) use explorer::FileExplorer;
 mod menu;
 pub(super) use menu::run_file_menu_command;
 

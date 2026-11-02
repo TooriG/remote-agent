@@ -162,6 +162,7 @@ pub(crate) struct Desktop {
     search: Entity<InputState>,
     file_search: Entity<InputState>,
     file_browser: Option<files::FileBrowser>,
+    file_explorer: files::FileExplorer,
     model_controls: forms::ModelControls,
     account: forms::AccountForm,
     worktrees: forms::WorktreeForm,
@@ -319,7 +320,9 @@ impl Desktop {
             cx.new(|cx| view::ConversationView::new(&owner, selection.clone(), window, cx));
         let composer_view =
             cx.new(|cx| view::ComposerView::new(&owner, composer.input.clone(), cx));
-        let workbench_view = cx.new(|_| view::WorkbenchView::new(&owner));
+        let file_explorer = files::FileExplorer::new(cx);
+        let workbench_view =
+            cx.new(|cx| view::WorkbenchView::new(&owner, &file_explorer.state, cx));
         let header_view = cx.new(|cx| view::HeaderView::new(&owner, cx));
         let mut subscriptions = vec![
             cx.observe_global_in::<crate::localization::Language>(window, |view, window, cx| {
@@ -535,6 +538,7 @@ impl Desktop {
             search,
             file_search,
             file_browser: None,
+            file_explorer,
             model_controls,
             account,
             worktrees,

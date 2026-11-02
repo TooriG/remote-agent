@@ -46,6 +46,10 @@ pub(super) fn matches_query_path(path: &str, kind: EntryKind, query: &str) -> bo
 }
 
 impl FileTreeView {
+    pub fn is_search_match(&self, row: &FileTreeRow) -> bool {
+        let query = desktop_query(&self.query);
+        !query.is_empty() && matches_query_path(&row.path, row.kind, &query)
+    }
     /// A compressed directory chain shares a row with its terminal directory.
     pub fn index_for_path(&self, path: &str) -> Option<usize> {
         self.rows

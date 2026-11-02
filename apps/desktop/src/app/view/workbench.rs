@@ -1,6 +1,7 @@
 use super::*;
 use agent_core::panels::{PanelState, PanelTool};
 use agent_core::presentation::agents::AgentSummary;
+use agent_core::presentation::files::{EXPLORER_CONTENT_MIN_WIDTH, EXPLORER_MIN_WIDTH};
 use errors::ErrorRow;
 
 #[derive(PartialEq)]
@@ -14,6 +15,9 @@ struct WorkbenchModel {
     tools: Vec<PanelTool>,
     errors: Vec<ErrorRow>,
     tree: Option<files::FileBrowserModel>,
+    explorer_state: Entity<gpui_kit::component::resizable::ResizableState>,
+    explorer_width: f32,
+    explorer_max: f32,
     file: Option<String>,
     saving: bool,
     file_failed: bool,
@@ -28,6 +32,7 @@ struct WorkbenchModel {
 
 pub(in crate::app) struct WorkbenchView {
     desktop: WeakEntity<Desktop>,
+    _explorer: Subscription,
     model: Option<WorkbenchModel>,
     _browsers: Vec<Subscription>,
     #[cfg(test)]
@@ -35,9 +40,14 @@ pub(in crate::app) struct WorkbenchView {
 }
 
 impl WorkbenchView {
-    pub(in crate::app) fn new(desktop: &Entity<Desktop>) -> Self {
+    pub(in crate::app) fn new(
+        desktop: &Entity<Desktop>,
+        explorer: &Entity<gpui_kit::component::resizable::ResizableState>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         Self {
             desktop: desktop.downgrade(),
+            _explorer: cx.observe(explorer, |_, _, cx| cx.notify()),
             model: None,
             _browsers: Vec::new(),
             #[cfg(test)]
@@ -270,6 +280,14 @@ impl Desktop {
                 .file_browser
                 .as_ref()
                 .map(|browser| browser.model.clone()),
+            explorer_state: self.file_explorer.state.clone(),
+            explorer_width: agent_core::presentation::files::explorer_width(
+                self.file_explorer.preferred,
+                self.file_explorer.available,
+            ),
+            explorer_max: agent_core::presentation::files::explorer_max_width(
+                self.file_explorer.available,
+            ),
             file,
             saving: kind == Panel::File && self.busy > 0,
             file_failed: self
@@ -479,7 +497,7 @@ impl Desktop {
             editor = editor.child(
                 h_flex()
                     .gap_2()
-                    .child(super::file_icon::file_icon(path, false, cx))
+                    .child(super::file_icon::file_icon(path, false, false, cx))
                     .child(
                         div()
                             .flex_1()
@@ -794,33 +812,71 @@ impl Desktop {
                 Panel::Files => {
                     Self::files_tree(model.tree.as_ref(), &model.file_search, &model.focus, cx)
                 }
-                Panel::File => h_resizable("file-explorer-split")
+                Panel::File => div()
+                    .size_full()
+                    .on_prepaint({
+                        let owner = cx.entity().downgrade();
+                        move |bounds, window, cx| {
+                            let available = f32::from(bounds.size.width);
+                            if let Some(owner) = owner.upgrade()
+                                && owner.read(cx).file_explorer.available != available
+                            {
+                                window.defer(cx, move |window, cx| {
+                                    owner.update(cx, |view, cx| {
+                                        view.fit_file_explorer(available, window, cx)
+                                    })
+                                });
+                            }
+                        }
+                    })
                     .child(
-                        resizable_panel().size_range(px(256.)..Pixels::MAX).child(
-                            Self::file_editor(
-                                model.file.as_deref(),
-                                model
-                                    .panel
-                                    .selected()
-                                    .and_then(|surface| surface.path.as_deref()),
-                                model.file_failed,
-                                &model.editor_input,
-                                model.saving,
-                                cx,
+                        h_resizable("file-explorer-split")
+                            .with_state(&model.explorer_state)
+                            .with_handle_appearance(Rc::new({
+                                let owner = cx.entity().downgrade();
+                                move |handle, _, cx| {
+                                    owner
+                                        .update(cx, |view, cx| {
+                                            view.file_explorer_handle(handle.is_active(), cx)
+                                        })
+                                        .ok()
+                                }
+                            }))
+                            .on_resize({
+                                let owner = cx.entity().downgrade();
+                                move |_, window, cx| {
+                                    let _ = owner.update(cx, |view, cx| {
+                                        view.commit_file_explorer_width(window, cx)
+                                    });
+                                }
+                            })
+                            .child(
+                                resizable_panel()
+                                    .size_range(px(EXPLORER_CONTENT_MIN_WIDTH)..Pixels::MAX)
+                                    .child(Self::file_editor(
+                                        model.file.as_deref(),
+                                        model
+                                            .panel
+                                            .selected()
+                                            .and_then(|surface| surface.path.as_deref()),
+                                        model.file_failed,
+                                        &model.editor_input,
+                                        model.saving,
+                                        cx,
+                                    )),
+                            )
+                            .child(
+                                resizable_panel()
+                                    .size(px(model.explorer_width))
+                                    .size_range(px(EXPLORER_MIN_WIDTH)..px(model.explorer_max))
+                                    .fixed()
+                                    .child(Self::files_tree(
+                                        model.tree.as_ref(),
+                                        &model.file_search,
+                                        &model.focus,
+                                        cx,
+                                    )),
                             ),
-                        ),
-                    )
-                    .child(
-                        resizable_panel()
-                            .size(px(256.))
-                            .size_range(px(160.)..px(560.))
-                            .fixed()
-                            .child(Self::files_tree(
-                                model.tree.as_ref(),
-                                &model.file_search,
-                                &model.focus,
-                                cx,
-                            )),
                     )
                     .into_any_element(),
                 Panel::Diff => v_flex()

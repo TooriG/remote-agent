@@ -215,6 +215,10 @@ impl Desktop {
         let menu_key = key.clone();
         let click_key = key.clone();
         let drag = self.file_tree_drag(key, row, cx);
+        let search_match = self
+            .file_browser
+            .as_ref()
+            .is_some_and(|browser| browser.model.tree.is_search_match(row));
         let icon = if directory {
             let icon = Icon::default()
                 .path(if row.expanded {
@@ -227,6 +231,9 @@ impl Desktop {
                 Icon::default()
                     .path("icons/file-icons/loading.svg")
                     .size(px(16.))
+                    .when(row.ignored, |icon| {
+                        icon.text_color(super::file_icon::ignored_ink(cx.theme().is_dark()))
+                    })
                     .opacity(0.6)
                     .with_animation(
                         "loading-folder",
@@ -238,7 +245,7 @@ impl Desktop {
                 icon.into_any_element()
             }
         } else {
-            super::file_icon::file_icon(&row.path, true, cx)
+            super::file_icon::file_icon(&row.path, true, row.ignored, cx)
         };
         h_flex()
             .relative()
@@ -268,16 +275,30 @@ impl Desktop {
             .rounded(px(6.))
             .text_size(px(12.))
             .cursor_pointer()
-            .text_color(rgb(if row.ignored {
-                0x737373
+            .text_color(if row.ignored {
+                super::file_icon::ignored_ink(cx.theme().is_dark())
             } else {
-                appearance::FOREGROUND
-            }))
-            .when(row.selected, |element| {
-                element.bg(rgb(appearance::SELECTED))
+                rgb(appearance::FOREGROUND).into()
             })
-            .hover(|style| style.bg(rgb(appearance::HOVER)))
-            .child(icon)
+            .when(search_match, |row| row.font_semibold())
+            .when(row.selected, |element| {
+                element.bg(rgb(appearance::FOREGROUND).opacity(0.12))
+            })
+            .when(!row.selected, |element| {
+                element.hover(|style| style.bg(rgb(appearance::FOREGROUND).opacity(0.07)))
+            })
+            .child(
+                div()
+                    .size(px(16.))
+                    .flex_shrink_0()
+                    .text_color(rgb(if row.selected {
+                        appearance::FOREGROUND
+                    } else {
+                        0x84848a
+                    }))
+                    .when(row.ignored, |icon| icon.opacity(0.5))
+                    .child(icon),
+            )
             .child(
                 div()
                     .flex_1()
