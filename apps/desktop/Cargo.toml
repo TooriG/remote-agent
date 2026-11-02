@@ -17,10 +17,10 @@ agent-core = { path = "../../crates/agent-core", features = ["diagrams"] }
 agent-local-host = { path = "../../crates/agent-local-host" }
 directories = "6"
 rfd = "0.17.2"
-gpui-kit = { version = "=0.8.1", features = ["tree-sitter-languages", "profiler"] }
+gpui-kit = { version = "=0.9.0", features = ["tree-sitter-languages", "profiler"] }
 # Keep GPUI icons inside development bundles as well as release bundles.
 rust-embed = { version = "8.13", features = ["debug-embed"] }
-gpui-http = { package = "gpui-pre-reqwest-client", version = "0.3.10" }
+gpui-http = { package = "gpui-pre-reqwest-client", version = "0.3.11" }
 uuid = { version = "1", features = ["v4"] }
 serde_json.workspace = true
 serde.workspace = true
@@ -52,11 +52,11 @@ block2 = "0.6"
 objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKSnapshotConfiguration", "WKHTTPCookieStore", "WKUIDelegate", "WKFrameInfo", "WKNavigationAction", "WKWindowFeatures", "WKOpenPanelParameters"] }
 
 [dev-dependencies]
-gpui-kit = { version = "=0.8.1", features = ["test-support"] }
+gpui-kit = { version = "=0.9.0", features = ["test-support"] }
 proptest = "1.12"
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
-gpui-apple = { package = "gpui-pre-apple", version = "=0.3.10" }
+gpui-apple = { package = "gpui-pre-apple", version = "=0.3.11" }
 
 [[bin]]
 name = "agent-desktop"
