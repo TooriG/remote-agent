@@ -5,6 +5,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     sync::Arc,
 };
+mod input;
 mod sort;
 #[cfg(test)]
 mod tests;
@@ -18,6 +19,13 @@ pub use view::{FileTreeRow, FileTreeView};
 pub struct FileTreeKey {
     pub owner: String,
     pub root: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "bindings", derive(uniffi::Record))]
+pub struct FileTreeRequest {
+    pub id: u64,
+    pub path: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -40,19 +48,41 @@ pub enum FileTreeAction {
     Toggle {
         path: String,
     },
+    Focus {
+        path: String,
+    },
+    SelectPaths {
+        paths: Vec<String>,
+        anchor: Option<String>,
+        focused: Option<String>,
+    },
+    Keyboard {
+        key: String,
+        additive: bool,
+        shift: bool,
+    },
+    Click {
+        path: String,
+        additive: bool,
+        range: bool,
+    },
     Select {
         path: String,
         additive: bool,
         range: bool,
     },
     Reveal {
-        path: String,
+        path: Option<String>,
+        directory: bool,
     },
     Query {
         text: String,
     },
     ToggleAll,
     Refresh,
+    DragStart {
+        path: String,
+    },
     DragEnd {
         paths: Vec<String>,
     },
@@ -78,6 +108,10 @@ struct Tree {
     running: BTreeSet<String>,
     selected: Vec<String>,
     anchor: Option<String>,
+    focused: Option<String>,
+    open_file: Option<FileTreeRequest>,
+    context_menu: Option<FileTreeRequest>,
+    reveal_id: u64,
     query: String,
     search_generation: u64,
     search: Option<Result<TreeEntries, String>>,
@@ -120,10 +154,10 @@ impl FileTrees {
                 .chain(tree.queue.drain(..));
             for path in pending {
                 tree.directories.entry(path).or_default().error =
-                    Some("Host not connected. Click to retry.".into());
+                    Some("Host not connected.".into());
             }
             if !tree.search_query().trim().is_empty() && tree.search.is_none() {
-                tree.search = Some(Err("Host not connected. Click to retry.".into()));
+                tree.search = Some(Err("Host not connected.".into()));
             }
         }
     }
@@ -132,6 +166,9 @@ impl FileTrees {
             .iter_mut()
             .find(|(path, _)| path == key)
             .map(|(_, tree)| Arc::make_mut(tree))
+    }
+    pub fn revision(&self) -> u64 {
+        self.sequence
     }
     pub fn view(&self, key: &FileTreeKey) -> FileTreeView {
         self.trees
@@ -220,13 +257,13 @@ impl FileTrees {
             tree.running.clear();
             tree.queue.clear();
             if reconnect && !opening {
-                search = tree.action(FileTreeAction::Refresh).or(search);
+                search = tree.action(FileTreeAction::Refresh, ticket).or(search);
             }
             if !tree.query.trim().is_empty() {
                 search = Some(tree.restart_search());
             }
         }
-        search = tree.action(action).or(search);
+        search = tree.action(action, ticket).or(search);
         let mut effects = Vec::new();
         if let Some(query) = search {
             tree.search_generation = ticket;
@@ -288,6 +325,7 @@ impl FileTrees {
         result: Result<TreeEntries, String>,
     ) {
         if self.search_current(key, generation) {
+            self.sequence += 1;
             self.tree_mut(key).unwrap().search = Some(result);
         }
     }
@@ -324,11 +362,14 @@ impl Tree {
         }
         work
     }
-    fn action(&mut self, action: FileTreeAction) -> Option<String> {
+    fn action(&mut self, action: FileTreeAction, ticket: u64) -> Option<String> {
+        let click = matches!(action, FileTreeAction::Click { .. });
         match action {
             FileTreeAction::Open {
                 surface, locale, ..
             } => {
+                self.open_file = None;
+                self.context_menu = None;
                 self.surface = surface;
                 self.locale = locale;
                 self.request(String::new(), true);
@@ -349,32 +390,81 @@ impl Tree {
                 }
                 self.retain_discoveries();
             }
-            FileTreeAction::Toggle { path } if valid_tree_path(&path) => {
-                // Pierre re-expands search matches after every tree mutation.
-                // The normal expansion is restored when search closes.
-                if self.desktop_search() {
-                    return None;
+            FileTreeAction::Keyboard {
+                key,
+                additive,
+                shift,
+            } => {
+                let view = self.view();
+                if let Some(input) =
+                    view.desktop_keyboard_input(&key, additive, shift, self.anchor.as_deref())
+                {
+                    let mut search = None;
+                    for action in input.actions {
+                        search = self.action(action, ticket).or(search);
+                    }
+                    if let Some(path) = input.menu_path {
+                        self.context_menu = Some(FileTreeRequest { id: ticket, path });
+                    }
+                    return search;
                 }
-                if !self.expanded.remove(&path) {
-                    self.reveal_ancestors(&path);
-                    self.expanded.insert(path.clone());
-                    self.request(path, true);
-                } else {
-                    self.expand_all = false;
-                    self.bound(true);
-                }
+            }
+            FileTreeAction::Toggle { path } if valid_tree_path(&path) => self.toggle(path),
+            FileTreeAction::Focus { path } if valid_tree_path(&path) => self.focused = Some(path),
+            FileTreeAction::SelectPaths {
+                paths,
+                anchor,
+                focused,
+            } => {
+                let before = self.selected.clone();
+                self.selected = paths
+                    .into_iter()
+                    .filter(|path| valid_tree_path(path))
+                    .collect();
+                self.request_selected_file(&before, ticket);
+                self.anchor = anchor.filter(|path| valid_tree_path(path));
+                self.focused = focused.filter(|path| valid_tree_path(path));
                 self.retain_discoveries();
             }
             FileTreeAction::Select {
                 path,
                 additive,
                 range,
+            }
+            | FileTreeAction::Click {
+                path,
+                additive,
+                range,
             } if valid_tree_path(&path) => {
-                self.select(path, additive, range);
+                let before = self.selected.clone();
+                let directory = self
+                    .entries()
+                    .get(&path)
+                    .is_some_and(|entry| entry.kind == EntryKind::Directory);
+                self.load_ancestors(&path, self.surface == FileTreeSurface::Mobile);
+                self.focused = Some(path.clone());
+                self.select(path.clone(), additive, range);
+                self.request_selected_file(&before, ticket);
+                if click && self.surface == FileTreeSurface::Desktop {
+                    if directory && !(additive || range) {
+                        self.toggle(path);
+                    }
+                    self.retain_discoveries();
+                    return self.query(String::new());
+                }
                 self.retain_discoveries();
             }
-            FileTreeAction::Reveal { path } if valid_tree_path(&path) => {
-                self.reveal_ancestors(&path);
+            FileTreeAction::Reveal { path, directory } => {
+                self.reveal_id = ticket;
+                self.open_file = None;
+                self.context_menu = None;
+                let path = path.filter(|path| valid_tree_path(path))?;
+                self.load_ancestors(&path, true);
+                if directory {
+                    self.expanded.insert(path.clone());
+                    self.request(path.clone(), false);
+                }
+                self.focused = Some(path.clone());
                 self.selected = vec![path];
                 self.retain_discoveries();
                 return self.query(String::new());
@@ -402,6 +492,15 @@ impl Tree {
                     return Some(self.restart_search());
                 }
             }
+            FileTreeAction::DragStart { path }
+                if !self.desktop_search() && valid_tree_path(&path) =>
+            {
+                if !self.selected.contains(&path) {
+                    self.selected = vec![path.clone()];
+                    self.anchor = Some(path.clone());
+                }
+                self.focused = Some(path);
+            }
             FileTreeAction::DragEnd { paths } => {
                 self.selected.retain(|path| !paths.contains(path));
                 self.retain_discoveries();
@@ -410,7 +509,37 @@ impl Tree {
         }
         None
     }
-    fn reveal_ancestors(&mut self, path: &str) {
+    fn request_selected_file(&mut self, previous: &[String], ticket: u64) {
+        if previous != self.selected
+            && let Some(path) = self.selected.last()
+            && self
+                .entries()
+                .get(path)
+                .is_some_and(|entry| entry.kind == EntryKind::File)
+        {
+            self.open_file = Some(FileTreeRequest {
+                id: ticket,
+                path: path.clone(),
+            });
+        }
+    }
+    fn toggle(&mut self, path: String) {
+        // Pierre re-expands search matches after every tree mutation.
+        // The normal expansion is restored when search closes.
+        if self.desktop_search() {
+            return;
+        }
+        if !self.expanded.remove(&path) {
+            self.load_ancestors(&path, true);
+            self.expanded.insert(path.clone());
+            self.request(path, true);
+        } else {
+            self.expand_all = false;
+            self.bound(true);
+        }
+        self.retain_discoveries();
+    }
+    fn load_ancestors(&mut self, path: &str, expand: bool) {
         let mut parent = String::new();
         let mut parts = path.split('/').peekable();
         while let Some(part) = parts.next() {
@@ -421,40 +550,35 @@ impl Tree {
                 parent.push('/');
             }
             parent.push_str(part);
-            self.expanded.insert(parent.clone());
+            if expand {
+                self.expanded.insert(parent.clone());
+            }
             self.request(parent.clone(), false);
         }
     }
     fn select(&mut self, path: String, additive: bool, range: bool) {
-        if range && let Some(anchor) = &self.anchor {
-            let rows = self.view().rows;
-            if let (Some(first), Some(last)) = (
-                rows.iter().position(|row| &row.path == anchor),
-                rows.iter().position(|row| row.path == path),
-            ) {
-                if !additive {
-                    self.selected.clear();
-                }
-                for row in &rows[first.min(last)..=first.max(last)] {
-                    if !self.selected.contains(&row.path) {
-                        self.selected.push(row.path.clone());
-                    }
-                }
-                return;
-            }
-        }
-        if !additive {
-            self.selected.clear();
-        }
-        if let Some(index) = self.selected.iter().position(|selected| selected == &path) {
-            self.selected.remove(index);
-        } else {
-            self.selected.push(path.clone());
-        }
-        self.anchor = Some(path);
+        let rows = if range { self.view().rows } else { Vec::new() };
+        (self.selected, self.anchor) = input::selection(
+            &rows,
+            &self.selected,
+            self.anchor.as_deref(),
+            &path,
+            additive,
+            range,
+        );
     }
     fn query(&mut self, text: String) -> Option<String> {
+        let text = if self.surface == FileTreeSurface::Desktop {
+            input::desktop_query(&text)
+        } else {
+            text
+        };
         let previous = self.search_query();
+        if self.desktop_search() && text.trim().is_empty() {
+            for path in self.selected.clone() {
+                self.load_ancestors(&path, true);
+            }
+        }
         self.query = text;
         if self.query.trim().is_empty() && self.expand_all {
             self.expand_available();
@@ -603,6 +727,7 @@ impl Tree {
             .retain(|path, entry| retained(path, entry.kind == EntryKind::Directory));
         self.selected.retain(|path| retained(path, false));
         self.anchor = self.anchor.take().filter(|path| retained(path, false));
+        self.focused = self.focused.take().filter(|path| retained(path, false));
     }
 }
 

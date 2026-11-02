@@ -63,10 +63,7 @@ enum OperationCompletion {
     Composer(u64),
     Answer(u64),
     Editor(u64),
-    Item {
-        generation: u64,
-        item_id: ItemId,
-    },
+    Item { generation: u64, item_id: ItemId },
     WorktreeSettings,
     Request(RequestId),
     Dictation(uuid::Uuid),
@@ -74,11 +71,6 @@ enum OperationCompletion {
     Account,
     Gallery(uuid::Uuid),
     OpenFile(u64),
-    Directory {
-        id: u64,
-        request: uuid::Uuid,
-        input: String,
-    },
 }
 enum Update {
     Connected(Result<(StoreSession, PathBuf, bool), String>),
@@ -121,10 +113,6 @@ enum ModelPanel {
     Manage,
 }
 enum SurfaceResource {
-    Files {
-        request: uuid::Uuid,
-        listing: Option<Arc<agent_protocol::models::FileList>>,
-    },
     Diff {
         view: Entity<DiffView>,
         source: Option<Weak<agent_protocol::models::WorkspaceReview>>,
@@ -172,7 +160,8 @@ pub(crate) struct Desktop {
     editor: forms::FileEditor,
     project_editor: Option<ProjectEditor>,
     search: Entity<InputState>,
-    path: Entity<InputState>,
+    file_search: Entity<InputState>,
+    file_browser: Option<files::FileBrowser>,
     model_controls: forms::ModelControls,
     account: forms::AccountForm,
     worktrees: forms::WorktreeForm,
@@ -262,6 +251,7 @@ impl Desktop {
     pub(crate) fn new(mode: Mode, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let language = crate::localization::language(cx);
         StoreSession::on_app_quit(cx, |view| &mut view.session);
+        cx.on_release(|view, _| view.close_file_browser()).detach();
         let (remote, initial_cwd, side_chat_mode) = match mode {
             Mode::Main => (None, None, false),
             Mode::SideChat { remote, cwd } => (remote, Some(cwd), true),
@@ -317,7 +307,7 @@ impl Desktop {
         let account = forms::AccountForm::new(window, cx);
         let search =
             cx.new(|cx| InputState::new(window, cx).placeholder(language.text("会話を検索")));
-        let path = cx.new(|cx| InputState::new(window, cx).placeholder(language.text("絶対パス")));
+        let file_search = cx.new(|cx| InputState::new(window, cx).placeholder("Search files"));
         let worktrees = forms::WorktreeForm::new(window, cx);
         let hosts = (!side_chat_mode).then(|| cx.new(|cx| Hosts::new(window, cx)));
         let app_updates = (!side_chat_mode
@@ -336,7 +326,6 @@ impl Desktop {
                 let language = crate::localization::language(cx);
                 for (input, source) in [
                     (&view.search, language.text("会話を検索")),
-                    (&view.path, language.text("絶対パス")),
                     (&view.model_controls.search, language.text("モデルを検索")),
                     (
                         &view.account.code,
@@ -418,6 +407,14 @@ impl Desktop {
                         );
                     }
                     view.sync_composer(cx);
+                }
+            }),
+            cx.subscribe(&file_search, |view, input, event, cx| {
+                if matches!(event, InputEvent::Change) {
+                    view.file_tree_action(agent_core::presentation::files::FileTreeAction::Query {
+                        text: input.read(cx).value().to_string(),
+                    });
+                    cx.notify();
                 }
             }),
             cx.subscribe(&question.input, |view, input, event, cx| {
@@ -536,7 +533,8 @@ impl Desktop {
             editor,
             project_editor: None,
             search,
-            path,
+            file_search,
+            file_browser: None,
             model_controls,
             account,
             worktrees,
@@ -892,13 +890,6 @@ impl Desktop {
                 }
                 return true;
             }
-            OperationCompletion::Directory { id, request, input } => {
-                if let Ok(Outcome::Directory { listing }) = result {
-                    self.directory_loaded(id, request, &input, listing, window, cx);
-                }
-                self.accept_snapshot(window, cx);
-                return true;
-            }
             OperationCompletion::ProjectImport => {
                 self.accept_snapshot(window, cx);
                 if result.is_ok()
@@ -1156,12 +1147,6 @@ impl Desktop {
             self.source_paths = paths.into_iter().map(str::to_owned).collect();
             self.source_items = self.user_items().cloned().collect();
         }
-        let cwd_changed = previous.navigation.cwd != self.snapshot.navigation.cwd;
-        if cwd_changed {
-            let cwd = self.snapshot.navigation.cwd.clone();
-            self.path
-                .update(cx, |input, cx| input.set_value(cwd, window, cx));
-        }
         if navigated {
             let panel = self.panels.get(self.panel_scope());
             if panel.open
@@ -1339,6 +1324,7 @@ impl Desktop {
                 return;
             }
         };
+        self.close_file_browser();
         self.session.take();
         self.remote = remote;
         self.model_controls.settings_scope = ModelDefaultsScope::Global;
@@ -1563,13 +1549,7 @@ impl Desktop {
                     }));
                 }
             }
-            Panel::Files => self.read_directory(
-                id,
-                surface
-                    .path
-                    .unwrap_or_else(|| self.snapshot.navigation.cwd.clone()),
-                cx,
-            ),
+            Panel::Files => (),
             Panel::Diff => self.refresh_review(),
             Panel::Agents | Panel::Home => (),
         }
@@ -1752,12 +1732,12 @@ impl Desktop {
             },
         );
     }
-    fn browse(&mut self, path: String, cx: &Context<Self>) {
-        let id = self
-            .panels
-            .open(self.panel_scope(), Panel::Files, Some(path.clone()));
+    fn browse(&mut self, path: String, cx: &mut Context<Self>) {
+        self.reveal_file_in_tree(Some(&path), true);
+        self.panels
+            .open(self.panel_scope(), Panel::Files, Some(path));
         self.tab = Tab::Chat;
-        self.read_directory(id, path, cx);
+        cx.notify();
     }
     fn edit(&mut self, path: String, discard_draft: bool) {
         self.panels

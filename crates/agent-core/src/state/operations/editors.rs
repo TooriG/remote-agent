@@ -17,12 +17,8 @@ impl Operation for ReadFileOpenCapabilities {
 
 impl Operation for OpenInEditor {
     rpc_operation!();
-    fn prepare(&mut self, snapshot: &mut Snapshot) -> Result<(), String> {
-        self.validate().map_err(str::to_owned)?;
-        if !self.reveal {
-            snapshot.preferred_editor = Some(self.editor);
-        }
-        Ok(())
+    fn prepare(&mut self, _: &mut Snapshot) -> Result<(), String> {
+        self.validate().map_err(str::to_owned)
     }
 }
 
@@ -32,8 +28,14 @@ mod tests {
     use agent_protocol::editors::EditorId;
 
     #[test]
-    fn opening_persists_the_selection_but_reveal_keeps_the_preferred_editor() {
-        let mut snapshot = Snapshot::default();
+    fn file_menu_launches_and_reveals_do_not_change_the_preferred_editor() {
+        let (mut snapshot, effects) = crate::state::reduce(
+            &Snapshot::default(),
+            Event::Intent(Intent::SetPreferredEditor {
+                editor: EditorId::Zed,
+            }),
+        );
+        assert!(effects.is_empty());
         let mut request = OpenInEditor {
             path: "~/a.rs".into(),
             line: Some(12),
@@ -42,14 +44,14 @@ mod tests {
             reveal: false,
         };
         request.prepare(&mut snapshot).unwrap();
-        assert_eq!(snapshot.preferred_editor, Some(EditorId::Cursor));
+        assert_eq!(snapshot.preferred_editor, Some(EditorId::Zed));
         request.editor = EditorId::FileManager;
         request.reveal = true;
         request.prepare(&mut snapshot).unwrap();
-        assert_eq!(snapshot.preferred_editor, Some(EditorId::Cursor));
+        assert_eq!(snapshot.preferred_editor, Some(EditorId::Zed));
         request.editor = EditorId::VsCode;
         assert!(request.prepare(&mut snapshot).is_err());
-        assert_eq!(snapshot.preferred_editor, Some(EditorId::Cursor));
+        assert_eq!(snapshot.preferred_editor, Some(EditorId::Zed));
     }
 
     #[test]

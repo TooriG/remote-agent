@@ -2,6 +2,8 @@ mod agents;
 mod composer;
 mod conversation;
 mod errors;
+mod file_icon;
+mod file_tree;
 mod header;
 mod markdown_diagram;
 mod media;
@@ -189,6 +191,7 @@ impl Render for Desktop {
         };
         h_flex()
             .relative()
+            .on_action(files::run_file_menu_command)
             .size_full()
             .items_stretch()
             .bg(rgb(appearance::BACKGROUND))

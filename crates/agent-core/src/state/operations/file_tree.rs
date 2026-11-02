@@ -71,7 +71,7 @@ impl Operation for ReadTreeDirectory {
             .map_err(|error| crate::presentation::error::error_message(&error.to_string())))
     }
     fn rejected_output(&self, _: ()) -> Option<Self::Output> {
-        Some(Err("Unable to load folder. Click to retry.".into()))
+        Some(Err("Unable to load folder.".into()))
     }
     fn apply(self, snapshot: &mut Snapshot, result: Self::Output) -> Vec<Effect> {
         effects(Arc::make_mut(&mut snapshot.workspace).file_trees.directory(
@@ -94,7 +94,7 @@ impl Operation for DebounceSearchTree {
         Ok(Ok(()))
     }
     fn rejected_output(&self, _: ()) -> Option<Self::Output> {
-        Some(Err("Unable to search files. Click to retry.".into()))
+        Some(Err("Unable to search files.".into()))
     }
     fn apply(self, snapshot: &mut Snapshot, result: Self::Output) -> Vec<Effect> {
         if let Err(error) = result {
@@ -136,7 +136,7 @@ impl Operation for SearchTree {
             .map_err(|error| crate::presentation::error::error_message(&error.to_string())))
     }
     fn rejected_output(&self, _: ()) -> Option<Self::Output> {
-        Some(Err("Unable to search files. Click to retry.".into()))
+        Some(Err("Unable to search files.".into()))
     }
     fn apply(self, snapshot: &mut Snapshot, result: Self::Output) -> Vec<Effect> {
         Arc::make_mut(&mut snapshot.workspace).file_trees.searched(

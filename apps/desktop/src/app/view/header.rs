@@ -154,6 +154,7 @@ impl Desktop {
                     .disabled(selected.is_none() || path.is_empty())
                     .on_click(cx.listener(move |view, _, _, cx| {
                         if let Some(editor) = selected {
+                            view.dispatch(Intent::SetPreferredEditor { editor });
                             view.open_in_editor(target.clone(), None, None, editor, false, cx);
                         }
                     })),
@@ -168,7 +169,6 @@ impl Desktop {
                         for editor in &options {
                             let editor = *editor;
                             let owner = owner.clone();
-                            let path = path.clone();
                             let file_manager = if cfg!(target_os = "macos") {
                                 FileManagerRevealKind::Finder
                             } else if cfg!(target_os = "windows") {
@@ -182,14 +182,8 @@ impl Desktop {
                                     .checked(selected == Some(editor))
                                     .on_click(move |_, _, cx| {
                                         let _ = owner.update(cx, |view, cx| {
-                                            view.open_in_editor(
-                                                path.clone(),
-                                                None,
-                                                None,
-                                                editor,
-                                                false,
-                                                cx,
-                                            )
+                                            view.dispatch(Intent::SetPreferredEditor { editor });
+                                            cx.notify();
                                         });
                                     }),
                             );

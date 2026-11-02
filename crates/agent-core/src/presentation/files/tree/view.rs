@@ -23,6 +23,10 @@ pub struct FileTreeRow {
 pub struct FileTreeView {
     pub rows: Vec<FileTreeRow>,
     pub selected_paths: Vec<String>,
+    pub open_file: Option<FileTreeRequest>,
+    pub context_menu: Option<FileTreeRequest>,
+    pub reveal_id: u64,
+    pub focused_path: Option<String>,
     pub query: String,
     pub ready: bool,
     pub pending: bool,
@@ -139,13 +143,18 @@ impl Tree {
             });
         }
         let rows = self.rows(&children, searching, &visible);
+        let focused_path = super::input::focused_path(&rows, self.focused.as_deref(), &self.query);
         FileTreeView {
+            focused_path,
             can_expand_all: !self.host_folder
                 && entries
                     .values()
                     .any(|entry| entry.kind == EntryKind::Directory),
             rows,
             selected_paths: self.selected.clone(),
+            open_file: self.open_file.clone(),
+            context_menu: self.context_menu.clone(),
+            reveal_id: self.reveal_id,
             query: self.query.clone(),
             ready: self
                 .directories
@@ -204,7 +213,7 @@ impl Tree {
                     && nested[0].kind == EntryKind::Directory
                 {
                     entry = nested[0];
-                    label.push('/');
+                    label.push_str(" / ");
                     label.push_str(basename(&entry.path));
                 }
             }
@@ -244,18 +253,11 @@ impl Tree {
                         .collect()
                 })
         } else {
-            let query = self.query.trim().replace('\\', "/").to_lowercase();
+            let query = super::input::desktop_query(&self.query);
             entries
-                .keys()
-                .filter(|path| {
-                    let suffix = if entries[*path].kind == EntryKind::Directory {
-                        "/"
-                    } else {
-                        ""
-                    };
-                    format!("{}{suffix}", path.to_lowercase()).contains(&query)
-                })
-                .cloned()
+                .values()
+                .filter(|entry| super::input::matches_query_path(&entry.path, entry.kind, &query))
+                .map(|entry| entry.path.clone())
                 .collect()
         };
         let mut visible = BTreeSet::new();

@@ -1,4 +1,6 @@
 mod activity;
+mod assets;
+use assets::DesktopAssets;
 mod app;
 mod appearance;
 mod browser;
@@ -21,82 +23,6 @@ pub(crate) struct Runtime {
     pub(crate) logging_error: Option<String>,
 }
 impl Global for Runtime {}
-struct DesktopAssets;
-impl DesktopAssets {
-    const FILES: &[(&str, &[u8])] = &[
-        (
-            "icons/openai.svg",
-            include_bytes!("../../mobile/iosApp/Bex/Assets.xcassets/openai.imageset/openai.svg"),
-        ),
-        (
-            "icons/anthropic.svg",
-            include_bytes!(
-                "../../mobile/iosApp/Bex/Assets.xcassets/anthropic.imageset/anthropic.svg"
-            ),
-        ),
-        (
-            "icons/deepseek.svg",
-            include_bytes!("../assets/deepseek.svg"),
-        ),
-        (
-            "icons/claude.svg",
-            include_bytes!("../../mobile/iosApp/Bex/Assets.xcassets/claude.imageset/claude.svg"),
-        ),
-        ("icons/shield.svg", include_bytes!("../assets/shield.svg")),
-        ("icons/bolt.svg", include_bytes!("../assets/bolt.svg")),
-        (
-            "icons/bolt-fill.svg",
-            include_bytes!("../assets/bolt-fill.svg"),
-        ),
-        (
-            "icons/microphone.svg",
-            include_bytes!("../assets/microphone.svg"),
-        ),
-        ("icons/stop.svg", include_bytes!("../assets/stop.svg")),
-        ("icons/pencil.svg", include_bytes!("../assets/pencil.svg")),
-        (
-            "icons/download.svg",
-            include_bytes!("../assets/download.svg"),
-        ),
-        (
-            "icons/square-pen.svg",
-            include_bytes!("../assets/square-pen.svg"),
-        ),
-        (
-            "icons/folder-plus.svg",
-            include_bytes!("../assets/folder-plus.svg"),
-        ),
-        ("icons/branch.svg", include_bytes!("../assets/branch.svg")),
-        ("icons/merge.svg", include_bytes!("../assets/merge.svg")),
-        ("icons/diff.svg", include_bytes!("../assets/diff.svg")),
-        ("icons/monitor.svg", include_bytes!("../assets/monitor.svg")),
-        (
-            "icons/message-circle-question.svg",
-            include_bytes!("../assets/message-circle-question.svg"),
-        ),
-        ("icons/qr-code.svg", include_bytes!("../assets/qr-code.svg")),
-    ];
-}
-impl AssetSource for DesktopAssets {
-    fn load(&self, path: &str) -> gpui_kit::Result<Option<std::borrow::Cow<'static, [u8]>>> {
-        if let Some((_, bytes)) = Self::FILES.iter().find(|(name, _)| *name == path) {
-            Ok(Some(std::borrow::Cow::Borrowed(*bytes)))
-        } else {
-            gpui_kit::assets::Assets.load(path)
-        }
-    }
-    fn list(&self, path: &str) -> gpui_kit::Result<Vec<SharedString>> {
-        let mut paths = gpui_kit::assets::Assets.list(path)?;
-        paths.extend(
-            Self::FILES
-                .iter()
-                .map(|(name, _)| *name)
-                .filter(|item| item.starts_with(path))
-                .map(SharedString::from),
-        );
-        Ok(paths)
-    }
-}
 
 struct MainWindow(Option<WindowHandle<Root>>);
 impl Global for MainWindow {}

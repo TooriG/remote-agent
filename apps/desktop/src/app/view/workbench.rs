@@ -13,14 +13,15 @@ struct WorkbenchModel {
     side_chat_mode: bool,
     tools: Vec<PanelTool>,
     errors: Vec<ErrorRow>,
-    directory: Option<Arc<agent_protocol::models::FileList>>,
+    tree: Option<files::FileBrowserModel>,
     file: Option<String>,
     saving: bool,
+    file_failed: bool,
     review: Option<(u64, u64, usize)>,
     agents: Vec<AgentSummary>,
     resource: Option<AnyView>,
     resource_message: &'static str,
-    path_input: Entity<InputState>,
+    file_search: Entity<InputState>,
     editor_input: Entity<gpui_kit::component::input::EditorState>,
     focus: FocusHandle,
 }
@@ -101,53 +102,6 @@ impl Render for WorkbenchView {
 }
 
 impl Desktop {
-    pub(in crate::app) fn read_directory(&mut self, id: u64, path: String, cx: &Context<Self>) {
-        let listing = match self.surface_resources.remove(&id) {
-            Some(SurfaceResource::Files { listing, .. }) => listing,
-            _ => None,
-        };
-        let request = uuid::Uuid::new_v4();
-        self.surface_resources
-            .insert(id, SurfaceResource::Files { request, listing });
-        self.perform(
-            Intent::ListFiles(op::ListFiles { path }),
-            OperationCompletion::Directory {
-                id,
-                request,
-                input: self.path.read(cx).value().to_string(),
-            },
-        );
-    }
-
-    pub(in crate::app) fn directory_loaded(
-        &mut self,
-        id: u64,
-        request: uuid::Uuid,
-        input: &str,
-        directory: agent_protocol::models::FileList,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(SurfaceResource::Files {
-            request: current,
-            listing,
-        }) = self.surface_resources.get_mut(&id)
-        else {
-            return;
-        };
-        if *current != request {
-            return;
-        }
-        let path = directory.path.clone();
-        *listing = Some(Arc::new(directory));
-        if self.panels.get(self.panel_scope()).active == Some(id)
-            && self.path.read(cx).value().as_ref() == input
-        {
-            self.path
-                .update(cx, |field, cx| field.set_value(path, window, cx));
-        }
-    }
-
     fn workbench_visible(&self, open: bool) -> bool {
         self.visible
             && open
@@ -224,6 +178,11 @@ impl Desktop {
                 _ => (),
             }
         }
+        self.sync_file_browser(
+            active && matches!(panel_kind, Panel::Files | Panel::File),
+            window,
+            cx,
+        );
         let model = self.workbench_model(window.viewport_size().width, cx);
         self.workbench_view
             .update(cx, |view, cx| view.set_model(model, cx));
@@ -244,7 +203,7 @@ impl Desktop {
                 SurfaceResource::Terminal(view) => Some(view.clone().into()),
                 SurfaceResource::SideChat(view) => Some(view.clone().into()),
                 SurfaceResource::Diff { view, .. } => Some(view.clone().into()),
-                SurfaceResource::Pending { .. } | SurfaceResource::Files { .. } => None,
+                SurfaceResource::Pending { .. } => None,
             });
         let pending = panel.active.is_some_and(|id| {
             matches!(
@@ -286,12 +245,6 @@ impl Desktop {
                     == Some(file.path.as_str())
             })
             .map(|file| file.path.clone());
-        let directory = panel
-            .active
-            .and_then(|id| match self.surface_resources.get(&id) {
-                Some(SurfaceResource::Files { listing, .. }) => listing.clone(),
-                _ => None,
-            });
         Some(WorkbenchModel {
             standalone: !self.side_chat_mode
                 && (panel.layout == PanelLayout::Expanded
@@ -313,9 +266,16 @@ impl Desktop {
             side_chat_mode: self.side_chat_mode,
             tools: self.panel_tools(),
             errors: self.error_rows(&ErrorScope::Workspace),
-            directory,
+            tree: self
+                .file_browser
+                .as_ref()
+                .map(|browser| browser.model.clone()),
             file,
             saving: kind == Panel::File && self.busy > 0,
+            file_failed: self
+                .snapshot
+                .operation_error(op::OperationKey::File)
+                .is_some(),
             review: (kind == Panel::Diff)
                 .then(|| self.snapshot.workspace.review.as_ref())
                 .flatten()
@@ -325,7 +285,7 @@ impl Desktop {
             } else {
                 Vec::new()
             },
-            path_input: self.path.clone(),
+            file_search: self.file_search.clone(),
             editor_input: self.editor.input.clone(),
             focus: self.panel_focus.clone(),
         })
@@ -499,114 +459,10 @@ impl Desktop {
             })
             .into_any_element()
     }
-    fn files(
-        directory: Option<&agent_protocol::models::FileList>,
-        path_input: &Entity<InputState>,
-        cx: &Context<Self>,
-    ) -> AnyElement {
-        let language = crate::localization::language(cx);
-        let mut entries = v_flex().gap_1();
-        for (i, entry) in directory
-            .map(|directory| directory.entries.as_slice())
-            .unwrap_or_default()
-            .iter()
-            .enumerate()
-        {
-            let path = entry.path.clone();
-            let download = path.clone();
-            let directory = entry.directory;
-            entries = entries.child(
-                h_flex()
-                    .w_full()
-                    .gap_1()
-                    .child(
-                        button(
-                            format!("file-{i}"),
-                            entry.name.clone(),
-                            cx,
-                            move |s, _, cx| {
-                                if directory {
-                                    s.browse(path.clone(), cx);
-                                } else {
-                                    s.open_file(PathBuf::from(&path), cx);
-                                }
-                            },
-                        )
-                        .icon(if directory {
-                            IconName::Folder
-                        } else {
-                            IconName::FileText
-                        })
-                        .flex_1()
-                        .debug_selector(move || format!("workspace-file-{i}")),
-                    )
-                    .when(!directory, |row| {
-                        row.child(
-                            Button::new(SharedString::from(format!("download-{i}")))
-                                .icon(IconName::ArrowDown)
-                                .small()
-                                .ghost()
-                                .tooltip(language.text("ダウンロード"))
-                                .accessibility_label(language.text("ダウンロード"))
-                                .on_click(cx.listener(move |s, _, _, cx| {
-                                    s.download(download.clone());
-                                    cx.notify();
-                                })),
-                        )
-                    }),
-            );
-        }
-        v_flex()
-            .size_full()
-            .min_h_0()
-            .p_4()
-            .gap_3()
-            .child(
-                h_flex()
-                    .gap_2()
-                    .child(icon_button(
-                        "parent-directory",
-                        IconName::ArrowUp,
-                        language.text("親フォルダ"),
-                        cx,
-                        |s, _, cx| {
-                            let path = s.path.read(cx).value();
-                            s.browse(
-                                Path::new(path.as_ref())
-                                    .parent()
-                                    .unwrap_or(Path::new("/"))
-                                    .to_string_lossy()
-                                    .into_owned(),
-                                cx,
-                            );
-                        },
-                    ))
-                    .child(
-                        Input::new(path_input)
-                            .small()
-                            .aria_label(language.text("フォルダのパス")),
-                    )
-                    .child(icon_button(
-                        "browse",
-                        IconName::ArrowRight,
-                        language.text("フォルダを開く"),
-                        cx,
-                        |s, _, cx| s.browse(s.path.read(cx).value().to_string(), cx),
-                    )),
-            )
-            .child(
-                div()
-                    .id("file-list")
-                    .debug_selector(|| "conversation-files".into())
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .child(entries),
-            )
-            .into_any_element()
-    }
     fn file_editor(
         path: Option<&str>,
+        target: Option<&str>,
+        failed: bool,
         input: &Entity<gpui_kit::component::input::EditorState>,
         saving: bool,
         cx: &Context<Self>,
@@ -618,18 +474,37 @@ impl Desktop {
             .min_h_0()
             .min_w_0()
             .gap_2();
-        if let Some(path) = path {
-            editor = editor
-                .child(
-                    h_flex().gap_2().child(IconName::FileText).child(
+        if let Some(path) = target {
+            let download = path.to_owned();
+            editor = editor.child(
+                h_flex()
+                    .gap_2()
+                    .child(super::file_icon::file_icon(path, false, cx))
+                    .child(
                         div()
                             .flex_1()
                             .min_w_0()
                             .text_sm()
                             .text_ellipsis()
                             .child(path.to_owned()),
+                    )
+                    .child(
+                        icon_button(
+                            "download-file",
+                            IconName::ArrowDown,
+                            language.text("ダウンロード"),
+                            cx,
+                            move |view, _, cx| {
+                                view.download(download.clone());
+                                cx.notify();
+                            },
+                        )
+                        .debug_selector(|| "download-file".into()),
                     ),
-                )
+            );
+        }
+        if path.is_some() {
+            editor = editor
                 .child(
                     div().flex_1().min_h_0().child(
                         Editor::new(input)
@@ -682,21 +557,23 @@ impl Desktop {
                         ),
                 );
         } else {
-            editor = editor
-                .items_center()
-                .justify_center()
-                .gap_3()
-                .child(
-                    Icon::new(IconName::FileText)
-                        .size_8()
-                        .text_color(rgb(appearance::MUTED)),
-                )
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(rgb(appearance::MUTED))
-                        .child(language.text("ファイルを読み込み中…")),
-                );
+            editor =
+                editor
+                    .items_center()
+                    .justify_center()
+                    .gap_3()
+                    .child(
+                        Icon::new(IconName::FileText)
+                            .size_8()
+                            .text_color(rgb(appearance::MUTED)),
+                    )
+                    .child(div().text_sm().text_color(rgb(appearance::MUTED)).child(
+                        language.text(if failed {
+                            "このファイルを表示できません"
+                        } else {
+                            "ファイルを読み込み中…"
+                        }),
+                    ));
         }
         editor.p_4().into_any_element()
     }
@@ -914,10 +791,38 @@ impl Desktop {
                         .into_any_element()
                 }
                 Panel::Agents => Self::agents_panel(&model.agents, language),
-                Panel::Files => Self::files(model.directory.as_deref(), &model.path_input, cx),
-                Panel::File => {
-                    Self::file_editor(model.file.as_deref(), &model.editor_input, model.saving, cx)
+                Panel::Files => {
+                    Self::files_tree(model.tree.as_ref(), &model.file_search, &model.focus, cx)
                 }
+                Panel::File => h_resizable("file-explorer-split")
+                    .child(
+                        resizable_panel().size_range(px(256.)..Pixels::MAX).child(
+                            Self::file_editor(
+                                model.file.as_deref(),
+                                model
+                                    .panel
+                                    .selected()
+                                    .and_then(|surface| surface.path.as_deref()),
+                                model.file_failed,
+                                &model.editor_input,
+                                model.saving,
+                                cx,
+                            ),
+                        ),
+                    )
+                    .child(
+                        resizable_panel()
+                            .size(px(256.))
+                            .size_range(px(160.)..px(560.))
+                            .fixed()
+                            .child(Self::files_tree(
+                                model.tree.as_ref(),
+                                &model.file_search,
+                                &model.focus,
+                                cx,
+                            )),
+                    )
+                    .into_any_element(),
                 Panel::Diff => v_flex()
                     .size_full()
                     .min_h_0()
@@ -1044,137 +949,6 @@ impl Desktop {
 mod tests {
     use super::*;
     use core::prelude::v1::test;
-
-    #[gpui::test]
-    fn directory_results_belong_to_the_request_and_surface_that_opened_them(
-        cx: &mut TestAppContext,
-    ) {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        cx.update(|cx| {
-            crate::appearance::init(cx);
-            cx.set_global(Runtime {
-                handle: runtime.handle().clone(),
-                connections: Arc::default(),
-                closing: tokio_util::task::TaskTracker::new(),
-                logging_error: None,
-            });
-        });
-        let (desktop, window) = cx.add_window_view(|window, cx| {
-            Desktop::new(
-                Mode::SideChat {
-                    remote: None,
-                    cwd: "/workspace".into(),
-                },
-                window,
-                cx,
-            )
-        });
-        window.update(|window, cx| {
-            desktop.update(cx, |view, cx| {
-                let listing = |path: &str, name: &str| agent_protocol::models::FileList {
-                    path: path.into(),
-                    entries: vec![agent_protocol::models::FileEntry {
-                        name: name.into(),
-                        path: format!("{path}/{name}"),
-                        directory: false,
-                        size: 1,
-                    }],
-                    truncated: false,
-                };
-                let request = |view: &Desktop, id| match &view.surface_resources[&id] {
-                    SurfaceResource::Files { request, .. } => *request,
-                    _ => panic!("expected Files resource"),
-                };
-                view.browse("/first".into(), cx);
-                let first = view.panels.get(view.panel_scope()).active.unwrap();
-                let old = request(view, first);
-                view.read_directory(first, "/first".into(), cx);
-                let current = request(view, first);
-                let input = view.path.read(cx).value().to_string();
-                view.directory_loaded(
-                    first,
-                    old,
-                    &input,
-                    listing("/first", "obsolete"),
-                    window,
-                    cx,
-                );
-                assert!(
-                    view.workbench_model(px(1600.), cx)
-                        .unwrap()
-                        .directory
-                        .is_none()
-                );
-                view.directory_loaded(
-                    first,
-                    current,
-                    &input,
-                    listing("/first", "current"),
-                    window,
-                    cx,
-                );
-                assert_eq!(
-                    view.workbench_model(px(1600.), cx)
-                        .unwrap()
-                        .directory
-                        .unwrap()
-                        .entries[0]
-                        .name,
-                    "current"
-                );
-                assert_eq!(view.path.read(cx).value().as_ref(), "/first");
-
-                view.read_directory(first, "/first".into(), cx);
-                let refresh = request(view, first);
-                view.path
-                    .update(cx, |field, cx| field.set_value("/unsent path", window, cx));
-                view.directory_loaded(
-                    first,
-                    refresh,
-                    "/first",
-                    listing("/first", "refreshed"),
-                    window,
-                    cx,
-                );
-                assert_eq!(view.path.read(cx).value().as_ref(), "/unsent path");
-
-                Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).navigation).draft_key =
-                    DraftKey::Local {
-                        key: "other".into(),
-                    };
-                view.browse("/second".into(), cx);
-                let second = view.panels.get(view.panel_scope()).active.unwrap();
-                view.directory_loaded(
-                    first,
-                    refresh,
-                    "/unsent path",
-                    listing("/first", "late"),
-                    window,
-                    cx,
-                );
-                assert!(
-                    view.workbench_model(px(1600.), cx)
-                        .unwrap()
-                        .directory
-                        .is_none()
-                );
-                let second_request = request(view, second);
-                view.close_surface(second, window, cx);
-                view.directory_loaded(
-                    second,
-                    second_request,
-                    "/unsent path",
-                    listing("/second", "closed"),
-                    window,
-                    cx,
-                );
-                assert!(!view.surface_resources.contains_key(&second));
-            })
-        });
-    }
 
     #[gpui::test]
     fn hidden_workbench_defers_resources_and_reconciles_before_drawing(cx: &mut TestAppContext) {

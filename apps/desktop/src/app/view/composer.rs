@@ -403,6 +403,14 @@ impl Desktop {
             ),
         };
         let composer = v_flex()
+            .when(answering.is_none() && model.connected, |composer| {
+                composer.on_drop(cx.listener(
+                    |view, drag: &super::file_tree::FileTreeDrag, window, cx| {
+                        view.add_file_mentions(&drag.mentions, window, cx);
+                        cx.stop_propagation();
+                    },
+                ))
+            })
             .track_focus(&focus)
             .map(|composer| {
                 if answering.is_some() {

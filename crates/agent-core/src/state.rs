@@ -524,6 +524,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
         LoadHostName, LoadHostManagement, LoadModels, ReadModelSettings,
         Respond, Transcribe, UploadAttachment, PairRemoteHost,
     ], {
+        Intent::SetPreferredEditor { editor } => next.preferred_editor = Some(editor),
         Intent::FileTree { key, action } => {
             let effects = op::file_tree_action(&mut next, key, action);
             return (next, effects);

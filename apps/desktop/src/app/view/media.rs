@@ -207,9 +207,7 @@ impl Desktop {
     }
 
     pub(in crate::app) fn open_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        if let Some(parent) = path.parent() {
-            self.browse(parent.to_string_lossy().into_owned(), cx);
-        }
+        self.reveal_file_in_tree(Some(&path.to_string_lossy()), false);
         self.edit(path.to_string_lossy().into_owned(), false);
         cx.notify();
     }
@@ -572,12 +570,8 @@ mod file_panel_tests {
     fn file_references_use_the_panel_without_previews_or_implicit_downloads(
         cx: &mut TestAppContext,
     ) {
-        use agent_protocol::models::{FileEntry, FileList};
-
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("large.PNG");
-        // Routing must not depend on a preview decoder or the text-size limit.
-        let size = 2 * 1024 * 1024;
         let cwd = directory.path().to_string_lossy().into_owned();
         let source = path.to_string_lossy().into_owned();
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -613,27 +607,26 @@ mod file_panel_tests {
             desktop.update(cx, |view, cx| {
                 let snapshot = Arc::make_mut(&mut view.snapshot);
                 Arc::make_mut(&mut snapshot.navigation).cwd = cwd.clone();
-                let listing = FileList {
-                    path: cwd.clone(),
-                    entries: vec![FileEntry {
-                        name: "large.PNG".into(),
-                        path: source.clone(),
-                        directory: false,
-                        size,
-                    }],
-                    truncated: false,
-                };
                 view.composer.input.update(cx, |input, cx| {
                     input.set_value("Keep this draft", window, cx)
                 });
-                let id = view.panels.open(view.panel_scope(), Panel::Files, None);
-                view.surface_resources.insert(
-                    id,
-                    SurfaceResource::Files {
-                        request: uuid::Uuid::new_v4(),
-                        listing: Some(Arc::new(listing)),
-                    },
-                );
+                view.panels.open(view.panel_scope(), Panel::Files, None);
+                view.sync_file_browser(true, window, cx);
+                view.file_browser.as_mut().unwrap().model.tree =
+                    Arc::new(agent_core::presentation::files::FileTreeView {
+                        rows: vec![agent_core::presentation::files::FileTreeRow {
+                            path: "large.PNG".into(),
+                            label: "large.PNG".into(),
+                            kind: agent_protocol::file_tree::EntryKind::File,
+                            depth: 0,
+                            expanded: false,
+                            selected: false,
+                            ignored: false,
+                            loading: false,
+                        }],
+                        ready: true,
+                        ..Default::default()
+                    });
                 view.panels.set_open(view.panel_scope(), true);
                 cx.notify();
             });
@@ -644,6 +637,24 @@ mod file_panel_tests {
             .expect("image file entry");
         window.simulate_click(entry.center(), Modifiers::default());
         window.run_until_parked();
+        window.update(|_, cx| {
+            desktop.update(cx, |view, cx| {
+                let key = view.file_browser.as_ref().unwrap().model.key.clone();
+                view.open_file_from_tree(
+                    &key,
+                    &agent_core::presentation::files::FileTreeRequest {
+                        id: 1,
+                        path: "large.PNG".into(),
+                    },
+                    cx,
+                );
+            })
+        });
+        window.run_until_parked();
+        assert!(
+            window.debug_bounds("download-file").is_some(),
+            "unsupported files keep an explicit save action"
+        );
         window.update(|window, cx| {
             desktop.update(cx, |view, cx| {
                 assert!(
@@ -663,6 +674,29 @@ mod file_panel_tests {
                 assert_eq!(
                     view.composer.input.read(cx).value().as_ref(),
                     "Keep this draft"
+                );
+                let key = view.file_browser.as_ref().unwrap().model.key.clone();
+                let duplicate = agent_core::presentation::files::FileTreeRequest {
+                    id: 1,
+                    path: "another.txt".into(),
+                };
+                view.open_file_from_tree(&key, &duplicate, cx);
+                let mut closed_owner = key;
+                closed_owner.owner.push_str("-previous-mount");
+                view.open_file_from_tree(
+                    &closed_owner,
+                    &agent_core::presentation::files::FileTreeRequest { id: 2, ..duplicate },
+                    cx,
+                );
+                assert_eq!(
+                    view.panels
+                        .get(view.panel_scope())
+                        .selected()
+                        .unwrap()
+                        .path
+                        .as_deref(),
+                    Some(source.as_str()),
+                    "duplicate projections and closed tree owners cannot reopen a file"
                 );
                 for name in [
                     "large.PNG",

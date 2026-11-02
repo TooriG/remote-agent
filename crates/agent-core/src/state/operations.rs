@@ -74,6 +74,9 @@ pub enum Intent {
     ResolveFile(ResolveFile),
     ReadFileOpenCapabilities(ReadFileOpenCapabilities),
     OpenInEditor(OpenInEditor),
+    SetPreferredEditor {
+        editor: agent_protocol::editors::EditorId,
+    },
     ReadFile(ReadFile),
     SaveFile(SaveFile),
     ReviewWorkspace(ReviewWorkspace),

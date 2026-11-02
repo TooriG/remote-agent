@@ -87,7 +87,7 @@ fn lazy_tree_sorts_directories_first_and_desktop_flattens_single_directory_chain
         ],
     );
     let view = trees.view(&key(ROOT));
-    assert_eq!(view.rows[0].label, "src/nested");
+    assert_eq!(view.rows[0].label, "src / nested");
     assert_eq!(view.rows[0].path, "src/nested");
     assert!(!view.rows[0].expanded);
     let nested = toggle(&mut trees, "src/nested");
@@ -375,7 +375,8 @@ fn mobile_uses_backend_matches_while_desktop_uses_pierre_literal_paths() {
     action(
         &mut trees,
         FileTreeAction::Reveal {
-            path: "src/main.rs".into(),
+            path: Some("src/main.rs".into()),
+            directory: false,
         },
     );
     assert!(trees.view(&key(ROOT)).query.is_empty());
@@ -520,7 +521,7 @@ fn query_bounds_and_host_folder_controls_follow_each_surface() {
         },
     );
     assert!(
-        matches!(&work[0], TreeWork::Search { query, .. } if query.encode_utf16().count() == 256 && query.starts_with(' '))
+        matches!(&work[0], TreeWork::Search { query, .. } if query.encode_utf16().count() == 256 && !query.starts_with(' '))
     );
     trees.action(
         key(ROOT),
@@ -609,6 +610,291 @@ fn selection_ranges_and_drag_end_preserve_unrelated_selection() {
         },
     );
     assert_eq!(trees.view(&key(ROOT)).selected_paths, ["c"]);
+}
+
+#[test]
+fn hidden_range_anchors_never_toggle_selected_rows_and_dragging_does_not_open_files() {
+    let mut trees = FileTrees::default();
+    let root = open(&mut trees, ROOT, FileTreeSurface::Desktop);
+    complete(
+        &mut trees,
+        &root[0],
+        ["a", "b", "c", "d"]
+            .map(|path| entry(path, EntryKind::File))
+            .into(),
+    );
+    for path in ["a", "d"] {
+        action(
+            &mut trees,
+            FileTreeAction::Click {
+                path: path.into(),
+                additive: true,
+                range: false,
+            },
+        );
+    }
+    action(&mut trees, FileTreeAction::Query { text: "a".into() });
+    assert!(trees.view(&key(ROOT)).drag_paths("a").is_empty());
+    action(&mut trees, FileTreeAction::DragStart { path: "b".into() });
+    assert_eq!(trees.view(&key(ROOT)).selected_paths, ["a", "d"]);
+    action(
+        &mut trees,
+        FileTreeAction::Click {
+            path: "a".into(),
+            additive: true,
+            range: true,
+        },
+    );
+    assert_eq!(trees.view(&key(ROOT)).selected_paths, ["a", "d"]);
+    assert_eq!(trees.view(&key(ROOT)).drag_paths("a"), ["a", "d"]);
+    assert_eq!(trees.view(&key(ROOT)).drag_paths("c"), ["c"]);
+    let before = trees.view(&key(ROOT)).open_file;
+    action(&mut trees, FileTreeAction::DragStart { path: "c".into() });
+    assert_eq!(trees.view(&key(ROOT)).selected_paths, ["c"]);
+    assert_eq!(trees.view(&key(ROOT)).open_file, before);
+    action(
+        &mut trees,
+        FileTreeAction::DragEnd {
+            paths: vec!["c".into()],
+        },
+    );
+    assert!(trees.view(&key(ROOT)).selected_paths.is_empty());
+    assert_eq!(trees.view(&key(ROOT)).open_file, before);
+}
+
+#[test]
+fn desktop_row_clicks_close_search_keep_selected_ancestors_open_and_use_the_last_item() {
+    let mut trees = FileTrees::default();
+    let root = open(&mut trees, ROOT, FileTreeSurface::Desktop);
+    complete(
+        &mut trees,
+        &root[0],
+        vec![
+            entry("src", EntryKind::Directory),
+            entry("a.rs", EntryKind::File),
+        ],
+    );
+    let search = action(
+        &mut trees,
+        FileTreeAction::Query {
+            text: "NESTED".into(),
+        },
+    );
+    let TreeWork::Search { generation, .. } = search[0] else {
+        panic!()
+    };
+    let before = trees.revision();
+    trees.searched(
+        &key(ROOT),
+        generation,
+        Ok(TreeEntries {
+            entries: vec![entry("src/nested.rs", EntryKind::File)],
+            truncated: false,
+        }),
+    );
+    assert!(trees.revision() > before);
+    assert_eq!(trees.view(&key(ROOT)).query, "nested");
+    let work = action(
+        &mut trees,
+        FileTreeAction::Click {
+            path: "src/nested.rs".into(),
+            additive: false,
+            range: false,
+        },
+    );
+    let first = trees.view(&key(ROOT)).open_file.unwrap();
+    assert_eq!(first.path, "src/nested.rs");
+    assert!(trees.view(&key(ROOT)).query.is_empty());
+    assert!(
+        trees
+            .view(&key(ROOT))
+            .rows
+            .iter()
+            .any(|row| row.path == "src" && row.expanded)
+    );
+    let src = work
+        .iter()
+        .find(|work| matches!(work, TreeWork::Directory { path, .. } if path == "src"))
+        .unwrap();
+    complete(
+        &mut trees,
+        src,
+        vec![entry("src/nested.rs", EntryKind::File)],
+    );
+    assert!(
+        trees
+            .view(&key(ROOT))
+            .rows
+            .iter()
+            .any(|row| row.path == "src/nested.rs" && row.selected)
+    );
+    action(
+        &mut trees,
+        FileTreeAction::Click {
+            path: "src".into(),
+            additive: true,
+            range: false,
+        },
+    );
+    assert_eq!(
+        trees.view(&key(ROOT)).open_file.unwrap().id,
+        first.id,
+        "a final folder must not emit another file request"
+    );
+    action(
+        &mut trees,
+        FileTreeAction::Click {
+            path: "src".into(),
+            additive: true,
+            range: false,
+        },
+    );
+    assert!(trees.view(&key(ROOT)).open_file.unwrap().id > first.id);
+    assert!(
+        trees
+            .view(&key(ROOT))
+            .rows
+            .iter()
+            .any(|row| row.path == "src" && row.expanded)
+    );
+    action(
+        &mut trees,
+        FileTreeAction::Click {
+            path: "src".into(),
+            additive: false,
+            range: false,
+        },
+    );
+    assert!(
+        trees
+            .view(&key(ROOT))
+            .rows
+            .iter()
+            .any(|row| row.path == "src" && !row.expanded)
+    );
+    action(
+        &mut trees,
+        FileTreeAction::Reveal {
+            path: Some("src".into()),
+            directory: true,
+        },
+    );
+    assert!(
+        trees
+            .view(&key(ROOT))
+            .rows
+            .iter()
+            .any(|row| row.path == "src" && row.expanded)
+    );
+    assert!(trees.view(&key(ROOT)).open_file.is_none());
+}
+
+#[test]
+fn desktop_keyboard_moves_focus_without_opening_and_matches_pierre_selection_commands() {
+    let mut trees = FileTrees::default();
+    let root = open(&mut trees, ROOT, FileTreeSurface::Desktop);
+    complete(
+        &mut trees,
+        &root[0],
+        vec![
+            entry("dir", EntryKind::Directory),
+            entry("a.rs", EntryKind::File),
+            entry("b.rs", EntryKind::File),
+        ],
+    );
+    let press = |trees: &mut FileTrees, input_key: &str, additive, shift| {
+        let before = trees.view(&key(ROOT)).open_file;
+        action(
+            trees,
+            FileTreeAction::Keyboard {
+                key: input_key.into(),
+                additive,
+                shift,
+            },
+        );
+        trees
+            .view(&key(ROOT))
+            .open_file
+            .filter(|request| Some(request.id) != before.map(|request| request.id))
+            .map(|request| request.path)
+    };
+    assert_eq!(press(&mut trees, "down", false, false), None);
+    assert_eq!(trees.view(&key(ROOT)).focused_path.as_deref(), Some("a.rs"));
+    assert!(trees.view(&key(ROOT)).selected_paths.is_empty());
+    assert_eq!(
+        press(&mut trees, "enter", false, false).as_deref(),
+        Some("a.rs")
+    );
+    assert_eq!(press(&mut trees, "enter", false, false), None);
+    assert_eq!(
+        press(&mut trees, "down", false, true).as_deref(),
+        Some("b.rs")
+    );
+    assert_eq!(trees.view(&key(ROOT)).selected_paths, ["a.rs", "b.rs"]);
+    assert_eq!(
+        press(&mut trees, "up", false, true).as_deref(),
+        Some("a.rs")
+    );
+    assert_eq!(trees.view(&key(ROOT)).selected_paths, ["a.rs"]);
+    assert_eq!(press(&mut trees, "a", true, false).as_deref(), Some("b.rs"));
+    assert_eq!(
+        trees.view(&key(ROOT)).selected_paths,
+        ["dir", "a.rs", "b.rs"]
+    );
+    press(&mut trees, "contextmenu", false, false);
+    assert_eq!(trees.view(&key(ROOT)).context_menu.unwrap().path, "a.rs");
+    action(
+        &mut trees,
+        FileTreeAction::Query {
+            text: "b.rs".into(),
+        },
+    );
+    assert_eq!(trees.view(&key(ROOT)).focused_path.as_deref(), Some("b.rs"));
+    assert!(!trees.view(&key(ROOT)).handles_desktop_key("a", true, false));
+    press(&mut trees, "enter", false, false);
+    assert!(trees.view(&key(ROOT)).query.is_empty());
+    assert_eq!(trees.view(&key(ROOT)).selected_paths, ["b.rs"]);
+    // Navigation and selection are reduced against the owner's latest state,
+    // even if no intermediate snapshot has reached the native view.
+    press(&mut trees, "home", false, false);
+    action(
+        &mut trees,
+        FileTreeAction::Keyboard {
+            key: "down".into(),
+            additive: false,
+            shift: false,
+        },
+    );
+    action(
+        &mut trees,
+        FileTreeAction::Keyboard {
+            key: "down".into(),
+            additive: false,
+            shift: false,
+        },
+    );
+    assert_eq!(trees.view(&key(ROOT)).focused_path.as_deref(), Some("b.rs"));
+    let open_id = trees.view(&key(ROOT)).open_file.unwrap().id;
+    assert!(
+        trees.view(&key(ROOT)).context_menu.is_some(),
+        "menu and file requests cannot overwrite one another"
+    );
+    action(
+        &mut trees,
+        FileTreeAction::Reveal {
+            path: None,
+            directory: false,
+        },
+    );
+    assert!(trees.view(&key(ROOT)).open_file.is_none());
+    assert!(trees.view(&key(ROOT)).context_menu.is_none());
+    assert_eq!(trees.view(&key(ROOT)).selected_paths, ["b.rs"]);
+    press(&mut trees, "space", true, false);
+    press(&mut trees, "space", true, false);
+    assert!(trees.view(&key(ROOT)).open_file.unwrap().id > open_id);
+    let reopened = open(&mut trees, ROOT, FileTreeSurface::Desktop);
+    assert!(!reopened.is_empty());
+    assert!(trees.view(&key(ROOT)).open_file.is_none());
 }
 
 #[test]

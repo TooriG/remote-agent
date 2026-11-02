@@ -1,5 +1,9 @@
 use super::*;
 use agent_core::{presentation::error::error_message, store::Store};
+mod browser;
+pub(super) use browser::{FileBrowser, FileBrowserModel};
+mod menu;
+pub(super) use menu::run_file_menu_command;
 
 impl Desktop {
     pub(super) fn open_in_editor(
