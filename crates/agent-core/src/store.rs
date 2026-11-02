@@ -1434,9 +1434,11 @@ async fn run(
     drop(browser_jobs);
     drop(diagnostic_jobs);
     drop(preparation_jobs);
+    // A missing CLOSE acknowledgement can delay transport cleanup. Native
+    // input and recovery must observe the lost event stream immediately.
+    apply(&updates, Event::Disconnected);
     peer.close().await;
     drop(connection);
-    apply(&updates, Event::Disconnected);
     if let Some(complete) = disconnected {
         let _ = complete.send(Ok(()));
     }

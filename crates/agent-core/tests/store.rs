@@ -2826,6 +2826,39 @@ async fn concurrent_account_listing_preserves_login_and_cancellation_ignores_lat
 }
 
 #[tokio::test]
+async fn notification_eof_publishes_disconnection_before_waiting_for_close_ack() {
+    use agent_transport::transport::{Endpoint, Identity, Relays, Trust};
+    let host = Endpoint::bind(Identity::generate(), Relays::Loopback)
+        .await
+        .unwrap();
+    let client = Endpoint::bind(Identity::generate(), Relays::Loopback)
+        .await
+        .unwrap();
+    let ticket = host.ticket();
+    let (remote, incoming) = tokio::join!(client.connect(&ticket), host.accept());
+    let remote = remote.unwrap();
+    let incoming = incoming
+        .unwrap()
+        .unwrap()
+        .authorize(&Trust {
+            allowed: [client.node_id()].into(),
+            ..Default::default()
+        })
+        .unwrap();
+    let (peer, events) = tokio::join!(
+        remote.open_peer(Duration::from_secs(1), 16),
+        incoming.accept_peer()
+    );
+    let store = Store::new(peer.unwrap(), Snapshot::default());
+    events.unwrap().finish().unwrap();
+    // Keep the Host alive without acknowledging CLOSE. Native input must still
+    // observe the lost event stream before transport cleanup finishes.
+    wait_for(&store, |snapshot| !snapshot.connected).await;
+    incoming.close();
+    store.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn disconnected_store_keeps_editing_and_persisting_drafts() {
     let (store, reader, writer) = setup(authenticated_snapshot()).await;
     wait_for(&store, |s| s.connected).await;
