@@ -2549,7 +2549,18 @@ async fn discovered_host_keeps_mobile_and_desktop_turns_in_sync_across_reconnect
             .await;
             let snapshot = desktop.snapshot();
             let request = snapshot.requests().next().unwrap();
-            let choice_id = request.body.choices()[if final_status == "completed" { 0 } else { 3 }]
+            // The fixture interrupts the turn for any answer that does not allow it.
+            let effect = if final_status == "completed" {
+                agent_protocol::requests::ChoiceEffect::Allow
+            } else {
+                agent_protocol::requests::ChoiceEffect::Deny
+            };
+            let choice_id = request
+                .body
+                .choices()
+                .iter()
+                .find(|choice| choice.effect == effect)
+                .unwrap()
                 .id
                 .clone();
             desktop
