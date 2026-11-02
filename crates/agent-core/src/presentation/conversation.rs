@@ -923,6 +923,57 @@ pub fn request(source: &WireRequest) -> Request {
     }
 }
 
+/// How prominently a request action is shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
+pub enum ActionTone {
+    Primary,
+    Secondary,
+    Danger,
+}
+
+/// T3 Code leads with a one-time grant and marks denial; broader grants and
+/// cancelling stay secondary.
+#[cfg_attr(feature = "bindings", uniffi::export)]
+pub fn choice_tone(effect: agent_protocol::requests::ChoiceEffect) -> ActionTone {
+    use agent_protocol::requests::ChoiceEffect;
+    match effect {
+        ChoiceEffect::Allow => ActionTone::Primary,
+        ChoiceEffect::Deny => ActionTone::Danger,
+        ChoiceEffect::AllowLasting | ChoiceEffect::Cancel => ActionTone::Secondary,
+    }
+}
+
+/// The composer answers one question and one other request at a time, as in
+/// T3 Code; later ones follow once these resolve.
+pub(crate) fn docked_request(thread: &models::Thread, question: bool) -> Option<&WireRequest> {
+    thread
+        .requests
+        .values()
+        .map(Arc::as_ref)
+        .find(|request| {
+            matches!(
+                request.body,
+                agent_protocol::requests::RequestBody::Question { .. }
+            ) == question
+        })
+}
+
+#[cfg_attr(feature = "bindings", uniffi::export)]
+impl Snapshot {
+    /// The requests shown above the composer: the other request, then the question.
+    pub fn docked_requests(&self, session: crate::session::SessionRef) -> Vec<Request> {
+        let Some(thread) = self.conversations.get(&session) else {
+            return Vec::new();
+        };
+        [false, true]
+            .into_iter()
+            .filter_map(|question| docked_request(thread, question))
+            .map(request)
+            .collect()
+    }
+}
+
 /// Native editors keep typed choice IDs separate from free text.
 #[cfg_attr(feature = "bindings", uniffi::export)]
 pub fn build_question_answer(
@@ -1235,6 +1286,77 @@ mod tests {
                 .clone(),
             &previous.cloned(),
         )
+    }
+
+    #[test]
+    fn request_choices_rank_as_t3_ranks_approval_decisions() {
+        use agent_protocol::requests::ChoiceEffect;
+        for (effect, tone) in [
+            (ChoiceEffect::Allow, ActionTone::Primary),
+            (ChoiceEffect::AllowLasting, ActionTone::Secondary),
+            (ChoiceEffect::Deny, ActionTone::Danger),
+            (ChoiceEffect::Cancel, ActionTone::Secondary),
+        ] {
+            assert_eq!(choice_tone(effect), tone);
+        }
+    }
+
+    #[test]
+    fn composer_docks_one_other_request_before_one_question_in_request_order() {
+        use agent_protocol::{
+            requests::{Question, RequestBody, RequestTarget},
+            session::{ProviderKind, RequestDelivery, SessionRef},
+        };
+        let question = || RequestBody::Question {
+            questions: vec![Question {
+                id: "q".into(),
+                header: String::new(),
+                prompt: "which?".into(),
+                secret: false,
+                allow_free_text: true,
+                multiple: false,
+                choices: vec![],
+            }],
+        };
+        let tool = || RequestBody::ToolExecution {
+            tool: "tool".into(),
+            namespace: None,
+            arguments: json!({}),
+        };
+        let session = SessionRef::new(ProviderKind::Codex, "thread".into()).unwrap();
+        let mut snapshot = Snapshot::default();
+        assert!(snapshot.docked_requests(session.clone()).is_empty());
+        let thread = models::Thread {
+            requests: [
+                ("1-question", question()),
+                ("2-tool", tool()),
+                ("3-question", question()),
+                ("4-tool", tool()),
+            ]
+            .into_iter()
+            .map(|(id, body)| {
+                let request = WireRequest {
+                    id: id.into(),
+                    target: RequestTarget::Session,
+                    delivery: RequestDelivery::Awaiting,
+                    body,
+                };
+                (request.id.clone(), Arc::new(request))
+            })
+            .collect(),
+            ..Default::default()
+        };
+        Arc::make_mut(&mut snapshot.conversations).insert(session.clone(), Arc::new(thread));
+        let docked: Vec<_> = snapshot
+            .docked_requests(session.clone())
+            .into_iter()
+            .map(|request| request.id.as_str().to_owned())
+            .collect();
+        assert_eq!(docked, ["2-tool", "1-question"]);
+        assert_eq!(
+            snapshot.question_prompt(session).unwrap().request_id.as_str(),
+            "1-question"
+        );
     }
 
     #[test]
@@ -1971,9 +2093,9 @@ mod tests {
     fn requests_and_pending_submissions_have_one_shared_native_projection() {
         let mut snapshot = fixture();
         for value in [
-            json!({"id": "1", "target": {"turn": {"turnId": "done", "itemId": null}}, "delivery": "awaiting", "body": {"approval": {"kind": "command", "description": "run command", "details": "", "choices": [{"id": "choice-0", "label": "承認", "description": ""}, {"id": "choice-1", "label": "このセッションで承認", "description": ""}, {"id": "choice-2", "label": "拒否", "description": ""}, {"id": "choice-3", "label": "キャンセル", "description": ""}]}}}),
+            json!({"id": "1", "target": {"turn": {"turnId": "done", "itemId": null}}, "delivery": "awaiting", "body": {"approval": {"kind": "command", "description": "run command", "details": "", "choices": [{"id": "choice-0", "label": "承認", "description": "", "effect": "allow"}, {"id": "choice-1", "label": "このセッションで承認", "description": "", "effect": "allowLasting"}, {"id": "choice-2", "label": "拒否", "description": "", "effect": "deny"}, {"id": "choice-3", "label": "キャンセル", "description": "", "effect": "cancel"}]}}}),
             json!({"id": "question", "target": {"turn":{"turnId":"live","itemId":null}}, "delivery": "awaiting", "body": {"question": {"questions": [{"id": "question-0", "header": "", "prompt": "which?", "secret": false, "allowFreeText": true, "multiple": false, "choices": []}]}}}),
-            json!({"id": "3", "target": "session", "delivery": "awaiting", "body": {"approval": {"kind": "fileChange", "description": "", "details": "", "choices": [{"id": "choice-0", "label": "承認", "description": ""}, {"id": "choice-1", "label": "このセッションで承認", "description": ""}, {"id": "choice-2", "label": "拒否", "description": ""}, {"id": "choice-3", "label": "キャンセル", "description": ""}]}}}),
+            json!({"id": "3", "target": "session", "delivery": "awaiting", "body": {"approval": {"kind": "fileChange", "description": "", "details": "", "choices": [{"id": "choice-0", "label": "承認", "description": "", "effect": "allow"}, {"id": "choice-1", "label": "このセッションで承認", "description": "", "effect": "allowLasting"}, {"id": "choice-2", "label": "拒否", "description": "", "effect": "deny"}, {"id": "choice-3", "label": "キャンセル", "description": "", "effect": "cancel"}]}}}),
         ] {
             let request: WireRequest = serde_json::from_value(value).unwrap();
             let request = Arc::new(request);

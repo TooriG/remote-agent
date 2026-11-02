@@ -33,13 +33,23 @@ extension ThreadScreen {
             if let error = model.transferError {
                 AppNotice(text: error)
             }
+            if let request = model.dockedRequest {
+                RequestPanel(
+                    request: request,
+                    busy: model.snapshot.operationRunning(key: .request(id: request.id)),
+                    error: model.snapshot.operationError(key: .request(id: request.id)),
+                    respond: { model.respond(request.id, $0) }
+                )
+                // Typed responses belong to one request.
+                .id(request.id)
+            }
             if let question {
                 QuestionPanel(
                     prompt: question,
                     busy: model.snapshot.operationRunning(key: .request(id: question.requestId)),
                     error: model.snapshot.operationError(key: .request(id: question.requestId)),
                     choose: { model.answerQuestion(question.requestId, .choose(choiceId: $0)) },
-                    skip: { model.skipQuestions(question.requestId) }
+                    skip: { model.respond(question.requestId, .skipQuestions) }
                 )
             }
             VStack(alignment: .leading, spacing: 4) {

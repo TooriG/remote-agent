@@ -66,7 +66,6 @@ pub(super) enum ConversationRow {
         last: bool,
     },
     Queued(Arc<agent_core::presentation::conversation::RenderedItem>),
-    Request(Box<agent_core::presentation::conversation::Request>),
     Preparation(agent_core::presentation::conversation::PreparationPresentation),
 }
 impl ConversationRow {
@@ -82,7 +81,6 @@ impl ConversationRow {
                 },
             ) => a.source.id == b.source.id && a.rows[*ai].id == b.rows[*bi].id,
             (Self::Queued(a), Self::Queued(b)) => a.data.id == b.data.id,
-            (Self::Request(a), Self::Request(b)) => a.id == b.id,
             (Self::Preparation(_), Self::Preparation(_)) => true,
             _ => false,
         }
@@ -144,10 +142,6 @@ impl ConversationRow {
                         ConversationRowContent::ProviderHandoff { text: b },
                     ) => a == b,
                     (
-                        ConversationRowContent::PendingRequest { request: a },
-                        ConversationRowContent::PendingRequest { request: b },
-                    ) => a == b,
-                    (
                         ConversationRowContent::Error { error: a },
                         ConversationRowContent::Error { error: b },
                     ) => a == b,
@@ -155,7 +149,6 @@ impl ConversationRow {
                 }
             }
             (Self::Queued(a), Self::Queued(b)) => Arc::ptr_eq(a, b),
-            (Self::Request(a), Self::Request(b)) => a == b,
             (Self::Preparation(a), Self::Preparation(b)) => a == b,
             _ => false,
         }
@@ -354,9 +347,8 @@ fn conversation_rows(
                         );
                     }
                     ConversationRowContent::Activity { .. } if !expanded => continue,
-                    ConversationRowContent::PendingRequest { request } if docked(request) => {
-                        continue;
-                    }
+                    // The composer answers requests from its docked cards.
+                    ConversationRowContent::PendingRequest { .. } => continue,
                     _ => (),
                 }
                 rows.push(ConversationRow::Turn {
@@ -378,9 +370,6 @@ fn conversation_rows(
             .iter()
             .flat_map(|conversation| &conversation.session_rows)
             .filter_map(|row| match &row.content {
-                ConversationRowContent::PendingRequest { request } if !docked(request) => {
-                    Some(ConversationRow::Request(request.clone()))
-                }
                 ConversationRowContent::Preparation { preparation } => {
                     Some(ConversationRow::Preparation(preparation.clone()))
                 }
@@ -388,14 +377,6 @@ fn conversation_rows(
             }),
     );
     rows
-}
-
-/// The composer answers questions from its docked panel, as on iOS and in T3 Code.
-fn docked(request: &agent_core::presentation::conversation::Request) -> bool {
-    matches!(
-        request.request_body,
-        agent_protocol::requests::RequestBody::Question { .. }
-    )
 }
 
 #[cfg(test)]
@@ -406,7 +387,7 @@ mod tests {
     use agent_core::presentation::conversation::{RenderedTurn, project_conversation};
 
     #[test]
-    fn questions_are_answered_from_the_composer_instead_of_the_timeline() {
+    fn session_and_turn_requests_are_answered_outside_the_timeline() {
         use agent_protocol::requests::{Request, RequestBody, RequestTarget};
         let mut source: Arc<Thread> = Arc::new(serde_json::from_value(serde_json::json!({
             "id": {"provider": "claude", "id": "thread"},
@@ -451,10 +432,9 @@ mod tests {
             );
         }
         let rendered = Some(project_conversation(&Snapshot::default(), source, &None));
-        let mut requests: Vec<_> = conversation_rows(&rendered, &Default::default())
+        let requests: Vec<_> = conversation_rows(&rendered, &Default::default())
             .iter()
             .filter_map(|row| match row {
-                ConversationRow::Request(request) => Some(request.id.to_string()),
                 ConversationRow::Turn { turn, index, .. } => match &turn.rows[*index].content {
                     ConversationRowContent::PendingRequest { request } => {
                         Some(request.id.to_string())
@@ -464,8 +444,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        requests.sort();
-        assert_eq!(requests, ["session-input", "turn-input"]);
+        assert!(requests.is_empty());
     }
 
     #[test]
@@ -499,7 +478,7 @@ mod tests {
     }
 
     #[test]
-    fn row_projection_keeps_repeated_turns_and_scopes_requests_without_changing_input() {
+    fn row_projection_keeps_repeated_turns_and_leaves_requests_to_the_composer() {
         let mut source: Arc<Thread> = Arc::new(serde_json::from_value(serde_json::json!({"id":{"provider":"codex","id":"selected"},"turns":[{"id":"repeated","items":[{"id":"first","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"first answer","phase":"unknown"}}}}}],"status":"unknown"},{"id":"repeated","items":[{"id":"second","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"second answer","phase":"unknown"}}}}}],"status":"unknown"}]})).unwrap());
         let mut snapshot = Snapshot::default();
         Arc::make_mut(&mut snapshot.navigation).thread_id =
@@ -509,7 +488,10 @@ mod tests {
             });
         let request = Arc::new(agent_protocol::requests::Request {
             id: "global".into(),
-            target: agent_protocol::requests::RequestTarget::Session,
+            target: agent_protocol::requests::RequestTarget::Turn {
+                turn_id: "repeated".into(),
+                item_id: None,
+            },
             delivery: agent_protocol::session::RequestDelivery::Awaiting,
             body: agent_protocol::requests::RequestBody::Elicitation {
                 server: "fixture".into(),
@@ -564,14 +546,23 @@ mod tests {
             assert!(Arc::ptr_eq(row, turn));
             assert_eq!(*body, Some(expected));
         }
-        let requests: Vec<_> = rows
-            .iter()
-            .filter_map(|row| match row {
-                ConversationRow::Request(request) => Some(request.id.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(requests, ["global"]);
+        let is_request = |content: &ConversationRowContent| {
+            matches!(content, ConversationRowContent::PendingRequest { .. })
+        };
+        let projected = rendered.as_ref().unwrap();
+        assert!(
+            projected
+                .turns
+                .iter()
+                .any(|turn| turn.rows.iter().any(|row| is_request(&row.content)))
+        );
+        assert!(
+            !rows.iter().any(|row| matches!(
+                row,
+                ConversationRow::Turn { turn, index, .. } if is_request(&turn.rows[*index].content)
+            )),
+            "the composer docks requests"
+        );
         assert!(rows.iter().zip(&repeated).all(|(a, b)| a.unchanged(b)));
         assert_eq!(snapshot, before);
     }

@@ -113,11 +113,18 @@ fn string(value: &Value, name: &str) -> String {
 fn detail(value: &Value) -> String {
     serde_json::to_string_pretty(value).expect("native value serializes")
 }
-fn choice(id: &RequestId, index: usize, label: &str, description: String) -> Choice {
+fn choice(
+    id: &RequestId,
+    index: usize,
+    label: &str,
+    effect: ChoiceEffect,
+    description: String,
+) -> Choice {
     Choice {
         id: format!("{id}/choice/{index}"),
         label: label.into(),
         description,
+        effect,
     }
 }
 
@@ -146,8 +153,8 @@ pub(crate) fn codex(id: RequestId, method: &str, params: &Value) -> Result<Adapt
             let mut choices = Vec::new();
             let mut mapping = BTreeMap::new();
             for (index, decision) in decisions.iter().enumerate() {
-                let (label, allows, description) = approval_choice(decision)?;
-                if allows
+                let (label, effect, description) = approval_choice(decision)?;
+                if matches!(effect, ChoiceEffect::Allow | ChoiceEffect::AllowLasting)
                     && params
                         .get("additionalPermissions")
                         .is_some_and(|permissions| {
@@ -160,7 +167,7 @@ pub(crate) fn codex(id: RequestId, method: &str, params: &Value) -> Result<Adapt
                 {
                     continue;
                 }
-                let choice = choice(&id, index, label, description);
+                let choice = choice(&id, index, label, effect, description);
                 mapping.insert(choice.id.clone(), json!({"decision":decision}));
                 choices.push(choice);
             }
@@ -211,11 +218,11 @@ pub(crate) fn codex(id: RequestId, method: &str, params: &Value) -> Result<Adapt
             let mut mapping = BTreeMap::new();
             let description = permission_description(permissions);
             if let Some(description) = &description {
-                for (index, scope, label) in [
-                    (0, "turn", "このターンで許可"),
-                    (1, "session", "このセッションで許可"),
+                for (index, scope, label, effect) in [
+                    (0, "turn", "このターンで許可", ChoiceEffect::Allow),
+                    (1, "session", "このセッションで許可", ChoiceEffect::AllowLasting),
                 ] {
-                    let choice = choice(&id, index, label, description.clone());
+                    let choice = choice(&id, index, label, effect, description.clone());
                     mapping.insert(
                         choice.id.clone(),
                         json!({"permissions":permissions,"scope":scope}),
@@ -223,7 +230,7 @@ pub(crate) fn codex(id: RequestId, method: &str, params: &Value) -> Result<Adapt
                     choices.push(choice);
                 }
             }
-            let deny = choice(&id, 2, "拒否", String::new());
+            let deny = choice(&id, 2, "拒否", ChoiceEffect::Deny, String::new());
             mapping.insert(deny.id.clone(), json!({"permissions":{},"scope":"turn"}));
             choices.push(deny);
             (
@@ -290,8 +297,8 @@ pub(crate) fn claude(
                 let (body, answers) = questions(&id, &input["questions"], Some(input.clone()))?;
                 (target, body, answers)
             } else {
-                let allow = choice(&id, 0, "承認", String::new());
-                let deny = choice(&id, 1, "拒否", String::new());
+                let allow = choice(&id, 0, "承認", ChoiceEffect::Allow, String::new());
+                let deny = choice(&id, 1, "拒否", ChoiceEffect::Deny, String::new());
                 let mapping = [
                     (
                         allow.id.clone(),
@@ -423,13 +430,13 @@ fn questions(
     ))
 }
 
-/// Returns the label, whether the choice grants the request, and its description.
-fn approval_choice(decision: &Value) -> Result<(&'static str, bool, String), String> {
-    let (label, allows) = match decision.as_str() {
-        Some("accept") => ("承認", true),
-        Some("acceptForSession") => ("このセッションで承認", true),
-        Some("decline") => ("拒否", false),
-        Some("cancel") => ("キャンセル", false),
+/// Returns the label, what the choice does, and its description.
+fn approval_choice(decision: &Value) -> Result<(&'static str, ChoiceEffect, String), String> {
+    let (label, effect) = match decision.as_str() {
+        Some("accept") => ("承認", ChoiceEffect::Allow),
+        Some("acceptForSession") => ("このセッションで承認", ChoiceEffect::AllowLasting),
+        Some("decline") => ("拒否", ChoiceEffect::Deny),
+        Some("cancel") => ("キャンセル", ChoiceEffect::Cancel),
         _ => {
             let fields = decision
                 .as_object()
@@ -447,7 +454,7 @@ fn approval_choice(decision: &Value) -> Result<(&'static str, bool, String), Str
                     .ok_or("execution rule arguments are missing")?;
                 return Ok((
                     "実行ルールを追加して承認",
-                    true,
+                    ChoiceEffect::AllowLasting,
                     format!(
                         "今後、次の引数のコマンドを許可します: {}",
                         detail(&json!(arguments))
@@ -471,7 +478,7 @@ fn approval_choice(decision: &Value) -> Result<(&'static str, bool, String), Str
                 return match rule.get("action").and_then(Value::as_str) {
                     Some("allow") => Ok((
                         "ネットワーク許可ルールを追加",
-                        true,
+                        ChoiceEffect::AllowLasting,
                         format!(
                             "今後、次のホストへの接続を許可します: {}",
                             detail(&json!(host))
@@ -479,7 +486,7 @@ fn approval_choice(decision: &Value) -> Result<(&'static str, bool, String), Str
                     )),
                     Some("deny") => Ok((
                         "ネットワーク拒否ルールを追加",
-                        false,
+                        ChoiceEffect::Deny,
                         format!(
                             "今後、次のホストへの接続を拒否します: {}",
                             detail(&json!(host))
@@ -491,7 +498,7 @@ fn approval_choice(decision: &Value) -> Result<(&'static str, bool, String), Str
             return Err("unsupported native approval choice".into());
         }
     };
-    Ok((label, allows, String::new()))
+    Ok((label, effect, String::new()))
 }
 
 fn permission_description(permissions: &serde_json::Map<String, Value>) -> Option<String> {
@@ -915,7 +922,24 @@ mod tests {
             &json!({"turnId":"turn","availableDecisions":decisions}),
         )
         .unwrap();
-        assert_eq!(adapted.request.body.choices().len(), 7);
+        assert_eq!(
+            adapted
+                .request
+                .body
+                .choices()
+                .iter()
+                .map(|choice| choice.effect)
+                .collect::<Vec<_>>(),
+            [
+                ChoiceEffect::Allow,
+                ChoiceEffect::AllowLasting,
+                ChoiceEffect::Deny,
+                ChoiceEffect::Cancel,
+                ChoiceEffect::AllowLasting,
+                ChoiceEffect::AllowLasting,
+                ChoiceEffect::Deny,
+            ]
+        );
         for (index, choice) in adapted.request.body.choices().iter().enumerate() {
             assert_eq!(
                 adapted
@@ -977,7 +1001,14 @@ mod tests {
         )
         .unwrap();
         let choices = adapted.request.body.choices();
-        assert_eq!(choices.len(), 3);
+        assert_eq!(
+            choices.iter().map(|choice| choice.effect).collect::<Vec<_>>(),
+            [
+                ChoiceEffect::Allow,
+                ChoiceEffect::AllowLasting,
+                ChoiceEffect::Deny
+            ]
+        );
         for (choice, scope) in [(&choices[0], "turn"), (&choices[1], "session")] {
             assert_eq!(
                 adapted
@@ -1061,10 +1092,15 @@ mod tests {
             assert_eq!(kind, &expected);
             assert_eq!(description, tool_name);
             assert_eq!(choices.len(), 2);
-            for (choice, native) in choices.iter().zip([
-                json!({"behavior":"allow","updatedInput":input}),
-                json!({"behavior":"deny","message":"ユーザーがこの操作を拒否しました。"}),
-            ]) {
+            for ((choice, native), effect) in choices
+                .iter()
+                .zip([
+                    json!({"behavior":"allow","updatedInput":input}),
+                    json!({"behavior":"deny","message":"ユーザーがこの操作を拒否しました。"}),
+                ])
+                .zip([ChoiceEffect::Allow, ChoiceEffect::Deny])
+            {
+                assert_eq!(choice.effect, effect);
                 assert_eq!(
                     adapted
                         .answers

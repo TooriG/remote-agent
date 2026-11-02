@@ -1,6 +1,6 @@
 use super::*;
 use agent_core::presentation::conversation::{
-    ActivityExpansion, ConversationRowContent, WorkProgress, activity_is_expanded,
+    ActionTone, ActivityExpansion, ConversationRowContent, WorkProgress, activity_is_expanded,
 };
 
 #[derive(Default, PartialEq)]
@@ -13,6 +13,7 @@ pub(in crate::app) struct ConversationModel {
     input_notice: Option<String>,
     history_notice: Option<String>,
     history: Option<agent_core::presentation::conversation::HistoryControl>,
+    docked: Vec<agent_core::presentation::conversation::Request>,
     errors: Vec<super::errors::ErrorRow>,
     running: std::collections::BTreeSet<op::OperationKey>,
     failures: BTreeMap<op::OperationKey, String>,
@@ -138,6 +139,18 @@ impl Desktop {
                 .selected()
                 .cloned()
                 .and_then(|session| self.snapshot.history_control(session)),
+            docked: self
+                .selected()
+                .into_iter()
+                .flat_map(|session| self.snapshot.docked_requests(session.clone()))
+                // Questions use the composer's answer field and question panel.
+                .filter(|request| {
+                    !matches!(
+                        request.request_body,
+                        agent_protocol::requests::RequestBody::Question { .. }
+                    )
+                })
+                .collect(),
             errors: self.error_rows(&ErrorScope::Conversation {
                 draft_key: self.draft_key().clone(),
             }),
@@ -878,9 +891,8 @@ impl ConversationView {
             ConversationRowContent::Activity { item, .. } => {
                 body = body.child(self.projected_item(item, turn, cx));
             }
-            ConversationRowContent::PendingRequest { request } => {
-                body = body.child(self.request_card(request, cx));
-            }
+            // Timeline rows leave requests to the composer's docked cards.
+            ConversationRowContent::PendingRequest { .. } => {}
             ConversationRowContent::ProviderHandoff { text } => {
                 body = body.child(
                     div()
@@ -1320,7 +1332,7 @@ impl ConversationView {
             .when(has_body, |column| column.child(body))
     }
 
-    pub(super) fn request_card(
+    fn request_card(
         &mut self,
         request: &agent_core::presentation::conversation::Request,
         cx: &mut Context<Self>,
@@ -1332,11 +1344,17 @@ impl ConversationView {
             return div().into_any_element();
         };
         let mut body = v_flex()
+            .w_full()
+            .max_w(px(CHAT_WIDTH))
             .gap_3()
             .p_4()
-            .rounded_lg()
-            .bg(rgb(0x30312a))
-            .child(request.title.clone())
+            .rounded(px(20.))
+            .bg(rgb(appearance::SURFACE))
+            .border_1()
+            .border_color(rgb(appearance::BORDER))
+            .child(div().text_sm().text_color(rgb(appearance::MUTED)).child(
+                agent_core::localization::localized_ui_text(language, request.title.clone()),
+            ))
             .child(request.body.clone());
         if let Some(error) = self
             .model
@@ -1371,24 +1389,29 @@ impl ConversationView {
                 for choice in choices {
                     let key = key.to_owned();
                     let choice_id = choice.id.clone();
-                    row = row.child(button(
-                        format!("decision-{key}-{}", choice.id),
-                        choice.label.clone(),
+                    let tone = agent_core::presentation::conversation::choice_tone(choice.effect);
+                    row = row.child(ranked(
+                        button(
+                            format!("decision-{key}-{}", choice.id),
+                            choice.label.clone(),
+                            cx,
+                            move |_, _, cx| {
+                                cx.emit(ConversationAction::Respond(
+                                    key.clone(),
+                                    if permission {
+                                        Answer::Permission {
+                                            choice_id: choice_id.clone(),
+                                        }
+                                    } else {
+                                        Answer::Approval {
+                                            choice_id: choice_id.clone(),
+                                        }
+                                    },
+                                ))
+                            },
+                        ),
+                        tone,
                         cx,
-                        move |_, _, cx| {
-                            cx.emit(ConversationAction::Respond(
-                                key.clone(),
-                                if permission {
-                                    Answer::Permission {
-                                        choice_id: choice_id.clone(),
-                                    }
-                                } else {
-                                    Answer::Approval {
-                                        choice_id: choice_id.clone(),
-                                    }
-                                },
-                            ))
-                        },
                     ));
                     if !choice.description.is_empty() {
                         body = body.child(choice.description.clone());
@@ -1415,74 +1438,109 @@ impl ConversationView {
                 }
                 let accept_key = key.to_owned();
                 let request_body = request.request_body.clone();
-                body = body.child(button(
-                    format!("elicitation-accept-{accept_key}"),
-                    language.text("確認して送信"),
-                    cx,
-                    move |view, _, cx| {
-                        let Some(inputs) = view.timeline.requests.get(&accept_key) else {
-                            return;
-                        };
-                        match agent_core::presentation::conversation::answer_from_json(
-                            &request_body,
-                            &inputs.response.read(cx).value(),
-                        ) {
-                            Ok(answer) => {
-                                cx.emit(ConversationAction::Respond(accept_key.clone(), answer))
+                let mut row = h_flex().gap_2().flex_wrap().child(ranked(
+                    button(
+                        format!("elicitation-accept-{accept_key}"),
+                        language.text("確認して送信"),
+                        cx,
+                        move |view, _, cx| {
+                            let Some(inputs) = view.timeline.requests.get(&accept_key) else {
+                                return;
+                            };
+                            match agent_core::presentation::conversation::answer_from_json(
+                                &request_body,
+                                &inputs.response.read(cx).value(),
+                            ) {
+                                Ok(answer) => {
+                                    cx.emit(ConversationAction::Respond(accept_key.clone(), answer))
+                                }
+                                Err(error) => cx.emit(ConversationAction::Error(error)),
                             }
-                            Err(error) => cx.emit(ConversationAction::Error(error)),
-                        }
-                    },
+                        },
+                    ),
+                    ActionTone::Primary,
+                    cx,
                 ));
-                for (action, label) in [
-                    (ElicitationAnswer::Decline, language.text("辞退")),
-                    (ElicitationAnswer::Cancel, language.text("キャンセル")),
+                for (action, label, tone) in [
+                    (
+                        ElicitationAnswer::Decline,
+                        language.text("辞退"),
+                        ActionTone::Danger,
+                    ),
+                    (
+                        ElicitationAnswer::Cancel,
+                        language.text("キャンセル"),
+                        ActionTone::Secondary,
+                    ),
                 ] {
                     let key = key.to_owned();
-                    body = body.child(button(
-                        format!("elicitation-{label}-{key}"),
-                        label,
+                    row = row.child(ranked(
+                        button(
+                            format!("elicitation-{label}-{key}"),
+                            label,
+                            cx,
+                            move |_, _, cx| {
+                                cx.emit(ConversationAction::Respond(
+                                    key.clone(),
+                                    Answer::Elicitation {
+                                        action: action.clone(),
+                                    },
+                                ))
+                            },
+                        ),
+                        tone,
                         cx,
-                        move |_, _, cx| {
-                            cx.emit(ConversationAction::Respond(
-                                key.clone(),
-                                Answer::Elicitation {
-                                    action: action.clone(),
-                                },
-                            ))
-                        },
                     ));
                 }
+                body = body.child(row);
             }
             RequestBody::ToolExecution { .. } => {
                 let key = key.to_owned();
                 let request_body = request.request_body.clone();
-                body = body.child(Textarea::new(&inputs.response)).child(button(
-                    format!("tool-answer-{key}"),
-                    language.text("実行結果を送信"),
+                body = body.child(Textarea::new(&inputs.response)).child(ranked(
+                    button(
+                        format!("tool-answer-{key}"),
+                        language.text("実行結果を送信"),
+                        cx,
+                        move |view, _, cx| {
+                            let Some(inputs) = view.timeline.requests.get(&key) else {
+                                return;
+                            };
+                            match agent_core::presentation::conversation::answer_from_json(
+                                &request_body,
+                                &inputs.response.read(cx).value(),
+                            ) {
+                                Ok(answer) => {
+                                    cx.emit(ConversationAction::Respond(key.clone(), answer))
+                                }
+                                Err(error) => cx.emit(ConversationAction::Error(error)),
+                            }
+                        },
+                    ),
+                    ActionTone::Primary,
                     cx,
-                    move |view, _, cx| {
-                        let Some(inputs) = view.timeline.requests.get(&key) else {
-                            return;
-                        };
-                        match agent_core::presentation::conversation::answer_from_json(
-                            &request_body,
-                            &inputs.response.read(cx).value(),
-                        ) {
-                            Ok(answer) => cx.emit(ConversationAction::Respond(key.clone(), answer)),
-                            Err(error) => cx.emit(ConversationAction::Error(error)),
-                        }
-                    },
                 ));
             }
         }
-        h_flex()
-            .w_full()
-            .justify_center()
-            .px_6()
-            .pb_5()
-            .child(body.max_w(px(CHAT_WIDTH)))
-            .into_any_element()
+        body.into_any_element()
+    }
+    /// Requests wait above the composer, as in T3 Code.
+    fn docked_requests(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let docked = self.model.docked.clone();
+        (!docked.is_empty()).then(|| {
+            // Long details or many questions scroll instead of hiding the conversation.
+            v_flex()
+                .id("docked-requests")
+                .w_full()
+                .max_h(relative(0.5))
+                .overflow_y_scroll()
+                .items_center()
+                .gap_3()
+                .px_6()
+                .pt_2()
+                .children(docked.iter().map(|request| self.request_card(request, cx)))
+                .into_any_element()
+        })
     }
     pub(in crate::app) fn sync_request_inputs(
         &mut self,
@@ -1520,6 +1578,22 @@ impl ConversationView {
                 },
             );
         }
+    }
+}
+
+/// Request actions in the tone the core ranks them, with T3 Code's danger tint.
+fn ranked(button: Button, tone: ActionTone, cx: &App) -> Button {
+    use gpui_kit::component::button::{ButtonCustomVariant, ButtonVariant};
+    match tone {
+        ActionTone::Primary => button.primary(),
+        ActionTone::Secondary => button.with_variant(ButtonVariant::Secondary),
+        ActionTone::Danger => button.custom(
+            ButtonCustomVariant::new(cx)
+                .color(rgb(0x301214).into())
+                .foreground(rgb(0xff6467).into())
+                .hover(rgb(0x3d171a).into())
+                .active(rgb(0x4a1c20).into()),
+        ),
     }
 }
 
@@ -1691,7 +1765,6 @@ impl ConversationView {
                                 .child(v_flex().w_full().max_w(px(CHAT_WIDTH)).gap_4().child(row))
                                 .into_any_element()
                         }
-                        Some(ConversationRow::Request(request)) => view.request_card(&request, cx),
                         Some(ConversationRow::Preparation(preparation)) => {
                             view.preparation_card(&preparation, cx)
                         }
@@ -1798,7 +1871,7 @@ impl ConversationView {
             }
             body = body.child(viewport);
         }
-        body.into_any_element()
+        body.children(self.docked_requests(cx)).into_any_element()
     }
 }
 impl Render for ConversationView {

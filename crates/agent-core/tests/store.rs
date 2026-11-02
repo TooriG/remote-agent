@@ -809,7 +809,7 @@ async fn approval_can_complete_while_another_request_is_waiting() {
     let (store, mut reader, writer) = setup(snapshot()).await;
     let server = tokio::spawn(async move {
         let pending = read(&mut reader).await;
-        writer.notify(json!({"method": "fixture/session/request", "session": {"provider": "codex", "id": "thread"}, "request": {"id": "approval", "target": "session", "delivery": "awaiting", "body": {"approval": {"kind": "command", "description": "", "details": "", "choices": [{"id": "choice-0", "label": "承認", "description": ""}, {"id": "choice-1", "label": "このセッションで承認", "description": ""}, {"id": "choice-2", "label": "拒否", "description": ""}, {"id": "choice-3", "label": "キャンセル", "description": ""}]}}}})).await.unwrap();
+        writer.notify(json!({"method": "fixture/session/request", "session": {"provider": "codex", "id": "thread"}, "request": {"id": "approval", "target": "session", "delivery": "awaiting", "body": {"approval": {"kind": "command", "description": "", "details": "", "choices": [{"id": "choice-0", "label": "承認", "description": "", "effect": "allow"}, {"id": "choice-1", "label": "このセッションで承認", "description": "", "effect": "allowLasting"}, {"id": "choice-2", "label": "拒否", "description": "", "effect": "deny"}, {"id": "choice-3", "label": "キャンセル", "description": "", "effect": "cancel"}]}}}})).await.unwrap();
         let answer = read(&mut reader).await;
         assert_eq!(answer["method"], "host/session/answer");
         assert_eq!(
@@ -866,7 +866,7 @@ async fn approval_reserve_is_bounded_when_ordinary_work_is_full() {
                     "delivery": "awaiting",
                     "body": {"approval": {
                         "kind": "command", "description": "", "details": "",
-                        "choices": [{"id": "deny", "label": "拒否", "description": ""}]
+                        "choices": [{"id": "deny", "label": "拒否", "description": "", "effect": "deny"}]
                     }}
                 }
             }))
@@ -3256,7 +3256,7 @@ async fn restored_snapshot_discards_session_authority_and_preserves_unknown_dict
         Arc::make_mut(&mut saved.conversations)
             .get_mut(saved.navigation.thread_id.as_ref().unwrap())
             .unwrap(),
-    ).requests = BTreeMap::from([("1".into(), Arc::new(serde_json::from_value(json!({"id": "1", "target": "session", "delivery": "awaiting", "body": {"approval": {"kind": "command", "description": "", "details": "", "choices": [{"id": "choice-0", "label": "承認", "description": ""}, {"id": "choice-1", "label": "このセッションで承認", "description": ""}, {"id": "choice-2", "label": "拒否", "description": ""}, {"id": "choice-3", "label": "キャンセル", "description": ""}]}}})).unwrap()))]);
+    ).requests = BTreeMap::from([("1".into(), Arc::new(serde_json::from_value(json!({"id": "1", "target": "session", "delivery": "awaiting", "body": {"approval": {"kind": "command", "description": "", "details": "", "choices": [{"id": "choice-0", "label": "承認", "description": "", "effect": "allow"}, {"id": "choice-1", "label": "このセッションで承認", "description": "", "effect": "allowLasting"}, {"id": "choice-2", "label": "拒否", "description": "", "effect": "deny"}, {"id": "choice-3", "label": "キャンセル", "description": "", "effect": "cancel"}]}}})).unwrap()))]);
     let bytes = serde_json::to_vec(&saved).unwrap();
     let (store, _reader, _writer) = connected(serde_json::from_slice(&bytes).unwrap()).await;
     wait_for(&store, |snapshot| snapshot.connected).await;
@@ -3741,7 +3741,7 @@ async fn item_transfer_releases_wire_order_and_preserves_newer_items() {
         let mut duplicate = Box::pin(store.dispatch(Intent::ReadItem(read_item.clone())));
         let changes = [
             (subscription_b, SessionChange::Text {turn_id:"turn".into(),item_id:"item".into(),field:TextField::AssistantText,delta:" + delta".into()}),
-            (subscription_a, SessionChange::Request {request:serde_json::from_value(json!({"id": "approval", "target": {"turn": {"turnId": "turn", "itemId": "item"}}, "delivery": "awaiting", "body": {"approval": {"kind": "command", "description": "", "details": "", "choices": [{"id": "choice-0", "label": "承認", "description": ""}, {"id": "choice-1", "label": "このセッションで承認", "description": ""}, {"id": "choice-2", "label": "拒否", "description": ""}, {"id": "choice-3", "label": "キャンセル", "description": ""}]}}})).unwrap()}),
+            (subscription_a, SessionChange::Request {request:serde_json::from_value(json!({"id": "approval", "target": {"turn": {"turnId": "turn", "itemId": "item"}}, "delivery": "awaiting", "body": {"approval": {"kind": "command", "description": "", "details": "", "choices": [{"id": "choice-0", "label": "承認", "description": "", "effect": "allow"}, {"id": "choice-1", "label": "このセッションで承認", "description": "", "effect": "allowLasting"}, {"id": "choice-2", "label": "拒否", "description": "", "effect": "deny"}, {"id": "choice-3", "label": "キャンセル", "description": "", "effect": "cancel"}]}}})).unwrap()}),
         ];
         for (subscription, change) in changes {
             output.lock().await.notify(json!({"method":"host/session/update","params":{"subscriptionId":subscription,"change":change}})).await.unwrap();

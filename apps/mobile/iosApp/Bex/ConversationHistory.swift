@@ -118,17 +118,8 @@ extension ThreadScreen {
             ).equatable()
         case let (.activityHeader(activity), _): activityHeader(activity)
         case (let .activity(_, turnId), let item?): activityItem(item, turnId: turnId)
-        case let (.pendingRequest(request), _):
-            // The composer answers questions from its docked panel.
-            if case .question = request.requestBody {
-                EmptyView()
-            } else {
-                ThreadRequestRow(request: request) { answer, complete in model.respond(
-                    request,
-                    answer: answer,
-                    completion: complete
-                ) }
-            }
+        // The composer answers requests from its docked panels.
+        case (.pendingRequest, _): EmptyView()
         case let (.error(error), _): ThreadErrorRow(error: error)
         case (.inProgress, _), (_, nil): EmptyView()
         }

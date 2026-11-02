@@ -67,6 +67,20 @@ pub struct Choice {
     pub id: String,
     pub label: String,
     pub description: String,
+    pub effect: ChoiceEffect,
+}
+
+/// What answering with a choice does, so clients can rank the choices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChoiceEffect {
+    /// Grants this request only.
+    Allow,
+    /// Grants this request and matching later ones, for a scope or by a rule.
+    AllowLasting,
+    Deny,
+    /// Denies the request and stops the turn.
+    Cancel,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

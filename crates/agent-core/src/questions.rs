@@ -204,15 +204,13 @@ pub struct QuestionPrompt {
 #[cfg_attr(feature = "bindings", uniffi::export)]
 impl Snapshot {
     pub fn question_prompt(&self, thread_id: crate::session::SessionRef) -> Option<QuestionPrompt> {
-        let (request, questions) = self
-            .conversations
-            .get(&thread_id)?
-            .requests
-            .values()
-            .find_map(|request| match &request.body {
-                RequestBody::Question { questions } => Some((request, questions)),
-                _ => None,
-            })?;
+        let request = crate::presentation::conversation::docked_request(
+            self.conversations.get(&thread_id)?,
+            true,
+        )?;
+        let RequestBody::Question { questions } = &request.body else {
+            return None;
+        };
         let unanswered = QuestionDraft::default();
         let draft = self.question_drafts.get(&request.id).unwrap_or(&unanswered);
         let index = draft.index(questions);
