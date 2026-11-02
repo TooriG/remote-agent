@@ -229,7 +229,9 @@ extension AppViewModel {
     /// The other request the composer answers; the question panel owns questions.
     var dockedRequest: Request? {
         selectedThreadId.flatMap { snapshot.dockedRequests(session: $0) }?.first { request in
-            if case .question = request.requestBody { return false }
+            if case .question = request.requestBody {
+                return false
+            }
             return true
         }
     }

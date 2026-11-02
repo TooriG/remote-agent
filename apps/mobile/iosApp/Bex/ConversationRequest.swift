@@ -84,7 +84,11 @@ struct RequestPanel: View {
     private func choiceButtons(_ choices: [Choice], answer: @escaping (String) -> Answer) -> some View {
         // Choices sharing a description, such as the scopes of one permission, explain it once.
         let notes = choices.map(\.description).filter { !$0.isEmpty }
-            .reduce(into: [String]()) { notes, note in if !notes.contains(note) { notes.append(note) } }
+            .reduce(into: [String]()) {
+                notes, note in if !notes.contains(note) {
+                    notes.append(note)
+                }
+            }
         return VStack(alignment: .leading, spacing: 8) {
             FlowLayout {
                 ForEach(choices, id: \.id) { choice in
