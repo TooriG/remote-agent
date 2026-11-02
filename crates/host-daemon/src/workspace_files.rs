@@ -24,6 +24,7 @@ use ring::{
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::SessionId;
+mod metadata;
 mod tree;
 
 const EDIT_LIMIT: u64 = 1024 * 1024;
@@ -74,6 +75,12 @@ impl WorkspaceFiles {
         session: SessionId,
         request: Call,
     ) -> Result<Body, crate::providers::Failure> {
+        if let Call::ReadFileMetadata(params) = request {
+            return metadata::read(params)
+                .await
+                .map(Body::from)
+                .map_err(file_failure);
+        }
         if let Call::ListTreeEntries(params) = request {
             return tree::list(params)
                 .await
@@ -216,11 +223,13 @@ impl WorkspaceFiles {
                 }))
             }
             Call::ReadFile(params) => {
-                let path = dunce::canonicalize(absolute_path(&params.path)?)?;
-                read_editable(&path).map(Body::from)
+                let requested = absolute_path(&params.path)?;
+                let path = dunce::canonicalize(&requested)?;
+                read_editable(&path, &requested).map(Body::from)
             }
             Call::WriteFile(params) => {
-                let path = dunce::canonicalize(absolute_path(&params.path)?)?;
+                let requested = absolute_path(&params.path)?;
+                let path = dunce::canonicalize(&requested)?;
                 let _lock = self.writes.lock().unwrap_or_else(|e| e.into_inner());
                 let original =
                     read_bounded(&path, EDIT_LIMIT).context("read file before saving")?;
@@ -273,7 +282,7 @@ impl WorkspaceFiles {
                         }
                         atomicwrites::Error::User(error) => error,
                     })?;
-                read_editable(&path).map(Body::from)
+                read_editable(&path, &requested).map(Body::from)
             }
             Call::Upload(params) => {
                 // New chats have no workspace yet. Keep their attachments in
@@ -488,7 +497,7 @@ fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>> {
     }
     Ok(bytes)
 }
-fn read_editable(path: &Path) -> Result<FileContent> {
+fn read_editable(path: &Path, requested: &Path) -> Result<FileContent> {
     let bytes = read_bounded(path, EDIT_LIMIT)?;
     let bom = bytes.starts_with(&[0xef, 0xbb, 0xbf]);
     let text = std::str::from_utf8(if bom { &bytes[3..] } else { &bytes })
@@ -497,7 +506,9 @@ fn read_editable(path: &Path) -> Result<FileContent> {
         return Err(anyhow!("binary file; download it instead"));
     }
     Ok(FileContent {
-        path: path.to_str().context("file path is not UTF-8")?.into(),
+        // The editor/draft belongs to the clicked path, including symlinks and
+        // lexical parent segments. Canonical paths only identify the I/O target.
+        path: requested.to_str().context("file path is not UTF-8")?.into(),
         revision: hash(&bytes),
         text: text.into(),
         size: bytes.len() as u64,
@@ -678,6 +689,55 @@ mod tests {
         assert_eq!(entry.name, "video.mp4");
         assert!(!entry.directory);
         assert_eq!(entry.size, 5);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn alias_reads_and_saves_preserve_the_editor_path_and_leave_the_symlink_intact() {
+        let directory = tempfile::tempdir().unwrap();
+        let real = directory.path().join("content");
+        fs::write(&real, "original").unwrap();
+        fs::create_dir(directory.path().join("nested")).unwrap();
+        let alias = directory.path().join("notes.md");
+        std::os::unix::fs::symlink("content", &alias).unwrap();
+        let files = WorkspaceFiles::new(directory.path().join("attachments"));
+        for path in [alias.clone(), directory.path().join("nested/../notes.md")] {
+            let requested = path.to_str().unwrap().to_owned();
+            let Body::File(content) = files
+                .dispatch(
+                    1,
+                    Call::ReadFile(PathParams {
+                        path: requested.clone(),
+                    }),
+                )
+                .unwrap()
+            else {
+                panic!()
+            };
+            assert_eq!(content.path, requested);
+            let Body::File(saved) = files
+                .dispatch(
+                    1,
+                    Call::WriteFile(agent_protocol::operations::WriteFile {
+                        path: requested.clone(),
+                        revision: content.revision,
+                        text: "edited".into(),
+                    }),
+                )
+                .unwrap()
+            else {
+                panic!()
+            };
+            assert_eq!(saved.path, requested);
+            assert_eq!(saved.text, "edited");
+            assert_eq!(fs::read_to_string(&real).unwrap(), "edited");
+            assert!(
+                fs::symlink_metadata(&alias)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+        }
     }
 
     #[test]

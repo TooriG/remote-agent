@@ -111,6 +111,7 @@ contracts! {
     ListTreeEntries, "host/file/tree" => (crate::file_tree::ListTreeEntries, crate::file_tree::TreeEntries) [clone],
     SearchTreeEntries, "host/file/search" => (crate::file_tree::SearchTreeEntries, crate::file_tree::TreeEntries) [clone],
     ResolveFile, "host/file/resolve" => (op::ResolveFile, m::FileEntry) [clone],
+    ReadFileMetadata, "host/file/metadata" => (crate::file_metadata::ReadFileMetadata, crate::file_metadata::FileMetadataEntries) [clone],
     ReadFileOpenCapabilities, "host/file/openCapabilities" => (crate::editors::ReadFileOpenCapabilities, crate::editors::FileOpenCapabilities) [clone],
     OpenInEditor, "host/file/openInEditor" => (crate::editors::OpenInEditor, m::Empty) [clone],
     ReadFile, "host/file/read" => (op::ListFiles, m::FileContent),

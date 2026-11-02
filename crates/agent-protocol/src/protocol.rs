@@ -117,6 +117,7 @@ macro_rules! results {
     }
 }
 results! {
+    FileMetadataEntries(crate::file_metadata::FileMetadataEntries),
     HostUpdate(crate::operations::HostUpdate), HostIdentity(crate::operations::HostIdentity),
     HandoffHistory(crate::handoff::Page),
     TaskActivity(crate::live_activity::TaskActivityState),

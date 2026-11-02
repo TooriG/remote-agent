@@ -492,6 +492,7 @@ impl HostRpcService {
             | Call::ListTreeEntries(_)
             | Call::SearchTreeEntries(_)
             | Call::ResolveFile(_)
+            | Call::ReadFileMetadata(_)
             | Call::ReadFile(_)
             | Call::WriteFile(_)
             | Call::Upload(_)

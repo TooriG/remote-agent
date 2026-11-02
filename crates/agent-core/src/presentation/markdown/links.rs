@@ -168,7 +168,7 @@ pub fn markdown_file_target(
     let mut file = file_reference(&source, Syntax::Link)?;
     file.path = paths::resolve(&file.path, &cwd)?;
     if surface == MarkdownFileSurface::Desktop
-        && paths::network(&file.path)
+        && agent_protocol::paths::is_network_host_path(&file.path)
         && paths::relative(&file.path, &cwd).is_none()
     {
         return None;

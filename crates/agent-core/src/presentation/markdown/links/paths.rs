@@ -1,3 +1,4 @@
+use agent_protocol::paths::is_network_host_path;
 use std::sync::LazyLock;
 
 use percent_encoding::percent_decode_str;
@@ -51,14 +52,8 @@ pub(super) fn absolute(path: &str) -> bool {
     path.starts_with('/') || windows(path)
 }
 
-pub(super) fn network(path: &str) -> bool {
-    path.as_bytes()
-        .get(..2)
-        .is_some_and(|prefix| prefix.iter().all(|byte| matches!(*byte, b'/' | b'\\')))
-}
-
 pub(super) fn strip_drive_slash(path: &str) -> &str {
-    if path.starts_with('/') && windows(&path[1..]) && !network(&path[1..]) {
+    if path.starts_with('/') && windows(&path[1..]) && !is_network_host_path(&path[1..]) {
         &path[1..]
     } else {
         path

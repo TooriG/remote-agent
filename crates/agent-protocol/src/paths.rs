@@ -27,9 +27,31 @@ pub fn is_windows_absolute_host_path(path: &str) -> bool {
     false
 }
 
+/// T3's network-path guard is deliberately independent of the current OS.
+/// Even filesystem metadata can authenticate to an untrusted Windows share.
+pub fn is_network_host_path(path: &str) -> bool {
+    path.as_bytes()
+        .get(..2)
+        .is_some_and(|prefix| prefix.iter().all(|byte| matches!(byte, b'/' | b'\\')))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn network_paths_are_recognized_before_any_platform_path_or_filesystem_calls() {
+        for path in [
+            "//server/share",
+            r"\\server\share",
+            "/\\server/share",
+            "\\/server/share",
+        ] {
+            assert!(is_network_host_path(path));
+        }
+        for path in ["/local", r"C:\local", "~/local", "relative", ""] {
+            assert!(!is_network_host_path(path));
+        }
+    }
     #[test]
     fn host_paths_are_classified_without_using_the_clients_platform() {
         for path in [
