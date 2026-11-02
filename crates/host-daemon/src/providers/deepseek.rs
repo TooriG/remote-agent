@@ -1389,15 +1389,20 @@ mod tests {
             ("reject_always", Some(ChoiceEffect::Deny)),
             ("future_kind", None),
         ] {
-            let choice =
-                permission_choice(&json!({"optionId":"option","name":"Name","kind":kind}));
+            let choice = permission_choice(&json!({"optionId":"option","name":"Name","kind":kind}));
             assert_eq!(choice.as_ref().map(|choice| choice.effect), effect);
             if let Some(choice) = choice {
-                assert_eq!((choice.id.as_str(), choice.label.as_str()), ("option", "Name"));
+                assert_eq!(
+                    (choice.id.as_str(), choice.label.as_str()),
+                    ("option", "Name")
+                );
                 assert!(choice.description.is_empty());
             }
         }
-        assert_eq!(permission_choice(&json!({"name":"Name","kind":"allow_once"})), None);
+        assert_eq!(
+            permission_choice(&json!({"name":"Name","kind":"allow_once"})),
+            None
+        );
     }
 
     #[tokio::test]

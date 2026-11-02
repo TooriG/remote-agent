@@ -947,16 +947,12 @@ pub fn choice_tone(effect: agent_protocol::requests::ChoiceEffect) -> ActionTone
 /// The composer answers one question and one other request at a time, as in
 /// T3 Code; later ones follow once these resolve.
 pub(crate) fn docked_request(thread: &models::Thread, question: bool) -> Option<&WireRequest> {
-    thread
-        .requests
-        .values()
-        .map(Arc::as_ref)
-        .find(|request| {
-            matches!(
-                request.body,
-                agent_protocol::requests::RequestBody::Question { .. }
-            ) == question
-        })
+    thread.requests.values().map(Arc::as_ref).find(|request| {
+        matches!(
+            request.body,
+            agent_protocol::requests::RequestBody::Question { .. }
+        ) == question
+    })
 }
 
 #[cfg_attr(feature = "bindings", uniffi::export)]
@@ -1354,7 +1350,11 @@ mod tests {
             .collect();
         assert_eq!(docked, ["2-tool", "1-question"]);
         assert_eq!(
-            snapshot.question_prompt(session).unwrap().request_id.as_str(),
+            snapshot
+                .question_prompt(session)
+                .unwrap()
+                .request_id
+                .as_str(),
             "1-question"
         );
     }

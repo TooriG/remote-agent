@@ -220,7 +220,12 @@ pub(crate) fn codex(id: RequestId, method: &str, params: &Value) -> Result<Adapt
             if let Some(description) = &description {
                 for (index, scope, label, effect) in [
                     (0, "turn", "このターンで許可", ChoiceEffect::Allow),
-                    (1, "session", "このセッションで許可", ChoiceEffect::AllowLasting),
+                    (
+                        1,
+                        "session",
+                        "このセッションで許可",
+                        ChoiceEffect::AllowLasting,
+                    ),
                 ] {
                     let choice = choice(&id, index, label, effect, description.clone());
                     mapping.insert(
@@ -1002,7 +1007,10 @@ mod tests {
         .unwrap();
         let choices = adapted.request.body.choices();
         assert_eq!(
-            choices.iter().map(|choice| choice.effect).collect::<Vec<_>>(),
+            choices
+                .iter()
+                .map(|choice| choice.effect)
+                .collect::<Vec<_>>(),
             [
                 ChoiceEffect::Allow,
                 ChoiceEffect::AllowLasting,
