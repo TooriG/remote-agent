@@ -256,3 +256,33 @@ proptest::proptest! {
         proptest::prop_assert_eq!((file.line, file.column), (Some(line), Some(column)));
     }
 }
+#[test]
+fn home_paths_use_only_the_authenticated_host_home() {
+    use super::file_host_path;
+    assert_eq!(file_host_path("~/a.rs".into(), None), "~/a.rs");
+    assert_eq!(
+        file_host_path("~/a.rs".into(), Some("/actual/home".into())),
+        "/actual/home/a.rs"
+    );
+    assert_eq!(
+        file_host_path("~".into(), Some("/actual/home".into())),
+        "/actual/home"
+    );
+    assert_eq!(
+        file_host_path(r"~\src/a.rs".into(), Some(r"C:\Users\Host".into())),
+        r"C:\Users\Host\src\a.rs"
+    );
+    assert_eq!(
+        file_host_path("/else/a".into(), Some("/actual/home".into())),
+        "/else/a"
+    );
+    assert_eq!(file_host_path("~/a".into(), Some("relative".into())), "~/a");
+    assert_eq!(
+        file_host_path("~//a".into(), Some("/actual/home".into())),
+        "/actual/home/a"
+    );
+    assert_eq!(
+        file_host_path(r"~\\a".into(), Some(r"C:\Users\Host".into())),
+        r"C:\Users\Host\a"
+    );
+}

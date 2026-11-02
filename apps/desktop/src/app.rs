@@ -208,7 +208,7 @@ fn general_snapshot_changed(before: &Snapshot, after: &Snapshot) -> bool {
             project_threads, models, model_errors, question_drafts, draft_sessions, pending_submissions,
             workspace, workspaces, navigation, activity, management, list_query, subscriptions],
         optional: [permission_settings, task_activity, threads, file_open_capabilities],
-        values: [recent_chats, operation_sequence, model_defaults, preferred_editor, host_name, host_ticket, storage_scope,
+        values: [recent_chats, operation_sequence, model_defaults, preferred_editor, host_name, host_ticket, host_home_directory, storage_scope,
             observed_agents, epoch, connected, connection_generation, connection_failure, error]
     );
     let empty = Draft::default();

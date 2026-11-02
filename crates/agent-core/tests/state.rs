@@ -622,6 +622,7 @@ fn changing_workspace_clears_content_and_preserves_file_drafts() {
             ..Default::default()
         }),
         workspace: Arc::new(Workspace {
+            file_metadata: Default::default(),
             file_trees: Default::default(),
             file: Some(file.clone()),
             review: Some(review.clone()),

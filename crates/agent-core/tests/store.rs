@@ -2971,7 +2971,7 @@ async fn cached_scope_starts_reads_before_the_host_confirms_it_and_holds_user_wo
             }
             assert!(held, "user work must wait for the Host to confirm the cached storage");
             let ticket = if changed { Endpoint::bind(Identity::generate(), Relays::Disabled).await.unwrap().ticket() } else { host.ticket() }.to_string();
-            writer.reply(&identify, json!({"result":{"storageScope":if changed { "changed" } else { "cached" },"ticket":ticket}})).await.unwrap();
+            writer.reply(&identify, json!({"result":{"storageScope":if changed { "changed" } else { "cached" },"ticket":ticket,"homeDirectory":"/actual-host-home"}})).await.unwrap();
             if changed {
                 assert!(settings.await.is_err(), "work started against the old storage must not reach the new one");
                 wait_for(&store, |state| state.storage_scope == format!("{}:changed", host.node_id())).await;
@@ -2986,6 +2986,7 @@ async fn cached_scope_starts_reads_before_the_host_confirms_it_and_holds_user_wo
                 assert_eq!(store.snapshot().storage_scope, cached);
                 assert_eq!(store.snapshot().host_ticket, Some(host.ticket().to_string()));
             }
+            assert_eq!(store.snapshot().host_home_directory.as_deref(), Some("/actual-host-home"));
             session.close();
             store.close().await.unwrap();
             client.close().await;
@@ -3060,6 +3061,7 @@ async fn reconnect_preserves_edits_made_during_pairing() {
                 result: agent_protocol::operations::HostIdentity {
                     storage_scope: "fixture-storage".into(),
                     ticket: String::new(),
+                    home_directory: Some("/host/home".into()),
                 },
             },
         )

@@ -147,6 +147,9 @@ impl Operation for SaveFile {
 }
 impl SaveFile {
     fn rebase_draft(snapshot: &mut Snapshot, submitted: &FileDraft, file: &FileContent) {
+        Arc::make_mut(&mut snapshot.workspace)
+            .file_metadata
+            .invalidate(&file.path);
         let drafts = Arc::make_mut(&mut snapshot.file_drafts);
         if let Some(current) = drafts.get_mut(&file.path) {
             if current.as_ref() == submitted {

@@ -51,6 +51,9 @@ impl Snapshot {
     pub fn host_ticket(&self) -> Option<String> {
         self.host_ticket.clone()
     }
+    pub fn host_home_directory(&self) -> Option<String> {
+        self.host_home_directory.clone()
+    }
     pub fn error(&self) -> Option<String> {
         self.error
             .as_deref()

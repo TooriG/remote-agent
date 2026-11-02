@@ -1,13 +1,27 @@
 mod actions;
 mod explorer;
 mod icons;
+mod metadata;
 pub use explorer::{
     EXPLORER_CONTENT_MIN_WIDTH, EXPLORER_DEFAULT_WIDTH, EXPLORER_MIN_WIDTH, explorer_key_width,
     explorer_max_width, explorer_width,
 };
+pub use metadata::FileMetadataCache;
 pub mod tree;
 pub use actions::{FileAction, FileMenuItem, file_reference_menu, file_tree_menu};
-pub use icons::desktop_file_icon;
+pub use icons::{desktop_file_icon, desktop_metadata_icon};
+
+pub fn file_reference_tooltip(path: &str, byte_length: Option<u64>) -> String {
+    let Some(bytes) = byte_length else {
+        return path.into();
+    };
+    let size = if bytes >= 1_048_576 {
+        format!("{:.1} MB", bytes as f64 / 1_048_576.)
+    } else {
+        format!("{} KB", bytes.div_ceil(1_024).max(1))
+    };
+    format!("{path} · {size}")
+}
 pub use tree::{
     FileTreeAction, FileTreeKey, FileTreeRequest, FileTreeRow, FileTreeSurface, FileTreeView,
     FileTrees, file_tree_path,
@@ -75,6 +89,23 @@ pub fn append_file_mentions(text: &str, mentions: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn file_tooltips_use_the_full_path_and_t3_size_rounding() {
+        assert_eq!(file_reference_tooltip("/a", None), "/a");
+        for (bytes, size) in [
+            (0, "1 KB"),
+            (1_024, "1 KB"),
+            (1_025, "2 KB"),
+            (1_048_575, "1024 KB"),
+            (1_048_576, "1.0 MB"),
+            (1_572_864, "1.5 MB"),
+        ] {
+            assert_eq!(
+                file_reference_tooltip("C:\\a", Some(bytes)),
+                format!("C:\\a · {size}")
+            );
+        }
+    }
     #[test]
     fn mentions_escape_markdown_and_uri_destinations_without_losing_host_paths() {
         assert_eq!(

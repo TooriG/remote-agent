@@ -76,6 +76,8 @@ pub struct HostIdentity {
     pub storage_scope: String,
     /// The Host's currently reachable addresses for the next cold connection.
     pub ticket: String,
+    /// The authenticated Host's actual home, used for lexical file labels and paths.
+    pub home_directory: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]

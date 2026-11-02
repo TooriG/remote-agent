@@ -73,6 +73,8 @@ pub struct FileDraft {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Workspace {
     #[serde(skip)]
+    pub file_metadata: crate::presentation::files::FileMetadataCache,
+    #[serde(skip)]
     pub file_trees: crate::presentation::files::FileTrees,
     pub file: Option<Arc<FileContent>>,
     pub review_cwd: Option<String>,
@@ -262,6 +264,9 @@ pub struct Snapshot {
     /// The Host's latest reachable addresses; platforms save them for cold connections.
     #[serde(skip)]
     pub host_ticket: Option<String>,
+    /// Retained while offline, but never inferred from workspace paths or persisted.
+    #[serde(skip)]
+    pub host_home_directory: Option<String>,
     #[serde(skip)]
     pub task_activity: Option<Arc<agent_protocol::live_activity::TaskActivityState>>,
     pub storage_scope: String,
@@ -443,6 +448,7 @@ pub struct ScopedData {
 pub enum Event {
     StorageScope(String),
     HostTicket(String),
+    HostHomeDirectory(Option<String>),
     TerminalFailed { handle: String, reason: String },
     Intent(Intent),
     SubmissionFailed(agent_protocol::ids::ClientInputId),
@@ -525,6 +531,10 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
         Respond, Transcribe, UploadAttachment, PairRemoteHost,
     ], {
         Intent::SetPreferredEditor { editor } => next.preferred_editor = Some(editor),
+        Intent::EnsureFileMetadata { paths, now_ms } => {
+            let effects = op::ensure_file_metadata(&mut next, paths, now_ms);
+            return (next, effects);
+        }
         Intent::FileTree { key, action } => {
             let effects = op::file_tree_action(&mut next, key, action);
             return (next, effects);
@@ -1114,6 +1124,9 @@ fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
         Event::HostTicket(ticket) => {
             next.host_ticket = Some(ticket);
         }
+        Event::HostHomeDirectory(home) => {
+            next.host_home_directory = home;
+        }
         Event::StorageScope(scope) => {
             if next.storage_scope == scope {
                 return (next, Vec::new());
@@ -1289,6 +1302,9 @@ impl Snapshot {
     /// Cached history and drafts survive; IDs and activity belong to one connection.
     /// Pending submissions are persisted only to recover dictation after a crash.
     fn reset_session(&mut self) {
+        Arc::make_mut(&mut self.workspace)
+            .file_metadata
+            .disconnected();
         Arc::make_mut(&mut self.workspace).file_trees.disconnected();
         self.file_open_capabilities = None;
         self.composer_catalog = None;

@@ -361,6 +361,8 @@ impl HostRuntime {
                 Ok(agent_protocol::operations::HostIdentity {
                     storage_scope: self.service.storage_scope()?,
                     ticket: self.ticket().to_string(),
+                    home_directory: directories::BaseDirs::new()
+                        .map(|base| base.home_dir().to_string_lossy().into_owned()),
                 }
                 .into())
             }
@@ -564,6 +566,10 @@ mod tests {
         };
         // The answer carries what the device needs before trusting its cached state.
         assert_eq!(result.ticket, runtime.ticket().to_string());
+        assert_eq!(
+            result.home_directory,
+            directories::BaseDirs::new().map(|base| base.home_dir().to_string_lossy().into_owned())
+        );
         assert!(!result.storage_scope.is_empty());
         assert!(matches!(
             identify(&runtime, tablet, "My device").await,

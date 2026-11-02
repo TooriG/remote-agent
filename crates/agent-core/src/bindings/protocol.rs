@@ -2,6 +2,7 @@
 
 use crate::{models::*, session::*};
 use agent_protocol::editors::*;
+use agent_protocol::file_metadata::{FileMetadata, FileMetadataKind, FilePathMetadata};
 use agent_protocol::file_tree::EntryKind;
 use agent_protocol::live_activity::*;
 use agent_protocol::permissions::*;
@@ -12,6 +13,23 @@ use serde_json::Value;
 enum EntryKind {
     Directory,
     File,
+}
+#[uniffi::remote(Enum)]
+enum FileMetadataKind {
+    File,
+    Directory,
+    Other,
+}
+#[uniffi::remote(Record)]
+struct FileMetadata {
+    pub kind: FileMetadataKind,
+    pub byte_length: Option<u64>,
+    pub mime_type: Option<String>,
+}
+#[uniffi::remote(Record)]
+struct FilePathMetadata {
+    pub path: String,
+    pub metadata: Option<FileMetadata>,
 }
 #[uniffi::remote(Enum)]
 enum EditorId {

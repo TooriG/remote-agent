@@ -94,6 +94,7 @@ struct Connection {
 struct Introduction {
     storage_scope: String,
     ticket: Option<String>,
+    home_directory: Option<String>,
 }
 type Introducing = futures_util::future::BoxFuture<'static, Result<Introduction, PeerError>>;
 
@@ -126,6 +127,7 @@ fn introduce(
         Ok(Introduction {
             storage_scope: format!("{node}:{}", identity.storage_scope),
             ticket,
+            home_directory: identity.home_directory,
         })
     }
     .boxed()
@@ -844,6 +846,7 @@ fn publication_key(snapshot: &Snapshot) -> impl PartialEq + '_ {
         composer_catalog,
         host_name,
         host_ticket,
+        host_home_directory,
         task_activity,
         storage_scope,
         archived_scopes,
@@ -888,6 +891,7 @@ fn publication_key(snapshot: &Snapshot) -> impl PartialEq + '_ {
         (
             host_name,
             host_ticket,
+            host_home_directory,
             task_activity,
             permission_settings,
             composer_catalog,
@@ -1400,6 +1404,7 @@ async fn run(
                 if let Some(ticket) = introduced.ticket {
                     apply(&updates, Event::HostTicket(ticket));
                 }
+                apply(&updates, Event::HostHomeDirectory(introduced.home_directory));
             }
             _ = browser_jobs.next(), if !browser_jobs.is_empty() => {},
             _ = diagnostic_jobs.next(), if !diagnostic_jobs.is_empty() => {},

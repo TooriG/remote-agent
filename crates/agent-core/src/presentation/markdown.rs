@@ -11,8 +11,9 @@ mod diagram;
 pub use diagram::{MarkdownDiagram, markdown_diagram};
 mod links;
 pub use links::{
-    MarkdownFileKind, MarkdownFileReference, MarkdownFileSurface, file_path_for_clipboard,
-    file_workspace_relative_path, markdown_file_kind, markdown_file_target,
+    MarkdownFileKind, MarkdownFileReference, MarkdownFileSurface, file_host_path,
+    file_path_for_clipboard, file_workspace_relative_path, markdown_file_kind,
+    markdown_file_target,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]

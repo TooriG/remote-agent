@@ -74,6 +74,32 @@ pub fn file_path_for_clipboard(path: &str, host_path: &str) -> String {
     }
 }
 
+/// Expand only an authenticated Host home. Workspace paths never imply a home.
+#[cfg_attr(feature = "bindings", uniffi::export)]
+pub fn file_host_path(path: String, home: Option<String>) -> String {
+    let Some(home) = home.filter(|home| paths::absolute(home)) else {
+        return path;
+    };
+    if path == "~" {
+        return home;
+    }
+    let suffix = path.strip_prefix("~/").or_else(|| {
+        paths::windows(&home)
+            .then(|| path.strip_prefix("~\\"))
+            .flatten()
+    });
+    suffix
+        .and_then(|suffix| {
+            let suffix = if paths::windows(&home) {
+                suffix.trim_start_matches(['/', '\\'])
+            } else {
+                suffix.trim_start_matches('/')
+            };
+            paths::resolve(suffix, &home)
+        })
+        .unwrap_or(path)
+}
+
 pub(super) fn file_reference(source: &str, syntax: Syntax) -> Option<MarkdownFileReference> {
     let candidate = detection::candidate(source, syntax)?;
     let source = candidate.trim();
