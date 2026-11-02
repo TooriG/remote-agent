@@ -81,7 +81,8 @@ struct AssistantSelectableText: UIViewRepresentable {
         func textView(_: UITextView, menuConfigurationFor textItem: UITextItem,
                       defaultMenu _: UIMenu) -> UITextItem.MenuConfiguration? {
             guard case let .link(url) = textItem.content,
-                  let file = markdownFileTarget(source: url.absoluteString, cwd: parent.cwd) else { return nil }
+                  let file = markdownFileTarget(source: url.absoluteString, cwd: parent.cwd, surface: .mobile)
+            else { return nil }
             let open = UIAction(title: "ファイルを開く", image: UIImage(systemName: "doc")) { [weak self] _ in
                 self?.parent.openURL(url)
             }

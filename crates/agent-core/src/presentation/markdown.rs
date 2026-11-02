@@ -11,7 +11,8 @@ mod diagram;
 pub use diagram::{MarkdownDiagram, markdown_diagram};
 mod links;
 pub use links::{
-    MarkdownFileKind, MarkdownFileReference, markdown_file_kind, markdown_file_target,
+    MarkdownFileKind, MarkdownFileReference, MarkdownFileSurface, markdown_file_kind,
+    markdown_file_target,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -231,7 +232,6 @@ pub fn markdown_blocks(source: String) -> Vec<MarkdownBlock> {
         MarkdownStyle::default(),
         &mut blocks,
     );
-    links::disambiguate(&mut blocks);
     blocks
 }
 
@@ -352,21 +352,8 @@ fn inline(
         _ => None,
     };
     if let Some(destination) = destination
-        && let Some(file) = links::file_reference(destination, false)
+        && let Some(file) = links::file_reference(destination, links::Syntax::Link)
     {
-        let mut label = Vec::new();
-        style.link = Some(destination.into());
-        for child in node.children().into_iter().flatten() {
-            inline(child, definitions, style.clone(), &mut label);
-        }
-        let text: String = label.iter().map(|run| run.text.as_str()).collect();
-        if !links::is_file_label(&text, &file) {
-            runs.extend(label);
-            runs.push(MarkdownRun {
-                text: " ".into(),
-                ..Default::default()
-            });
-        }
         runs.push(MarkdownRun {
             text: file.label.clone(),
             link: Some(destination.into()),
@@ -389,7 +376,7 @@ fn inline(
             style.code = true;
             style.text = code.value.clone();
             if style.link.is_none() {
-                style.file = links::file_reference(&code.value, true);
+                style.file = links::file_reference(&code.value, links::Syntax::MobileCode);
                 if let Some(file) = &style.file {
                     style.link = Some(code.value.clone());
                     style.text = file.label.clone();
@@ -934,12 +921,12 @@ mod tests {
         assert!(
             presentation
                 .source
-                .contains("[`a/index.ts`](<src/a/index.ts>)")
+                .contains("[`index.ts · src/a`](<src/a/index.ts>)")
         );
         assert!(
             presentation
                 .source
-                .contains("[`b/index.ts`](<src/b/index.ts>)")
+                .contains("[`index.ts · src/b`](<src/b/index.ts>)")
         );
         assert_eq!(presentation.code_headers.len(), 2);
         assert_eq!(

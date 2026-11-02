@@ -173,6 +173,7 @@ dependencies = [
  "mermaid-rs-renderer",
  "percent-encoding",
  "proptest",
+ "regex",
  "ring",
  "rstest",
  "scopeguard",

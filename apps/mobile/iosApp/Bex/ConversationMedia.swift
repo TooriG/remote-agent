@@ -9,7 +9,7 @@ import UniformTypeIdentifiers
 
 /// Host paths always use the authenticated transfer; never read a Host path from the phone's filesystem.
 func conversationFilePath(_ source: String, cwd: String) throws -> String {
-    guard let target = markdownFileTarget(source: source, cwd: cwd) else {
+    guard let target = markdownFileTarget(source: source, cwd: cwd, surface: .mobile) else {
         throw URLError(.unsupportedURL)
     }
     return target.path

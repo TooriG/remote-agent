@@ -88,7 +88,7 @@ internal fun DraftAttachments(
         attachments.forEachIndexed { index, attachment ->
             Box {
                 val reference =
-                    markdownFileTarget(attachment.path, "")
+                    markdownFileTarget(attachment.path, "", dev.remoteagent.core.MarkdownFileSurface.MOBILE)
                         ?: MarkdownFileReference(
                             attachment.path,
                             attachment.name,

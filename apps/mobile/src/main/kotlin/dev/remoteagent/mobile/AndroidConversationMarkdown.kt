@@ -84,7 +84,9 @@ internal fun ConversationBlocks(
     perform: ((Intent, (Result<Outcome>) -> Unit) -> Unit)?,
 ) {
     var file by remember { mutableStateOf<dev.remoteagent.core.MarkdownFileReference?>(null) }
-    val openFile: (String) -> Unit = { source -> file = dev.remoteagent.core.markdownFileTarget(source, cwd) }
+    val openFile: (String) -> Unit = { source ->
+        file = dev.remoteagent.core.markdownFileTarget(source, cwd, dev.remoteagent.core.MarkdownFileSurface.MOBILE)
+    }
     SelectionContainer {
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
             blocks.forEachIndexed { index, block ->

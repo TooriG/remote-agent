@@ -156,9 +156,13 @@ fn review_counts(
 }
 
 fn conversation_file_path(source: &str, cwd: &str) -> Result<PathBuf, String> {
-    agent_core::presentation::markdown::markdown_file_target(source.into(), cwd.into())
-        .map(|file| PathBuf::from(file.path))
-        .ok_or_else(|| "ファイルパスが不正です".into())
+    agent_core::presentation::markdown::markdown_file_target(
+        source.into(),
+        cwd.into(),
+        agent_core::presentation::markdown::MarkdownFileSurface::Desktop,
+    )
+    .map(|file| PathBuf::from(file.path))
+    .ok_or_else(|| "ファイルパスが不正です".into())
 }
 
 impl Render for Desktop {
