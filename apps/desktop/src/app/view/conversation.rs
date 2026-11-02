@@ -1528,7 +1528,7 @@ impl ConversationView {
     fn docked_requests(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let docked = self.model.docked.clone();
         (!docked.is_empty()).then(|| {
-            // Long details or many questions scroll instead of hiding the conversation.
+            // Long details scroll instead of hiding the conversation.
             v_flex()
                 .id("docked-requests")
                 .w_full()
