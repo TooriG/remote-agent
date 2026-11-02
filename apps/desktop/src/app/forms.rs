@@ -123,11 +123,13 @@ impl QuestionInput {
     /// Whether Enter commits IME composition rather than answering.
     pub(super) fn composing(&self, secret: bool, window: &mut Window, cx: &mut App) -> bool {
         if secret {
-            self.secret
-                .update(cx, |input, cx| input.marked_text_range(window, cx).is_some())
+            self.secret.update(cx, |input, cx| {
+                input.marked_text_range(window, cx).is_some()
+            })
         } else {
-            self.input
-                .update(cx, |input, cx| input.marked_text_range(window, cx).is_some())
+            self.input.update(cx, |input, cx| {
+                input.marked_text_range(window, cx).is_some()
+            })
         }
     }
 
@@ -136,8 +138,9 @@ impl QuestionInput {
         self.input.update(cx, |input, cx| {
             input.set_placeholder(placeholder.clone(), window, cx)
         });
-        self.secret
-            .update(cx, |input, cx| input.set_placeholder(placeholder, window, cx));
+        self.secret.update(cx, |input, cx| {
+            input.set_placeholder(placeholder, window, cx)
+        });
     }
 
     pub(super) fn set_value(&self, value: SharedString, window: &mut Window, cx: &mut App) {

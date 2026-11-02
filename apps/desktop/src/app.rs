@@ -45,8 +45,7 @@ use std::{
     sync::{Arc, Weak},
 };
 use timeline::{
-    ConversationRow, ImageGallery, ImageState, MarkdownContent, Media, RequestInputs,
-    Timeline,
+    ConversationRow, ImageGallery, ImageState, MarkdownContent, Media, RequestInputs, Timeline,
 };
 use view::icon_button;
 

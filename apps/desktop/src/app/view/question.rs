@@ -279,9 +279,12 @@ impl Desktop {
         let prompt = &question.prompt;
         let back = prompt.can_go_back.then(|| {
             let request_id = prompt.request_id.clone();
-            button("question-back", language.text("前へ"), cx, move |s, _, _| {
-                s.answer_question(request_id.clone(), QuestionAction::Back)
-            })
+            button(
+                "question-back",
+                language.text("前へ"),
+                cx,
+                move |s, _, _| s.answer_question(request_id.clone(), QuestionAction::Back),
+            )
             .debug_selector(|| "question-back".into())
             .h(px(40.))
         });

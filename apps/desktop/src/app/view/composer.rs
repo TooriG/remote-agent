@@ -1101,7 +1101,16 @@ mod composer_tests {
                         },
                     }),
                 );
-                Arc::make_mut(&mut snapshot.conversations).insert(session.clone(), Arc::new(thread));
+                Arc::make_mut(&mut snapshot.conversations)
+                    .insert(session.clone(), Arc::new(thread));
+                Arc::make_mut(&mut snapshot.drafts).insert(
+                    session.clone().into(),
+                    Arc::new(Draft {
+                        text: "Keep draft".into(),
+                        ..Default::default()
+                    }),
+                );
+                view.sync_inputs(window, cx);
                 view.sync_conversation(window, cx);
             });
             handle = Some(desktop.clone());
@@ -1136,6 +1145,65 @@ mod composer_tests {
         window.run_until_parked();
         assert!(window.debug_bounds("question-choice-scope-a").is_some());
         assert!(window.debug_bounds("question-skip").is_some());
+        window.update(|window, cx| {
+            desktop.update(cx, |view, cx| {
+                let transition =
+                    |view: &mut Desktop, action, window: &mut Window, cx: &mut Context<Desktop>| {
+                        let (snapshot, _) = agent_core::state::reduce(
+                            &view.snapshot,
+                            agent_core::state::Event::Intent(Intent::AnswerQuestion {
+                                request_id: "request".into(),
+                                action,
+                            }),
+                        );
+                        view.snapshot = Arc::new(snapshot);
+                        view.sync_inputs(window, cx);
+                    };
+                use agent_core::questions::QuestionAction;
+                transition(
+                    view,
+                    QuestionAction::Edit {
+                        text: "own answer".into(),
+                    },
+                    window,
+                    cx,
+                );
+                assert_eq!(view.question.input.read(cx).value(), "own answer");
+                assert_eq!(view.question.secret.read(cx).value(), "own answer");
+                let revision = view.question.text.record("unsaved".into());
+                view.question.set_value("unsaved".into(), window, cx);
+                view.sync_inputs(window, cx);
+                assert_eq!(view.question.input.read(cx).value(), "unsaved");
+                transition(
+                    view,
+                    QuestionAction::Choose {
+                        choice_id: "scope-a".into(),
+                    },
+                    window,
+                    cx,
+                );
+                view.question.text.saved(revision);
+                assert_eq!(view.question.input.read(cx).value(), "");
+                assert_eq!(
+                    view.composer.input.read(cx).value(),
+                    "Keep draft\n\nown answer"
+                );
+                transition(
+                    view,
+                    QuestionAction::Edit {
+                        text: "notes answer".into(),
+                    },
+                    window,
+                    cx,
+                );
+                transition(view, QuestionAction::Back, window, cx);
+                assert_eq!(view.question.input.read(cx).value(), "");
+                transition(view, QuestionAction::Advance, window, cx);
+                assert_eq!(view.question.input.read(cx).value(), "notes answer");
+                assert_eq!(view.question.secret.read(cx).value(), "notes answer");
+                cx.notify();
+            });
+        });
         window.update(|_, cx| {
             desktop.update(cx, |view, cx| {
                 let snapshot = Arc::make_mut(&mut view.snapshot);
