@@ -50,6 +50,41 @@ Split the 30-second render at 0/10/20 seconds into `public/demos/agents.mp4`,
 `-movflags +faststart`. Posters use full-render timestamps 3/17/27 seconds.
 The shipped clips are about 120–170 KB each, 1280×720, H.264, without audio.
 
+## Japanese promo video
+
+`promo-video/` is the Remotion source of a 40-second Japanese introduction
+(1920×1080, 60 fps): iPhone connection over QUIC/iroh, the Rust + GPUI desktop,
+and Claude Code, Codex and DSH. `src/Film.tsx` is one continuous camera take on
+the 120 BPM beat grid: the logo's teal dot becomes the iPhone, travels to the
+Mac, morphs into the memory chart and the agent picker, and returns as the
+antenna of the logo. `public/footage/` holds real app recordings from an
+isolated demo Host with a fictional `web-shop` repository and real Claude Code
+turns: the iPhone app in iOS Simulator driven by XCUITest, and the desktop
+window recorded with ScreenCaptureKit. Model-picker footage stays on the Codex
+tab because the Claude tab shows the signed-in account address.
+
+The music is "Hazy After Hours" from Mixkit under its Stock Music Free License,
+downloaded by `npm run audio` rather than committed; the same
+script synthesizes the interface sounds. The figures come from saved
+measurements; update the constants at the top of `src/Film.tsx` when replacing
+either dataset.
+
+- `data/ios-connections.jsonl`: `client.connection` records a real iPhone reported
+  to the Bex Dev Host on 2026-10-31. `scripts/connection-stats.py` prints the
+  direct share (51/52) and the median new direct connection (43.5 ms, n=42),
+  measured until the encrypted connection is authenticated.
+- `data/memory-macos.json`: `scripts/memory-snapshot.py 5 10` sums physical
+  memory (top MEM) per app bundle on one Mac while each app was in everyday use,
+  excluding agent CLIs and including the bex Host. App states differ, so this is
+  a same-time snapshot rather than a controlled benchmark.
+
+From the repository root, fetch the audio and render
+`promo-video/out/bex-promo-ja.mp4`:
+
+```sh
+scripts/dev-env.sh bash -c 'cd lp/promo-video && npm ci && npm run audio && npm run render'
+```
+
 
 The published APK was found to require API 37 after an installation failure was reported.
 The replacement has minimum API 26 (Android 8.0), while compile/target SDK remain
