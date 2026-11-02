@@ -2227,7 +2227,7 @@ async fn claude_history_beyond_one_hundred_turns_opens_and_pages_in_order() {
         ProjectStore::new(directory.path().join("worktrees.json")),
     );
     let client = host.open_session();
-    let complete = host.native_history(&root, false).await.unwrap();
+    let complete = host.native_history(&root, HistoryUse::Read).await.unwrap();
     assert_eq!(complete.thread.turns.unwrap().len(), 201);
     let opened: agent_protocol::session::OpenedSession = call(
         &host,
@@ -2529,4 +2529,114 @@ async fn handoff_and_excerpts_recover_deferred_native_messages() {
     .await
     .unwrap();
     assert_eq!(page.items[0].message.text, text);
+}
+
+/// Imports run in the background; wait until the stored turns are `expected`.
+async fn imported_turns(host: &HostRpcService, root: &SessionRef, expected: &[&str]) {
+    let stored = || {
+        host.inner
+            .transcripts
+            .window(root, None, 1000)
+            .unwrap()
+            .map(|window| {
+                window
+                    .response
+                    .thread
+                    .turns
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|turn| turn.id.to_string())
+                    .collect::<Vec<_>>()
+            })
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while stored().is_none_or(|turns| turns != expected) {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("transcript {:?} never became {expected:?}", stored()));
+}
+
+#[tokio::test]
+async fn transcripts_replace_native_reads_until_the_project_is_imported_again() {
+    let directory = tempfile::tempdir().unwrap();
+    let directory = dunce::canonicalize(directory.path()).unwrap();
+    let codex = NativeAgent::new(ProviderKind::Codex, directory.join("codex"));
+    let claude = NativeAgent::new(ProviderKind::Claude, directory.join("claude"));
+    let host = service(&directory, &codex, &claude);
+    let client = host.open_session();
+    let root = codex
+        .create(directory.to_str().unwrap(), None, None)
+        .await
+        .unwrap()
+        .thread
+        .id
+        .unwrap();
+    send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "first",
+        "hello",
+    )
+    .await
+    .unwrap();
+    history(&host, client.id(), &root).await;
+    imported_turns(&host, &root, &["turn-0"]).await;
+
+    // Native history continued outside the Host waits for a re-import, while
+    // turns run through the Host are recorded as they finish.
+    codex
+        .records
+        .lock()
+        .unwrap()
+        .get_mut(&root.id)
+        .unwrap()
+        .thread
+        .turns
+        .as_mut()
+        .unwrap()
+        .push(Arc::new(Turn {
+            id: "outside".into(),
+            status: TurnStatus::Completed,
+            items: Some(vec![]),
+            ..Default::default()
+        }));
+    send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "second",
+        "again",
+    )
+    .await
+    .unwrap();
+    *codex.open_error.lock().unwrap() = Some(Failure::new(
+        "unreadable",
+        "native history must not be read",
+    ));
+    let opened = history(&host, client.id(), &root).await;
+    let ids: Vec<_> = opened
+        .thread
+        .turns
+        .unwrap()
+        .iter()
+        .map(|turn| turn.id.clone())
+        .collect();
+    assert_eq!(ids, [TurnId::from("turn-0"), "turn-2".into()]);
+    assert!(codex.open_error.lock().unwrap().take().is_some());
+
+    call::<agent_protocol::project_import::ProjectImportResult>(
+        &host,
+        client.id(),
+        Call::ImportProjects(agent_protocol::project_import::ImportProjects {
+            paths: vec![directory.to_str().unwrap().into()],
+        }),
+    )
+    .await
+    .unwrap();
+    imported_turns(&host, &root, &["turn-0", "outside", "turn-2"]).await;
 }

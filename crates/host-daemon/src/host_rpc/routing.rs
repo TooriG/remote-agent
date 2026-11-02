@@ -107,6 +107,7 @@ struct State {
     subscriptions: HashMap<uuid::Uuid, (SessionRef, SessionId)>,
     requests: HashMap<agent_protocol::ids::RequestId, SessionRef>,
     native_requests: HashMap<(uuid::Uuid, String), agent_protocol::ids::RequestId>,
+    transcripts: Option<Arc<super::transcripts::Transcripts>>,
 }
 #[derive(Clone)]
 pub(crate) struct SessionRouter {
@@ -114,6 +115,11 @@ pub(crate) struct SessionRouter {
 }
 fn lock_state<T>(state: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     state.lock().unwrap_or_else(|e| e.into_inner())
+}
+fn record_failure(result: Result<(), String>) {
+    if let Err(message) = result {
+        tracing::error!(target: "agent", operation = "host.transcript.write", message);
+    }
 }
 
 impl SessionRouter {
@@ -137,6 +143,9 @@ impl SessionRouter {
             } => self.resolve_native_request(instance, &native_id),
             AgentChange::SourceClosed(instance) => self.close_request_source(instance),
             AgentChange::Renamed { session, name } => {
+                if let Some(transcripts) = lock_state(&self.state).transcripts.clone() {
+                    record_failure(transcripts.rename(&session, name.as_deref()));
+                }
                 self.broadcast(Notification::SessionRenamed {
                     session,
                     name,
@@ -155,6 +164,38 @@ impl SessionRouter {
                 next_session_id: 1,
                 ..Default::default()
             })),
+        }
+    }
+    /// Finished turns are recorded while their conversation is still locked,
+    /// so the store observes them in execution order.
+    pub(super) fn with_transcripts(
+        self,
+        transcripts: Arc<super::transcripts::Transcripts>,
+    ) -> Self {
+        lock_state(&self.state).transcripts = Some(transcripts);
+        self
+    }
+    /// Running turns end with the Host; record what they produced.
+    pub(super) fn record_running(&self) {
+        let (transcripts, actors) = {
+            let state = lock_state(&self.state);
+            let actors: Vec<_> = state
+                .executions
+                .iter()
+                .map(|(target, actor)| (target.clone(), actor.clone()))
+                .collect();
+            (state.transcripts.clone(), actors)
+        };
+        let Some(transcripts) = transcripts else {
+            return;
+        };
+        for (target, actor) in actors {
+            let actor = lock_state(&actor);
+            for turn in actor.timeline.turns.iter().flatten() {
+                if turn.status == agent_protocol::execution::TurnStatus::Running {
+                    record_failure(transcripts.record(&target, turn));
+                }
+            }
         }
     }
     fn actor(&self, target: &SessionRef) -> Arc<Mutex<SessionActor>> {
@@ -551,6 +592,20 @@ impl SessionRouter {
         }
         let (next, result) = change.apply_timeline(std::mem::take(&mut actor.timeline));
         actor.timeline = next;
+        let finished = match change {
+            SessionChange::Turn {
+                turn,
+                completed: true,
+            } => actor
+                .timeline
+                .turns
+                .iter()
+                .flatten()
+                .rev()
+                .find(|current| current.id == turn.id)
+                .cloned(),
+            _ => None,
+        };
         // An update may target native history that the Host deliberately does
         // not retain. Subscribers still apply it to their own history window.
         if let Err(reason) = result
@@ -585,7 +640,11 @@ impl SessionRouter {
             &actor.timeline,
             change,
         ));
+        let transcripts = state.transcripts.clone();
         drop(state);
+        if let (Some(transcripts), Some(turn)) = (transcripts, finished) {
+            record_failure(transcripts.record(target, &turn));
+        }
         actor.release();
     }
 }

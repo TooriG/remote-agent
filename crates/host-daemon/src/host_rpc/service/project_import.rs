@@ -96,7 +96,33 @@ impl HostRpcService {
                 }
             }
         }
+        self.reimport_transcripts(&result.imported).await?;
         Ok(result)
+    }
+
+    /// Importing a project again copies native history continued outside the
+    /// Host into its conversations' transcripts.
+    async fn reimport_transcripts(&self, roots: &[String]) -> Result<(), Failure> {
+        let projects = self.project_snapshot().await?;
+        let imported: HashSet<_> = roots
+            .iter()
+            .filter_map(|root| projects.project_for_workspace(root))
+            .collect();
+        let conversations = self
+            .inner
+            .transcripts
+            .imported()
+            .map_err(transcripts::storage_failure)?;
+        for (conversation, cwd) in conversations {
+            if cwd
+                .as_deref()
+                .and_then(|cwd| projects.project_for_workspace(cwd))
+                .is_some_and(|project| imported.contains(project))
+            {
+                self.import_transcript(conversation, true);
+            }
+        }
+        Ok(())
     }
 }
 

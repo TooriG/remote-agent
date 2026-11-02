@@ -7,6 +7,7 @@ mod preparation;
 mod project_import;
 mod sessions;
 mod titles;
+mod transcripts;
 mod update;
 mod worktrees;
 
@@ -49,6 +50,8 @@ struct ServiceInner {
     terminals: crate::terminals::Terminals,
     dictation: crate::dictation::Dictation,
     conversations: super::conversations::Conversations,
+    transcripts: Arc<super::transcripts::Transcripts>,
+    imports: std::sync::Mutex<HashMap<agent_protocol::session::SessionRef, transcripts::Import>>,
     model_selections: model_selections::ModelSelections,
     history_scope: OnceLock<(std::path::PathBuf, bool)>,
     updating: std::sync::atomic::AtomicBool,
@@ -59,8 +62,12 @@ impl HostRpcService {
         let files = crate::workspace_files::WorkspaceFiles::new(
             projects.path().with_file_name("bex-attachments"),
         );
+        let transcripts = Arc::new(super::transcripts::Transcripts::open(
+            &projects.path().with_file_name("bex-transcripts.sqlite"),
+        ));
         let router = SessionRouter::new()
-            .with_read_state(projects.path().with_file_name("bex-read-state.json"));
+            .with_read_state(projects.path().with_file_name("bex-read-state.json"))
+            .with_transcripts(transcripts.clone());
         let (providers, dictation) = crate::providers::Registry::new(backends);
         Self {
             inner: Arc::new(ServiceInner {
@@ -69,6 +76,8 @@ impl HostRpcService {
                 conversations: super::conversations::Conversations::new(
                     projects.path().with_file_name("bex-conversations.json"),
                 ),
+                transcripts,
+                imports: Default::default(),
                 model_selections: model_selections::ModelSelections::new(
                     projects.path().with_file_name("bex-model-selections.json"),
                 ),
@@ -147,6 +156,7 @@ impl HostRpcService {
             browser.shutdown().await;
         }
         self.inner.terminals.shutdown().await;
+        self.inner.router.record_running();
         self.inner.providers.shutdown().await;
     }
 
@@ -578,6 +588,9 @@ impl HostRpcService {
 
     fn start_event_pumps(&self) {
         self.inner.event_pumps.call_once(|| {
+            if let Err(message) = self.inner.transcripts.interrupt_running() {
+                tracing::error!(target: "agent", operation = "host.transcript.write", message);
+            }
             if self.inner.router.apns().is_some() {
                 let owner = Arc::downgrade(&self.inner);
                 tokio::spawn(async move {

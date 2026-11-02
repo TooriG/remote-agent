@@ -199,15 +199,18 @@ pub struct ReadThread {
     #[cfg_attr(feature = "bindings", uniffi(default = false))]
     pub open: bool,
     #[serde(default)]
-    #[cfg_attr(feature = "bindings", uniffi(default = 5))]
+    // UniFFI defaults must be literals; keep this equal to HISTORY_WINDOW_TURNS.
+    #[cfg_attr(feature = "bindings", uniffi(default = 10))]
     pub limit: u32,
 }
+/// Turns an opened conversation shows first, and each older page adds.
+pub const HISTORY_WINDOW_TURNS: u32 = 10;
 impl ReadThread {
     pub fn new(thread_id: crate::session::SessionRef) -> Self {
         Self {
             thread_id,
             open: false,
-            limit: 5,
+            limit: HISTORY_WINDOW_TURNS,
         }
     }
     pub fn open(thread_id: crate::session::SessionRef) -> Self {

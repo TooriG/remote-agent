@@ -119,7 +119,10 @@ impl HostRpcService {
         if preparation.status != PreparationStatus::Unknown || row.bindings.is_empty() {
             return Ok(response);
         }
-        let native = match self.native_history(&row.active, false).await {
+        let native = match self
+            .native_history(&row.active, conversations::HistoryUse::Read)
+            .await
+        {
             Ok(native) => native,
             Err(error) => {
                 response.thread.history_read_state =

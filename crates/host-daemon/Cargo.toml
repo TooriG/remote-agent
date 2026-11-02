@@ -40,6 +40,7 @@ atomicwrites = "0.4.4"
 anyhow.workspace = true
 dunce.workspace = true
 alacritty_terminal = "=0.26.0"
+rusqlite = { version = "0.41", features = ["bundled"] }
 
 [dev-dependencies]
 agent-protocol = { path = "../agent-protocol", features = ["test-support"] }
@@ -59,5 +60,4 @@ cbc = { version = "0.2", features = ["alloc"] }
 pbkdf2 = "0.13"
 sha1 = "0.11"
 sha2 = "0.11"
-rusqlite = { version = "0.41", features = ["bundled"] }
 security-framework = "3"

@@ -563,10 +563,11 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             if let Some(cursor) = previous.conversations.get(&thread_id).and_then(|thread| thread.history_cursor.clone()) {
                 return prepare(next, op::ReadHistory { session: thread_id, cursor, include_activity: false });
             }
-            let limit = u32::try_from(previous.conversations.get(&thread_id).map_or(5, |thread| {
+            let window = op::HISTORY_WINDOW_TURNS;
+            let limit = u32::try_from(previous.conversations.get(&thread_id).map_or(window.into(), |thread| {
                 thread.history_limit
-                    .unwrap_or_else(|| thread.turns.as_ref().map_or(5, |turns| turns.len() as u64))
-            })).unwrap_or(u32::MAX).saturating_add(5);
+                    .unwrap_or_else(|| thread.turns.as_ref().map_or(window.into(), |turns| turns.len() as u64))
+            })).unwrap_or(u32::MAX).saturating_add(window);
             return prepare(next, op::ReadThread { limit, ..op::ReadThread::new(thread_id) });
         }
         Intent::LoadTurnItems(params) => {
