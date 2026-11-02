@@ -4,6 +4,75 @@ use crate::presentation::editors::{open_editor_label, reveal_label};
 use agent_protocol::editors::{EditorId, FileManagerRevealKind};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FilePrimaryAction {
+    Panel,
+    Editor,
+    Options,
+}
+
+/// T3's desktop priority with the approved media/browser previews removed.
+/// `path` is a resolved Host path without a line/column suffix.
+pub fn desktop_file_primary_action(
+    path: &str,
+    workspace_root: &str,
+    has_thread: bool,
+    local_shell: bool,
+    editor_modifier: bool,
+) -> FilePrimaryAction {
+    if local_shell && editor_modifier {
+        return FilePrimaryAction::Editor;
+    }
+    let in_workspace =
+        super::super::markdown::file_workspace_relative_path(path, workspace_root).is_some();
+    let host_path = agent_protocol::paths::is_absolute_host_path(path)
+        || path.starts_with("~/")
+        || path.starts_with("~\\");
+    if has_thread && (in_workspace || (host_path && !image_or_video_path(path))) {
+        FilePrimaryAction::Panel
+    } else if local_shell {
+        FilePrimaryAction::Editor
+    } else {
+        FilePrimaryAction::Options
+    }
+}
+
+fn image_or_video_path(path: &str) -> bool {
+    let basename = path
+        .trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(path);
+    let extension = basename
+        .rsplit_once('.')
+        .map(|(_, extension)| extension.to_ascii_lowercase());
+    matches!(
+        extension.as_deref(),
+        Some(
+            "avif"
+                | "bmp"
+                | "heic"
+                | "heif"
+                | "gif"
+                | "ico"
+                | "jpeg"
+                | "jpg"
+                | "png"
+                | "svg"
+                | "tif"
+                | "tiff"
+                | "webp"
+                | "avi"
+                | "m4v"
+                | "mkv"
+                | "mov"
+                | "mp4"
+                | "ogv"
+                | "webm"
+        )
+    )
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FileAction {
     OpenEditor { editor: Option<EditorId> },
     Reveal,
@@ -112,6 +181,93 @@ pub fn file_tree_menu(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn primary_clicks_keep_workspace_files_in_the_panel_and_modifier_clicks_in_the_editor() {
+        for file in [
+            "a.rs",
+            "image.png",
+            "movie.mp4",
+            "voice.mp3",
+            "paper.pdf",
+            "bundle.zip",
+            "installer.exe",
+        ] {
+            let path = format!("/workspace/{file}");
+            assert_eq!(
+                desktop_file_primary_action(&path, "/workspace", true, false, false),
+                FilePrimaryAction::Panel
+            );
+            assert_eq!(
+                desktop_file_primary_action(&path, "/workspace", true, true, true),
+                FilePrimaryAction::Editor
+            );
+            assert_eq!(
+                desktop_file_primary_action(&path, "/workspace", true, false, true),
+                FilePrimaryAction::Panel
+            );
+        }
+        assert_eq!(
+            desktop_file_primary_action(
+                r"C:\workspace\image.png",
+                r"C:\workspace",
+                true,
+                false,
+                false
+            ),
+            FilePrimaryAction::Panel
+        );
+    }
+
+    #[test]
+    fn outside_images_and_videos_fall_back_to_the_editor_or_options_and_audio_is_a_file() {
+        for path in ["~/voice.mp3", r"~\voice.mp3"] {
+            assert_eq!(
+                desktop_file_primary_action(path, "/workspace", true, false, false),
+                FilePrimaryAction::Panel
+            );
+        }
+        for extension in [
+            "avif", "bmp", "heic", "heif", "gif", "ico", "jpeg", "jpg", "png", "svg", "tif",
+            "tiff", "webp", "avi", "m4v", "mkv", "mov", "mp4", "ogv", "webm",
+        ] {
+            let path = format!("/other/file.{}", extension.to_uppercase());
+            assert_eq!(
+                desktop_file_primary_action(&path, "/workspace", true, true, false),
+                FilePrimaryAction::Editor
+            );
+            assert_eq!(
+                desktop_file_primary_action(&path, "/workspace", true, false, false),
+                FilePrimaryAction::Options
+            );
+        }
+        for file in [
+            "a.rs",
+            "voice.mp3",
+            "voice.flac",
+            "paper.pdf",
+            "bundle.zip",
+            "icon.icns",
+        ] {
+            assert_eq!(
+                desktop_file_primary_action(
+                    &format!("/other/{file}"),
+                    "/workspace",
+                    true,
+                    false,
+                    false
+                ),
+                FilePrimaryAction::Panel
+            );
+        }
+        assert_eq!(
+            desktop_file_primary_action("/other/a.rs", "/workspace", false, true, false),
+            FilePrimaryAction::Editor
+        );
+        assert_eq!(
+            desktop_file_primary_action("/other/a.rs", "/workspace", false, false, false),
+            FilePrimaryAction::Options
+        );
+    }
     #[test]
     fn conversation_menu_has_t3_order_and_omits_unavailable_shell_actions() {
         let menu = file_reference_menu(

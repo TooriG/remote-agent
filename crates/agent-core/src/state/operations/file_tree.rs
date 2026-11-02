@@ -131,6 +131,7 @@ impl Operation for SearchTree {
                 root: self.key.root.clone(),
                 query: self.query.clone(),
                 limit: 200,
+                files_only: false,
             })
             .await
             .map_err(|error| crate::presentation::error::error_message(&error.to_string())))

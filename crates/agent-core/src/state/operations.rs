@@ -76,6 +76,7 @@ pub enum Intent {
     RevokeDevice(RevokeDevice),
     ListFiles(ListFiles),
     ResolveFile(ResolveFile),
+    ResolveFileReference(ResolveFileReference),
     ReadFileOpenCapabilities(ReadFileOpenCapabilities),
     OpenInEditor(OpenInEditor),
     SetPreferredEditor {
@@ -498,6 +499,8 @@ mod file_tree;
 pub(crate) use file_tree::file_tree_action;
 mod file_metadata;
 pub(crate) use file_metadata::ensure_file_metadata;
+mod file_reference;
+pub use file_reference::ResolveFileReference;
 mod lists;
 pub use lists::*;
 mod models;

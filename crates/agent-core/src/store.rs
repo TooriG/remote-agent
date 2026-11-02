@@ -47,6 +47,10 @@ pub enum Outcome {
     ResolvedFile {
         entry: crate::models::FileEntry,
     },
+    FileReferenceResolved {
+        path: String,
+        directory: bool,
+    },
     Directory {
         listing: crate::models::FileList,
     },

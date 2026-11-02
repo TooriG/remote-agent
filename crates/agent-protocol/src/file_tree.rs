@@ -32,6 +32,8 @@ pub struct SearchTreeEntries {
     pub root: String,
     pub query: String,
     pub limit: u32,
+    /// File references search files before applying the limit; the filer includes directories.
+    pub files_only: bool,
 }
 
 pub fn valid_tree_path(path: &str) -> bool {
@@ -148,6 +150,7 @@ mod tests {
             root: "C:/workspace".into(),
             query: "x".repeat(256),
             limit: 200,
+            files_only: false,
         };
         assert!(request.validate().is_ok());
         request.query.push('x');

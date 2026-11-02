@@ -8,7 +8,10 @@ pub use explorer::{
 };
 pub use metadata::FileMetadataCache;
 pub mod tree;
-pub use actions::{FileAction, FileMenuItem, file_reference_menu, file_tree_menu};
+pub use actions::{
+    FileAction, FileMenuItem, FilePrimaryAction, desktop_file_primary_action, file_reference_menu,
+    file_tree_menu,
+};
 pub use icons::{desktop_file_icon, desktop_metadata_icon};
 
 pub fn file_reference_tooltip(path: &str, byte_length: Option<u64>) -> String {

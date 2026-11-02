@@ -3,7 +3,12 @@ use super::MarkdownBlock;
 use super::{MarkdownRun, definitions};
 use markdown::mdast::Node;
 mod detection;
+mod lookup;
 mod paths;
+pub use lookup::{
+    WORKSPACE_BASENAME_LOOKUP_LIMIT, needs_workspace_basename_lookup,
+    pick_stripped_workspace_match, pick_workspace_basename_match, strip_repeated_workspace_prefix,
+};
 
 pub(super) use detection::Syntax;
 

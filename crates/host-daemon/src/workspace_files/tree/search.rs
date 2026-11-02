@@ -3,8 +3,8 @@
 use super::*;
 use agent_protocol::file_tree::SearchTreeEntries;
 use fff_search::{
-    FFFMode, FilePicker, FilePickerOptions, FuzzySearchOptions, MixedItemRef, MixedSearchConfig,
-    PaginationArgs, QueryParser, SharedFilePicker, SharedFrecency,
+    FFFMode, FilePicker, FilePickerOptions, FileSearchConfig, FuzzySearchOptions, MixedItemRef,
+    MixedSearchConfig, PaginationArgs, QueryParser, SharedFilePicker, SharedFrecency,
 };
 use std::sync::OnceLock;
 
@@ -89,7 +89,12 @@ impl SearchIndexes {
             *used = Instant::now();
             index.clone()
         };
-        let result = index.search(&root, &request.query, request.limit as usize);
+        let result = index.search(
+            &root,
+            &request.query,
+            request.limit as usize,
+            request.files_only,
+        );
         if result.is_err() {
             let mut entries = self
                 .entries
@@ -107,7 +112,13 @@ impl SearchIndexes {
 }
 
 impl Index {
-    fn search(&self, root: &Path, query: &str, limit: usize) -> Result<TreeEntries> {
+    fn search(
+        &self,
+        root: &Path,
+        query: &str,
+        limit: usize,
+        files_only: bool,
+    ) -> Result<TreeEntries> {
         let partial = self
             .initialized
             .get_or_init(|| {
@@ -138,26 +149,38 @@ impl Index {
             .trim()
             .trim_start_matches(['@', '.', '/'])
             .to_lowercase();
-        let parser = QueryParser::new(MixedSearchConfig);
-        let parsed = parser.parse(&query);
-        let result = picker.fuzzy_search_mixed(
-            &parsed,
-            None,
-            FuzzySearchOptions {
-                max_threads: 0,
-                current_file: None,
-                project_path: Some(picker.base_path()),
-                combo_boost_score_multiplier: 100,
-                min_combo_count: 3,
-                pagination: PaginationArgs {
-                    offset: 0,
-                    limit: limit + 1,
-                },
+        let options = FuzzySearchOptions {
+            max_threads: 0,
+            current_file: None,
+            project_path: Some(picker.base_path()),
+            combo_boost_score_multiplier: 100,
+            min_combo_count: 3,
+            pagination: PaginationArgs {
+                offset: 0,
+                limit: limit + 1,
             },
-        );
+        };
+        let (items, total_matched) = if files_only {
+            let parser = QueryParser::new(FileSearchConfig);
+            let parsed = parser.parse(&query);
+            let result = picker.fuzzy_search(&parsed, None, options);
+            (
+                result
+                    .items
+                    .into_iter()
+                    .map(MixedItemRef::File)
+                    .collect::<Vec<_>>(),
+                result.total_matched,
+            )
+        } else {
+            let parser = QueryParser::new(MixedSearchConfig);
+            let parsed = parser.parse(&query);
+            let result = picker.fuzzy_search_mixed(&parsed, None, options);
+            (result.items, result.total_matched)
+        };
         let mut root_count = 0;
         let mut entries = Vec::new();
-        for item in result.items {
+        for item in items {
             let (path, kind) = match item {
                 MixedItemRef::File(file) => (file.relative_path(picker), EntryKind::File),
                 MixedItemRef::Dir(directory) => {
@@ -180,7 +203,7 @@ impl Index {
         }
         Ok(TreeEntries {
             entries,
-            truncated: incomplete || result.total_matched.saturating_sub(root_count) > limit,
+            truncated: incomplete || total_matched.saturating_sub(root_count) > limit,
         })
     }
 }
@@ -188,6 +211,56 @@ impl Index {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn file_only_search_excludes_directories_before_ranking_and_limiting() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("needle")).unwrap();
+        fs::write(root.path().join("needle/actual.txt"), "needle").unwrap();
+        let indexes = Arc::new(SearchIndexes::default());
+        let request = SearchTreeEntries {
+            root: root.path().to_str().unwrap().into(),
+            query: "needle".into(),
+            limit: 1,
+            files_only: false,
+        };
+        let mixed = indexes.search(request.clone()).await.unwrap();
+        assert!(mixed.truncated);
+        let files = indexes
+            .search(SearchTreeEntries {
+                files_only: true,
+                ..request.clone()
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            files.entries,
+            [TreeEntry {
+                path: "needle/actual.txt".into(),
+                kind: EntryKind::File,
+                ignored: false,
+            }]
+        );
+        assert!(
+            !files.truncated,
+            "excluded directories must not exhaust the file limit"
+        );
+        let folder_query = SearchTreeEntries {
+            query: "needle/".into(),
+            ..request
+        };
+        let folders = indexes.search(folder_query.clone()).await.unwrap();
+        assert_eq!(folders.entries[0].kind, EntryKind::Directory);
+        let files = indexes
+            .search(SearchTreeEntries {
+                files_only: true,
+                ..folder_query
+            })
+            .await
+            .unwrap();
+        assert_eq!(files.entries[0].path, "needle/actual.txt");
+        assert_eq!(files.entries[0].kind, EntryKind::File);
+        assert!(!files.truncated);
+    }
     #[tokio::test]
     async fn search_uses_t3s_fuzzy_engine_and_normalization_without_ignored_files() {
         let root = tempfile::tempdir().unwrap();
@@ -210,6 +283,7 @@ mod tests {
             root: root.path().to_str().unwrap().into(),
             query: "@./MAIN.RS ".into(),
             limit: 200,
+            files_only: false,
         };
         let result = indexes.search(request.clone()).await.unwrap();
         assert!(!result.truncated);
