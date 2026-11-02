@@ -45,7 +45,7 @@ private struct TaskActivityExtension: Widget {
             } compactTrailing: {
                 EmptyView()
             } minimal: {
-                TaskIconRow(icons: Array(view.icons.prefix(1))).accessibilityLabel(view.label)
+                TaskMinimalIcons(icons: view.icons).accessibilityLabel(view.label)
             }
             .widgetURL(context.attributes.url)
         }
@@ -60,6 +60,29 @@ private struct TaskActivityExtension: Widget {
                 Text("+\(view.overflow)").font(.caption2).monospacedDigit()
             }
         }
+    }
+}
+
+private struct TaskMinimalIcons: View {
+    let icons: [TaskActivityAttributes.Icon]
+
+    var body: some View {
+        GeometryReader { geometry in
+            let columns = max(1, min(3, Int(ceil(sqrt(Double(icons.count))))))
+            let rows = max(1, (icons.count + columns - 1) / columns)
+            let width = (geometry.size.width - CGFloat(columns - 1)) / CGFloat(columns)
+            let height = (geometry.size.height - CGFloat(rows - 1)) / CGFloat(rows)
+            let size = max(0, min(22, width, height))
+            VStack(spacing: 1) {
+                ForEach(Array(stride(from: 0, to: icons.count, by: columns)), id: \.self) { start in
+                    let row = Array(icons[start ..< min(start + columns, icons.count)])
+                    TaskIconRow(icons: row)
+                        .frame(width: size * CGFloat(row.count) + CGFloat(row.count - 1), height: size)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .padding(4)
     }
 }
 
