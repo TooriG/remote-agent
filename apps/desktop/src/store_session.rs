@@ -74,6 +74,8 @@ impl StoreSession {
         let (send, mut receive) = watch::channel(self.store.snapshot());
         let mut preferences =
             agent_core::persistence::ModelPreferences::capture(&self.store.snapshot());
+        let mut editor_preferences =
+            agent_core::persistence::EditorPreferences::capture(&self.store.snapshot());
         self.persistence = Some(send);
         self.persistence_task = Some(self.runtime.closing.spawn_on(
             async move {
@@ -85,7 +87,17 @@ impl StoreSession {
                         agent_core::persistence::ModelPreferences::capture(&snapshot);
                     let preferences_changed = preferences != next_preferences;
                     let saved_preferences = next_preferences.clone();
+                    let next_editor_preferences =
+                        agent_core::persistence::EditorPreferences::capture(&snapshot);
+                    let editor_changed = editor_preferences != next_editor_preferences;
+                    let saved_editor = next_editor_preferences.clone();
                     let result = tokio::task::spawn_blocking(move || {
+                        if editor_changed {
+                            agent_local_host::save_private_json(
+                                &path.with_file_name("editor-preferences.json"),
+                                &saved_editor,
+                            )?;
+                        }
                         if preferences_changed {
                             agent_local_host::save_private_json(
                                 &path.with_file_name("model-preferences.json"),
@@ -102,6 +114,7 @@ impl StoreSession {
                     .and_then(|result| result);
                     if result.is_ok() {
                         preferences = next_preferences;
+                        editor_preferences = next_editor_preferences;
                     }
                     if let Err(error) = result {
                         let _ = updates.send(failure(format!("{error:#}"))).await;

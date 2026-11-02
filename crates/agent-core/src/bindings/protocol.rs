@@ -1,11 +1,57 @@
 //! ABI converters for wire records; the protocol crate has no UniFFI dependency.
 
 use crate::{models::*, session::*};
+use agent_protocol::editors::*;
 use agent_protocol::live_activity::*;
 use agent_protocol::permissions::*;
 use agent_protocol::project_import::ScanProjects;
 use agent_protocol::{browser::*, composer::*, diagnostics::*, operations::*, requests::*};
 use serde_json::Value;
+#[uniffi::remote(Enum)]
+enum EditorId {
+    Cursor,
+    Trae,
+    Kiro,
+    VsCode,
+    VsCodeInsiders,
+    VsCodium,
+    Zed,
+    Antigravity,
+    Idea,
+    Aqua,
+    Clion,
+    Datagrip,
+    Dataspell,
+    Goland,
+    Phpstorm,
+    Pycharm,
+    Rider,
+    Rubymine,
+    Rustrover,
+    Webstorm,
+    FileManager,
+}
+#[uniffi::remote(Enum)]
+enum FileManagerRevealKind {
+    Finder,
+    FileExplorer,
+    Files,
+}
+#[uniffi::remote(Record)]
+struct FileOpenCapabilities {
+    pub editors: Vec<EditorId>,
+    pub reveal: Option<FileManagerRevealKind>,
+}
+#[uniffi::remote(Record)]
+struct ReadFileOpenCapabilities {}
+#[uniffi::remote(Record)]
+struct OpenInEditor {
+    pub path: String,
+    pub line: Option<u32>,
+    pub column: Option<u32>,
+    pub editor: EditorId,
+    pub reveal: bool,
+}
 #[uniffi::remote(Enum)]
 enum ListDecorationScope {
     Root { part: Option<ListPart> },

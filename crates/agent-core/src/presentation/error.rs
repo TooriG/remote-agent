@@ -102,6 +102,7 @@ fn operation_notice(key: &OperationKey) -> Option<(ErrorScope, &'static str)> {
         SaveFile { .. } => (Workspace, "ファイルを保存できませんでした"),
         WorkspaceReview => (Workspace, "変更を読み込めませんでした"),
         CodexCli => (Settings, "Codex CLIの操作に失敗しました"),
+        FileOpenCapabilities => (Settings, "エディターを検出できませんでした"),
         Models | ModelSettings { .. } => (Settings, "モデルを読み込めませんでした"),
         Accounts => (Settings, "アカウントの操作に失敗しました"),
         WorktreeSettings | Worktrees => (Settings, "ワークツリーの操作に失敗しました"),
@@ -120,6 +121,10 @@ impl Snapshot {
             return None;
         }
         let (label, intent) = match key {
+            OperationKey::FileOpenCapabilities => (
+                "再読み込み",
+                Intent::ReadFileOpenCapabilities(op::ReadFileOpenCapabilities {}),
+            ),
             OperationKey::Models => ("再読み込み", Intent::LoadModels(op::LoadModels {})),
             OperationKey::ModelSettings { model } => (
                 "再読み込み",

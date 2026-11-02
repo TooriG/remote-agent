@@ -831,6 +831,8 @@ impl<T> PartialEq for SharedIdentity<'_, T> {
 fn publication_key(snapshot: &Snapshot) -> impl PartialEq + '_ {
     // No `..`: adding a Snapshot field must update the publication contract.
     let Snapshot {
+        preferred_editor,
+        file_open_capabilities,
         project_import,
         recent_chats,
         operations,
@@ -878,6 +880,8 @@ fn publication_key(snapshot: &Snapshot) -> impl PartialEq + '_ {
         (
             recent_chats,
             model_defaults,
+            preferred_editor,
+            file_open_capabilities.as_ref().map(SharedIdentity),
             SharedIdentity(project_preferences),
             SharedIdentity(scoped_model_defaults),
         ),

@@ -81,7 +81,7 @@ enum OperationCompletion {
     },
 }
 enum Update {
-    Connected(Result<(StoreSession, PathBuf), String>),
+    Connected(Result<(StoreSession, PathBuf, bool), String>),
     Snapshot,
     Completed(OperationCompletion, Result<Outcome, String>),
     Folder(Result<Option<PathBuf>, String>),
@@ -153,6 +153,7 @@ pub(crate) struct Desktop {
     snapshot_pending: Option<u64>,
     epoch: u64,
     connecting: bool,
+    local_shell: bool,
     remote: Option<RemoteHost>,
     hosts: Option<Entity<Hosts>>,
     app_updates: Option<Entity<crate::updates::Updates>>,
@@ -216,8 +217,8 @@ fn general_snapshot_changed(before: &Snapshot, after: &Snapshot) -> bool {
             archived_scopes, account, terminals, conversations, expanded_projects,
             project_threads, models, model_errors, question_drafts, draft_sessions, pending_submissions,
             workspace, workspaces, navigation, activity, management, list_query, subscriptions],
-        optional: [permission_settings, task_activity, threads],
-        values: [recent_chats, operation_sequence, model_defaults, host_name, host_ticket, storage_scope,
+        optional: [permission_settings, task_activity, threads, file_open_capabilities],
+        values: [recent_chats, operation_sequence, model_defaults, preferred_editor, host_name, host_ticket, storage_scope,
             observed_agents, epoch, connected, connection_generation, connection_failure, error]
     );
     let empty = Draft::default();
@@ -514,6 +515,7 @@ impl Desktop {
             snapshot_pending: None,
             epoch: 0,
             connecting: false,
+            local_shell: false,
             remote,
             hosts,
             app_updates,
@@ -568,6 +570,7 @@ impl Desktop {
     fn connect(&mut self, preferences: Option<Vec<u8>>) {
         self.epoch += 1;
         self.connecting = true;
+        self.local_shell = false;
         self.busy = 0;
         self.worktrees.removal = None;
         self.worktrees.removing = false;
@@ -630,6 +633,18 @@ impl Desktop {
                     )
                     .map_err(|error| error.to_string())?;
                 }
+                snapshot.preferred_editor =
+                    match tokio::fs::read(path.with_file_name("editor-preferences.json")).await {
+                        Ok(bytes) => {
+                            serde_json::from_slice::<agent_core::persistence::EditorPreferences>(
+                                &bytes,
+                            )
+                            .map_err(|error| error.to_string())?
+                            .preferred
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                        Err(error) => return Err(error.to_string()),
+                    };
                 let initial_cwd = initial_cwd.or_else(|| {
                     snapshot
                         .navigation
@@ -647,11 +662,14 @@ impl Desktop {
                 if let Some(cwd) = initial_cwd {
                     drop(store.dispatch(Intent::NewChat { cwd }));
                 }
-                Ok::<_, String>((store, path))
+                let local_shell =
+                    platform::host_is_local(remote.as_ref().map(|remote| remote.ticket.as_str()))
+                        .await;
+                Ok::<_, String>((store, path, local_shell))
             }
             .await;
             match result {
-                Ok((store, path)) => {
+                Ok((store, path, local_shell)) => {
                     StoreSession::publish(
                         Ok(store),
                         runtime,
@@ -659,7 +677,9 @@ impl Desktop {
                         move |session| {
                             (
                                 epoch,
-                                Update::Connected(session.map(|session| (session, path))),
+                                Update::Connected(
+                                    session.map(|session| (session, path, local_shell)),
+                                ),
                             )
                         },
                         move |_| (epoch, Update::Snapshot),
@@ -712,7 +732,8 @@ impl Desktop {
             Update::Connected(result) => {
                 self.connecting = false;
                 match result {
-                    Ok((mut session, path)) => {
+                    Ok((mut session, path, local_shell)) => {
+                        self.local_shell = local_shell;
                         session.persist(path, self.updates.clone(), move |error| {
                             (epoch, Update::PersistenceError(error))
                         });
@@ -725,6 +746,9 @@ impl Desktop {
                             self.explain_selection(&text, cx);
                         }
                         self.dispatch(Intent::ReadWorktreeSettings(op::ReadWorktreeSettings {}));
+                        self.dispatch(Intent::ReadFileOpenCapabilities(
+                            op::ReadFileOpenCapabilities {},
+                        ));
                         if self.import_projects {
                             self.dispatch(Intent::ScanProjects(op::ScanProjects {}));
                         }

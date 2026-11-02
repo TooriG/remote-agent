@@ -43,6 +43,7 @@ struct ServiceInner {
     router: SessionRouter,
     event_pumps: std::sync::Once,
     files: crate::workspace_files::WorkspaceFiles,
+    editors: crate::editors::Editors,
     worktrees: crate::worktrees::Worktrees,
     worktree_access: tokio::sync::RwLock<()>,
     permission_settings_access: tokio::sync::Mutex<()>,
@@ -83,6 +84,7 @@ impl HostRpcService {
                 router,
                 event_pumps: std::sync::Once::new(),
                 files,
+                editors: Default::default(),
             }),
         }
     }
@@ -346,6 +348,21 @@ impl HostRpcService {
                 .map(Into::into);
         }
         let response = match request {
+            Call::ReadFileOpenCapabilities(_) => self
+                .inner
+                .editors
+                .capabilities()
+                .await
+                .map_err(|error| Failure::new("editor_discovery_failed", error))?
+                .into(),
+            Call::OpenInEditor(params) => {
+                self.inner
+                    .editors
+                    .open(params.clone())
+                    .await
+                    .map_err(|error| Failure::new("editor_open_failed", error))?;
+                agent_protocol::models::Empty {}.into()
+            }
             Call::ReadHandoffHistory(params) => self.read_handoff_history(params).await?.into(),
             Call::Unsupported => {
                 return Err(Failure::new(

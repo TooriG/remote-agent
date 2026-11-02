@@ -427,7 +427,7 @@ impl WorkspaceFiles {
     }
 }
 
-fn absolute_path(path: &impl AsRef<Path>) -> Result<PathBuf> {
+pub(crate) fn absolute_path(path: &impl AsRef<Path>) -> Result<PathBuf> {
     let path = path.as_ref();
     if let Ok(relative) = path.strip_prefix("~") {
         let home = directories::BaseDirs::new().context("Host home directory is unavailable")?;

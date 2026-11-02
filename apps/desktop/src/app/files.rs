@@ -2,6 +2,31 @@ use super::*;
 use agent_core::{presentation::error::error_message, store::Store};
 
 impl Desktop {
+    pub(super) fn open_in_editor(
+        &mut self,
+        path: String,
+        line: Option<u32>,
+        column: Option<u32>,
+        editor: agent_protocol::editors::EditorId,
+        reveal: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.local_shell || !self.snapshot.connected {
+            return;
+        }
+        self.busy += 1;
+        self.perform(
+            Intent::OpenInEditor(op::OpenInEditor {
+                path,
+                line,
+                column,
+                editor,
+                reveal,
+            }),
+            OperationCompletion::Busy,
+        );
+        cx.notify();
+    }
     pub(super) fn download(&mut self, source: String) {
         let Some(store) = self.session.as_ref().map(|session| session.store.clone()) else {
             self.set_error("Host に接続していません".into());

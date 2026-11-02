@@ -5,6 +5,10 @@ struct HeaderModel {
     title: String,
     sidebar: bool,
     panel_open: bool,
+    editors: Vec<agent_protocol::editors::EditorId>,
+    preferred_editor: Option<agent_protocol::editors::EditorId>,
+    can_open_editor: bool,
+    cwd: String,
 }
 
 pub(in crate::app) struct HeaderView {
@@ -77,6 +81,15 @@ impl Desktop {
             title,
             sidebar: self.sidebar,
             panel_open,
+            editors: self
+                .snapshot
+                .file_open_capabilities
+                .as_ref()
+                .map(|capabilities| capabilities.editors.clone())
+                .unwrap_or_default(),
+            preferred_editor: self.snapshot.preferred_editor,
+            can_open_editor: self.local_shell && self.snapshot.connected,
+            cwd: self.snapshot.navigation.cwd.clone(),
         }
     }
     pub(super) fn conversation_header(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -115,8 +128,75 @@ impl Desktop {
                     .text_ellipsis()
                     .child(model.title.clone()),
             )
+            .when(model.can_open_editor, |header| {
+                header.child(Self::editor_picker(model, cx))
+            })
             .when(!model.panel_open, |header| {
                 header.child(Self::panel_toggle(false, cx))
             })
+    }
+
+    fn editor_picker(model: &HeaderModel, cx: &Context<Self>) -> AnyElement {
+        use agent_core::presentation::editors::{editor_label, preferred_editor};
+        use agent_protocol::editors::FileManagerRevealKind;
+        let selected = preferred_editor(model.preferred_editor, &model.editors);
+        let owner = cx.entity().downgrade();
+        let options = model.editors.clone();
+        let path = model.cwd.clone();
+        let target = path.clone();
+        h_flex()
+            .gap_0()
+            .child(
+                Button::new("open-preferred-editor")
+                    .label("Open")
+                    .small()
+                    .ghost()
+                    .disabled(selected.is_none() || path.is_empty())
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        if let Some(editor) = selected {
+                            view.open_in_editor(target.clone(), None, None, editor, false, cx);
+                        }
+                    })),
+            )
+            .child(
+                Button::new("preferred-editor-picker")
+                    .label("⌄")
+                    .small()
+                    .ghost()
+                    .disabled(options.is_empty() || path.is_empty())
+                    .dropdown_menu(move |mut menu, _, _| {
+                        for editor in &options {
+                            let editor = *editor;
+                            let owner = owner.clone();
+                            let path = path.clone();
+                            let file_manager = if cfg!(target_os = "macos") {
+                                FileManagerRevealKind::Finder
+                            } else if cfg!(target_os = "windows") {
+                                FileManagerRevealKind::FileExplorer
+                            } else {
+                                FileManagerRevealKind::Files
+                            };
+                            let label = editor_label(editor, file_manager);
+                            menu = menu.item(
+                                PopupMenuItem::new(label)
+                                    .checked(selected == Some(editor))
+                                    .on_click(move |_, _, cx| {
+                                        let _ = owner.update(cx, |view, cx| {
+                                            view.open_in_editor(
+                                                path.clone(),
+                                                None,
+                                                None,
+                                                editor,
+                                                false,
+                                                cx,
+                                            )
+                                        });
+                                    }),
+                            );
+                        }
+                        menu
+                    }),
+            )
+            .into_any_element()
     }
 }

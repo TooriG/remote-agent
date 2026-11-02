@@ -68,6 +68,8 @@ pub enum Intent {
     RevokeDevice(RevokeDevice),
     ListFiles(ListFiles),
     ResolveFile(ResolveFile),
+    ReadFileOpenCapabilities(ReadFileOpenCapabilities),
+    OpenInEditor(OpenInEditor),
     ReadFile(ReadFile),
     SaveFile(SaveFile),
     ReviewWorkspace(ReviewWorkspace),
@@ -293,6 +295,7 @@ pub enum OperationKey {
         item: ReadItem,
     },
     Directory,
+    FileOpenCapabilities,
     File,
     SaveFile {
         path: String,
@@ -466,6 +469,8 @@ pub trait Operation: Send + Sync + std::fmt::Debug + Sized + 'static {
 
 mod permissions;
 pub use permissions::*;
+mod editors;
+pub use editors::*;
 mod composer;
 pub use composer::*;
 mod codex_cli;

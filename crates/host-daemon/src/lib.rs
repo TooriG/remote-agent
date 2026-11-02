@@ -2,6 +2,7 @@ mod account_usage;
 mod apns;
 pub mod browser;
 mod dictation;
+mod editors;
 mod git;
 mod host_identity;
 mod host_rpc;

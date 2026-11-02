@@ -232,6 +232,10 @@ pub struct ProjectImportState {
 #[cfg_attr(feature = "bindings", derive(uniffi::Object))]
 pub struct Snapshot {
     #[serde(skip)]
+    pub preferred_editor: Option<agent_protocol::editors::EditorId>,
+    #[serde(skip)]
+    pub file_open_capabilities: Option<Arc<agent_protocol::editors::FileOpenCapabilities>>,
+    #[serde(skip)]
     pub project_import: Arc<ProjectImportState>,
     /// Mobile recent feed loads project pages independently of expansion.
     #[serde(skip)]
@@ -508,6 +512,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
         ReadAccountLogin, CancelAccountLogin, SubmitAccountLogin, ForkSession,
         StartTerminal, DetachTerminal, KillTerminal, CreateInvitation, RemoveRemoteHost,
         RevokeDevice, ListFiles, ResolveFile, ReadFile,
+        ReadFileOpenCapabilities, OpenInEditor,
         SaveFile, ReviewWorkspace, ReadWorktreeSettings,
         UpdateWorktreeSettings, ListWorktrees, RemoveWorktree, ListProjectSessions,
         ListAgents, AddProject, ScanProjects, ImportProjects, CreateSession, RetryPreparation,
@@ -1277,6 +1282,7 @@ impl Snapshot {
     /// Cached history and drafts survive; IDs and activity belong to one connection.
     /// Pending submissions are persisted only to recover dictation after a crash.
     fn reset_session(&mut self) {
+        self.file_open_capabilities = None;
         self.composer_catalog = None;
         self.permission_settings = None;
         self.subscriptions = Arc::default();

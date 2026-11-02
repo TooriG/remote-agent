@@ -5,6 +5,7 @@ pub mod browser_native;
 pub mod composer;
 pub mod diagnostics;
 pub mod dsh;
+pub mod editors;
 pub mod error;
 pub mod execution;
 pub mod handoff;

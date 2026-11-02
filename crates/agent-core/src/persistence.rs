@@ -16,6 +16,55 @@ use crate::state::{
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc};
 
+/// One device's editor selection, shared across Host snapshots. Discovery is never persisted.
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct EditorPreferences {
+    pub preferred: Option<agent_protocol::editors::EditorId>,
+}
+
+impl EditorPreferences {
+    pub fn capture(snapshot: &Snapshot) -> Self {
+        Self {
+            preferred: snapshot.preferred_editor,
+        }
+    }
+}
+
+#[cfg(test)]
+mod editor_tests {
+    use super::*;
+    use agent_protocol::editors::EditorId;
+
+    #[test]
+    fn editor_preferences_are_device_owned_and_never_serialize_host_discovery() {
+        let snapshot = Snapshot {
+            preferred_editor: Some(EditorId::Cursor),
+            file_open_capabilities: Some(Arc::new(agent_protocol::editors::FileOpenCapabilities {
+                editors: vec![EditorId::Cursor, EditorId::FileManager],
+                reveal: None,
+            })),
+            ..Default::default()
+        };
+        let bytes = serde_json::to_vec(&EditorPreferences::capture(&snapshot)).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
+            serde_json::json!({"preferred":"cursor"})
+        );
+        assert_eq!(
+            serde_json::from_slice::<EditorPreferences>(&bytes)
+                .unwrap()
+                .preferred,
+            Some(EditorId::Cursor)
+        );
+        assert!(
+            decode(&encode(&snapshot).unwrap())
+                .unwrap()
+                .file_open_capabilities
+                .is_none()
+        );
+    }
+}
+
 /// Required user-owned fields prevent a damaged document from silently becoming
 /// an empty draft. Runtime Snapshot fields cannot change the storage contract.
 #[derive(Serialize, Deserialize)]
