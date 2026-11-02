@@ -210,6 +210,8 @@ Nixシェルは固定したKacheでワークツリー間のビルド結果を再
 
 新規ワークツリーのビルド出力を外付けディスクへ置くには、マウント済みディスクにディレクトリを作り、`git config --local bex.buildRoot /absolute/path/to/builds`を設定します。このローカル設定は全ワークツリーで共有します。`scripts/dev-env.sh`は新しい`target`を外付け上の専用ディレクトリへのシンボリックリンクにし、Cargo・Xcode・生成バインディング・キャッシュの既存パスを維持します。既存`target`は移動しません。移す場合は使用していない間に移動して元の場所をリンクへ置き換えてください。指定ディレクトリは事前に存在する必要があり、ディスク取り外しなどで利用できなければコマンドは失敗します。`git config --local --unset bex.buildRoot`で設定を削除すると、その後の新規ワークツリーはローカル出力へ戻ります。
 
+RustのチェックとテストをLinuxマシンで実行するには、対話なしで接続できるSSHホスト名を用意し、`git config --local bex.remoteBuilder <host>`を設定します。ビルダーにはNix、Git、Bash 5.1以降、util-linux、GNU tarが必要です。設定すると`scripts/dev-env.sh`は、`cargo check`・`clippy`・`test`・`nextest`・`mutants`と、`just --list`の`portable`グループのレシピを、ワークツリーをコミットした場合と同じファイルでビルダー上で実行します。`just unit-tests`は、macOS専用のテストだけをこのMacで実行します。コマンドが作成・変更したソースと`target`内のレポートは手元に戻ります。`--target aarch64-apple-darwin`などApple向けのビルドは手元で実行します。ビルダーに接続できなければコマンドは失敗します。`just clean-builds`はビルダーの出力も整理します。`git config --local --unset bex.remoteBuilder`で設定を削除すると手元のビルドに戻ります。
+
 `just quality`は未使用のビルド出力を整理します。`scripts/dev-env.sh just clean-builds --dry-run`で計画を確認でき、保持条件と使用中ビルドの保護は[整理処理](crates/xtask/src/build_cleanup.rs)で定義しています。バックアップや検証記録はCargoの`debug`・`release`ディレクトリの外へ保存してください。
 
 Simulator・フィクスチャの実行では、実機、本番キーチェーン、カメラ、実際のCodexアカウントは検証できません。

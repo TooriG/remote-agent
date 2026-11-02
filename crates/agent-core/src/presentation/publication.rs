@@ -25,6 +25,7 @@ impl Snapshot {
         self.recent_chats == other.recent_chats
             && same_list
             && Arc::ptr_eq(&self.activity, &other.activity)
+            && self.waiting_sessions() == other.waiting_sessions()
             && Arc::ptr_eq(&self.expanded_projects, &other.expanded_projects)
             && Arc::ptr_eq(&self.project_preferences, &other.project_preferences)
             && self.storage_scope == other.storage_scope
@@ -87,6 +88,63 @@ impl Snapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn waiting_membership_refreshes_lists_without_republishing_other_surfaces() {
+        use agent_protocol::{
+            live_activity::{TaskActivityState, TaskActivitySummary},
+            models::SessionStatus,
+            session::{ProviderKind, SessionRef},
+        };
+        let id = SessionRef::new(ProviderKind::Codex, "question".into()).unwrap();
+        let mut snapshot = Snapshot {
+            threads: Some(Arc::new(
+                serde_json::from_value(serde_json::json!({
+                    "data":[{"id":id,"status":"running"}],
+                    "projects":[],"hasMore":false,"hasMoreProjects":false,
+                    "projectPages":{},"limit":5
+                }))
+                .unwrap(),
+            )),
+            ..Default::default()
+        };
+        Arc::make_mut(&mut snapshot.activity)
+            .active
+            .insert(id.clone(), true);
+        for (revision, waiting, changed) in [
+            (1, false, false),
+            (2, true, true),
+            (3, true, false),
+            (4, false, true),
+        ] {
+            let before = Arc::new(snapshot.clone());
+            let _ = snapshot.accept_task_activity(TaskActivityState {
+                revision,
+                statuses: vec![(id.clone(), SessionStatus::Running)],
+                waiting: if waiting {
+                    vec![id.clone()]
+                } else {
+                    Vec::new()
+                },
+                unread: Vec::new(),
+                display: TaskActivitySummary {
+                    waiting: u32::from(waiting),
+                    running: u32::from(!waiting),
+                    ..Default::default()
+                }
+                .display(),
+            });
+            assert!(Arc::ptr_eq(&snapshot.activity, &before.activity));
+            assert!(Arc::ptr_eq(
+                snapshot.threads.as_ref().unwrap(),
+                before.threads.as_ref().unwrap()
+            ));
+            let publication = snapshot.changes(before);
+            assert_eq!(publication.list, changed, "waiting={waiting}");
+            assert!(!publication.models && !publication.conversation);
+            assert_eq!(snapshot.thread_list().unwrap().threads[0].waiting, waiting);
+        }
+    }
 
     #[test]
     fn publication_changes_keep_independent_surfaces_and_connection_epochs_distinct() {

@@ -105,6 +105,15 @@ pub struct ThreadList {
     pub has_more: bool,
     pub has_more_projects: bool,
 }
+
+impl Snapshot {
+    pub(crate) fn waiting_sessions(&self) -> &[crate::session::SessionRef] {
+        self.task_activity
+            .as_ref()
+            .map_or(&[], |state| state.waiting.as_slice())
+    }
+}
+
 #[cfg_attr(feature = "bindings", uniffi::export)]
 impl Snapshot {
     /// The selected folder is separate from the provider's execution directory.
@@ -127,10 +136,7 @@ impl Snapshot {
     pub fn recent_thread_list(&self) -> Option<ThreadList> {
         let mut list = self.thread_list()?;
         let source = self.threads.as_ref()?;
-        let waiting = self
-            .task_activity
-            .as_ref()
-            .map_or(&[][..], |state| state.waiting.as_slice());
+        let waiting = self.waiting_sessions();
         let project_ids: HashSet<_> = source.projects.iter().map(|p| p.id.as_str()).collect();
         let mut rows: BTreeMap<_, crate::models::Thread> = BTreeMap::new();
         for thread in source
@@ -184,10 +190,7 @@ impl Snapshot {
 
     pub fn thread_list(&self) -> Option<ThreadList> {
         let list = self.threads.as_ref()?;
-        let waiting = self
-            .task_activity
-            .as_ref()
-            .map_or(&[][..], |state| state.waiting.as_slice());
+        let waiting = self.waiting_sessions();
         let project_ids: HashSet<_> = list
             .projects
             .iter()

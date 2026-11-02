@@ -269,6 +269,18 @@ when it is unavailable, including when the disk is unplugged. Remove the setting
 with `git config --local --unset bex.buildRoot` to use local targets for new
 worktrees again.
 
+To run Rust checks and tests on a Linux machine, make it reachable through a
+non-interactive SSH host name and set `git config --local bex.remoteBuilder <host>`.
+The builder needs Nix, Git, Bash 5.1 or later, util-linux and GNU tar.
+`scripts/dev-env.sh` then runs `cargo check`, `clippy`, `test`, `nextest` and
+`mutants`, and the `portable` recipes in `just --list`, on the builder against the
+files a commit of the worktree would contain; `just unit-tests` keeps only its
+macOS tests here. Sources and reports under `target` that the command creates or
+changes come back. Builds for Apple targets, such as `--target aarch64-apple-darwin`,
+stay local. Commands fail when the builder is unreachable, and `just clean-builds`
+prunes its outputs too. Remove the setting with
+`git config --local --unset bex.remoteBuilder` to build locally again.
+
 `just quality` prunes inactive build outputs. Preview the plan with
 `scripts/dev-env.sh just clean-builds --dry-run`; the owning
 [cleanup implementation](crates/xtask/src/build_cleanup.rs) defines retention and

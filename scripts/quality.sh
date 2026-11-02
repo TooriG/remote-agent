@@ -34,5 +34,5 @@ fi
 if [[ $language == apple || $language == swift ]]; then
     just conversation-ui || failed=1
 fi
-cargo xtask clean-builds || failed=1
+just clean-builds || failed=1
 exit "$failed"

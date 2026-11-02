@@ -6,6 +6,7 @@ default:
     @just --list
 
 # Check Rust without generating executables; use -p to select changed crates.
+[group('portable')]
 check *args:
     cargo check --locked "$@"
 
@@ -24,6 +25,26 @@ unit-tests *targets:
     #!/usr/bin/env bash
     set -uo pipefail
     failed=0
+    if [[ -n ${AGENT_REMOTE_BUILDER-} ]]; then
+        scripts/remote-run.sh "$AGENT_REMOTE_BUILDER" just portable-unit-tests "$@" &
+    else
+        just portable-unit-tests "$@" &
+    fi
+    portable_pid=$!
+    if [[ $(uname -s) == Darwin ]]; then
+        cargo test --locked -p agent-desktop --test native_focus || failed=1
+        cargo xtask ios-markdown || failed=1
+        bash scripts/test-ios-scroll.sh || failed=1
+    fi
+    wait "$portable_pid" || failed=1
+    exit "$failed"
+
+# Run the unit tests that do not need macOS.
+[group('portable')]
+portable-unit-tests *targets:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    failed=0
     node --test scripts/apple-*.test.mjs || failed=1
     node --test crates/agent-protocol/src/browser_input.test.cjs crates/host-daemon/src/browser/password-fill.test.cjs apps/desktop/src/browser/native/snapshot.test.cjs || failed=1
     pwsh -NoLogo -NoProfile -NonInteractive -File tools/windows-fxc/update.test.ps1 || failed=1
@@ -34,17 +55,17 @@ unit-tests *targets:
     cargo nextest run --locked --no-fail-fast --workspace --lib --bins --features agent-core/bindings "$@" &
     rust_pid=$!
     CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$PWD/target}" cargo test --locked --no-fail-fast --manifest-path tools/agent-peer/Cargo.toml || failed=1
-    if [[ $(uname -s) == Darwin ]]; then
-        cargo test --locked -p agent-desktop --test native_focus || failed=1
-        cargo xtask ios-markdown || failed=1
-        bash scripts/test-ios-scroll.sh || failed=1
-    fi
     wait "$rust_pid" || failed=1
     exit "$failed"
 
-# Prune inactive Cargo outputs older than 3 days or over the 32 GiB idle budget.
+# Prune inactive Cargo outputs older than 3 days or over the 32 GiB idle budget, here and on the remote builder.
 clean-builds *args:
-    cargo xtask clean-builds {{args}}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo xtask clean-builds "$@"
+    if [[ -n ${AGENT_REMOTE_BUILDER-} ]]; then
+        scripts/remote-run.sh "$AGENT_REMOTE_BUILDER" cargo xtask clean-builds "$@"
+    fi
 
 # Build and verify the certificate-signed Host executable (dev or release).
 build-host-macos profile="release":
@@ -132,6 +153,7 @@ conversation-ui:
         testSimulatorBrowserUsesOneSharedImportMenu
 
 # Exercise the real iroh Host through the headless client.
+[group('portable')]
 iroh-e2e:
     cargo build --locked --package agent-process --bin agent-provider-supervisor
     cargo test --locked --package host-fixture --test iroh_host
@@ -143,6 +165,7 @@ quality language="apple":
 # Audit diff presentation tests in an isolated copy; extra arguments go to cargo-mutants.
 # Inspect missed.txt and logs; distinguish equivalent mutations from missing assertions.
 # Report timeouts and unbuildable mutants separately from assertion-based catches.
+[group('portable')]
 mutants-diff *args:
     mkdir -p target/mutation-diff
     env -u CARGO_TARGET_DIR PROPTEST_RNG_SEED=20260925 cargo mutants --copy-target=false --package agent-core --file crates/agent-core/src/presentation/diff.rs --output target/mutation-diff --jobs 2 --build-timeout 900 --timeout 60 --cargo-arg=--locked --cargo-arg=--lib "$@" -- presentation::diff::tests
