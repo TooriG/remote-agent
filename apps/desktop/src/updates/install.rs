@@ -253,14 +253,8 @@ fn app_launch_command(
         command
             .args(["-n", "-a"])
             .arg(destination)
-            .args(["--env", "AGENT_STATE_DIR", "--env", "AGENT_ISOLATED_HOST"])
             .env("AGENT_STATE_DIR", directory)
             .env("AGENT_ISOLATED_HOST", if isolated { "1" } else { "0" });
-        for key in ["AGENT_ACCOUNT_STATE_DIR", "AGENT_CODEX", "AGENT_CLAUDE"] {
-            if std::env::var_os(key).is_some() {
-                command.args(["--env", key]);
-            }
-        }
         command
     } else {
         Command::new(executable)
@@ -459,7 +453,7 @@ mod tests {
             if cfg!(target_os = "macos") {
                 assert_eq!(command.get_program(), "/usr/bin/open");
                 assert_eq!(
-                    command.get_args().take(3).collect::<Vec<_>>(),
+                    command.get_args().collect::<Vec<_>>(),
                     [
                         std::ffi::OsStr::new("-n"),
                         std::ffi::OsStr::new("-a"),
