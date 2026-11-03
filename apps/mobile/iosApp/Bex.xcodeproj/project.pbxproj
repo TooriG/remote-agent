@@ -447,6 +447,7 @@
 		A10000000000000000000060 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				AGENT_TASK_URL_SCHEME = bex;
 				AGENT_BUILD_REVISION = development;
