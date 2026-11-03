@@ -48,6 +48,17 @@ pub fn private_file_options() -> fs::OpenOptions {
 
 /// Atomically replace owner-only JSON state and flush its contents before rename.
 pub fn save_private_json(path: &Path, value: &impl serde::Serialize) -> Result<()> {
+    save_private(path, |file| {
+        serde_json::to_writer(file, value).map_err(Into::into)
+    })
+}
+
+/// Atomically replace an opaque payload with the same privacy and durability as JSON state.
+pub fn save_private_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
+    save_private(path, |file| std::io::Write::write_all(file, bytes))
+}
+
+fn save_private(path: &Path, write: impl Fn(&mut File) -> io::Result<()>) -> Result<()> {
     let parent = path.parent().context("state path has no parent")?;
     create_state_directory(parent)?;
     #[cfg(windows)]
@@ -61,17 +72,17 @@ pub fn save_private_json(path: &Path, value: &impl serde::Serialize) -> Result<(
         file.lock()?;
         file
     };
-    save_private_json_inner(path, value)
+    save_private_inner(path, write)
         .with_context(|| format!("could not save state {}", path.display()))
 }
 
-fn save_private_json_inner(path: &Path, value: &impl serde::Serialize) -> Result<()> {
+fn save_private_inner(path: &Path, write: impl Fn(&mut File) -> io::Result<()>) -> Result<()> {
     let mut retries = 0;
     loop {
         let result = atomicwrites::AtomicFile::new(path, atomicwrites::AllowOverwrite)
             .write_with_options(
                 |file| {
-                    serde_json::to_writer(&mut *file, value)?;
+                    write(file)?;
                     file.sync_all()
                 },
                 private_file_options(),
@@ -96,6 +107,15 @@ fn save_private_json_inner(path: &Path, value: &impl serde::Serialize) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opaque_state_preserves_every_byte() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("state.bin");
+        let bytes: Vec<u8> = (0..=255).collect();
+        save_private_bytes(&path, &bytes).unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
+    }
 
     #[test]
     fn concurrent_state_replacements_keep_complete_json() {

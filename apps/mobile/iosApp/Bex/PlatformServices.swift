@@ -6,7 +6,7 @@ import SwiftUI
 import UIKit
 
 /// Keychain and private file I/O; core owns restoration and save scheduling.
-final class MobileSessionStorage: ClientStorage, @unchecked Sendable {
+final class MobileSessionStorage: ClientStorage, ClientPlatform, @unchecked Sendable {
     let host: String
 
     init(host: String) {
@@ -27,21 +27,27 @@ final class MobileSessionStorage: ClientStorage, @unchecked Sendable {
         do { return try body() } catch { throw AgentError.Failed(reason: error.localizedDescription) }
     }
 
-    func load(newPairing: Bool) throws -> Data {
+    func load(key: StorageKey) throws -> Data {
         try access {
-            let url = try location()
-            let bytes = !newPairing && FileManager.default.fileExists(atPath: url.path)
-                ? try Data(contentsOf: url) : Data()
-            return try applyModelPreferences(persisted: bytes,
-                                             defaults: UserDefaults.standard
-                                                 .data(forKey: "bex.model-defaults") ?? Data())
+            switch key {
+            case .localState:
+                let url = try location()
+                return FileManager.default.fileExists(atPath: url.path) ? try Data(contentsOf: url) : Data()
+            case .modelPreferences:
+                return UserDefaults.standard.data(forKey: "bex.model-defaults") ?? Data()
+            case .editorPreferences:
+                return UserDefaults.standard.data(forKey: "bex.editor-preferences") ?? Data()
+            }
         }
     }
 
-    func save(localState: Data, modelPreferences: Data) throws {
+    func save(key: StorageKey, bytes: Data) throws {
         try access {
-            UserDefaults.standard.set(modelPreferences, forKey: "bex.model-defaults")
-            try localState.write(to: location(), options: .atomic)
+            switch key {
+            case .localState: try bytes.write(to: location(), options: .atomic)
+            case .modelPreferences: UserDefaults.standard.set(bytes, forKey: "bex.model-defaults")
+            case .editorPreferences: UserDefaults.standard.set(bytes, forKey: "bex.editor-preferences")
+            }
         }
     }
 

@@ -1,6 +1,7 @@
 //! Native connection ownership and transport recovery shared by mobile clients.
 mod recovery;
 
+use super::{AgentError, error};
 use crate::{
     diagnostics::{
         ConnectionPhase,
@@ -17,17 +18,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 use zeroize::Zeroizing;
-
-#[derive(Debug, Clone, thiserror::Error, uniffi::Error)]
-pub enum AgentError {
-    #[error("{reason}")]
-    Failed { reason: String },
-}
-pub(crate) fn error(error: impl std::fmt::Display) -> AgentError {
-    AgentError::Failed {
-        reason: crate::presentation::error::error_message(&error.to_string()),
-    }
-}
 
 #[derive(uniffi::Record)]
 pub struct Connection {
@@ -91,7 +81,7 @@ pub fn validate_invitation(invitation: Invitation, now: u64) -> Result<String, A
 
 #[derive(uniffi::Object)]
 pub struct AgentStore {
-    store: Arc<crate::store::Store>,
+    pub(super) store: Arc<crate::store::Store>,
     recovery: Mutex<Option<recovery::Recovery>>,
     connection_active: tokio::sync::watch::Sender<bool>,
     connection_work: Arc<tokio::sync::Mutex<()>>,
@@ -244,7 +234,7 @@ impl AgentStore {
     /// A store for saved device state. With a conversation directory, saved
     /// conversation copies show at once and later windows are saved there.
     pub(crate) async fn restored(
-        persisted: Vec<u8>,
+        snapshot: Snapshot,
         diagnostics_directory: Option<String>,
         conversations: Option<std::path::PathBuf>,
     ) -> Result<Arc<Self>, AgentError> {
@@ -254,15 +244,6 @@ impl AgentStore {
             trace.persist(directory.into()).map_err(error)?;
         }
         trace.activate();
-        let mut snapshot = crate::persistence::decode(&persisted).map_err(error)?;
-        if let Some(directory) = conversations.clone() {
-            snapshot = tokio::task::spawn_blocking(move || {
-                crate::conversation_cache::restore(&directory, &mut snapshot);
-                snapshot
-            })
-            .await
-            .map_err(error)?;
-        }
         let store = crate::store::Store::offline(snapshot);
         if let Some(directory) = conversations {
             tokio::spawn(crate::conversation_cache::run(directory, store.subscribe()));
@@ -291,7 +272,12 @@ impl AgentStore {
         persisted: Vec<u8>,
         diagnostics_directory: Option<String>,
     ) -> Result<Arc<Self>, AgentError> {
-        Self::restored(persisted, diagnostics_directory, None).await
+        Self::restored(
+            crate::persistence::decode(&persisted).map_err(error)?,
+            diagnostics_directory,
+            None,
+        )
+        .await
     }
 
     pub async fn reconnect(&self, connection: Connection) -> Result<(), AgentError> {

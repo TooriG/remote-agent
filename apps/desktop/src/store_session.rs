@@ -1,8 +1,10 @@
 use crate::Runtime;
+use agent_core::client::persistence::Persistence;
 use agent_core::{state::Snapshot, store::Store};
 use gpui_kit::Context;
-use std::{path::PathBuf, sync::Arc};
-use tokio::{sync::watch, task::JoinHandle};
+use std::sync::Arc;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 
 /// Owns a view's connection, snapshot subscription and final persistence flush.
 /// Dropping a replaced or undelivered session also closes its Store.
@@ -10,8 +12,8 @@ pub(crate) struct StoreSession {
     pub(crate) store: Arc<Store>,
     runtime: Runtime,
     closed: bool,
-    persistence: Option<watch::Sender<Arc<Snapshot>>>,
-    persistence_task: Option<JoinHandle<()>>,
+    persistence: Option<Arc<Persistence>>,
+    persistence_stop: CancellationToken,
 }
 impl StoreSession {
     pub(crate) fn on_app_quit<V: 'static>(
@@ -51,7 +53,7 @@ impl StoreSession {
             runtime,
             closed: false,
             persistence: None,
-            persistence_task: None,
+            persistence_stop: CancellationToken::new(),
         };
         if updates.send(connected(Ok(session))).await.is_err() {
             return;
@@ -67,85 +69,48 @@ impl StoreSession {
 
     pub(crate) fn persist<E: Send + 'static>(
         &mut self,
-        path: PathBuf,
+        persistence: Arc<Persistence>,
         updates: async_channel::Sender<E>,
         failure: impl Fn(String) -> E + Send + 'static,
     ) {
-        let (send, mut receive) = watch::channel(self.store.snapshot());
-        let mut preferences =
-            agent_core::persistence::ModelPreferences::capture(&self.store.snapshot());
-        let mut editor_preferences =
-            agent_core::persistence::EditorPreferences::capture(&self.store.snapshot());
-        self.persistence = Some(send);
-        self.persistence_task = Some(self.runtime.closing.spawn_on(
-            async move {
-                while receive.changed().await.is_ok() {
-                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-                    let snapshot = receive.borrow_and_update().clone();
-                    let path = path.clone();
-                    let next_preferences =
-                        agent_core::persistence::ModelPreferences::capture(&snapshot);
-                    let preferences_changed = preferences != next_preferences;
-                    let saved_preferences = next_preferences.clone();
-                    let next_editor_preferences =
-                        agent_core::persistence::EditorPreferences::capture(&snapshot);
-                    let editor_changed = editor_preferences != next_editor_preferences;
-                    let saved_editor = next_editor_preferences.clone();
-                    let result = tokio::task::spawn_blocking(move || {
-                        if editor_changed {
-                            agent_local_host::save_private_json(
-                                &path.with_file_name("editor-preferences.json"),
-                                &saved_editor,
-                            )?;
-                        }
-                        if preferences_changed {
-                            agent_local_host::save_private_json(
-                                &path.with_file_name("model-preferences.json"),
-                                &saved_preferences,
-                            )?;
-                        }
-                        agent_local_host::save_private_json(
-                            &path,
-                            &agent_core::persistence::PersistedState::capture(&snapshot),
-                        )
-                    })
-                    .await
-                    .map_err(anyhow::Error::from)
-                    .and_then(|result| result);
-                    if result.is_ok() {
-                        preferences = next_preferences;
-                        editor_preferences = next_editor_preferences;
-                    }
-                    if let Err(error) = result {
-                        let _ = updates.send(failure(format!("{error:#}"))).await;
-                    }
+        persistence.start(&self.store.snapshot());
+        let mut failures = persistence.failures();
+        let stop = self.persistence_stop.clone();
+        self.runtime.handle.spawn(
+            persistence
+                .clone()
+                .observe(self.store.subscribe(), stop.clone()),
+        );
+        self.runtime.handle.spawn(async move {
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = stop.cancelled() => break,
+                    result = failures.changed() => if result.is_err() { break; },
                 }
-            },
-            &self.runtime.handle,
-        ));
+                let error = failures.borrow_and_update().clone();
+                if let Some(error) = error {
+                    let _ = updates.send(failure(error)).await;
+                }
+            }
+        });
+        self.persistence = Some(persistence);
     }
 
-    pub(crate) fn save(&self, snapshot: Arc<Snapshot>) {
-        if let Some(persistence) = &self.persistence {
-            persistence.send_replace(snapshot);
-        }
-    }
-
-    fn close(&mut self) -> Option<JoinHandle<()>> {
+    pub(crate) fn close(&mut self) -> Option<JoinHandle<()>> {
         if std::mem::replace(&mut self.closed, true) {
             return None;
         }
         let store = self.store.clone();
         let persistence = self.persistence.take();
-        let persistence_task = self.persistence_task.take();
+        self.persistence_stop.cancel();
         Some(self.runtime.closing.spawn_on(
             async move {
                 let _ = store.close().await;
-                if let Some(persistence) = persistence {
-                    persistence.send_replace(store.snapshot());
-                }
-                if let Some(task) = persistence_task {
-                    let _ = task.await;
+                if let Some(persistence) = persistence
+                    && let Ok(saved) = persistence.finish(store.snapshot())
+                {
+                    let _ = saved.await;
                 }
             },
             &self.runtime.handle,
@@ -162,7 +127,7 @@ impl Drop for StoreSession {
 mod tests {
     use super::*;
     use agent_core::state::Intent;
-    use std::time::Duration;
+    use std::{path::PathBuf, time::Duration};
 
     enum Update {
         Connected(Result<StoreSession, String>),
@@ -176,6 +141,13 @@ mod tests {
             closing: tokio_util::task::TaskTracker::new(),
             logging_error: None,
         }
+    }
+
+    fn persistence(path: PathBuf) -> Arc<Persistence> {
+        Persistence::new(
+            Arc::new(crate::platform::SessionStorage { path }),
+            Arc::default(),
+        )
     }
 
     #[tokio::test]
@@ -196,7 +168,7 @@ mod tests {
             let Update::Connected(Ok(mut session)) = incoming.recv().await.unwrap() else {
                 panic!("missing session")
             };
-            session.persist(path.clone(), updates, |_| Update::Error);
+            session.persist(persistence(path.clone()), updates, |_| Update::Error);
             store
                 .dispatch(Intent::SelectDefaultEffort {
                     provider: agent_protocol::session::ProviderKind::Codex,
@@ -226,12 +198,11 @@ mod tests {
             assert!(store.dispatch(Intent::ShowThreadList).await.is_err());
             let preferences =
                 std::fs::read(directory.path().join("model-preferences.json")).unwrap();
-            let other = agent_core::persistence::decode(
-                &agent_core::persistence::apply_model_preferences(&[], &preferences).unwrap(),
-            )
-            .unwrap();
-            assert_eq!(other.scoped_model_defaults, restored.scoped_model_defaults);
-            assert!(other.drafts.is_empty());
+            assert_eq!(
+                serde_json::from_slice::<agent_core::persistence::ModelPreferences>(&preferences)
+                    .unwrap(),
+                agent_core::persistence::ModelPreferences::capture(&restored)
+            );
         })
         .await
         .expect("session close stalled");
@@ -256,8 +227,7 @@ mod tests {
             let Update::Connected(Ok(mut session)) = incoming.recv().await.unwrap() else {
                 panic!("missing session")
             };
-            session.persist(path.clone(), updates, |_| Update::Error);
-            session.save(store.snapshot());
+            session.persist(persistence(path.clone()), updates, |_| Update::Error);
             while !matches!(incoming.recv().await.unwrap(), Update::Error) {}
             std::fs::remove_dir(&path).unwrap();
             store
@@ -267,7 +237,6 @@ mod tests {
                 })
                 .await
                 .unwrap();
-            session.save(store.snapshot());
             drop(session);
             runtime.closing.close();
             runtime.closing.wait().await;

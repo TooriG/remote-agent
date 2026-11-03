@@ -11,6 +11,7 @@ mod view;
 
 use crate::{Runtime, appearance, diff::DiffView, platform, store_session::StoreSession};
 use agent_core::{
+    client::persistence::{Persistence, RestoreError},
     panels::{PanelKind as Panel, PanelLayout, PanelScope, Panels},
     presentation::{
         conversation::{ActivityExpansion, ConversationRowContent},
@@ -73,7 +74,7 @@ enum OperationCompletion {
     FileReference(Box<files::ReferenceRequest>),
 }
 enum Update {
-    Connected(Result<(StoreSession, PathBuf, bool), String>),
+    Connected(Result<(StoreSession, Arc<Persistence>, bool), String>),
     Snapshot,
     Completed(OperationCompletion, Result<Outcome, String>),
     Folder(Result<Option<PathBuf>, String>),
@@ -571,7 +572,8 @@ impl Desktop {
         cx.notify();
         view
     }
-    fn connect(&mut self, preferences: Option<Vec<u8>>) {
+    fn connect(&mut self, previous: Option<StoreSession>) {
+        let previous = previous.and_then(|mut session| session.close());
         self.epoch += 1;
         self.connecting = true;
         self.local_shell = false;
@@ -596,6 +598,9 @@ impl Desktop {
         let runtime = self.runtime.clone();
         self.runtime.handle.spawn(async move {
             let result = async {
+                if let Some(previous) = previous {
+                    let _ = previous.await;
+                }
                 let host = if let Some(remote) = &remote {
                     remote
                         .ticket
@@ -610,53 +615,20 @@ impl Desktop {
                     "desktop-{}-{host}.json",
                     if side { "side" } else { "main" }
                 ));
-                let mut snapshot: Snapshot = match tokio::fs::read(&path).await {
-                    Ok(bytes) => agent_core::persistence::decode(&bytes)
-                        .map_err(|error| format!("保存した入力状態を読み込めません: {error}"))?,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                        Snapshot::default()
-                    }
-                    Err(error) => return Err(error.to_string()),
-                };
-                let preferences = match preferences {
-                    Some(preferences) => Some(preferences),
-                    None => {
-                        match tokio::fs::read(path.with_file_name("model-preferences.json")).await {
-                            Ok(bytes) => Some(bytes),
-                            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-                            Err(error) => return Err(error.to_string()),
-                        }
-                    }
-                };
-                if let Some(preferences) = preferences {
-                    let saved = agent_core::persistence::encode(&snapshot)
-                        .map_err(|error| error.to_string())?;
-                    snapshot = agent_core::persistence::decode(
-                        &agent_core::persistence::apply_model_preferences(&saved, &preferences)
-                            .map_err(|error| error.to_string())?,
-                    )
-                    .map_err(|error| error.to_string())?;
-                }
-                snapshot.preferred_editor =
-                    match tokio::fs::read(path.with_file_name("editor-preferences.json")).await {
-                        Ok(bytes) => {
-                            serde_json::from_slice::<agent_core::persistence::EditorPreferences>(
-                                &bytes,
-                            )
-                            .map_err(|error| error.to_string())?
-                            .preferred
-                        }
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-                        Err(error) => return Err(error.to_string()),
-                    };
+                let persistence = Persistence::new(
+                    Arc::new(platform::SessionStorage { path }),
+                    connections.preferences.clone(),
+                );
                 let conversations = platform::conversation_copies(&host)?;
-                let restoring = conversations.clone();
-                let snapshot = tokio::task::spawn_blocking(move || {
-                    agent_core::conversation_cache::restore(&restoring, &mut snapshot);
-                    snapshot
-                })
-                .await
-                .map_err(|error| error.to_string())?;
+                let snapshot = persistence
+                    .restore(false, Some(conversations.clone()))
+                    .await
+                    .map_err(|reason| match reason {
+                        RestoreError::InvalidState(reason) => {
+                            format!("保存した入力状態を読み込めません: {reason}")
+                        }
+                        RestoreError::Storage(reason) => reason.to_string(),
+                    })?;
                 let initial_cwd = initial_cwd.or_else(|| {
                     snapshot
                         .navigation
@@ -681,11 +653,11 @@ impl Desktop {
                 let local_shell =
                     platform::host_is_local(remote.as_ref().map(|remote| remote.ticket.as_str()))
                         .await;
-                Ok::<_, String>((store, path, local_shell))
+                Ok::<_, String>((store, persistence, local_shell))
             }
             .await;
             match result {
-                Ok((store, path, local_shell)) => {
+                Ok((store, persistence, local_shell)) => {
                     StoreSession::publish(
                         Ok(store),
                         runtime,
@@ -694,7 +666,7 @@ impl Desktop {
                             (
                                 epoch,
                                 Update::Connected(
-                                    session.map(|session| (session, path, local_shell)),
+                                    session.map(|session| (session, persistence, local_shell)),
                                 ),
                             )
                         },
@@ -748,9 +720,9 @@ impl Desktop {
             Update::Connected(result) => {
                 self.connecting = false;
                 match result {
-                    Ok((mut session, path, local_shell)) => {
+                    Ok((mut session, persistence, local_shell)) => {
                         self.local_shell = local_shell;
-                        session.persist(path, self.updates.clone(), move |error| {
+                        session.persist(persistence, self.updates.clone(), move |error| {
                             (epoch, Update::PersistenceError(error))
                         });
                         self.session = Some(session);
@@ -1032,9 +1004,6 @@ impl Desktop {
         let snapshot = session.store.snapshot();
         let changed = !Arc::ptr_eq(&snapshot, &self.snapshot);
         let general_changed = changed && general_snapshot_changed(&self.snapshot, &snapshot);
-        if changed {
-            session.save(snapshot.clone());
-        }
         let previous = std::mem::replace(&mut self.snapshot, snapshot);
         if !general_changed {
             // A save acknowledgment can make the same snapshot adoptable, so
@@ -1329,22 +1298,8 @@ impl Desktop {
         }
         self.cancel_recording();
         self.dictation = None;
-        let preferences = self
-            .session
-            .as_ref()
-            .map(|session| {
-                agent_core::persistence::encode_model_preferences(&session.store.snapshot())
-            })
-            .transpose();
-        let preferences = match preferences {
-            Ok(preferences) => preferences,
-            Err(error) => {
-                self.set_error(error.to_string());
-                return;
-            }
-        };
         self.close_file_browser();
-        self.session.take();
+        let previous = self.session.take();
         self.remote = remote;
         self.model_controls.settings_scope = ModelDefaultsScope::Global;
         self.snapshot = Arc::default();
@@ -1366,7 +1321,7 @@ impl Desktop {
         self.composer
             .input
             .update(cx, |input, cx| input.set_value(value, window, cx));
-        self.connect(preferences);
+        self.connect(previous);
     }
     fn send(&mut self, cx: &Context<Self>) {
         if !self.snapshot.connected || self.busy > 0 {

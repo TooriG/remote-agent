@@ -3,7 +3,7 @@ mod json;
 mod protocol;
 mod snapshot;
 
-use crate::client::native::{AgentError, error};
+use crate::client::{AgentError, error};
 
 #[uniffi::export]
 pub fn browser_address_url(input: String) -> Result<String, AgentError> {
@@ -31,12 +31,4 @@ pub fn browser_input_focus(
 #[uniffi::export]
 pub fn account_error_message(message: String) -> String {
     crate::presentation::error::error_message(&message)
-}
-
-#[uniffi::export]
-pub fn apply_model_preferences(
-    persisted: Vec<u8>,
-    defaults: Vec<u8>,
-) -> Result<Vec<u8>, AgentError> {
-    crate::persistence::apply_model_preferences(&persisted, &defaults).map_err(error)
 }

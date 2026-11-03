@@ -181,7 +181,8 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         observation?.cancel()
         connection?.cancel()
         val old = session
-        val selected = ClientSession.open(repository.sessionStorage(id), old, true, 0uL, repository.deviceName)
+        val storage = repository.sessionStorage(id)
+        val selected = ClientSession.open(storage, storage, old, true, 0uL, repository.deviceName)
         session = selected
         owner = null
         profileId = id
@@ -211,9 +212,11 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
                 val invitation =
                     parseInvitation(contents, System.currentTimeMillis().milliseconds.inWholeSeconds.toULong())
                 val id = ticketIdentity(invitation.endpoint)
+                val storage = repository.sessionStorage(id)
                 val store =
                     ClientSession.pair(
-                        repository.sessionStorage(id),
+                        storage,
+                        storage,
                         session,
                         invitation.endpoint,
                         invitation.invitation,

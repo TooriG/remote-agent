@@ -261,9 +261,10 @@ proptest::proptest! {
             proptest::prop_assert_eq!(draft.service_tier.as_deref(), Some(tier));
         }
         let existing = snapshot.drafts.clone();
-        let preferences = persistence::encode_model_preferences(&snapshot).unwrap();
+        let preferences = serde_json::to_vec(&persistence::ModelPreferences::capture(&snapshot)).unwrap();
         let bytes = persistence::encode(&snapshot).unwrap();
-        snapshot = persistence::decode(&persistence::apply_model_preferences(&bytes, &preferences).unwrap()).unwrap();
+        snapshot = persistence::decode(&bytes).unwrap();
+        serde_json::from_slice::<persistence::ModelPreferences>(&preferences).unwrap().apply(&mut snapshot);
         snapshot.threads = scoped_fixture().threads;
         snapshot.storage_scope = "vm:changed-session-namespace".into();
         proptest::prop_assert_eq!(&snapshot.drafts, &existing);
@@ -559,8 +560,9 @@ proptest::proptest! {
             scope: ModelDefaultsScope::Global, model: Some(starting_model.clone()),
         });
         proptest::prop_assert_eq!(&snapshot.model_defaults.providers, &presets);
-        let preferences = persistence::encode_model_preferences(&snapshot).unwrap();
-        snapshot = persistence::decode(&persistence::apply_model_preferences(&[], &preferences).unwrap()).unwrap();
+        let preferences = serde_json::to_vec(&persistence::ModelPreferences::capture(&snapshot)).unwrap();
+        snapshot = Snapshot::default();
+        serde_json::from_slice::<persistence::ModelPreferences>(&preferences).unwrap().apply(&mut snapshot);
         let automatic_provider = if reverse_catalog { ProviderKind::Claude } else { ProviderKind::Codex };
         snapshot.models = Arc::new(models);
         snapshot.account = scoped_fixture().account;

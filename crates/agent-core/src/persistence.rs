@@ -14,10 +14,13 @@ use crate::state::{
     Snapshot,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 /// One device's editor selection, shared across Host snapshots. Discovery is never persisted.
-#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct EditorPreferences {
     pub preferred: Option<agent_protocol::editors::EditorId>,
 }
@@ -104,7 +107,7 @@ pub fn encode(snapshot: &Snapshot) -> Result<Vec<u8>, serde_json::Error> {
 }
 
 /// Device-owned presets shared by every saved Host snapshot.
-#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ModelPreferences {
     #[serde(flatten)]
     defaults: ModelDefaults,
@@ -118,30 +121,87 @@ impl ModelPreferences {
             scoped: snapshot.scoped_model_defaults.clone(),
         }
     }
-}
-pub fn encode_model_preferences(snapshot: &Snapshot) -> Result<Vec<u8>, serde_json::Error> {
-    serde_json::to_vec(&ModelPreferences::capture(snapshot))
+
+    pub(crate) fn apply(&self, snapshot: &mut Snapshot) {
+        snapshot.model_defaults = self.defaults.clone();
+        snapshot.scoped_model_defaults = self.scoped.clone();
+    }
+
+    /// Apply only this session's edits to the device's current preferences.
+    /// Another window's unchanged fields must never be replaced by a stale copy.
+    pub(crate) fn merge(&self, before: &Self, after: &Self) -> Self {
+        let mut scoped = self.scoped.clone();
+        for scope in before
+            .scoped
+            .keys()
+            .chain(after.scoped.keys())
+            .collect::<BTreeSet<_>>()
+        {
+            let (before, after) = (before.scoped.get(scope), after.scoped.get(scope));
+            if before == after {
+                continue;
+            }
+            match after {
+                Some(after) => {
+                    let value = merge_defaults(
+                        scoped.get(scope).unwrap_or(&ModelDefaults::default()),
+                        before.unwrap_or(&ModelDefaults::default()),
+                        after,
+                    );
+                    Arc::make_mut(&mut scoped).insert(scope.clone(), value);
+                }
+                None => {
+                    Arc::make_mut(&mut scoped).remove(scope);
+                }
+            }
+        }
+        Self {
+            defaults: merge_defaults(&self.defaults, &before.defaults, &after.defaults),
+            scoped,
+        }
+    }
 }
 
-pub fn apply_model_preferences(
-    persisted: &[u8],
-    defaults: &[u8],
-) -> Result<Vec<u8>, serde_json::Error> {
-    let mut saved = if persisted.is_empty() {
-        PersistedState::capture(&Snapshot::default())
-    } else {
-        serde_json::from_slice::<PersistedState>(persisted)?
-    };
-    let preferences: ModelPreferences = if defaults.is_empty() {
-        ModelPreferences::default()
-    } else {
-        serde_json::from_slice(defaults)?
-    };
-    saved.model_defaults = preferences.defaults;
-    saved.scoped_model_defaults = preferences.scoped;
-    serde_json::to_vec(&saved)
+fn merge_defaults(
+    current: &ModelDefaults,
+    before: &ModelDefaults,
+    after: &ModelDefaults,
+) -> ModelDefaults {
+    let mut merged = current.clone();
+    if before.new_chat_model != after.new_chat_model {
+        merged.new_chat_model = after.new_chat_model.clone();
+    }
+    for provider in before
+        .providers
+        .keys()
+        .chain(after.providers.keys())
+        .collect::<BTreeSet<_>>()
+    {
+        let empty = crate::state::ProviderModelDefaults::default();
+        let before = before.providers.get(provider).unwrap_or(&empty);
+        let after = after.providers.get(provider).unwrap_or(&empty);
+        if before == after {
+            continue;
+        }
+        let mut settings = merged.providers.get(provider).cloned().unwrap_or_default();
+        if before.model != after.model {
+            settings = after.clone();
+        } else {
+            if before.effort != after.effort {
+                settings.effort = after.effort.clone();
+            }
+            if before.service_tier != after.service_tier {
+                settings.service_tier = after.service_tier.clone();
+            }
+        }
+        if settings == empty {
+            merged.providers.remove(provider);
+        } else {
+            merged.providers.insert(*provider, settings);
+        }
+    }
+    merged
 }
-
 pub fn decode(bytes: &[u8]) -> Result<Snapshot, serde_json::Error> {
     if bytes.is_empty() {
         return Ok(Snapshot::default());

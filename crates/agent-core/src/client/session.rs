@@ -1,32 +1,28 @@
 //! One mobile Host session owns restoration, queued intents and ordered saves.
 //! Platforms supply private storage; no UI task decides when state is durable.
-use super::native::{AgentError, AgentStore, Connection, Receipt, error};
+use super::native::{AgentStore, Connection, Receipt};
+use super::persistence::ClientStorage;
+use super::persistence::{Completion, Persistence};
+use super::{AgentError, error};
 use crate::{
     diagnostics::ConnectionPhase,
     state::{Intent, Snapshot},
     store::Outcome,
 };
-use futures_util::{
-    FutureExt,
-    future::{BoxFuture, Shared},
-};
+use futures_util::FutureExt;
 use std::sync::{Arc, Mutex};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
-/// Methods run on blocking workers, never on the platform's UI thread.
+/// OS-owned connection identity and private directories, independent of state payloads.
 #[uniffi::export(rust, foreign)]
-pub trait ClientStorage: Send + Sync {
-    fn load(&self, new_pairing: bool) -> Result<Vec<u8>, AgentError>;
-    fn save(&self, local_state: Vec<u8>, model_preferences: Vec<u8>) -> Result<(), AgentError>;
+pub trait ClientPlatform: Send + Sync {
     fn identity(&self) -> Result<Vec<u8>, AgentError>;
     fn diagnostics_directory(&self) -> Result<Option<String>, AgentError>;
-    /// Private directory for this Host's conversation copies.
     fn conversation_directory(&self) -> Result<Option<String>, AgentError>;
 }
 
 type Pending = (Intent, oneshot::Sender<Result<Outcome, AgentError>>);
-type Completion<T> = Shared<BoxFuture<'static, Result<T, AgentError>>>;
 enum Phase {
     Loading(Vec<Pending>),
     Ready {
@@ -40,6 +36,7 @@ enum Phase {
 #[derive(uniffi::Object)]
 pub struct ClientSession {
     persistence: Arc<Persistence>,
+    platform: Arc<dyn ClientPlatform>,
     previous: Mutex<Option<Arc<ClientSession>>>,
     closing: Mutex<Option<Completion<()>>>,
     recent_chats: bool,
@@ -58,6 +55,7 @@ impl ClientSession {
     #[uniffi::constructor]
     pub fn open(
         storage: Arc<dyn ClientStorage>,
+        platform: Arc<dyn ClientPlatform>,
         previous: Option<Arc<ClientSession>>,
         recent_chats: bool,
         client_build: u64,
@@ -66,29 +64,25 @@ impl ClientSession {
         if let Some(previous) = &previous {
             previous.retire();
         }
-        Arc::new(Self {
-            persistence: Arc::new(Persistence {
-                storage,
-                queue: Default::default(),
-                error: Arc::default(),
-            }),
-            previous: Mutex::new(previous),
-            closing: Default::default(),
+        let device = previous
+            .as_ref()
+            .map(|previous| previous.persistence.device.clone())
+            .unwrap_or_default();
+        Self::create(
+            Persistence::new(storage, device),
+            platform,
+            previous,
             recent_chats,
             client_build,
             device_name,
-            phase: Mutex::new(Phase::Loading(Vec::new())),
-            initialization: Default::default(),
-            operations: Default::default(),
-            stop: CancellationToken::new(),
-            empty: Arc::default(),
-        })
+        )
     }
 
     /// Pairing stays provisional until the app commits its platform profile.
     #[uniffi::constructor]
     pub async fn pair(
         storage: Arc<dyn ClientStorage>,
+        platform: Arc<dyn ClientPlatform>,
         previous: Option<Arc<ClientSession>>,
         ticket: String,
         invitation: String,
@@ -98,10 +92,21 @@ impl ClientSession {
     ) -> Result<Arc<Self>, AgentError> {
         // Device-wide model preferences must include edits still waiting for I/O.
         // Keep the current Host usable if pairing subsequently fails.
-        if let Some(previous) = previous {
-            previous.flush().await?;
+        if let Some(previous) = &previous {
+            previous.clone().flush().await?;
         }
-        let session = Self::open(storage, None, recent_chats, client_build, device_name);
+        let device = previous
+            .as_ref()
+            .map(|previous| previous.persistence.device.clone())
+            .unwrap_or_default();
+        let session = Self::create(
+            Persistence::new(storage, device),
+            platform,
+            None,
+            recent_chats,
+            client_build,
+            device_name,
+        );
         let store = session.restore(true).await?;
         store
             .reconnect(session.connection(ticket, Some(invitation)).await?)
@@ -123,7 +128,7 @@ impl ClientSession {
     }
 
     pub fn persistence_error(&self) -> Option<String> {
-        self.persistence.error.lock().unwrap().clone()
+        self.persistence.failure()
     }
 
     pub async fn ready(self: Arc<Self>) -> Result<Arc<AgentStore>, AgentError> {
@@ -134,7 +139,7 @@ impl ClientSession {
         let previous = self.previous.lock().unwrap().clone();
         if let Some(previous) = previous {
             if let Err(reason) = previous.shutdown().await {
-                *self.persistence.error.lock().unwrap() = Some(reason.to_string());
+                self.persistence.report_failure(reason.to_string());
             }
             self.previous.lock().unwrap().take();
         }
@@ -249,7 +254,7 @@ impl ClientSession {
             runtime.spawn(async move {
                 let closed = store.shutdown().await;
                 let saved = if observing {
-                    match persistence.enqueue(store.snapshot()) {
+                    match persistence.finish(store.snapshot()) {
                         Ok(saved) => saved.await,
                         Err(reason) => Err(reason),
                     }
@@ -276,26 +281,49 @@ impl ClientSession {
 }
 
 impl ClientSession {
+    fn create(
+        persistence: Arc<Persistence>,
+        platform: Arc<dyn ClientPlatform>,
+        previous: Option<Arc<Self>>,
+        recent_chats: bool,
+        client_build: u64,
+        device_name: String,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            persistence,
+            platform,
+            previous: Mutex::new(previous),
+            closing: Default::default(),
+            recent_chats,
+            client_build,
+            device_name,
+            phase: Mutex::new(Phase::Loading(Vec::new())),
+            initialization: Default::default(),
+            operations: Default::default(),
+            stop: CancellationToken::new(),
+            empty: Arc::default(),
+        })
+    }
     async fn restore(&self, new_pairing: bool) -> Result<Arc<AgentStore>, AgentError> {
         let started = std::time::Instant::now();
-        let storage = self.persistence.storage.clone();
-        let (bytes, directory, conversations) = tokio::task::spawn_blocking(move || {
-            let conversations = storage
-                .conversation_directory()?
-                .map(std::path::PathBuf::from);
-            if new_pairing && let Some(conversations) = &conversations {
-                crate::conversation_cache::clear(conversations);
-            }
+        let platform = self.platform.clone();
+        let (directory, conversations) = tokio::task::spawn_blocking(move || {
             Ok::<_, AgentError>((
-                storage.load(new_pairing)?,
-                storage.diagnostics_directory()?,
-                conversations,
+                platform.diagnostics_directory()?,
+                platform
+                    .conversation_directory()?
+                    .map(std::path::PathBuf::from),
             ))
         })
         .await
         .map_err(error)??;
+        let snapshot = self
+            .persistence
+            .restore(new_pairing, conversations.clone())
+            .await
+            .map_err(error)?;
         let read = started.elapsed().as_micros() as u64;
-        let store = AgentStore::restored(bytes, directory, conversations).await?;
+        let store = AgentStore::restored(snapshot, directory, conversations).await?;
         store.record_connection_event(ConnectionPhase::SnapshotRead, read);
         store.record_connection_event(
             ConnectionPhase::AppPreparation,
@@ -311,8 +339,8 @@ impl ClientSession {
         invitation: Option<String>,
     ) -> Result<Connection, AgentError> {
         let started = std::time::Instant::now();
-        let storage = self.persistence.storage.clone();
-        let identity = tokio::task::spawn_blocking(move || storage.identity())
+        let platform = self.platform.clone();
+        let identity = tokio::task::spawn_blocking(move || platform.identity())
             .await
             .map_err(error)??;
         if let Some(store) = self.store() {
@@ -336,7 +364,7 @@ impl ClientSession {
         let Phase::Loading(pending) = &mut *phase else {
             return Err(error("session closed"));
         };
-        self.persistence.start();
+        self.persistence.start(&store.snapshot());
         // Navigation comes before queued UI intents, just as on both platforms.
         let _ = store.dispatch(Intent::ShowThreadList);
         if self.recent_chats {
@@ -386,35 +414,11 @@ impl ClientSession {
     }
 
     fn observe(self: &Arc<Self>, store: Arc<AgentStore>) {
-        let session = Arc::downgrade(self);
-        let stop = self.stop.clone();
-        tokio::spawn(async move {
-            let mut previous = store.snapshot();
-            let mut dirty = true;
-            loop {
-                let next = tokio::select! {
-                    biased;
-                    _ = stop.cancelled() => return,
-                    next = store.next_snapshot(previous.clone()) => match next { Ok(next) => Some(next), Err(_) => return },
-                    _ = tokio::time::sleep(std::time::Duration::from_millis(250)), if dirty => None,
-                };
-                if let Some(next) = next {
-                    let immediate = !next.list_unchanged(previous.clone());
-                    previous = next;
-                    dirty = true;
-                    if !immediate {
-                        continue;
-                    }
-                }
-                let Some(session) = session.upgrade() else {
-                    return;
-                };
-                if let Ok(saved) = session.save() {
-                    let _ = saved.await;
-                }
-                dirty = false;
-            }
-        });
+        tokio::spawn(
+            self.persistence
+                .clone()
+                .observe(store.store.subscribe(), self.stop.clone()),
+        );
     }
     fn save(&self) -> Result<Completion<()>, AgentError> {
         let phase = self.phase.lock().unwrap();
@@ -422,58 +426,6 @@ impl ClientSession {
             Phase::Ready { store, .. } => self.persistence.enqueue(store.snapshot()),
             _ => Err(error("session closed")),
         }
-    }
-}
-
-struct Save {
-    snapshot: Arc<Snapshot>,
-    complete: oneshot::Sender<Result<(), AgentError>>,
-}
-struct Persistence {
-    storage: Arc<dyn ClientStorage>,
-    queue: Mutex<Option<mpsc::UnboundedSender<Save>>>,
-    error: Arc<Mutex<Option<String>>>,
-}
-impl Persistence {
-    fn start(&self) {
-        let mut queue = self.queue.lock().unwrap();
-        if queue.is_some() {
-            return;
-        }
-        let (send, mut receive) = mpsc::unbounded_channel::<Save>();
-        *queue = Some(send);
-        let storage = self.storage.clone();
-        let failure = self.error.clone();
-        // This worker owns each write through completion, even if its native
-        // waiter is cancelled. Closing enqueues the final save after earlier ones.
-        tokio::spawn(async move {
-            while let Some(Save { snapshot, complete }) = receive.recv().await {
-                let storage = storage.clone();
-                let result = tokio::task::spawn_blocking(move || {
-                    storage.save(
-                        snapshot.serialize_local_state()?,
-                        snapshot.serialize_model_preferences()?,
-                    )
-                })
-                .await
-                .map_err(error)
-                .and_then(|result| result);
-                *failure.lock().unwrap() = result.as_ref().err().map(ToString::to_string);
-                let _ = complete.send(result);
-            }
-        });
-    }
-
-    fn enqueue(&self, snapshot: Arc<Snapshot>) -> Result<Completion<()>, AgentError> {
-        let (complete, result) = oneshot::channel();
-        self.queue
-            .lock()
-            .unwrap()
-            .as_ref()
-            .ok_or_else(|| error("session is not ready"))?
-            .send(Save { snapshot, complete })
-            .map_err(error)?;
-        Ok(async move { result.await.map_err(error)? }.boxed().shared())
     }
 }
 
@@ -486,6 +438,7 @@ impl Drop for ClientSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client::persistence::StorageKey;
     use std::sync::{
         Condvar,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -515,6 +468,8 @@ mod tests {
     #[derive(Default)]
     struct Storage {
         bytes: Mutex<Vec<u8>>,
+        model_preferences: Mutex<Vec<u8>>,
+        editor_preferences: Mutex<Vec<u8>>,
         writes: Mutex<Vec<Vec<u8>>>,
         loads: AtomicUsize,
         read_gate: Mutex<Option<Arc<Gate>>>,
@@ -523,19 +478,38 @@ mod tests {
         saved: Notify,
     }
     impl ClientStorage for Storage {
-        fn load(&self, new_pairing: bool) -> Result<Vec<u8>, AgentError> {
+        fn load(&self, key: StorageKey) -> Result<Vec<u8>, AgentError> {
+            match key {
+                StorageKey::ModelPreferences => {
+                    return Ok(self.model_preferences.lock().unwrap().clone());
+                }
+                StorageKey::EditorPreferences => {
+                    return Ok(self.editor_preferences.lock().unwrap().clone());
+                }
+                StorageKey::LocalState => {}
+            }
             self.loads.fetch_add(1, Ordering::SeqCst);
             let gate = self.read_gate.lock().unwrap().take();
             if let Some(gate) = gate {
                 gate.block();
             }
-            Ok(if new_pairing {
-                Vec::new()
-            } else {
-                self.bytes.lock().unwrap().clone()
-            })
+            Ok(self.bytes.lock().unwrap().clone())
         }
-        fn save(&self, bytes: Vec<u8>, preferences: Vec<u8>) -> Result<(), AgentError> {
+        fn save(&self, key: StorageKey, bytes: Vec<u8>) -> Result<(), AgentError> {
+            match key {
+                StorageKey::ModelPreferences => {
+                    serde_json::from_slice::<crate::persistence::ModelPreferences>(&bytes).unwrap();
+                    *self.model_preferences.lock().unwrap() = bytes;
+                    return Ok(());
+                }
+                StorageKey::EditorPreferences => {
+                    serde_json::from_slice::<crate::persistence::EditorPreferences>(&bytes)
+                        .unwrap();
+                    *self.editor_preferences.lock().unwrap() = bytes;
+                    return Ok(());
+                }
+                StorageKey::LocalState => {}
+            }
             let gate = self.write_gate.lock().unwrap().take();
             if let Some(gate) = gate {
                 gate.block();
@@ -543,14 +517,14 @@ mod tests {
             if self.fail_save.load(Ordering::SeqCst) {
                 return Err(error("disk unavailable"));
             }
-            // Both platform payloads must use their production codecs.
             crate::persistence::decode(&bytes).unwrap();
-            crate::persistence::apply_model_preferences(&[], &preferences).unwrap();
             *self.bytes.lock().unwrap() = bytes.clone();
             self.writes.lock().unwrap().push(bytes);
             self.saved.notify_one();
             Ok(())
         }
+    }
+    impl ClientPlatform for Storage {
         fn identity(&self) -> Result<Vec<u8>, AgentError> {
             Ok(vec![1; 32])
         }
@@ -573,7 +547,14 @@ mod tests {
             .clone()
     }
     fn open(storage: Arc<Storage>) -> Arc<ClientSession> {
-        ClientSession::open(storage, None, false, 42, "Fixture device".into())
+        ClientSession::open(
+            storage.clone(),
+            storage,
+            None,
+            false,
+            42,
+            "Fixture device".into(),
+        )
     }
 
     #[tokio::test]
@@ -589,6 +570,7 @@ mod tests {
 
             let storage = Arc::new(Storage::default());
             let next = ClientSession::open(
+                storage.clone(),
                 storage.clone(),
                 Some(old),
                 false,
@@ -628,6 +610,7 @@ mod tests {
             *current_storage.write_gate.lock().unwrap() = Some(gate.clone());
             let storage = Arc::new(Storage::default());
             let pairing = tokio::spawn(ClientSession::pair(
+                storage.clone(),
                 storage.clone(),
                 Some(current.clone()),
                 "invalid ticket".into(),
@@ -820,11 +803,18 @@ mod tests {
             let old = open(old_storage.clone());
             old.clone().ready().await.unwrap();
             old.dispatch(edit("preserve old Host")).unwrap();
+            old.dispatch(Intent::SelectDefaultEffort {
+                scope: crate::state::ModelDefaultsScope::Global,
+                provider: agent_protocol::session::ProviderKind::Codex,
+                effort: Some("high".into()),
+            })
+            .unwrap();
             let gate = Arc::new(Gate::default());
             let _release = scopeguard::guard(gate.clone(), |gate| gate.release());
             *old_storage.write_gate.lock().unwrap() = Some(gate.clone());
             let next_storage = Arc::new(Storage::default());
             let next = ClientSession::open(
+                next_storage.clone(),
                 next_storage.clone(),
                 Some(old.clone()),
                 true,
@@ -843,6 +833,13 @@ mod tests {
             next.clone().flush().await.unwrap();
             receipt.wait().await.unwrap();
             assert!(next.snapshot().recent_chats);
+            assert_eq!(
+                next.snapshot().model_defaults.providers
+                    [&agent_protocol::session::ProviderKind::Codex]
+                    .effort
+                    .as_deref(),
+                Some("high")
+            );
             assert_eq!(
                 text(&old_storage.bytes.lock().unwrap()),
                 "preserve old Host"
@@ -894,6 +891,7 @@ mod tests {
             *storage.bytes.lock().unwrap() = b"saved work must remain".to_vec();
             assert!(
                 ClientSession::pair(
+                    storage.clone(),
                     storage.clone(),
                     None,
                     "invalid ticket".into(),
