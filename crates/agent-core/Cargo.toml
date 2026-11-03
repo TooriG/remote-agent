@@ -17,7 +17,8 @@ icu_collator = "=2.4.0"
 icu_locale_core = "=2.4.0"
 agent-protocol = { path = "../agent-protocol" }
 agent-transport = { path = "../agent-transport" }
-uniffi = { workspace = true, features = ["tokio"], optional = true }
+# Native libraries need scaffolding and the runtime, not Cargo project discovery.
+uniffi = { version = "=0.32.2", default-features = false, features = ["tokio"], optional = true }
 zeroize = { workspace = true, optional = true }
 uuid = { version = "1", features = ["v4", "serde", "v5"] }
 futures-util.workspace = true

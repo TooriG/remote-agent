@@ -67,8 +67,6 @@ tokio = { version = "1.54.1", features = ["io-util", "macros", "process", "rt-mu
 tokio-util = { version = "0.7.20", features = ["codec"] }
 url = "2.5.8"
 zeroize = "1.9.1"
-# Bindings use an explicit config instead of Cargo project discovery.
-uniffi = { version = "=0.32.2", default-features = false }
 
 [patch.crates-io]
 # Retain nested caches and expose current-frame state for activity overlays.

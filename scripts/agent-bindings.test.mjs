@@ -16,6 +16,8 @@ function fixture(t) {
   for (const script of ['build-agent-bindings.sh', 'build-agent-ios.sh']) {
     copyFileSync(`scripts/${script}`, join(root, 'scripts', script));
   }
+  mkdirSync(join(root, 'crates/agent-core'), { recursive: true });
+  copyFileSync('crates/agent-core/uniffi.toml', join(root, 'crates/agent-core/uniffi.toml'));
   const command = join(bin, 'command');
   writeFileSync(command, `#!${process.execPath}
 const fs = require('node:fs');
@@ -33,9 +35,9 @@ if (name === 'cargo') {
   }
   if (args[0] === 'run') {
     if (process.env.BINDINGS_FAIL) process.exit(19);
-    const library = args[args.indexOf('generate') + 1];
+    const [library, config, output] = args.slice(args.indexOf('--') + 1);
     if (!fs.existsSync(library)) process.exit(20);
-    const output = args[args.indexOf('--out-dir') + 1];
+    if (!fs.existsSync(config)) process.exit(21);
     for (const file of ['AgentCore.swift', 'AgentCoreFFI.h', 'AgentCoreFFI.modulemap', 'dev/remoteagent/core/agent_core.kt']) {
       write(path.join(output, file), process.env.BINDINGS_SCHEMA || 'schema');
     }
@@ -80,8 +82,8 @@ test('iOS uses its target archive and reuses Swift outputs across invocation pat
       assert.equal(builds.length, 1);
       assert.ok(builds[0].args.includes(triple));
       assert.equal(builds[0].args[builds[0].args.indexOf('--crate-type') + 1], 'staticlib');
-      const generation = first.commands.find(command => command.args.includes('generate'));
-      assert.equal(generation.args[generation.args.indexOf('generate') + 1], join(output, 'libagent_ffi.a'));
+      const generation = first.commands.find(command => command.name === 'cargo' && command.args[0] === 'run');
+      assert.equal(generation.args[generation.args.indexOf('--') + 1], join(output, 'libagent_ffi.a'));
       const source = join(build.target, 'agent-bindings/AgentCore.swift');
       utimesSync(source, 100, 100);
       const repeated = build.run(join(build.root, 'scripts/build-agent-ios.sh'), [platform]);
@@ -104,8 +106,8 @@ test('standalone generation reads Core metadata without an FFI link and retains 
   assert.equal(first.status, 0, first.stderr);
   const libraryBuild = first.commands.find(command => command.name === 'cargo' && command.args[0] === 'build');
   assert.deepEqual(libraryBuild.args, ['build', '--locked', '-p', 'agent-core', '--features', 'bindings', '--lib']);
-  const generation = first.commands.find(command => command.args.includes('generate'));
-  assert.equal(generation.args[generation.args.indexOf('generate') + 1], join(build.target, 'debug/libagent_core.rlib'));
+  const generation = first.commands.find(command => command.name === 'cargo' && command.args[0] === 'run');
+  assert.equal(generation.args[generation.args.indexOf('--') + 1], join(build.target, 'debug/libagent_core.rlib'));
   const failed = build.run('scripts/build-agent-bindings.sh', [], { BINDINGS_FAIL: '1' });
   assert.equal(failed.status, 19, failed.stderr);
   assert.equal(readFileSync(join(build.target, 'agent-bindings/AgentCore.swift'), 'utf8'), 'schema');
