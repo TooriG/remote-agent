@@ -1,6 +1,6 @@
 use gpui_kit::{
     App,
-    component::{Theme, ThemeColor, ThemeMode},
+    component::{Theme, ThemeMode},
     px, rgb,
 };
 
@@ -61,80 +61,77 @@ pub(crate) fn init(cx: &mut App) {
     gpui_kit::init(cx);
     Theme::change(ThemeMode::Dark, None, cx);
     let theme = Theme::global_mut(cx);
-    theme.colors = ThemeColor {
-        background: rgb(BACKGROUND).into(),
-        foreground: rgb(FOREGROUND).into(),
-        border: rgb(BORDER).into(),
-        input: rgb(0x666666).into(),
-        caret: rgb(FOREGROUND).into(),
-        accent: rgb(SELECTED).into(),
-        accent_foreground: rgb(FOREGROUND).into(),
-        muted: rgb(RAISED).into(),
-        muted_foreground: rgb(MUTED).into(),
-        secondary: rgb(RAISED).into(),
-        secondary_hover: rgb(HOVER).into(),
-        secondary_active: rgb(SELECTED).into(),
-        secondary_foreground: rgb(FOREGROUND).into(),
-        primary: rgb(ACCENT).into(),
-        primary_hover: rgb(0x477af5).into(),
-        primary_active: rgb(0x285bd5).into(),
-        primary_foreground: rgb(FOREGROUND).into(),
-        button_primary: rgb(ACCENT).into(),
-        button_primary_hover: rgb(0x477af5).into(),
-        button_primary_active: rgb(0x285bd5).into(),
-        button_primary_foreground: rgb(FOREGROUND).into(),
-        button_secondary: rgb(RAISED).into(),
-        button_secondary_hover: rgb(HOVER).into(),
-        button_secondary_active: rgb(SELECTED).into(),
-        button_secondary_foreground: rgb(FOREGROUND).into(),
-        ring: rgb(ACCENT).into(),
-        selection: rgb(ACCENT).opacity(0.25).into(),
-        button: rgb(RAISED).into(),
-        button_hover: rgb(HOVER).into(),
-        button_active: rgb(SELECTED).into(),
-        button_foreground: rgb(FOREGROUND).into(),
-        sidebar: rgb(SIDEBAR).into(),
-        sidebar_foreground: rgb(MUTED).into(),
-        sidebar_accent: rgb(SELECTED).into(),
-        sidebar_accent_foreground: rgb(FOREGROUND).into(),
-        sidebar_border: rgb(BORDER).into(),
-        sidebar_primary: rgb(SELECTED).into(),
-        sidebar_primary_foreground: rgb(FOREGROUND).into(),
-        popover: rgb(SURFACE).into(),
-        popover_foreground: rgb(FOREGROUND).into(),
-        list: rgb(SURFACE).into(),
-        list_hover: rgb(HOVER).into(),
-        list_active: rgb(SELECTED).into(),
-        list_active_border: rgb(BORDER).into(),
-        list_even: rgb(RAISED).into(),
-        list_head: rgb(SURFACE).into(),
-        tab: rgb(BACKGROUND).into(),
-        tab_bar: rgb(BACKGROUND).into(),
-        tab_bar_segmented: rgb(SURFACE).into(),
-        tab_active: rgb(SELECTED).into(),
-        tab_active_foreground: rgb(FOREGROUND).into(),
-        tab_foreground: rgb(MUTED).into(),
-        table: rgb(BACKGROUND).into(),
-        table_even: rgb(SURFACE).into(),
-        table_head: rgb(RAISED).into(),
-        table_hover: rgb(HOVER).into(),
-        table_active: rgb(SELECTED).into(),
-        table_active_border: rgb(BORDER).into(),
-        table_head_foreground: rgb(MUTED).into(),
-        table_foot: rgb(SURFACE).into(),
-        table_foot_foreground: rgb(MUTED).into(),
-        table_row_border: rgb(BORDER).into(),
-        title_bar: rgb(BACKGROUND).into(),
-        title_bar_border: rgb(BORDER).into(),
-        window_border: rgb(BORDER).into(),
-        accordion: rgb(SURFACE).into(),
-        group_box: rgb(SURFACE).into(),
-        group_box_foreground: rgb(MUTED).into(),
-        skeleton: rgb(RAISED).into(),
-        scrollbar_thumb: rgb(0x333333).into(),
-        scrollbar_thumb_hover: rgb(0x454545).into(),
-        ..theme.colors
-    };
+    theme.colors.background = rgb(BACKGROUND).into();
+    theme.colors.foreground = rgb(FOREGROUND).into();
+    theme.colors.border = rgb(BORDER).into();
+    theme.colors.input = rgb(0x666666).into();
+    theme.colors.caret = rgb(FOREGROUND).into();
+    theme.colors.accent = rgb(SELECTED).into();
+    theme.colors.accent_foreground = rgb(FOREGROUND).into();
+    theme.colors.muted = rgb(RAISED).into();
+    theme.colors.muted_foreground = rgb(MUTED).into();
+    theme.colors.secondary = rgb(RAISED).into();
+    theme.colors.secondary_hover = rgb(HOVER).into();
+    theme.colors.secondary_active = rgb(SELECTED).into();
+    theme.colors.secondary_foreground = rgb(FOREGROUND).into();
+    theme.colors.primary = rgb(ACCENT).into();
+    theme.colors.primary_hover = rgb(0x477af5).into();
+    theme.colors.primary_active = rgb(0x285bd5).into();
+    theme.colors.primary_foreground = rgb(FOREGROUND).into();
+    theme.colors.button_primary = rgb(ACCENT).into();
+    theme.colors.button_primary_hover = rgb(0x477af5).into();
+    theme.colors.button_primary_active = rgb(0x285bd5).into();
+    theme.colors.button_primary_foreground = rgb(FOREGROUND).into();
+    theme.colors.button_secondary = rgb(RAISED).into();
+    theme.colors.button_secondary_hover = rgb(HOVER).into();
+    theme.colors.button_secondary_active = rgb(SELECTED).into();
+    theme.colors.button_secondary_foreground = rgb(FOREGROUND).into();
+    theme.colors.ring = rgb(ACCENT).into();
+    theme.colors.selection = rgb(ACCENT).opacity(0.25).into();
+    theme.colors.button = rgb(RAISED).into();
+    theme.colors.button_hover = rgb(HOVER).into();
+    theme.colors.button_active = rgb(SELECTED).into();
+    theme.colors.button_foreground = rgb(FOREGROUND).into();
+    theme.colors.sidebar = rgb(SIDEBAR).into();
+    theme.colors.sidebar_foreground = rgb(MUTED).into();
+    theme.colors.sidebar_accent = rgb(SELECTED).into();
+    theme.colors.sidebar_accent_foreground = rgb(FOREGROUND).into();
+    theme.colors.sidebar_border = rgb(BORDER).into();
+    theme.colors.sidebar_primary = rgb(SELECTED).into();
+    theme.colors.sidebar_primary_foreground = rgb(FOREGROUND).into();
+    theme.colors.popover = rgb(SURFACE).into();
+    theme.colors.popover_foreground = rgb(FOREGROUND).into();
+    theme.colors.list = rgb(SURFACE).into();
+    theme.colors.list_hover = rgb(HOVER).into();
+    theme.colors.list_active = rgb(SELECTED).into();
+    theme.colors.list_active_border = rgb(BORDER).into();
+    theme.colors.list_even = rgb(RAISED).into();
+    theme.colors.list_head = rgb(SURFACE).into();
+    theme.colors.tab = rgb(BACKGROUND).into();
+    theme.colors.tab_bar = rgb(BACKGROUND).into();
+    theme.colors.tab_bar_segmented = rgb(SURFACE).into();
+    theme.colors.tab_active = rgb(SELECTED).into();
+    theme.colors.tab_active_foreground = rgb(FOREGROUND).into();
+    theme.colors.tab_foreground = rgb(MUTED).into();
+    theme.colors.table = rgb(BACKGROUND).into();
+    theme.colors.table_even = rgb(SURFACE).into();
+    theme.colors.table_head = rgb(RAISED).into();
+    theme.colors.table_hover = rgb(HOVER).into();
+    theme.colors.table_active = rgb(SELECTED).into();
+    theme.colors.table_active_border = rgb(BORDER).into();
+    theme.colors.table_head_foreground = rgb(MUTED).into();
+    theme.colors.table_foot = rgb(SURFACE).into();
+    theme.colors.table_foot_foreground = rgb(MUTED).into();
+    theme.colors.table_row_border = rgb(BORDER).into();
+    theme.colors.title_bar = rgb(BACKGROUND).into();
+    theme.colors.title_bar_border = rgb(BORDER).into();
+    theme.colors.window_border = rgb(BORDER).into();
+    theme.colors.accordion = rgb(SURFACE).into();
+    theme.colors.group_box = rgb(SURFACE).into();
+    theme.colors.group_box_foreground = rgb(MUTED).into();
+    theme.colors.skeleton = rgb(RAISED).into();
+    theme.colors.scrollbar_thumb = rgb(0x333333).into();
+    theme.colors.scrollbar_thumb_hover = rgb(0x454545).into();
     // Components and Base both keep resolved copies of the palette.
     theme.tokens = theme.colors.into();
     theme.radius = px(8.);

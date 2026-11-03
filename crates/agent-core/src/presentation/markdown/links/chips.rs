@@ -1,4 +1,4 @@
-use super::super::definitions;
+use super::super::{MarkdownRun, definitions, inline};
 use super::*;
 use markdown::mdast::Node;
 use std::collections::HashMap;
@@ -9,7 +9,8 @@ use std::collections::HashMap;
 pub struct MarkdownFileChip {
     pub file: MarkdownFileReference,
     pub lookup_path: Option<String>,
-    pub show_caption: bool,
+    /// Inline caption formatting, displayed with the chip as one atomic element.
+    pub caption: Option<Vec<MarkdownRun>>,
     pub copy_markdown: String,
 }
 
@@ -100,7 +101,22 @@ pub(in crate::presentation::markdown) fn file_chips(
             format!("[{label}]({target})")
         };
         Some(MarkdownFileChip {
-            show_caption: code.is_none() && !is_file_label(&label, &label_file),
+            caption: (code.is_none() && !is_file_label(&label, &label_file)).then(|| {
+                let mut runs = Vec::new();
+                // Preserve inline syntax from the original AST. Parsing the
+                // caption alone would turn e.g. "# design" into a heading.
+                let style = MarkdownRun {
+                    link: Some(target.into()),
+                    ..Default::default()
+                };
+                for child in node.children().into_iter().flatten() {
+                    inline(child, &definitions, style.clone(), &mut runs);
+                }
+                for run in &mut runs {
+                    run.link = None;
+                }
+                runs
+            }),
             file,
             lookup_path,
             copy_markdown,
@@ -149,7 +165,7 @@ mod tests {
         let first = &presentation.files[&0];
         assert_eq!(first.file.path, "/repo/src/a/index.ts");
         assert_eq!(first.lookup_path.as_deref(), Some("src/a/index.ts"));
-        assert!(!first.show_caption);
+        assert!(first.caption.is_none());
         let absolute = &presentation.files[&source.find("[index.ts](/repo").unwrap()];
         assert!(absolute.lookup_path.is_none());
         assert!(
@@ -188,7 +204,10 @@ mod tests {
             "[**説明**](<docs/a b.md> \"title\") [説明][ref] ``src/main.rs:4``\n\n[ref]: docs/a.md";
         let presentation = markdown_presentation(source, "/repo", None);
         let authored = &presentation.files[&0];
-        assert!(authored.show_caption);
+        let caption = authored.caption.as_ref().unwrap();
+        assert_eq!(caption.len(), 1);
+        assert_eq!(caption[0].text, "説明");
+        assert!(caption[0].strong);
         assert_eq!(
             authored.copy_markdown,
             "[**説明**](<docs/a b.md> \"title\")"
@@ -196,7 +215,7 @@ mod tests {
         let reference = &presentation.files[&source.find("[説明][ref]").unwrap()];
         assert_eq!(reference.copy_markdown, "[説明](docs/a.md)");
         let code = &presentation.files[&source.find("``").unwrap()];
-        assert!(!code.show_caption);
+        assert!(code.caption.is_none());
         assert_eq!(code.copy_markdown, "`src/main.rs:4`");
         assert_eq!(code.file.line, Some(4));
         assert_eq!(presentation.source, source);
@@ -204,13 +223,34 @@ mod tests {
             markdown_presentation("[`src/main.rs`][ref]\n\n[ref]: docs/a.md", "/repo", None);
         assert_eq!(caption.files[&0].copy_markdown, "[src/main.rs](docs/a.md)");
         let html = markdown_presentation("[<span>src/main.rs</span>](src/main.rs)", "/repo", None);
-        assert!(!html.files[&0].show_caption);
+        assert!(html.files[&0].caption.is_none());
         let posix =
             markdown_presentation("[説明][ref]\n\n[ref]: /repo/docs/a\\b.rs", "/repo", None);
         assert_eq!(posix.files[&0].copy_markdown, "[説明](/repo/docs/a\\b.rs)");
         let windows =
             markdown_presentation("[説明][ref]\n\n[ref]: C:\\repo\\a.rs", r"C:\repo", None);
         assert_eq!(windows.files[&0].copy_markdown, "[説明](C:/repo/a.rs)");
+    }
+
+    #[test]
+    fn captions_keep_inline_semantics_instead_of_becoming_standalone_blocks() {
+        let source = "[# *設計* `src/a.rs`](docs/a.md)";
+        let presentation = markdown_presentation(source, "/repo", None);
+        let caption = presentation.files[&0].caption.as_ref().unwrap();
+        assert_eq!(
+            caption
+                .iter()
+                .map(|run| run.text.as_str())
+                .collect::<String>(),
+            "# 設計 src/a.rs"
+        );
+        assert!(caption.iter().any(|run| run.emphasis && run.text == "設計"));
+        assert!(caption.iter().any(|run| run.code && run.text == "src/a.rs"));
+        assert!(
+            caption
+                .iter()
+                .all(|run| run.file.is_none() && run.link.is_none())
+        );
     }
 
     #[test]

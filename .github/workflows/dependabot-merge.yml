@@ -1,0 +1,48 @@
+name: Dependabot merge
+# Merges a Dependabot pull request once Native clients passed for its current head and every
+# update keeps the existing API (scripts/dependabot-merge.mjs). Main has no required checks,
+# so sessions can push directly; GitHub auto-merge would need them and is not used.
+on:
+  workflow_run:
+    workflows: [Native clients]
+    types: [completed]
+permissions: {}
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+jobs:
+  merge:
+    if: >-
+      github.event.workflow_run.event == 'pull_request'
+      && github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.actor.login == 'dependabot[bot]'
+      && github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+    steps:
+      # The decision script comes from main, never from the pull request.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Merge compatible updates
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          PULL_REQUESTS: ${{ toJSON(github.event.workflow_run.pull_requests) }}
+        run: |
+          set -euo pipefail
+          for number in $(jq -r '.[].number' <<< "$PULL_REQUESTS"); do
+            gh pr view "$number" --json state,isDraft,baseRefName,author,headRefOid,commits,title,body > pull-request.json
+            decision=$(node scripts/dependabot-merge.mjs "$HEAD_SHA" < pull-request.json)
+            echo "#$number: $(jq -r .reason <<< "$decision")"
+            if [[ $(jq -r .merge <<< "$decision") == true ]]; then
+              gh pr merge "$number" --merge --match-head-commit "$HEAD_SHA"
+              # A merge by this token starts no push workflows, so verify the merged main here.
+              gh workflow run native.yml --ref main
+            fi
+          done

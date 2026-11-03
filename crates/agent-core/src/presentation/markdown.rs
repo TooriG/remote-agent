@@ -896,7 +896,7 @@ mod tests {
         let presentation = markdown_presentation("<file:///tmp/main.rs>", "/repo", None);
         assert_eq!(presentation.source, "<file:///tmp/main.rs>");
         let chip = &presentation.files[&0];
-        assert!(chip.show_caption);
+        assert!(chip.caption.is_some());
         assert_eq!(chip.file.label, "main.rs");
         assert_eq!(chip.copy_markdown, "[file:///tmp/main.rs](/tmp/main.rs)");
     }

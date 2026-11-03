@@ -65,6 +65,16 @@ try {
             $env:GPUI_FXC_PATH = $previousCompiler
         }
     }
+    # Check the PE Subsystem field in both profiles before distributing the app.
+    $desktopReader = [IO.BinaryReader]::new([IO.File]::OpenRead((Join-Path $buildDirectory "agent-desktop.exe")))
+    try {
+        $desktopReader.BaseStream.Position = 0x3c
+        $peHeaderOffset = $desktopReader.ReadInt32()
+        $desktopReader.BaseStream.Position = $peHeaderOffset + 24 + 68
+        if ($desktopReader.ReadUInt16() -ne 2) {
+            throw "The desktop executable must use the Windows GUI subsystem."
+        }
+    } finally { $desktopReader.Dispose() }
     # A unique staging directory avoids modifying an installed/running Host.
     $packageRoot = Join-Path $metadata.target_directory "windows-packages"
     New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null

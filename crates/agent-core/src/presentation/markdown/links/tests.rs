@@ -154,11 +154,13 @@ fn desktop_parents_expand_until_distinct_even_when_one_path_is_a_suffix() {
 }
 
 #[test]
-fn descriptive_labels_are_plain_prose_on_desktop_and_replaced_on_mobile() {
+fn descriptive_captions_are_kept_on_desktop_and_replaced_on_mobile() {
     let source = "[**設計資料**](docs/overview.md) and `src/main.rs:4` and `README.md`\n\n```rs\nsrc/main.rs\n```";
     let desktop = super::super::markdown_presentation(source, "/repo", None);
     assert_eq!(desktop.source, source);
-    assert!(desktop.files[&0].show_caption);
+    let caption = desktop.files[&0].caption.as_ref().unwrap();
+    assert_eq!(caption[0].text, "設計資料");
+    assert!(caption[0].strong);
     assert_eq!(desktop.files[&0].file.label, "overview.md");
     assert_eq!(desktop.files.len(), 2);
     let blocks = super::super::markdown_blocks(source.into());

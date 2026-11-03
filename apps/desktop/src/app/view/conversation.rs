@@ -2376,6 +2376,18 @@ mod rendering_tests {
                 .debug_bounds("markdown-file:/fixture/src/other.rs")
                 .is_some()
         );
+        let caption = window
+            .debug_bounds("markdown-file-caption:/fixture/src/main.rs")
+            .expect("the caption is inside the same atomic inline element");
+        assert!(chip.contains(&caption.origin));
+        assert!(caption.right() <= chip.right());
+        assert!(caption.bottom() <= chip.bottom());
+        assert!(
+            window
+                .debug_bounds("markdown-file-caption:/fixture/src/other.rs")
+                .is_none(),
+            "a path-only reference has no additional caption"
+        );
         let desktop = view.read_with(window, |view, _| view.desktop.clone());
         let before = desktop.read_with(window, |view, _| view.panels.get(view.panel_scope()));
         desktop.update(window, |desktop, cx| {

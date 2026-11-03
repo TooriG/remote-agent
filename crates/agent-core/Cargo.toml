@@ -13,8 +13,8 @@ bindings = ["dep:uniffi", "dep:zeroize"]
 diagrams = ["dep:mermaid-rs-renderer"]
 
 [dependencies]
-icu_collator = "=2.2.0"
-icu_locale_core = "=2.2.0"
+icu_collator = "=2.4.0"
+icu_locale_core = "=2.4.0"
 agent-protocol = { path = "../agent-protocol" }
 agent-transport = { path = "../agent-transport" }
 uniffi = { version = "=0.32.2", features = ["tokio"], optional = true }

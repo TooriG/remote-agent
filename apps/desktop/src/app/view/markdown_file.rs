@@ -1,7 +1,7 @@
 use super::*;
 use agent_core::presentation::{
     files::{desktop_file_chip_color, desktop_metadata_icon, file_reference_tooltip},
-    markdown::{MarkdownFileChip, MarkdownFileReference, file_position_target},
+    markdown::{MarkdownFileChip, MarkdownFileReference, MarkdownRun, file_position_target},
 };
 use agent_protocol::file_metadata::{FileMetadata, FileMetadataKind};
 use gpui_kit::base::text::{
@@ -26,7 +26,13 @@ impl FileChips {
                 (
                     *offset,
                     cx.new(|cx| {
-                        FileChip::new(chip.file.clone(), chip.lookup_path.clone(), desktop, cx)
+                        FileChip::new(
+                            chip.file.clone(),
+                            chip.lookup_path.clone(),
+                            chip.caption.clone(),
+                            desktop,
+                            cx,
+                        )
                     }),
                 )
             })
@@ -70,14 +76,17 @@ impl MarkdownPlugin for FileChips {
         let chip = self.files.get(&offset)?;
         Some(
             MarkdownNode::new(self.name().to_owned(), offset)
-                .text(chip.file.label.clone())
+                .text(if chip.caption.is_some() {
+                    format!("{} {}", node.to_string(), chip.file.label)
+                } else {
+                    chip.file.label.clone()
+                })
                 .accessibility_label(file_position_target(
                     &chip.file.path,
                     chip.file.line,
                     chip.file.column,
                 ))
-                .with_caption(chip.show_caption)
-                .source_markdown(chip.copy_markdown.clone()),
+                .markdown(chip.copy_markdown.clone()),
         )
     }
     fn render_inline(
@@ -99,6 +108,7 @@ impl MarkdownPlugin for FileChips {
 struct FileChip {
     file: MarkdownFileReference,
     lookup_path: Option<String>,
+    caption: Option<Vec<MarkdownRun>>,
     desktop: WeakEntity<Desktop>,
     metadata: Option<FileMetadata>,
     focus: FocusHandle,
@@ -109,6 +119,7 @@ impl FileChip {
     fn new(
         file: MarkdownFileReference,
         lookup_path: Option<String>,
+        caption: Option<Vec<MarkdownRun>>,
         desktop: &Entity<Desktop>,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -120,6 +131,7 @@ impl FileChip {
                 .and_then(|entry| entry.metadata),
             file,
             lookup_path,
+            caption,
             desktop: desktop.downgrade(),
             focus: cx.focus_handle(),
             epoch: desktop.read(cx).snapshot.epoch,
@@ -229,8 +241,7 @@ impl Render for FileChip {
             .gap(font_size * 0.2)
             .max_w_full()
             .min_w_0()
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(color)
+            .whitespace_nowrap()
             .cursor_pointer()
             .rounded_sm()
             .focus_visible(|style| {
@@ -242,13 +253,35 @@ impl Render for FileChip {
                     inset: true,
                 }])
             })
-            .child(icon)
-            .child(
+            // GPUI Kit's public inline API exposes one atomic element. Keep
+            // the authored caption and chip together: neither wraps nor offers
+            // partial text selection, unlike T3's separate caption text runs.
+            .children(self.caption.as_ref().map(|caption| {
                 div()
-                    .min_w_0()
-                    .text_ellipsis()
-                    .group_hover("file-reference", |style| style.underline())
-                    .child(self.file.label.clone()),
+                    .debug_selector(|| format!("markdown-file-caption:{}", self.file.path))
+                    .child(caption_text(
+                        caption,
+                        window.text_style(),
+                        cx.theme().mono_font_family.clone(),
+                        gpui_kit::base::text::TextViewStyle::from_theme(
+                            &gpui_kit::base::Theme::global(cx),
+                        )
+                        .inline_code(),
+                    ))
+            }))
+            .child(
+                h_flex()
+                    .gap(font_size * 0.2)
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(color)
+                    .child(icon)
+                    .child(
+                        div()
+                            .min_w_0()
+                            .text_ellipsis()
+                            .group_hover("file-reference", |style| style.underline())
+                            .child(self.file.label.clone()),
+                    ),
             )
             .group("file-reference")
             .tooltip(move |window, cx| {
@@ -300,6 +333,38 @@ impl Render for FileChip {
             }))
     }
 }
+fn caption_text(
+    caption: &[MarkdownRun],
+    style: gpui_kit::TextStyle,
+    mono_font: SharedString,
+    code_style: HighlightStyle,
+) -> gpui_kit::StyledText {
+    let mut text = String::new();
+    let runs = caption
+        .iter()
+        .map(|run| {
+            let mut style = style.clone();
+            if run.code {
+                style = style.highlight(code_style);
+                style.font_family = mono_font.clone();
+            }
+            if run.strong {
+                style.font_weight = FontWeight::BOLD;
+            }
+            if run.emphasis {
+                style.font_style = gpui_kit::FontStyle::Italic;
+            }
+            if run.strikethrough {
+                style.strikethrough = Some(Default::default());
+            }
+            let fragment = run.text.replace(['\r', '\n'], " ");
+            text.push_str(&fragment);
+            style.to_run(fragment.len())
+        })
+        .collect();
+    gpui_kit::StyledText::new(text).with_runs(runs)
+}
+
 fn editor_modifier(modifiers: Modifiers) -> bool {
     if cfg!(target_os = "macos") {
         modifiers.platform
@@ -315,5 +380,59 @@ impl Desktop {
                 now_ms: chrono::Utc::now().timestamp_millis().max(0) as u64,
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FileChips;
+    use gpui_kit as gpui;
+    use gpui_kit::{
+        AppContext, Context, Entity, IntoElement, Render, Window,
+        base::text::{SelectionFormat, TextView, TextViewState},
+    };
+    use std::sync::Arc;
+
+    struct ReferenceText {
+        state: Entity<TextViewState>,
+        chips: FileChips,
+    }
+
+    impl Render for ReferenceText {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            TextView::new(&self.state)
+                .selection_format(SelectionFormat::Source)
+                .plugin(self.chips.clone())
+        }
+    }
+
+    #[gpui::test]
+    fn public_inline_plugin_preserves_caption_text_and_copies_links_once(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(crate::appearance::init);
+        let source = "before [**設計資料**](docs/a.md) and `src/main.rs:4` after";
+        let presentation =
+            agent_core::presentation::markdown::markdown_presentation(source, "/repo", None);
+        let (view, window) = cx.add_window_view(|_, cx| ReferenceText {
+            state: cx.new(|cx| TextViewState::markdown(source, cx)),
+            chips: FileChips {
+                files: presentation.files.into(),
+                // No native views: exercise the public API's atomic text fallback
+                // as well as its parsed copy representation.
+                views: Arc::default(),
+            },
+        });
+        window.run_until_parked();
+        let state = view.read_with(window, |view, _| view.state.clone());
+        state.update(window, |state, cx| {
+            state.select_all(cx);
+            assert_eq!(state.selected_text(), source);
+            state.set_selection_format(SelectionFormat::Plain, cx);
+            assert_eq!(
+                state.selected_text().trim(),
+                "before 設計資料 a.md and main.rs · L4 after"
+            );
+        });
     }
 }
