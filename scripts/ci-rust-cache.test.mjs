@@ -36,8 +36,8 @@ function fixture(t) {
   };
 }
 
-test('vendored crates use the compiler cache and preserve arguments', async (t) => {
-  for (const crate of ['vendor/gpui-pre', 'vendor/vte']) {
+test('repository crates use the compiler cache and preserve arguments', async (t) => {
+  for (const crate of ['vendor/gpui-pre', 'vendor/vte', 'crates/agent-core', 'crates/agent-ffi', 'apps/desktop']) {
     await t.test(crate, (t) => {
       const { workspace, run } = fixture(t);
       const result = run(join(workspace, crate));
@@ -47,10 +47,10 @@ test('vendored crates use the compiler cache and preserve arguments', async (t) 
   }
 });
 
-test('application crates, registry, git and compiler probes execute directly', async (t) => {
+test('registry, git, workspace siblings and compiler probes execute directly', async (t) => {
   for (const crate of [
     'registry/src/example', 'git/checkouts/example', 'workspace-sibling/crate',
-    'workspace/crates/agent-core', 'workspace/vendor-sibling/crate', '',
+    'workspace-extra/crates/agent-core', '',
   ]) {
     await t.test(crate || 'compiler probe', (t) => {
       const { workspace, run } = fixture(t);

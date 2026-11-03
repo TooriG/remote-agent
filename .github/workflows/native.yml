@@ -302,6 +302,9 @@ jobs:
   mac:
     name: Mac
     needs: [changes, repository]
+    permissions:
+      actions: write # Retire the preceding compiler snapshot after saving its replacement.
+      contents: read
     if: needs.changes.outputs.mac == 'true' && !inputs.ios-tests
     concurrency:
       # Optional PRs share one Apple slot; main and manual clients stay parallel.
@@ -337,20 +340,23 @@ jobs:
           save-if: ${{ github.event_name != 'pull_request' }}
           cache-on-failure: true
       - &restore-local-rust-cache
-        name: Restore compiled vendored Rust dependencies
+        name: Restore compiled repository Rust crates
         id: local-rust-cache
+        continue-on-error: true
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         env:
-          AGENT_LOCAL_RUST_CACHE_PREFIX: local-rust-${{ runner.os }}-${{ runner.arch }}-xcode-26.6-${{ hashFiles('flake.lock', '.kache.toml', 'tools/kache/package.nix', 'scripts/ci-rust-cache.sh') }}
+          AGENT_LOCAL_RUST_CACHE_PREFIX: local-rust-${{ runner.os }}-${{ runner.arch }}-xcode-26.6-${{ hashFiles('flake.lock', '.kache.toml', 'tools/kache/package.nix', 'scripts/ci-rust-cache.sh') }}-${{ github.job }}
         with:
           path: ${{ runner.temp }}/kache-store
-          key: ${{ env.AGENT_LOCAL_RUST_CACHE_PREFIX }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/config.toml', 'crates/*/Cargo.toml', 'apps/desktop/Cargo.toml', 'apps/desktop/native-focus/Cargo.toml', 'vendor/**', '.github/workflows/native.yml') }}-${{ github.job }}
+          # Publish changed workspace sources too; preserve only the newest snapshot.
+          key: ${{ env.AGENT_LOCAL_RUST_CACHE_PREFIX }}-${{ github.sha }}
           restore-keys: ${{ env.AGENT_LOCAL_RUST_CACHE_PREFIX }}-
       - name: Mac contracts and acceptance
         env: &local-rust-cache-env
           RUSTC_WRAPPER: ${{ github.workspace }}/scripts/ci-rust-cache.sh
           KACHE_CACHE_DIR: ${{ runner.temp }}/kache-store
           KACHE_RUNTIME_DIR: ${{ runner.temp }}/kache-runtime
+          KACHE_MAX_SIZE: 2GiB
         run: |
           set -o pipefail
           mkdir -p target/qa
@@ -371,14 +377,25 @@ jobs:
           # Local-only compiles need no daemon; start one before verified shutdown.
           nix run .#kache -- daemon start
           nix run .#kache -- stats --last-build
+          nix run .#kache -- gc
           nix run .#kache -- daemon stop
       - &save-local-rust-cache
-        name: Save compiled vendored Rust dependencies
+        name: Save compiled repository Rust crates
+        id: save-local-rust-cache
         if: ${{ !cancelled() && github.event_name != 'pull_request' && !inputs.ios-tests && steps.finish-local-rust-cache.outcome == 'success' && steps.local-rust-cache.outputs.cache-primary-key != '' && steps.local-rust-cache.outputs.cache-hit != 'true' }}
+        continue-on-error: true
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ${{ runner.temp }}/kache-store
           key: ${{ steps.local-rust-cache.outputs.cache-primary-key }}
+      - &prune-local-rust-cache
+        name: Retire replaced repository compiler snapshots
+        if: ${{ !cancelled() && steps.save-local-rust-cache.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMPILER_CACHE_KEY: ${{ steps.local-rust-cache.outputs.cache-primary-key }}
+        run: nix develop '.#${{ github.job == 'mac' && 'native' || 'ios-build' }}' --command node scripts/prune-build-cache.mjs "$COMPILER_CACHE_KEY"
       - name: Retain Apple acceptance logs and result bundles
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -483,6 +500,7 @@ jobs:
         run: nix develop .#ios-build --command node scripts/prune-build-cache.mjs "$SWIFT_CACHE_KEY"
       - *finish-local-rust-cache
       - *save-local-rust-cache
+      - *prune-local-rust-cache
       - name: Retain Apple acceptance logs and result bundles
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
