@@ -60,7 +60,7 @@ pub(super) fn strip_drive_slash(path: &str) -> &str {
     }
 }
 
-pub(super) fn basename(path: &str) -> &str {
+pub fn basename(path: &str) -> &str {
     let trimmed = path.trim_end_matches(['/', '\\']);
     if trimmed.is_empty() {
         return path;

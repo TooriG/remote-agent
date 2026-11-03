@@ -6,6 +6,7 @@ mod file_icon;
 mod file_tree;
 mod header;
 mod markdown_diagram;
+pub(super) mod markdown_file;
 mod media;
 mod model_settings;
 mod onboarding;
@@ -54,11 +55,7 @@ fn observe_popup_desktop(
 }
 
 fn file_name(path: &str) -> String {
-    Path::new(path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(path)
-        .to_owned()
+    agent_core::presentation::markdown::file_basename(path).into()
 }
 
 const CHAT_WIDTH: f32 = 780.;

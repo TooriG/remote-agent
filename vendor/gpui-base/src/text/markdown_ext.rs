@@ -110,6 +110,8 @@ pub struct MarkdownNode {
     text: SharedString,
     markdown: SharedString,
     accessibility_label: Option<SharedString>,
+    caption: bool,
+    source_copy: bool,
     data: Arc<dyn Any + Send + Sync>,
     pub(crate) span: Option<Span>,
 }
@@ -125,6 +127,8 @@ impl MarkdownNode {
             text: SharedString::default(),
             markdown: SharedString::default(),
             accessibility_label: None,
+            caption: false,
+            source_copy: false,
             data: Arc::new(data),
             span: None,
         }
@@ -199,6 +203,29 @@ impl MarkdownNode {
         self
     }
 
+    /// Render this AST node's children as ordinary, selectable text before the
+    /// atomic object. Copying the object includes its caption exactly once.
+    pub fn with_caption(mut self, caption: bool) -> Self {
+        self.caption = caption;
+        self
+    }
+
+    /// Use this representation even when copying a whole source block or the
+    /// entire document. Parsing and source offsets still use the original text.
+    pub fn source_markdown(mut self, markdown: impl Into<SharedString>) -> Self {
+        self.markdown = markdown.into();
+        self.source_copy = true;
+        self
+    }
+
+    pub(crate) fn has_caption(&self) -> bool {
+        self.caption
+    }
+
+    pub(crate) fn overrides_source_copy(&self) -> bool {
+        self.source_copy
+    }
+
     /// Read typed data.
     pub fn data<T>(&self) -> Option<&T>
     where
@@ -237,6 +264,8 @@ impl PartialEq for MarkdownNode {
             && self.text == other.text
             && self.markdown == other.markdown
             && self.accessibility_label == other.accessibility_label
+            && self.caption == other.caption
+            && self.source_copy == other.source_copy
             && self.span == other.span
     }
 }

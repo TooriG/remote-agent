@@ -70,7 +70,7 @@ enum OperationCompletion {
     RemoveWorktree,
     Account,
     Gallery(uuid::Uuid),
-    OpenFile(u64),
+    FileReference(Box<files::ReferenceRequest>),
 }
 enum Update {
     Connected(Result<(StoreSession, PathBuf, bool), String>),
@@ -163,6 +163,7 @@ pub(crate) struct Desktop {
     file_search: Entity<InputState>,
     file_browser: Option<files::FileBrowser>,
     file_explorer: files::FileExplorer,
+    file_open_generation: u64,
     model_controls: forms::ModelControls,
     account: forms::AccountForm,
     worktrees: forms::WorktreeForm,
@@ -538,6 +539,7 @@ impl Desktop {
             search,
             file_search,
             file_browser: None,
+            file_open_generation: 0,
             file_explorer,
             model_controls,
             account,
@@ -878,20 +880,8 @@ impl Desktop {
                 | OperationCompletion::Editor(_)
         );
         match kind {
-            OperationCompletion::OpenFile(epoch) => {
-                if self.snapshot.epoch != epoch {
-                    return true;
-                }
-                match result {
-                    Ok(Outcome::ResolvedFile { entry }) if entry.directory => {
-                        self.browse(entry.path, cx)
-                    }
-                    Ok(Outcome::ResolvedFile { entry }) => {
-                        self.open_file(PathBuf::from(entry.path), cx)
-                    }
-                    Err(error) => self.set_error(error),
-                    _ => {}
-                }
+            OperationCompletion::FileReference(request) => {
+                self.complete_reference(*request, result, window, cx);
                 return true;
             }
             OperationCompletion::ProjectImport => {
@@ -1192,6 +1182,19 @@ impl Desktop {
             self.editor
                 .input
                 .update(cx, |input, cx| input.set_value(value, window, cx));
+        }
+        if self
+            .editor
+            .pending_line
+            .as_ref()
+            .is_some_and(|(path, _)| file.is_some_and(|file| &file.path == path))
+        {
+            let (_, line) = self.editor.pending_line.take().unwrap();
+            let line = (line.saturating_sub(1) as usize)
+                .min(text.split('\n').count().saturating_sub(1)) as u32;
+            self.editor.input.update(cx, |input, cx| {
+                input.set_cursor_position(gpui_kit::base::input::Position::new(line, 0), window, cx)
+            });
         }
     }
     fn draft_key(&self) -> &DraftKey {
@@ -1737,6 +1740,8 @@ impl Desktop {
         );
     }
     fn browse(&mut self, path: String, cx: &mut Context<Self>) {
+        self.file_open_generation += 1;
+        self.editor.pending_line = None;
         self.reveal_file_in_tree(Some(&path), true);
         self.panels
             .open(self.panel_scope(), Panel::Files, Some(path));
@@ -1744,6 +1749,8 @@ impl Desktop {
         cx.notify();
     }
     fn edit(&mut self, path: String, discard_draft: bool) {
+        self.file_open_generation += 1;
+        self.editor.pending_line = None;
         self.panels
             .open(self.panel_scope(), Panel::File, Some(path.clone()));
         self.dispatch(Intent::ReadFile(op::ReadFile {

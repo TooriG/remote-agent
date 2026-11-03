@@ -197,12 +197,34 @@ impl ParsedDocument {
     /// Blocks the parser could not locate fall back to reconstruction.
     fn whole_source(&self, block: &BlockNode) -> String {
         if let Some(span) = block.span()
-            && let Some(source) = self.source.get(span.start..span.end)
+            && self.source.get(span.start..span.end).is_some()
         {
-            return source.to_string();
+            return self.copy_source(span.start..span.end);
         }
 
         block.selected_text(SelectionFormat::Source)
+    }
+
+    /// Project opt-in widget clipboard representations onto original source
+    /// without reparsing it or changing the parser's byte coordinates.
+    pub(super) fn copy_source(&self, range: Range<usize>) -> String {
+        let mut overrides = Vec::new();
+        for block in self.blocks.iter() {
+            block.source_copy_overrides(&mut overrides);
+        }
+        overrides.sort_by_key(|(span, _)| (span.start, std::cmp::Reverse(span.end)));
+        let mut result = String::new();
+        let mut previous = range.start;
+        for (span, replacement) in overrides {
+            if span.start < previous || span.end > range.end {
+                continue;
+            }
+            result.push_str(&self.source[previous..span.start]);
+            result.push_str(&replacement);
+            previous = span.end;
+        }
+        result.push_str(&self.source[previous..range.end]);
+        result
     }
 
     pub(super) fn selected_source_range(&self) -> Option<Range<usize>> {

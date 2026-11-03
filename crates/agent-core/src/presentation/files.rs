@@ -1,4 +1,6 @@
 mod actions;
+mod chip_color;
+pub use chip_color::desktop_file_chip_color;
 mod explorer;
 mod icons;
 mod metadata;

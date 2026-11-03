@@ -5,7 +5,9 @@ mod explorer;
 pub(super) use browser::{FileBrowser, FileBrowserModel};
 pub(super) use explorer::FileExplorer;
 mod menu;
+mod reference;
 pub(super) use menu::run_file_menu_command;
+pub(super) use reference::{ReferenceAction, ReferenceRequest};
 
 impl Desktop {
     pub(super) fn open_in_editor(
@@ -17,7 +19,12 @@ impl Desktop {
         reveal: bool,
         cx: &mut Context<Self>,
     ) {
-        if !self.local_shell || !self.snapshot.connected {
+        if !self.local_shell {
+            return;
+        }
+        if !self.snapshot.connected {
+            self.set_error("Host に接続していません".into());
+            cx.notify();
             return;
         }
         self.busy += 1;

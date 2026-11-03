@@ -8,6 +8,7 @@ pub(in crate::app) struct ConversationModel {
     draft_key: DraftKey,
     session: Option<SessionRef>,
     cwd: String,
+    home: Option<String>,
     connected: bool,
     busy: bool,
     input_notice: Option<String>,
@@ -87,6 +88,9 @@ impl ConversationView {
         if self.model == model && same_content {
             return;
         }
+        if self.model.cwd != model.cwd || self.model.home != model.home {
+            self.timeline.markdown.clear();
+        }
         self.sync_request_inputs(&requests, window, cx);
         let reset = self.model.draft_key != model.draft_key;
         if reset {
@@ -127,6 +131,7 @@ impl Desktop {
             draft_key: self.draft_key().clone(),
             session: self.selected().cloned(),
             cwd: self.snapshot.navigation.cwd.clone(),
+            home: self.snapshot.host_home_directory.clone(),
             connected: self.snapshot.connected,
             busy: self.busy > 0,
             input_notice: self
@@ -218,7 +223,7 @@ impl Desktop {
             }
             ConversationAction::Error(error) => self.set_error(error.clone()),
             ConversationAction::OpenLink(source, control) => {
-                self.click_conversation_link(source, *control, cx)
+                self.click_conversation_link(source, *control, window, cx)
             }
         }
     }
@@ -1898,7 +1903,15 @@ impl ConversationView {
             .get(&id)
             .is_none_or(|cached| cached.source != source)
         {
-            let presentation = agent_core::presentation::markdown::markdown_presentation(source);
+            let presentation = agent_core::presentation::markdown::markdown_presentation(
+                source,
+                &self.model.cwd,
+                self.model.home.as_deref(),
+            );
+            let Some(desktop) = self.desktop.upgrade() else {
+                return div().into_any_element();
+            };
+            let file_chips = super::markdown_file::FileChips::new(presentation.files, &desktop, cx);
             let source: SharedString = source.to_owned().into();
             let (wrap_code, compact_tables) = self
                 .timeline
@@ -1914,6 +1927,8 @@ impl ConversationView {
                     rendered: presentation.source.into(),
                     images: presentation.images.into(),
                     code_headers: Arc::new(presentation.code_headers),
+                    file_chips,
+                    parser_revision: uuid::Uuid::new_v4().as_u64_pair().0,
                     diagrams: HashMap::new(),
                     wrap_code,
                     compact_tables,
@@ -1957,6 +1972,11 @@ impl ConversationView {
         let mut body = v_flex().gap_3().w_full().child(
             TextView::markdown(SharedString::from(id), cached.rendered.clone())
                 .selectable(true)
+                .markdown_extensions(
+                    gpui_kit::base::text::MarkdownExtensions::default()
+                        .parser_revision(cached.parser_revision),
+                )
+                .plugin(cached.file_chips.clone())
                 .markdown_block_parser(|node, context| {
                     let original = context.node_source(node)?;
                     let diagram = agent_core::presentation::markdown::markdown_diagram(original)?;
@@ -2308,6 +2328,76 @@ mod rendering_tests {
                     .value()
                     .as_ref(),
                 "{\"answer\":\"Keep my answer\"}"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn markdown_file_chips_are_native_click_targets_inside_selectable_prose(
+        cx: &mut TestAppContext,
+    ) {
+        let _runtime = init(cx);
+        let source = serde_json::from_value(serde_json::json!({
+            "id": {"provider":"codex", "id":"fixture"},
+            "turns": [{"id":"turn", "status":"completed", "items": [{
+                "id":"answer", "body":{"inline":{"body":{"assistantText":{
+                    "text":"[**設計資料**](src/main.rs:12:3) and `src/other.rs`", "phase":"final"
+                }}}}
+            }]}]
+        }))
+        .unwrap();
+        let mut snapshot = Snapshot::default();
+        Arc::make_mut(&mut snapshot.navigation).cwd = "/fixture".into();
+        let (view, window) =
+            cx.add_window_view(|window, cx| ConversationView::new(snapshot, source, window, cx));
+        window.simulate_resize(size(px(380.), px(600.)));
+        window.run_until_parked();
+        let chip = window
+            .debug_bounds("markdown-file:/fixture/src/main.rs")
+            .expect("native file chip");
+        assert!(chip.size.width > px(30.) && chip.size.width < px(380.));
+        assert!(
+            window
+                .debug_bounds("markdown-file:/fixture/src/other.rs")
+                .is_some()
+        );
+        let desktop = view.read_with(window, |view, _| view.desktop.clone());
+        let before = desktop.read_with(window, |view, _| view.panels.get(view.panel_scope()));
+        desktop.update(window, |desktop, cx| {
+            desktop.local_shell = true;
+            cx.notify();
+        });
+        window.simulate_click(
+            chip.center(),
+            gpui_kit::Modifiers {
+                platform: cfg!(target_os = "macos"),
+                control: !cfg!(target_os = "macos"),
+                ..Default::default()
+            },
+        );
+        window.run_until_parked();
+        assert_eq!(
+            desktop.read_with(window, |view, _| view.panels.get(view.panel_scope())),
+            before,
+            "the local editor modifier bypasses the file panel"
+        );
+        desktop.update(window, |desktop, cx| {
+            desktop.local_shell = false;
+            cx.notify();
+        });
+        window.run_until_parked();
+        let chip = window
+            .debug_bounds("markdown-file:/fixture/src/main.rs")
+            .unwrap();
+        window.simulate_click(chip.center(), gpui_kit::Modifiers::default());
+        window.run_until_parked();
+        desktop.read_with(window, |view, _| {
+            let panel = view.panels.get(view.panel_scope());
+            assert!(panel.open);
+            assert_eq!(panel.kind(), agent_core::panels::PanelKind::File);
+            assert_eq!(
+                panel.selected().unwrap().path.as_deref(),
+                Some("/fixture/src/main.rs")
             );
         });
     }

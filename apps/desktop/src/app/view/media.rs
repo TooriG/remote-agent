@@ -172,44 +172,33 @@ impl Desktop {
         &mut self,
         source: &str,
         control: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if control && (source.starts_with("https://") || source.starts_with("http://")) {
-            self.open_browser(self.panel_scope(), source, cx);
-        } else {
-            self.open_conversation_link(source, cx);
-        }
-    }
-    pub(super) fn open_conversation_link(&mut self, source: &str, cx: &mut Context<Self>) {
         if source.starts_with("https://") || source.starts_with("http://") {
-            cx.open_url(source);
-            return;
-        }
-        let path = match conversation_file_path(source, &self.snapshot.navigation.cwd) {
-            Ok(path) => path,
-            Err(error) => {
-                self.set_error(error);
-                cx.notify();
-                return;
+            if control {
+                self.open_browser(self.panel_scope(), source, cx);
+            } else {
+                cx.open_url(source);
             }
-        };
-        if self.session.is_none() {
-            self.set_error("Host に接続していません".into());
-            cx.notify();
             return;
         }
-        self.perform(
-            Intent::ResolveFile(op::ResolveFile {
-                path: path.to_string_lossy().into_owned(),
-            }),
-            OperationCompletion::OpenFile(self.snapshot.epoch),
-        );
-    }
-
-    pub(in crate::app) fn open_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        self.reveal_file_in_tree(Some(&path.to_string_lossy()), false);
-        self.edit(path.to_string_lossy().into_owned(), false);
-        cx.notify();
+        if let Some((file, lookup_path)) =
+            agent_core::presentation::markdown::desktop_file_reference(
+                source,
+                &self.snapshot.navigation.cwd,
+                self.snapshot.host_home_directory.as_deref(),
+            )
+        {
+            self.activate_reference(
+                &file,
+                lookup_path.as_deref(),
+                false,
+                window.mouse_position(),
+                window,
+                cx,
+            );
+        }
     }
 
     pub(super) fn open_image_gallery(
@@ -552,18 +541,34 @@ mod file_panel_tests {
     use core::prelude::v1::test;
 
     fn resolved(path: &str, directory: bool) -> Outcome {
-        Outcome::ResolvedFile {
-            entry: agent_protocol::models::FileEntry {
-                name: Path::new(path)
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .into_owned(),
-                path: path.into(),
-                directory,
-                size: 0,
-            },
+        Outcome::FileReferenceResolved {
+            path: path.into(),
+            directory,
         }
+    }
+    fn reference_request(view: &Desktop, source: &str, epoch: u64) -> files::ReferenceRequest {
+        let (file, lookup_path) = agent_core::presentation::markdown::desktop_file_reference(
+            source,
+            &view.snapshot.navigation.cwd,
+            view.snapshot.host_home_directory.as_deref(),
+        )
+        .unwrap();
+        files::ReferenceRequest {
+            epoch,
+            target: view.reference_target(&file, lookup_path.as_deref()),
+            action: files::ReferenceAction::Panel(view.file_open_generation),
+        }
+    }
+    fn start_reference(
+        view: &mut Desktop,
+        source: &str,
+        window: &mut Window,
+        cx: &mut Context<Desktop>,
+    ) -> files::ReferenceRequest {
+        Arc::make_mut(&mut view.snapshot).connected = true;
+        let request = reference_request(view, source, view.snapshot.epoch);
+        view.open_reference_panel(request.target, window, cx);
+        reference_request(view, source, view.snapshot.epoch)
     }
 
     #[gpui::test]
@@ -711,11 +716,11 @@ mod file_panel_tests {
                 ] {
                     let target = directory.path().join(name).to_string_lossy().into_owned();
                     view.panels.set_open(view.panel_scope(), false);
-                    view.open_conversation_link(&target, cx);
+                    let request = start_reference(view, &target, window, cx);
                     // The fixture is offline; deliver the Host's resolution
                     // through the same production completion used by links.
                     view.operation_completed(
-                        OperationCompletion::OpenFile(view.snapshot.epoch),
+                        OperationCompletion::FileReference(Box::new(request)),
                         Ok(resolved(&target, false)),
                         window,
                         cx,
@@ -737,6 +742,71 @@ mod file_panel_tests {
                         "Keep this draft"
                     );
                 }
+                let before = view.panels.get(view.panel_scope());
+                let stale = start_reference(view, "older.rs", window, cx);
+                let latest = start_reference(view, "newer.rs", window, cx);
+                view.operation_completed(
+                    OperationCompletion::FileReference(Box::new(stale)),
+                    Ok(resolved("/stale.rs", false)),
+                    window,
+                    cx,
+                );
+                assert_eq!(
+                    view.panels.get(view.panel_scope()),
+                    before,
+                    "a slower lookup cannot replace a newer request"
+                );
+                let winner = format!("{cwd}/newer.rs");
+                view.operation_completed(
+                    OperationCompletion::FileReference(Box::new(latest)),
+                    Ok(resolved(&winner, false)),
+                    window,
+                    cx,
+                );
+                assert_eq!(
+                    view.panels
+                        .get(view.panel_scope())
+                        .selected()
+                        .unwrap()
+                        .path
+                        .as_deref(),
+                    Some(winner.as_str())
+                );
+                let stale = start_reference(view, "older.rs", window, cx);
+                view.edit(source.clone(), false);
+                view.operation_completed(
+                    OperationCompletion::FileReference(Box::new(stale)),
+                    Ok(resolved("/stale.rs", false)),
+                    window,
+                    cx,
+                );
+                assert_eq!(
+                    view.panels
+                        .get(view.panel_scope())
+                        .selected()
+                        .unwrap()
+                        .path
+                        .as_deref(),
+                    Some(source.as_str()),
+                    "tree and explicit editor opens supersede pending lookups"
+                );
+                let mut copy = reference_request(view, "missing.rs:12:3", view.snapshot.epoch);
+                copy.action = files::ReferenceAction::Menu(
+                    agent_core::presentation::files::FileAction::CopyRelativePath,
+                );
+                let found = format!("{cwd}/nested/missing.rs");
+                view.operation_completed(
+                    OperationCompletion::FileReference(Box::new(copy)),
+                    Ok(resolved(&found, false)),
+                    window,
+                    cx,
+                );
+                assert_eq!(
+                    cx.read_from_clipboard()
+                        .and_then(|item| item.text())
+                        .as_deref(),
+                    Some("nested/missing.rs:12:3")
+                );
                 // The existing gallery remains available to its explicit image
                 // entry points; only file-reference routing is being replaced.
                 view.open_image_gallery(Arc::new(source.clone()), false, cx);
@@ -751,9 +821,9 @@ mod file_panel_tests {
                     source
                 );
                 view.media.gallery = None;
-                view.open_conversation_link("~/Documents", cx);
+                let request = start_reference(view, "~/Documents", window, cx);
                 view.operation_completed(
-                    OperationCompletion::OpenFile(view.snapshot.epoch),
+                    OperationCompletion::FileReference(Box::new(request)),
                     Ok(resolved(&cwd, true)),
                     window,
                     cx,
@@ -761,7 +831,11 @@ mod file_panel_tests {
                 assert_eq!(view.panels.get(view.panel_scope()).kind(), Panel::Files);
                 let before = view.panels.get(view.panel_scope());
                 view.operation_completed(
-                    OperationCompletion::OpenFile(view.snapshot.epoch + 1),
+                    OperationCompletion::FileReference(Box::new(reference_request(
+                        view,
+                        &source,
+                        view.snapshot.epoch + 1,
+                    ))),
                     Ok(resolved(&source, false)),
                     window,
                     cx,
@@ -819,9 +893,9 @@ mod file_panel_tests {
                 view.composer.input.update(cx, |input, cx| {
                     input.set_value("Keep this side draft", window, cx)
                 });
-                view.open_conversation_link("readme.txt:1", cx);
+                let request = start_reference(view, "readme.txt:1", window, cx);
                 view.operation_completed(
-                    OperationCompletion::OpenFile(view.snapshot.epoch),
+                    OperationCompletion::FileReference(Box::new(request)),
                     Ok(resolved("/fixture/readme.txt", false)),
                     window,
                     cx,
@@ -832,7 +906,7 @@ mod file_panel_tests {
                 );
                 #[cfg(target_os = "windows")]
                 {
-                    view.click_conversation_link("https://example.com/first", true, cx);
+                    view.click_conversation_link("https://example.com/first", true, window, cx);
                     assert!(
                         view.panels.get(view.panel_scope()).open
                             && view.panels.get(view.panel_scope()).kind() == Panel::Browser
@@ -846,7 +920,12 @@ mod file_panel_tests {
                         }),
                         Some("https://example.com/first")
                     );
-                    view.click_conversation_link("http://localhost:3000/next?q=1#detail", true, cx);
+                    view.click_conversation_link(
+                        "http://localhost:3000/next?q=1#detail",
+                        true,
+                        window,
+                        cx,
+                    );
                     assert_eq!(
                         view.panels.get(view.panel_scope()).active.and_then(|id| {
                             match view.surface_resources.get(&id) {
@@ -856,9 +935,9 @@ mod file_panel_tests {
                         }),
                         Some("http://localhost:3000/next?q=1#detail")
                     );
-                    view.click_conversation_link("readme.txt:1", true, cx);
+                    let request = start_reference(view, "readme.txt:1", window, cx);
                     view.operation_completed(
-                        OperationCompletion::OpenFile(view.snapshot.epoch),
+                        OperationCompletion::FileReference(Box::new(request)),
                         Ok(resolved("/fixture/readme.txt", false)),
                         window,
                         cx,

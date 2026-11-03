@@ -78,7 +78,10 @@ impl Desktop {
         cx: &mut Context<Self>,
     ) {
         let panel = self.panels.get(self.panel_scope());
-        let workspace = self.snapshot.navigation.cwd.clone();
+        let workspace = agent_core::presentation::markdown::file_host_path(
+            self.snapshot.navigation.cwd.clone(),
+            self.snapshot.host_home_directory.clone(),
+        );
         if !visible || workspace.is_empty() {
             self.close_file_browser();
             return;

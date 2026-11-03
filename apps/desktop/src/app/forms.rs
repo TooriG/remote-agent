@@ -169,6 +169,7 @@ pub(super) struct FileEditor {
     pub(super) input: Entity<EditorState>,
     pub(super) text: DraftText,
     pub(super) path: Option<String>,
+    pub(super) pending_line: Option<(String, u32)>,
 }
 
 impl FileEditor {
@@ -177,6 +178,7 @@ impl FileEditor {
             input: cx.new(|cx| EditorState::new(window, cx)),
             text: DraftText::default(),
             path: None,
+            pending_line: None,
         }
     }
 

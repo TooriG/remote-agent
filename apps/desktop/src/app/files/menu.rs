@@ -13,6 +13,9 @@ pub(in crate::app) struct FileMenuTarget {
     pub line: Option<u32>,
     pub column: Option<u32>,
     pub mention: String,
+    pub resolve_reference: bool,
+    pub lookup_path: Option<String>,
+    pub root: String,
 }
 
 #[derive(Clone, PartialEq, gpui::Action)]
@@ -112,13 +115,29 @@ impl Desktop {
                 relative: Some(relative),
                 line: None,
                 column: None,
+                resolve_reference: false,
+                lookup_path: None,
+                root: key.root.clone(),
             },
             position,
             window,
             cx,
         );
     }
-    fn activate_file_action(
+    pub(super) fn activate_file_action(
+        &mut self,
+        target: &FileMenuTarget,
+        action: FileAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if target.resolve_reference && target.lookup_path.is_some() && self.snapshot.connected {
+            self.resolve_reference_action(target.clone(), super::ReferenceAction::Menu(action));
+            return;
+        }
+        self.finish_file_action(target, action, window, cx);
+    }
+    pub(super) fn finish_file_action(
         &mut self,
         target: &FileMenuTarget,
         action: FileAction,
@@ -143,6 +162,9 @@ impl Desktop {
                         false,
                         cx,
                     );
+                } else {
+                    self.set_error(format!("No available editor can open {}", target.path));
+                    cx.notify();
                 }
             }
             FileAction::Reveal => self.open_in_editor(
@@ -156,14 +178,25 @@ impl Desktop {
             FileAction::CopyRelativePath => {
                 if let Some(path) = &target.relative {
                     cx.write_to_clipboard(ClipboardItem::new_string(file_path_for_clipboard(
-                        path,
+                        &agent_core::presentation::markdown::file_position_target(
+                            path,
+                            target.line,
+                            target.column,
+                        ),
                         &target.path,
                     )));
                 }
             }
-            FileAction::CopyFullPath => cx.write_to_clipboard(ClipboardItem::new_string(
-                file_path_for_clipboard(&target.path, &target.path),
-            )),
+            FileAction::CopyFullPath => {
+                cx.write_to_clipboard(ClipboardItem::new_string(file_path_for_clipboard(
+                    &agent_core::presentation::markdown::file_position_target(
+                        &target.path,
+                        target.line,
+                        target.column,
+                    ),
+                    &target.path,
+                )))
+            }
             FileAction::CopyMention => {
                 cx.write_to_clipboard(ClipboardItem::new_string(target.mention.clone()))
             }

@@ -1,3 +1,4 @@
+use super::super::MarkdownBlock;
 use super::*;
 
 // These expectations describe the pinned T3 source, including its desktop/mobile differences.
@@ -112,9 +113,14 @@ fn labels_require_the_path_and_explicit_position_to_match() {
 #[test]
 fn desktop_disambiguates_parents_but_mobile_uses_basename_only() {
     let source = "[index.ts](src/a/index.ts) [index.ts](src/b/index.ts) [index.ts](src/a/index.ts)";
-    let desktop = super::super::markdown_presentation(source).source;
-    assert!(desktop.contains("[`index.ts · src/a`](<src/a/index.ts>)"));
-    assert!(desktop.contains("[`index.ts · src/b`](<src/b/index.ts>)"));
+    let desktop = super::super::markdown_presentation(source, "/repo", None);
+    let labels: Vec<_> = desktop
+        .files
+        .values()
+        .map(|chip| chip.file.label.as_str())
+        .collect();
+    assert!(labels.contains(&"index.ts · src/a"));
+    assert!(labels.contains(&"index.ts · src/b"));
     let blocks = super::super::markdown_blocks(source.into());
     let MarkdownBlock::Paragraph { runs, .. } = &blocks[0] else {
         panic!()
@@ -150,9 +156,11 @@ fn desktop_parents_expand_until_distinct_even_when_one_path_is_a_suffix() {
 #[test]
 fn descriptive_labels_are_plain_prose_on_desktop_and_replaced_on_mobile() {
     let source = "[**設計資料**](docs/overview.md) and `src/main.rs:4` and `README.md`\n\n```rs\nsrc/main.rs\n```";
-    let desktop = super::super::markdown_presentation(source).source;
-    assert!(desktop.contains("**設計資料** [`overview.md`](<docs/overview.md>)"));
-    assert!(!desktop.contains("[**設計資料**]"));
+    let desktop = super::super::markdown_presentation(source, "/repo", None);
+    assert_eq!(desktop.source, source);
+    assert!(desktop.files[&0].show_caption);
+    assert_eq!(desktop.files[&0].file.label, "overview.md");
+    assert_eq!(desktop.files.len(), 2);
     let blocks = super::super::markdown_blocks(source.into());
     let MarkdownBlock::Paragraph { runs, .. } = &blocks[0] else {
         panic!()

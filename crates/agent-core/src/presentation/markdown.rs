@@ -11,10 +11,11 @@ mod diagram;
 pub use diagram::{MarkdownDiagram, markdown_diagram};
 mod links;
 pub use links::{
-    MarkdownFileKind, MarkdownFileReference, MarkdownFileSurface, WORKSPACE_BASENAME_LOOKUP_LIMIT,
-    file_host_path, file_path_for_clipboard, file_workspace_relative_path, markdown_file_kind,
-    markdown_file_target, needs_workspace_basename_lookup, pick_stripped_workspace_match,
-    pick_workspace_basename_match, strip_repeated_workspace_prefix,
+    MarkdownFileChip, MarkdownFileKind, MarkdownFileReference, MarkdownFileSurface,
+    WORKSPACE_BASENAME_LOOKUP_LIMIT, desktop_file_reference, file_basename, file_host_path,
+    file_path_for_clipboard, file_position_target, file_workspace_relative_path,
+    markdown_file_kind, markdown_file_target, needs_workspace_basename_lookup,
+    pick_stripped_workspace_match, pick_workspace_basename_match, strip_repeated_workspace_prefix,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -257,9 +258,10 @@ pub struct MarkdownPresentation {
     pub source: String,
     pub images: Vec<String>,
     pub code_headers: HashMap<usize, String>,
+    pub files: HashMap<usize, MarkdownFileChip>,
 }
 
-pub fn markdown_presentation(source: &str) -> MarkdownPresentation {
+pub fn markdown_presentation(source: &str, cwd: &str, home: Option<&str>) -> MarkdownPresentation {
     let (source, images) = markdown_without_images(source);
     // File chips need a link or inline-code opener. Fenced labels need a fence;
     // ordinary prose and indented code can go straight to the retained renderer.
@@ -268,33 +270,16 @@ pub fn markdown_presentation(source: &str) -> MarkdownPresentation {
             source: source.into_owned(),
             images,
             code_headers: HashMap::new(),
+            files: HashMap::new(),
         };
     }
     let root = parse(&source);
-    let edits = links::file_reference_edits(&source, &root);
-    let mut headers = code_headers(&root).into_iter().peekable();
-    let mut code_headers = HashMap::new();
-    let mut rendered = String::with_capacity(source.len());
-    let mut previous = 0;
-    for (range, replacement) in &edits {
-        while let Some((offset, _)) = headers.peek()
-            && *offset < range.start
-        {
-            let (offset, label) = headers.next().unwrap();
-            code_headers.insert(rendered.len() + offset - previous, label);
-        }
-        rendered.push_str(&source[previous..range.start]);
-        rendered.push_str(replacement);
-        previous = range.end;
-    }
-    for (offset, label) in headers {
-        code_headers.insert(rendered.len() + offset - previous, label);
-    }
-    rendered.push_str(&source[previous..]);
+    let files = links::chips::file_chips(&source, &root, cwd, home);
     MarkdownPresentation {
-        source: rendered,
+        source: source.into_owned(),
         images,
-        code_headers,
+        code_headers: code_headers(&root).into_iter().collect(),
+        files,
     }
 }
 
@@ -902,35 +887,33 @@ mod tests {
     }
 
     #[test]
-    fn presentation_preserves_plain_text_and_converts_file_autolinks() {
+    fn presentation_preserves_source_and_describes_file_autolinks() {
         let source = "日本語の文章🌸\n\n    plain code";
-        let presentation = markdown_presentation(source);
+        let presentation = markdown_presentation(source, "/repo", None);
         assert_eq!(presentation.source, source);
         assert!(presentation.images.is_empty());
         assert!(presentation.code_headers.is_empty());
-        assert_eq!(
-            markdown_presentation("<file:///tmp/main.rs>").source,
-            // T3 treats the authored file URL as a descriptive label, retaining it before the chip.
-            "file:///tmp/main.rs [`main.rs`](<file:///tmp/main.rs>)"
-        );
+        let presentation = markdown_presentation("<file:///tmp/main.rs>", "/repo", None);
+        assert_eq!(presentation.source, "<file:///tmp/main.rs>");
+        let chip = &presentation.files[&0];
+        assert!(chip.show_caption);
+        assert_eq!(chip.file.label, "main.rs");
+        assert_eq!(chip.copy_markdown, "[file:///tmp/main.rs](/tmp/main.rs)");
     }
 
     #[test]
     fn presentation_keeps_code_labels_at_displayed_offsets() {
         let source = "[長い説明](src/first.rs)\n\n```rust filename=src/一.rs\nfn first() {}\n```\n\n![証拠](image.png)\n\n`src/a/index.ts` and `src/b/index.ts`\n\n~~~ts title=src/second.ts\nconst second = 2;\n~~~\n\n`src/last.rs`";
-        let presentation = markdown_presentation(source);
+        let presentation = markdown_presentation(source, "/repo", None);
         assert_eq!(presentation.images, ["image.png"]);
         assert!(!presentation.source.contains("![証拠]"));
-        assert!(
-            presentation
-                .source
-                .contains("[`index.ts · src/a`](<src/a/index.ts>)")
-        );
-        assert!(
-            presentation
-                .source
-                .contains("[`index.ts · src/b`](<src/b/index.ts>)")
-        );
+        let labels: Vec<_> = presentation
+            .files
+            .values()
+            .map(|chip| chip.file.label.as_str())
+            .collect();
+        assert!(labels.contains(&"index.ts · src/a"));
+        assert!(labels.contains(&"index.ts · src/b"));
         assert_eq!(presentation.code_headers.len(), 2);
         assert_eq!(
             presentation.code_headers[&presentation.source.find("```rust").unwrap()],
@@ -945,7 +928,7 @@ mod tests {
             .map(|(end, _)| end)
             .chain([source.len()])
         {
-            let partial = markdown_presentation(&source[..end]);
+            let partial = markdown_presentation(&source[..end], "/repo", None);
             for offset in partial.code_headers.keys() {
                 assert!(partial.source.is_char_boundary(*offset));
                 assert!(partial.source[*offset..].starts_with(['`', '~']));
@@ -966,7 +949,7 @@ mod tests {
             assert!(images.len() <= 1);
             assert!(images.iter().all(|url| url == "images/receipt.png"));
             markdown_blocks(partial.into());
-            markdown_presentation(&rendered);
+            markdown_presentation(&rendered, "/repo", None);
         }
         assert_eq!(markdown_without_images(source).1, ["images/receipt.png"]);
     }

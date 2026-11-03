@@ -36,6 +36,8 @@ pub(super) struct MarkdownContent {
     pub(super) rendered: SharedString,
     pub(super) images: Rc<[String]>,
     pub(super) code_headers: Arc<HashMap<usize, String>>,
+    pub(super) file_chips: super::view::markdown_file::FileChips,
+    pub(super) parser_revision: u64,
     pub(super) diagrams: HashMap<String, Arc<RenderImage>>,
     pub(super) wrap_code: bool,
     pub(super) compact_tables: bool,

@@ -1,14 +1,13 @@
-#[cfg(test)]
-use super::MarkdownBlock;
-use super::{MarkdownRun, definitions};
-use markdown::mdast::Node;
+pub(super) mod chips;
 mod detection;
+pub use chips::{MarkdownFileChip, desktop_file_reference};
 mod lookup;
 mod paths;
 pub use lookup::{
     WORKSPACE_BASENAME_LOOKUP_LIMIT, needs_workspace_basename_lookup,
     pick_stripped_workspace_match, pick_workspace_basename_match, strip_repeated_workspace_prefix,
 };
+pub use paths::basename as file_basename;
 
 pub(super) use detection::Syntax;
 
@@ -76,6 +75,18 @@ pub fn file_path_for_clipboard(path: &str, host_path: &str) -> String {
         path.replace('/', "\\")
     } else {
         path.into()
+    }
+}
+
+pub fn file_position_target(path: &str, line: Option<u32>, column: Option<u32>) -> String {
+    match line {
+        Some(line) => format!(
+            "{path}:{line}{}",
+            column
+                .map(|column| format!(":{column}"))
+                .unwrap_or_default()
+        ),
+        None => path.into(),
     }
 }
 
@@ -221,97 +232,6 @@ fn file_label(file: &MarkdownFileReference, parent: Option<&str>) -> String {
         ));
     }
     parts.join(" · ")
-}
-
-fn chip_markdown(file: &MarkdownFileReference, target: &str) -> String {
-    let fence = "`".repeat(file.label.chars().filter(|char| *char == '`').count() + 1);
-    let target = target.replace('<', "%3C").replace('>', "%3E");
-    format!("[{fence}{}{fence}](<{target}>)", file.label)
-}
-
-pub(super) fn file_reference_edits(
-    source: &str,
-    root: &Node,
-) -> Vec<(std::ops::Range<usize>, String)> {
-    fn visit(
-        node: &Node,
-        definitions: &std::collections::HashMap<&str, &str>,
-        source: &str,
-        edits: &mut Vec<(
-            std::ops::Range<usize>,
-            String,
-            MarkdownFileReference,
-            String,
-        )>,
-    ) {
-        let destination = match node {
-            Node::Link(link) => Some((link.url.as_str(), false)),
-            Node::LinkReference(link) => definitions
-                .get(link.identifier.as_str())
-                .map(|url| (*url, false)),
-            Node::InlineCode(code) => Some((code.value.as_str(), true)),
-            Node::Code(_) => return,
-            _ => None,
-        };
-        if let Some((target, implicit)) = destination {
-            if let Some(file) = file_reference(
-                target,
-                if implicit {
-                    Syntax::DesktopCode
-                } else {
-                    Syntax::Link
-                },
-            ) && let Some(position) = node.position()
-            {
-                let range = position.start.offset..position.end.offset;
-                let mut runs = Vec::new();
-                for child in node.children().into_iter().flatten() {
-                    super::inline(
-                        child,
-                        definitions,
-                        MarkdownRun {
-                            link: Some(target.into()),
-                            ..Default::default()
-                        },
-                        &mut runs,
-                    );
-                }
-                let label: String = runs.iter().map(|run| run.text.as_str()).collect();
-                let prefix = if implicit || is_file_label(&label, &file) {
-                    String::new()
-                } else {
-                    let children = node.children().expect("link has children");
-                    let start = children
-                        .first()
-                        .and_then(Node::position)
-                        .map(|position| position.start.offset);
-                    let end = children
-                        .last()
-                        .and_then(Node::position)
-                        .map(|position| position.end.offset);
-                    match (start, end) {
-                        (Some(start), Some(end)) => format!("{} ", &source[start..end]),
-                        _ => String::new(),
-                    }
-                };
-                edits.push((range, prefix, file, target.into()));
-            }
-            return;
-        }
-        for child in node.children().into_iter().flatten() {
-            visit(child, definitions, source, edits);
-        }
-    }
-    let mut edits = Vec::new();
-    visit(root, &definitions(root), source, &mut edits);
-    let labels = file_labels(edits.iter().map(|(_, _, file, _)| file.clone()));
-    edits
-        .into_iter()
-        .map(|(range, prefix, mut file, target)| {
-            relabel(&mut file, &labels);
-            (range, format!("{prefix}{}", chip_markdown(&file, &target)))
-        })
-        .collect()
 }
 
 fn file_labels(

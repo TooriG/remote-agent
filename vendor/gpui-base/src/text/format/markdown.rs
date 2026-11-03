@@ -763,7 +763,26 @@ fn parse_paragraph(
     if let Some(mut custom) = cx.markdown_extensions.parse_inline(node, &parse_cx) {
         custom.set_span(span);
         let custom = custom.with_inline_source(parse_cx.node_source(node).unwrap_or_default());
-        let text = custom.as_text().to_string();
+        let mut text = String::new();
+        if custom.has_caption() {
+            let first = paragraph.children.len();
+            if let Some(children) = node.children() {
+                text.push_str(&parse_inline_children(source, paragraph, children, cx));
+                text.push(' ');
+                let anchor = span.map_or(0, |span| span.end);
+                paragraph.push(InlineNode::new(" ").source_segments(vec![SourceSegment {
+                    rendered: 0..1,
+                    source: anchor..anchor,
+                    linear: false,
+                }]));
+            }
+            if let Some(span) = span {
+                for child in &mut paragraph.children[first..] {
+                    child.copy_groups.push(span);
+                }
+            }
+        }
+        text.push_str(custom.as_text());
         paragraph.push(InlineNode::custom(custom));
         return text;
     }
@@ -2216,6 +2235,51 @@ mod tests {
 
     struct TickerPlugin {
         name: &'static str,
+    }
+
+    #[test]
+    fn inline_captions_wrap_as_text_but_copy_once_with_the_object() {
+        let source = "before [**日本語の説明**](a.rs) after";
+        let extensions = MarkdownExtensions::default().plugin(
+            crate::text::markdown_ext::TestInlinePlugin::new("file").parse_with(|node, _| {
+                let Node::Link(_) = node else { return None };
+                Some(
+                    MarkdownNode::new("file", ())
+                        .text("a.rs")
+                        .with_caption(true)
+                        .source_markdown("[copied](a.rs)"),
+                )
+            }),
+        );
+        let mut cx = NodeContext {
+            markdown_extensions: extensions.into(),
+            ..Default::default()
+        };
+        let document = parse(source, &mut cx).unwrap();
+        let BlockNode::Paragraph(paragraph) = &document.blocks[0] else {
+            panic!()
+        };
+        assert_eq!(paragraph.text(), "before 日本語の説明 a.rs after");
+        assert_eq!(document.to_markdown(), "before [copied](a.rs) after");
+        assert_eq!(
+            document.copy_source(0..source.len()),
+            "before [copied](a.rs) after"
+        );
+        // An unpainted middle block uses the same projection as select-all.
+        let source = format!("head\n\n{source}\n\ntail");
+        let document = parse(&source, &mut cx).unwrap();
+        for (index, text) in [(0, "head"), (2, "tail")] {
+            let BlockNode::Paragraph(paragraph) = &document.blocks[index] else {
+                panic!()
+            };
+            let mut state = paragraph.state.lock().unwrap();
+            state.text = text.into();
+            state.selection = Some((0..text.len()).into());
+        }
+        assert_eq!(
+            document.selected_text(crate::text::SelectionFormat::Source, Some(0..=2)),
+            "head\n\nbefore [copied](a.rs) after\n\ntail"
+        );
     }
 
     #[test]

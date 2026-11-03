@@ -417,6 +417,45 @@ enum BlockTextKind {
 }
 
 impl BlockNode {
+    pub(super) fn source_copy_overrides(&self, overrides: &mut Vec<(Span, String)>) {
+        let paragraph = |paragraph: &Paragraph, overrides: &mut Vec<(Span, String)>| {
+            for inline in &paragraph.children {
+                if let Some(node) = &inline.custom
+                    && node.overrides_source_copy()
+                    && let Some(span) = node.span
+                {
+                    overrides.push((span, node.to_markdown()));
+                }
+            }
+        };
+        match self {
+            Self::Root { children, .. }
+            | Self::Blockquote { children, .. }
+            | Self::List { children, .. }
+            | Self::ListItem { children, .. } => {
+                for child in children {
+                    child.source_copy_overrides(overrides);
+                }
+            }
+            Self::Paragraph(children) | Self::Heading { children, .. } => {
+                paragraph(children, overrides);
+            }
+            Self::Table(table) => {
+                for row in &table.children {
+                    for cell in &row.children {
+                        paragraph(&cell.children, overrides);
+                    }
+                }
+            }
+            Self::Custom { node, .. } if node.overrides_source_copy() => {
+                if let Some(span) = node.span {
+                    overrides.push((span, node.to_markdown()));
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub(super) fn is_list_item(&self) -> bool {
         matches!(self, Self::ListItem { .. })
     }
@@ -1015,6 +1054,7 @@ pub struct InlineNode {
     pub(crate) marks: Vec<(Range<usize>, TextMark)>,
     /// Rendered UTF-8 byte spans paired with their exact Markdown source spans.
     pub(crate) source_segments: Vec<SourceSegment>,
+    pub(crate) copy_groups: Vec<Span>,
 
     pub(super) state: Arc<Mutex<InlineState>>,
 }
@@ -1026,6 +1066,7 @@ impl PartialEq for InlineNode {
             && self.custom == other.custom
             && self.marks == other.marks
             && self.source_segments == other.source_segments
+            && self.copy_groups == other.copy_groups
     }
 }
 
@@ -1091,12 +1132,21 @@ pub(crate) fn wrap_with_mark(text: &str, mark: &TextMark) -> String {
 #[derive(Default)]
 struct MarkdownSource {
     pieces: Vec<(String, Vec<TextMark>)>,
+    caption_starts: HashMap<(usize, usize), usize>,
     /// Whether an inline object or image was emitted, whose rendered text
     /// stands in for source that spells out more.
     has_objects: bool,
 }
 
 impl MarkdownSource {
+    fn begin_caption_groups(&mut self, groups: &[Span]) {
+        for group in groups {
+            self.caption_starts
+                .entry((group.start, group.end))
+                .or_insert(self.pieces.len());
+        }
+    }
+
     fn push_str(&mut self, source: &str) {
         self.push_marked(source, &TextMark::default());
     }
@@ -1176,12 +1226,24 @@ impl MarkdownSource {
     }
 
     fn push_object(&mut self, node: &InlineNode) {
+        self.begin_caption_groups(&node.copy_groups);
+        let custom = node.custom.as_ref().unwrap();
+        if custom.has_caption()
+            && let Some(span) = custom.span
+            && let Some(start) = self.caption_starts.remove(&(span.start, span.end))
+        {
+            self.pieces.truncate(start);
+            self.caption_starts
+                .retain(|(group_start, group_end), index| {
+                    *index < start || (*group_start <= span.start && *group_end >= span.end)
+                });
+        }
         self.has_objects = true;
         let mut mark = TextMark::default();
         for (_, layer) in &node.marks {
             mark.merge(layer.clone());
         }
-        self.push_marked(&node.custom.as_ref().unwrap().to_markdown(), &mark);
+        self.push_marked(&custom.to_markdown(), &mark);
     }
 
     fn is_empty(&self) -> bool {
@@ -1287,6 +1349,7 @@ fn emit_run(
         }
         selected.emitted = true;
 
+        out.begin_caption_groups(&child.copy_groups);
         out.push_text(&child.text, &child.marks, (lo - start)..(hi - start));
     }
 
@@ -1482,6 +1545,7 @@ impl InlineNode {
             custom_selection: Arc::default(),
             marks: vec![],
             source_segments: vec![],
+            copy_groups: vec![],
             state: Arc::new(Mutex::new(InlineState::default())),
         }
     }
@@ -3482,6 +3546,7 @@ impl Paragraph {
         if self.children.iter().any(|node| node.custom.is_some()) {
             let mut source = MarkdownSource::default();
             for node in &self.children {
+                source.begin_caption_groups(&node.copy_groups);
                 if node.custom.is_some() {
                     source.push_object(node);
                 } else {
@@ -4592,6 +4657,38 @@ mod tests {
         assert_eq!(paragraph.selected_text(), "");
         assert_eq!(paragraph.selected_source(), "");
         assert!(!paragraph.has_selection());
+    }
+
+    #[test]
+    fn caption_partial_selection_and_atomic_copy_do_not_duplicate_text() {
+        let span = Span { start: 7, end: 38 };
+        let before = InlineNode::new("before ");
+        let mut caption = InlineNode::new("日本語の説明 ");
+        caption.copy_groups.push(span);
+        let mut custom = MarkdownNode::new("file", ())
+            .text("a.rs")
+            .with_caption(true)
+            .source_markdown("[日本語の説明](a.rs)");
+        custom.set_span(Some(span));
+        let chip = InlineNode::custom(custom);
+        let paragraph = Paragraph {
+            children: vec![before, caption, chip],
+            ..Default::default()
+        };
+        let chip = &paragraph.children[2];
+        let run = "before 日本語の説明 ";
+        {
+            let mut state = chip.state.lock().unwrap();
+            state.text = run.into();
+            state.selection = Some((7..13).into());
+        }
+        assert_eq!(paragraph.selected_source(), "日本");
+        chip.state.lock().unwrap().selection = Some((2..run.len()).into());
+        *chip.custom_selection.lock().unwrap() = true;
+        assert_eq!(paragraph.selected_source(), "fore [日本語の説明](a.rs)");
+        assert_eq!(paragraph.to_markdown(), "before [日本語の説明](a.rs)\n\n");
+        chip.state.lock().unwrap().selection = None;
+        assert_eq!(paragraph.selected_source(), "[日本語の説明](a.rs)");
     }
 
     #[test]

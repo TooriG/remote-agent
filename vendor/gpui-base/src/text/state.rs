@@ -462,7 +462,13 @@ impl TextViewState {
 
         if self.select_all {
             if format != SelectionFormat::Plain {
-                return self.source().to_string();
+                if self.parsed_content.document.source.as_ref() != self.source().as_ref() {
+                    return self.source().to_string();
+                }
+                return self
+                    .parsed_content
+                    .document
+                    .copy_source(0..self.source().len());
             }
 
             return self.parsed_content.document.text();
