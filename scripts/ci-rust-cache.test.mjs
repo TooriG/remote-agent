@@ -50,7 +50,6 @@ test('vendored crates use the compiler cache and preserve arguments', async (t) 
 test('application crates, registry, git and compiler probes execute directly', async (t) => {
   for (const crate of [
     'registry/src/example', 'git/checkouts/example', 'workspace-sibling/crate',
-    'workspace/target/cargo-home/registry/src/example', 'workspace/target/cargo-home/git/checkouts/example',
     'workspace/crates/agent-core', 'workspace/vendor-sibling/crate', '',
   ]) {
     await t.test(crate || 'compiler probe', (t) => {

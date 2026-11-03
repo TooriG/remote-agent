@@ -20,29 +20,9 @@ complexity:
     cccc --table --top-cyclomatic 20 . || failed=1
     exit "$failed"
 
-# Run all unit tests; CI can add explicit integration targets to the same build.
-unit-tests *targets:
-    #!/usr/bin/env bash
-    set -uo pipefail
-    failed=0
-    if [[ -n ${AGENT_REMOTE_BUILDER-} ]]; then
-        scripts/remote-run.sh --native "$AGENT_REMOTE_BUILDER" just portable-unit-tests "$@" &
-    else
-        just portable-unit-tests "$@" &
-    fi
-    portable_pid=$!
-    # Builds of whole apps and cross-compiled bindings belong to E2E and CI
-    # checks such as `just ios-markdown`, not to unit tests.
-    if [[ $(uname -s) == Darwin ]]; then
-        cargo test --locked -p native-focus --test native_focus || failed=1
-        bash scripts/test-ios-scroll.sh || failed=1
-    fi
-    wait "$portable_pid" || failed=1
-    exit "$failed"
-
-# Run the unit tests that do not need macOS.
+# Run platform-independent unit tests on the configured builder.
 [group('portable')]
-portable-unit-tests *targets:
+unit-tests *targets:
     #!/usr/bin/env bash
     set -uo pipefail
     failed=0
@@ -58,6 +38,11 @@ portable-unit-tests *targets:
     CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$PWD/target}/agent-peer" cargo test --locked --no-fail-fast --manifest-path tools/agent-peer/Cargo.toml || failed=1
     wait "$rust_pid" || failed=1
     exit "$failed"
+
+# macOS-only unit tests; CI runs these separately from portable validation.
+apple-unit-tests:
+    cargo test --locked -p native-focus --test native_focus
+    bash scripts/test-ios-scroll.sh
 
 # Prune inactive Cargo outputs older than 3 days or over the 32 GiB idle budget, here and on the remote builder.
 clean-builds *args:
@@ -160,8 +145,8 @@ iroh-e2e:
     cargo build --locked --package agent-process --bin agent-provider-supervisor
     cargo test --locked --package host-fixture --test iroh_host
 
-# Check the local Mac Host/desktop and iPhone client, or one selected language.
-quality language="apple" *options:
+# Lint and validate contracts without building native clients or starting E2E.
+quality language="apple":
     scripts/quality.sh "$@"
 
 # Audit diff presentation tests in an isolated copy; extra arguments go to cargo-mutants.

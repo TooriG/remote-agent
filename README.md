@@ -44,6 +44,11 @@ scripts/dev-env.sh node scripts/install-claude-sdk.mjs target/debug
 scripts/dev-env.sh cargo run -p host-daemon -- --name 'BEX Host'
 ```
 
+With a remote builder configured, Cargo build/run commands execute there. For a
+local Mac Host, use `scripts/dev-env.sh just build-host-macos dev`, then run
+`target/debug/host-daemon --name 'BEX Host'`; the build recipe installs its SDK
+runtime and signs the executables.
+
 | Flag | Meaning |
 | --- | --- |
 | `--state-dir` | Credential directory for a new Host; otherwise the remembered directory is used (initial macOS default: `~/Library/Application Support/app.bex.BEX/`). It does not permit a second normal Host. |
@@ -225,14 +230,14 @@ authentication remain machine-local; see the standalone README for details.
 ## Verify
 
 ```sh
-scripts/dev-env.sh just unit-tests                  # all unit tests; no Simulator or emulator
+scripts/dev-env.sh just unit-tests                  # portable unit tests on the configured builder
 scripts/dev-env.sh cargo test --workspace            # Rust, including the behavior corpus
 scripts/dev-env.sh just iroh-e2e                     # real daemon over isolated iroh sessions
 scripts/dev-env.sh just android-e2e                  # fresh Android 17 emulator: network permission, Markdown, persistence and Host recovery
 scripts/dev-env.sh just ios-e2e [TestMethod…]        # Simulator XCUITest against a fixture Host
 scripts/dev-env.sh just conversation-ui             # selection, side chat, and activity regressions
 scripts/dev-env.sh just macos-e2e                   # native Browser authentication and persistence
-scripts/dev-env.sh just quality [apple|rust|kotlin|swift]  # default: Mac Host/desktop and iPhone checks
+scripts/dev-env.sh just quality [apple|rust|kotlin|swift]  # source checks and contracts; no native builds or E2E
 ```
 
 Claude contracts run with `scripts/dev-env.sh cargo test --locked -p host-fixture --test claude`. Build the companion supervisor first (see above). The tests use a deterministic external CLI boundary with real Store, iroh, Host routing, native transcript files and isolated Git/filesystem state. An anonymized transcript from Claude Code 2.1.266 also exercises native format compatibility. The opt-in `live_claude_subscription_completes_and_resumes_through_store_and_host` test uses the real authenticated CLI; set `AGENT_LIVE_CLAUDE_PROGRAM` to its absolute path and run that test with `-- --ignored --exact` to verify subscription inference, resumption across a Host restart, interruption and successful input after interruption.
@@ -243,8 +248,10 @@ configured in [native.yml](.github/workflows/native.yml).
 
 Development and test builds keep filename/line-number backtraces without full variable debug information. Use `CARGO_PROFILE_DEV_DEBUG=full` when a debugger needs variables. Quality checks disable Rust incremental compilation; Kache manages incremental state for normal local builds.
 
-The Nix shells use the pinned Kache compiler wrapper to share eligible build
-results across worktrees. Set `KACHE_CACHE_DIR` to select a cache location;
+Cargo shares downloaded dependencies through `CARGO_HOME` (default `~/.cargo`);
+compilation outputs stay in each worktree’s `target`. The Nix shells use the
+pinned Kache compiler wrapper to share eligible build results across worktrees.
+Set `KACHE_CACHE_DIR` to select a cache location;
 when `bex.buildRoot` is configured the default is `<buildRoot>/.kache`.
 Use `scripts/dev-env.sh kache stats --last-build` to inspect reuse or
 `scripts/dev-env.sh kache explain` to investigate misses. Cache policy lives in
@@ -269,23 +276,27 @@ when it is unavailable, including when the disk is unplugged. Remove the setting
 with `git config --local --unset bex.buildRoot` to use local targets for new
 worktrees again.
 
-To run Rust checks and tests on a Linux machine, make it reachable through a
-non-interactive SSH host name and set `git config --local bex.remoteBuilder <host>`.
-The builder needs Nix, Git, Bash 5.1 or later, util-linux and GNU tar.
-`scripts/dev-env.sh` then runs `cargo check`, `clippy`, `test`, `nextest` and
-`mutants`, and the `portable` recipes in `just --list`, on the builder against the
-files a commit of the worktree would contain; `just unit-tests` keeps only its
-macOS tests here. Sources and reports under `target` that the command creates or
-changes come back. Builds for Apple targets, such as `--target aarch64-apple-darwin`,
-stay local. Commands fail when the builder is unreachable, and `just clean-builds`
-prunes its outputs too. Remove the setting with
+To offload Rust builds and verification to Linux, make the builder reachable
+through a non-interactive SSH host name and set
+`git config --local bex.remoteBuilder <host>`. It needs Nix, Git, Bash 5.1 or
+later, util-linux and GNU tar. `scripts/dev-env.sh` runs `cargo build`, `rustc`,
+`run`, `check`, `clippy`, `test`, `nextest` and `mutants`, and the `portable`
+recipes in `just --list`, against a snapshot of the worktree on that builder.
+`just unit-tests` runs there in full; `just quality` keeps Swift source checks
+local and delegates Rust verification. Sources and reports the command creates
+or changes return to the Mac; compiled Linux binaries stay on the builder.
+Apple targets such as `--target aarch64-apple-darwin` and explicit native recipes
+stay local. An unreachable builder fails the command. Remove the setting with
 `git config --local --unset bex.remoteBuilder` to build locally again.
 
-`just quality` prunes inactive build outputs. Preview the plan with
-`scripts/dev-env.sh just clean-builds --dry-run`; the owning
-[cleanup implementation](crates/xtask/src/build_cleanup.rs) defines retention and
-protects active builds. Keep backups and verification records outside Cargo's
-`debug` and `release` directories.
+Native clients CI runs `just apple-unit-tests`, native builds and E2E explicitly.
+Local native acceptance is for requested debugging. `just quality` does not
+start native acceptance or prune builds. To reclaim inactive Cargo outputs,
+preview `scripts/dev-env.sh just clean-builds --dry-run`, then run it without
+`--dry-run`; this also prunes the builder. The
+[cleanup implementation](crates/xtask/src/build_cleanup.rs) protects active
+builds. Keep backups and verification records outside Cargo’s `debug` and
+`release` directories.
 
 Simulator and fixture runs do not verify physical devices, production Keychain access, camera, or real Codex accounts.
 
