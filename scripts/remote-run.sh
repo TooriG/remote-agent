@@ -12,6 +12,15 @@ shift
 # Relative to the builder's home directory.
 root=.cache/agent-remote-builds
 key=$(printf '%s\n' "$PWD" | git hash-object --stdin)
+# Serialize the snapshot, push, execution and returned outputs together. The
+# builder's lock starts after the push and ends before the output download.
+exec 9> "$(git rev-parse --git-path agent-remote-run.lock)"
+perl -MFcntl=:flock -e '
+    if (!flock(STDIN, LOCK_EX | LOCK_NB)) {
+        warn "Waiting for another remote run of this worktree\n";
+        flock(STDIN, LOCK_EX) or die "Could not lock remote worktree: $!\n";
+    }
+' <&9
 work=$(mktemp -d)
 trap 'ssh -o ControlPath="$work/control" -O exit "$builder" 2> /dev/null || true; rm -rf "$work"' EXIT
 
@@ -88,7 +97,10 @@ GIT_SSH_COMMAND="ssh -o ControlPath=$work/control" \
 status=0
 # Standard input stays open until this script exits; the builder watches it.
 "${remote[@]}" "bash -c $(quote "$remote_script") remote-run $(quote "$root" "$key" "$@")" \
-    < <(while kill -0 "$$" 2> /dev/null; do sleep 5; done < /dev/null 2> /dev/null) || status=$?
+    < <(
+        exec < /dev/null 2> /dev/null 9>&-
+        while kill -0 "$$" 2> /dev/null; do sleep 5; done
+    ) || status=$?
 if ! "${remote[@]}" "cat $(quote "$root/$key.tar") && rm -f $(quote "$root/$key.tar")" |
     tar --extract --keep-directory-symlink --file=- --directory="$PWD"; then
     echo "Could not return the outputs from $builder" >&2

@@ -124,3 +124,16 @@ test('manual runs and unavailable comparison data conservatively verify everythi
     await t.test(JSON.stringify(options), (t) => assert.deepEqual(select(t, ['README.md'], options).selected, platforms));
   }
 });
+
+test('Android acceptance counts include every test declared by its selected classes', () => {
+  const script = readFileSync(new URL('./android-e2e.sh', import.meta.url), 'utf8');
+  const groups = [...script.matchAll(/-e class ([\w.,]+)[\s\S]*?\| tee "\$log\.(\w+)\.log"[\s\S]*?grep -qx 'OK \((\d+) tests?\)'/g)];
+  assert.equal(groups.length, 4);
+  for (const [, classes, label, expected] of groups) {
+    const count = classes.split(',').reduce((count, name) => {
+      const source = readFileSync(new URL(`../apps/mobile/src/androidTest/kotlin/${name.replaceAll('.', '/')}.kt`, import.meta.url), 'utf8');
+      return count + [...source.matchAll(/^\s*@Test\b/gm)].length;
+    }, 0);
+    assert.equal(Number(expected), count, `${label} acceptance count is out of date`);
+  }
+});

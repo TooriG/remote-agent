@@ -13,7 +13,11 @@ if [[ $language == apple || $language == rust ]]; then
     actionlint
     cargo fmt --all --check
     nix build .#agent-peer --no-link
-    cargo clippy --locked --workspace --all-targets -- --no-deps -D warnings
+    clippy=(cargo clippy --locked --workspace --all-targets -- --no-deps -D warnings)
+    if [[ -n ${AGENT_REMOTE_BUILDER-} ]]; then
+        clippy=(scripts/remote-run.sh "$AGENT_REMOTE_BUILDER" "${clippy[@]}")
+    fi
+    "${clippy[@]}"
     integration_targets=(
         --test errors --test iroh --test iroh_host --test browser_bridge
         --test management --test codex_accounts --test claude --test adapter_conformance
