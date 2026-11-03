@@ -13,7 +13,7 @@ members = [
     "crates/xtask",
     "crates/host-fixture",
 ]
-exclude = ["vendor/gpui-pre", "vendor/gpui-base"]
+exclude = ["vendor/gpui-pre", "vendor/gpui-base", "vendor/askama_derive"]
 resolver = "2"
 
 [workspace.package]
@@ -57,6 +57,8 @@ url = "2.5.8"
 zeroize = "1.9.1"
 
 [patch.crates-io]
+# Bindgen must work with the standard, symlinked Cargo home without env overrides.
+askama_derive = { path = "vendor/askama_derive" }
 # Retain nested caches and expose current-frame state for activity overlays.
 gpui-pre = { path = "vendor/gpui-pre" }
 gpui-base = { path = "vendor/gpui-base" }
