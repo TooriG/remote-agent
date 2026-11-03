@@ -269,6 +269,13 @@ jobs:
         run: nix develop .#android-build --command node scripts/prune-build-cache.mjs "$GRADLE_CACHE_KEY"
       - name: Enable emulator hardware acceleration
         run: sudo chmod a+rw /dev/kvm
+      - name: Restore Linux Host compiler dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          cmd-format: &host-rust-cache-command nix develop .#host-build --command {0}
+          shared-key: &host-rust-cache-key wsl-runtime-host-build-${{ hashFiles('flake.lock') }}
+          # The WSL job owns this cache; Android consumes its Host dependencies.
+          save-if: false
       - name: Build isolated Android Host fixtures
         run: nix develop .#host-build --command cargo build --locked -p host-fixture -p codex-app-server -p agent-process --bins
       - name: Android emulator acceptance
@@ -576,8 +583,8 @@ jobs:
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          cmd-format: nix develop .#host-build --command {0}
-          shared-key: wsl-runtime-host-build-${{ hashFiles('flake.lock') }}
+          cmd-format: *host-rust-cache-command
+          shared-key: *host-rust-cache-key
           save-if: ${{ github.event_name != 'pull_request' }}
       - name: Build and package the Linux Host for the Windows revision
         run: |
