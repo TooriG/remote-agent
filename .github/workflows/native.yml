@@ -364,6 +364,8 @@ jobs:
           KACHE_CACHE_DIR: ${{ runner.temp }}/kache-store
           KACHE_RUNTIME_DIR: ${{ runner.temp }}/kache-runtime
           KACHE_MAX_SIZE: 2GiB
+          # Bound the snapshot even when target/ still shares the cached files.
+          KACHE_GC_EVICT_SHARED: '1'
         run: |
           set -o pipefail
           mkdir -p target/qa
