@@ -17,4 +17,6 @@ tokio.workspace = true
 uuid = "1"
 
 [dev-dependencies]
+agent-protocol = { path = "../agent-protocol", features = ["test-support"] }
 tempfile = "3"
+tokio = { workspace = true, features = ["process"] }

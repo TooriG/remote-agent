@@ -11,7 +11,7 @@ agent-transport = { path = "../../crates/agent-transport" }
 tracing.workspace = true
 anyhow.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-tokio = { workspace = true, features = ["fs"] }
+tokio = { workspace = true, features = ["fs", "process"] }
 tokio-util = { workspace = true, features = ["rt"] }
 agent-core = { path = "../../crates/agent-core", features = ["diagrams"] }
 agent-local-host = { path = "../../crates/agent-local-host" }

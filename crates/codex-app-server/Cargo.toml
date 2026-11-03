@@ -10,7 +10,7 @@ agent-process = { path = "../agent-process" }
 agent-transport = { path = "../agent-transport" }
 serde.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["process"] }
 
 [dev-dependencies]
 tempfile = "3"

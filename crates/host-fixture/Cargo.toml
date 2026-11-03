@@ -18,7 +18,7 @@ codex-app-server = { path = "../codex-app-server" }
 host-daemon = { path = "../host-daemon" }
 serde = { workspace = true, features = ["rc"] }
 serde_json.workspace = true
-tokio = { workspace = true, features = ["io-std"] }
+tokio = { workspace = true, features = ["io-std", "process", "signal"] }
 tokio-util.workspace = true
 zeroize.workspace = true
 png = "0.18.1"

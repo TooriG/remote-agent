@@ -15,7 +15,7 @@ process-wrap = { version = "10", features = ["tokio1"] }
 
 [target.'cfg(unix)'.dependencies]
 serde.workspace = true
-tokio = { workspace = true, features = ["net"] }
+tokio = { workspace = true, features = ["net", "process", "signal"] }
 plist = "1.10"
 roxmltree = "0.21"
 sha2 = "0.11"
