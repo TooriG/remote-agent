@@ -971,7 +971,8 @@ async fn archive_test_bundle(
     cancel: &watch::Receiver<bool>,
 ) -> Result<()> {
     let archive = target.join("qa/ios-e2e.tar.gz");
-    let mut arguments = args![vec; "tar", "-czf", &archive, "-C", target];
+    // This disposable CI handoff favors compression speed over minimum size.
+    let mut arguments = args![vec; "tar", "-I", "gzip -1", "-cf", &archive, "-C", target];
     arguments.extend(test_bundle_paths(browser).into_iter().map(Into::into));
     supervision::run(&arguments, target, Io::Log(log), cancel, BUILD_TIMEOUT).await?;
     println!("Prepared iOS test bundle: {}", archive.display());
