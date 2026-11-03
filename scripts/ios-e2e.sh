@@ -6,6 +6,10 @@ cd "$(dirname "$0")/.."
     echo 'iOS E2E requires an Apple Silicon Mac with Xcode' >&2; exit 2
 }
 options=()
+if [[ ${1:-} == --build-only || ${1:-} == --prebuilt ]]; then
+    options+=("$1")
+    shift
+fi
 if [[ ${1:-} == --maestro ]]; then
     options+=(--maestro)
     shift
@@ -89,4 +93,7 @@ fi
 for test in "$@"; do
     [[ $test == testSimulator* ]] || { echo 'Only isolated Simulator tests are allowed' >&2; exit 2; }
 done
+if [[ ${options[0]:-} == --prebuilt ]]; then
+    exec "${CARGO_TARGET_DIR:-$PWD/target}/debug/xtask" ios-e2e "${options[@]}" "$@"
+fi
 exec cargo xtask ios-e2e "${options[@]}" "$@"

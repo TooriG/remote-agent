@@ -9,6 +9,13 @@ pub enum TestDriver {
     Maestro,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum BuildMode {
+    BuildAndTest,
+    BuildOnly,
+    Prebuilt,
+}
+
 fn check_maestro_report(report: &str, tests: &[String]) -> Result<()> {
     let document = roxmltree::Document::parse(report)?;
     let cases = document
@@ -821,7 +828,7 @@ async fn build_test_bundle(
     target: &Path,
     build: &Path,
     driver: TestDriver,
-    tests: &[String],
+    browser: bool,
     log: &File,
     cancel: &watch::Receiver<bool>,
 ) -> Result<(PathBuf, f64)> {
@@ -860,7 +867,7 @@ async fn build_test_bundle(
     ] {
         supervision::run(&arguments, cwd, Io::Log(log), cancel, BUILD_TIMEOUT).await?;
     }
-    if needs_browser_fixture(tests) {
+    if browser {
         supervision::run(
             &args!["cargo", "build", "--locked", "-p", "agent-desktop"],
             cwd,
@@ -906,11 +913,50 @@ async fn build_test_bundle(
     )
     .await?;
     let seconds = build_started.elapsed().as_secs_f64();
-    let runs = xctestrun_files(&products)?;
-    let [run]: [PathBuf; 1] = runs
+    Ok((prebuilt_test_bundle(target, browser)?, seconds))
+}
+
+fn test_bundle_paths(browser: bool) -> Vec<&'static str> {
+    let mut paths = vec![
+        "qa/ios-derived-data/Build/Products",
+        "debug/xtask",
+        "debug/agent-ui-fixture",
+        "debug/agent-codex-fixture",
+        "debug/agent-claude-fixture",
+        "debug/agent-provider-supervisor",
+        "debug/agent-claude-sdk.mjs",
+        "debug/Claude-Agent-SDK-LICENSE.md",
+    ];
+    if browser {
+        paths.push("debug/agent-desktop");
+    }
+    paths
+}
+
+fn prebuilt_test_bundle(target: &Path, browser: bool) -> Result<PathBuf> {
+    for path in test_bundle_paths(browser) {
+        if !target.join(path).exists() {
+            return Err(format!("Missing prebuilt iOS test dependency: {path}").into());
+        }
+    }
+    let [run]: [PathBuf; 1] = xctestrun_files(&target.join("qa/ios-derived-data/Build/Products"))?
         .try_into()
         .map_err(|_| "Expected exactly one xctestrun file")?;
-    Ok((run, seconds))
+    Ok(run)
+}
+
+async fn archive_test_bundle(
+    target: &Path,
+    browser: bool,
+    log: &File,
+    cancel: &watch::Receiver<bool>,
+) -> Result<()> {
+    let archive = target.join("qa/ios-e2e.tar.gz");
+    let mut arguments = args![vec; "tar", "-czf", &archive, "-C", target];
+    arguments.extend(test_bundle_paths(browser).into_iter().map(Into::into));
+    supervision::run(&arguments, target, Io::Log(log), cancel, BUILD_TIMEOUT).await?;
+    println!("Prepared iOS test bundle: {}", archive.display());
+    Ok(())
 }
 
 fn report_rounds(records: &Path, rounds: usize, test_count: usize) -> Result<()> {
@@ -946,7 +992,12 @@ fn xctestrun_files(products: &Path) -> Result<Vec<PathBuf>> {
         .collect())
 }
 
-pub async fn run(tests: Vec<String>, without_codex: bool, driver: TestDriver) -> Result<()> {
+pub async fn run(
+    tests: Vec<String>,
+    without_codex: bool,
+    driver: TestDriver,
+    build_mode: BuildMode,
+) -> Result<()> {
     if std::env::consts::OS != "macos" || std::env::consts::ARCH != "aarch64" {
         return Err("iOS E2E requires an Apple Silicon Mac with Xcode".into());
     }
@@ -957,9 +1008,6 @@ pub async fn run(tests: Vec<String>, without_codex: bool, driver: TestDriver) ->
     if driver == TestDriver::Maestro {
         validate_maestro_flows(&tests)?;
     }
-    let groups = (0..workers)
-        .map(|index| partition_tests(&tests, index, workers))
-        .collect::<Result<Vec<_>>>()?;
     let cancel = supervision::cancellation();
     let started = Instant::now();
     let cwd = std::env::current_dir()?;
@@ -1019,8 +1067,19 @@ pub async fn run(tests: Vec<String>, without_codex: bool, driver: TestDriver) ->
         }
     }
     let log = File::create(records.join("build.log"))?;
-    let (test_run, build_seconds) =
-        build_test_bundle(&cwd, &target, &build, driver, &tests, &log, &cancel).await?;
+    let browser = needs_browser_fixture(&tests);
+    let (test_run, build_seconds) = if build_mode == BuildMode::Prebuilt {
+        println!("Using the prebuilt iOS app and Host fixtures");
+        (prebuilt_test_bundle(&target, browser)?, 0.0)
+    } else {
+        build_test_bundle(&cwd, &target, &build, driver, browser, &log, &cancel).await?
+    };
+    if build_mode == BuildMode::BuildOnly {
+        return archive_test_bundle(&target, browser, &log, &cancel).await;
+    }
+    let groups = (0..workers)
+        .map(|index| partition_tests(&tests, index, workers))
+        .collect::<Result<Vec<_>>>()?;
     if needs_media_fixtures(&tests) {
         supervision::run(
             &args![
@@ -1130,6 +1189,99 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn shared_test_bundle_preserves_products_and_executables() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("build");
+        let products = target.join("qa/ios-derived-data/Build/Products");
+        fs::create_dir_all(&products).unwrap();
+        fs::create_dir_all(target.join("debug")).unwrap();
+        for name in [
+            "xtask",
+            "agent-ui-fixture",
+            "agent-codex-fixture",
+            "agent-claude-fixture",
+            "agent-provider-supervisor",
+            "agent-desktop",
+        ] {
+            let path = target.join("debug").join(name);
+            fs::write(&path, format!("executable {name}")).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        fs::write(target.join("debug/agent-claude-sdk.mjs"), "SDK runtime").unwrap();
+        fs::write(target.join("debug/Claude-Agent-SDK-LICENSE.md"), "license").unwrap();
+        fs::write(products.join("Bex.xctestrun"), "test configuration").unwrap();
+        let app = products.join("Debug-iphonesimulator/bex.app");
+        fs::create_dir_all(&app).unwrap();
+        fs::write(app.join("bex"), "iPhone app").unwrap();
+        symlink("bex", app.join("app-link")).unwrap();
+        let log = File::create(directory.path().join("archive.log")).unwrap();
+        let (_sender, cancel) = watch::channel(false);
+        for browser in [false, true] {
+            archive_test_bundle(&target, browser, &log, &cancel)
+                .await
+                .unwrap();
+            let restored = tempfile::tempdir().unwrap();
+            supervision::run(
+                &args![
+                    "tar",
+                    "-xzf",
+                    target.join("qa/ios-e2e.tar.gz"),
+                    "-C",
+                    restored.path()
+                ],
+                directory.path(),
+                Io::Log(&log),
+                &cancel,
+                SETUP_TIMEOUT,
+            )
+            .await
+            .unwrap();
+            let restored = restored.path();
+            let run = prebuilt_test_bundle(restored, browser).unwrap();
+            assert_eq!(fs::read_to_string(run).unwrap(), "test configuration");
+            assert_eq!(
+                fs::read_to_string(restored.join(
+                    "qa/ios-derived-data/Build/Products/Debug-iphonesimulator/bex.app/app-link"
+                ))
+                .unwrap(),
+                "iPhone app"
+            );
+            assert_eq!(
+                fs::metadata(restored.join("debug/xtask"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o755
+            );
+            assert_eq!(restored.join("debug/agent-desktop").exists(), browser);
+            if !browser {
+                assert!(
+                    prebuilt_test_bundle(restored, true)
+                        .unwrap_err()
+                        .to_string()
+                        .contains("agent-desktop")
+                );
+            }
+            fs::remove_file(restored.join("debug/agent-ui-fixture")).unwrap();
+            assert!(
+                prebuilt_test_bundle(restored, browser)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("agent-ui-fixture")
+            );
+        }
+        fs::remove_file(products.join("Bex.xctestrun")).unwrap();
+        assert!(prebuilt_test_bundle(&target, true).is_err());
+        for name in ["first.xctestrun", "second.xctestrun"] {
+            fs::write(products.join(name), "configuration").unwrap();
+        }
+        assert!(prebuilt_test_bundle(&target, true).is_err());
+    }
 
     #[test]
     fn test_environment_parses_defaults_and_bounds_worker_and_round_counts() {

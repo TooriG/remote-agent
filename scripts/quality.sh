@@ -2,37 +2,36 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 case "${1:-apple}" in apple|rust|kotlin|swift) language=${1:-apple} ;; *) echo 'quality expects apple, rust, kotlin, or swift' >&2; exit 2 ;; esac
+if (( $# )); then shift; fi
 export CARGO_INCREMENTAL=0
-failed=0
+# Reject inexpensive failures before compiling apps or starting acceptance.
+if [[ $language == apple || $language == swift ]]; then
+    swiftformat --lint apps/mobile/iosApp/Bex apps/mobile/iosApp/UITests apps/mobile/iosApp/TaskActivity
+    swiftlint lint --strict
+fi
 if [[ $language == apple || $language == rust ]]; then
-    actionlint || failed=1
-    nix build .#agent-peer --no-link || failed=1
-    cargo fmt --all --check || failed=1
-    cargo clippy --locked --workspace --all-targets -- --no-deps -D warnings || failed=1
+    actionlint
+    cargo fmt --all --check
+    nix build .#agent-peer --no-link
+    cargo clippy --locked --workspace --all-targets -- --no-deps -D warnings
     integration_targets=(
         --test errors --test iroh --test iroh_host --test browser_bridge
         --test management --test codex_accounts --test claude --test adapter_conformance
         --test crate_boundaries --test build_cleanup --test diagnostics
     )
-    just unit-tests "${integration_targets[@]}" || failed=1
+    just unit-tests "${integration_targets[@]}"
     if [[ $(uname -s) == Darwin ]]; then
-        just macos-e2e || failed=1
+        just macos-e2e
     fi
 fi
 if [[ $language == kotlin ]]; then
-    ./gradlew :apps:mobile:ktfmtCheck :apps:mobile:detekt --continue --console=plain || failed=1
-    just android-e2e || failed=1
+    ./gradlew :apps:mobile:ktfmtCheck :apps:mobile:detekt --continue --console=plain
+    just android-e2e
 fi
-# Every shard runs acceptance; shared Swift checks run on the first shard only.
-if [[ ( $language == apple || $language == swift ) && ${AGENT_IOS_TEST_SHARD:-0} == 0 ]]; then
-    swiftformat --lint apps/mobile/iosApp/Bex apps/mobile/iosApp/UITests apps/mobile/iosApp/TaskActivity || failed=1
-    swiftlint lint --strict || failed=1
-    if [[ $language == swift ]]; then
-        just ios-markdown || failed=1
-    fi
+if [[ $language == swift ]]; then
+    just ios-markdown
 fi
 if [[ $language == apple || $language == swift ]]; then
-    just conversation-ui || failed=1
+    just conversation-ui "$@"
 fi
-just clean-builds || failed=1
-exit "$failed"
+just clean-builds

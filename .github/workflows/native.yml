@@ -132,6 +132,7 @@ jobs:
           echo "version=$(nix eval --raw .#devShells.x86_64-linux.native.RUST_TOOLCHAIN_VERSION)" >> "$GITHUB_OUTPUT"
           echo "nextest-version=$(nix eval --raw .#devShells.x86_64-linux.native.NEXTEST_VERSION)" >> "$GITHUB_OUTPUT"
   linux:
+    needs: repository
     if: ${{ !inputs.ios-tests && !inputs.desktop-release-tag }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -177,7 +178,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         run: nix develop .#native --command cargo test --locked -p host-fixture --test iroh_host passive_client_can_approve_after_five_minutes_without_reconnecting -- --ignored
   android:
-    needs: changes
+    needs: [changes, repository]
     permissions:
       contents: write # Attach the tested Android preview APK on release publication.
     if: needs.changes.outputs.android == 'true' && !inputs.ios-tests
@@ -209,13 +210,20 @@ jobs:
         with:
           cache-provider: basic
           cache-read-only: ${{ github.event_name == 'pull_request' }}
-      - name: Check Android and build app and test APKs
+      - name: Check Android formatting and lint
         env:
           GRADLE_USER_HOME: ${{ runner.temp }}/gradle
           ANDROID_USER_HOME: ${{ runner.temp }}/android
         run: >-
           nix develop . --command ./gradlew
           :apps:mobile:ktfmtCheck :apps:mobile:detekt
+          --no-daemon --parallel --max-workers=4 --build-cache --console=plain
+      - name: Test Android and build app and test APKs
+        env:
+          GRADLE_USER_HOME: ${{ runner.temp }}/gradle
+          ANDROID_USER_HOME: ${{ runner.temp }}/android
+        run: >-
+          nix develop . --command ./gradlew
           :apps:mobile:testDebugUnitTest
           :apps:mobile:assembleDebug :apps:mobile:assembleDebugAndroidTest
           --no-daemon --parallel --max-workers=4 --build-cache --console=plain
@@ -253,7 +261,7 @@ jobs:
         run: gh release upload "$RELEASE_TAG" target/android-packages/bex-android-preview.apk target/android-packages/bex-android-preview.apk.sha256 --repo "$GITHUB_REPOSITORY" --clobber
   mac:
     name: Mac
-    needs: changes
+    needs: [changes, repository]
     if: needs.changes.outputs.mac == 'true' && !inputs.ios-tests
     concurrency:
       # Optional PRs share one Apple slot; main and manual clients stay parallel.
@@ -304,29 +312,20 @@ jobs:
             target/qa/Bex-*
           retention-days: 7
   iphone:
-    name: iPhone ${{ matrix.label }}
-    needs: changes
-    if: needs.changes.outputs.iphone == 'true'
+    name: iPhone build
+    needs: [changes, repository]
+    # Focused manual runs keep their existing acceptance-only scope.
+    if: ${{ !cancelled() && needs.changes.outputs.iphone == 'true' && (inputs.ios-tests || needs.repository.result == 'success') }}
     concurrency:
-      group: native-apple-${{ github.event_name == 'pull_request' && 'pr' || format('{0}-{1}-{2}', github.run_id, github.job, matrix.label) }}
+      group: native-apple-${{ github.event_name == 'pull_request' && 'pr' || format('{0}-{1}', github.run_id, github.job) }}
       cancel-in-progress: false
       queue: max
-    strategy:
-      fail-fast: false
-      matrix:
-        # With Mac, four full-suite jobs stay within the hosted macOS limit.
-        include: ${{ fromJSON(inputs.ios-tests && '[{"shard":0,"label":"focused"}]' || '[{"shard":0,"label":"1/3"},{"shard":1,"label":"2/3"},{"shard":2,"label":"3/3"}]') }}
     runs-on: macos-26
     timeout-minutes: 120
     env:
       CARGO_BUILD_JOBS: 2
       AGENT_XCODE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       NEXTEST_TEST_THREADS: 6
-      # The iPhone runner has its own Host and one Simulator on a 7 GiB Mac.
-      AGENT_IOS_TEST_WORKERS: 1
-      AGENT_IOS_TEST_SHARD: ${{ matrix.shard }}
-      AGENT_IOS_TEST_SHARDS: ${{ inputs.ios-tests && 1 || 3 }}
-      AGENT_IOS_TEST_ROUNDS: ${{ inputs.ios-test-rounds || 1 }}
       # The builders validate Swift content/toolchain hashes before reuse.
       AGENT_IOS_SWIFT_CACHE_PATHS: |
         target/qa/ios-derived-data
@@ -345,7 +344,7 @@ jobs:
         with:
           cmd-format: nix develop . --command {0}
           key: macos-swift-xcode-26.6-${{ hashFiles('flake.lock') }}
-          save-if: ${{ github.event_name != 'pull_request' && matrix.shard == 0 }}
+          save-if: ${{ github.event_name != 'pull_request' }}
           cache-on-failure: true
       - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         id: ios-cache
@@ -353,7 +352,7 @@ jobs:
           path: ${{ env.AGENT_IOS_SWIFT_CACHE_PATHS }}
           key: ios-swift-xcode-26.6-${{ hashFiles('flake.lock', 'Cargo.lock', 'crates/agent-core/src/**', 'crates/agent-protocol/src/**', 'crates/xtask/src/ios_markdown.rs', 'scripts/build-agent*.sh', 'apps/mobile/iosApp/**') }}
           restore-keys: ios-swift-xcode-26.6-
-      - name: iPhone contracts and acceptance
+      - name: iPhone contracts and shared test build
         env:
           AGENT_IOS_TESTS: ${{ inputs.ios-tests }}
         run: |
@@ -361,16 +360,75 @@ jobs:
           mkdir -p target/qa
           if [[ -n "$AGENT_IOS_TESTS" ]]; then
             read -r -a ios_tests <<< "$AGENT_IOS_TESTS"
-            nix develop . --command just ios-e2e "${ios_tests[@]}" 2>&1 | tee target/qa/quality.log
+            nix develop . --command just ios-e2e --build-only "${ios_tests[@]}" 2>&1 | tee target/qa/quality.log
           else
-            nix develop . --command just quality swift 2>&1 | tee target/qa/quality.log
+            nix develop . --command just quality swift --build-only 2>&1 | tee target/qa/quality.log
           fi
-      - name: Save iPhone Swift builds once for all shards
-        if: ${{ !cancelled() && github.event_name != 'pull_request' && matrix.shard == 0 && steps.ios-cache.outputs.cache-primary-key != '' && steps.ios-cache.outputs.cache-hit != 'true' }}
+      - name: Share the iPhone app, Host fixtures and test runner
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: iphone-test-build
+          path: target/qa/ios-e2e.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+      - name: Save iPhone Swift builds
+        if: ${{ !cancelled() && github.event_name != 'pull_request' && steps.ios-cache.outputs.cache-primary-key != '' && steps.ios-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ${{ env.AGENT_IOS_SWIFT_CACHE_PATHS }}
           key: ${{ steps.ios-cache.outputs.cache-primary-key }}
+      - name: Retain Apple acceptance logs and result bundles
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: apple-iphone-build
+          path: |
+            target/qa/quality.log
+            target/qa/Bex-*
+          retention-days: 7
+  iphone-tests:
+    name: iPhone ${{ matrix.label }}
+    needs: iphone
+    concurrency:
+      group: native-apple-${{ github.event_name == 'pull_request' && 'pr' || format('{0}-{1}-{2}', github.run_id, github.job, matrix.label) }}
+      cancel-in-progress: false
+      queue: max
+    strategy:
+      fail-fast: false
+      matrix:
+        # With Mac, three acceptance shards stay within the hosted macOS limit.
+        include: ${{ fromJSON(inputs.ios-tests && '[{"shard":0,"label":"focused"}]' || '[{"shard":0,"label":"1/3"},{"shard":1,"label":"2/3"},{"shard":2,"label":"3/3"}]') }}
+    runs-on: macos-26
+    timeout-minutes: 120
+    env:
+      AGENT_XCODE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      AGENT_IOS_TEST_WORKERS: 1
+      AGENT_IOS_TEST_SHARD: ${{ matrix.shard }}
+      AGENT_IOS_TEST_SHARDS: ${{ inputs.ios-tests && 1 || 3 }}
+      AGENT_IOS_TEST_ROUNDS: ${{ inputs.ios-test-rounds || 1 }}
+    steps:
+      - *apple-checkout
+      - *apple-xcode
+      - *apple-nix
+      - *prepare-zsh
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: iphone-test-build
+          path: target/qa
+      - name: Restore the shared test build
+        run: tar -xzf target/qa/ios-e2e.tar.gz -C target
+      - name: iPhone acceptance without rebuilding
+        env:
+          AGENT_IOS_TESTS: ${{ inputs.ios-tests }}
+        run: |
+          set -o pipefail
+          if [[ -n "$AGENT_IOS_TESTS" ]]; then
+            read -r -a ios_tests <<< "$AGENT_IOS_TESTS"
+            nix develop . --command just ios-e2e --prebuilt "${ios_tests[@]}" 2>&1 | tee target/qa/quality.log
+          else
+            nix develop . --command just conversation-ui --prebuilt 2>&1 | tee target/qa/quality.log
+          fi
       - name: Retain Apple acceptance logs and result bundles
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -381,8 +439,8 @@ jobs:
             target/qa/Bex-*
           retention-days: 7
   windows:
-    if: ${{ !inputs.ios-tests }}
-    needs: toolchain
+    if: ${{ !cancelled() && needs.toolchain.result == 'success' && (inputs.desktop-release-tag || needs.repository.result == 'success') }}
+    needs: [toolchain, repository]
     permissions:
       actions: read
       contents: write # Attach the verified Windows package to a published release.

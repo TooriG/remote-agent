@@ -111,8 +111,8 @@ android-e2e:
     nix develop .#android-test --command bash scripts/android-e2e.sh
 
 # Native conversation acceptance; interleaved shards balance measured CI durations.
-conversation-ui:
-    scripts/ios-e2e.sh \
+conversation-ui *options:
+    scripts/ios-e2e.sh "$@" \
         testSimulatorModelDefaultsInheritAndPersistAcrossScopes \
         testSimulatorModelDefaultsPersistAndApplyOnlyToNewConversations \
         testSimulatorMarksMergedWorktreesToTheRightOfRunningStatus \
@@ -160,8 +160,8 @@ iroh-e2e:
     cargo test --locked --package host-fixture --test iroh_host
 
 # Check the local Mac Host/desktop and iPhone client, or one selected language.
-quality language="apple":
-    scripts/quality.sh "$1"
+quality language="apple" *options:
+    scripts/quality.sh "$@"
 
 # Audit diff presentation tests in an isolated copy; extra arguments go to cargo-mutants.
 # Inspect missed.txt and logs; distinguish equivalent mutations from missing assertions.
