@@ -569,7 +569,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn settled_windows_are_saved_after_a_pause_and_restored() {
         let root = tempfile::tempdir().unwrap();
-        let directory = root.path().join("host:a/b");
+        let directory = root.path().join("host-a/b");
         let (updates, receiver) = watch::channel(snapshot([]));
         let saving = tokio::spawn(run(directory.clone(), receiver));
         updates.send_replace(snapshot([
