@@ -14,13 +14,13 @@ final class LaunchUITests: XCTestCase {
     }
 
     func waitForStableFrame(_ element: XCUIElement) {
-        // A failed poll captures slow XCTest snapshots, so sample before polling.
+        // Sample early and keep failed-poll diagnostics off the accessibility tree.
         var previous = element.frame
         let settled = expectation(for: NSPredicate { _, _ in
             let frame = element.frame
             defer { previous = frame }
             return !frame.isEmpty && frame == previous
-        }, evaluatedWith: element)
+        }, evaluatedWith: nil)
         wait(for: [settled], timeout: 10)
     }
 
