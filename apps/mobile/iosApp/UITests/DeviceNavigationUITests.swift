@@ -222,6 +222,8 @@ extension LaunchUITests {
         search.tap(); search.typeText("child\n")
         XCTAssertTrue(child.waitForExistence(timeout: 10))
         XCTAssertTrue(rootFile.waitForNonExistence(timeout: 10))
+        // Focusing the bottom search field moves its clear button above the keyboard.
+        search.tap()
         search.buttons.firstMatch.tap()
         XCTAssertTrue(rootFile.waitForExistence(timeout: 10))
         closeWorkbench(app)
