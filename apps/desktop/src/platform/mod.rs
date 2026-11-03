@@ -58,9 +58,12 @@ use macos as os;
 use windows as os;
 
 mod microphone;
+mod wsl;
 #[cfg(target_os = "macos")]
 pub(crate) use microphone::prepare_microphone;
 pub(crate) use microphone::{Recording, RecordingEvent, start_recording};
+pub(crate) use wsl::ProjectSelection;
+pub(crate) use wsl::distributions as wsl_distributions;
 
 pub(crate) fn state_dir() -> Result<PathBuf, String> {
     std::env::var_os("AGENT_STATE_DIR")
@@ -139,6 +142,7 @@ pub(crate) struct Connections {
     endpoint: tokio::sync::OnceCell<(PathBuf, Endpoint)>,
     local_endpoint: tokio::sync::OnceCell<(PathBuf, Endpoint)>,
     startup: tokio::sync::Mutex<()>,
+    wsl: wsl::WslConnections,
 }
 impl Connections {
     pub(crate) async fn connect(
@@ -150,6 +154,10 @@ impl Connections {
         let startup = self.startup.lock().await;
         if let Some(remote) = remote {
             let ticket = remote.parse::<Ticket>()?;
+            if let Some(distro) = self.wsl_target(&ticket).await {
+                drop(startup);
+                return self.connect_wsl(distro, snapshot, &device_name).await;
+            }
             let endpoint = match self.endpoint.get() {
                 Some((_, endpoint)) => endpoint,
                 None => {
@@ -289,6 +297,9 @@ impl Connections {
     }
 
     pub(crate) async fn close(&self) {
+        for host in self.wsl.lock().await.values() {
+            host.endpoint.close().await;
+        }
         for cell in [&self.local_endpoint, &self.endpoint] {
             if let Some((_, endpoint)) = cell.get() {
                 endpoint.close().await;
@@ -340,18 +351,23 @@ pub(crate) async fn discover_local_host() -> anyhow::Result<LocalHost> {
     .await?
 }
 
-pub(crate) async fn host_is_local(remote: Option<&str>) -> bool {
-    let Some(remote) = remote else {
-        return true;
-    };
-    let Ok(remote) = remote.parse::<Ticket>() else {
-        return false;
-    };
-    matches!(
-        discover_local_host().await,
-        Ok(LocalHost { state: LocalHostState::Ready(local), .. })
-            if local.node_id() == remote.node_id()
-    )
+impl Connections {
+    pub(crate) async fn host_is_local(&self, remote: Option<&str>) -> bool {
+        let Some(remote) = remote else {
+            return true;
+        };
+        let Ok(remote) = remote.parse::<Ticket>() else {
+            return false;
+        };
+        if self.wsl_target(&remote).await.is_some() {
+            return true;
+        }
+        matches!(
+            discover_local_host().await,
+            Ok(LocalHost { state: LocalHostState::Ready(local), .. })
+                if local.node_id() == remote.node_id()
+        )
+    }
 }
 
 fn start_host(directory: &std::path::Path, isolated: bool) -> anyhow::Result<std::process::Child> {
@@ -390,8 +406,14 @@ fn start_host(directory: &std::path::Path, isolated: bool) -> anyhow::Result<std
 pub(crate) fn choose_files() -> Option<Vec<PathBuf>> {
     rfd::FileDialog::new().pick_files()
 }
-pub(crate) fn choose_folder() -> Option<PathBuf> {
-    rfd::FileDialog::new().pick_folder()
+pub(crate) fn choose_folder(initial: Option<PathBuf>) -> Option<PathBuf> {
+    let dialog = rfd::FileDialog::new();
+    let dialog = if let Some(path) = initial {
+        dialog.set_directory(path)
+    } else {
+        dialog
+    };
+    dialog.pick_folder()
 }
 pub(crate) fn choose_destination(name: &str) -> Option<PathBuf> {
     rfd::FileDialog::new().set_file_name(name).save_file()

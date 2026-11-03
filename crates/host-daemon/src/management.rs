@@ -25,12 +25,24 @@ pub(crate) async fn run(mode: Mode, state_dir: Option<PathBuf>, isolated: bool) 
         Ok::<_, anyhow::Error>((identity, ticket))
     })
     .await??;
+    if let Mode::LocalClient { address } = mode {
+        let access = agent_local_host::LocalClientAccess {
+            ticket: ticket.with_ip(address),
+            secret: identity.to_bytes(),
+        };
+        println!("{}", serde_json::to_string(&access)?);
+        return Ok(());
+    }
     // This client manages a Host on the same machine. It needs no public relay.
     let endpoint = Endpoint::bind(identity, Relays::Loopback).await?;
     let result = tokio::time::timeout(Duration::from_secs(20), async {
         let session = endpoint.connect(&ticket).await?;
         let (client, _events) = session.open_peer(Duration::from_secs(15), 8).await?;
         let result = match mode {
+            Mode::PrepareUpdate => client
+                .call(&agent_protocol::operations::PrepareHostUpdate {})
+                .await
+                .map(|value| serde_json::to_value(value).expect("Host launch serializes")),
             Mode::History {
                 session,
                 offset,

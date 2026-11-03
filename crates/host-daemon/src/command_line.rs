@@ -48,6 +48,15 @@ pub(crate) struct StartupConfig {
 
 #[derive(clap::Subcommand)]
 pub(crate) enum Mode {
+    /// Local updater: journal interrupted work and return the saved launch configuration.
+    #[command(hide = true)]
+    PrepareUpdate,
+    /// Private local desktop bootstrap. Credentials are written only to stdout.
+    #[command(hide = true)]
+    LocalClient {
+        #[arg(long)]
+        address: std::net::IpAddr,
+    },
     /// Read conversation context without starting an agent. Positions and text
     /// offsets paginate the same history referenced by provider handoffs.
     History {

@@ -4,6 +4,7 @@ param(
     [string]$Profile = "release",
     [switch]$SkipBuild,
     [string]$BinaryDirectory,
+    [string]$WslRuntimeDirectory,
     [string]$InnoCompiler
 )
 
@@ -51,6 +52,14 @@ try {
     $sourceStatus = & git -c core.longpaths=true status --porcelain --untracked-files=normal
     if ($LASTEXITCODE -ne 0) { throw "Cannot verify the source checkout." }
     if ($sourceStatus) { $revision = "$revision-dirty" }
+    if (-not $WslRuntimeDirectory) {
+        $WslRuntimeDirectory = Join-Path $metadata.target_directory "wsl-runtime"
+    }
+    $wslRevisionPath = Join-Path $WslRuntimeDirectory "revision"
+    if (-not (Test-Path -LiteralPath $wslRevisionPath) -or
+        (Get-Content -Raw -LiteralPath $wslRevisionPath).Trim() -ne $revision) {
+        throw "A Linux WSL runtime built from revision $revision is required. Set WslRuntimeDirectory to its directory."
+    }
     if (-not $SkipBuild) {
         $previousRevision = $env:AGENT_BUILD_REVISION
         $previousCompiler = $env:GPUI_FXC_PATH
@@ -85,6 +94,7 @@ try {
         foreach ($executable in @("agent-desktop.exe", "host-daemon.exe", "agent-provider-supervisor.exe", "agent-cli.exe")) {
             Copy-Item -LiteralPath (Join-Path $buildDirectory $executable) -Destination $bundle
         }
+        Copy-Item -LiteralPath $WslRuntimeDirectory -Destination (Join-Path $bundle "wsl-runtime") -Recurse
         # Claude's bridge and its license must travel with the Host.
         & node scripts/install-claude-sdk.mjs $bundle
         if ($LASTEXITCODE -ne 0) { throw "Claude SDK packaging failed." }

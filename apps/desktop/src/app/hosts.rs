@@ -20,6 +20,7 @@ use std::{io::Write, sync::Arc};
 pub(super) enum HostEvent {
     Selected(Option<RemoteHost>),
     Removed(String),
+    Failed(String),
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum ConnectionLayout {
@@ -33,6 +34,8 @@ enum Action {
     Remove(String),
 }
 enum Update {
+    WslDistributions(Result<Vec<String>, String>),
+    WslHost(Result<RemoteHost, String>),
     Connected(Result<StoreSession, String>),
     Snapshot,
     Completed(Action, Result<Outcome, String>),
@@ -53,6 +56,7 @@ pub(super) struct Hosts {
     invitation: Option<(String, tempfile::NamedTempFile)>,
     busy: bool,
     connecting: bool,
+    wsl_distros: Vec<String>,
     error: Option<String>,
     _language: Subscription,
 }
@@ -89,6 +93,7 @@ impl Hosts {
             invitation: None,
             busy: false,
             connecting: false,
+            wsl_distros: Vec::new(),
             error: None,
             _language: cx.observe_global_in::<crate::localization::Language>(
                 window,
@@ -106,7 +111,53 @@ impl Hosts {
             ),
         };
         view.connect();
+        view.discover_wsl();
         view
+    }
+    fn discover_wsl(&self) {
+        let updates = self.updates.clone();
+        self.runtime.handle.spawn(async move {
+            let result = crate::platform::wsl_distributions()
+                .await
+                .map_err(|error| error.to_string());
+            let _ = updates.send(Update::WslDistributions(result)).await;
+        });
+    }
+    fn choices(&self) -> Vec<RemoteHost> {
+        self.wsl_distros
+            .iter()
+            .map(|distro| RemoteHost {
+                id: format!("wsl:{distro}"),
+                name: format!("WSL ({distro})"),
+                ticket: String::new(),
+            })
+            .chain(self.snapshot.management.remotes.iter().cloned())
+            .collect()
+    }
+    fn select(&mut self, remote: Option<RemoteHost>, cx: &mut Context<Self>) {
+        if let Some(distro) = remote
+            .as_ref()
+            .and_then(|host| host.id.strip_prefix("wsl:"))
+        {
+            if self.busy {
+                return;
+            }
+            self.busy = true;
+            self.error = None;
+            let distro = distro.to_owned();
+            let connections = self.runtime.connections.clone();
+            let updates = self.updates.clone();
+            self.runtime.handle.spawn(async move {
+                let result = connections
+                    .wsl_host(&distro)
+                    .await
+                    .map_err(|error| format!("{error:#}"));
+                let _ = updates.send(Update::WslHost(result)).await;
+            });
+        } else {
+            cx.emit(HostEvent::Selected(remote));
+        }
+        cx.notify();
     }
     fn connect(&mut self) {
         if self.connecting {
@@ -133,6 +184,7 @@ impl Hosts {
         if self.busy || self.connecting {
             return;
         }
+        self.discover_wsl();
         if self.snapshot.connected {
             self.dispatch(
                 Intent::LoadHostManagement(op::LoadHostManagement {}),
@@ -157,6 +209,22 @@ impl Hosts {
     }
     fn receive(&mut self, update: Update, window: &mut Window, cx: &mut Context<Self>) {
         match update {
+            Update::WslDistributions(result) => match result {
+                Ok(distros) => self.wsl_distros = distros,
+                Err(error) => {
+                    tracing::warn!(target: "agent", operation = "wsl.discovery", message = %error)
+                }
+            },
+            Update::WslHost(result) => {
+                self.busy = false;
+                match result {
+                    Ok(host) => cx.emit(HostEvent::Selected(Some(host))),
+                    Err(error) => {
+                        self.error = Some(error.clone());
+                        cx.emit(HostEvent::Failed(error));
+                    }
+                }
+            }
             Update::SshInvitation(result) => {
                 self.busy = false;
                 match result {
@@ -272,8 +340,9 @@ impl Hosts {
                     .border_color(rgb(appearance::BORDER))
                     .overflow_hidden()
             });
+        let targets = self.choices();
         for (index, remote) in std::iter::once(None)
-            .chain(self.snapshot.management.remotes.iter().map(Some))
+            .chain(targets.iter().map(Some))
             .enumerate()
         {
             let selected = current == remote.map(|host| host.id.as_str());
@@ -285,63 +354,67 @@ impl Hosts {
                 } else {
                     language.text("接続中…")
                 }
-            } else if remote.is_none() && self.snapshot.connected {
+            } else if (remote.is_none() || remote.is_some_and(|host| host.id.starts_with("wsl:")))
+                && self.snapshot.connected
+            {
                 language.text("利用可能")
             } else {
                 language.text("保存済み")
             };
-            let mut card =
-                v_flex()
-                    .gap_3()
-                    .p_4()
-                    .when(cards, |view| {
-                        view.rounded(px(12.))
-                            .border_1()
-                            .border_color(if selected {
-                                rgb(appearance::ACCENT)
-                            } else {
-                                rgb(appearance::BORDER)
-                            })
-                            .bg(rgb(appearance::SURFACE))
-                    })
-                    .when(!cards, |view| {
-                        view.border_b_1().border_color(rgb(appearance::BORDER))
-                    })
-                    .child(
-                        h_flex()
-                            .items_center()
-                            .gap_3()
-                            .child(
-                                Button::new(format!("onboarding-host-{index}"))
-                                    .accessibility_label(name.to_owned())
-                                    .child(
-                                        h_flex()
-                                            .w_full()
-                                            .gap_2()
-                                            .child(if remote.is_some() {
-                                                Icon::new(IconName::Network)
-                                            } else {
-                                                Icon::default().path("icons/monitor.svg")
-                                            })
-                                            .child(name.to_owned()),
-                                    )
-                                    .ghost()
-                                    .flex_1()
-                                    .on_click(cx.listener(move |_, _, _, cx| {
-                                        cx.emit(HostEvent::Selected(destination.clone()));
-                                    })),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(if selected && connected {
-                                        rgb(0x88c9a0)
-                                    } else {
-                                        rgb(appearance::MUTED)
-                                    })
-                                    .child(label),
-                            )
-                            .when_some(remote.filter(|_| !cards), |row, remote| {
+            let mut card = v_flex()
+                .gap_3()
+                .p_4()
+                .when(cards, |view| {
+                    view.rounded(px(12.))
+                        .border_1()
+                        .border_color(if selected {
+                            rgb(appearance::ACCENT)
+                        } else {
+                            rgb(appearance::BORDER)
+                        })
+                        .bg(rgb(appearance::SURFACE))
+                })
+                .when(!cards, |view| {
+                    view.border_b_1().border_color(rgb(appearance::BORDER))
+                })
+                .child(
+                    h_flex()
+                        .items_center()
+                        .gap_3()
+                        .child(
+                            Button::new(format!("onboarding-host-{index}"))
+                                .accessibility_label(name.to_owned())
+                                .child(
+                                    h_flex()
+                                        .w_full()
+                                        .gap_2()
+                                        .child(if remote.is_some() {
+                                            Icon::new(IconName::Network)
+                                        } else {
+                                            Icon::default().path("icons/monitor.svg")
+                                        })
+                                        .child(name.to_owned()),
+                                )
+                                .ghost()
+                                .flex_1()
+                                .disabled(self.busy)
+                                .on_click(cx.listener(move |view, _, _, cx| {
+                                    view.select(destination.clone(), cx);
+                                })),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(if selected && connected {
+                                    rgb(0x88c9a0)
+                                } else {
+                                    rgb(appearance::MUTED)
+                                })
+                                .child(label),
+                        )
+                        .when_some(
+                            remote.filter(|host| !cards && !host.id.starts_with("wsl:")),
+                            |row, remote| {
                                 let id = remote.id.clone();
                                 let ticket = remote.ticket.clone();
                                 row.child(
@@ -373,8 +446,9 @@ impl Hosts {
                                             cx.notify();
                                         })),
                                 )
-                            }),
-                    );
+                            },
+                        ),
+                );
             if selected {
                 let details = v_flex()
                     .gap_2()
@@ -552,7 +626,7 @@ impl Hosts {
     ) -> impl IntoElement {
         let language = crate::localization::language(cx);
         let view = owner.read(cx);
-        let hosts = &view.snapshot.management.remotes;
+        let hosts = view.choices();
         let name: SharedString = current
             .and_then(|id| hosts.iter().find(|host| host.id == id))
             .map_or_else(
@@ -560,11 +634,10 @@ impl Hosts {
                 |host| host.name.clone().into(),
             );
         let current = current.map(str::to_owned);
-        let hosts = hosts.clone();
         let owner = owner.downgrade();
         Button::new(id)
             .debug_selector(move || id.into())
-            .disabled(disabled)
+            .disabled(disabled || view.busy)
             .accessibility_label(agent_core::localization::localized_ui_format(
                 language,
                 "実行先: {0}".into(),
@@ -589,7 +662,7 @@ impl Hosts {
                     PopupMenuItem::new(language.text("この端末"))
                         .checked(current.is_none())
                         .on_click(move |_, _, cx| {
-                            let _ = local.update(cx, |_, cx| cx.emit(HostEvent::Selected(None)));
+                            let _ = local.update(cx, |view, cx| view.select(None, cx));
                         }),
                 );
                 for host in &hosts {
@@ -599,9 +672,8 @@ impl Hosts {
                         PopupMenuItem::new(host.name.clone())
                             .checked(current.as_deref() == Some(&host.id))
                             .on_click(move |_, _, cx| {
-                                let _ = owner.update(cx, |_, cx| {
-                                    cx.emit(HostEvent::Selected(Some(host.clone())))
-                                });
+                                let _ = owner
+                                    .update(cx, |view, cx| view.select(Some(host.clone()), cx));
                             }),
                     );
                 }

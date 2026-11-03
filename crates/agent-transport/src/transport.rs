@@ -94,6 +94,24 @@ impl Ticket {
     pub fn node_id(&self) -> NodeId {
         NodeId(self.0.endpoint_addr().id)
     }
+
+    /// A WSL local ticket carries loopback ports. Windows reaches those same
+    /// wildcard sockets through the distro's interface IP, without public relays.
+    pub fn with_ip(&self, ip: std::net::IpAddr) -> Self {
+        Self(EndpointTicket::new(EndpointAddr::from_parts(
+            self.0.endpoint_addr().id,
+            self.0
+                .endpoint_addr()
+                .addrs
+                .iter()
+                .filter_map(|addr| match addr {
+                    TransportAddr::Ip(addr) => {
+                        Some(TransportAddr::Ip(SocketAddr::new(ip, addr.port())))
+                    }
+                    _ => None,
+                }),
+        )))
+    }
 }
 impl fmt::Display for Ticket {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -576,6 +594,52 @@ impl AsyncWrite for Stream {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn wsl_ticket_changes_only_the_interface_ip_and_connects_to_the_same_host() {
+        let host = Endpoint::bind_host(Identity::generate(), Relays::Disabled)
+            .await
+            .unwrap();
+        let local = host.local_ticket();
+        let routed = local.with_ip("127.0.0.1".parse().unwrap());
+        assert_eq!(routed.node_id(), local.node_id());
+        assert!(routed == local);
+        let address: std::net::IpAddr = "172.25.10.2".parse().unwrap();
+        let translated = local.with_ip(address);
+        let ports = |ticket: &Ticket| {
+            ticket
+                .0
+                .endpoint_addr()
+                .addrs
+                .iter()
+                .filter_map(|addr| match addr {
+                    TransportAddr::Ip(addr) => Some(addr.port()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ports(&translated), ports(&local));
+        assert!(
+            translated
+                .0
+                .endpoint_addr()
+                .addrs
+                .iter()
+                .all(|addr| matches!(addr, TransportAddr::Ip(addr) if addr.ip() == address))
+        );
+        let client = Endpoint::bind(Identity::generate(), Relays::Disabled)
+            .await
+            .unwrap();
+        let (connection, accepted) = tokio::time::timeout(Duration::from_secs(10), async {
+            tokio::join!(client.connect(&routed), host.accept())
+        })
+        .await
+        .unwrap();
+        connection.unwrap().close();
+        assert!(accepted.unwrap().is_ok());
+        client.close().await;
+        host.close().await;
+    }
 
     #[tokio::test]
     async fn named_protocol_connects_but_positional_protocol_is_rejected() {

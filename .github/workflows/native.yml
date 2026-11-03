@@ -511,9 +511,42 @@ jobs:
             target/qa/quality.log
             target/qa/Bex-*
           retention-days: 7
+  wsl-runtime:
+    needs: toolchain
+    if: ${{ !cancelled() && needs.toolchain.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      WSL_PROFILE: ${{ (github.event_name == 'release' || inputs.desktop-release-tag != '') && 'release' || 'dev' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.desktop-release-tag || github.ref }}
+          persist-credentials: false
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          cmd-format: nix develop .#native --command {0}
+          shared-key: wsl-runtime-${{ hashFiles('flake.lock') }}
+          save-if: ${{ github.event_name != 'pull_request' }}
+      - name: Build and package the Linux Host for the Windows revision
+        run: |
+          AGENT_BUILD_REVISION=$(git rev-parse HEAD)
+          export AGENT_BUILD_REVISION
+          nix develop .#native --command cargo build --locked --profile "$WSL_PROFILE" -p host-daemon -p agent-process --bin host-daemon --bin agent-provider-supervisor
+          directory=debug
+          if [[ "$WSL_PROFILE" == release ]]; then directory=release; fi
+          nix develop .#native --command node scripts/package-wsl-runtime.mjs "target/$directory" target/wsl-runtime
+          nix develop .#native --command node scripts/verify-wsl-runtime.mjs target/wsl-runtime
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: bex-wsl-runtime
+          path: target/wsl-runtime
+          if-no-files-found: error
+          retention-days: 14
   windows:
-    if: ${{ !cancelled() && needs.toolchain.result == 'success' && (inputs.desktop-release-tag || needs.repository.result == 'success') }}
-    needs: [toolchain, repository]
+    if: ${{ !cancelled() && needs.toolchain.result == 'success' && needs.wsl-runtime.result == 'success' && (inputs.desktop-release-tag || needs.repository.result == 'success') }}
+    needs: [toolchain, repository, wsl-runtime]
     permissions:
       actions: read
       contents: write # Attach the verified Windows package to a published release.
@@ -554,6 +587,10 @@ jobs:
           cache-directories: ${{ env.AGENT_FXC_CACHE_ROOT }}
           save-if: ${{ github.event_name != 'pull_request' }}
           cache-on-failure: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bex-wsl-runtime
+          path: target/wsl-runtime
       - name: Verify pinned shader compiler and reproducible bytecode
         run: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tools/windows-fxc/verify.ps1
       - name: Compile GPUI shaders with the pinned compiler

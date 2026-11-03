@@ -6,6 +6,33 @@ pub mod browser;
 mod files;
 mod registry;
 pub mod update;
+pub mod wsl;
+
+/// Returned only over the local process pipe to a desktop on the owning machine.
+/// Never log this value: it contains the preauthorized local client's secret.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct LocalClientAccess {
+    pub ticket: agent_transport::transport::Ticket,
+    pub secret: [u8; 32],
+}
+
+impl LocalClientAccess {
+    /// A user's login shell may print a banner before the bootstrap reply.
+    pub fn from_process_output(bytes: Vec<u8>) -> anyhow::Result<Self> {
+        let bytes = zeroize::Zeroizing::new(bytes);
+        let reply = bytes
+            .rsplit(|byte| *byte == b'\n')
+            .find(|line| !line.trim_ascii().is_empty())
+            .ok_or_else(|| anyhow::anyhow!("WSL did not return local Host credentials"))?;
+        Ok(serde_json::from_slice(reply)?)
+    }
+}
+
+impl Drop for LocalClientAccess {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.secret);
+    }
+}
 
 pub use files::{
     create_state_directory, private_file_options, save_private_bytes, save_private_json,
@@ -70,4 +97,31 @@ pub fn bundled_node_path(executable: &Path) -> Option<PathBuf> {
             .expect("Contents exists")
             .join("Helpers/Bex Node.app/Contents/MacOS/node")
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_transport::transport::{Endpoint, Relays};
+
+    #[tokio::test]
+    async fn bootstrap_reply_ignores_login_banners_but_requires_complete_credentials() {
+        let endpoint = Endpoint::bind(Identity::generate(), Relays::Loopback)
+            .await
+            .unwrap();
+        let access = LocalClientAccess {
+            ticket: endpoint.ticket(),
+            secret: [7; 32],
+        };
+        let mut output = b"Welcome to Linux\n\n".to_vec();
+        output.extend(serde_json::to_vec(&access).unwrap());
+        output.extend(b"\n\n");
+        let decoded = LocalClientAccess::from_process_output(output).unwrap();
+        assert!(decoded.ticket == access.ticket);
+        assert_eq!(decoded.secret, [7; 32]);
+        for output in [b"".as_slice(), b"Welcome\n", b"{}\n", b"{\"secret\":[7]}\n"] {
+            assert!(LocalClientAccess::from_process_output(output.to_vec()).is_err());
+        }
+        endpoint.close().await;
+    }
 }

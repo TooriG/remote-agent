@@ -7,11 +7,33 @@ The package is currently unsigned.
 ## Install and run
 
 1. Download `bex-windows-x86_64-setup.exe` from https://getbex.dev.
-2. Install Git for Windows, Node.js, and your agents (Codex and/or Claude Code); sign in with your own accounts. Install Microsoft Edge WebView2 Runtime if missing.
+2. For Windows projects, install Git for Windows, Node.js, and your agents (Codex and/or Claude Code); sign in with your own accounts. For WSL projects, install these inside WSL as described below. Install Microsoft Edge WebView2 Runtime if missing.
 3. Run the EXE installer. It installs BEX, Host, supervisor, CLI and the Claude SDK together in `%LOCALAPPDATA%\Programs\BEX`, with a Start menu shortcut. No administrator privileges or ZIP extraction are required.
 4. Open BEX from Start and pair a phone through its invitation flow.
 
 Before updating, finish active tasks and exit BEX and its Host, then run the new installer. Account and conversation data remains outside the install directory and is not removed by uninstalling. These previews are unsigned and target x86-64 Windows 11. ZIP remains an optional developer artifact.
+
+## WSL projects
+
+The desktop and the Windows Host run natively on Windows. WSL projects use a
+separate Linux Host in their owning distribution. Choose **WSL (Ubuntu)** (or
+another installed distribution) in the Host selector, or select a folder under
+`\\wsl.localhost\Ubuntu\home\…` in the Windows folder dialog. BEX starts the
+matching WSL Host and converts the folder to its Linux path. Git, worktrees,
+agents and terminals then run inside that distribution. Windows projects
+continue to use the Windows Host.
+The last selected local environment is restored when BEX opens again; choose
+the Windows entry to return to native Windows projects.
+
+Install Git, Node.js and your agent CLIs and sign in **inside WSL**. Windows and
+WSL accounts, conversations and settings are separate. The Windows package
+includes the matching Linux Host and its libraries; WSL does not need Rust or
+Nix. The current x86-64 Windows package supports x86-64 WSL distributions.
+After WSL restarts, BEX discovers its new address and reconnects. Startup errors
+appear in BEX; the Host log is `~/.cache/bex/wsl/host.log` inside the distribution
+(or beneath `$XDG_CACHE_HOME` when configured).
+
+WSL内のフォルダーをWindowsの選択画面で開くと、対応するWSLのHostを自動で起動して接続します。Git・エージェント・ターミナルはWSL内で動きます。Git、Node.js、エージェントのインストールとログインもWSL内で行ってください。Windows側のプロジェクトと接続先は引き続き利用できます。
 
 ## Update Codex CLI
 
@@ -35,10 +57,23 @@ If LLVM is installed outside its standard directory, set `LIBCLANG_PATH` to
 the directory containing that DLL. The pinned Nix environment supplies both
 tools on macOS/Linux; Windows CI installs the same Zig version.
 
+On Linux, build the WSL payload from the same clean commit as the Windows app:
+
+```sh
+scripts/dev-env.sh --native cargo build --locked -p host-daemon -p agent-process --bin host-daemon --bin agent-provider-supervisor
+scripts/dev-env.sh --native node scripts/package-wsl-runtime.mjs target/debug target/wsl-runtime
+scripts/dev-env.sh --native node scripts/verify-wsl-runtime.mjs target/wsl-runtime
+```
+
+Copy `target/wsl-runtime` to the Windows builder. CI supplies this payload
+automatically; release packages build it with the release profile.
+
 ```powershell
-./scripts/package-windows.ps1
+# First build scripts/package-wsl-runtime.mjs on Linux from this same commit,
+# then supply the resulting runtime directory:
+./scripts/package-windows.ps1 -WslRuntimeDirectory C:\build\wsl-runtime
 # Faster local development package:
-./scripts/package-windows.ps1 -Profile dev
+./scripts/package-windows.ps1 -Profile dev -WslRuntimeDirectory C:\build\wsl-runtime
 ```
 
 Both profiles embed the Windows renderer's compiled shaders. The workspace

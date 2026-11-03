@@ -20,6 +20,17 @@ use std::{
     sync::Arc,
 };
 
+/// A local execution environment is rediscovered at launch; never persist its
+/// endpoint ticket, IP address or local authentication secret.
+#[derive(Default, Serialize, Deserialize)]
+pub enum LocalEnvironment {
+    #[default]
+    Native,
+    Wsl {
+        distro: String,
+    },
+}
+
 /// One device's editor selection, shared across Host snapshots. Discovery is never persisted.
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct EditorPreferences {

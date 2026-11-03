@@ -90,7 +90,7 @@
             systemImageTypes = [ "google_apis" ];
             abiVersions = [ (if pkgs.stdenv.hostPlatform.isAarch64 then "arm64-v8a" else "x86_64") ];
           }).androidsdk;
-          nativeBuildTools = with pkgs; [ pkg-config cmake clang zig ];
+          nativeBuildTools = with pkgs; [ pkg-config cmake clang zig ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.patchelf ];
           # The desktop, Host and their tests link these on Linux.
           linuxDesktopLibraries = with pkgs; [
             lsof

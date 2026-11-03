@@ -74,10 +74,11 @@ enum OperationCompletion {
     FileReference(Box<files::ReferenceRequest>),
 }
 enum Update {
+    InitialHost(Result<Option<RemoteHost>, String>),
     Connected(Result<(StoreSession, Arc<Persistence>, bool), String>),
     Snapshot,
     Completed(OperationCompletion, Result<Outcome, String>),
-    Folder(Result<Option<PathBuf>, String>),
+    Folder(Result<Option<platform::ProjectSelection>, String>),
     Image {
         key: String,
         result: Result<String, String>,
@@ -150,6 +151,7 @@ pub(crate) struct Desktop {
     onboarding: bool,
     import_projects: bool,
     initial_cwd: Option<String>,
+    pending_project: Option<(Option<String>, String)>,
     busy: usize,
     local_errors: BTreeMap<ErrorScope, String>,
     composer: forms::ComposerInput,
@@ -494,6 +496,7 @@ impl Desktop {
                 cx.subscribe_in(hosts, window, |view, _, event, window, cx| {
                     match event {
                         HostEvent::Selected(remote) => view.switch_host(remote.clone(), window, cx),
+                        HostEvent::Failed(error) => view.set_error(error.clone()),
                         HostEvent::Removed(id)
                             if view.remote.as_ref().is_some_and(|remote| &remote.id == id) =>
                         {
@@ -521,6 +524,7 @@ impl Desktop {
             epoch: 0,
             connecting: false,
             local_shell: false,
+            pending_project: None,
             remote,
             hosts,
             app_updates,
@@ -573,7 +577,21 @@ impl Desktop {
             let sidebar = cx.new(|cx| view::SidebarView::new(&desktop, &view, cx));
             view.sidebar_view = Some(sidebar);
         }
-        view.connect(None);
+        if cfg!(windows) && !side_chat_mode {
+            view.connecting = true;
+            let connections = view.runtime.connections.clone();
+            view.effect(
+                async move {
+                    connections
+                        .initial_environment()
+                        .await
+                        .map_err(|error| format!("{error:#}"))
+                },
+                Update::InitialHost,
+            );
+        } else {
+            view.connect(None);
+        }
         cx.notify();
         view
     }
@@ -598,6 +616,11 @@ impl Desktop {
         let remote = self.remote.clone();
         let side = self.side_chat_mode;
         let initial_cwd = self.initial_cwd.take();
+        let pending_project = self
+            .pending_project
+            .as_ref()
+            .filter(|(host, _)| host.as_deref() == remote.as_ref().map(|host| host.id.as_str()))
+            .map(|(_, cwd)| cwd.clone());
         let updates = self.updates.clone();
         let connections = self.runtime.connections.clone();
         let runtime = self.runtime.clone();
@@ -650,9 +673,21 @@ impl Desktop {
                 if let Some(cwd) = initial_cwd {
                     drop(store.dispatch(Intent::NewChat { cwd }));
                 }
-                let local_shell =
-                    platform::host_is_local(remote.as_ref().map(|remote| remote.ticket.as_str()))
-                        .await;
+                if let Some(cwd) = pending_project {
+                    store
+                        .dispatch(Intent::AddProject(op::AddProject { cwd }))
+                        .await
+                        .map_err(|error| error.to_string())?;
+                }
+                if !side {
+                    connections
+                        .remember_environment(remote.as_ref())
+                        .await
+                        .map_err(|error| error.to_string())?;
+                }
+                let local_shell = connections
+                    .host_is_local(remote.as_ref().map(|remote| remote.ticket.as_str()))
+                    .await;
                 Ok::<_, String>((store, persistence, local_shell))
             }
             .await;
@@ -717,10 +752,12 @@ impl Desktop {
             return;
         }
         match update {
+            Update::InitialHost(result) => self.initial_host(result),
             Update::Connected(result) => {
                 self.connecting = false;
                 match result {
                     Ok((mut session, persistence, local_shell)) => {
+                        self.pending_project = None;
                         self.local_shell = local_shell;
                         session.persist(persistence, self.updates.clone(), move |error| {
                             (epoch, Update::PersistenceError(error))
@@ -810,12 +847,8 @@ impl Desktop {
             Update::Folder(result) => {
                 self.busy = self.busy.saturating_sub(1);
                 match result {
-                    Ok(Some(path)) => {
-                        self.tab = Tab::Chat;
-                        self.cancel_recording();
-                        self.dispatch(Intent::AddProject(op::AddProject {
-                            cwd: path.to_string_lossy().into_owned(),
-                        }));
+                    Ok(Some(platform::ProjectSelection { remote, cwd })) => {
+                        self.add_selected_project(remote, cwd, window, cx);
                     }
                     Ok(None) => {}
                     Err(error) => self.set_error(error),
@@ -1552,14 +1585,68 @@ impl Desktop {
     }
     fn pick_folder(&mut self) {
         self.busy += 1;
+        let initial = self
+            .remote
+            .as_ref()
+            .and_then(|host| host.id.strip_prefix("wsl:"))
+            .and_then(|distro| {
+                let cwd = if self.snapshot.navigation.cwd.is_empty() {
+                    self.snapshot
+                        .host_home_directory
+                        .as_deref()
+                        .unwrap_or("/home")
+                } else {
+                    self.snapshot.navigation.cwd.as_str()
+                };
+                agent_local_host::wsl::to_unc(distro, cwd)
+                    .ok()
+                    .map(PathBuf::from)
+            });
+        let connections = self.runtime.connections.clone();
         self.effect(
-            async {
-                tokio::task::spawn_blocking(platform::choose_folder)
+            async move {
+                let path = tokio::task::spawn_blocking(move || platform::choose_folder(initial))
                     .await
-                    .map_err(|error| error.to_string())
+                    .map_err(|error| error.to_string())?;
+                match path {
+                    Some(path) => connections
+                        .project_target(path)
+                        .await
+                        .map(Some)
+                        .map_err(|error| format!("{error:#}")),
+                    None => Ok(None),
+                }
             },
             Update::Folder,
         );
+    }
+    fn initial_host(&mut self, result: Result<Option<RemoteHost>, String>) {
+        self.connecting = false;
+        match result {
+            Ok(remote) => {
+                self.remote = remote;
+                self.connect(None);
+            }
+            Err(error) => self.set_error(error),
+        }
+    }
+    fn add_selected_project(
+        &mut self,
+        remote: Option<RemoteHost>,
+        cwd: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.tab = Tab::Chat;
+        self.cancel_recording();
+        if self.snapshot.connected
+            && self.remote.as_ref().map(|host| &host.id) == remote.as_ref().map(|host| &host.id)
+        {
+            self.dispatch(Intent::AddProject(op::AddProject { cwd }));
+        } else {
+            self.pending_project = Some((remote.as_ref().map(|host| host.id.clone()), cwd));
+            self.switch_host(remote, window, cx);
+        }
     }
     fn composer_arrow(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.completion_key(key, window, cx) {
