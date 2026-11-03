@@ -98,8 +98,14 @@ fn binding_generator_stays_independent_of_the_application() {
         &root.join("crates/agent-bindgen/Cargo.toml"),
         &mut BTreeSet::new(),
     );
-    assert!(names.contains("uniffi"));
-    for dependency in ["agent-core", "agent-ffi", "agent-transport", "host-daemon"] {
+    assert!(names.contains("uniffi_bindgen"));
+    for dependency in [
+        "uniffi",
+        "agent-core",
+        "agent-ffi",
+        "agent-transport",
+        "host-daemon",
+    ] {
         assert!(
             !names.contains(dependency),
             "bindgen depends on {dependency}"
