@@ -449,6 +449,7 @@ jobs:
   iphone-tests:
     name: iPhone ${{ matrix.label }}
     needs: iphone
+    if: ${{ !cancelled() && needs.iphone.result == 'success' }}
     concurrency:
       group: native-apple-${{ github.event_name == 'pull_request' && 'pr' || format('{0}-iphone-tests-{1}', github.run_id, matrix.label) }}
       cancel-in-progress: false
@@ -478,7 +479,7 @@ jobs:
           name: iphone-test-build
           path: target/qa
       - name: Restore the shared test build
-        run: tar -xzf target/qa/ios-e2e.tar.gz -C target
+        run: tar -xpzf target/qa/ios-e2e.tar.gz -C target
       - name: iPhone acceptance without rebuilding
         env:
           AGENT_IOS_TESTS: ${{ inputs.ios-tests }}

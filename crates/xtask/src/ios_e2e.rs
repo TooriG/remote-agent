@@ -1041,6 +1041,29 @@ async fn target_directory(
     ))
 }
 
+async fn acquire_ios_lock(path: &Path, cancel: &watch::Receiver<bool>) -> Result<File> {
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)?;
+    let mut reported = false;
+    loop {
+        match lock.try_lock() {
+            Ok(()) => return Ok(lock),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                if !reported {
+                    println!("Waiting for iOS lock: {}", path.display());
+                    reported = true;
+                }
+                tokio::select! { _ = tokio::time::sleep(Duration::from_millis(200)) => {}, _ = supervision::cancelled(cancel.clone()) => return Err(supervision::interrupted()) }
+            }
+            Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
+        }
+    }
+}
+
 pub async fn run(
     tests: Vec<String>,
     without_codex: bool,
@@ -1070,6 +1093,19 @@ pub async fn run(
     ));
     fs::create_dir(&records)?;
     let build = qa.join("ios-derived-data");
+    // Keep products stable until their test consumers have finished.
+    let _products = acquire_ios_lock(&qa.join("ios-build.lock"), &cancel).await?;
+    let log = File::create(records.join("build.log"))?;
+    let browser = needs_browser_fixture(&tests);
+    let (test_run, build_seconds) = if build_mode == BuildMode::Prebuilt {
+        println!("Using the prebuilt iOS app and Host fixtures");
+        (prebuilt_test_bundle(&target, browser)?, 0.0)
+    } else {
+        build_test_bundle(&cwd, &target, &build, driver, browser, &log, &cancel).await?
+    };
+    if build_mode == BuildMode::BuildOnly {
+        return archive_test_bundle(&target, browser, &log, &cancel).await;
+    }
     let common = supervision::run(
         &args![
             "git",
@@ -1086,33 +1122,8 @@ pub async fn run(
     let state =
         PathBuf::from(std::str::from_utf8(&common.stdout)?.trim_end()).join("agent-ios-e2e");
     fs::create_dir_all(&state)?;
-    let lock = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(state.join("ios-e2e.lock"))?;
     println!("Acquiring shared iOS test lock");
-    loop {
-        match lock.try_lock() {
-            Ok(()) => break,
-            Err(std::fs::TryLockError::WouldBlock) => {
-                tokio::select! { _ = tokio::time::sleep(Duration::from_millis(200)) => {}, _ = supervision::cancelled(cancel.clone()) => return Err(supervision::interrupted()) }
-            }
-            Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
-        }
-    }
-    let log = File::create(records.join("build.log"))?;
-    let browser = needs_browser_fixture(&tests);
-    let (test_run, build_seconds) = if build_mode == BuildMode::Prebuilt {
-        println!("Using the prebuilt iOS app and Host fixtures");
-        (prebuilt_test_bundle(&target, browser)?, 0.0)
-    } else {
-        build_test_bundle(&cwd, &target, &build, driver, browser, &log, &cancel).await?
-    };
-    if build_mode == BuildMode::BuildOnly {
-        return archive_test_bundle(&target, browser, &log, &cancel).await;
-    }
+    let _simulator = acquire_ios_lock(&state.join("ios-e2e.lock"), &cancel).await?;
     let groups = (0..workers)
         .map(|index| partition_tests(&tests, index, workers))
         .collect::<Result<Vec<_>>>()?;
@@ -1226,6 +1237,9 @@ mod tests {
     use proptest::prelude::*;
     use serde_json::json;
 
+    const BUILD_TEST_MODE: &str = "AGENT_IOS_BUILD_TEST_MODE";
+    const BUILD_TEST_ROOT: &str = "AGENT_IOS_BUILD_TEST_ROOT";
+
     #[tokio::test]
     async fn prebuilt_target_needs_no_cargo_while_builds_respect_project_configuration() {
         const ROOT: &str = "AGENT_IOS_TARGET_TEST_ROOT";
@@ -1285,12 +1299,93 @@ mod tests {
         }
     }
 
+    fn build_fixture() -> tempfile::TempDir {
+        use std::os::unix::fs::PermissionsExt;
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        for directory in [
+            "bin",
+            "scripts",
+            "target/debug",
+            "target/qa/ios-derived-data/Build/Products",
+        ] {
+            fs::create_dir_all(root.join(directory)).unwrap();
+        }
+        fs::write(root.join("target/debug/xtask"), "test runner").unwrap();
+        fs::write(
+            root.join("metadata.json"),
+            serde_json::to_vec(&json!({"target_directory": root.join("target")})).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            root.join("target/qa/ios-derived-data/Build/Products/stale.xctestrun"),
+            "old run",
+        )
+        .unwrap();
+        let script = r#"#!/usr/bin/env bash
+set -eu
+root=$AGENT_IOS_BUILD_TEST_ROOT
+printf '%s\n' "${0##*/} $*" >> "$root/commands"
+case ${0##*/} in
+  git)
+    if [[ $1 == rev-parse ]]; then echo "$root/git-common"; else echo fixture-revision; fi ;;
+  build-agent-ios.sh) touch "$root/ios-ready" ;;
+  cargo)
+    if [[ $1 == metadata ]]; then cat "$root/metadata.json"; exit; fi
+    [[ $AGENT_IOS_BUILD_TEST_MODE != failure ]] || exit 19
+    previous=''
+    for argument; do
+      if [[ $previous == --bin ]]; then touch "$root/target/debug/$argument"; fi
+      previous=$argument
+    done ;;
+  node) touch "$root/target/debug/agent-claude-sdk.mjs" "$root/target/debug/Claude-Agent-SDK-LICENSE.md" ;;
+  xcodebuild)
+    test -e "$root/ios-ready"
+    touch "$root/target/qa/ios-derived-data/Build/Products/Bex.xctestrun" ;;
+  xcrun) touch "$root/simulator-access"; exit 23 ;;
+esac
+"#;
+        for executable in [
+            "scripts/build-agent-ios.sh",
+            "bin/cargo",
+            "bin/node",
+            "bin/xcodebuild",
+            "bin/xcrun",
+            "bin/git",
+        ] {
+            let path = root.join(executable);
+            fs::write(&path, script).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        temporary
+    }
+
+    fn build_command(root: &Path, test: &str, mode: &str) -> tokio::process::Command {
+        let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", test, "--nocapture"])
+            .current_dir(root)
+            .env(BUILD_TEST_MODE, mode)
+            .env(BUILD_TEST_ROOT, root)
+            .env("AGENT_IOS_TEST_SHARD", "0")
+            .env("AGENT_IOS_TEST_SHARDS", "1")
+            .env("AGENT_IOS_TEST_WORKERS", "1")
+            .env("AGENT_IOS_TEST_ROUNDS", "1")
+            .env(
+                "PATH",
+                std::env::join_paths(
+                    std::iter::once(root.join("bin"))
+                        .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+                )
+                .unwrap(),
+            );
+        command
+    }
+
     #[tokio::test]
     async fn build_uses_one_host_graph_and_stops_on_failure() {
-        const MODE: &str = "AGENT_IOS_BUILD_TEST_MODE";
-        const ROOT: &str = "AGENT_IOS_BUILD_TEST_ROOT";
-        if let Some(mode) = std::env::var_os(MODE) {
-            let root = PathBuf::from(std::env::var_os(ROOT).unwrap());
+        if let Some(mode) = std::env::var_os(BUILD_TEST_MODE) {
+            let root = PathBuf::from(std::env::var_os(BUILD_TEST_ROOT).unwrap());
             let target = root.join("target");
             let log = File::create(root.join("build.log")).unwrap();
             let (_sender, cancel) = watch::channel(false);
@@ -1311,74 +1406,17 @@ mod tests {
             }
             return;
         }
-        use std::os::unix::fs::PermissionsExt;
         for mode in ["host", "browser", "failure"] {
-            let temporary = tempfile::tempdir().unwrap();
+            let temporary = build_fixture();
             let root = temporary.path().canonicalize().unwrap();
-            for directory in [
-                "bin",
-                "scripts",
-                "target/debug",
-                "target/qa/ios-derived-data/Build/Products",
-            ] {
-                fs::create_dir_all(root.join(directory)).unwrap();
-            }
-            fs::write(root.join("target/debug/xtask"), "test runner").unwrap();
-            fs::write(
-                root.join("target/qa/ios-derived-data/Build/Products/stale.xctestrun"),
-                "old run",
+            let output = build_command(
+                &root,
+                "ios_e2e::tests::build_uses_one_host_graph_and_stops_on_failure",
+                mode,
             )
+            .output()
+            .await
             .unwrap();
-            let script = r#"#!/usr/bin/env bash
-set -eu
-root=$AGENT_IOS_BUILD_TEST_ROOT
-printf '%s\n' "${0##*/} $*" >> "$root/commands"
-case ${0##*/} in
-  git) echo fixture-revision ;;
-  build-agent-ios.sh) touch "$root/ios-ready" ;;
-  cargo)
-    [[ $AGENT_IOS_BUILD_TEST_MODE != failure ]] || exit 19
-    previous=''
-    for argument; do
-      if [[ $previous == --bin ]]; then touch "$root/target/debug/$argument"; fi
-      previous=$argument
-    done ;;
-  node) touch "$root/target/debug/agent-claude-sdk.mjs" "$root/target/debug/Claude-Agent-SDK-LICENSE.md" ;;
-  xcodebuild)
-    test -e "$root/ios-ready"
-    touch "$root/target/qa/ios-derived-data/Build/Products/Bex.xctestrun" ;;
-esac
-"#;
-            for executable in [
-                "scripts/build-agent-ios.sh",
-                "bin/cargo",
-                "bin/node",
-                "bin/xcodebuild",
-                "bin/git",
-            ] {
-                let path = root.join(executable);
-                fs::write(&path, script).unwrap();
-                fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
-            }
-            let output = tokio::process::Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "ios_e2e::tests::build_uses_one_host_graph_and_stops_on_failure",
-                    "--nocapture",
-                ])
-                .env(MODE, mode)
-                .env(ROOT, &root)
-                .env(
-                    "PATH",
-                    std::env::join_paths(
-                        std::iter::once(root.join("bin"))
-                            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
-                    )
-                    .unwrap(),
-                )
-                .output()
-                .await
-                .unwrap();
             assert!(
                 output.status.success(),
                 "{}\n{}",
@@ -1402,6 +1440,136 @@ esac
             assert_eq!(
                 root.join("target/debug/agent-desktop").is_file(),
                 mode == "browser"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_lock_wait_keeps_the_owner_and_allows_later_reuse() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("products.lock");
+        let owner = File::create(&path).unwrap();
+        owner.lock().unwrap();
+        let (sender, cancel) = watch::channel(false);
+        let cancellation = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            sender.send(true).unwrap();
+        });
+        let error = tokio::time::timeout(Duration::from_secs(5), acquire_ios_lock(&path, &cancel))
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::Interrupted
+        );
+        cancellation.await.unwrap();
+        let probe = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        assert!(matches!(
+            probe.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+        drop(owner);
+        let (_sender, cancel) = watch::channel(false);
+        let acquired = acquire_ios_lock(&path, &cancel).await.unwrap();
+        assert!(matches!(
+            probe.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+        drop(acquired);
+        probe.try_lock().unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    async fn wait_for_lock_message(log: &Path, lock: &Path) {
+        let expected = format!("Waiting for iOS lock: {}", lock.display());
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !fs::read_to_string(log).unwrap().contains(&expected) {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("Missing {expected}: {}", fs::read_to_string(log).unwrap()));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn builds_guard_their_products_without_waiting_for_another_worktrees_simulator() {
+        if let Ok(mode) = std::env::var(BUILD_TEST_MODE) {
+            let result = run(
+                vec!["testSimulatorUsesNativeProjectDisclosureAndWorkspaceTree".into()],
+                false,
+                TestDriver::XCTest,
+                if mode == "build-only" {
+                    BuildMode::BuildOnly
+                } else {
+                    BuildMode::BuildAndTest
+                },
+            )
+            .await;
+            if mode == "build-only" {
+                result.unwrap();
+            } else {
+                assert!(result.unwrap_err().to_string().contains("xcrun failed"));
+            }
+            return;
+        }
+        for mode in ["build-only", "test"] {
+            let temporary = build_fixture();
+            let root = temporary.path().canonicalize().unwrap();
+            let state = root.join("git-common/agent-ios-e2e");
+            fs::create_dir_all(&state).unwrap();
+            let simulator_path = state.join("ios-e2e.lock");
+            let simulator = File::create(&simulator_path).unwrap();
+            simulator.lock().unwrap();
+            let product_path = root.join("target/qa/ios-build.lock");
+            let products = (mode == "test").then(|| {
+                let file = File::create(&product_path).unwrap();
+                file.lock().unwrap();
+                file
+            });
+            let log_path = root.join("child.log");
+            let log = File::create(&log_path).unwrap();
+            let mut child = build_command(
+                &root,
+                "ios_e2e::tests::builds_guard_their_products_without_waiting_for_another_worktrees_simulator",
+                mode,
+            )
+            .stdout(log.try_clone().unwrap())
+            .stderr(log)
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+            if products.is_some() {
+                wait_for_lock_message(&log_path, &product_path).await;
+                assert!(!root.join("ios-ready").exists());
+            }
+            drop(products);
+            if mode == "test" {
+                wait_for_lock_message(&log_path, &simulator_path).await;
+                assert!(root.join("ios-ready").exists());
+                assert!(!root.join("simulator-access").exists());
+                drop(simulator);
+            }
+            let status = tokio::time::timeout(Duration::from_secs(10), child.wait())
+                .await
+                .unwrap_or_else(|_| {
+                    panic!("{mode} blocked: {}", fs::read_to_string(&log_path).unwrap())
+                })
+                .unwrap();
+            assert!(
+                status.success(),
+                "{}",
+                fs::read_to_string(&log_path).unwrap()
+            );
+            assert_eq!(root.join("simulator-access").exists(), mode == "test");
+            assert_eq!(
+                root.join("target/qa/ios-e2e.tar.gz").exists(),
+                mode == "build-only"
             );
         }
     }
@@ -1443,8 +1611,11 @@ esac
             let restored = tempfile::tempdir().unwrap();
             supervision::run(
                 &args![
+                    "sh",
+                    "-c",
+                    "umask 077; exec tar \"$@\"",
                     "tar",
-                    "-xzf",
+                    "-xpzf",
                     target.join("qa/ios-e2e.tar.gz"),
                     "-C",
                     restored.path()
