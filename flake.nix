@@ -90,6 +90,12 @@
             systemImageTypes = [ "google_apis" ];
             abiVersions = [ (if pkgs.stdenv.hostPlatform.isAarch64 then "arm64-v8a" else "x86_64") ];
           }).androidsdk;
+          androidBuildEnvironment = {
+            JAVA_HOME = pkgs.jdk21.home;
+            ANDROID_HOME = "${androidSdk}/libexec/android-sdk";
+            ANDROID_SDK_ROOT = "${androidSdk}/libexec/android-sdk";
+            ANDROID_NDK_HOME = "${androidSdk}/libexec/android-sdk/ndk-bundle";
+          };
           nativeBuildTools = with pkgs; [ pkg-config cmake clang zig ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.patchelf ];
           # The desktop, Host and their tests link these on Linux.
           linuxDesktopLibraries = with pkgs; [
@@ -182,12 +188,19 @@
             ];
 
             shellHook = kacheHook + appleSdkHook;
-          } // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          } // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (androidBuildEnvironment // {
             LD_LIBRARY_PATH = linuxDesktopLibraryPath;
-            JAVA_HOME = pkgs.jdk21.home;
-            ANDROID_HOME = "${androidSdk}/libexec/android-sdk";
-            ANDROID_SDK_ROOT = "${androidSdk}/libexec/android-sdk";
-            ANDROID_NDK_HOME = "${androidSdk}/libexec/android-sdk/ndk-bundle";
+          }));
+        } // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          android-build = pkgs.mkShell (androidBuildEnvironment // {
+            packages = with pkgs; [
+              (hostRustToolchain.override {
+                extensions = [ ];
+                targets = [ "aarch64-linux-android" "x86_64-linux-android" ];
+              })
+              kache zsh just jq gitMinimal nodejs cargo-ndk jdk21 androidSdk
+            ];
+            shellHook = kacheHook + runtimeShellHook;
           });
         } // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
           ios-build = mkDevShell {

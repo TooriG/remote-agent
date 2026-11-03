@@ -217,7 +217,7 @@ jobs:
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          cmd-format: nix develop . --command {0}
+          cmd-format: nix develop .#android-build --command {0}
           key: android-${{ hashFiles('flake.lock') }}
           save-if: ${{ github.event_name != 'pull_request' }}
           cache-on-failure: true
@@ -233,7 +233,7 @@ jobs:
           GRADLE_USER_HOME: ${{ runner.temp }}/gradle
           ANDROID_USER_HOME: ${{ runner.temp }}/android
         run: >-
-          nix develop . --command ./gradlew
+          nix develop .#android-build --command ./gradlew
           :apps:mobile:ktfmtCheck :apps:mobile:detekt
           :apps:mobile:testDebugUnitTest
           :apps:mobile:assembleDebug :apps:mobile:assembleDebugAndroidTest
