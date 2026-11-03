@@ -256,6 +256,9 @@ impl Operation for ListProjectSessions {
         let (data, more) = page_rows(output.data, output.limit);
         output.data = data;
         output.has_more |= more;
+        Arc::make_mut(&mut snapshot.unconfirmed_lists).remove(&OperationKey::ProjectList {
+            project_id: self.project_id.clone(),
+        });
         update_titles(snapshot, &output.data);
         if let Some(limit) =
             Arc::make_mut(&mut snapshot.expanded_projects).get_mut(&self.project_id)
@@ -321,6 +324,8 @@ impl Operation for ListSessions {
         if snapshot.list_query.search_term != self.query.search_term {
             snapshot.expanded_projects = Arc::default();
             snapshot.project_threads = Arc::default();
+            Arc::make_mut(&mut snapshot.unconfirmed_lists)
+                .retain(|key| *key == OperationKey::SessionList);
             self.query.project_limits = None;
             Arc::make_mut(&mut snapshot.operations).retain(|key, _| {
                 !matches!(
@@ -356,6 +361,7 @@ impl Operation for ListSessions {
         }
 
         let mut threads = merge_received(threads, snapshot.threads.as_deref());
+        Arc::make_mut(&mut snapshot.unconfirmed_lists).remove(&OperationKey::SessionList);
         let projects: Vec<_> = threads
             .projects
             .iter()
@@ -404,6 +410,10 @@ impl Operation for ListSessions {
         }
         let pages = Arc::make_mut(&mut snapshot.project_threads);
         pages.retain(|id, _| visible.contains(id.as_str()));
+        Arc::make_mut(&mut snapshot.unconfirmed_lists).retain(|key| match key {
+            OperationKey::ProjectList { project_id } => visible.contains(project_id.as_str()),
+            _ => true,
+        });
         for (id, page) in &threads.project_pages {
             if pages
                 .get(id)
@@ -411,6 +421,9 @@ impl Operation for ListSessions {
             {
                 continue;
             }
+            Arc::make_mut(&mut snapshot.unconfirmed_lists).remove(&OperationKey::ProjectList {
+                project_id: id.clone(),
+            });
             let mut received = merge_received(
                 crate::models::ThreadList {
                     revision: threads.revision,

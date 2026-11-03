@@ -195,7 +195,7 @@ fn general_snapshot_changed(before: &Snapshot, after: &Snapshot) -> bool {
         (shared: [$($shared:ident),*], optional: [$($optional:ident),*], values: [$($value:ident),*]) => {{
             let Snapshot {
                 $($shared: _,)* $($optional: _,)* $($value: _,)*
-                drafts: _, file_drafts: _, composer_catalog: _,
+                drafts: _, file_drafts: _, composer_catalog: _, unconfirmed_lists: _,
             } = after;
             false
                 $(|| !Arc::ptr_eq(&before.$shared, &after.$shared))*

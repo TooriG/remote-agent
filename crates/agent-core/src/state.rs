@@ -287,6 +287,9 @@ pub struct Snapshot {
     pub expanded_projects: Arc<BTreeMap<String, u32>>,
     #[serde(skip)]
     pub project_threads: Arc<BTreeMap<String, Arc<ThreadList>>>,
+    /// Disk copies need one authoritative read; live lists continue through notifications.
+    #[serde(skip)]
+    pub unconfirmed_lists: Arc<BTreeSet<op::OperationKey>>,
     #[serde(skip)]
     pub observed_agents: Option<crate::session::SessionRef>,
     #[serde(default)]
@@ -737,7 +740,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 let page = previous.project_threads.get(&project_id);
                 let limit = page.map_or(5, |page| page.limit);
                 Arc::make_mut(&mut next.expanded_projects).insert(project_id.clone(), limit);
-                if page.is_none() && next.connected {
+                if next.connected && (page.is_none() || next.unconfirmed_lists.contains(&op::OperationKey::ProjectList { project_id: project_id.clone() })) {
                     return prepare(next, op::ListProjectSessions {
                         project_id,
                         limit,
@@ -1142,6 +1145,7 @@ fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
             next.activity = Arc::default();
             next.expanded_projects = Arc::default();
             next.project_threads = Arc::default();
+            next.unconfirmed_lists = Arc::default();
             if !next.storage_scope.is_empty() {
                 let archived = ScopedData {
                     drafts: std::mem::take(&mut next.drafts),
@@ -1275,7 +1279,11 @@ impl Snapshot {
             effects.push(Effect::execute(op::ReadFileOpenCapabilities {}));
         }
         effects.extend(op::reconnect_file_trees(self));
-        if self.threads.is_none() {
+        if self.threads.is_none()
+            || self
+                .unconfirmed_lists
+                .contains(&op::OperationKey::SessionList)
+        {
             effects.push(Effect::execute(op::ListSessions::new(
                 (*self.list_query).clone(),
             )));

@@ -864,6 +864,7 @@ fn publication_key(snapshot: &Snapshot) -> impl PartialEq + '_ {
         threads,
         expanded_projects,
         project_threads,
+        unconfirmed_lists,
         observed_agents,
         models,
         model_errors,
@@ -929,6 +930,7 @@ fn publication_key(snapshot: &Snapshot) -> impl PartialEq + '_ {
             SharedIdentity(terminals),
             SharedIdentity(expanded_projects),
             SharedIdentity(project_threads),
+            SharedIdentity(unconfirmed_lists),
             SharedIdentity(workspace),
             SharedIdentity(workspaces),
             SharedIdentity(navigation),
@@ -2595,6 +2597,65 @@ mod tests {
 #[cfg(test)]
 mod model_reconnection_tests {
     use super::*;
+
+    #[test]
+    fn reconnect_and_reopening_a_project_refresh_held_lists_without_clearing_them() {
+        let page = Arc::new(crate::models::ThreadList {
+            revision: 10,
+            limit: 5,
+            data: vec![],
+            projects: vec![crate::models::Project {
+                id: "p".into(),
+                name: "Project".into(),
+                ..Default::default()
+            }],
+            has_more: false,
+            has_more_projects: false,
+            project_pages: Default::default(),
+            provider_errors: None,
+        });
+        let previous = Snapshot {
+            threads: Some(page.clone()),
+            project_threads: Arc::new([("p".into(), page)].into()),
+            unconfirmed_lists: Arc::new(
+                [
+                    op::OperationKey::SessionList,
+                    op::OperationKey::ProjectList {
+                        project_id: "p".into(),
+                    },
+                ]
+                .into(),
+            ),
+            ..Default::default()
+        };
+        let (connected, effects) = reduce(&previous, Event::Connected);
+        assert!(connected.threads.is_some());
+        assert_eq!(
+            effects
+                .iter()
+                .filter(|effect| effect.operation.key() == Some(op::OperationKey::SessionList))
+                .count(),
+            1
+        );
+        let (opened, effects) = reduce(
+            &connected,
+            Event::Intent(Intent::SetProjectExpanded {
+                project_id: "p".into(),
+                expanded: true,
+            }),
+        );
+        assert!(opened.project_threads.contains_key("p"));
+        assert_eq!(
+            effects
+                .iter()
+                .filter(|effect| effect.operation.key()
+                    == Some(op::OperationKey::ProjectList {
+                        project_id: "p".into()
+                    }))
+                .count(),
+            1
+        );
+    }
 
     #[test]
     fn reconnect_refreshes_a_cached_catalog_without_clearing_choices() {
