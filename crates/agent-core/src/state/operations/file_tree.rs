@@ -26,6 +26,17 @@ pub(crate) fn file_tree_action(
         Vec::new()
     }
 }
+pub(crate) fn refresh_file_trees(snapshot: &mut Snapshot, path: &str) -> Vec<Effect> {
+    if !snapshot.connected {
+        return Vec::new();
+    }
+    effects(
+        Arc::make_mut(&mut snapshot.workspace)
+            .file_trees
+            .refresh_matching(path, snapshot.connection_generation),
+    )
+}
+
 fn effects(work: Vec<TreeWork>) -> Vec<Effect> {
     work.into_iter()
         .map(|work| match work {

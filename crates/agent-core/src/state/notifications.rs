@@ -413,10 +413,37 @@ pub(super) fn session_update(
     {
         Arc::make_mut(&mut next.subscriptions).remove(id);
     }
+    if workspace_mutated(&update.change)
+        && let Some(cwd) = &current.cwd
+    {
+        effects.extend(op::refresh_file_trees(&mut next, cwd));
+    }
     if refresh_workspace || workspace_changed {
         effects.extend(op::review_workspace(&mut next));
     }
     (next, effects)
+}
+
+// Match T3 ChatView.logic.ts deriveWorkspaceMutationId: completed shell/file
+// tools and completed turns refresh file views; prose streaming does not.
+fn workspace_mutated(change: &crate::session::SessionChange) -> bool {
+    use crate::session::SessionChange;
+    match change {
+        SessionChange::Turn {
+            completed: true, ..
+        } => true,
+        SessionChange::Item { item, .. } => {
+            !matches!(
+                item.status,
+                crate::models::ItemStatus::Running | crate::models::ItemStatus::Unknown
+            ) && matches!(
+                item.body(),
+                crate::models::ItemBody::FileChange { .. }
+                    | crate::models::ItemBody::CommandExecution { .. }
+            )
+        }
+        _ => false,
+    }
 }
 
 impl Snapshot {
@@ -1169,5 +1196,54 @@ mod tests {
             "a spawn refreshes while the parent is still running"
         );
         assert_eq!(next.navigation, snapshot.navigation);
+    }
+}
+
+#[cfg(test)]
+mod workspace_mutation_tests {
+    use super::*;
+    use crate::{
+        models::{Item, ItemBody, ItemStatus},
+        session::SessionChange,
+    };
+
+    #[test]
+    fn only_finished_workspace_tools_refresh_the_tree_during_a_turn() {
+        for body in [
+            ItemBody::FileChange {
+                changes: vec![],
+                output: String::new(),
+            },
+            ItemBody::CommandExecution {
+                command: "touch new.txt".into(),
+                cwd: None,
+                output: String::new(),
+                exit_code: None,
+            },
+        ] {
+            for (status, expected) in [
+                (ItemStatus::Running, false),
+                (ItemStatus::Completed, true),
+                (ItemStatus::Failed, true),
+            ] {
+                let change = SessionChange::Item {
+                    turn_id: "turn".into(),
+                    item: Arc::new(Item::new("item".into(), status, body.clone())),
+                };
+                assert_eq!(workspace_mutated(&change), expected);
+            }
+        }
+        let prose = SessionChange::Item {
+            turn_id: "turn".into(),
+            item: Arc::new(Item::new(
+                "prose".into(),
+                ItemStatus::Completed,
+                ItemBody::AssistantText {
+                    text: "hello".into(),
+                    phase: crate::models::AssistantPhase::Final,
+                },
+            )),
+        };
+        assert!(!workspace_mutated(&prose));
     }
 }

@@ -55,7 +55,11 @@ struct ConversationMarkdown: View {
         .sheet(item: $sharedFile) { item in FileShareSheet(url: item.url) }
         .task(id: shareTarget) {
             guard let path = shareTarget else { return }
-            defer { if !Task.isCancelled { shareTarget = nil } }
+            defer {
+                if !Task.isCancelled {
+                    shareTarget = nil
+                }
+            }
             do {
                 let url = try await media.download(path)
                 if Task.isCancelled {
@@ -64,7 +68,9 @@ struct ConversationMarkdown: View {
                 }
                 sharedFile = SharedFile(url: url)
             } catch {
-                if !Task.isCancelled { linkError = error.localizedDescription }
+                if !Task.isCancelled {
+                    linkError = error.localizedDescription
+                }
             }
         }
         .task(id: linkTarget) {
@@ -91,7 +97,9 @@ struct ConversationMarkdown: View {
         }
     }
 
-    private func shareFile(_ path: String) { shareTarget = path }
+    private func shareFile(_ path: String) {
+        shareTarget = path
+    }
 
     private func image(_ block: ConversationMarkdownContent.Block, url: URL) -> some View {
         ConversationImage(

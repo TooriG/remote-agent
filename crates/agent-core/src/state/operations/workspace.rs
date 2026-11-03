@@ -130,6 +130,7 @@ impl Operation for SaveFile {
     }
     fn apply(self, snapshot: &mut Snapshot, (submitted, file): Self::Output) -> Vec<Effect> {
         Self::rebase_draft(snapshot, &submitted, &file);
+        let effects = super::file_tree::refresh_file_trees(snapshot, &file.path);
         if snapshot
             .workspace
             .file
@@ -138,7 +139,7 @@ impl Operation for SaveFile {
         {
             Arc::make_mut(&mut snapshot.workspace).file = Some(Arc::new(file));
         }
-        Vec::new()
+        effects
     }
     fn stale(self, snapshot: &mut Snapshot, (submitted, file): Self::Output) -> Vec<Effect> {
         Self::rebase_draft(snapshot, &submitted, &file);

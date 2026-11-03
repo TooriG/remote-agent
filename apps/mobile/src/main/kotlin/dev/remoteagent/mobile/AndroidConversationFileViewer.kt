@@ -73,19 +73,33 @@ internal fun ConversationFileViewer(
         AlertDialog(
             onDismissRequest = dismiss,
             title = { Text(reference.label) },
-            text = { FileViewerBody(path, text, error, loading, reference.line) },
+            text = {
+                if (loading) CircularProgressIndicator() else FileViewerBody(path, text, error, reference.line, perform)
+            },
             confirmButton = { TextButton(onClick = dismiss) { Text(LocalUiLanguage.current.text("閉じる")) } },
         )
     }
 }
 
 @Composable
-private fun FileViewerBody(path: String, text: String?, error: String?, loading: Boolean, line: UInt?) {
+private fun FileViewerBody(
+    path: String,
+    text: String?,
+    error: String?,
+    line: UInt?,
+    perform: ((Intent, (Result<Outcome>) -> Unit) -> Unit)?,
+) {
     Column(Modifier.heightIn(max = 480.dp)) {
         SelectionContainer { Text(path) }
-        if (loading) CircularProgressIndicator()
         error?.let { Text(it) }
-        if (text != null && !loading && error == null) FileViewerText(text, line)
+        if (text != null && error == null) {
+            if (
+                line == null &&
+                    dev.remoteagent.core.markdownFileKind(path) == dev.remoteagent.core.MarkdownFileKind.MARKDOWN
+            ) {
+                PreviewText(text, true, path.replace('\\', '/').substringBeforeLast('/'), perform)
+            } else FileViewerText(text, line)
+        }
     }
 }
 

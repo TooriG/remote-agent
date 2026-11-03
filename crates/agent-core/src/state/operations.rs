@@ -497,6 +497,7 @@ mod workspace;
 pub use workspace::*;
 mod file_tree;
 pub(crate) use file_tree::file_tree_action;
+pub(super) use file_tree::refresh_file_trees;
 mod file_metadata;
 pub(crate) use file_metadata::ensure_file_metadata;
 mod file_reference;

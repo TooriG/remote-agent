@@ -142,7 +142,7 @@ private fun readFilePreview(target: File, kind: MarkdownFileKind, path: String):
 }
 
 @Composable
-private fun PreviewText(
+internal fun PreviewText(
     text: String,
     markdown: Boolean,
     cwd: String,

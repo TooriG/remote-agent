@@ -1039,3 +1039,32 @@ fn pull_refresh_indicator_tracks_the_loaded_root_and_not_child_or_search_request
     assert!(trees.view(&key(ROOT)).pending);
     assert!(!trees.view(&key(ROOT)).refreshing);
 }
+
+#[test]
+fn workspace_mutations_refresh_only_matching_active_roots_and_preserve_selection() {
+    let mut trees = FileTrees::default();
+    let old = open(&mut trees, "/old", FileTreeSurface::Mobile);
+    let root = open(&mut trees, ROOT, FileTreeSurface::Mobile);
+    complete(&mut trees, &root[0], vec![entry("a.rs", EntryKind::File)]);
+    action(
+        &mut trees,
+        FileTreeAction::Select {
+            path: "a.rs".into(),
+            additive: false,
+            range: false,
+        },
+    );
+    assert!(trees.refresh_matching("/old/a.rs", 1).is_empty());
+    assert!(trees.refresh_matching("/elsewhere", 1).is_empty());
+    let refresh = trees.refresh_matching("/workspace/a.rs", 1);
+    assert_eq!(refresh.len(), 1);
+    assert!(trees.view(&key(ROOT)).refreshing);
+    assert_eq!(trees.view(&key(ROOT)).selected_paths, ["a.rs"]);
+    assert!(complete(&mut trees, &old[0], vec![]).is_empty());
+    complete(
+        &mut trees,
+        &refresh[0],
+        vec![entry("b.rs", EntryKind::File)],
+    );
+    assert_eq!(paths(&trees), ["b.rs"]);
+}

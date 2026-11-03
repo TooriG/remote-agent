@@ -161,6 +161,25 @@ impl FileTrees {
             }
         }
     }
+    /// Refresh the active root of each mounted browser after a workspace mutation.
+    pub(crate) fn refresh_matching(&mut self, path: &str, connection: u64) -> Vec<TreeWork> {
+        use crate::presentation::markdown::file_workspace_relative_path;
+        let mut owners = BTreeSet::new();
+        let keys = self
+            .trees
+            .iter()
+            .rev()
+            .filter(|(key, _)| owners.insert(key.owner.clone()))
+            .filter(|(key, _)| {
+                file_workspace_relative_path(path, &key.root).is_some()
+                    || file_workspace_relative_path(&key.root, path).is_some()
+            })
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        keys.into_iter()
+            .flat_map(|key| self.action(key, FileTreeAction::Refresh, connection))
+            .collect()
+    }
     fn tree_mut(&mut self, key: &FileTreeKey) -> Option<&mut Tree> {
         self.trees
             .iter_mut()
