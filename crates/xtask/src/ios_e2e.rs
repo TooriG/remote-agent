@@ -290,6 +290,7 @@ const IDLE_SIMULATOR_SERVICES: &[&str] = &[
 ];
 /// System apps that the first boot opens in the background.
 const IDLE_SIMULATOR_APPS: &[&str] = &[
+    "com.apple.PosterBoard",
     "com.apple.Spotlight",
     "com.apple.mobilecal",
     "com.apple.family",
@@ -1887,6 +1888,7 @@ esac
         );
         for required in [
             "com.apple.SpringBoard",
+            "com.apple.springboard",
             "com.apple.backboardd",
             "com.apple.runningboardd",
             "com.apple.AccessibilityUIServer",
@@ -1898,7 +1900,10 @@ esac
             "com.apple.mediaremoted",
             "com.apple.corespeechd",
         ] {
-            assert!(!services.contains(required), "{required} must keep running");
+            assert!(
+                !services.contains(required) && !IDLE_SIMULATOR_APPS.contains(&required),
+                "{required} must keep running"
+            );
         }
     }
 

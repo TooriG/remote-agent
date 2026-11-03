@@ -14,7 +14,8 @@ final class LaunchUITests: XCTestCase {
     }
 
     func waitForStableFrame(_ element: XCUIElement) {
-        var previous: CGRect?
+        // A failed poll captures slow XCTest snapshots, so sample before polling.
+        var previous = element.frame
         let settled = expectation(for: NSPredicate { _, _ in
             let frame = element.frame
             defer { previous = frame }
