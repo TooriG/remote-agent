@@ -289,21 +289,17 @@ extension LaunchUITests {
     }
 
     private func verifyUncachedHistoryDetails(_ app: XCUIApplication, fullOutput: XCUIElement) throws {
-        // A previously unseen conversation must fetch deferred details instead of using the live cache.
+        // A previously unseen conversation is imported with its messages; past
+        // work stays in native history and is not offered as activity.
         try useSimulatorListFixture("completed-history")
         app.terminate(); app.launch()
         expandSimulatorProject(app)
         let persisted = app.descendants(matching: .any)["tasks.row.codex:fixture-thread-persisted"]
         XCTAssertTrue(persisted.waitForExistence(timeout: 20)); persisted.tap()
-        let persistedActivity = app.buttons["turn.activity.fixture-turn-persisted"]
-        XCTAssertTrue(persistedActivity.waitForExistence(timeout: 20))
-        // The review badge changes the viewport height. Wait before targeting a work row.
-        XCTAssertTrue(app.buttons["task.diff"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.descendants(matching: .any)["item.fixture-final-persisted"].waitForExistence(timeout: 20))
+        XCTAssertFalse(app.buttons["turn.activity.fixture-turn-persisted"].exists)
         XCTAssertFalse(app.buttons["item.fixture-command-persisted"].exists)
-        persistedActivity.tap()
-        let persistedCommand = app.buttons["item.fixture-command-persisted"]
-        XCTAssertTrue(persistedCommand.waitForExistence(timeout: 10)); persistedCommand.tap()
-        XCTAssertTrue(fullOutput.waitForExistence(timeout: 10), "Uncached history must fetch the full deferred body")
-        captureScreen(app, named: "Uncached deferred activity loaded")
+        XCTAssertFalse(fullOutput.exists)
+        captureScreen(app, named: "Imported history shows its messages")
     }
 }
