@@ -1,3 +1,4 @@
+import java.util.Properties
 import org.gradle.api.tasks.Exec
 
 plugins {
@@ -32,6 +33,7 @@ val buildRevision =
 
 val nativeAbis = listOf("arm64-v8a", "x86_64")
 val rustBuildInputs = rootProject.files("Cargo.toml", "Cargo.lock", "flake.nix", "flake.lock", ".cargo/config.toml")
+val ndkHome = providers.environmentVariable("ANDROID_NDK_HOME").get()
 
 val generateAgentBindings =
     tasks.register<Exec>("generateAgentBindings") {
@@ -72,6 +74,12 @@ tasks
 tasks.matching { it.name.matches(Regex("merge.*JniLibFolders")) }.configureEach { dependsOn(buildAgentAndroid) }
 
 android {
+    // AGP no longer reads ANDROID_NDK_HOME; use the same pinned NDK as cargo-ndk.
+    ndkPath = ndkHome
+    ndkVersion =
+        Properties()
+            .apply { file("$ndkHome/source.properties").inputStream().use { load(it) } }
+            .getProperty("Pkg.Revision")
     namespace = "dev.remoteagent.mobile"
     compileSdk = 37
     defaultConfig {
