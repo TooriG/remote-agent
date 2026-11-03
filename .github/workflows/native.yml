@@ -40,6 +40,8 @@ jobs:
       actions: read
       contents: read
     outputs:
+      linux: ${{ steps.areas.outputs.linux }}
+      windows: ${{ steps.areas.outputs.windows }}
       android: ${{ steps.areas.outputs.android }}
       iphone: ${{ steps.areas.outputs.iphone }}
       mac: ${{ steps.areas.outputs.mac }}
@@ -56,26 +58,35 @@ jobs:
         run: |
           set -euo pipefail
           verify_all() {
-            printf '%s=true\n' android iphone mac >> "$GITHUB_OUTPUT"
+            printf '%s=true\n' linux windows android iphone mac >> "$GITHUB_OUTPUT"
             exit 0
           }
           case "$GITHUB_EVENT_NAME" in
             pull_request) base=$(git rev-parse HEAD^1) ;;
             push)
               # Cancelled or failed runs leave their changes for the next push.
-              base=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow native.yml --branch main --event push \
-                --status success --limit 1 --json headSha --jq '.[0].headSha // ""')
-              if [[ -z "$base" ]] || ! git fetch --no-tags --depth=1 origin "$base"; then verify_all; fi
+              if ! base=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow native.yml --branch main --event push \
+                --status success --limit 1 --json headSha --jq '.[0].headSha // ""') || \
+                [[ -z "$base" ]] || ! git fetch --no-tags --depth=1 origin "$base"; then verify_all; fi
               ;;
             *) verify_all ;;
           esac
-          android=false iphone=false mac=false
+          linux=false windows=false android=false iphone=false mac=false
+          # Renames must retain both paths, including a moved Mac geometry fixture.
+          if ! changed=$(git diff --no-renames --name-only "$base" HEAD); then verify_all; fi
           while IFS= read -r path; do
+            [[ -n "$path" ]] || continue
             # Unknown paths verify every client.
             case "$path" in
               docs/PRIVACY.md) area=all ;;
-              cccc.toml) area=repository ;;
-              docs/* | AGENTS.md | CHANGELOG.md | README.md | README.ja.md | SECURITY.md) area=docs ;;
+              cccc.toml | docs/* | AGENTS.md | CHANGELOG.md | README.md | README.ja.md | SECURITY.md | \
+                lp/* | scripts/*.test.mjs | tools/windows-fxc/update.test.ps1 | \
+                crates/agent-protocol/src/browser_input.test.cjs | crates/host-daemon/src/browser/password-fill.test.cjs | \
+                apps/desktop/src/browser/native/snapshot.test.cjs) continue ;;
+              tools/windows-fxc/* | scripts/package-windows.ps1 | scripts/windows-installer.iss) area=windows ;;
+              apps/mobile/iosApp/Bex/ConversationScrollObserver.swift | apps/mobile/iosApp/Bex/ConversationTextLayout.swift | \
+                apps/mobile/iosApp/UITests/Fixtures/scroll-tests.swift | apps/mobile/iosApp/UITests/Fixtures/text-view-tests.swift) area='iphone-mac' ;;
+              scripts/test-ios-scroll.sh) area=mac ;;
               apps/mobile/src/* | apps/mobile/build.gradle.kts | build.gradle.kts | settings.gradle.kts | \
                 gradle.properties | gradle/* | gradlew | gradlew.bat | detekt.yml | scripts/android-e2e.sh) area=android ;;
               apps/mobile/iosApp/* | .swiftformat | .swiftlint.yml | scripts/ios-e2e.sh | \
@@ -83,12 +94,14 @@ jobs:
               apps/desktop/*) area=desktop ;;
               *) area=all ;;
             esac
+            if [[ $area == all || $area == desktop ]]; then linux=true windows=true; fi
+            if [[ $area == windows ]]; then windows=true; fi
             if [[ $area == all || $area == android ]]; then android=true; fi
-            if [[ $area == all || $area == iphone ]]; then iphone=true; fi
-            # Mac Rust checks also render the iPhone Markdown fixtures.
-            if [[ $area == all || $area == iphone || $area == desktop ]]; then mac=true; fi
-          done < <(git diff --name-only "$base" HEAD)
-          printf 'android=%s\niphone=%s\nmac=%s\n' "$android" "$iphone" "$mac" | tee -a "$GITHUB_OUTPUT"
+            if [[ $area == all || $area == iphone || $area == iphone-mac ]]; then iphone=true; fi
+            # Only the UIKit geometry fixtures also compile Swift in the Mac job.
+            if [[ $area == all || $area == mac || $area == iphone-mac || $area == desktop ]]; then mac=true; fi
+          done <<< "$changed"
+          printf 'linux=%s\nwindows=%s\nandroid=%s\niphone=%s\nmac=%s\n' "$linux" "$windows" "$android" "$iphone" "$mac" | tee -a "$GITHUB_OUTPUT"
   repository:
     if: ${{ !inputs.ios-tests && !inputs.desktop-release-tag }}
     runs-on: ubuntu-24.04
@@ -100,21 +113,23 @@ jobs:
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
       - name: Check workflows and vendored runtimes
         run: |
-          nix develop .#native --command actionlint
-          nix develop .#native --command pwsh -NoLogo -NoProfile -NonInteractive -File tools/windows-fxc/update.test.ps1
-          nix develop .#native --command node --test lp/download.test.cjs
-          nix develop .#native --command node --test scripts/*.test.mjs
-          nix develop .#native --command npm --prefix crates/host-daemon/src/visualize ci --ignore-scripts --no-audit
-          nix develop .#native --command npm --prefix crates/host-daemon/src/visualize run vendor
+          nix develop .#repository --command bash -euo pipefail <<'CHECKS'
+          actionlint
+          pwsh -NoLogo -NoProfile -NonInteractive -File tools/windows-fxc/update.test.ps1
+          node --test lp/download.test.cjs scripts/*.test.mjs
+          node --test crates/agent-protocol/src/browser_input.test.cjs crates/host-daemon/src/browser/password-fill.test.cjs apps/desktop/src/browser/native/snapshot.test.cjs
+          npm --prefix crates/host-daemon/src/visualize ci --ignore-scripts --no-audit
+          npm --prefix crates/host-daemon/src/visualize run vendor
           git diff --exit-code -- crates/host-daemon/src/visualize
-          nix develop .#native --command npm --prefix crates/host-daemon/src/providers/claude/sdk ci --ignore-scripts --no-audit --no-fund
-          nix develop .#native --command npm --prefix crates/host-daemon/src/providers/claude/sdk run vendor
-          nix develop .#native --command npm --prefix crates/host-daemon/src/providers/claude/sdk test
+          npm --prefix crates/host-daemon/src/providers/claude/sdk ci --ignore-scripts --no-audit --no-fund
+          npm --prefix crates/host-daemon/src/providers/claude/sdk run vendor
+          npm --prefix crates/host-daemon/src/providers/claude/sdk test
           git diff --exit-code -- crates/host-daemon/src/providers/claude/sdk/bridge.bundle.mjs crates/host-daemon/src/providers/claude/sdk/SDK-LICENSE.md
-      - name: Check function complexity
-        run: nix develop .#native --command just complexity
+          just complexity
+          CHECKS
   toolchain:
-    if: ${{ !inputs.ios-tests }}
+    needs: changes
+    if: ${{ !cancelled() && !inputs.ios-tests && (inputs.desktop-release-tag || needs.changes.outputs.windows == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -132,8 +147,8 @@ jobs:
           echo "version=$(nix eval --raw .#devShells.x86_64-linux.native.RUST_TOOLCHAIN_VERSION)" >> "$GITHUB_OUTPUT"
           echo "nextest-version=$(nix eval --raw .#devShells.x86_64-linux.native.NEXTEST_VERSION)" >> "$GITHUB_OUTPUT"
   linux:
-    needs: repository
-    if: ${{ !inputs.ios-tests && !inputs.desktop-release-tag }}
+    needs: [changes, repository]
+    if: ${{ needs.changes.outputs.linux == 'true' && !inputs.ios-tests && !inputs.desktop-release-tag }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
