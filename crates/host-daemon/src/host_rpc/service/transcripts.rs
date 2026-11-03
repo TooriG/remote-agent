@@ -7,13 +7,9 @@ use conversations::HistoryUse;
 /// Every transcript window, including older pages, holds at most this many turns.
 pub(super) const WINDOW_TURNS: usize = 10;
 
-/// A failed import, often a provider that is still starting, waits this long
-/// before an open retries it.
-const IMPORT_RETRY: std::time::Duration = std::time::Duration::from_secs(60);
-
 pub(super) enum Import {
     Running,
-    Failed(std::time::Instant),
+    Failed,
 }
 
 pub(super) fn storage_failure(error: String) -> Failure {
@@ -115,12 +111,14 @@ impl HostRpcService {
     }
 
     /// Copy native history in the background, once per conversation at a time.
+    /// A failed import waits for a re-import or a Host restart; an unavailable
+    /// provider, often one still starting, lets the next open try again.
     pub(super) fn import_transcript(&self, target: SessionRef, retry: bool) {
         {
             let mut imports = self.inner.imports.lock().unwrap();
             match imports.get(&target) {
                 Some(Import::Running) => return,
-                Some(Import::Failed(at)) if !retry && at.elapsed() < IMPORT_RETRY => return,
+                Some(Import::Failed) if !retry => return,
                 _ => {}
             }
             imports.insert(target.clone(), Import::Running);
@@ -136,8 +134,9 @@ impl HostRpcService {
                         .await
                         .map_err(|error| error.to_string())
                         .and_then(|result| result)
+                        .map_err(storage_failure)
                 }
-                Err(error) => Err(error.message),
+                Err(error) => Err(error),
             };
             let mut imports = service.inner.imports.lock().unwrap();
             match result {
@@ -146,25 +145,47 @@ impl HostRpcService {
                     tracing::info!(target: "agent", operation = "transcript.import",
                         message = %format_args!("provider={} total_ms={}", target.provider.key(), started.elapsed().as_millis()));
                 }
-                Err(message) => {
-                    imports.insert(target, Import::Failed(std::time::Instant::now()));
-                    tracing::warn!(target: "agent", operation = "transcript.import", message);
+                Err(error) => {
+                    if error.code == "provider_unavailable" {
+                        imports.remove(&target);
+                    } else {
+                        imports.insert(target, Import::Failed);
+                    }
+                    tracing::warn!(target: "agent", operation = "transcript.import", message = %error.message);
                 }
             }
         });
     }
 
-    /// Complete history in public identity, every turn detail and body included.
+    /// History in public identity, keeping the text of every user and
+    /// assistant message.
     async fn import_history(&self, target: &SessionRef) -> Result<ThreadResponse, Failure> {
-        if let Some(row) = self.inner.conversations.get(target)? {
+        let mut response = if let Some(row) = self.inner.conversations.get(target)? {
             if row.startup.is_some() {
                 return Err(Failure::new(
                     "preparation_active",
                     "A conversation is imported after its preparation finishes.",
                 ));
             }
-            return self.conversation_history(&row, HistoryUse::Import).await;
+            self.conversation_history(&row, HistoryUse::Import).await?
+        } else {
+            self.native_history(target, HistoryUse::Import).await?
+        };
+        // Past activity is not imported; turns the Host runs keep every item.
+        for turn in response.thread.turns.iter_mut().flatten() {
+            if let Some(items) = &mut Arc::make_mut(turn).items {
+                items.retain(|item| text(item.body()));
+            }
         }
-        self.native_history(target, HistoryUse::Import).await
+        Ok(response)
     }
+}
+
+/// The conversation's text: what an import copies from native history.
+pub(super) fn text(body: &agent_protocol::items::ItemBody) -> bool {
+    matches!(
+        body,
+        agent_protocol::items::ItemBody::UserMessage { .. }
+            | agent_protocol::items::ItemBody::AssistantText { .. }
+    )
 }

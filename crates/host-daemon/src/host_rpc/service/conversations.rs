@@ -17,7 +17,7 @@ pub(super) enum HistoryUse {
     Read,
     Excerpt,
     Handoff,
-    /// A transcript keeps every detail and body, not just handoff content.
+    /// A transcript copies the full text of user and assistant messages.
     Import,
 }
 
@@ -205,15 +205,14 @@ impl HostRpcService {
                     // Handoffs deliberately omit reasoning and native tool
                     // state. Their deferred bodies need not be recovered.
                     if item.is_deferred()
-                        && (usage == HistoryUse::Import
-                            || matches!(
-                                item.body(),
-                                agent_protocol::items::ItemBody::UserMessage { .. }
-                                    | agent_protocol::items::ItemBody::AssistantText { .. }
-                                    | agent_protocol::items::ItemBody::CommandExecution { .. }
-                                    | agent_protocol::items::ItemBody::FileChange { .. }
-                                    | agent_protocol::items::ItemBody::Plan { .. }
-                            ))
+                        && (transcripts::text(item.body())
+                            || (usage != HistoryUse::Import
+                                && matches!(
+                                    item.body(),
+                                    agent_protocol::items::ItemBody::CommandExecution { .. }
+                                        | agent_protocol::items::ItemBody::FileChange { .. }
+                                        | agent_protocol::items::ItemBody::Plan { .. }
+                                )))
                     {
                         let output = match agent
                             .read_item(&op::ReadItem {
@@ -224,9 +223,8 @@ impl HostRpcService {
                             .await
                         {
                             Ok(output) if !output.item.is_deferred() => output,
-                            // A transcript keeps an unreadable body deferred, such
-                            // as a non-UTF-8 tool output; reading the item later
-                            // reports the provider's failure.
+                            // A transcript keeps an unreadable body deferred;
+                            // reading the item later reports the provider's failure.
                             _ if usage == HistoryUse::Import => continue,
                             Ok(_) => {
                                 return Err(Failure::new(

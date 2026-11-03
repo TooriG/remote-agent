@@ -2713,3 +2713,87 @@ async fn unreadable_native_bodies_stay_deferred_without_blocking_their_import() 
     .unwrap_err();
     assert_eq!(failure.code, "unreadable");
 }
+
+#[tokio::test]
+async fn imports_copy_message_text_while_host_turns_keep_activity() {
+    let directory = tempfile::tempdir().unwrap();
+    let directory = dunce::canonicalize(directory.path()).unwrap();
+    let codex = NativeAgent::new(ProviderKind::Codex, directory.join("codex"));
+    let claude = NativeAgent::new(ProviderKind::Claude, directory.join("claude"));
+    let host = service(&directory, &codex, &claude);
+    let client = host.open_session();
+    let root = codex
+        .create(directory.to_str().unwrap(), None, None)
+        .await
+        .unwrap()
+        .thread
+        .id
+        .unwrap();
+    let turn = |id: &str| Turn {
+        id: id.into(),
+        status: TurnStatus::Completed,
+        items: Some(
+            [
+                ItemBody::UserMessage {
+                    text: Some(format!("{id} request")),
+                    content: vec![],
+                },
+                ItemBody::Reasoning {
+                    content: vec![format!("{id} activity")],
+                    summary: vec![],
+                },
+                ItemBody::AssistantText {
+                    text: format!("{id} answer"),
+                    phase: AssistantPhase::Final,
+                },
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(index, body)| {
+                Arc::new(Item::new(
+                    format!("{id}-{index}").into(),
+                    ItemStatus::Completed,
+                    body,
+                ))
+            })
+            .collect(),
+        ),
+        ..Default::default()
+    };
+    codex
+        .records
+        .lock()
+        .unwrap()
+        .get_mut(&root.id)
+        .unwrap()
+        .thread
+        .turns = Some(vec![Arc::new(turn("past"))]);
+    emit(
+        &codex.events,
+        AgentChange::Session {
+            session: root.clone(),
+            change: SessionChange::Turn {
+                turn: turn("live"),
+                completed: true,
+            },
+        },
+    )
+    .await
+    .unwrap();
+    history(&host, client.id(), &root).await;
+    imported_turns(&host, &root, &["past", "live"]).await;
+    let items = |id: &str| {
+        host.inner
+            .transcripts
+            .turn(&root, &id.into())
+            .unwrap()
+            .unwrap()
+            .items
+            .unwrap()
+            .iter()
+            .map(|item| item.id.to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(items("past"), ["past-0", "past-2"]);
+    assert_eq!(items("live"), ["live-0", "live-1", "live-2"]);
+}
