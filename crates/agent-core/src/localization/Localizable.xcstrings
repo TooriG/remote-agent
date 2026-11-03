@@ -12161,6 +12161,22 @@
         }
       }
     },
+    "スレッド詳細を切り替え": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "スレッド詳細を切り替え"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Toggle thread details"
+          }
+        }
+      }
+    },
     "右パネルを切り替え": {
       "localizations": {
         "ja": {

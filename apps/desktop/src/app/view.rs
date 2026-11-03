@@ -60,6 +60,12 @@ fn file_name(path: &str) -> String {
 
 const CHAT_WIDTH: f32 = 780.;
 
+// Like T3, thread details dock beside the chat when the window is wide enough and
+// the right panel is closed; otherwise the header toggle opens them as a popover.
+fn details_inline(panel_open: bool, width: Pixels) -> bool {
+    !panel_open && width >= px(1280.)
+}
+
 fn new_chat_icon() -> Icon {
     Icon::default().path("icons/square-pen.svg")
 }
@@ -303,7 +309,7 @@ impl Desktop {
                 right
             }
         } else {
-            self.conversation_main(width >= px(1280.), cx)
+            self.conversation_main(self.details && details_inline(panel_open, width), cx)
         };
         v_flex()
             .flex_1()

@@ -170,6 +170,8 @@ pub(crate) struct Desktop {
     tab: Tab,
     settings_page: SettingsPage,
     sidebar: bool,
+    /// Whether thread details stay docked beside the chat when they fit.
+    details: bool,
     panels: Panels,
     surface_resources: HashMap<u64, SurfaceResource>,
     panel_focus: FocusHandle,
@@ -547,6 +549,7 @@ impl Desktop {
             tab: Tab::Chat,
             settings_page: SettingsPage::Agents,
             sidebar: true,
+            details: true,
             panels: Panels::default(),
             surface_resources: HashMap::new(),
             panel_focus: cx.focus_handle(),
