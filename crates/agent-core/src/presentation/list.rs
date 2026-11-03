@@ -107,6 +107,25 @@ pub struct ThreadList {
 }
 
 impl Snapshot {
+    fn list_error_providers(&self, list: &crate::models::ThreadList) -> Vec<String> {
+        list.provider_errors
+            .iter()
+            .flat_map(|errors| errors.keys())
+            .filter(|provider| {
+                // An unused login provider is not a partial-list failure.
+                // Keep errors visible until account discovery has completed.
+                !matches!(provider.as_str(), "codex" | "claude")
+                    || self.account.accounts.as_ref().is_none_or(|accounts| {
+                        accounts
+                            .accounts
+                            .iter()
+                            .any(|account| account.provider.key() == provider.as_str())
+                    })
+            })
+            .cloned()
+            .collect()
+    }
+
     pub(crate) fn waiting_sessions(&self) -> &[crate::session::SessionRef] {
         self.task_activity
             .as_ref()
@@ -196,10 +215,8 @@ impl Snapshot {
             .iter()
             .map(|project| project.id.as_str())
             .collect();
-        let mut notices = Vec::new();
-        if let Some(errors) = list.provider_errors.as_ref() {
-            notices.push(format!("会話一覧は部分結果です（{}）。取得できない提供元の保存済み表示は最新とは限りません。", errors.keys().cloned().collect::<Vec<_>>().join("、")));
-        }
+        let errors = self.list_error_providers(list);
+        let notice = (!errors.is_empty()).then(|| format!("会話一覧は部分結果です（{}）。取得できない提供元の保存済み表示は最新とは限りません。", errors.join("、")));
         let summaries = thread_summaries(
             &list.data,
             &self.activity.active,
@@ -224,7 +241,7 @@ impl Snapshot {
             )
         });
         Some(ThreadList {
-            notice: (!notices.is_empty()).then(|| notices.join("\n")),
+            notice,
             threads: summaries,
             loading_projects: self.operation_running(
                 crate::state::operations::OperationKey::SessionPage {
@@ -302,11 +319,10 @@ impl Snapshot {
                             &project_ids,
                         );
                         summary.has_more = page.has_more;
-                        if let Some(errors) = &page.provider_errors {
-                            summary.error = Some(format!(
-                                "一部を取得できません（{}）",
-                                errors.keys().cloned().collect::<Vec<_>>().join("、")
-                            ));
+                        let errors = self.list_error_providers(page);
+                        if !errors.is_empty() {
+                            summary.error =
+                                Some(format!("一部を取得できません（{}）", errors.join("、")));
                         }
                     }
                     if summary.expanded {
@@ -667,6 +683,94 @@ mod tests {
             assert_eq!(project.icon_png, icon.map(|_| vec![1, 2, 3]));
             assert_eq!(project.threads[0].id.id, "task");
         }
+    }
+
+    #[rstest::rstest]
+    #[case(&[], &[])]
+    #[case(&["codex"], &["codex"])]
+    #[case(&["claude"], &["claude"])]
+    #[case(&["codex", "claude"], &["claude", "codex"])]
+    fn list_notices_follow_logged_in_providers(
+        #[case] logged_in: &[&str],
+        #[case] expected: &[&str],
+        #[values(false, true)] root_errors: bool,
+    ) {
+        let mut snapshot = snapshot_list(json!([]));
+        let errors = json!({"codex":{"message":"offline"},"claude":{"message":"offline"}});
+        Arc::make_mut(snapshot.threads.as_mut().unwrap()).provider_errors =
+            Some(serde_json::from_value(errors).unwrap());
+        Arc::make_mut(&mut snapshot.project_threads)
+            .insert("project".into(), snapshot.threads.clone().unwrap());
+        if !root_errors {
+            Arc::make_mut(snapshot.threads.as_mut().unwrap()).provider_errors = None;
+        }
+        Arc::make_mut(&mut snapshot.expanded_projects).insert("project".into(), 5);
+        // Exercise login and logout with the same already-loaded list.
+        for providers in [logged_in, &[], logged_in] {
+            let previous = Arc::new(snapshot.clone());
+            let previous_list = previous.thread_list();
+            crate::state::operations::ListAccounts {}.apply(
+                &mut snapshot,
+                serde_json::from_value(json!({
+                    "accounts": providers.iter().map(|provider| json!({
+                        "provider":provider,"id":"account"
+                    })).collect::<Vec<_>>(),
+                    "selected":{}
+                }))
+                .unwrap(),
+            );
+            let list = snapshot.thread_list().unwrap();
+            let recent = snapshot.recent_thread_list().unwrap();
+            // Mobile clients cache this projection using the publication flag.
+            if previous_list.as_ref() != Some(&list) {
+                assert!(snapshot.changes(previous).list);
+            }
+            if providers.is_empty() {
+                assert!(list.notice.is_none());
+                assert!(recent.notice.is_none());
+                assert!(list.projects[0].error.is_none());
+            } else {
+                assert_eq!(recent.notice, list.notice);
+                let project_error = list.projects[0].error.as_ref().unwrap();
+                if root_errors {
+                    assert!(list.notice.as_ref().unwrap().contains("部分結果"));
+                } else {
+                    assert!(list.notice.is_none());
+                }
+                for provider in ["codex", "claude"] {
+                    let visible = expected.contains(&provider);
+                    assert_eq!(
+                        list.notice
+                            .as_ref()
+                            .is_some_and(|notice| notice.contains(provider)),
+                        root_errors && visible
+                    );
+                    assert_eq!(project_error.contains(provider), visible);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn non_login_provider_errors_remain_visible_without_accounts() {
+        let mut snapshot = snapshot_list(json!([]));
+        crate::state::operations::ListAccounts {}.apply(
+            &mut snapshot,
+            serde_json::from_value(json!({"accounts":[],"selected":{}})).unwrap(),
+        );
+        let page = Arc::make_mut(snapshot.threads.as_mut().unwrap());
+        page.provider_errors = Some(Default::default());
+        assert!(snapshot.thread_list().unwrap().notice.is_none());
+        Arc::make_mut(snapshot.threads.as_mut().unwrap()).provider_errors =
+            Some(serde_json::from_value(json!({"deepseek":{"message":"offline"}})).unwrap());
+        assert!(
+            snapshot
+                .thread_list()
+                .unwrap()
+                .notice
+                .unwrap()
+                .contains("deepseek")
+        );
     }
 
     #[test]
