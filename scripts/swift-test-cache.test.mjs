@@ -1,0 +1,104 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+
+function fixture(t) {
+  const root = mkdtempSync(join(tmpdir(), 'swift-test-cache-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const bin = join(root, 'bin');
+  const target = join(root, 'target');
+  const log = join(root, 'commands.log');
+  mkdirSync(bin);
+  mkdirSync(join(root, 'scripts'));
+  copyFileSync('scripts/test-ios-scroll.sh', join(root, 'scripts/test-ios-scroll.sh'));
+  for (const path of [
+    'apps/mobile/iosApp/Bex/ConversationScrollObserver.swift',
+    'apps/mobile/iosApp/Bex/ConversationTextLayout.swift',
+    'apps/mobile/iosApp/UITests/Fixtures/scroll-tests.swift',
+    'apps/mobile/iosApp/UITests/Fixtures/text-view-tests.swift',
+  ]) {
+    const destination = join(root, path);
+    mkdirSync(join(destination, '..'), { recursive: true });
+    copyFileSync(path, destination);
+  }
+  const commands = {
+    cargo: 'printf \'{"target_directory":"%s"}\\n\' "$SWIFT_FIXTURE_TARGET"',
+    uname: 'echo "${SWIFT_FIXTURE_ARCH:-arm64}"',
+    xcrun: [
+      'case "$*" in',
+      '  "--sdk macosx --show-sdk-path") echo "$SWIFT_FIXTURE_SDK" ;;',
+      '  "--sdk macosx --show-sdk-build-version") echo "${SWIFT_FIXTURE_SDK_BUILD:-26A}" ;;',
+      '  "swiftc --version") echo "${SWIFT_FIXTURE_COMPILER:-Swift 6}" ;;',
+      '  *)',
+      '    echo compile >> "$SWIFT_FIXTURE_LOG"',
+      '    if [[ ${SWIFT_FIXTURE_COMPILE_STATUS:-0} != 0 ]]; then exit "$SWIFT_FIXTURE_COMPILE_STATUS"; fi',
+      '    while [[ $1 != -o ]]; do shift; done',
+      '    printf \'#!/bin/bash\\necho run >> "$SWIFT_FIXTURE_LOG"\\nexit "${SWIFT_FIXTURE_TEST_STATUS:-0}"\\n\' > "$2"',
+      '    chmod +x "$2"',
+      '    ;;',
+      'esac',
+    ].join('\n'),
+  };
+  for (const [name, script] of Object.entries(commands)) {
+    const path = join(bin, name);
+    writeFileSync(path, `#!/bin/bash\n${script}\n`);
+    chmodSync(path, 0o755);
+  }
+  return {
+    root, target,
+    run(overrides = {}) {
+      writeFileSync(log, '');
+      const result = spawnSync('/bin/bash', ['scripts/test-ios-scroll.sh'], {
+        cwd: root,
+        encoding: 'utf8',
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, SWIFT_FIXTURE_TARGET: target, SWIFT_FIXTURE_LOG: log, SWIFT_FIXTURE_SDK: join(root, 'SDK'), ...overrides },
+      });
+      assert.ifError(result.error);
+      return { status: result.status, stderr: result.stderr, commands: readFileSync(log, 'utf8').trim().split('\n').filter(Boolean) };
+    },
+  };
+}
+
+function successfulRun(build, compileCount, overrides) {
+  const result = build.run(overrides);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.commands.filter(command => command === 'compile').length, compileCount);
+  assert.equal(result.commands.filter(command => command === 'run').length, 2);
+}
+
+test('unchanged Swift tests reuse compilation and always execute both fixtures', (t) => {
+  const build = fixture(t);
+  const directory = join(build.target, 'qa/ios-scroll/builds/scroll-tests');
+  successfulRun(build, 2);
+  const firstBuild = readdirSync(directory)[0];
+  successfulRun(build, 0);
+  writeFileSync(join(build.root, 'apps/mobile/iosApp/Bex/ConversationScrollObserver.swift'), '// changed source\n');
+  successfulRun(build, 1);
+  const currentBuild = readdirSync(directory).find(name => name !== firstBuild);
+  writeFileSync(join(build.root, 'apps/mobile/iosApp/UITests/Fixtures/text-view-tests.swift'), '// changed test\n');
+  successfulRun(build, 1);
+  for (const overrides of [
+    { SWIFT_FIXTURE_COMPILER: 'Swift 7' },
+    { SWIFT_FIXTURE_SDK_BUILD: '26B' },
+    { SWIFT_FIXTURE_SDK: join(build.root, 'Other SDK') },
+    { SWIFT_FIXTURE_ARCH: 'x86_64' },
+  ]) successfulRun(build, 2, overrides);
+  chmodSync(join(directory, currentBuild), 0o644);
+  successfulRun(build, 1);
+  successfulRun(build, 0);
+});
+
+test('failed compilations are retried and cached test failures still fail verification', (t) => {
+  const build = fixture(t);
+  const compilation = build.run({ SWIFT_FIXTURE_COMPILE_STATUS: '1' });
+  assert.equal(compilation.status, 1);
+  assert.deepEqual(compilation.commands, ['compile']);
+  successfulRun(build, 2);
+  const failure = build.run({ SWIFT_FIXTURE_TEST_STATUS: '7' });
+  assert.equal(failure.status, 7);
+  assert.deepEqual(failure.commands, ['run']);
+  successfulRun(build, 0);
+});
