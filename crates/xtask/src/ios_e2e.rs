@@ -844,38 +844,37 @@ async fn build_test_bundle(
         .await?;
     }
     println!("Building iOS bindings and isolated Host fixtures");
+    let mut host_build = args![vec;
+        "cargo",
+        "build",
+        "--locked",
+        "--package",
+        "agent-process",
+        "--bin",
+        "agent-provider-supervisor",
+        "--package",
+        "host-fixture",
+        "--bin",
+        "agent-ui-fixture",
+        "--bin",
+        "agent-codex-fixture",
+        "--bin",
+        "agent-claude-fixture"
+    ];
+    if browser {
+        host_build.extend(args![
+            "--package",
+            "agent-desktop",
+            "--bin",
+            "agent-desktop"
+        ]);
+    }
     for arguments in [
         args![vec; "scripts/build-agent-ios.sh", "simulator"],
-        args![vec;
-            "cargo",
-            "build",
-            "--locked",
-            "--package",
-            "agent-process",
-            "--bin",
-            "agent-provider-supervisor",
-            "--package",
-            "host-fixture",
-            "--bin",
-            "agent-ui-fixture",
-            "--bin",
-            "agent-codex-fixture",
-            "--bin",
-            "agent-claude-fixture"
-        ],
+        host_build,
         args![vec; "node", "scripts/install-claude-sdk.mjs", target.join("debug")],
     ] {
         supervision::run(&arguments, cwd, Io::Log(log), cancel, BUILD_TIMEOUT).await?;
-    }
-    if browser {
-        supervision::run(
-            &args!["cargo", "build", "--locked", "-p", "agent-desktop"],
-            cwd,
-            Io::Log(log),
-            cancel,
-            BUILD_TIMEOUT,
-        )
-        .await?;
     }
     let products = build.join("Build/Products");
     if products.is_dir() {
@@ -1191,6 +1190,121 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn build_uses_one_host_graph_and_stops_on_failure() {
+        const MODE: &str = "AGENT_IOS_BUILD_TEST_MODE";
+        const ROOT: &str = "AGENT_IOS_BUILD_TEST_ROOT";
+        if let Some(mode) = std::env::var_os(MODE) {
+            let root = PathBuf::from(std::env::var_os(ROOT).unwrap());
+            let target = root.join("target");
+            let log = File::create(root.join("build.log")).unwrap();
+            let (_sender, cancel) = watch::channel(false);
+            let result = build_test_bundle(
+                &root,
+                &target,
+                &target.join("qa/ios-derived-data"),
+                TestDriver::XCTest,
+                mode == "browser",
+                &log,
+                &cancel,
+            )
+            .await;
+            if mode == "failure" {
+                assert!(result.unwrap_err().to_string().contains("cargo failed"));
+            } else {
+                result.unwrap();
+            }
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        for mode in ["host", "browser", "failure"] {
+            let temporary = tempfile::tempdir().unwrap();
+            let root = temporary.path().canonicalize().unwrap();
+            for directory in [
+                "bin",
+                "scripts",
+                "target/debug",
+                "target/qa/ios-derived-data/Build/Products",
+            ] {
+                fs::create_dir_all(root.join(directory)).unwrap();
+            }
+            fs::write(root.join("target/debug/xtask"), "test runner").unwrap();
+            fs::write(
+                root.join("target/qa/ios-derived-data/Build/Products/stale.xctestrun"),
+                "old run",
+            )
+            .unwrap();
+            let script = r#"#!/usr/bin/env bash
+set -eu
+root=$AGENT_IOS_BUILD_TEST_ROOT
+printf '%s\n' "${0##*/} $*" >> "$root/commands"
+case ${0##*/} in
+  build-agent-ios.sh) touch "$root/ios-ready" ;;
+  cargo)
+    [[ $AGENT_IOS_BUILD_TEST_MODE != failure ]] || exit 19
+    previous=''
+    for argument; do
+      if [[ $previous == --bin ]]; then touch "$root/target/debug/$argument"; fi
+      previous=$argument
+    done ;;
+  node) touch "$root/target/debug/agent-claude-sdk.mjs" "$root/target/debug/Claude-Agent-SDK-LICENSE.md" ;;
+  xcodebuild)
+    test -e "$root/ios-ready"
+    touch "$root/target/qa/ios-derived-data/Build/Products/Bex.xctestrun" ;;
+esac
+"#;
+            for executable in [
+                "scripts/build-agent-ios.sh",
+                "bin/cargo",
+                "bin/node",
+                "bin/xcodebuild",
+            ] {
+                let path = root.join(executable);
+                fs::write(&path, script).unwrap();
+                fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            let output = tokio::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "ios_e2e::tests::build_uses_one_host_graph_and_stops_on_failure",
+                    "--nocapture",
+                ])
+                .env(MODE, mode)
+                .env(ROOT, &root)
+                .env(
+                    "PATH",
+                    std::env::join_paths(
+                        std::iter::once(root.join("bin"))
+                            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+                    )
+                    .unwrap(),
+                )
+                .output()
+                .await
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let commands = fs::read_to_string(root.join("commands")).unwrap();
+            assert_eq!(
+                commands
+                    .lines()
+                    .filter(|line| line.starts_with("cargo "))
+                    .count(),
+                1
+            );
+            assert_eq!(commands.contains("--bin agent-desktop"), mode == "browser");
+            assert_eq!(commands.contains("xcodebuild "), mode != "failure");
+            assert_eq!(
+                root.join("target/debug/agent-desktop").is_file(),
+                mode == "browser"
+            );
+        }
+    }
 
     #[tokio::test]
     async fn shared_test_bundle_preserves_products_and_executables() {
