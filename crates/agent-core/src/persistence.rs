@@ -10,10 +10,14 @@
 //! marks unconfirmed sends as delivery-unknown until Host evidence reconciles
 //! them, preserving their content and order without automatically resending.
 use crate::state::{
-    Draft, FileDraft, ModelPreferences, Navigation, PendingSubmission, ScopedData, Snapshot,
+    Draft, FileDraft, ModelPreferences, ModelSelection, Navigation, PendingSubmission, ScopedData,
+    Snapshot,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 /// One device's editor selection, shared across Host snapshots. Discovery is never persisted.
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -100,26 +104,69 @@ pub fn encode(snapshot: &Snapshot) -> Result<Vec<u8>, serde_json::Error> {
     serde_json::to_vec(&PersistedState::capture(snapshot))
 }
 
-pub fn encode_model_preferences(snapshot: &Snapshot) -> Result<Vec<u8>, serde_json::Error> {
-    serde_json::to_vec(&snapshot.model_preferences)
+/// Merge only the session's explicit edits, preserving another window's
+/// provider choices and options. Options always stay with their selected model.
+pub(crate) fn merge_model_preferences(
+    current: &ModelPreferences,
+    before: &ModelPreferences,
+    after: &ModelPreferences,
+) -> ModelPreferences {
+    if before == after {
+        return current.clone();
+    }
+    let mut merged = current.clone();
+    // Effort/tier picks also select their provider for the next new chat.
+    merged.provider = after.provider;
+    for provider in before
+        .selections
+        .keys()
+        .chain(after.selections.keys())
+        .collect::<BTreeSet<_>>()
+    {
+        let (before, after) = (
+            before.selections.get(provider),
+            after.selections.get(provider),
+        );
+        if before == after {
+            continue;
+        }
+        match after {
+            Some(after) => {
+                let selection = match (merged.selections.get(provider), before) {
+                    (Some(current), Some(before)) => merge_selection(current, before, after),
+                    _ => after.clone(),
+                };
+                merged.selections.insert(*provider, selection);
+            }
+            None => {
+                merged.selections.remove(provider);
+            }
+        }
+    }
+    merged
 }
 
-pub fn apply_model_preferences(
-    persisted: &[u8],
-    preferences: &[u8],
-) -> Result<Vec<u8>, serde_json::Error> {
-    let mut saved = if persisted.is_empty() {
-        PersistedState::capture(&Snapshot::default())
-    } else {
-        serde_json::from_slice::<PersistedState>(persisted)?
-    };
-    let preferences: ModelPreferences = if preferences.is_empty() {
-        ModelPreferences::default()
-    } else {
-        serde_json::from_slice(preferences)?
-    };
-    saved.model_preferences = preferences;
-    serde_json::to_vec(&saved)
+fn merge_selection(
+    current: &ModelSelection,
+    before: &ModelSelection,
+    after: &ModelSelection,
+) -> ModelSelection {
+    if before.model != after.model || current.model != after.model {
+        return after.clone();
+    }
+    ModelSelection {
+        model: current.model.clone(),
+        effort: if before.effort != after.effort {
+            after.effort.clone()
+        } else {
+            current.effort.clone()
+        },
+        service_tier: if before.service_tier != after.service_tier {
+            after.service_tier.clone()
+        } else {
+            current.service_tier.clone()
+        },
+    }
 }
 
 pub fn decode(bytes: &[u8]) -> Result<Snapshot, serde_json::Error> {

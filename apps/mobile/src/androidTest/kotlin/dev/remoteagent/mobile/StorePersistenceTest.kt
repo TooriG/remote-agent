@@ -13,6 +13,7 @@ import dev.remoteagent.core.Intent
 import dev.remoteagent.core.ProviderKind
 import dev.remoteagent.core.SessionRef
 import dev.remoteagent.core.Snapshot
+import dev.remoteagent.core.StorageKey
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.CoroutineStart
@@ -106,15 +107,30 @@ class StorePersistenceTest {
         val repository = AndroidMobileRepository(context)
         val store = AgentStore.offline(byteArrayOf(), null, "test-revision")
         try {
+            val preferences = "opaque device preferences".encodeToByteArray()
+            repository.sessionStorage("host-a").save(StorageKey.MODEL_PREFERENCES, preferences)
+            assertTrue(
+                repository.sessionStorage("host-b").load(StorageKey.MODEL_PREFERENCES).contentEquals(preferences)
+            )
             store.dispatch(Intent.NewChat("/fixture")).wait()
             val key = store.snapshot().navigation().draftKey
             store.dispatch(Intent.SetDraftText(key, "日本語の下書き")).wait()
             store.dispatch(Intent.AddAttachment(key, Attachment("/fixture/photo.png", "photo.png", true))).wait()
-            repository.save("host-a", store.snapshot().serializeLocalState())
+            repository.sessionStorage("host-a").save(StorageKey.LOCAL_STATE, store.snapshot().serializeLocalState())
             store.dispatch(Intent.SetDraftText(key, "別の Host の下書き")).wait()
-            repository.save("host-b", store.snapshot().serializeLocalState())
-            val restoredA = AgentStore.offline(repository.load("host-a"), null, "test-revision")
-            val restoredB = AgentStore.offline(repository.load("host-b"), null, "test-revision")
+            repository.sessionStorage("host-b").save(StorageKey.LOCAL_STATE, store.snapshot().serializeLocalState())
+            val restoredA =
+                AgentStore.offline(
+                    repository.sessionStorage("host-a").load(StorageKey.LOCAL_STATE),
+                    null,
+                    "test-revision",
+                )
+            val restoredB =
+                AgentStore.offline(
+                    repository.sessionStorage("host-b").load(StorageKey.LOCAL_STATE),
+                    null,
+                    "test-revision",
+                )
             try {
                 assertEquals("日本語の下書き", restoredA.snapshot().draft(key).text)
                 assertEquals("別の Host の下書き", restoredB.snapshot().draft(key).text)

@@ -8,7 +8,9 @@ import android.provider.Settings
 import android.util.AtomicFile
 import dev.remoteagent.core.AgentException
 import dev.remoteagent.core.Attachment
+import dev.remoteagent.core.ClientPlatform
 import dev.remoteagent.core.ClientStorage
+import dev.remoteagent.core.StorageKey
 import dev.remoteagent.core.generateIdentity
 import java.io.File
 import java.io.IOException
@@ -43,55 +45,46 @@ internal class AndroidMobileRepository(private val context: Context) {
         preferences.edit().putString("profiles", Json.encodeToString(profiles)).apply()
     }
 
-    fun diagnosticsDirectory(id: String): String =
-        File(
-                directory,
-                "connection-diagnostics/${encodedId(id)}",
-            )
-            .absolutePath
+    fun sessionStorage(id: String) = SessionStorage(id)
 
-    fun load(id: String): ByteArray {
-        val file = snapshotFile(id)
-        return if (file.baseFile.exists()) file.openRead().use { it.readBytes() } else byteArrayOf()
-    }
-
-    fun save(id: String, bytes: ByteArray) = snapshotFile(id).writeSynced(bytes)
-
-    fun sessionStorage(id: String): ClientStorage =
-        object : ClientStorage {
-            private fun <T> access(body: () -> T): T =
-                try {
-                    body()
-                } catch (error: IOException) {
-                    throw AgentException.Failed(error.message ?: error.toString()).apply { initCause(error) }
-                } catch (error: GeneralSecurityException) {
-                    throw AgentException.Failed(error.message ?: error.toString()).apply { initCause(error) }
-                } catch (error: IllegalArgumentException) {
-                    throw AgentException.Failed(error.message ?: error.toString()).apply { initCause(error) }
-                }
-
-            override fun load(newPairing: Boolean): ByteArray = access {
-                if (newPairing) byteArrayOf() else this@AndroidMobileRepository.load(id)
+    inner class SessionStorage(private val id: String) : ClientStorage, ClientPlatform {
+        private fun <T> access(body: () -> T): T =
+            try {
+                body()
+            } catch (error: IOException) {
+                throw AgentException.Failed(error.message ?: error.toString()).apply { initCause(error) }
+            } catch (error: GeneralSecurityException) {
+                throw AgentException.Failed(error.message ?: error.toString()).apply { initCause(error) }
+            } catch (error: IllegalArgumentException) {
+                throw AgentException.Failed(error.message ?: error.toString()).apply { initCause(error) }
             }
 
-            override fun save(localState: ByteArray, modelPreferences: ByteArray) = access {
-                this@AndroidMobileRepository.save(id, localState)
+        private fun file(key: StorageKey): AtomicFile =
+            when (key) {
+                StorageKey.LOCAL_STATE -> AtomicFile(File(directory, "agent-snapshot-${encodedId(id)}.json"))
+                StorageKey.MODEL_PREFERENCES -> AtomicFile(File(directory, "model-preferences.json"))
+                StorageKey.EDITOR_PREFERENCES -> AtomicFile(File(directory, "editor-preferences.json"))
             }
 
-            override fun identity(): ByteArray = access {
-                AndroidCredentialStore(context, id).loadOrCreate(::generateIdentity)
-            }
-
-            override fun diagnosticsDirectory(): String? = access {
-                this@AndroidMobileRepository.diagnosticsDirectory(id)
-            }
-
-            override fun conversationDirectory(): String? = access {
-                File(directory, "conversations/${encodedId(id)}").absolutePath
-            }
+        override fun load(key: StorageKey): ByteArray = access {
+            val file = file(key)
+            if (file.baseFile.exists()) file.openRead().use { it.readBytes() } else byteArrayOf()
         }
 
-    private fun snapshotFile(id: String) = AtomicFile(File(directory, "agent-snapshot-${encodedId(id)}.json"))
+        override fun save(key: StorageKey, bytes: ByteArray) = access { file(key).writeSynced(bytes) }
+
+        override fun identity(): ByteArray = access {
+            AndroidCredentialStore(context, id).loadOrCreate(::generateIdentity)
+        }
+
+        override fun diagnosticsDirectory(): String? = access {
+            File(directory, "connection-diagnostics/${encodedId(id)}").absolutePath
+        }
+
+        override fun conversationDirectory(): String? = access {
+            File(directory, "conversations/${encodedId(id)}").absolutePath
+        }
+    }
 
     private fun encodedId(id: String): String =
         Base64.getUrlEncoder().withoutPadding().encodeToString(id.encodeToByteArray())

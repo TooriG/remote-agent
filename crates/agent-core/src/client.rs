@@ -6,6 +6,19 @@ use agent_transport::client::{Client, Updates};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+#[derive(Debug, Clone, thiserror::Error)]
+#[cfg_attr(feature = "bindings", derive(uniffi::Error))]
+pub enum AgentError {
+    #[error("{reason}")]
+    Failed { reason: String },
+}
+
+pub(crate) fn error(reason: impl std::fmt::Display) -> AgentError {
+    AgentError::Failed {
+        reason: crate::presentation::error::error_message(&reason.to_string()),
+    }
+}
+
 /// A recording owns its prepared connection until transcription finishes or
 /// capture is cancelled. The Store worker orders preparation before cancellation.
 #[cfg_attr(feature = "bindings", derive(uniffi::Object))]
@@ -261,5 +274,6 @@ impl ClientExt for Client {
 
 #[cfg(feature = "bindings")]
 pub mod native;
+pub mod persistence;
 #[cfg(feature = "bindings")]
 pub mod session;

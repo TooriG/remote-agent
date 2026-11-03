@@ -1,3 +1,7 @@
+use agent_core::client::{
+    AgentError,
+    persistence::{ClientStorage, DevicePreferences, StorageKey},
+};
 use agent_core::{state::Snapshot, store::Store};
 use agent_local_host::{LocalHost, LocalHostRegistry, LocalHostState};
 use agent_transport::transport::{Endpoint, Relays, Ticket};
@@ -7,6 +11,36 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+
+pub(crate) struct SessionStorage {
+    pub(crate) path: PathBuf,
+}
+impl SessionStorage {
+    fn file(&self, key: StorageKey) -> PathBuf {
+        match key {
+            StorageKey::LocalState => self.path.clone(),
+            StorageKey::ModelPreferences => self.path.with_file_name("model-preferences.json"),
+            StorageKey::EditorPreferences => self.path.with_file_name("editor-preferences.json"),
+        }
+    }
+}
+fn storage_error(reason: impl std::fmt::Display) -> AgentError {
+    AgentError::Failed {
+        reason: reason.to_string(),
+    }
+}
+impl ClientStorage for SessionStorage {
+    fn load(&self, key: StorageKey) -> Result<Vec<u8>, AgentError> {
+        match std::fs::read(self.file(key)) {
+            Ok(bytes) => Ok(bytes),
+            Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(reason) => Err(storage_error(reason)),
+        }
+    }
+    fn save(&self, key: StorageKey, bytes: Vec<u8>) -> Result<(), AgentError> {
+        agent_local_host::save_private_bytes(&self.file(key), &bytes).map_err(storage_error)
+    }
+}
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -101,6 +135,7 @@ pub(crate) async fn ssh_invitation(
 /// One identity with separate local and remote endpoints. Views own sessions.
 #[derive(Default)]
 pub(crate) struct Connections {
+    pub(crate) preferences: Arc<DevicePreferences>,
     endpoint: tokio::sync::OnceCell<(PathBuf, Endpoint)>,
     local_endpoint: tokio::sync::OnceCell<(PathBuf, Endpoint)>,
     startup: tokio::sync::Mutex<()>,
