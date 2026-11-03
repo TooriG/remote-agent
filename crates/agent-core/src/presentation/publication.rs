@@ -24,6 +24,7 @@ impl Snapshot {
         };
         self.recent_chats == other.recent_chats
             && same_list
+            && Arc::ptr_eq(&self.account, &other.account)
             && Arc::ptr_eq(&self.activity, &other.activity)
             && self.waiting_sessions() == other.waiting_sessions()
             && Arc::ptr_eq(&self.expanded_projects, &other.expanded_projects)
