@@ -131,6 +131,7 @@ impl AgentStore {
                     endpoint,
                     ticket,
                     device_name,
+                    self.trace.client_revision().into(),
                     self.connection_work.clone(),
                     self.connection_active.subscribe(),
                 ));
@@ -138,11 +139,10 @@ impl AgentStore {
             let mut performance = result?;
             performance.endpoint_ms = endpoint_ms;
             performance.total_ms = started.elapsed().as_millis() as u64;
-            performance.client_revision = option_env!("AGENT_BUILD_REVISION")
-                .unwrap_or("development")
-                .into();
-            performance.platform = crate::diagnostics::ClientPlatform::current();
-            Ok::<_, AgentError>(performance)
+            Ok::<_, AgentError>(performance.with_client(
+                self.trace.client_revision(),
+                crate::diagnostics::ClientPlatform::current(),
+            ))
         })
         .await
     }
@@ -237,9 +237,10 @@ impl AgentStore {
         snapshot: Snapshot,
         diagnostics_directory: Option<String>,
         conversations: Option<std::path::PathBuf>,
+        client_revision: String,
     ) -> Result<Arc<Self>, AgentError> {
         let started = std::time::Instant::now();
-        let trace = Trace::new();
+        let trace = Trace::new(client_revision);
         if let Some(directory) = diagnostics_directory {
             trace.persist(directory.into()).map_err(error)?;
         }
@@ -271,11 +272,13 @@ impl AgentStore {
     pub async fn offline(
         persisted: Vec<u8>,
         diagnostics_directory: Option<String>,
+        client_revision: String,
     ) -> Result<Arc<Self>, AgentError> {
         Self::restored(
             crate::persistence::decode(&persisted).map_err(error)?,
             diagnostics_directory,
             None,
+            client_revision,
         )
         .await
     }
@@ -530,7 +533,7 @@ mod tests {
                 .await
                 .unwrap();
             let (incoming, store) = tokio::join!(scoped_incoming(&host, &trust), async {
-                let store = AgentStore::offline(Vec::new(), None).await?;
+                let store = AgentStore::offline(Vec::new(), None, "test-revision".into()).await?;
                 store
                     .reconnect(Connection {
                         ticket: host.ticket().to_string(),
@@ -577,7 +580,9 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_releases_a_native_snapshot_waiter() {
-        let store = AgentStore::offline(Vec::new(), None).await.unwrap();
+        let store = AgentStore::offline(Vec::new(), None, "test-revision".into())
+            .await
+            .unwrap();
         let previous = store.snapshot();
         let weak = Arc::downgrade(&store);
         let waiting = store.clone();
@@ -617,10 +622,10 @@ mod tests {
             let mut saved: serde_json::Value = serde_json::from_slice(&cached.serialize_local_state().unwrap()).unwrap();
             assert!(saved.get("list_query").is_none());
             saved["list_query"] = serde_json::to_value(&cached.list_query).unwrap();
-            let restored = AgentStore::offline(serde_json::to_vec(&saved).unwrap(), None).await.unwrap();
+            let restored = AgentStore::offline(serde_json::to_vec(&saved).unwrap(), None, "test-revision".into()).await.unwrap();
             assert_eq!(*restored.snapshot().list_query, crate::models::ListQuery::default());
             restored.shutdown().await.unwrap();
-            let store = Arc::new(AgentStore { store: Arc::new(crate::store::Store::offline(cached)), recovery: Mutex::new(None), connection_active: tokio::sync::watch::channel(true).0, connection_work: Default::default(), endpoint: Default::default(), trace: Trace::new() });
+            let store = Arc::new(AgentStore { store: Arc::new(crate::store::Store::offline(cached)), recovery: Mutex::new(None), connection_active: tokio::sync::watch::channel(true).0, connection_work: Default::default(), endpoint: Default::default(), trace: Trace::new("development".into()) });
             let (connected, (session, reader, writer)) = tokio::join!(store.reconnect(connection()), scoped_incoming(&host, &trust));
             connected.unwrap();
             let first = session;
@@ -727,14 +732,17 @@ mod tests {
                             ..Default::default()
                         }), ..Default::default()
                     };
-                    let store = AgentStore::offline(crate::persistence::encode(&snapshot).unwrap(), None).await.unwrap();
+                    let store = AgentStore::offline(crate::persistence::encode(&snapshot).unwrap(), None, "test-revision".into()).await.unwrap();
                     let (connected, (first, mut reader, writer)) = tokio::join!(store.reconnect(connection()), scoped_incoming(&host, &trust));
                     connected.unwrap();
                     let old_identity = store.endpoint.lock().await.as_ref().unwrap().endpoint.node_id();
                     let response = |request: &Value, text: &str| {
                         let result = match request["method"].as_str().unwrap() {
                             "host/device/identify" => json!({"storageScope":"fixture-storage","ticket":""}),
-                            "host/diagnostics/connection" => json!({}),
+                            "host/diagnostics/connection" => {
+                                assert_eq!(request["params"]["client_revision"], "test-revision");
+                                json!({})
+                            },
                             "host/account/list" => json!({"accounts":[],"selected":{}}),
                             "host/taskActivity/read" => json!({"revision":u64::from(text == "after"),"statuses":[],"waiting":[],"unread":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()}),
                             "host/session/list" => json!({"data":[{"id":{"provider":"codex","id":"thread"},"name":text}],"projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,}),
@@ -822,7 +830,9 @@ mod tests {
     async fn failed_and_cancelled_attempts_survive_store_recreation() {
         let directory = tempfile::tempdir().unwrap();
         let path = Some(directory.path().to_string_lossy().into_owned());
-        let store = AgentStore::offline(Vec::new(), path.clone()).await.unwrap();
+        let store = AgentStore::offline(Vec::new(), path.clone(), "test-revision".into())
+            .await
+            .unwrap();
         assert!(
             store
                 .resume_connection(std::time::Instant::now(), async {
@@ -841,6 +851,7 @@ mod tests {
         );
         let reports = store.trace.pending_reports().await;
         assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].client_revision, "test-revision");
         let id = reports[0].timeline.id;
         assert!(
             !serde_json::to_string(&reports)
@@ -849,12 +860,25 @@ mod tests {
         );
         store.shutdown().await.unwrap();
         drop(store);
-        let restored = AgentStore::offline(Vec::new(), path).await.unwrap();
+        let restored = AgentStore::offline(Vec::new(), path, "next-revision".into())
+            .await
+            .unwrap();
         let reports = restored.trace.pending_reports().await;
         let previous = reports
             .iter()
             .find(|report| report.timeline.id == id)
             .unwrap();
+        assert_eq!(previous.client_revision, "test-revision");
+        restored.record_connection_event(ConnectionPhase::AppScene, 1);
+        let reports = restored.trace.pending_reports().await;
+        assert_eq!(
+            reports
+                .iter()
+                .find(|report| report.timeline.id != id)
+                .unwrap()
+                .client_revision,
+            "next-revision"
+        );
         assert!(
             previous
                 .timeline
@@ -882,7 +906,7 @@ mod tests {
             connection_active: tokio::sync::watch::channel(true).0,
             connection_work: Default::default(),
             endpoint: Default::default(),
-            trace: Trace::new(),
+            trace: Trace::new("development".into()),
         };
         let (connected, connection) = tokio::sync::oneshot::channel();
         let mut resume = Box::pin(store.resume_connection(std::time::Instant::now(), async {
@@ -1125,7 +1149,7 @@ mod tests {
                     navigation: Arc::new(crate::state::Navigation { thread_id: selected.then(|| agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() }), draft_key: agent_protocol::session::SessionRef {provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into()}.into(), ..Default::default() }),
                     ..Default::default()
                 };
-                let store = AgentStore::offline(crate::persistence::encode(&cached).unwrap(), None).await.unwrap();
+                let store = AgentStore::offline(crate::persistence::encode(&cached).unwrap(), None, "test-revision".into()).await.unwrap();
                 let (connected, (session, mut reader, writer)) = tokio::join!(store.reconnect(connection()), scoped_incoming(&host, &trust));
                 connected.unwrap();
                 let (withheld, waiting) = tokio::sync::oneshot::channel();

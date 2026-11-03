@@ -21,6 +21,15 @@ detekt {
     basePath = rootProject.projectDir.absolutePath
 }
 
+val buildRevision =
+    providers
+        .exec {
+            workingDir(rootProject.projectDir)
+            commandLine("git", "describe", "--always", "--dirty", "--abbrev=40", "--exclude", "*")
+        }
+        .standardOutput
+        .asText
+
 val generateAgentBindings =
     tasks.register<Exec>("generateAgentBindings") {
         workingDir(rootProject.projectDir)
@@ -74,6 +83,7 @@ android {
         targetSdk = 37
         versionCode = System.getenv("AGENT_ANDROID_VERSION_CODE")?.toIntOrNull() ?: 1
         versionName = System.getenv("AGENT_ANDROID_VERSION_CODE")?.let { "0.1.0-preview.$it" } ?: "0.1.0"
+        buildConfigField("String", "BUILD_REVISION", "\"${buildRevision.get().trim()}\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     signingConfigs {
@@ -91,7 +101,10 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
     sourceSets.getByName("androidTest").assets.directories +=
         rootProject.file("crates/agent-core/tests/fixtures/markdown").path
     sourceSets.getByName("main") {

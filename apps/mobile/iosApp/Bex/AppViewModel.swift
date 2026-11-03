@@ -89,8 +89,11 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    private static var clientBuild: UInt64 {
-        UInt64(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0") ?? 0
+    private static var clientBuild: ClientBuild {
+        ClientBuild(
+            number: UInt64(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0") ?? 0,
+            revision: Bundle.main.infoDictionary?["BEXBuildRevision"] as? String ?? "development"
+        )
     }
 
     func removeProfile(_ id: String) {

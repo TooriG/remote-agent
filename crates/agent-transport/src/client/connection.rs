@@ -487,7 +487,7 @@ mod tests {
         use crate::diagnostics::{ConnectionPerformance, connection::Trace};
         tokio::time::timeout(Duration::from_secs(45), async {
             let directory = tempfile::tempdir().unwrap();
-            let old = Trace::new();
+            let old = Trace::new("development".into());
             old.persist(directory.path().into()).unwrap();
             old.record(Phase::ResumeStart, 17, 0, 0);
             old.record(Phase::ResumeFailed, 17, 0, 1000);
@@ -495,7 +495,7 @@ mod tests {
             let old_id = old.id;
             drop(old);
 
-            let trace = Trace::new();
+            let trace = Trace::new("development".into());
             trace.persist(directory.path().into()).unwrap();
             let host = Endpoint::bind(Identity::generate(), Relays::Disabled)
                 .await

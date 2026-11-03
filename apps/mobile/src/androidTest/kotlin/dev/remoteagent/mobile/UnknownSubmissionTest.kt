@@ -51,7 +51,7 @@ class UnknownSubmissionTest {
     @Test
     fun discardRemovesOldInstructionAcrossRestartAndNewChatWithoutSending() = runBlocking {
         val bytes = fixture().use { it.serializeLocalState() }
-        val store = AgentStore.offline(bytes, null)
+        val store = AgentStore.offline(bytes, null, "test-revision")
         val current = mutableStateOf(store.snapshot())
         val intents = mutableListOf<Intent>()
         try {
@@ -77,7 +77,7 @@ class UnknownSubmissionTest {
             compose.onNodeWithText("表示を削除").performClick()
             compose.onNodeWithText("過去の指示", substring = true).assertDoesNotExist()
             assertTrue(intents.single() is Intent.DiscardUnknownSubmission)
-            val restarted = AgentStore.offline(store.snapshot().serializeLocalState(), null)
+            val restarted = AgentStore.offline(store.snapshot().serializeLocalState(), null, "test-revision")
             try {
                 restarted.dispatch(Intent.NewChat("/fixture")).wait()
                 assertNull(restarted.snapshot().conversationSource())
@@ -92,7 +92,7 @@ class UnknownSubmissionTest {
 
     @Test
     fun restoreReturnsTextAndAttachmentsToDraftWithoutSending() = runBlocking {
-        val store = AgentStore.offline(fixture().use { it.serializeLocalState() }, null)
+        val store = AgentStore.offline(fixture().use { it.serializeLocalState() }, null, "test-revision")
         try {
             val snapshot = store.snapshot()
             val item =
@@ -165,7 +165,7 @@ class UnknownSubmissionTest {
 
     @Test
     fun bulkDiscardPersistsWithoutSendingOrChangingCurrentDraft() = runBlocking {
-        val store = AgentStore.offline(fixture(count = 3).use { it.serializeLocalState() }, null)
+        val store = AgentStore.offline(fixture(count = 3).use { it.serializeLocalState() }, null, "test-revision")
         store.dispatch(Intent.SetDraftText(store.snapshot().navigation().draftKey, "編集中の下書き")).wait()
         val current = mutableStateOf(store.snapshot())
         val intents = mutableListOf<Intent>()
@@ -193,7 +193,7 @@ class UnknownSubmissionTest {
             compose.onNodeWithText("送信結果不明・3件").assertDoesNotExist()
             assertEquals(3, intents.size)
             assertTrue(intents.all { it is Intent.DiscardUnknownSubmission })
-            val restarted = AgentStore.offline(store.snapshot().serializeLocalState(), null)
+            val restarted = AgentStore.offline(store.snapshot().serializeLocalState(), null, "test-revision")
             try {
                 assertNull(restarted.snapshot().conversationSource())
                 assertEquals("編集中の下書き", restarted.snapshot().draft(restarted.snapshot().navigation().draftKey).text)

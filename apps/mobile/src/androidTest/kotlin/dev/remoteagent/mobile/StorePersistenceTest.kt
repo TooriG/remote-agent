@@ -67,7 +67,7 @@ class StorePersistenceTest {
         val source = fixture.conversation(session)
         val bytes = fixture.serializeLocalState()
         fixture.close()
-        val store = AgentStore.offline(bytes, null)
+        val store = AgentStore.offline(bytes, null, "test-revision")
         try {
             val snapshot = store.snapshot()
             val first = requireNotNull(projectConversationRows(snapshot, source, null))
@@ -105,7 +105,7 @@ class StorePersistenceTest {
                     base.getSharedPreferences("$token-$name", mode)
             }
         val repository = AndroidMobileRepository(context)
-        val store = AgentStore.offline(byteArrayOf(), null)
+        val store = AgentStore.offline(byteArrayOf(), null, "test-revision")
         try {
             val preferences = "opaque device preferences".encodeToByteArray()
             repository.sessionStorage("host-a").save(StorageKey.MODEL_PREFERENCES, preferences)
@@ -119,8 +119,8 @@ class StorePersistenceTest {
             repository.sessionStorage("host-a").save(StorageKey.LOCAL_STATE, store.snapshot().serializeLocalState())
             store.dispatch(Intent.SetDraftText(key, "別の Host の下書き")).wait()
             repository.sessionStorage("host-b").save(StorageKey.LOCAL_STATE, store.snapshot().serializeLocalState())
-            val restoredA = AgentStore.offline(repository.sessionStorage("host-a").load(StorageKey.LOCAL_STATE), null)
-            val restoredB = AgentStore.offline(repository.sessionStorage("host-b").load(StorageKey.LOCAL_STATE), null)
+            val restoredA = AgentStore.offline(repository.sessionStorage("host-a").load(StorageKey.LOCAL_STATE), null, "test-revision")
+            val restoredB = AgentStore.offline(repository.sessionStorage("host-b").load(StorageKey.LOCAL_STATE), null, "test-revision")
             try {
                 assertEquals("日本語の下書き", restoredA.snapshot().draft(key).text)
                 assertEquals("別の Host の下書き", restoredB.snapshot().draft(key).text)
@@ -140,7 +140,7 @@ class StorePersistenceTest {
 
     @Test
     fun shutdownCompletesTheNativeSnapshotWait() = runBlocking {
-        val store = AgentStore.offline(byteArrayOf(), null)
+        val store = AgentStore.offline(byteArrayOf(), null, "test-revision")
         val waiter =
             async(start = CoroutineStart.UNDISPATCHED) {
                 var previous = store.snapshot()

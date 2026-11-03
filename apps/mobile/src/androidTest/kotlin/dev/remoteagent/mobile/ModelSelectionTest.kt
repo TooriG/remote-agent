@@ -52,7 +52,7 @@ class ModelSelectionTest {
     @Test
     fun pickerChoicesSurviveRestartAndSeedNewChats() = runBlocking {
         fixture().use { selected ->
-            val store = AgentStore.offline(selected.serializeLocalState(), null)
+            val store = AgentStore.offline(selected.serializeLocalState(), null, "test-revision")
             try {
                 compose.setContent {
                     MaterialTheme {
@@ -67,7 +67,7 @@ class ModelSelectionTest {
                 compose.onNodeWithTag("model.settings").performClick()
                 compose.onNodeWithTag("model.save-defaults").assertDoesNotExist()
                 compose.onNodeWithText("低").performScrollTo().performClick()
-                val restored = AgentStore.offline(store.snapshot().serializeLocalState(), null)
+                val restored = AgentStore.offline(store.snapshot().serializeLocalState(), null, "test-revision")
                 try {
                     restored.dispatch(Intent.NewChat("/another-project")).wait()
                     val snapshot = restored.snapshot()
@@ -89,7 +89,7 @@ class ModelSelectionTest {
     @Test
     fun openingPickerDoesNotRememberTheDisplayedModel() = runBlocking {
         fixture().use { selected ->
-            val store = AgentStore.offline(selected.serializeLocalState(), null)
+            val store = AgentStore.offline(selected.serializeLocalState(), null, "test-revision")
             try {
                 compose.setContent {
                     MaterialTheme {

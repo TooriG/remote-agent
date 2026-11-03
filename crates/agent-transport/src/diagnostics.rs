@@ -76,6 +76,7 @@ struct Log {
     component: &'static str,
     limit: usize,
     version: &'static str,
+    revision: &'static str,
     network_emissions: Mutex<HashMap<&'static str, NetworkEmission>>,
 }
 
@@ -107,12 +108,14 @@ pub fn initialize(
     state_directory: &Path,
     component: Component,
     version: &'static str,
+    revision: &'static str,
 ) -> io::Result<()> {
     let log = Log::open(
         &state_directory.join("logs"),
         component,
         FILE_BYTES,
         version,
+        revision,
     )?;
     log.write("info", "startup", "Bex started", None, None)?;
     tracing::subscriber::set_global_default(
@@ -290,6 +293,7 @@ impl Log {
         component: Component,
         limit: usize,
         version: &'static str,
+        revision: &'static str,
     ) -> io::Result<Self> {
         fs::create_dir_all(directory)?;
         #[cfg(unix)]
@@ -302,6 +306,7 @@ impl Log {
             component: component.name(),
             limit,
             version,
+            revision,
             network_emissions: Mutex::new(HashMap::new()),
         })
     }
@@ -328,7 +333,7 @@ impl Log {
             pid: std::process::id(),
             component: self.component,
             version: self.version,
-            revision: option_env!("AGENT_BUILD_REVISION").unwrap_or("development"),
+            revision: self.revision,
             level,
             operation: &sanitize(operation),
             message: sanitize(message),
@@ -451,11 +456,24 @@ mod tests {
     #[test]
     fn reopens_and_rotates_complete_private_records_with_bounded_retention() {
         let directory = tempfile::tempdir().unwrap();
-        let log = Log::open(directory.path(), Component::Host, 1024, "test-version").unwrap();
+        let log = Log::open(
+            directory.path(),
+            Component::Host,
+            1024,
+            "test-version",
+            "test-revision",
+        )
+        .unwrap();
         for index in 0..50 {
             // Independent writers model app restarts sharing the same directory.
-            let writer =
-                Log::open(directory.path(), Component::Host, 1024, "test-version").unwrap();
+            let writer = Log::open(
+                directory.path(),
+                Component::Host,
+                1024,
+                "test-version",
+                "test-revision",
+            )
+            .unwrap();
             writer
                 .write(
                     "error",
@@ -507,6 +525,7 @@ mod tests {
             Component::Host,
             FILE_BYTES,
             "test-version",
+            "test-revision",
         )
         .unwrap();
         let path = log.path.clone();
@@ -537,7 +556,14 @@ mod tests {
     #[test]
     fn rotation_failure_preserves_current_records_and_recovers() {
         let directory = tempfile::tempdir().unwrap();
-        let log = Log::open(directory.path(), Component::Host, 1, "test-version").unwrap();
+        let log = Log::open(
+            directory.path(),
+            Component::Host,
+            1,
+            "test-version",
+            "test-revision",
+        )
+        .unwrap();
         log.write("error", "first", "first record", None, None)
             .unwrap();
         let mut archive = log.path.as_os_str().to_owned();
@@ -580,6 +606,7 @@ mod tests {
             Component::Desktop,
             FILE_BYTES,
             "test-version",
+            "test-revision",
         )
         .unwrap();
         fs::create_dir(&log.path).unwrap();

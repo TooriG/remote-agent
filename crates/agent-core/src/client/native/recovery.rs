@@ -20,6 +20,7 @@ impl Recovery {
         endpoint: Endpoint,
         ticket: Ticket,
         device_name: String,
+        client_revision: String,
         attempt: Arc<tokio::sync::Mutex<()>>,
         mut lifecycle: watch::Receiver<bool>,
     ) -> Self {
@@ -64,12 +65,11 @@ impl Recovery {
                         continue;
                     }
                     match store.resume(&endpoint, &ticket, &device_name).await {
-                        Ok(mut performance) => {
-                            performance.client_revision = option_env!("AGENT_BUILD_REVISION")
-                                .unwrap_or("development")
-                                .into();
-                            performance.platform = crate::diagnostics::ClientPlatform::current();
-                            store.record_connection_performance(performance);
+                        Ok(performance) => {
+                            store.record_connection_performance(performance.with_client(
+                                &client_revision,
+                                crate::diagnostics::ClientPlatform::current(),
+                            ));
                         }
                         Err(TransportError::Unauthorized | TransportError::Ticket(_)) => {
                             unauthorized = true

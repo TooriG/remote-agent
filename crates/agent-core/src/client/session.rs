@@ -23,6 +23,14 @@ pub trait ClientPlatform: Send + Sync {
 }
 
 type Pending = (Intent, oneshot::Sender<Result<Outcome, AgentError>>);
+
+/// Native apps supply build metadata without recompiling the shared library.
+#[derive(uniffi::Record)]
+pub struct ClientBuild {
+    pub number: u64,
+    pub revision: String,
+}
+
 enum Phase {
     Loading(Vec<Pending>),
     Ready {
@@ -40,7 +48,7 @@ pub struct ClientSession {
     previous: Mutex<Option<Arc<ClientSession>>>,
     closing: Mutex<Option<Completion<()>>>,
     recent_chats: bool,
-    client_build: u64,
+    client_build: ClientBuild,
     device_name: String,
     phase: Mutex<Phase>,
     initialization: tokio::sync::Mutex<()>,
@@ -58,7 +66,7 @@ impl ClientSession {
         platform: Arc<dyn ClientPlatform>,
         previous: Option<Arc<ClientSession>>,
         recent_chats: bool,
-        client_build: u64,
+        client_build: ClientBuild,
         device_name: String,
     ) -> Arc<Self> {
         if let Some(previous) = &previous {
@@ -87,7 +95,7 @@ impl ClientSession {
         ticket: String,
         invitation: String,
         recent_chats: bool,
-        client_build: u64,
+        client_build: ClientBuild,
         device_name: String,
     ) -> Result<Arc<Self>, AgentError> {
         // Device-wide model preferences must include edits still waiting for I/O.
@@ -286,7 +294,7 @@ impl ClientSession {
         platform: Arc<dyn ClientPlatform>,
         previous: Option<Arc<Self>>,
         recent_chats: bool,
-        client_build: u64,
+        client_build: ClientBuild,
         device_name: String,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -323,13 +331,19 @@ impl ClientSession {
             .await
             .map_err(error)?;
         let read = started.elapsed().as_micros() as u64;
-        let store = AgentStore::restored(snapshot, directory, conversations).await?;
+        let store = AgentStore::restored(
+            snapshot,
+            directory,
+            conversations,
+            self.client_build.revision.clone(),
+        )
+        .await?;
         store.record_connection_event(ConnectionPhase::SnapshotRead, read);
         store.record_connection_event(
             ConnectionPhase::AppPreparation,
             started.elapsed().as_micros() as u64,
         );
-        store.record_connection_event(ConnectionPhase::ClientBuild, self.client_build);
+        store.record_connection_event(ConnectionPhase::ClientBuild, self.client_build.number);
         Ok(store)
     }
 
@@ -476,6 +490,7 @@ mod tests {
         write_gate: Mutex<Option<Arc<Gate>>>,
         fail_save: AtomicBool,
         saved: Notify,
+        diagnostics_directory: Option<String>,
     }
     impl ClientStorage for Storage {
         fn load(&self, key: StorageKey) -> Result<Vec<u8>, AgentError> {
@@ -529,7 +544,7 @@ mod tests {
             Ok(vec![1; 32])
         }
         fn diagnostics_directory(&self) -> Result<Option<String>, AgentError> {
-            Ok(None)
+            Ok(self.diagnostics_directory.clone())
         }
         fn conversation_directory(&self) -> Result<Option<String>, AgentError> {
             Ok(None)
@@ -546,13 +561,20 @@ mod tests {
             .text
             .clone()
     }
+    fn client_build(number: u64) -> ClientBuild {
+        ClientBuild {
+            number,
+            revision: "test-revision".into(),
+        }
+    }
+
     fn open(storage: Arc<Storage>) -> Arc<ClientSession> {
         ClientSession::open(
             storage.clone(),
             storage,
             None,
             false,
-            42,
+            client_build(42),
             "Fixture device".into(),
         )
     }
@@ -574,7 +596,7 @@ mod tests {
                 storage.clone(),
                 Some(old),
                 false,
-                0,
+                client_build(0),
                 "Fixture device".into(),
             );
             let queued = next.dispatch(edit("new Host work")).unwrap();
@@ -616,7 +638,7 @@ mod tests {
                 "invalid ticket".into(),
                 "invalid invitation".into(),
                 false,
-                0,
+                client_build(0),
                 "Fixture device".into(),
             ));
             gate.entered.notified().await;
@@ -642,7 +664,12 @@ mod tests {
             *storage.bytes.lock().unwrap() = b"previous pairing".to_vec();
             let provisional = open(storage.clone());
             provisional
-                .install(AgentStore::offline(Vec::new(), None).await.unwrap(), false)
+                .install(
+                    AgentStore::offline(Vec::new(), None, "test-revision".into())
+                        .await
+                        .unwrap(),
+                    false,
+                )
                 .unwrap();
             provisional.shutdown().await.unwrap();
             assert_eq!(*storage.bytes.lock().unwrap(), b"previous pairing");
@@ -650,7 +677,12 @@ mod tests {
 
             let adopted = open(storage.clone());
             adopted
-                .install(AgentStore::offline(Vec::new(), None).await.unwrap(), false)
+                .install(
+                    AgentStore::offline(Vec::new(), None, "test-revision".into())
+                        .await
+                        .unwrap(),
+                    false,
+                )
                 .unwrap();
             adopted.clone().ready().await.unwrap();
             adopted.dispatch(edit("paired Host work")).unwrap();
@@ -665,7 +697,11 @@ mod tests {
     #[tokio::test]
     async fn restoration_applies_queued_intents_in_order_and_flushes_without_native_waiters() {
         tokio::time::timeout(std::time::Duration::from_secs(3), async {
-            let storage = Arc::new(Storage::default());
+            let directory = tempfile::tempdir().unwrap();
+            let storage = Arc::new(Storage {
+                diagnostics_directory: Some(directory.path().to_string_lossy().into_owned()),
+                ..Default::default()
+            });
             let original = crate::store::Store::offline(Snapshot::default());
             original.dispatch(edit("cached")).await.unwrap();
             *storage.bytes.lock().unwrap() =
@@ -691,8 +727,19 @@ mod tests {
                 session.snapshot().drafts[&"draft".into()].text,
                 "synchronous edit"
             );
+            store.record_connection_event(ConnectionPhase::AppScene, 1);
             session.shutdown().await.unwrap();
             assert_eq!(text(&storage.bytes.lock().unwrap()), "synchronous edit");
+            let trace = crate::diagnostics::connection::Trace::new("next-revision".into());
+            trace.persist(directory.path().into()).unwrap();
+            let reports = trace.pending_reports().await;
+            assert_eq!(reports.len(), 1);
+            assert_eq!(reports[0].client_revision, "test-revision");
+            assert!(
+                reports[0].timeline.events.iter().any(|event| {
+                    event.phase == ConnectionPhase::ClientBuild && event.value == 42
+                })
+            );
         })
         .await
         .expect("session lifecycle stalled");
@@ -816,7 +863,7 @@ mod tests {
                 next_storage.clone(),
                 Some(old.clone()),
                 true,
-                0,
+                client_build(0),
                 "Fixture device".into(),
             );
             gate.entered.notified().await;
@@ -892,7 +939,7 @@ mod tests {
                     "invalid ticket".into(),
                     "invalid invitation".into(),
                     false,
-                    0,
+                    client_build(0),
                     "Fixture device".into()
                 )
                 .await

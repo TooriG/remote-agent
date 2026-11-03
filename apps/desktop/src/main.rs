@@ -82,6 +82,7 @@ fn main() {
                 &directory,
                 agent_transport::diagnostics::Component::Desktop,
                 env!("CARGO_PKG_VERSION"),
+                option_env!("AGENT_BUILD_REVISION").unwrap_or("development"),
             )
             .map_err(|error| error.to_string())
         })

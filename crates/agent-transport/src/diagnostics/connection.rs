@@ -23,6 +23,7 @@ struct State {
 
 pub struct Trace {
     pub id: u64,
+    client_revision: String,
     origin: Instant,
     started_at_ms: u64,
     journal: OnceLock<super::journal::Journal>,
@@ -36,12 +37,16 @@ pub fn identifier() -> u64 {
 }
 
 impl Trace {
-    pub fn new() -> Arc<Self> {
-        Self::with_enabled(std::env::var("AGENT_CONNECTION_DIAGNOSTICS").as_deref() != Ok("off"))
+    pub fn new(client_revision: String) -> Arc<Self> {
+        Self::with_enabled(
+            std::env::var("AGENT_CONNECTION_DIAGNOSTICS").as_deref() != Ok("off"),
+            client_revision,
+        )
     }
-    fn with_enabled(enabled: bool) -> Arc<Self> {
+    fn with_enabled(enabled: bool, client_revision: String) -> Arc<Self> {
         let trace = Arc::new(Self {
             id: identifier(),
+            client_revision,
             origin: Instant::now(),
             started_at_ms: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -60,6 +65,10 @@ impl Trace {
         traces.retain(|_, value| value.strong_count() > 0);
         traces.insert(trace.id, Arc::downgrade(&trace));
         trace
+    }
+
+    pub fn client_revision(&self) -> &str {
+        &self.client_revision
     }
 
     pub fn persist(&self, directory: std::path::PathBuf) -> std::io::Result<()> {
@@ -212,17 +221,16 @@ impl Trace {
                 event.phase == ConnectionPhase::ResumeConnection && event.group == attempt_id
             })
             .map_or(0, |event| event.stream);
-        journal.checkpoint(super::ConnectionPerformance {
-            recovered: true,
-            attempt_id,
-            connection_id,
-            platform: super::ClientPlatform::current(),
-            client_revision: option_env!("AGENT_BUILD_REVISION")
-                .unwrap_or("development")
-                .into(),
-            timeline,
-            ..Default::default()
-        });
+        journal.checkpoint(
+            super::ConnectionPerformance {
+                recovered: true,
+                attempt_id,
+                connection_id,
+                timeline,
+                ..Default::default()
+            }
+            .with_client(&self.client_revision, super::ClientPlatform::current()),
+        );
     }
 
     pub fn snapshot(&self) -> ConnectionTimeline {
@@ -450,7 +458,7 @@ mod tests {
 
     #[test]
     fn native_lifecycle_callbacks_can_activate_without_a_runtime() {
-        let trace = Trace::with_enabled(true);
+        let trace = Trace::with_enabled(true, "test-revision".into());
         trace.activate();
         trace.record(ConnectionPhase::UiConnectStart, 0, 0, 0);
         assert!(trace.active());
@@ -460,12 +468,12 @@ mod tests {
 
     #[tokio::test]
     async fn disabled_capture_has_no_events_or_sampler_and_runtime_stalls_are_observable() {
-        let off = Trace::with_enabled(false);
+        let off = Trace::with_enabled(false, "test-revision".into());
         off.activate();
         off.record(ConnectionPhase::ResumeStart, 0, 0, 0);
         assert!(off.snapshot().events.is_empty());
         assert!(off.sampler.lock().unwrap().is_none());
-        let trace = Trace::with_enabled(true);
+        let trace = Trace::with_enabled(true, "test-revision".into());
         trace.activate();
         std::thread::sleep(Duration::from_millis(350));
         tokio::time::timeout(Duration::from_secs(2), async {
@@ -484,7 +492,7 @@ mod tests {
     async fn real_relay_records_upstream_connection_boundaries() {
         use crate::transport::{Endpoint, Identity, Relays};
         tokio::time::timeout(Duration::from_secs(45), async {
-            let trace = Trace::new();
+            let trace = Trace::new("development".into());
             let endpoint =
                 Endpoint::bind_recording(Identity::generate(), Relays::Default, trace.clone())
                     .await
@@ -529,7 +537,7 @@ mod tests {
 
     #[test]
     fn timeline_is_bounded_and_ignores_private_dependency_fields() {
-        let trace = Trace::new();
+        let trace = Trace::new("development".into());
         tracing::subscriber::with_default(
             tracing_subscriber::registry().with(network_layer()),
             || {

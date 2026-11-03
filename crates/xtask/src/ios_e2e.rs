@@ -883,6 +883,23 @@ async fn build_test_bundle(
         }
     }
     println!("Building the iOS app and UI test bundle");
+    let revision = supervision::run(
+        &args![
+            "git",
+            "describe",
+            "--always",
+            "--dirty",
+            "--abbrev=40",
+            "--exclude",
+            "*"
+        ],
+        cwd,
+        Io::Capture,
+        cancel,
+        SETUP_TIMEOUT,
+    )
+    .await?;
+    let revision = std::str::from_utf8(&revision.stdout)?.trim();
     supervision::run(
         &args![
             "xcodebuild",
@@ -905,6 +922,7 @@ async fn build_test_bundle(
             "CODE_SIGN_IDENTITY=-",
             "CODE_SIGNING_REQUIRED=YES",
             format!("AGENT_CARGO_TARGET_DIR={}", target.display()),
+            format!("AGENT_BUILD_REVISION={revision}"),
             "build-for-testing"
         ],
         cwd,
@@ -1240,6 +1258,7 @@ set -eu
 root=$AGENT_IOS_BUILD_TEST_ROOT
 printf '%s\n' "${0##*/} $*" >> "$root/commands"
 case ${0##*/} in
+  git) echo fixture-revision ;;
   build-agent-ios.sh) touch "$root/ios-ready" ;;
   cargo)
     [[ $AGENT_IOS_BUILD_TEST_MODE != failure ]] || exit 19
@@ -1259,6 +1278,7 @@ esac
                 "bin/cargo",
                 "bin/node",
                 "bin/xcodebuild",
+                "bin/git",
             ] {
                 let path = root.join(executable);
                 fs::write(&path, script).unwrap();
@@ -1299,6 +1319,10 @@ esac
             );
             assert_eq!(commands.contains("--bin agent-desktop"), mode == "browser");
             assert_eq!(commands.contains("xcodebuild "), mode != "failure");
+            assert_eq!(
+                commands.contains("AGENT_BUILD_REVISION=fixture-revision"),
+                mode != "failure"
+            );
             assert_eq!(
                 root.join("target/debug/agent-desktop").is_file(),
                 mode == "browser"

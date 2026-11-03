@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import dev.remoteagent.core.AgentException
 import dev.remoteagent.core.AgentStore
+import dev.remoteagent.core.ClientBuild
 import dev.remoteagent.core.ClientSession
 import dev.remoteagent.core.ErrorScope
 import dev.remoteagent.core.Intent
@@ -120,6 +121,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         private set
 
     private var session: ClientSession? = null
+    private val clientBuild = ClientBuild(0uL, BuildConfig.BUILD_REVISION)
     private var owner: AgentStore? = null
     private var connection: Job? = null
     private var attachmentTransfers = 0
@@ -182,7 +184,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         connection?.cancel()
         val old = session
         val storage = repository.sessionStorage(id)
-        val selected = ClientSession.open(storage, storage, old, true, 0uL, repository.deviceName)
+        val selected = ClientSession.open(storage, storage, old, true, clientBuild, repository.deviceName)
         session = selected
         owner = null
         profileId = id
@@ -221,7 +223,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
                         invitation.endpoint,
                         invitation.invitation,
                         true,
-                        0uL,
+                        clientBuild,
                         repository.deviceName,
                     )
                 if (!isActive) {
