@@ -19,10 +19,8 @@ import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
-import dev.remoteagent.core.FileEntry
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.Outcome
-import java.io.IOException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -71,7 +69,7 @@ class MarkdownLinkTest {
     }
 
     @Test
-    fun workspaceLinkStillUsesAuthenticatedFilePreview() {
+    fun workspaceLinkStillUsesAuthenticatedHostResolutionAndFileRead() {
         val launched = mutableListOf<AndroidIntent>()
         val intents = mutableListOf<Intent>()
         val resolvedPath = "/host/notes.md"
@@ -82,22 +80,28 @@ class MarkdownLinkTest {
                     ConversationBody("[notes.md](/repo/notes.md)", "/repo") { intent, complete ->
                         intents.add(intent)
                         complete(
-                            if (intent is Intent.ResolveFile)
-                                Result.success(Outcome.ResolvedFile(FileEntry("notes.md", resolvedPath, false, 0uL)))
-                            else Result.failure(IOException("fixture preview"))
+                            if (intent is Intent.ResolveFileReference)
+                                Result.success(Outcome.FileReferenceResolved(resolvedPath, false))
+                            else Result.failure(IllegalStateException("fixture read"))
                         )
                     }
                 }
             }
         }
         // File chips are inline replacements, so click their displayed label.
-        compose.onNodeWithText("notes.md").performTouchInput { click() }
-        compose.onNodeWithText("fixture preview").assertExists()
+        val chip =
+            androidx.test.uiautomator.UiDevice.getInstance(
+                    androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
+                )
+                .wait(androidx.test.uiautomator.Until.findObject(androidx.test.uiautomator.By.text("notes.md")), 5_000)
+        checkNotNull(chip).click()
+        compose.waitForIdle()
+        compose.onNodeWithText("fixture read").assertExists()
         compose.runOnIdle {
             assertTrue(launched.isEmpty())
             assertEquals(2, intents.size)
-            assertEquals("/repo/notes.md", (intents[0] as Intent.ResolveFile).v1.path)
-            assertEquals(resolvedPath, (intents[1] as Intent.DownloadFile).v1.source)
+            assertEquals("/repo/notes.md", (intents[0] as Intent.ResolveFileReference).v1.path)
+            assertEquals(resolvedPath, (intents[1] as Intent.ReadFile).v1.path)
         }
     }
 

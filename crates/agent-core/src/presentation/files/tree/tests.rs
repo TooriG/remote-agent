@@ -1068,3 +1068,65 @@ fn workspace_mutations_refresh_only_matching_active_roots_and_preserve_selection
     );
     assert_eq!(paths(&trees), ["b.rs"]);
 }
+
+#[test]
+fn mobile_folder_taps_expand_load_and_collapse() {
+    let mut trees = FileTrees::default();
+    let root = open(&mut trees, ROOT, FileTreeSurface::Mobile);
+    complete(
+        &mut trees,
+        &root[0],
+        vec![
+            entry("src", EntryKind::Directory),
+            entry("a.rs", EntryKind::File),
+        ],
+    );
+    action(
+        &mut trees,
+        FileTreeAction::Click {
+            path: "a.rs".into(),
+            additive: false,
+            range: false,
+        },
+    );
+    let selected = trees.view(&key(ROOT)).open_file;
+    let click = || FileTreeAction::Click {
+        path: "src".into(),
+        additive: false,
+        range: false,
+    };
+    let work = action(&mut trees, click());
+    assert_eq!(work.len(), 1);
+    assert!(trees.view(&key(ROOT)).rows[0].expanded);
+    complete(
+        &mut trees,
+        &work[0],
+        vec![entry("src/main.rs", EntryKind::File)],
+    );
+    assert_eq!(paths(&trees), ["src", "src/main.rs", "a.rs"]);
+    assert!(action(&mut trees, click()).is_empty());
+    assert_eq!(paths(&trees), ["src", "a.rs"]);
+    assert_eq!(trees.view(&key(ROOT)).selected_paths, ["a.rs"]);
+    assert_eq!(trees.view(&key(ROOT)).open_file, selected);
+    assert!(!trees.view(&key(ROOT)).rows[0].expanded);
+}
+
+#[test]
+fn mobile_file_taps_reopen_the_same_selection_with_a_fresh_request() {
+    for surface in [FileTreeSurface::Mobile, FileTreeSurface::Desktop] {
+        let mut trees = FileTrees::default();
+        let root = open(&mut trees, ROOT, surface);
+        complete(&mut trees, &root[0], vec![entry("a.rs", EntryKind::File)]);
+        let click = || FileTreeAction::Click {
+            path: "a.rs".into(),
+            additive: false,
+            range: false,
+        };
+        action(&mut trees, click());
+        let first = trees.view(&key(ROOT)).open_file.unwrap();
+        action(&mut trees, click());
+        let second = trees.view(&key(ROOT)).open_file.unwrap();
+        assert_eq!(first.path, second.path);
+        assert_eq!(first.id != second.id, surface == FileTreeSurface::Mobile);
+    }
+}

@@ -11,12 +11,12 @@ use gpui_kit::base::text::{
 
 #[derive(Clone)]
 pub(in crate::app) struct FileChips {
-    files: Arc<HashMap<usize, MarkdownFileChip>>,
+    pub(super) files: Arc<HashMap<usize, MarkdownFileChip>>,
     views: Arc<HashMap<usize, Entity<FileChip>>>,
 }
 impl FileChips {
     pub(super) fn new(
-        files: HashMap<usize, MarkdownFileChip>,
+        files: Arc<HashMap<usize, MarkdownFileChip>>,
         desktop: &Entity<Desktop>,
         cx: &mut App,
     ) -> Self {
@@ -44,7 +44,7 @@ impl FileChips {
             });
         }
         Self {
-            files: Arc::new(files),
+            files,
             views: Arc::new(views),
         }
     }

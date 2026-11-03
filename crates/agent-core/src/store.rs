@@ -51,6 +51,9 @@ pub enum Outcome {
         path: String,
         directory: bool,
     },
+    FileRead {
+        file: crate::models::FileContent,
+    },
     Directory {
         listing: crate::models::FileList,
     },
@@ -839,6 +842,7 @@ fn publication_key(snapshot: &Snapshot) -> impl PartialEq + '_ {
     let Snapshot {
         preferred_editor,
         file_open_capabilities,
+        file_open_capabilities_requested,
         project_import,
         recent_chats,
         operations,
@@ -888,6 +892,7 @@ fn publication_key(snapshot: &Snapshot) -> impl PartialEq + '_ {
             recent_chats,
             model_defaults,
             preferred_editor,
+            file_open_capabilities_requested,
             file_open_capabilities.as_ref().map(SharedIdentity),
             SharedIdentity(project_preferences),
             SharedIdentity(scoped_model_defaults),

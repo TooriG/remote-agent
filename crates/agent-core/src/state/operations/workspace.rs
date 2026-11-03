@@ -86,6 +86,11 @@ impl Operation for ReadFile {
         Some(OperationKey::File)
     }
     rpc_operation!(workspace.file);
+    fn outcome(output: &mut Self::Output) -> Outcome {
+        Outcome::FileRead {
+            file: output.clone(),
+        }
+    }
     fn prepare(&mut self, snapshot: &mut Snapshot) -> Result<(), String> {
         if self.discard_draft {
             Arc::make_mut(&mut snapshot.file_drafts).remove(&self.path);
@@ -326,5 +331,41 @@ impl Operation for LoadVisualization {
         Outcome::Visualization {
             html: std::mem::take(output),
         }
+    }
+}
+
+#[cfg(test)]
+mod read_result_tests {
+    use super::*;
+    #[test]
+    fn each_read_receipt_keeps_its_content_when_another_file_replaces_the_editor_snapshot() {
+        let file = |path: &str, text: &str| FileContent {
+            path: path.into(),
+            text: text.into(),
+            revision: "r1".into(),
+            size: text.len() as u64,
+        };
+        let mut parent = file("/repo/parent.md", "[child](child.md)");
+        let receipt = ReadFile::outcome(&mut parent);
+        let mut snapshot = Snapshot::default();
+        ReadFile {
+            path: parent.path.clone(),
+            discard_draft: false,
+        }
+        .apply(&mut snapshot, parent);
+        ReadFile {
+            path: "/repo/child.md".into(),
+            discard_draft: false,
+        }
+        .apply(&mut snapshot, file("/repo/child.md", "child content"));
+        assert_eq!(
+            snapshot.workspace.file.as_ref().unwrap().path,
+            "/repo/child.md"
+        );
+        let Outcome::FileRead { file } = receipt else {
+            panic!("file read result")
+        };
+        assert_eq!(file.path, "/repo/parent.md");
+        assert_eq!(file.text, "[child](child.md)");
     }
 }

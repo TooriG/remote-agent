@@ -59,7 +59,7 @@ pub struct MarkdownFileReference {
     pub column: Option<u32>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
 pub enum MarkdownFileSurface {
     Desktop,

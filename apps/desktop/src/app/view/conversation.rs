@@ -9,6 +9,7 @@ pub(in crate::app) struct ConversationModel {
     session: Option<SessionRef>,
     cwd: String,
     home: Option<String>,
+    epoch: u64,
     connected: bool,
     busy: bool,
     input_notice: Option<String>,
@@ -90,6 +91,18 @@ impl ConversationView {
         }
         if self.model.cwd != model.cwd || self.model.home != model.home {
             self.timeline.markdown.clear();
+        } else if self.model.epoch != model.epoch
+            && let Some(desktop) = self.desktop.upgrade()
+        {
+            // Rebind native handlers without dropping code/table presentation choices.
+            for cached in self.timeline.markdown.values_mut() {
+                cached.file_chips = super::markdown_file::FileChips::new(
+                    cached.file_chips.files.clone(),
+                    &desktop,
+                    cx,
+                );
+                cached.parser_revision = uuid::Uuid::new_v4().as_u64_pair().0;
+            }
         }
         self.sync_request_inputs(&requests, window, cx);
         let reset = self.model.draft_key != model.draft_key;
@@ -132,6 +145,7 @@ impl Desktop {
             session: self.selected().cloned(),
             cwd: self.snapshot.navigation.cwd.clone(),
             home: self.snapshot.host_home_directory.clone(),
+            epoch: self.snapshot.epoch,
             connected: self.snapshot.connected,
             busy: self.busy > 0,
             input_notice: self
@@ -1911,7 +1925,8 @@ impl ConversationView {
             let Some(desktop) = self.desktop.upgrade() else {
                 return div().into_any_element();
             };
-            let file_chips = super::markdown_file::FileChips::new(presentation.files, &desktop, cx);
+            let file_chips =
+                super::markdown_file::FileChips::new(presentation.files.into(), &desktop, cx);
             let source: SharedString = source.to_owned().into();
             let (wrap_code, compact_tables) = self
                 .timeline
@@ -2333,7 +2348,7 @@ mod rendering_tests {
     }
 
     #[gpui::test]
-    fn markdown_file_chips_are_native_click_targets_inside_selectable_prose(
+    fn markdown_file_chips_remain_native_click_targets_across_connection_epochs(
         cx: &mut TestAppContext,
     ) {
         let _runtime = init(cx);
@@ -2381,11 +2396,56 @@ mod rendering_tests {
             before,
             "the local editor modifier bypasses the file panel"
         );
+        let previous_parser = desktop.read_with(window, |desktop, cx| {
+            desktop
+                .conversation
+                .read(cx)
+                .timeline
+                .markdown
+                .values()
+                .next()
+                .unwrap()
+                .parser_revision
+        });
         desktop.update(window, |desktop, cx| {
             desktop.local_shell = false;
+            // A Store reconnect advances the snapshot epoch without changing the
+            // conversation or its shared rendered-body allocation.
+            desktop.conversation.update(cx, |view, _| {
+                for cached in view.timeline.markdown.values_mut() {
+                    cached.wrap_code = true;
+                }
+            });
+            Arc::make_mut(&mut desktop.snapshot).epoch += 2;
             cx.notify();
         });
         window.run_until_parked();
+        let current_parser = desktop.read_with(window, |desktop, cx| {
+            desktop
+                .conversation
+                .read(cx)
+                .timeline
+                .markdown
+                .values()
+                .next()
+                .unwrap()
+                .parser_revision
+        });
+        assert_ne!(
+            previous_parser, current_parser,
+            "cached native handlers must use the current epoch"
+        );
+        desktop.read_with(window, |desktop, cx| {
+            assert!(
+                desktop
+                    .conversation
+                    .read(cx)
+                    .timeline
+                    .markdown
+                    .values()
+                    .all(|cached| cached.wrap_code)
+            );
+        });
         let chip = window
             .debug_bounds("markdown-file:/fixture/src/main.rs")
             .unwrap();

@@ -94,6 +94,7 @@ pub fn mobile_file_open_request(
     let lookup_path =
         relative.filter(|path| !authored_absolute && needs_workspace_basename_lookup(path));
     Some(crate::state::operations::ResolveFileReference {
+        surface: MarkdownFileSurface::Mobile,
         path,
         root,
         lookup_path,

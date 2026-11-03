@@ -44,6 +44,7 @@ internal fun ConversationFileViewer(
     var directory by remember(reference.path) { mutableStateOf(false) }
     var error by remember(reference.path) { mutableStateOf<String?>(null) }
     var loading by remember(reference.path) { mutableStateOf(true) }
+    var text by remember(reference.path) { mutableStateOf<String?>(null) }
     LaunchedEffect(reference.path) {
         try {
             if (source != null) {
@@ -55,7 +56,10 @@ internal fun ConversationFileViewer(
                     directory = result.directory
                 }
             }
-            if (!directory) fileOperation(Intent.ReadFile(ReadFile(path, false)), perform)
+            if (!directory) {
+                val result = fileOperation(Intent.ReadFile(ReadFile(path, false)), perform) as Outcome.FileRead
+                text = result.file.text
+            }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: AgentException) {
@@ -69,7 +73,6 @@ internal fun ConversationFileViewer(
     if (directory && perform != null) {
         WorkspaceFilesDialog(snapshot, path, perform, dismiss)
     } else {
-        val text = snapshot.file()?.takeIf { it.path == path }?.text
         AlertDialog(
             onDismissRequest = dismiss,
             title = { Text(reference.label) },
@@ -97,7 +100,9 @@ private fun FileViewerBody(
                 line == null &&
                     dev.remoteagent.core.markdownFileKind(path) == dev.remoteagent.core.MarkdownFileKind.MARKDOWN
             ) {
-                PreviewText(text, true, path.replace('\\', '/').substringBeforeLast('/'), perform)
+                Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
+                    PreviewText(text, true, path.replace('\\', '/').substringBeforeLast('/'), perform)
+                }
             } else FileViewerText(text, line)
         }
     }

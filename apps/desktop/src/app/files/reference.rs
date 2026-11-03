@@ -112,6 +112,7 @@ impl Desktop {
     pub(super) fn resolve_reference_action(&self, target: FileMenuTarget, action: ReferenceAction) {
         self.perform(
             Intent::ResolveFileReference(op::ResolveFileReference {
+                surface: agent_core::presentation::markdown::MarkdownFileSurface::Desktop,
                 path: target.path.clone(),
                 root: target.root.clone(),
                 lookup_path: target.lookup_path.clone(),

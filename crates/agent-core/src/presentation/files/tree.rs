@@ -161,20 +161,31 @@ impl FileTrees {
             }
         }
     }
-    /// Refresh the active root of each mounted browser after a workspace mutation.
-    pub(crate) fn refresh_matching(&mut self, path: &str, connection: u64) -> Vec<TreeWork> {
-        use crate::presentation::markdown::file_workspace_relative_path;
+    fn active_keys(&self) -> Vec<FileTreeKey> {
         let mut owners = BTreeSet::new();
-        let keys = self
-            .trees
+        self.trees
             .iter()
             .rev()
             .filter(|(key, _)| owners.insert(key.owner.clone()))
-            .filter(|(key, _)| {
+            .map(|(key, _)| key.clone())
+            .collect()
+    }
+    pub(crate) fn reconnect(&mut self, connection: u64) -> Vec<TreeWork> {
+        self.active_keys()
+            .into_iter()
+            .flat_map(|key| self.action(key, FileTreeAction::Refresh, connection))
+            .collect()
+    }
+    /// Refresh the active root of each mounted browser after a workspace mutation.
+    pub(crate) fn refresh_matching(&mut self, path: &str, connection: u64) -> Vec<TreeWork> {
+        use crate::presentation::markdown::file_workspace_relative_path;
+        let keys = self
+            .active_keys()
+            .into_iter()
+            .filter(|key| {
                 file_workspace_relative_path(path, &key.root).is_some()
                     || file_workspace_relative_path(&key.root, path).is_some()
             })
-            .map(|(key, _)| key.clone())
             .collect::<Vec<_>>();
         keys.into_iter()
             .flat_map(|key| self.action(key, FileTreeAction::Refresh, connection))
@@ -275,7 +286,7 @@ impl FileTrees {
             tree.connection = connection;
             tree.running.clear();
             tree.queue.clear();
-            if reconnect && !opening {
+            if reconnect && !opening && !matches!(action, FileTreeAction::Refresh) {
                 search = tree.action(FileTreeAction::Refresh, ticket).or(search);
             }
             if !tree.query.trim().is_empty() {
@@ -455,24 +466,9 @@ impl Tree {
                 additive,
                 range,
             } if valid_tree_path(&path) => {
-                let before = self.selected.clone();
-                let directory = self
-                    .entries()
-                    .get(&path)
-                    .is_some_and(|entry| entry.kind == EntryKind::Directory);
-                self.load_ancestors(&path, self.surface == FileTreeSurface::Mobile);
-                self.focused = Some(path.clone());
-                self.select(path.clone(), additive, range);
-                self.request_selected_file(&before, ticket);
-                if click && self.surface == FileTreeSurface::Desktop {
-                    if directory && !(additive || range) {
-                        self.toggle(path);
-                    }
-                    self.retain_discoveries();
-                    return self.query(String::new());
-                }
-                self.retain_discoveries();
+                return self.select_row(path, additive, range, click, ticket);
             }
+
             FileTreeAction::Reveal { path, directory } => {
                 self.reveal_id = ticket;
                 self.open_file = None;
@@ -527,6 +523,42 @@ impl Tree {
             _ => {}
         }
         None
+    }
+    /// Row interaction differs by surface; programmatic selection remains separate.
+    fn select_row(
+        &mut self,
+        path: String,
+        additive: bool,
+        range: bool,
+        click: bool,
+        ticket: u64,
+    ) -> Option<String> {
+        let directory = self
+            .entries()
+            .get(&path)
+            .is_some_and(|entry| entry.kind == EntryKind::Directory);
+        self.load_ancestors(&path, self.surface == FileTreeSurface::Mobile);
+        self.focused = Some(path.clone());
+        // A mobile folder press changes expansion, preserving the open file's selection.
+        if self.surface == FileTreeSurface::Desktop || !directory {
+            let before = self.selected.clone();
+            self.select(path.clone(), additive, range);
+            let previous = if click && self.surface == FileTreeSurface::Mobile {
+                &[][..]
+            } else {
+                &before
+            };
+            self.request_selected_file(previous, ticket);
+        }
+        if click && directory && !(additive || range) {
+            self.toggle(path);
+        }
+        self.retain_discoveries();
+        if click && self.surface == FileTreeSurface::Desktop {
+            self.query(String::new())
+        } else {
+            None
+        }
     }
     fn request_selected_file(&mut self, previous: &[String], ticket: u64) {
         if previous != self.selected

@@ -3,6 +3,10 @@ pub use agent_protocol::editors::{OpenInEditor, ReadFileOpenCapabilities};
 
 impl Operation for ReadFileOpenCapabilities {
     rpc_operation!();
+    fn prepare(&mut self, snapshot: &mut Snapshot) -> Result<(), String> {
+        snapshot.file_open_capabilities_requested = true;
+        Ok(())
+    }
     fn key(&self) -> Option<OperationKey> {
         Some(OperationKey::FileOpenCapabilities)
     }

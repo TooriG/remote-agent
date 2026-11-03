@@ -239,6 +239,9 @@ pub struct Snapshot {
     pub preferred_editor: Option<agent_protocol::editors::EditorId>,
     #[serde(skip)]
     pub file_open_capabilities: Option<Arc<agent_protocol::editors::FileOpenCapabilities>>,
+    /// Desktop opts into this Host catalog; keep the subscription across reconnects.
+    #[serde(skip)]
+    pub file_open_capabilities_requested: bool,
     #[serde(skip)]
     pub project_import: Arc<ProjectImportState>,
     /// Mobile recent feed loads project pages independently of expansion.
@@ -1267,6 +1270,10 @@ impl Snapshot {
 
     fn prepare_connection_refresh(&mut self) -> Vec<Effect> {
         let mut effects = vec![Effect::execute(op::ReadTaskActivity {})];
+        if self.file_open_capabilities_requested {
+            effects.push(Effect::execute(op::ReadFileOpenCapabilities {}));
+        }
+        effects.extend(op::reconnect_file_trees(self));
         if self.threads.is_none() {
             effects.push(Effect::execute(op::ListSessions::new(
                 (*self.list_query).clone(),

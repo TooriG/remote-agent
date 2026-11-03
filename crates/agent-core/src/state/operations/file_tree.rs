@@ -26,6 +26,13 @@ pub(crate) fn file_tree_action(
         Vec::new()
     }
 }
+pub(crate) fn reconnect_file_trees(snapshot: &mut Snapshot) -> Vec<Effect> {
+    effects(
+        Arc::make_mut(&mut snapshot.workspace)
+            .file_trees
+            .reconnect(snapshot.connection_generation),
+    )
+}
 pub(crate) fn refresh_file_trees(snapshot: &mut Snapshot, path: &str) -> Vec<Effect> {
     if !snapshot.connected {
         return Vec::new();
@@ -162,8 +169,14 @@ impl Operation for SearchTree {
 
 #[cfg(test)]
 mod tests {
+    #[allow(dead_code)]
+    mod host_fixture {
+        include!("../../../tests/support/host.rs");
+    }
+
     use super::*;
     use crate::presentation::files::FileTreeSurface;
+    use serde_json::json;
     fn key(root: &str) -> FileTreeKey {
         FileTreeKey {
             owner: "browser".into(),
@@ -327,5 +340,52 @@ mod tests {
                 .is_some()
         );
         store.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn reconnect_retries_mounted_offline_tree_and_requested_editor_catalog_without_ui_actions()
+     {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            let mut initial = Snapshot::default();
+            super::super::ReadFileOpenCapabilities {}.prepare(&mut initial).unwrap();
+            initial.preferred_editor = Some(agent_protocol::editors::EditorId::Cursor);
+            super::super::ReadFileOpenCapabilities {}.apply(&mut initial,
+                agent_protocol::editors::FileOpenCapabilities { editors: vec![agent_protocol::editors::EditorId::Cursor], reveal: None });
+            let (mut initial, _) = crate::state::reduce(&initial, Event::Disconnected);
+            assert!(initial.file_open_capabilities.is_none());
+            let key = FileTreeKey { owner: "mobile".into(), root: "/workspace".into() };
+            assert!(file_tree_action(&mut initial, key.clone(), FileTreeAction::Open {
+                surface: crate::presentation::files::FileTreeSurface::Mobile,
+                locale: "en-US".into(), workspace_root: "/workspace".into(),
+            }).is_empty());
+            assert!(initial.file_tree(key.clone()).error.is_some());
+            let (peer, mut reader, writer) = host_fixture::connect(&initial).await;
+            let store = crate::store::Store::new(peer, initial);
+            let mut methods = Vec::new();
+            for _ in 0..6 {
+                let request = reader.read_request().await.unwrap().unwrap();
+                let method = request["method"].as_str().unwrap();
+                let reply = match method {
+                    "host/file/openCapabilities" => json!({"editors":["zed"],"reveal":null}),
+                    "host/file/tree" => json!({"entries":[{"path":"new.rs","kind":"file","ignored":false}],"truncated":false}),
+                    "host/taskActivity/read" => json!({"revision":0,"statuses":[],"waiting":[],"unread":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()}),
+                    "host/session/list" => json!({"data":[],"projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5}),
+                    "host/model/list" => json!({"data":[],"nextCursor":null}),
+                    "host/account/list" => json!({"accounts":[],"selected":{}}),
+                    other => panic!("unexpected reconnect request: {other}"),
+                };
+                methods.push(method.to_owned());
+                writer.reply(&request, json!({"result":reply})).await.unwrap();
+            }
+            let mut updates = store.subscribe();
+            updates.wait_for(|snapshot| snapshot.file_tree(key.clone()).ready && snapshot.file_open_capabilities.is_some()).await.unwrap();
+            let snapshot = store.snapshot();
+            assert_eq!(snapshot.file_tree(key.clone()).rows[0].path, "new.rs");
+            assert!(snapshot.file_tree(key).error.is_none());
+            assert_eq!(snapshot.preferred_editor, Some(agent_protocol::editors::EditorId::Cursor));
+            assert_eq!(snapshot.file_open_capabilities.as_ref().unwrap().editors, [agent_protocol::editors::EditorId::Zed]);
+            assert_eq!(methods.iter().filter(|method| *method == "host/file/openCapabilities").count(), 1);
+            store.close().await.unwrap();
+        }).await.unwrap();
     }
 }

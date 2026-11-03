@@ -3,9 +3,9 @@ use super::*;
 use crate::presentation::{
     files::file_tree_path,
     markdown::{
-        WORKSPACE_BASENAME_LOOKUP_LIMIT, file_host_path, needs_workspace_basename_lookup,
-        pick_stripped_workspace_match, pick_workspace_basename_match,
-        strip_repeated_workspace_prefix,
+        MarkdownFileSurface, WORKSPACE_BASENAME_LOOKUP_LIMIT, file_host_path,
+        needs_workspace_basename_lookup, pick_stripped_workspace_match,
+        pick_workspace_basename_match, strip_repeated_workspace_prefix,
     },
 };
 use agent_protocol::{file_metadata::ReadFileMetadata, file_tree::SearchTreeEntries};
@@ -16,6 +16,7 @@ pub struct ResolveFileReference {
     pub path: String,
     pub root: String,
     pub lookup_path: Option<String>,
+    pub surface: MarkdownFileSurface,
     /// Only panel opens need to distinguish a directory from a file. Editor
     /// launches and path copies must also work for targets that do not exist.
     pub inspect_directory: bool,
@@ -47,9 +48,15 @@ impl Operation for ResolveFileReference {
     ) -> Result<Self::Output, PeerError> {
         let root = file_host_path(self.root.clone(), home.clone());
         let literal = file_host_path(self.path.clone(), home);
-        let path = workspace_match(context, &root, self.lookup_path.as_deref(), &literal)
-            .await
-            .unwrap_or(literal);
+        let path = workspace_match(
+            context,
+            &root,
+            self.lookup_path.as_deref(),
+            &literal,
+            self.surface,
+        )
+        .await
+        .unwrap_or(literal);
         if self.inspect_directory
             && let Ok(entry) = context.call(&rpc::ResolveFile { path: path.clone() }).await
         {
@@ -72,6 +79,7 @@ async fn workspace_match(
     root: &str,
     lookup: Option<&str>,
     literal: &str,
+    surface: MarkdownFileSurface,
 ) -> Option<String> {
     let lookup = lookup?;
     let basename = needs_workspace_basename_lookup(lookup);
@@ -96,7 +104,8 @@ async fn workspace_match(
     } else {
         pick_stripped_workspace_match(query, root, &entries)
     }?;
-    if stripped.is_some() {
+    let protect_directory = surface == MarkdownFileSurface::Mobile && basename && matched != lookup;
+    if stripped.is_some() || protect_directory {
         // FFF may still be scanning or truncated: only a Host probe can rule
         // out the literal path before redirecting to the stripped candidate.
         let request = ReadFileMetadata {
@@ -104,7 +113,13 @@ async fn workspace_match(
         };
         request.validate().ok()?;
         let metadata = context.call(&request).await.ok()?;
-        if metadata.entries.first()?.metadata.is_some() {
+        let metadata = metadata.entries.first()?.metadata.as_ref();
+        if (stripped.is_some() && metadata.is_some())
+            || metadata.is_some_and(|metadata| {
+                protect_directory
+                    && metadata.kind == agent_protocol::file_metadata::FileMetadataKind::Directory
+            })
+        {
             return None;
         }
     }
@@ -134,6 +149,7 @@ mod tests {
             r"\\server\share\file",
         ] {
             let mut request = ResolveFileReference {
+                surface: MarkdownFileSurface::Desktop,
                 path: path.into(),
                 root: String::new(),
                 lookup_path: None,
@@ -143,6 +159,7 @@ mod tests {
         }
         for path in ["", "relative.rs", "~someone/file", "/file\0"] {
             let mut request = ResolveFileReference {
+                surface: MarkdownFileSurface::Desktop,
                 path: path.into(),
                 root: String::new(),
                 lookup_path: None,
@@ -189,7 +206,7 @@ mod tests {
     async fn basename_actions_choose_the_first_exact_file_and_inspect_only_panel_targets() {
         tokio::time::timeout(Duration::from_secs(10), async {
             let (store, mut reader, writer) = fixture().await;
-            let result = store.dispatch(Intent::ResolveFileReference(ResolveFileReference {
+            let result = store.dispatch(Intent::ResolveFileReference(ResolveFileReference { surface: MarkdownFileSurface::Desktop,
                 path: "/workspace/main.rs".into(), root: "/workspace".into(), lookup_path: Some("main.rs".into()), inspect_directory: false,
             }));
             let request = reader.read_request().await.unwrap().unwrap();
@@ -202,7 +219,7 @@ mod tests {
             ],"truncated":true}})).await.unwrap();
             assert_eq!(result.await.unwrap(), Outcome::FileReferenceResolved { path: "/workspace/a/main.rs".into(), directory: false });
 
-            let result = store.dispatch(Intent::ResolveFileReference(ResolveFileReference {
+            let result = store.dispatch(Intent::ResolveFileReference(ResolveFileReference { surface: MarkdownFileSurface::Desktop,
                 path: "~/Documents".into(), root: String::new(), lookup_path: None, inspect_directory: true,
             }));
             let request = reader.read_request().await.unwrap().unwrap();
@@ -220,7 +237,7 @@ mod tests {
             let (store, mut reader, writer) = fixture().await;
             for exists in [Some(true), Some(false), None] {
                 let literal = "/workspace/repo/repo/src/main.rs";
-                let result = store.dispatch(Intent::ResolveFileReference(ResolveFileReference {
+                let result = store.dispatch(Intent::ResolveFileReference(ResolveFileReference { surface: MarkdownFileSurface::Desktop,
                     path: literal.into(), root: "/workspace/repo".into(), lookup_path: Some("repo/src/main.rs".into()), inspect_directory: false,
                 }));
                 let request = reader.read_request().await.unwrap().unwrap();
@@ -248,7 +265,7 @@ mod tests {
     async fn failed_search_and_directory_reads_leave_the_literal_file_panel_available() {
         tokio::time::timeout(Duration::from_secs(10), async {
             let (store, mut reader, writer) = fixture().await;
-            let result = store.dispatch(Intent::ResolveFileReference(ResolveFileReference {
+            let result = store.dispatch(Intent::ResolveFileReference(ResolveFileReference { surface: MarkdownFileSurface::Desktop,
                 path: "/workspace/missing.rs".into(), root: "/workspace".into(), lookup_path: Some("missing.rs".into()), inspect_directory: true,
             }));
             for method in ["host/file/search", "host/file/resolve"] {
@@ -260,5 +277,36 @@ mod tests {
             assert!(store.snapshot().error.is_none());
             store.close().await.unwrap();
         }).await.expect("failed reference lookup deadline");
+    }
+    #[tokio::test]
+    async fn mobile_basename_lookup_keeps_literal_directories_and_failed_probes() {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let (store, mut reader, writer) = fixture().await;
+            for kind in ["directory", "file", "missing", "unavailable"] {
+                let result = store.dispatch(Intent::ResolveFileReference(ResolveFileReference {
+                    surface: MarkdownFileSurface::Mobile, path: "/workspace/main.rs".into(),
+                    root: "/workspace".into(), lookup_path: Some("main.rs".into()), inspect_directory: true,
+                }));
+                let search = reader.read_request().await.unwrap().unwrap();
+                assert_eq!(search["method"], "host/file/search");
+                writer.reply(&search, json!({"result":{"entries":[{"path":"nested/main.rs","kind":"file","ignored":false}],"truncated":false}})).await.unwrap();
+                let probe = reader.read_request().await.unwrap().unwrap();
+                assert_eq!(probe["method"], "host/file/metadata");
+                assert_eq!(probe["params"]["paths"], json!(["/workspace/main.rs"]));
+                let response = match kind {
+                    "unavailable" => json!({"error":{"code":"unavailable","message":"probe failed","delivery":"notSent"}}),
+                    "missing" => json!({"result":{"entries":[{"path":"/workspace/main.rs","metadata":null}]}}),
+                    _ => json!({"result":{"entries":[{"path":"/workspace/main.rs","metadata":{"kind":kind,"byte_length":1,"mime_type":null}}]}}),
+                };
+                writer.reply(&probe, response).await.unwrap();
+                let target = if matches!(kind, "directory" | "unavailable") { "/workspace/main.rs" } else { "/workspace/nested/main.rs" };
+                let resolve = reader.read_request().await.unwrap().unwrap();
+                assert_eq!(resolve["method"], "host/file/resolve");
+                assert_eq!(resolve["params"]["path"], target);
+                writer.reply(&resolve, json!({"result":{"name":"main.rs","path":target,"directory":kind == "directory","size":1}})).await.unwrap();
+                assert_eq!(result.await.unwrap(), Outcome::FileReferenceResolved { path: target.into(), directory: kind == "directory" });
+            }
+            store.close().await.unwrap();
+        }).await.unwrap();
     }
 }
