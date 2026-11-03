@@ -1,5 +1,8 @@
+import groovy.json.JsonSlurper
+import java.io.File
 import java.util.Properties
 import org.gradle.api.tasks.Exec
+import org.gradle.api.tasks.PathSensitivity
 
 plugins {
     id("com.ncorti.ktfmt.gradle")
@@ -32,19 +35,44 @@ val buildRevision =
         .asText
 
 val nativeAbis = listOf("arm64-v8a", "x86_64")
-val rustBuildInputs = rootProject.files("Cargo.toml", "Cargo.lock", "flake.nix", "flake.lock", ".cargo/config.toml")
+val rustBuildInputs =
+    rootProject.files(
+        "Cargo.toml",
+        "Cargo.lock",
+        "flake.nix",
+        "flake.lock",
+        ".cargo/config.toml",
+        "scripts/rust-build-inputs.mjs",
+        "apps/mobile/build.gradle.kts",
+        "build.gradle.kts",
+        "settings.gradle.kts",
+        "gradle.properties",
+    )
+val rustMetadata =
+    providers
+        .exec {
+            workingDir(rootProject.projectDir)
+            commandLine("node", "scripts/rust-build-inputs.mjs", "agent-core", "agent-bindgen", "agent-ffi")
+        }
+        .standardOutput
+        .asText
+        .map { JsonSlurper().parseText(it) as Map<*, *> }
+val rustSources = rustMetadata.map { metadata ->
+    (metadata["sources"] as Map<*, *>).entries.associate { (name, paths) ->
+        (name as String) to (paths as List<*>).map { File(it as String) }
+    }
+}
 val ndkHome = providers.environmentVariable("ANDROID_NDK_HOME").get()
 
 val generateAgentBindings =
     tasks.register<Exec>("generateAgentBindings") {
         workingDir(rootProject.projectDir)
         commandLine("scripts/build-agent-bindings.sh")
-        inputs.file(rootProject.file("scripts/build-agent-bindings.sh"))
-        inputs.files(rustBuildInputs)
-        inputs.dir(rootProject.file("crates/agent-bindgen"))
-        inputs.dir(rootProject.file("crates/agent-core"))
-        inputs.dir(rootProject.file("crates/agent-protocol"))
-        inputs.dir(rootProject.file("crates/agent-transport"))
+        inputs.file(rootProject.file("scripts/build-agent-bindings.sh")).withPathSensitivity(PathSensitivity.RELATIVE)
+        inputs
+            .files(rustSources.map { it.getValue("agent-core") + it.getValue("agent-bindgen") })
+            .withPropertyName("rustSources")
+            .withPathSensitivity(PathSensitivity.RELATIVE)
         outputs.dir(rootProject.file("target/agent-bindings"))
     }
 val buildAgentAndroid =
@@ -54,22 +82,27 @@ val buildAgentAndroid =
             listOf(
                 "node",
                 "scripts/build-agent-android.mjs",
-                layout.buildDirectory.dir("generated/jniLibs").get().asFile.absolutePath,
+                rootProject.relativePath(layout.buildDirectory.dir("generated/jniLibs").get().asFile),
             ) + nativeAbis
         )
-        inputs.file(rootProject.file("scripts/build-agent-android.mjs"))
+        inputs.file(rootProject.file("scripts/build-agent-android.mjs")).withPathSensitivity(PathSensitivity.RELATIVE)
         inputs.property("nativeAbis", nativeAbis)
-        inputs.files(rustBuildInputs)
-        inputs.dir(rootProject.file("crates/agent-ffi"))
-        inputs.dir(rootProject.file("crates/agent-core"))
-        inputs.dir(rootProject.file("crates/agent-protocol"))
-        inputs.dir(rootProject.file("crates/agent-transport"))
+        inputs.file("$ndkHome/source.properties").withPathSensitivity(PathSensitivity.NONE)
+        inputs
+            .files(rustSources.map { it.getValue("agent-ffi") })
+            .withPropertyName("rustSources")
+            .withPathSensitivity(PathSensitivity.RELATIVE)
         outputs.dir(layout.buildDirectory.dir("generated/jniLibs"))
     }
 
 // When requested together, finish static checks before starting Rust builds.
 listOf(generateAgentBindings, buildAgentAndroid).forEach { task ->
-    task.configure { mustRunAfter("ktfmtCheck", "detekt") }
+    task.configure {
+        mustRunAfter("ktfmtCheck", "detekt")
+        inputs.files(rustBuildInputs).withPropertyName("rustBuild").withPathSensitivity(PathSensitivity.RELATIVE)
+        inputs.property("compiler", rustMetadata.map { it["compiler"]!! })
+        outputs.cacheIf { true }
+    }
 }
 
 tasks

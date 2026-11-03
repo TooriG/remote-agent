@@ -226,6 +226,7 @@ extension LaunchUITests {
         search.tap()
         search.buttons.firstMatch.tap()
         XCTAssertTrue(rootFile.waitForExistence(timeout: 10))
+        app.buttons["close"].tap()
         closeWorkbench(app)
         XCTAssertFalse(app.staticTexts["notice"].exists)
         XCTAssertTrue(app.textFields["task.message"].waitForExistence(timeout: 10))

@@ -198,6 +198,7 @@ jobs:
   android:
     needs: [changes, repository]
     permissions:
+      actions: write # Retire the preceding Gradle snapshot after saving its replacement.
       contents: write # Attach the tested Android preview APK on release publication.
     if: needs.changes.outputs.android == 'true' && !inputs.ios-tests
     runs-on: ubuntu-24.04
@@ -218,16 +219,29 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           cmd-format: nix develop .#android-build --command {0}
-          key: android-build-${{ hashFiles('flake.lock') }}
+          key: android-downloads-${{ hashFiles('flake.lock') }}
+          # Gradle caches the JNI libraries and bindings, without Cargo intermediates.
+          cache-targets: false
           save-if: ${{ github.event_name != 'pull_request' }}
           cache-on-failure: true
       - name: Restore Gradle dependencies and build outputs
+        id: gradle-cache
+        continue-on-error: true
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        env:
+          GRADLE_CACHE_PREFIX: bex-gradle-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'gradle/wrapper/gradle-wrapper.properties') }}
+        with:
+          path: &gradle-cache-paths |
+            ${{ runner.temp }}/gradle/caches
+            ${{ runner.temp }}/gradle/wrapper
+          key: ${{ env.GRADLE_CACHE_PREFIX }}-${{ github.sha }}
+          restore-keys: ${{ env.GRADLE_CACHE_PREFIX }}-
+      - name: Configure Gradle
         uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6
         env:
           GRADLE_USER_HOME: ${{ runner.temp }}/gradle
         with:
-          cache-provider: basic
-          cache-read-only: ${{ github.event_name == 'pull_request' }}
+          cache-provider: external
       - name: Check, test and build Android app and test APKs
         env:
           GRADLE_USER_HOME: ${{ runner.temp }}/gradle
@@ -238,6 +252,21 @@ jobs:
           :apps:mobile:testDebugUnitTest
           :apps:mobile:assembleDebug :apps:mobile:assembleDebugAndroidTest
           --no-daemon --parallel --max-workers=4 --build-cache --console=plain
+      - name: Save Gradle dependencies and completed native outputs
+        id: save-gradle-cache
+        if: ${{ github.ref == 'refs/heads/main' && steps.gradle-cache.outputs.cache-hit != 'true' }}
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: *gradle-cache-paths
+          key: ${{ steps.gradle-cache.outputs.cache-primary-key }}
+      - name: Retire replaced Gradle snapshots
+        if: ${{ steps.save-gradle-cache.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GRADLE_CACHE_KEY: ${{ steps.gradle-cache.outputs.cache-primary-key }}
+        run: nix develop .#android-build --command node scripts/prune-gradle-cache.mjs "$GRADLE_CACHE_KEY"
       - name: Enable emulator hardware acceleration
         run: sudo chmod a+rw /dev/kvm
       - name: Build isolated Android Host fixtures
