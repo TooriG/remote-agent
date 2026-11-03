@@ -189,6 +189,17 @@
             ANDROID_SDK_ROOT = "${androidSdk}/libexec/android-sdk";
             ANDROID_NDK_HOME = "${androidSdk}/libexec/android-sdk/ndk-bundle";
           });
+        } // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
+          ios-build = mkDevShell {
+            packages = with pkgs; [
+              (hostRustToolchain.override {
+                extensions = [ ];
+                targets = [ "aarch64-apple-ios-sim" ];
+              })
+              kache just jq gitMinimal nodejs zig swiftlint swiftformat
+            ];
+            shellHook = kacheHook + appleSdkHook;
+          };
         });
     };
 }

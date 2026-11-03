@@ -383,7 +383,7 @@ jobs:
       - *prepare-zsh
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          cmd-format: nix develop . --command {0}
+          cmd-format: nix develop .#ios-build --command {0}
           # Either Apple job may be unavailable; each must publish its own cache.
           key: macos-swift-xcode-26.6-${{ hashFiles('flake.lock') }}
           # Focused tests may omit the desktop renderer; only full builds publish.
@@ -409,9 +409,9 @@ jobs:
           mkdir -p target/qa
           if [[ -n "$AGENT_IOS_TESTS" ]]; then
             read -r -a ios_tests <<< "$AGENT_IOS_TESTS"
-            nix develop . --command just ios-e2e --build-only "${ios_tests[@]}" 2>&1 | tee target/qa/quality.log
+            nix develop .#ios-build --command just ios-e2e --build-only "${ios_tests[@]}" 2>&1 | tee target/qa/quality.log
           else
-            nix develop . --command just quality swift --build-only 2>&1 | tee target/qa/quality.log
+            nix develop .#ios-build --command just quality swift --build-only 2>&1 | tee target/qa/quality.log
           fi
       - name: Share the iPhone app, Host fixtures and test runner
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
