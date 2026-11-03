@@ -108,6 +108,53 @@ async fn device_preferences_apply_across_hosts_without_replacing_their_work() {
 }
 
 #[tokio::test]
+async fn local_presets_initialize_device_preferences_without_losing_existing_work() {
+    let storage = Arc::new(Storage::default());
+    let mut saved = edit(
+        &Snapshot::default(),
+        Intent::SelectDefaultEffort {
+            scope: ModelDefaultsScope::Global,
+            provider: ProviderKind::Codex,
+            effort: Some("high".into()),
+        },
+    );
+    saved = edit(
+        &saved,
+        Intent::SelectDefaultServiceTier {
+            scope: ModelDefaultsScope::Environment { id: "first".into() },
+            provider: ProviderKind::Claude,
+            service_tier: Some("fast".into()),
+        },
+    );
+    draft(&mut saved, "existing Android draft");
+    *storage.local.lock().unwrap() = crate::persistence::encode(&saved).unwrap();
+    let persistence = session(storage.clone(), Arc::default());
+    let restored = persistence.restore(false, None).await.unwrap();
+    assert_eq!(restored.model_defaults, saved.model_defaults);
+    assert_eq!(restored.scoped_model_defaults, saved.scoped_model_defaults);
+    assert_eq!(restored.drafts, saved.drafts);
+    persistence.start(&restored);
+    persistence
+        .finish(Arc::new(restored))
+        .unwrap()
+        .await
+        .unwrap();
+    let other = session(
+        Arc::new(Storage {
+            device: storage.device.clone(),
+            ..Default::default()
+        }),
+        Arc::default(),
+    )
+    .restore(false, None)
+    .await
+    .unwrap();
+    assert_eq!(other.model_defaults, saved.model_defaults);
+    assert_eq!(other.scoped_model_defaults, saved.scoped_model_defaults);
+    assert!(other.drafts.is_empty());
+}
+
+#[tokio::test]
 async fn simultaneous_views_keep_independent_preference_edits_when_closed_in_reverse_order() {
     let disk = Arc::new(DeviceDisk::default());
     let device = Arc::new(DevicePreferences::default());
