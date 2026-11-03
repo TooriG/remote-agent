@@ -64,6 +64,36 @@ else
 fi
 export CARGO_TARGET_DIR="$agent_root/target"
 export CARGO_HOME="$agent_root/target/cargo-home"
+# Cargo checks and tests, and recipes in the portable group, run on the
+# configured Linux builder. Builds for Apple targets and all else stay here.
+agent_portable() {
+    if [[ ${1-} == env ]]; then
+        shift
+        while [[ ${1-} == -u || ${1-} == *=* ]]; do
+            [[ $1 == -u ]] && shift
+            shift
+        done
+    fi
+    case "${1-} ${2-}" in
+        "cargo check" | "cargo clippy" | "cargo test" | "cargo nextest" | "cargo mutants")
+            local previous='' argument
+            for argument; do
+                [[ $argument == --target=*-apple-* || ($previous == --target && $argument == *-apple-*) ]] && return 1
+                previous=$argument
+            done
+            ;;
+        "just "[!-]*)
+            just --dump --dump-format json |
+                jq -e --arg recipe "$2" '.recipes[$recipe].attributes // [] | any(.group? == "portable")' > /dev/null
+            ;;
+        *) return 1 ;;
+    esac
+}
+export AGENT_REMOTE_BUILDER
+AGENT_REMOTE_BUILDER=$(git config --get bex.remoteBuilder || true)
+if [[ -n $AGENT_REMOTE_BUILDER ]] && agent_portable "$@"; then
+    exec scripts/remote-run.sh "$AGENT_REMOTE_BUILDER" "$@"
+fi
 agent_seed_key=$(git hash-object Cargo.lock tools/agent-peer/Cargo.lock | git hash-object --stdin)
 if [[ ! -f $CARGO_HOME/.seeded || $(< "$CARGO_HOME/.seeded") != "$agent_seed_key" ]]; then
     mkdir -p "$CARGO_HOME/registry" "$CARGO_HOME/git/db" "$CARGO_HOME/git/checkouts"
@@ -74,8 +104,9 @@ if [[ ! -f $CARGO_HOME/.seeded || $(< "$CARGO_HOME/.seeded") != "$agent_seed_key
             cp --reflink=auto -pR "$@"
         fi
     }
-    # Clone only locked sources and archives. APFS/reflinks share their bytes
-    # without sharing Cargo's locks, index updates or automatic cache deletion.
+    # Clone locked archives; Cargo unpacks only the crates the command needs.
+    # Fall back to source-only entries. APFS/reflinks share their bytes without
+    # sharing Cargo's locks, index updates or automatic cache deletion.
     agent_packages=()
     while IFS= read -r agent_package; do agent_packages+=("$agent_package"); done < <(
         awk '/^name = / { name = $3; gsub(/"/, "", name) }
@@ -91,13 +122,16 @@ if [[ ! -f $CARGO_HOME/.seeded || $(< "$CARGO_HOME/.seeded") != "$agent_seed_key
             if [[ ! -d $CARGO_HOME/registry/index/$agent_registry ]]; then
                 agent_copy_cache "$agent_index" "$CARGO_HOME/registry/index/"
             fi
-            for agent_kind in src cache; do
+            for agent_kind in cache src; do
                 agent_suffix=
                 [[ $agent_kind == cache ]] && agent_suffix=.crate
                 agent_destination="$CARGO_HOME/registry/$agent_kind/$agent_registry"
                 mkdir -p "$agent_destination"
                 agent_sources=()
                 for agent_package in "${agent_packages[@]}"; do
+                    if [[ $agent_kind == src && -f $CARGO_HOME/registry/cache/$agent_registry/$agent_package.crate ]]; then
+                        continue
+                    fi
                     agent_cached="$agent_seed_cargo/registry/$agent_kind/$agent_registry/$agent_package$agent_suffix"
                     if [[ -e $agent_cached && ! -e $agent_destination/$agent_package$agent_suffix ]]; then
                         agent_sources+=("$agent_cached")
@@ -130,35 +164,5 @@ if [[ ! -f $CARGO_HOME/.seeded || $(< "$CARGO_HOME/.seeded") != "$agent_seed_key
         }' Cargo.lock tools/agent-peer/Cargo.lock | sort -u)
     fi
     printf '%s\n' "$agent_seed_key" > "$CARGO_HOME/.seeded"
-fi
-# Cargo checks and tests, and recipes in the portable group, run on the
-# configured Linux builder. Builds for Apple targets and all else stay here.
-agent_portable() {
-    if [[ ${1-} == env ]]; then
-        shift
-        while [[ ${1-} == -u || ${1-} == *=* ]]; do
-            [[ $1 == -u ]] && shift
-            shift
-        done
-    fi
-    case "${1-} ${2-}" in
-        "cargo check" | "cargo clippy" | "cargo test" | "cargo nextest" | "cargo mutants")
-            local previous='' argument
-            for argument; do
-                [[ $argument == --target=*-apple-* || ($previous == --target && $argument == *-apple-*) ]] && return 1
-                previous=$argument
-            done
-            ;;
-        "just "[!-]*)
-            just --dump --dump-format json |
-                jq -e --arg recipe "$2" '.recipes[$recipe].attributes // [] | any(.group? == "portable")' > /dev/null
-            ;;
-        *) return 1 ;;
-    esac
-}
-export AGENT_REMOTE_BUILDER
-AGENT_REMOTE_BUILDER=$(git config --get bex.remoteBuilder || true)
-if [[ -n $AGENT_REMOTE_BUILDER ]] && agent_portable "$@"; then
-    exec scripts/remote-run.sh "$AGENT_REMOTE_BUILDER" "$@"
 fi
 exec "$@"
