@@ -15,7 +15,7 @@ if [[ $language == apple || $language == rust ]]; then
     nix build .#agent-peer --no-link
     clippy=(cargo clippy --locked --workspace --all-targets -- --no-deps -D warnings)
     if [[ -n ${AGENT_REMOTE_BUILDER-} ]]; then
-        clippy=(scripts/remote-run.sh "$AGENT_REMOTE_BUILDER" "${clippy[@]}")
+        clippy=(scripts/remote-run.sh --native "$AGENT_REMOTE_BUILDER" "${clippy[@]}")
     fi
     "${clippy[@]}"
     integration_targets=(

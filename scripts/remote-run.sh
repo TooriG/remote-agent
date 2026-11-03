@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: scripts/remote-run.sh SSH-DESTINATION COMMAND...
+# Usage: scripts/remote-run.sh [--native] SSH-DESTINATION COMMAND...
 # Run COMMAND through scripts/dev-env.sh on a Linux builder, against the files
 # a commit of this worktree would contain. The builder keeps one Git worktree
 # and Cargo target per local worktree. Afterwards, files the command created or
@@ -7,8 +7,14 @@
 # or tool caches. An unreachable builder fails the command; nothing runs here.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-builder=$1
-shift
+if [[ ${1-} == --native ]]; then
+    builder=$2
+    shift 2
+    set -- --native "$@"
+else
+    builder=$1
+    shift
+fi
 # Relative to the builder's home directory.
 root=.cache/agent-remote-builds
 key=$(printf '%s\n' "$PWD" | git hash-object --stdin)

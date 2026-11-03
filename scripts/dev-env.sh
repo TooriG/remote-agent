@@ -2,11 +2,15 @@
 # Share fixed tooling and dependency bytes; keep mutable Cargo state local.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# Portable builder checks do not need the mobile SDKs in the default shell.
+agent_env_shell=.
+if [[ ${1-} == --native ]]; then agent_env_shell=.#native; fi
 # print-dev-env emits Bash 4+ syntax. macOS launchd and clean runners can
 # enter through the system's Bash 3, so use the pinned shell before sourcing it.
 if (( BASH_VERSINFO[0] < 4 )); then
-    exec nix develop . --no-update-lock-file --command bash "$PWD/scripts/dev-env.sh" "$@"
+    exec nix develop "$agent_env_shell" --no-update-lock-file --command bash "$PWD/scripts/dev-env.sh" "$@"
 fi
+if [[ ${1-} == --native ]]; then shift; fi
 agent_root=$PWD
 agent_build_root=$(git config --path --get bex.buildRoot || true)
 if [[ -n $agent_build_root ]]; then
@@ -32,13 +36,13 @@ if [[ ! -e $agent_root/target/CACHEDIR.TAG && ! -L $agent_root/target/CACHEDIR.T
 fi
 agent_seed_cargo=${CARGO_HOME:-$HOME/.cargo}
 export XDG_CACHE_HOME="$agent_root/target/tool-cache"
-agent_env_key=$({ git hash-object flake.nix flake.lock tools/github-release-binary.nix tools/cccc/package.nix tools/kache/package.nix tools/node-runtime/package.nix; uname -sm; } | git hash-object --stdin)
+agent_env_key=$({ git hash-object flake.nix flake.lock tools/github-release-binary.nix tools/cccc/package.nix tools/kache/package.nix tools/node-runtime/package.nix; uname -sm; printf '%s\n' "$agent_env_shell"; } | git hash-object --stdin)
 agent_env_dir="$(git rev-parse --git-common-dir)/agent-dev-env/$agent_env_key"
 mkdir -p "$agent_env_dir"
 if [[ ! -f $agent_env_dir/env.sh ]]; then
     agent_pending_env=$(mktemp -d "$agent_env_dir/bootstrap.XXXXXX")
     trap 'rm -rf "$agent_pending_env"' EXIT
-    nix --option eval-cache false print-dev-env . --no-update-lock-file \
+    nix --option eval-cache false print-dev-env "$agent_env_shell" --no-update-lock-file \
         --profile "$agent_pending_env/profile" > "$agent_pending_env/env.sh"
     # Publish once, without a shared reader lock. Keep the winning GC root.
     if ! ln "$agent_pending_env/env.sh" "$agent_env_dir/env.sh" 2>/dev/null; then
@@ -92,7 +96,7 @@ agent_portable() {
 export AGENT_REMOTE_BUILDER
 AGENT_REMOTE_BUILDER=$(git config --get bex.remoteBuilder || true)
 if [[ -n $AGENT_REMOTE_BUILDER ]] && agent_portable "$@"; then
-    exec scripts/remote-run.sh "$AGENT_REMOTE_BUILDER" "$@"
+    exec scripts/remote-run.sh --native "$AGENT_REMOTE_BUILDER" "$@"
 fi
 agent_seed_key=$(git hash-object Cargo.lock tools/agent-peer/Cargo.lock | git hash-object --stdin)
 if [[ ! -f $CARGO_HOME/.seeded || $(< "$CARGO_HOME/.seeded") != "$agent_seed_key" ]]; then

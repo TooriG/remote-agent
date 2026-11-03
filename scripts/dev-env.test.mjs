@@ -32,7 +32,14 @@ function fixture(t, builder = '') {
   put(root, 'scripts/remote-run.sh', '#!/usr/bin/env bash\nprintf "%s\\n" "$@"\nexit "${DEV_ENV_REMOTE_STATUS:-0}"\n');
   chmodSync(join(root, 'scripts/remote-run.sh'), 0o755);
   copyFileSync('scripts/dev-env.sh', join(root, 'scripts/dev-env.sh'));
-  const nix = put(root, 'bin/nix', '#!/usr/bin/env bash\nprintf \'export NIX_BUILD_TOP=$(mktemp -d)\\n\'\n');
+  const nixLog = join(root, 'nix.log');
+  const nix = put(root, 'bin/nix', `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$DEV_ENV_NIX_LOG"
+for argument; do
+  case $argument in .|.\\#native) printf 'export DEV_ENV_SELECTED_SHELL=%q\\n' "$argument" ;; esac
+done
+printf 'export NIX_BUILD_TOP=$(mktemp -d)\\n'
+`);
   chmodSync(nix, 0o755);
   const cargo = put(root, 'bin/cargo', '#!/usr/bin/env bash\necho local-cargo\n');
   chmodSync(cargo, 0o755);
@@ -44,12 +51,12 @@ function fixture(t, builder = '') {
     put(root, `seed/registry/src/index.crates.io-fixture/${name}-1.0.0/src/lib.rs`, name);
   }
   return {
-    archive, registry,
+    archive, registry, nixLog,
     home: join(root, 'target/cargo-home'),
     run(args = ['true'], overrides = {}) {
       const result = spawnSync('bash', ['scripts/dev-env.sh', ...args], {
         cwd: root, encoding: 'utf8',
-        env: { ...process.env, PATH: `${join(root, 'bin')}:${process.env.PATH}`, CARGO_HOME: join(root, 'seed'), ...overrides },
+        env: { ...process.env, PATH: `${join(root, 'bin')}:${process.env.PATH}`, CARGO_HOME: join(root, 'seed'), DEV_ENV_NIX_LOG: nixLog, ...overrides },
       });
       assert.ifError(result.error);
       return result;
@@ -80,10 +87,20 @@ test('portable commands reach the builder before local Cargo cache setup, includ
       const build = fixture(t, 'test-builder');
       const result = build.run(args, { DEV_ENV_REMOTE_STATUS: '23' });
       assert.equal(result.status, 23, result.stderr);
-      assert.deepEqual(result.stdout.trim().split('\n'), ['test-builder', ...args]);
+      assert.deepEqual(result.stdout.trim().split('\n'), ['--native', 'test-builder', ...args]);
       assert.ok(!existsSync(build.home));
     });
   }
+});
+
+test('native and mobile environments are cached independently and reused', (t) => {
+  const build = fixture(t);
+  for (const options of [[], ['--native'], [], ['--native']]) {
+    const result = build.run([...options, 'bash', '-c', 'printf "%s" "$DEV_ENV_SELECTED_SHELL"']);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, options.length ? '.#native' : '.');
+  }
+  assert.equal(readFileSync(build.nixLog, 'utf8').trim().split('\n').length, 2);
 });
 
 test('Apple checks keep local cache setup when a remote builder is configured', async (t) => {

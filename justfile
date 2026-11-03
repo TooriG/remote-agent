@@ -26,7 +26,7 @@ unit-tests *targets:
     set -uo pipefail
     failed=0
     if [[ -n ${AGENT_REMOTE_BUILDER-} ]]; then
-        scripts/remote-run.sh "$AGENT_REMOTE_BUILDER" just portable-unit-tests "$@" &
+        scripts/remote-run.sh --native "$AGENT_REMOTE_BUILDER" just portable-unit-tests "$@" &
     else
         just portable-unit-tests "$@" &
     fi
@@ -65,7 +65,7 @@ clean-builds *args:
     set -euo pipefail
     cargo xtask clean-builds "$@"
     if [[ -n ${AGENT_REMOTE_BUILDER-} ]]; then
-        scripts/remote-run.sh "$AGENT_REMOTE_BUILDER" cargo xtask clean-builds "$@"
+        scripts/remote-run.sh --native "$AGENT_REMOTE_BUILDER" cargo xtask clean-builds "$@"
     fi
 
 # Build and verify the certificate-signed Host executable (dev or release).

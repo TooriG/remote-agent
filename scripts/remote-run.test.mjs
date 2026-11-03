@@ -46,15 +46,20 @@ async function gate(stage) {
 }
 async function main() {
   if (name === 'git') {
-    if (args[0] === 'push') { record('push'); return; }
+    if (args[0] === 'push') {
+      if (!args.some(argument => argument.startsWith('builder:'))) throw new Error('wrong push destination');
+      record('push'); return;
+    }
     const result = cp.spawnSync(process.env.REMOTE_FIXTURE_GIT, args, { stdio: 'inherit' });
     process.exitCode = result.status ?? 1;
     return;
   }
+  if (!args.includes('builder')) throw new Error('wrong SSH destination');
   if (args.includes('-O')) return;
   if (args.includes('-fN')) { record('connect'); return; }
   const script = args.at(-1);
   if (script.startsWith('bash -c ')) {
+    fs.writeFileSync(path.join(root, task + '.command'), script);
     await gate('run');
     process.exitCode = Number(process.env.REMOTE_FIXTURE_STATUS || 0);
   } else if (script.startsWith('cat ')) {
@@ -83,9 +88,10 @@ main().catch(error => { console.error(error); process.exitCode = 1; });
   return {
     work,
     events: () => readFileSync(log, 'utf8').trim().split('\n').filter(Boolean),
+    command: task => readFileSync(join(root, task + '.command'), 'utf8'),
     release: (task, stage) => writeFileSync(join(root, `${task}.${stage}`), ''),
-    start(name, overrides = {}) {
-      const child = spawn('bash', ['scripts/remote-run.sh', 'builder', 'true'], {
+    start(name, overrides = {}, options = []) {
+      const child = spawn('bash', ['scripts/remote-run.sh', ...options, 'builder', 'true'], {
         cwd: work,
         detached: true,
         env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, REMOTE_FIXTURE_ROOT: root, REMOTE_FIXTURE_TASK: name, REMOTE_FIXTURE_GIT: git, ...overrides },
@@ -125,4 +131,12 @@ test('remote failures return their outputs and release the worktree for another 
   const next = build.start('next');
   assert.equal(await next.done, 0, next.stderr());
   assert.ok(existsSync(join(build.work, 'target/next')));
+});
+
+test('native verification selects the remote environment and preserves failures', async (t) => {
+  const build = fixture(t);
+  const task = build.start('native', { REMOTE_FIXTURE_STATUS: '23' }, ['--native']);
+  assert.equal(await task.done, 23, task.stderr());
+  assert.match(build.command('native'), /'--native' 'true'/);
+  assert.ok(existsSync(join(build.work, 'target/native')));
 });

@@ -14,7 +14,7 @@ function fixture(t) {
   mkdirSync(join(root, 'scripts'));
   for (const script of ['quality.sh', 'ios-e2e.sh']) copyFileSync(`scripts/${script}`, join(root, 'scripts', script));
   const remote = join(root, 'scripts/remote-run.sh');
-  writeFileSync(remote, '#!/bin/bash\nprintf \'remote-run %s\\n\' "$*" >> "$NATIVE_VALIDATION_LOG"\nshift\nexec "$@"\n');
+  writeFileSync(remote, '#!/bin/bash\nprintf \'remote-run %s\\n\' "$*" >> "$NATIVE_VALIDATION_LOG"\nif [[ $1 == --native ]]; then shift; fi\nshift\nexec "$@"\n');
   chmodSync(remote, 0o755);
   writeFileSync(log, '');
   const command = join(bin, 'command');
@@ -70,7 +70,7 @@ test('Rust formatting fails before compiling and contract failures stop native a
       assert.ok(!result.commands.includes('just macos-e2e'));
       if (lastCommand) assert.equal(result.commands.at(-1), lastCommand);
       if (failure === 'cargo fmt') assert.ok(!result.commands.some(command => command.startsWith('nix ')));
-      else assert.ok(result.commands.includes('remote-run validation-builder cargo clippy --locked --workspace --all-targets -- --no-deps -D warnings'));
+      else assert.ok(result.commands.includes('remote-run --native validation-builder cargo clippy --locked --workspace --all-targets -- --no-deps -D warnings'));
       if (failure === 'just unit-tests') assert.ok(result.commands.at(-1).startsWith('just unit-tests --test errors'));
     });
   }
