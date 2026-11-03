@@ -33,14 +33,14 @@ final class MobileSessionStorage: ClientStorage, @unchecked Sendable {
             let bytes = !newPairing && FileManager.default.fileExists(atPath: url.path)
                 ? try Data(contentsOf: url) : Data()
             return try applyModelPreferences(persisted: bytes,
-                                             defaults: UserDefaults.standard
-                                                 .data(forKey: "bex.model-defaults") ?? Data())
+                                             preferences: UserDefaults.standard
+                                                 .data(forKey: "bex.model-preferences") ?? Data())
         }
     }
 
     func save(localState: Data, modelPreferences: Data) throws {
         try access {
-            UserDefaults.standard.set(modelPreferences, forKey: "bex.model-defaults")
+            UserDefaults.standard.set(modelPreferences, forKey: "bex.model-preferences")
             try localState.write(to: location(), options: .atomic)
         }
     }

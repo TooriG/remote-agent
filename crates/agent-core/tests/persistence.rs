@@ -6,33 +6,24 @@ use serde_json::json;
 use std::sync::Arc;
 
 #[test]
-fn device_model_defaults_apply_across_hosts_without_replacing_their_user_work() {
-    let defaults = agent_core::state::ModelDefaults {
-        new_chat_model: Some(agent_protocol::models::ModelRef {
-            provider: agent_protocol::session::ProviderKind::Claude,
-            id: "sonnet".into(),
-        }),
-        providers: [(
+fn remembered_models_apply_across_hosts_without_replacing_their_user_work() {
+    let selected = agent_core::state::ModelPreferences {
+        provider: Some(agent_protocol::session::ProviderKind::Claude),
+        selections: [(
             agent_protocol::session::ProviderKind::Claude,
-            agent_core::state::ProviderModelDefaults {
-                model: Some(agent_protocol::models::ModelRef {
+            agent_core::state::ModelSelection {
+                model: agent_protocol::models::ModelRef {
                     provider: agent_protocol::session::ProviderKind::Claude,
-                    id: "opus".into(),
-                }),
+                    id: "sonnet".into(),
+                },
                 effort: Some("high".into()),
                 service_tier: Some("fast".into()),
             },
         )]
         .into(),
     };
-    let scoped = [(
-        agent_core::state::ModelDefaultsScope::Environment { id: "first".into() },
-        defaults.clone(),
-    )]
-    .into();
     let preferences = persistence::encode_model_preferences(&Snapshot {
-        model_defaults: defaults.clone(),
-        scoped_model_defaults: Arc::new(scoped),
+        model_preferences: selected.clone(),
         ..Default::default()
     })
     .unwrap();
@@ -57,14 +48,7 @@ fn device_model_defaults_apply_across_hosts_without_replacing_their_user_work() 
         assert_eq!(
             restored,
             Snapshot {
-                model_defaults: defaults.clone(),
-                scoped_model_defaults: Arc::new(
-                    [(
-                        agent_core::state::ModelDefaultsScope::Environment { id: "first".into() },
-                        defaults.clone()
-                    )]
-                    .into()
-                ),
+                model_preferences: selected.clone(),
                 ..snapshot.clone()
             }
         );
@@ -77,11 +61,32 @@ fn device_model_defaults_apply_across_hosts_without_replacing_their_user_work() 
     assert_eq!(
         persistence::decode(&persistence::apply_model_preferences(&[], &preferences).unwrap())
             .unwrap()
-            .model_defaults,
-        defaults
+            .model_preferences,
+        selected
     );
     assert!(persistence::apply_model_preferences(b"{}", &preferences).is_err());
     assert!(persistence::apply_model_preferences(&[], b"invalid").is_err());
+}
+
+#[test]
+fn absent_model_preferences_preserve_user_work_but_invalid_preferences_fail() {
+    let mut snapshot = Snapshot::default();
+    Arc::make_mut(&mut snapshot.drafts).insert(
+        "unsent".into(),
+        Arc::new(Draft {
+            text: "keep this request".into(),
+            ..Default::default()
+        }),
+    );
+    let mut saved: serde_json::Value =
+        serde_json::from_slice(&persistence::encode(&snapshot).unwrap()).unwrap();
+    saved.as_object_mut().unwrap().remove("model_preferences");
+    assert_eq!(
+        persistence::decode(&serde_json::to_vec(&saved).unwrap()).unwrap(),
+        snapshot
+    );
+    saved["model_preferences"] = json!(17);
+    assert!(persistence::decode(&serde_json::to_vec(&saved).unwrap()).is_err());
 }
 
 #[test]
@@ -115,8 +120,6 @@ fn missing_or_invalid_user_work_is_not_silently_discarded() {
     let saved: serde_json::Value =
         serde_json::from_slice(&persistence::encode(&Snapshot::default()).unwrap()).unwrap();
     for field in [
-        "model_defaults",
-        "scoped_model_defaults",
         "storage_scope",
         "archived_scopes",
         "drafts",

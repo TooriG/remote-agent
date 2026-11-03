@@ -16,37 +16,17 @@ struct ModelSettingsSheet: View {
 
 struct ModelSettingsScreen: View {
     @ObservedObject var model: AppViewModel
-    @State private var scope: ModelDefaultsScope?
     let close: () -> Void
     @State private var search = ""
     @State private var providerOverride: ProviderKind?
     @State private var loadingModels = false
 
-    init(model: AppViewModel, scope: ModelDefaultsScope? = nil, close: @escaping () -> Void) {
-        self.model = model
-        _scope = State(initialValue: scope)
-        self.close = close
-    }
-
-    private var defaults: Bool {
-        scope != nil
-    }
-
-    private func preferences(_ provider: ProviderKind) -> ProviderModelDefaults {
-        model.snapshot.providerModelDefaults(scope: scope ?? .global, provider: provider)
-    }
-
     private var provider: ProviderKind? {
-        providerOverride
-            ?? model.snapshot.modelProviderForDraft(threadId: model.coreDraftKey)
-    }
-
-    private var selectedModel: ModelRef? {
-        defaults ? provider.flatMap { preferences($0).model } : model.selectedModel
+        providerOverride ?? model.snapshot.modelProviderForDraft(threadId: model.coreDraftKey)
     }
 
     private var disabled: Bool {
-        defaults ? model.store == nil : !model.isConnected || model.sending
+        !model.isConnected || model.sending
     }
 
     private var selectedAccount: Account? {
@@ -58,19 +38,6 @@ struct ModelSettingsScreen: View {
     var body: some View {
         Form {
             ErrorNotices(model: model, scope: .settings)
-            if let scope {
-                Section("適用範囲") {
-                    ModelDefaultsScopeFields(projects: model.snapshot.modelProjectScopeChoices(scope: scope),
-                                             environments: model.snapshot.modelEnvironmentScopeChoices(scope: scope),
-                                             selected: scope, disabled: model.store == nil || model.sending,
-                                             select: selectScope)
-                    NewChatDefaultModelMenu(selected: model.snapshot.modelDefaults(scope: scope).newChatModel,
-                                            choices: model.snapshot.modelsMatching(provider: nil, query: ""),
-                                            disabled: disabled) { value in
-                        model.perform(.selectNewChatModel(scope: scope, model: value))
-                    }
-                }
-            }
             Section("エージェント") {
                 Picker("エージェント", selection: Binding<ProviderKind?>(
                     get: { provider }, set: {
@@ -87,38 +54,34 @@ struct ModelSettingsScreen: View {
                 .accessibilityIdentifier("model.provider")
                 .disabled(disabled)
             }
-            Section("アカウント") {
-                let identity = selectedAccount?.email ?? selectedAccount?.id ?? "未選択"
+            Section("モデル") { modelSection }
+            quickControls
+            Section {
                 NavigationLink {
                     AgentSettingsScreen(model: model, provider: provider, close: close)
                 } label: {
-                    LabeledContent("アカウント", value: identity)
+                    if provider == .deepSeek {
+                        Label("APIキー", systemImage: "key")
+                    } else {
+                        AccountIdentityView(account: selectedAccount)
+                    }
                 }
                 .accessibilityIdentifier("model.accounts.manage")
                 if let account = selectedAccount {
                     WeeklyUsageView(windows: model.snapshot.accountWeeklyUsage(
-                        provider: account.provider,
-                        id: account.id
+                        provider: account.provider, id: account.id
                     ))
                     .accessibilityIdentifier("model.account.usage")
                 }
-            }
-            Section("モデル") {
-                modelSection
-            }
-            Section("応答") {
-                quickControls
-            }
-            if let scope, model.snapshot.hasModelDefaultsOverride(scope: scope) {
-                Section {
-                    Button("共通設定を使う") { model.perform(.inheritModelDefaults(scope: scope)) }
-                        .accessibilityIdentifier("model.defaults.inherit").disabled(disabled)
-                }
+            } header: {
+                Text(LocalizedStringKey(provider == .deepSeek ? "接続" : "アカウント"))
+            } footer: {
+                Text("選んだモデルと応答設定は、次の新規チャットにも引き継ぎます。")
             }
         }
         .accessibilityIdentifier("model.picker")
         .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "モデルを検索")
-        .navigationTitle(LocalizedStringKey(defaults ? "モデルのデフォルト" : "モデル設定"))
+        .navigationTitle("モデル設定")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
@@ -131,67 +94,38 @@ struct ModelSettingsScreen: View {
             model.perform(.loadModels(LoadModels())) { _ in loadingModels = false }
         }
         .onChange(of: model.selectedProfileId) { _ in
-            scope = defaults ? .global : nil
             providerOverride = nil
             search = ""
         }
     }
-}
 
-extension ModelSettingsScreen {
     @ViewBuilder
     private var quickControls: some View {
-        if let provider {
-            let preferences = preferences(provider)
-            let controls = defaults ? model.snapshot.defaultModelControls(scope: scope ?? .global, provider: provider)
-                : model.snapshot.modelQuickControls(threadId: model.coreDraftKey)
-            if defaults || selectedModel?.provider == provider,
-               !controls.efforts.isEmpty || controls.toggleFastTo != nil {
+        let controls = model.snapshot.modelQuickControls(threadId: model.coreDraftKey)
+        if model.selectedModel?.provider == provider,
+           !controls.efforts.isEmpty || controls.speedChoices.count > 1 {
+            Section("応答") {
                 if !controls.efforts.isEmpty {
-                    let effort = defaults ? preferences.effort ?? "自動" : controls.effort
-                    Picker("思考の深さ", selection: Binding<String?>(get: {
-                        defaults ? preferences.effort : controls.effort
-                    }, set: { value in
-                        if let scope {
-                            model.perform(.selectDefaultEffort(scope: scope, provider: provider, effort: value))
-                        } else if let value {
-                            model.chooseEffort(value)
-                        }
-                    })) {
-                        if defaults {
-                            Text("自動").tag(String?.none)
-                        }
-                        ForEach(controls.efforts, id: \.self) { Text($0).tag(Optional($0)) }
+                    Picker("思考の深さ", selection: Binding(get: { controls.effort }, set: model.chooseEffort)) {
+                        ForEach(controls.efforts, id: \.self) { Text($0).tag($0) }
                     }
                     .pickerStyle(.menu)
                     .accessibilityIdentifier("model.sheet.effort")
-                    .accessibilityValue(effort)
+                    .accessibilityValue(controls.effort)
                     .disabled(disabled)
                 }
-                if let tier = controls.fastServiceTier {
-                    let value = defaults && preferences.serviceTier == nil ? "自動" : controls.fast ? "高速" : "通常"
-                    Picker("速度", selection: Binding<String?>(get: {
-                        defaults ? preferences.serviceTier : controls.fast ? tier : "default"
-                    }, set: { value in
-                        if let scope {
-                            model.perform(.selectDefaultServiceTier(
-                                scope: scope,
-                                provider: provider,
-                                serviceTier: value
-                            ))
-                        } else if let value {
-                            model.chooseServiceTier(value)
+                if controls.speedChoices.count > 1 {
+                    Picker("速度", selection: Binding(get: {
+                        controls.speedChoices.first { $0.selected }?.id ?? "default"
+                    }, set: model.chooseServiceTier)) {
+                        ForEach(controls.speedChoices, id: \.id) { choice in
+                            AppText(choice.label).tag(choice.id)
                         }
-                    })) {
-                        if defaults {
-                            Text("自動").tag(String?.none)
-                        }
-                        Text("通常").tag(Optional("default"))
-                        Text("高速").tag(Optional(tier))
                     }
                     .pickerStyle(.menu)
-                    .accessibilityIdentifier(defaults ? "model.defaults.speed" : "model.sheet.fast")
-                    .accessibilityValue(value).disabled(disabled)
+                    .accessibilityIdentifier("model.sheet.fast")
+                    .accessibilityValue(controls.fast ? "高速" : "通常")
+                    .disabled(disabled)
                 }
             }
         }
@@ -200,65 +134,35 @@ extension ModelSettingsScreen {
     @ViewBuilder
     private var modelSection: some View {
         let choices = model.snapshot.modelsMatching(provider: provider, query: search)
-        Group {
-            if defaults, let provider {
-                Button {
-                    if let scope {
-                        model.perform(.selectDefaultModel(scope: scope, provider: provider, model: nil))
-                    }
-                } label: {
-                    ModelChoiceRow(label: "自動", selected: selectedModel == nil)
-                }
-                .accessibilityIdentifier("model.choice.automatic")
-                .accessibilityValue(selectedModel == nil ? "選択中" : "")
-                .disabled(disabled)
-            }
-            if choices.isEmpty {
-                AppText(loadingModels ? "モデルを読み込み中…" : "利用可能なモデルがありません")
-                    .foregroundStyle(.secondary)
-            }
-            ForEach(choices, id: \.model) { choice in
-                Button {
-                    if let scope {
-                        model.perform(.selectDefaultModel(
-                            scope: scope,
-                            provider: choice.model.provider,
-                            model: choice.model
-                        ))
-                    } else {
-                        model.chooseModel(choice.model)
-                    }
-                } label: {
-                    ModelChoiceRow(label: choice.displayName, selected: selectedModel == choice.model)
-                }
-                .accessibilityIdentifier("model.choice." + choice.id)
-                .accessibilityValue(selectedModel == choice.model ? "選択中" : "")
-                .disabled(disabled)
-            }
+        if choices.isEmpty {
+            AppText(loadingModels ? "モデルを読み込み中…" : "利用可能なモデルがありません")
+                .foregroundStyle(.secondary)
         }
-        .foregroundStyle(.primary)
+        ForEach(choices, id: \.model) { choice in
+            Button { model.chooseModel(choice.model) } label: {
+                ModelChoiceRow(label: choice.displayName, selected: model.selectedModel == choice.model)
+            }
+            .foregroundStyle(.primary)
+            .accessibilityIdentifier("model.choice." + choice.id)
+            .accessibilityValue(model.selectedModel == choice.model ? "選択中" : "")
+            .disabled(disabled)
+        }
         ForEach(model.snapshot.modelErrorMessages(provider: provider), id: \.self) { error in
             AppText(accountErrorMessage(message: error)).font(.caption).foregroundStyle(.red)
                 .accessibilityIdentifier("model.error")
         }
     }
 
-    private func selectScope(_ scope: ModelDefaultsScope) {
-        self.scope = scope
-        providerOverride = nil
-        search = ""
-    }
-
     private func selectProvider(_ provider: ProviderKind) {
         providerOverride = provider
         search = ""
-        if !defaults, let choice = model.snapshot.modelForProvider(threadId: model.coreDraftKey, provider: provider) {
+        if let choice = model.snapshot.modelForProvider(threadId: model.coreDraftKey, provider: provider) {
             model.chooseModel(choice)
         }
     }
 }
 
-private struct ModelChoiceRow: View {
+struct ModelChoiceRow: View {
     let label: String
     let selected: Bool
 

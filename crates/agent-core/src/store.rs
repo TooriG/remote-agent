@@ -847,8 +847,7 @@ fn publication_key(snapshot: &Snapshot) -> impl PartialEq + '_ {
         recent_chats,
         operations,
         operation_sequence,
-        model_defaults,
-        scoped_model_defaults,
+        model_preferences,
         project_preferences,
         permission_settings,
         composer_catalog,
@@ -891,12 +890,11 @@ fn publication_key(snapshot: &Snapshot) -> impl PartialEq + '_ {
     (
         (
             recent_chats,
-            model_defaults,
+            model_preferences,
             preferred_editor,
             file_open_capabilities_requested,
             file_open_capabilities.as_ref().map(SharedIdentity),
             SharedIdentity(project_preferences),
-            SharedIdentity(scoped_model_defaults),
         ),
         (
             host_name,
@@ -2480,8 +2478,8 @@ mod tests {
             ("operation_sequence", |snapshot| {
                 snapshot.operation_sequence += 1
             }),
-            ("scoped_model_defaults", |snapshot| {
-                snapshot.scoped_model_defaults = Arc::default()
+            ("model_preferences", |snapshot| {
+                snapshot.model_preferences.provider = Some(crate::session::ProviderKind::Claude);
             }),
             ("permission_settings", |snapshot| {
                 snapshot.permission_settings = Some(Arc::new(

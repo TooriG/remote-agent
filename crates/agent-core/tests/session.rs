@@ -531,11 +531,10 @@ fn local_storage_keeps_user_work_without_host_caches() {
             "archived_scopes",
             "drafts",
             "file_drafts",
-            "model_defaults",
+            "model_preferences",
             "navigation",
             "pending_submissions",
             "project_preferences",
-            "scoped_model_defaults",
             "storage_scope"
         ]
     );

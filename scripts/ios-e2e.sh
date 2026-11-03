@@ -40,8 +40,8 @@ if [[ $# == 0 ]]; then
         testSimulatorReviewsTheOpenSessionsWorktree \
         testSimulatorStartsOnListAndPreservesDetailOnForeground \
         testSimulatorOpensAccountManagementFromSettingsAndModelPicker \
-        testSimulatorModelDefaultsPersistAndApplyOnlyToNewConversations \
-        testSimulatorModelDefaultsInheritAndPersistAcrossScopes \
+        testSimulatorLastModelSelectionPersistsAndKeepsExistingDrafts \
+        testSimulatorWeeklyUsageNamesFableAndSettingsOmitModelDefaults \
         testSimulatorModelPickerUsesNativeFormAndAgentPicker \
         testSimulatorSignsInDirectlyFromModelSettings \
         testSimulatorGoesBackFromAccountLoginAndCanStartAgain \

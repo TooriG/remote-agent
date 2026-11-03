@@ -955,9 +955,9 @@ fn incomplete_model_catalog_preserves_restored_choices_and_defaults_only_new_dra
         };
         state = reduce(
             &state,
-            Event::Intent(Intent::SelectNewChatModel {
-                scope: agent_core::state::ModelDefaultsScope::Global,
-                model: Some(claude.clone()),
+            Event::Intent(Intent::SelectModel {
+                thread_id: "chosen".into(),
+                model: claude.clone(),
             }),
         )
         .0;

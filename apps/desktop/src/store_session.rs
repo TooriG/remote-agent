@@ -72,8 +72,7 @@ impl StoreSession {
         failure: impl Fn(String) -> E + Send + 'static,
     ) {
         let (send, mut receive) = watch::channel(self.store.snapshot());
-        let mut preferences =
-            agent_core::persistence::ModelPreferences::capture(&self.store.snapshot());
+        let mut preferences = self.store.snapshot().model_preferences.clone();
         let mut editor_preferences =
             agent_core::persistence::EditorPreferences::capture(&self.store.snapshot());
         self.persistence = Some(send);
@@ -83,8 +82,7 @@ impl StoreSession {
                     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                     let snapshot = receive.borrow_and_update().clone();
                     let path = path.clone();
-                    let next_preferences =
-                        agent_core::persistence::ModelPreferences::capture(&snapshot);
+                    let next_preferences = snapshot.model_preferences.clone();
                     let preferences_changed = preferences != next_preferences;
                     let saved_preferences = next_preferences.clone();
                     let next_editor_preferences =
@@ -198,10 +196,12 @@ mod tests {
             };
             session.persist(path.clone(), updates, |_| Update::Error);
             store
-                .dispatch(Intent::SelectDefaultEffort {
-                    provider: agent_protocol::session::ProviderKind::Codex,
-                    scope: agent_core::state::ModelDefaultsScope::Environment { id: "vm".into() },
-                    effort: Some("high".into()),
+                .dispatch(Intent::SelectModel {
+                    thread_id: "draft".into(),
+                    model: agent_protocol::models::ModelRef {
+                        provider: agent_protocol::session::ProviderKind::Codex,
+                        id: "remembered".into(),
+                    },
                 })
                 .await
                 .unwrap();
@@ -230,7 +230,7 @@ mod tests {
                 &agent_core::persistence::apply_model_preferences(&[], &preferences).unwrap(),
             )
             .unwrap();
-            assert_eq!(other.scoped_model_defaults, restored.scoped_model_defaults);
+            assert_eq!(other.model_preferences, restored.model_preferences);
             assert!(other.drafts.is_empty());
         })
         .await

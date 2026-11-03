@@ -1,9 +1,6 @@
 //! Window-local input state. Saved values always come from the core snapshot;
 //! these types only decide when local input may replace or be replaced by them.
-use agent_core::{
-    questions::QuestionPrompt,
-    state::{DraftKey, ModelDefaultsScope},
-};
+use agent_core::{questions::QuestionPrompt, state::DraftKey};
 use agent_protocol::{
     dsh::KeyProvider, ids::RequestId, models::WorktreeSettings, session::ProviderKind,
 };
@@ -299,7 +296,6 @@ pub(super) struct ModelControls {
     pub(super) panel: ModelPanel,
     pub(super) search: Entity<InputState>,
     pub(super) provider: Option<ProviderKind>,
-    pub(super) settings_scope: ModelDefaultsScope,
 }
 
 impl ModelControls {
@@ -310,7 +306,6 @@ impl ModelControls {
             search: cx
                 .new(|cx| InputState::new(window, cx).placeholder(language.text("モデルを検索"))),
             provider: None,
-            settings_scope: ModelDefaultsScope::Global,
         }
     }
 }

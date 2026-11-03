@@ -116,7 +116,7 @@ extension LaunchUITests {
         app.buttons["tasks.new.project.simulator-project"].tap()
         app.buttons["model.settings"].tap()
         let id = addFixtureClaudeAccount(app)
-        XCTAssertTrue(app.navigationBars["エージェント"].exists)
+        XCTAssertTrue(app.navigationBars["アカウント"].exists)
         let actions = app.buttons["account.actions." + id]
         for _ in 0 ..< 6 where !actions.isHittable {
             app.swipeUp()
@@ -137,12 +137,14 @@ extension LaunchUITests {
     func selectFixtureProvider(_ app: XCUIApplication, _ name: String) {
         openModelChoices(app)
         let provider = app.segmentedControls["model.provider"].buttons[name == "Codex" ? "Codex" : "Claude Code"]
-        XCTAssertTrue(provider.waitForExistence(timeout: 10)); provider.tap()
+        scrollToEarlierListElement(provider, in: app, attempts: 6)
+        provider.tap()
     }
 
     func openAccountManagement(_ app: XCUIApplication) {
         let manage = app.buttons["model.accounts.manage"]
-        XCTAssertTrue(manage.waitForExistence(timeout: 10)); manage.tap()
+        scrollToListElement(manage, in: app, bottomMargin: 0)
+        manage.tap()
     }
 
     func assertAccountQuota(_ app: XCUIApplication, label: String, remaining: Int) {
@@ -160,7 +162,7 @@ extension LaunchUITests {
         XCTAssertTrue(add.waitForExistence(timeout: 10)); XCTAssertTrue(add.isHittable); add.tap()
         let code = app.secureTextFields["model.login.input"]
         XCTAssertTrue(code.waitForExistence(timeout: 15))
-        XCTAssertTrue(app.navigationBars["エージェント"].exists)
+        XCTAssertTrue(app.navigationBars["アカウント"].exists)
         captureScreen(app, named: "Claude sign in from account management")
         code.tap(); code.typeText("fixture-code")
         app.buttons["model.login.submit"].tap()
@@ -194,7 +196,7 @@ extension LaunchUITests {
         XCTAssertFalse(app.buttons["model.account.desktop"].exists)
         app.segmentedControls["account.provider"].buttons["Codex"].tap()
         captureScreen(app, named: "Agent account settings")
-        app.navigationBars["エージェント"].buttons["BackButton"].tap()
+        app.navigationBars["アカウント"].buttons["BackButton"].tap()
         app.buttons["settings.connections"].tap()
         XCTAssertTrue(app.buttons["profiles.add"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["このiPhone"].exists)

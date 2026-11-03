@@ -24,11 +24,6 @@ impl Desktop {
         let mut navigation = Vec::new();
         for (label, icon, page) in [
             (
-                language.text("モデル"),
-                IconName::Settings,
-                SettingsPage::Models,
-            ),
-            (
                 language.text("エージェント"),
                 IconName::User,
                 SettingsPage::Agents,
@@ -78,53 +73,30 @@ impl Desktop {
 
     pub(super) fn settings(&self, cx: &mut Context<Self>) -> AnyElement {
         let language = crate::localization::language(cx);
-        let (projects, environment) = match self.settings_page {
-            SettingsPage::Models => (
-                self.model_scope_menu(
-                    "settings-scope-projects",
-                    self.snapshot
-                        .model_project_scope_choices(self.model_controls.settings_scope.clone()),
-                    cx,
-                ),
-                self.model_scope_menu(
-                    "settings-scope-environment",
-                    self.snapshot.model_environment_scope_choices(
-                        self.model_controls.settings_scope.clone(),
-                    ),
-                    cx,
-                ),
-            ),
-            page => (
-                div()
-                    .child(language.text("すべてのプロジェクト"))
-                    .into_any_element(),
-                if page == SettingsPage::Connections {
-                    div().child(language.text("このPC")).into_any_element()
-                } else if let Some(hosts) = &self.hosts {
-                    Hosts::menu(
-                        hosts,
-                        "settings-scope-environment",
-                        self.remote.as_ref().map(|host| host.id.as_str()),
-                        self.remote
-                            .as_ref()
-                            .map_or("Local", |host| host.name.as_str()),
-                        self.busy > 0
-                            || self.worktrees.dirty
-                            || self.worktrees.saving
-                            || self.snapshot.account.login.is_some(),
-                        cx,
-                    )
-                    .into_any_element()
-                } else {
-                    div().child(language.text("このPC")).into_any_element()
-                },
-            ),
+        let projects = div()
+            .child(language.text("すべてのプロジェクト"))
+            .into_any_element();
+        let environment = if self.settings_page == SettingsPage::Connections {
+            div().child(language.text("このPC")).into_any_element()
+        } else if let Some(hosts) = &self.hosts {
+            Hosts::menu(
+                hosts,
+                "settings-scope-environment",
+                self.remote.as_ref().map(|host| host.id.as_str()),
+                self.remote
+                    .as_ref()
+                    .map_or("Local", |host| host.name.as_str()),
+                self.busy > 0
+                    || self.worktrees.dirty
+                    || self.worktrees.saving
+                    || self.snapshot.account.login.is_some(),
+                cx,
+            )
+            .into_any_element()
+        } else {
+            div().child(language.text("このPC")).into_any_element()
         };
         let (title, subtitle) = match self.settings_page {
-            SettingsPage::Models => (
-                language.text("モデル"),
-                language.text("プロバイダごとの初期値と、新規チャットのモデルを設定します。"),
-            ),
             SettingsPage::Agents => (
                 language.text("エージェント"),
                 language.text("選択した環境のAIアカウントと使用量を管理します。"),
@@ -158,7 +130,6 @@ impl Desktop {
         body = body.child(self.language_settings(cx));
         body =
             match self.settings_page {
-                SettingsPage::Models => body.child(self.default_model_settings(cx)),
                 SettingsPage::Agents => body.child(self.account_controls(true, cx)),
                 SettingsPage::Connections => {
                     let setup = self.snapshot.connection_setup();
@@ -232,7 +203,6 @@ impl Desktop {
             .child(
                 div()
                     .id(match self.settings_page {
-                        SettingsPage::Models => "settings-models-scroll",
                         SettingsPage::Agents => "settings-agents-scroll",
                         SettingsPage::Connections => "settings-connections-scroll",
                         SettingsPage::Worktrees => "settings-worktrees-scroll",
@@ -281,48 +251,6 @@ impl Desktop {
                     .selected(value == language)
                 }),
             )
-    }
-
-    fn model_scope_menu(
-        &self,
-        id: &'static str,
-        choices: Vec<agent_core::presentation::model_settings::ModelScopeChoice>,
-        cx: &Context<Self>,
-    ) -> AnyElement {
-        let language = crate::localization::language(cx);
-        let selected = self.model_controls.settings_scope.clone();
-        let label = choices
-            .iter()
-            .find(|choice| choice.scope == selected)
-            .map_or(language.text("すべてのプロジェクト"), |choice| {
-                choice.label.as_str()
-            })
-            .to_owned();
-        let owner = cx.entity().downgrade();
-        Button::new(id)
-            .label(label)
-            .dropdown_caret(true)
-            .small()
-            .ghost()
-            .debug_selector(move || id.into())
-            .dropdown_menu(move |mut menu, _, _| {
-                for choice in &choices {
-                    let scope = choice.scope.clone();
-                    let owner = owner.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new(choice.label.clone())
-                            .checked(scope == selected)
-                            .on_click(move |_, _, cx| {
-                                let _ = owner.update(cx, |view, cx| {
-                                    view.model_controls.settings_scope = scope.clone();
-                                    cx.notify();
-                                });
-                            }),
-                    );
-                }
-                menu
-            })
-            .into_any_element()
     }
 
     fn worktree_settings(&self, cx: &Context<Self>) -> AnyElement {

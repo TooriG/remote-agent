@@ -29,32 +29,19 @@ pub struct Draft {
     #[cfg_attr(feature = "bindings", uniffi(default = false))]
     pub model_settings_changed: bool,
 }
-/// Device preferences for new chats and each provider, with independent choices.
+/// Explicit picker choices remembered on this device. Reading a conversation or
+/// refreshing a catalog must never change what the next new chat starts with.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "bindings", derive(uniffi::Record))]
-pub struct ModelDefaults {
-    pub new_chat_model: Option<crate::models::ModelRef>,
-    pub providers: HashMap<crate::session::ProviderKind, ProviderModelDefaults>,
+#[serde(default)]
+pub struct ModelPreferences {
+    pub provider: Option<crate::session::ProviderKind>,
+    pub selections: HashMap<crate::session::ProviderKind, ModelSelection>,
 }
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "bindings", derive(uniffi::Record))]
-pub struct ProviderModelDefaults {
-    pub model: Option<crate::models::ModelRef>,
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelSelection {
+    pub model: crate::models::ModelRef,
     pub effort: Option<String>,
     pub service_tier: Option<String>,
-}
-#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
-pub enum ModelDefaultsScope {
-    #[default]
-    Global,
-    Environment {
-        id: String,
-    },
-    Project {
-        environment: String,
-        project: String,
-    },
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -255,9 +242,7 @@ pub struct Snapshot {
     #[serde(skip)]
     pub operation_sequence: u64,
     #[serde(default)]
-    pub model_defaults: ModelDefaults,
-    #[serde(default, with = "crate::persistence::entries")]
-    pub scoped_model_defaults: Arc<BTreeMap<ModelDefaultsScope, ModelDefaults>>,
+    pub model_preferences: ModelPreferences,
     #[serde(skip)]
     pub permission_settings: Option<Arc<op::PermissionSettingsState>>,
     #[serde(skip)]
@@ -800,24 +785,22 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             let key = DraftKey::Local { key: format!("new:{cwd}") };
             let existing = previous.drafts.get(&key);
             if existing.is_none_or(|draft| draft.model.is_none()) {
-                let preferences = previous.model_defaults_for_cwd(&cwd);
-                let selected_model = existing.is_none().then_some(preferences.new_chat_model).flatten();
-                let provider = selected_model.as_ref().map(|model| model.provider)
-                    .or_else(|| previous.model_provider_for_draft(key.clone()));
-                let defaults = provider.and_then(|provider| preferences.providers.get(&provider))
-                    .cloned().unwrap_or_default();
+                let selection = previous.model_preferences.provider
+                    .and_then(|provider| previous.model_preferences.selections.get(&provider));
                 let mut draft = existing.map(|draft| (**draft).clone()).unwrap_or_default();
-                draft.model = selected_model.or(defaults.model);
-                draft.effort = draft.effort.or(defaults.effort);
-                draft.service_tier = draft.service_tier.or(defaults.service_tier);
-                if provider.is_some() && !previous.models.is_empty() {
-                    let (model, effort, tier) = supported_settings(
-                        draft.model.as_ref(), draft.effort.as_deref(), draft.service_tier.as_deref(),
-                        provider, &previous.models, &previous.model_errors, previous.allows_custom_codex_models(),
-                    );
-                    let settings = (model.cloned(), effort.map(str::to_owned), tier.map(str::to_owned));
-                    (draft.model, draft.effort, draft.service_tier) = settings;
-                }
+                let provider = selection.map(|selection| selection.model.provider)
+                    .or_else(|| previous.model_provider_for_draft(key.clone()));
+                let (model, effort, tier) = match provider {
+                    Some(provider) => supported_settings(
+                        selection.map(|selection| &selection.model),
+                        draft.effort.as_deref().or_else(|| selection.and_then(|selection| selection.effort.as_deref())),
+                        draft.service_tier.as_deref().or_else(|| selection.and_then(|selection| selection.service_tier.as_deref())),
+                        Some(provider), &previous.models, &previous.model_errors, previous.allows_custom_codex_models(),
+                    ),
+                    None => (None, draft.effort.as_deref(), draft.service_tier.as_deref()),
+                };
+                let settings = (model.cloned(), effort.map(str::to_owned), tier.map(str::to_owned));
+                (draft.model, draft.effort, draft.service_tier) = settings;
                 Arc::make_mut(&mut next.drafts).insert(key.clone(), Arc::new(draft));
             }
             navigate(&mut next, Navigation {
@@ -855,66 +838,6 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             }
         }
 
-        Intent::SaveDraftModelDefaults { scope, draft_key } => {
-            if let Some(draft) = previous.drafts.get(&draft_key) {
-                let provider = previous.model_provider_for_draft(draft_key.clone());
-                let model = draft.model.clone().or_else(|| {
-                    provider.and_then(|provider| previous.model_for_provider(draft_key.clone(), provider))
-                });
-                if let Some(model) = model {
-                    let (effort, tier) = previous.models.iter()
-                        .find(|choice| choice.model == model)
-                        .and_then(|choice| choice.settings.as_ref())
-                        .map(|settings| {
-                            let (effort, tier) = supported_model_options(
-                                settings, draft.effort.as_deref(), draft.service_tier.as_deref(),
-                            );
-                            (effort, Some(tier))
-                        })
-                        .unwrap_or((draft.effort.as_deref(), draft.service_tier.as_deref()));
-                    let mut defaults = previous.model_defaults(scope.clone());
-                    defaults.new_chat_model = Some(model.clone());
-                    defaults.providers.insert(model.provider, ProviderModelDefaults {
-                        model: Some(model),
-                        effort: effort.map(str::to_owned),
-                        service_tier: tier.map(str::to_owned),
-                    });
-                    set_model_defaults(&mut next, scope, defaults);
-                } else {
-                    next.error = Some("モデルを選択してください".into());
-                }
-            } else {
-                next.error = Some("入力欄が見つかりません".into());
-            }
-        }
-        Intent::SelectNewChatModel { scope, model } => {
-            let mut defaults = previous.model_defaults(scope.clone());
-            defaults.new_chat_model = model;
-            set_model_defaults(&mut next, scope, defaults);
-        }
-        Intent::SelectDefaultModel { scope, provider, model } => {
-            if model.as_ref().is_none_or(|model| model.provider == provider) {
-                let mut defaults = previous.model_defaults(scope.clone());
-                let settings = defaults.providers.entry(provider).or_default();
-                if settings.model != model {
-                    *settings = ProviderModelDefaults { model, ..Default::default() };
-                }
-                set_model_defaults(&mut next, scope, defaults);
-            }
-        }
-        Intent::SelectDefaultEffort { scope, provider, effort } => {
-            let mut defaults = previous.model_defaults(scope.clone());
-            defaults.providers.entry(provider).or_default().effort = effort;
-            set_model_defaults(&mut next, scope, defaults);
-        }
-        Intent::SelectDefaultServiceTier { scope, provider, service_tier } => {
-            let mut defaults = previous.model_defaults(scope.clone());
-            defaults.providers.entry(provider).or_default().service_tier = service_tier;
-            set_model_defaults(&mut next, scope, defaults);
-        }
-        Intent::InheritModelDefaults { scope } => {
-            Arc::make_mut(&mut next.scoped_model_defaults).remove(&scope);
-        }
         Intent::SetDraft { thread_id, draft } => {
             Arc::make_mut(&mut next.drafts).insert(thread_id, Arc::new(draft));
         }
@@ -968,8 +891,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                     if draft.model.as_ref() != Some(&model) {
                         if draft.model.as_ref().is_none_or(|selected| selected.provider != model.provider)
                         {
-                            let defaults = previous.model_defaults_for_cwd(&previous.navigation.cwd);
-                            let settings = defaults.providers.get(&model.provider);
+                            let settings = previous.model_preferences.selections.get(&model.provider);
                             draft.effort = settings.and_then(|settings| settings.effort.clone());
                             draft.service_tier = settings.and_then(|settings| settings.service_tier.clone());
                         } else {
@@ -1001,6 +923,14 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                     tier.map(str::to_owned),
                 );
                 (draft.model, draft.effort, draft.service_tier) = settings;
+            }
+            if let Some(model) = &draft.model {
+                next.model_preferences.provider = Some(model.provider);
+                next.model_preferences.selections.insert(model.provider, ModelSelection {
+                    model: model.clone(),
+                    effort: draft.effort.clone(),
+                    service_tier: draft.service_tier.clone(),
+                });
             }
             draft.model_settings_changed |= previous.drafts.get(&thread_id).is_none_or(|saved| {
                 (saved.model.as_ref(), saved.effort.as_deref(), saved.service_tier.as_deref())
@@ -1406,7 +1336,10 @@ pub(crate) fn allows_custom_codex_models(
 
 impl Snapshot {
     pub(crate) fn normalize_model_drafts(&mut self) {
-        let provider_defaults = self.model_defaults_for_cwd(&self.navigation.cwd).providers;
+        let remembered = self
+            .model_preferences
+            .provider
+            .and_then(|provider| self.model_preferences.selections.get(&provider));
         let allow_custom_codex = self.allows_custom_codex_models();
         let mut next = self.drafts.clone();
         for (key, previous) in self.drafts.iter() {
@@ -1421,36 +1354,35 @@ impl Snapshot {
             if selected_provider.is_none() && key != &self.navigation.draft_key {
                 continue;
             }
-            let provider = selected_provider.or_else(|| {
-                crate::presentation::model_settings::automatic_provider(
-                    &self.models,
-                    self.account
-                        .accounts
-                        .as_ref()
-                        .map(|accounts| &accounts.selected),
-                    &self.model_errors,
-                )
-            });
+            let selection = selected_provider.is_none().then_some(remembered).flatten();
+            let provider = selected_provider
+                .or_else(|| selection.map(|selection| selection.model.provider))
+                .or_else(|| {
+                    crate::presentation::model_settings::automatic_provider(
+                        &self.models,
+                        self.account
+                            .accounts
+                            .as_ref()
+                            .map(|accounts| &accounts.selected),
+                        &self.model_errors,
+                    )
+                });
             let Some(provider) = provider else {
                 continue;
             };
-            let defaults = selected_provider
-                .is_none()
-                .then(|| provider_defaults.get(&provider))
-                .flatten();
             let (model, effort, tier) = supported_settings(
                 previous
                     .model
                     .as_ref()
-                    .or_else(|| defaults.and_then(|defaults| defaults.model.as_ref())),
+                    .or_else(|| selection.map(|selection| &selection.model)),
                 previous
                     .effort
                     .as_deref()
-                    .or_else(|| defaults.and_then(|defaults| defaults.effort.as_deref())),
+                    .or_else(|| selection.and_then(|selection| selection.effort.as_deref())),
                 previous
                     .service_tier
                     .as_deref()
-                    .or_else(|| defaults.and_then(|defaults| defaults.service_tier.as_deref())),
+                    .or_else(|| selection.and_then(|selection| selection.service_tier.as_deref())),
                 Some(provider),
                 &self.models,
                 &self.model_errors,
@@ -1884,66 +1816,9 @@ fn reconcile_pending(snapshot: &mut Snapshot, thread_id: &crate::session::Sessio
     }
 }
 
-fn set_model_defaults(
-    snapshot: &mut Snapshot,
-    scope: ModelDefaultsScope,
-    mut defaults: ModelDefaults,
-) {
-    defaults
-        .providers
-        .retain(|_, settings| *settings != ProviderModelDefaults::default());
-    if scope == ModelDefaultsScope::Global {
-        snapshot.model_defaults = defaults;
-    } else if snapshot.scoped_model_defaults.get(&scope) != Some(&defaults) {
-        Arc::make_mut(&mut snapshot.scoped_model_defaults).insert(scope, defaults);
-    }
-}
-
-impl Snapshot {
-    /// Storage scope is Host node ID plus its session namespace. Model presets
-    /// belong to the Host even when that namespace changes.
-    pub(crate) fn model_environment_id(&self) -> &str {
-        self.storage_scope.split(':').next().unwrap_or_default()
-    }
-
-    pub(crate) fn model_defaults_for_cwd(&self, cwd: &str) -> ModelDefaults {
-        let project = self.threads.as_ref().and_then(|list| {
-            list.projects
-                .iter()
-                .flat_map(|project| {
-                    project.roots.iter().filter_map(move |root| {
-                        let trimmed = root.path.trim_end_matches(['/', '\\']);
-                        let path = if trimmed.is_empty() {
-                            root.path.as_str()
-                        } else {
-                            trimmed
-                        };
-                        (!path.is_empty()
-                            && (cwd == path
-                                || cwd.strip_prefix(path).is_some_and(|rest| {
-                                    path.ends_with(['/', '\\']) || rest.starts_with(['/', '\\'])
-                                })))
-                        .then_some((path.len(), &project.id))
-                    })
-                })
-                .max_by_key(|(length, _)| *length)
-                .map(|(_, id)| id.clone())
-        });
-        self.model_defaults(match project {
-            Some(project) => ModelDefaultsScope::Project {
-                environment: self.model_environment_id().to_owned(),
-                project,
-            },
-            None => ModelDefaultsScope::Environment {
-                id: self.model_environment_id().to_owned(),
-            },
-        })
-    }
-}
-
 #[cfg(test)]
-#[path = "state/model_defaults_tests.rs"]
-mod model_defaults_tests;
+#[path = "state/model_selection_tests.rs"]
+mod model_selection_tests;
 
 #[cfg(test)]
 mod history_tests {

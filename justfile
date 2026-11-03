@@ -114,8 +114,8 @@ android-e2e:
 # Native conversation acceptance; interleaved shards balance measured CI durations.
 conversation-ui *options:
     scripts/ios-e2e.sh "$@" \
-        testSimulatorModelDefaultsInheritAndPersistAcrossScopes \
-        testSimulatorModelDefaultsPersistAndApplyOnlyToNewConversations \
+        testSimulatorWeeklyUsageNamesFableAndSettingsOmitModelDefaults \
+        testSimulatorLastModelSelectionPersistsAndKeepsExistingDrafts \
         testSimulatorMarksMergedWorktreesToTheRightOfRunningStatus \
         testSimulatorNativeTerminalRetainsShellAfterReopening \
         testSimulatorKeepsDraftDuringLongMarkdownStreamAndReopensFinalText \

@@ -10,8 +10,7 @@
 //! marks unconfirmed sends as delivery-unknown until Host evidence reconciles
 //! them, preserving their content and order without automatically resending.
 use crate::state::{
-    Draft, FileDraft, ModelDefaults, ModelDefaultsScope, Navigation, PendingSubmission, ScopedData,
-    Snapshot,
+    Draft, FileDraft, ModelPreferences, Navigation, PendingSubmission, ScopedData, Snapshot,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc};
@@ -69,9 +68,8 @@ mod editor_tests {
 /// an empty draft. Runtime Snapshot fields cannot change the storage contract.
 #[derive(Serialize, Deserialize)]
 pub struct PersistedState {
-    model_defaults: ModelDefaults,
-    #[serde(with = "entries")]
-    scoped_model_defaults: Arc<BTreeMap<ModelDefaultsScope, ModelDefaults>>,
+    #[serde(default)]
+    model_preferences: ModelPreferences,
     #[serde(default)]
     project_preferences: Arc<BTreeMap<String, BTreeMap<String, crate::state::ProjectPreferences>>>,
     storage_scope: String,
@@ -86,8 +84,7 @@ pub struct PersistedState {
 impl PersistedState {
     pub fn capture(snapshot: &Snapshot) -> Self {
         Self {
-            model_defaults: snapshot.model_defaults.clone(),
-            scoped_model_defaults: snapshot.scoped_model_defaults.clone(),
+            model_preferences: snapshot.model_preferences.clone(),
             project_preferences: snapshot.project_preferences.clone(),
             storage_scope: snapshot.storage_scope.clone(),
             archived_scopes: snapshot.archived_scopes.clone(),
@@ -103,42 +100,25 @@ pub fn encode(snapshot: &Snapshot) -> Result<Vec<u8>, serde_json::Error> {
     serde_json::to_vec(&PersistedState::capture(snapshot))
 }
 
-/// Device-owned presets shared by every saved Host snapshot.
-#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct ModelPreferences {
-    #[serde(flatten)]
-    defaults: ModelDefaults,
-    #[serde(with = "entries")]
-    scoped: Arc<BTreeMap<ModelDefaultsScope, ModelDefaults>>,
-}
-impl ModelPreferences {
-    pub fn capture(snapshot: &Snapshot) -> Self {
-        Self {
-            defaults: snapshot.model_defaults.clone(),
-            scoped: snapshot.scoped_model_defaults.clone(),
-        }
-    }
-}
 pub fn encode_model_preferences(snapshot: &Snapshot) -> Result<Vec<u8>, serde_json::Error> {
-    serde_json::to_vec(&ModelPreferences::capture(snapshot))
+    serde_json::to_vec(&snapshot.model_preferences)
 }
 
 pub fn apply_model_preferences(
     persisted: &[u8],
-    defaults: &[u8],
+    preferences: &[u8],
 ) -> Result<Vec<u8>, serde_json::Error> {
     let mut saved = if persisted.is_empty() {
         PersistedState::capture(&Snapshot::default())
     } else {
         serde_json::from_slice::<PersistedState>(persisted)?
     };
-    let preferences: ModelPreferences = if defaults.is_empty() {
+    let preferences: ModelPreferences = if preferences.is_empty() {
         ModelPreferences::default()
     } else {
-        serde_json::from_slice(defaults)?
+        serde_json::from_slice(preferences)?
     };
-    saved.model_defaults = preferences.defaults;
-    saved.scoped_model_defaults = preferences.scoped;
+    saved.model_preferences = preferences;
     serde_json::to_vec(&saved)
 }
 
@@ -148,8 +128,7 @@ pub fn decode(bytes: &[u8]) -> Result<Snapshot, serde_json::Error> {
     }
     let saved: PersistedState = serde_json::from_slice(bytes)?;
     Ok(Snapshot {
-        model_defaults: saved.model_defaults,
-        scoped_model_defaults: saved.scoped_model_defaults,
+        model_preferences: saved.model_preferences,
         project_preferences: saved.project_preferences,
         storage_scope: saved.storage_scope,
         archived_scopes: saved.archived_scopes,

@@ -10,7 +10,20 @@ use agent_protocol::{
 use serde_json::{Value, json};
 use std::borrow::Cow;
 
-pub(super) fn parse_model(entry: &Value) -> Result<Model, String> {
+pub(super) fn parse_models(entries: &[Value]) -> Result<Vec<Model>, String> {
+    // Native aliases such as default and opus can resolve to the same model.
+    // Keep the SDK's ordering, with one selectable row per execution identity.
+    let mut models: Vec<Model> = Vec::new();
+    for entry in entries {
+        let model = parse_model(entry)?;
+        if models.iter().all(|existing| existing.model != model.model) {
+            models.push(model);
+        }
+    }
+    Ok(models)
+}
+
+fn parse_model(entry: &Value) -> Result<Model, String> {
     let name = entry["value"]
         .as_str()
         .filter(|name| !name.is_empty())
@@ -548,6 +561,27 @@ pub(super) fn tool_result_body(body: &ItemBody, content: &Value, metadata: &Valu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catalog_coalesces_aliases_without_hiding_distinct_models() {
+        let entries = vec![
+            json!({"value":"default","resolvedModel":"claude-opus-5-5","displayName":"Opus 5.5"}),
+            json!({"value":"opus","resolvedModel":"claude-opus-5-5","displayName":"Opus 5.5"}),
+            json!({"value":"claude-opus-5-5","resolvedModel":"claude-opus-5-5","displayName":"Opus 5.5"}),
+            json!({"value":"sonnet","resolvedModel":"claude-sonnet-5","displayName":"Sonnet"}),
+            json!({"value":"custom-opus","resolvedModel":"other-opus","displayName":"Opus 5.5"}),
+        ];
+        let models = parse_models(&entries).unwrap();
+        assert_eq!(
+            models
+                .iter()
+                .map(|model| model.model.id.as_str())
+                .collect::<Vec<_>>(),
+            ["claude-opus-5-5", "claude-sonnet-5", "other-opus"]
+        );
+        assert_eq!(models[0].id, "default");
+        assert!(parse_models(&[json!({"displayName":"invalid"})]).is_err());
+    }
 
     #[test]
     fn catalog_uses_the_resolved_model_identity_stored_in_transcripts() {

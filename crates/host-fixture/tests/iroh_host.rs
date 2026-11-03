@@ -27,12 +27,20 @@ use host_fixture::test_support::{HostFixture, Memory, assert_project_directory};
 // Codex new-chat preference.
 fn codex_chat_snapshot() -> agent_core::state::Snapshot {
     agent_core::state::Snapshot {
-        model_defaults: agent_core::state::ModelDefaults {
-            new_chat_model: Some(agent_protocol::models::ModelRef {
-                provider: agent_protocol::session::ProviderKind::Codex,
-                id: "fixture-model".into(),
-            }),
-            ..Default::default()
+        model_preferences: agent_core::state::ModelPreferences {
+            provider: Some(agent_protocol::session::ProviderKind::Codex),
+            selections: [(
+                agent_protocol::session::ProviderKind::Codex,
+                agent_core::state::ModelSelection {
+                    model: agent_protocol::models::ModelRef {
+                        provider: agent_protocol::session::ProviderKind::Codex,
+                        id: "fixture-model".into(),
+                    },
+                    effort: None,
+                    service_tier: None,
+                },
+            )]
+            .into(),
         },
         ..Default::default()
     }

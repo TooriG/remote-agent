@@ -221,6 +221,10 @@ mod tests {
     #[test]
     fn formatted_presentation_labels_preserve_inserted_values() {
         assert_eq!(
+            localized_ui_text(UiLanguage::English, "Fable · 週間枠".into()),
+            "Fable · Weekly allowance"
+        );
+        assert_eq!(
             localized_ui_text(UiLanguage::English, "残り 42%".into()),
             "42% remaining"
         );

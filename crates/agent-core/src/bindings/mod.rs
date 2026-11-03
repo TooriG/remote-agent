@@ -36,7 +36,7 @@ pub fn account_error_message(message: String) -> String {
 #[uniffi::export]
 pub fn apply_model_preferences(
     persisted: Vec<u8>,
-    defaults: Vec<u8>,
+    preferences: Vec<u8>,
 ) -> Result<Vec<u8>, AgentError> {
-    crate::persistence::apply_model_preferences(&persisted, &defaults).map_err(error)
+    crate::persistence::apply_model_preferences(&persisted, &preferences).map_err(error)
 }
