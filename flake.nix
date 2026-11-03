@@ -40,9 +40,11 @@
               go test . -run '^TestLinterLint(OK|Error)$'
             '';
           });
-          rustToolchain = pkgs.rust-bin.stable.latest.minimal.override {
+          hostRustToolchain = pkgs.rust-bin.stable.latest.minimal.override {
             extensions = [ "clippy" "rustfmt" "rust-analyzer" "rust-src" ];
-            targets = [
+          };
+          mobileRustToolchain = hostRustToolchain.override {
+            targets = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
               "aarch64-apple-ios"
               "aarch64-apple-ios-sim"
             ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
@@ -128,14 +130,14 @@
           kani = mkDevShell {
             packages = with pkgs; [
               (callPackage ./tools/kani/package.nix { })
-              rustToolchain just git clang pkg-config
+              hostRustToolchain just git clang pkg-config
             ];
           };
           native = mkDevShell {
             AGENT_NODE_RUNTIME = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "${nodeRuntime}";
-            RUST_TOOLCHAIN_VERSION = rustToolchain.version;
+            RUST_TOOLCHAIN_VERSION = hostRustToolchain.version;
             NEXTEST_VERSION = pkgs.cargo-nextest.version;
-            packages = with pkgs; [ rustToolchain kache cccc cargo-mutants cargo-nextest just jq git perl ] ++ nativeBuildTools
+            packages = with pkgs; [ hostRustToolchain kache cccc cargo-mutants cargo-nextest just jq git perl ] ++ nativeBuildTools
               ++ [ workflowLinter nodejs powershell ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux linuxDesktopLibraries;
             LD_LIBRARY_PATH = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux linuxDesktopLibraryPath;
             shellHook = kacheHook;
@@ -145,7 +147,7 @@
             shellHook = appleSdkHook + runtimeShellHook;
           };
           android-test = mkDevShell {
-            packages = [ androidTestSdk pkgs.jdk21 rustToolchain pkgs.coreutils ];
+            packages = [ androidTestSdk pkgs.jdk21 hostRustToolchain pkgs.coreutils ];
             JAVA_HOME = pkgs.jdk21.home;
             ANDROID_HOME = "${androidTestSdk}/libexec/android-sdk";
             ANDROID_SDK_ROOT = "${androidTestSdk}/libexec/android-sdk";
@@ -160,7 +162,7 @@
               nodejs
               perl
               powershell
-              rustToolchain
+              mobileRustToolchain
               kache
               cccc
               cargo-mutants
