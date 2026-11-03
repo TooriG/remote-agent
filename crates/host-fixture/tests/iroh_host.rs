@@ -1708,11 +1708,14 @@ async fn large_history_loads_conversation_before_lossless_item_details() {
         }
         assert_eq!(page.thread.history_has_more, Some(false));
         let turns = page.thread.turns.as_ref().unwrap();
-        assert_eq!(turns.len(), 10);
+        assert_eq!(turns.len(), 15);
         let items: Vec<_> = turns.iter().flat_map(|turn| turn.items.as_ref().unwrap()).collect();
         let ids: std::collections::HashSet<_> = items.iter().map(|item| &item.id).collect();
         assert_eq!(ids.len(), items.len(), "no item is duplicated when expanding the window");
-        assert!(items.len() <= 20, "activity is not hydrated while paging summaries");
+        assert!(
+            items.iter().all(|item| !matches!(item.body(), agent_protocol::items::ItemBody::CommandExecution { .. })),
+            "imported history pages hold no past activity"
+        );
 
         let started = mobile.peer.call(&serde_json::from_value::<op::CreateSession>(json!({"provider":"codex","cwd":directory.path()})).unwrap()).await.map(|output| serde_json::to_value(output.response).unwrap()).unwrap();
         let image_thread = &started["thread"]["id"];

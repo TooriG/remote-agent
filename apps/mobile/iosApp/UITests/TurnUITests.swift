@@ -10,7 +10,7 @@ extension LaunchUITests {
         expandSimulatorProject(app)
         let row = app.descendants(matching: .any)["tasks.row.codex:fixture-long-history"]
         XCTAssertTrue(row.waitForExistence(timeout: 30)); row.tap()
-        XCTAssertTrue(app.descendants(matching: .any)["item.long-9-0"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.descendants(matching: .any)["item.long-14-0"].waitForExistence(timeout: 20))
         let message = app.descendants(matching: .any)["task.message"]
         let latestButton = app.buttons["task.latest"]
         let approval = app.buttons["request.accept"]

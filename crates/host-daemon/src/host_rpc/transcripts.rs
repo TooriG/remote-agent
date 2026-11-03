@@ -116,9 +116,9 @@ impl Transcripts {
         })
     }
 
-    /// Native history becomes authoritative once. Turns recorded while it was
-    /// read replace their unfinished native reads, or follow native history
-    /// in their recorded order when it lacks them.
+    /// Native history fills in what the Host did not run. A turn the Host
+    /// recorded keeps its recorded items, which an import does not copy in
+    /// full; recorded turns missing from native history follow it in order.
     pub(crate) fn import(
         &self,
         conversation: &SessionRef,
@@ -143,24 +143,29 @@ impl Transcripts {
                     recorded.push(decode_turn(&row.get::<_, Vec<u8>>(0).map_err(failure)?)?);
                 }
             }
-            let finished = |native: &Turn| {
-                recorded.iter().find(|turn| {
-                    native.status == TurnStatus::Running
-                        && turn.status != TurnStatus::Running
-                        && same_occurrence(native, turn)
-                })
-            };
-            let turns: Vec<&Turn> = native
+            // A turn recorded before its conversation was saved lacks the
+            // provider attribution native reads add.
+            let turns: Vec<std::borrow::Cow<Turn>> = native
                 .iter()
-                .map(|native| finished(native).unwrap_or(native))
-                .chain(recorded.iter().filter(|turn| {
-                    !native.iter().any(|native| same_occurrence(native, turn))
-                }))
+                .map(|native| match recorded.iter().find(|turn| same_occurrence(native, turn)) {
+                    Some(turn) => std::borrow::Cow::Owned(Turn {
+                        provider: turn.provider.or(native.provider),
+                        supports_fork: turn.supports_fork.or(native.supports_fork),
+                        ..turn.clone()
+                    }),
+                    None => std::borrow::Cow::Borrowed(native.as_ref()),
+                })
+                .chain(
+                    recorded
+                        .iter()
+                        .filter(|turn| !native.iter().any(|native| same_occurrence(native, turn)))
+                        .map(std::borrow::Cow::Borrowed),
+                )
                 .collect();
             transaction
                 .execute("DELETE FROM turns WHERE provider = ?1 AND id = ?2", key)
                 .map_err(failure)?;
-            for (position, turn) in turns.into_iter().enumerate() {
+            for (position, turn) in turns.iter().enumerate() {
                 insert(transaction, conversation, position as i64, turn)?;
             }
             transaction
@@ -561,7 +566,7 @@ mod tests {
     }
 
     #[test]
-    fn recorded_turns_stay_hidden_until_import_and_follow_native_history() {
+    fn recorded_turns_stay_hidden_until_import_and_keep_their_items() {
         let (_root, store) = store();
         let target = conversation();
         store
@@ -588,7 +593,7 @@ mod tests {
             )
             .unwrap();
         let window = store.window(&target, None, 10).unwrap().unwrap();
-        assert_eq!(texts(&window), ["first/a", "native", "later/after"]);
+        assert_eq!(texts(&window), ["first/a", "shared/live", "later/after"]);
 
         // A turn that finished while its native history was read keeps the
         // recorded result instead of the unfinished read.

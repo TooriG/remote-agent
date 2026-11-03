@@ -31,9 +31,10 @@ unit-tests *targets:
         just portable-unit-tests "$@" &
     fi
     portable_pid=$!
+    # Builds of whole apps and cross-compiled bindings belong to E2E and CI
+    # checks such as `just ios-markdown`, not to unit tests.
     if [[ $(uname -s) == Darwin ]]; then
-        cargo test --locked -p agent-desktop --test native_focus || failed=1
-        cargo xtask ios-markdown || failed=1
+        cargo test --locked -p native-focus --test native_focus || failed=1
         bash scripts/test-ios-scroll.sh || failed=1
     fi
     wait "$portable_pid" || failed=1

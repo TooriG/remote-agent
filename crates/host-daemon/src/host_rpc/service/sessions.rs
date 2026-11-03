@@ -501,14 +501,19 @@ impl HostRpcService {
             let revision = self.inner.router.list_revision();
             let started = std::time::Instant::now();
             let mut stored = self.stored_history(&target, row.as_ref(), None, limit, params.include_activity)?;
-            // A conversation's first open imports it; native history serves
-            // only conversations whose import failed or is not possible yet.
+            // A conversation's first open imports it. Native history serves only
+            // conversations it can read only partly, or that are still preparing.
             if stored.is_none()
                 && row.as_ref().is_none_or(|row| row.startup.is_none())
                 && let Some(importing) = self.import_transcript(target.clone(), false)
-                && importing.await
             {
-                stored = self.stored_history(&target, row.as_ref(), None, limit, params.include_activity)?;
+                match importing.await {
+                    Ok(()) => {
+                        stored = self.stored_history(&target, row.as_ref(), None, limit, params.include_activity)?;
+                    }
+                    Err(error) if transcripts::readable_without_import(&error) => {}
+                    Err(error) => return Err(anyhow::anyhow!(error.message)),
+                }
             }
             let source = if stored.is_some() { "transcript" } else { "native" };
             let mut response = if let Some(response) = stored {

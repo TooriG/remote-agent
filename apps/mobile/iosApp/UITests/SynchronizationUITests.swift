@@ -32,16 +32,16 @@ extension LaunchUITests {
         try simulatorFixture("background-reply")
         try simulatorFixture("hold-history-reads")
         row.tap()
-        XCTAssertTrue(app.descendants(matching: .any)["task.loading"].waitForExistence(timeout: 2),
-                      "After relaunch, Host-owned history must be fetched while the local draft remains available")
-        XCTAssertFalse(firstAnswer.exists)
+        // The device copy and the Host transcript answer without native history,
+        // so held native reads do not delay the reopened conversation.
+        XCTAssertTrue(firstAnswer.waitForExistence(timeout: 5),
+                      "After relaunch, the saved conversation shows while the local draft remains available")
         XCTAssertEqual(composer.value as? String, "Keep this opening draft")
-        let latest = app.descendants(matching: .any)["item.fixture-external-final"]
-        XCTAssertFalse(latest.exists)
-        captureScreen(app, named: "Local draft survives relaunch while Host history loads")
+        captureScreen(app, named: "Local draft survives relaunch with the saved conversation")
         try simulatorFixture("release-history-reads")
-        XCTAssertTrue(firstAnswer.waitForExistence(timeout: 15))
-        XCTAssertTrue(latest.waitForExistence(timeout: 15))
+        // A reply written to native history outside the Host waits for a re-import.
+        let latest = app.descendants(matching: .any)["item.fixture-external-final"]
+        XCTAssertFalse(latest.waitForExistence(timeout: 3))
         XCTAssertEqual(composer.value as? String, "Keep this opening draft")
         XCTAssertFalse(app.staticTexts["notice"].exists)
     }

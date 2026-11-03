@@ -8,9 +8,14 @@ use futures_util::FutureExt;
 /// Every transcript window, including older pages, holds at most this many turns.
 pub(super) const WINDOW_TURNS: usize = 10;
 
-/// Resolves to whether the conversation's transcript is stored.
+/// Resolves once the conversation's transcript is stored or cannot be.
 pub(super) type Importing =
-    futures_util::future::Shared<futures_util::future::BoxFuture<'static, bool>>;
+    futures_util::future::Shared<futures_util::future::BoxFuture<'static, Result<(), Failure>>>;
+
+/// Native reads still show these conversations, with what they can read.
+pub(super) fn readable_without_import(error: &Failure) -> bool {
+    matches!(error.code, "provider_unavailable" | "incomplete_history")
+}
 
 pub(super) enum Import {
     Running(Importing),
@@ -119,9 +124,9 @@ impl HostRpcService {
     }
 
     /// Copy native history once; concurrent callers share one import, which
-    /// completes even if they stop waiting. A failed import waits for a
-    /// re-import or a Host restart; an unavailable provider, often one still
-    /// starting, lets the next open try again.
+    /// completes even if they stop waiting. Incomplete native history is not
+    /// imported again until a re-import or a Host restart; other failures,
+    /// such as a provider still starting, let the next open try again.
     pub(super) fn import_transcript(&self, target: SessionRef, retry: bool) -> Option<Importing> {
         let mut imports = self.inner.imports.lock().unwrap();
         match imports.get(&target) {
@@ -132,14 +137,16 @@ impl HostRpcService {
         let service = self.clone();
         let key = target.clone();
         let importing = tokio::spawn(async move { service.import(key).await })
-            .map(|finished| finished.unwrap_or(false))
+            .map(|finished| {
+                finished.unwrap_or_else(|error| Err(Failure::new("import_failed", error)))
+            })
             .boxed()
             .shared();
         imports.insert(target, Import::Running(importing.clone()));
         Some(importing)
     }
 
-    async fn import(&self, target: SessionRef) -> bool {
+    async fn import(&self, target: SessionRef) -> Result<(), Failure> {
         let started = std::time::Instant::now();
         let result = match self.import_history(&target).await {
             Ok(response) => {
@@ -154,23 +161,22 @@ impl HostRpcService {
             Err(error) => Err(error),
         };
         let mut imports = self.inner.imports.lock().unwrap();
-        match result {
+        match &result {
             Ok(()) => {
                 imports.remove(&target);
                 tracing::info!(target: "agent", operation = "transcript.import",
                     message = %format_args!("provider={} total_ms={}", target.provider.key(), started.elapsed().as_millis()));
-                true
             }
             Err(error) => {
-                if error.code == "provider_unavailable" {
-                    imports.remove(&target);
-                } else {
+                if error.code == "incomplete_history" {
                     imports.insert(target, Import::Failed);
+                } else {
+                    imports.remove(&target);
                 }
                 tracing::warn!(target: "agent", operation = "transcript.import", message = %error.message);
-                false
             }
         }
+        result
     }
 
     /// History in public identity, keeping the conversation's content.

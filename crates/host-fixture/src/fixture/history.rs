@@ -21,8 +21,11 @@ pub(super) fn persisted(thread: &Thread) -> Option<Thread> {
         return None;
     }
     let mut turns = if long_history {
-        let sizes = [286, 6, 325, 393, 859, 424, 21, 609, 641, 154];
-        let inputs = [4, 1, 6, 8, 1, 2, 1, 4, 1, 2];
+        // More turns than one ten-turn window, so older history pages remain.
+        let sizes = [
+            286, 6, 325, 393, 859, 424, 21, 609, 641, 154, 212, 37, 488, 95, 154,
+        ];
+        let inputs = [4, 1, 6, 8, 1, 2, 1, 4, 1, 2, 3, 1, 5, 1, 2];
         let statuses = [
             "failed",
             "completed",
@@ -32,6 +35,11 @@ pub(super) fn persisted(thread: &Thread) -> Option<Thread> {
             "completed",
             "completed",
             "interrupted",
+            "completed",
+            "completed",
+            "completed",
+            "interrupted",
+            "completed",
             "completed",
             "interrupted",
         ];
@@ -71,9 +79,9 @@ pub(super) fn persisted(thread: &Thread) -> Option<Thread> {
     };
     if long_history {
         if id == "fixture-viewport-history" {
-            // Four activity-only turns leave the initial summary shorter than
-            // the viewport, so the manual history control is initially visible.
-            for turn in &turns[5..9] {
+            // Activity-only turns before the last leave the initial window shorter
+            // than the viewport, so the manual history control is initially visible.
+            for turn in &turns[5..14] {
                 let item_id = format!("{}-work", turn.borrow()["id"].as_str().unwrap());
                 turn.borrow_mut()["items"] = json!([{"id":item_id,
                     "type":"commandExecution","command":"inspect","status":"completed","aggregatedOutput":"done"}]);
