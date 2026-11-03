@@ -120,13 +120,15 @@ fn answer(command: &mut Command, prompt: &str) -> (Output, Value) {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(prompt.as_bytes())
-        .unwrap();
+    let input = child.stdin.take().unwrap().write_all(prompt.as_bytes());
     let output = child.wait_with_output().unwrap();
+    if let Err(error) = input {
+        assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
+        assert!(
+            !output.status.success(),
+            "CLI closed stdin before accepting the prompt"
+        );
+    }
     let value = serde_json::from_slice(&output.stdout)
         .unwrap_or_else(|error| panic!("{error}: {output:?}"));
     (output, value)
@@ -211,11 +213,13 @@ fn failures() {
         assert_eq!(output.status.success(), mode == "missing-id", "{result}");
         assert_eq!(result["session_id"], SESSION);
     }
+    // Exceed pipe capacity so early validation closes stdin during the write.
+    let prompt = "prompt".repeat(1024 * 1024);
     for timeout in ["0", "NaN", "inf"] {
         let root = TempDir::new().unwrap();
         let (output, result) = answer(
             peer(root.path(), "codex", "echo", None).args(["--timeout", timeout]),
-            "prompt",
+            &prompt,
         );
         assert!(!output.status.success(), "{result}");
         assert!(!root.path().join("arguments.json").exists());
