@@ -192,32 +192,6 @@ pub enum Intent {
     },
     LoadModels(LoadModels),
     ReadModelSettings(ReadModelSettings),
-    SaveDraftModelDefaults {
-        scope: super::ModelDefaultsScope,
-        draft_key: DraftKey,
-    },
-    SelectNewChatModel {
-        scope: super::ModelDefaultsScope,
-        model: Option<crate::models::ModelRef>,
-    },
-    SelectDefaultModel {
-        scope: super::ModelDefaultsScope,
-        provider: crate::session::ProviderKind,
-        model: Option<crate::models::ModelRef>,
-    },
-    SelectDefaultEffort {
-        scope: super::ModelDefaultsScope,
-        provider: crate::session::ProviderKind,
-        effort: Option<String>,
-    },
-    SelectDefaultServiceTier {
-        scope: super::ModelDefaultsScope,
-        provider: crate::session::ProviderKind,
-        service_tier: Option<String>,
-    },
-    InheritModelDefaults {
-        scope: super::ModelDefaultsScope,
-    },
     SetDraft {
         thread_id: DraftKey,
         draft: Draft,

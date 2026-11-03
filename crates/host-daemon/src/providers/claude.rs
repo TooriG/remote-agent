@@ -218,7 +218,7 @@ impl Claude {
                 let entries = probe.initialized["models"]
                     .as_array()
                     .ok_or("Claude Code did not return a model catalog")?;
-                entries.iter().map(native::parse_model).collect()
+                native::parse_models(entries)
             })
             .await
     }

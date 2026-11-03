@@ -10,7 +10,7 @@
 //! marks unconfirmed sends as delivery-unknown until Host evidence reconciles
 //! them, preserving their content and order without automatically resending.
 use crate::state::{
-    Draft, FileDraft, ModelDefaults, ModelDefaultsScope, Navigation, PendingSubmission, ScopedData,
+    Draft, FileDraft, ModelPreferences, ModelSelection, Navigation, PendingSubmission, ScopedData,
     Snapshot,
 };
 use serde::{Deserialize, Serialize};
@@ -20,7 +20,7 @@ use std::{
 };
 
 /// One device's editor selection, shared across Host snapshots. Discovery is never persisted.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct EditorPreferences {
     pub preferred: Option<agent_protocol::editors::EditorId>,
 }
@@ -72,9 +72,8 @@ mod editor_tests {
 /// an empty draft. Runtime Snapshot fields cannot change the storage contract.
 #[derive(Serialize, Deserialize)]
 pub struct PersistedState {
-    model_defaults: ModelDefaults,
-    #[serde(with = "entries")]
-    scoped_model_defaults: Arc<BTreeMap<ModelDefaultsScope, ModelDefaults>>,
+    #[serde(default)]
+    model_preferences: ModelPreferences,
     #[serde(default)]
     project_preferences: Arc<BTreeMap<String, BTreeMap<String, crate::state::ProjectPreferences>>>,
     storage_scope: String,
@@ -89,8 +88,7 @@ pub struct PersistedState {
 impl PersistedState {
     pub fn capture(snapshot: &Snapshot) -> Self {
         Self {
-            model_defaults: snapshot.model_defaults.clone(),
-            scoped_model_defaults: snapshot.scoped_model_defaults.clone(),
+            model_preferences: snapshot.model_preferences.clone(),
             project_preferences: snapshot.project_preferences.clone(),
             storage_scope: snapshot.storage_scope.clone(),
             archived_scopes: snapshot.archived_scopes.clone(),
@@ -106,110 +104,76 @@ pub fn encode(snapshot: &Snapshot) -> Result<Vec<u8>, serde_json::Error> {
     serde_json::to_vec(&PersistedState::capture(snapshot))
 }
 
-/// Device-owned presets shared by every saved Host snapshot.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct ModelPreferences {
-    #[serde(flatten)]
-    defaults: ModelDefaults,
-    #[serde(with = "entries")]
-    scoped: Arc<BTreeMap<ModelDefaultsScope, ModelDefaults>>,
-}
-impl ModelPreferences {
-    pub fn capture(snapshot: &Snapshot) -> Self {
-        Self {
-            defaults: snapshot.model_defaults.clone(),
-            scoped: snapshot.scoped_model_defaults.clone(),
-        }
-    }
-
-    pub(crate) fn apply(&self, snapshot: &mut Snapshot) {
-        snapshot.model_defaults = self.defaults.clone();
-        snapshot.scoped_model_defaults = self.scoped.clone();
-    }
-
-    /// Apply only this session's edits to the device's current preferences.
-    /// Another window's unchanged fields must never be replaced by a stale copy.
-    pub(crate) fn merge(&self, before: &Self, after: &Self) -> Self {
-        let mut scoped = self.scoped.clone();
-        for scope in before
-            .scoped
-            .keys()
-            .chain(after.scoped.keys())
-            .collect::<BTreeSet<_>>()
-        {
-            let (before, after) = (before.scoped.get(scope), after.scoped.get(scope));
-            if before == after {
-                continue;
-            }
-            match after {
-                Some(after) => {
-                    let value = merge_defaults(
-                        scoped.get(scope).unwrap_or(&ModelDefaults::default()),
-                        before.unwrap_or(&ModelDefaults::default()),
-                        after,
-                    );
-                    Arc::make_mut(&mut scoped).insert(scope.clone(), value);
-                }
-                None => {
-                    Arc::make_mut(&mut scoped).remove(scope);
-                }
-            }
-        }
-        Self {
-            defaults: merge_defaults(&self.defaults, &before.defaults, &after.defaults),
-            scoped,
-        }
-    }
-}
-
-fn merge_defaults(
-    current: &ModelDefaults,
-    before: &ModelDefaults,
-    after: &ModelDefaults,
-) -> ModelDefaults {
+/// Merge only the session's explicit edits, preserving another window's
+/// provider choices and options. Options always stay with their selected model.
+pub(crate) fn merge_model_preferences(
+    current: &ModelPreferences,
+    before: &ModelPreferences,
+    after: &ModelPreferences,
+) -> ModelPreferences {
     let mut merged = current.clone();
-    if before.new_chat_model != after.new_chat_model {
-        merged.new_chat_model = after.new_chat_model.clone();
+    if before.provider != after.provider {
+        merged.provider = after.provider;
     }
     for provider in before
-        .providers
+        .selections
         .keys()
-        .chain(after.providers.keys())
+        .chain(after.selections.keys())
         .collect::<BTreeSet<_>>()
     {
-        let empty = crate::state::ProviderModelDefaults::default();
-        let before = before.providers.get(provider).unwrap_or(&empty);
-        let after = after.providers.get(provider).unwrap_or(&empty);
+        let (before, after) = (
+            before.selections.get(provider),
+            after.selections.get(provider),
+        );
         if before == after {
             continue;
         }
-        let mut settings = merged.providers.get(provider).cloned().unwrap_or_default();
-        if before.model != after.model {
-            settings = after.clone();
-        } else {
-            if before.effort != after.effort {
-                settings.effort = after.effort.clone();
+        match after {
+            Some(after) => {
+                let selection = match (merged.selections.get(provider), before) {
+                    (Some(current), Some(before)) => merge_selection(current, before, after),
+                    _ => after.clone(),
+                };
+                merged.selections.insert(*provider, selection);
             }
-            if before.service_tier != after.service_tier {
-                settings.service_tier = after.service_tier.clone();
+            None => {
+                merged.selections.remove(provider);
             }
-        }
-        if settings == empty {
-            merged.providers.remove(provider);
-        } else {
-            merged.providers.insert(*provider, settings);
         }
     }
     merged
 }
+
+fn merge_selection(
+    current: &ModelSelection,
+    before: &ModelSelection,
+    after: &ModelSelection,
+) -> ModelSelection {
+    if before.model != after.model || current.model != after.model {
+        return after.clone();
+    }
+    ModelSelection {
+        model: current.model.clone(),
+        effort: if before.effort != after.effort {
+            after.effort.clone()
+        } else {
+            current.effort.clone()
+        },
+        service_tier: if before.service_tier != after.service_tier {
+            after.service_tier.clone()
+        } else {
+            current.service_tier.clone()
+        },
+    }
+}
+
 pub fn decode(bytes: &[u8]) -> Result<Snapshot, serde_json::Error> {
     if bytes.is_empty() {
         return Ok(Snapshot::default());
     }
     let saved: PersistedState = serde_json::from_slice(bytes)?;
     Ok(Snapshot {
-        model_defaults: saved.model_defaults,
-        scoped_model_defaults: saved.scoped_model_defaults,
+        model_preferences: saved.model_preferences,
         project_preferences: saved.project_preferences,
         storage_scope: saved.storage_scope,
         archived_scopes: saved.archived_scopes,

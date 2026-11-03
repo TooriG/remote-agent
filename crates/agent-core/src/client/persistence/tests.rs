@@ -1,6 +1,6 @@
 use super::*;
-use crate::state::{Draft, Event, Intent, ModelDefaultsScope, ProviderModelDefaults, reduce};
-use agent_protocol::{editors::EditorId, session::ProviderKind};
+use crate::state::{Draft, Intent, ModelSelection};
+use agent_protocol::{editors::EditorId, models::ModelRef, session::ProviderKind};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 #[derive(Default)]
@@ -55,39 +55,62 @@ fn draft(snapshot: &mut Snapshot, text: &str) {
         }),
     );
 }
-fn edit(snapshot: &Snapshot, intent: Intent) -> Snapshot {
-    reduce(snapshot, Event::Intent(intent)).0
+fn selection(
+    provider: ProviderKind,
+    id: &str,
+    effort: Option<String>,
+    tier: Option<String>,
+) -> ModelSelection {
+    ModelSelection {
+        model: ModelRef {
+            provider,
+            id: id.into(),
+        },
+        effort,
+        service_tier: tier,
+    }
 }
-fn settings(snapshot: &Snapshot) -> &ProviderModelDefaults {
-    &snapshot.model_defaults.providers[&ProviderKind::Codex]
+fn remember(snapshot: &mut Snapshot, selection: ModelSelection) {
+    let provider = selection.model.provider;
+    snapshot.model_preferences.provider = Some(provider);
+    snapshot
+        .model_preferences
+        .selections
+        .insert(provider, selection);
+}
+fn selected(snapshot: &Snapshot) -> &ModelSelection {
+    &snapshot.model_preferences.selections[&ProviderKind::Codex]
 }
 fn session(storage: Arc<Storage>, device: Arc<DevicePreferences>) -> Arc<Persistence> {
     Persistence::new(storage, device)
+}
+fn with_disk(disk: Arc<DeviceDisk>) -> Arc<Storage> {
+    Arc::new(Storage {
+        device: disk,
+        ..Default::default()
+    })
 }
 
 #[tokio::test]
 async fn device_preferences_apply_across_hosts_without_replacing_their_work() {
     let mut defaults = Snapshot::default();
-    defaults.model_defaults.providers.insert(
-        ProviderKind::Codex,
-        ProviderModelDefaults {
-            effort: Some("high".into()),
-            service_tier: Some("priority".into()),
-            ..Default::default()
-        },
+    remember(
+        &mut defaults,
+        selection(
+            ProviderKind::Codex,
+            "chosen",
+            Some("high".into()),
+            Some("priority".into()),
+        ),
     );
     defaults.preferred_editor = Some(EditorId::Zed);
     let disk = Arc::new(DeviceDisk::default());
-    *disk.models.lock().unwrap() =
-        serde_json::to_vec(&ModelPreferences::capture(&defaults)).unwrap();
+    *disk.models.lock().unwrap() = serde_json::to_vec(&defaults.model_preferences).unwrap();
     *disk.editor.lock().unwrap() =
         serde_json::to_vec(&EditorPreferences::capture(&defaults)).unwrap();
     let device = Arc::new(DevicePreferences::default());
     for host in ["first", "second"] {
-        let storage = Arc::new(Storage {
-            device: disk.clone(),
-            ..Default::default()
-        });
+        let storage = with_disk(disk.clone());
         let mut saved = Snapshot {
             storage_scope: host.into(),
             ..Default::default()
@@ -101,37 +124,29 @@ async fn device_preferences_apply_across_hosts_without_replacing_their_work() {
         assert_eq!(restored.drafts, saved.drafts);
         assert_eq!(restored.navigation, saved.navigation);
         assert_eq!(restored.storage_scope, host);
-        assert_eq!(restored.model_defaults, defaults.model_defaults);
+        assert_eq!(restored.model_preferences, defaults.model_preferences);
         assert_eq!(restored.preferred_editor, Some(EditorId::Zed));
     }
     assert_eq!(disk.writes.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
-async fn local_presets_initialize_device_preferences_without_losing_existing_work() {
+async fn local_choices_initialize_device_preferences_without_losing_existing_work() {
     let storage = Arc::new(Storage::default());
-    let mut saved = edit(
-        &Snapshot::default(),
-        Intent::SelectDefaultEffort {
-            scope: ModelDefaultsScope::Global,
-            provider: ProviderKind::Codex,
-            effort: Some("high".into()),
-        },
+    let mut saved = Snapshot::default();
+    remember(
+        &mut saved,
+        selection(ProviderKind::Codex, "chosen", Some("high".into()), None),
     );
-    saved = edit(
-        &saved,
-        Intent::SelectDefaultServiceTier {
-            scope: ModelDefaultsScope::Environment { id: "first".into() },
-            provider: ProviderKind::Claude,
-            service_tier: Some("fast".into()),
-        },
+    remember(
+        &mut saved,
+        selection(ProviderKind::Claude, "other", None, Some("fast".into())),
     );
     draft(&mut saved, "existing Android draft");
     *storage.local.lock().unwrap() = crate::persistence::encode(&saved).unwrap();
     let persistence = session(storage.clone(), Arc::default());
     let restored = persistence.restore(false, None).await.unwrap();
-    assert_eq!(restored.model_defaults, saved.model_defaults);
-    assert_eq!(restored.scoped_model_defaults, saved.scoped_model_defaults);
+    assert_eq!(restored.model_preferences, saved.model_preferences);
     assert_eq!(restored.drafts, saved.drafts);
     persistence.start(&restored);
     persistence
@@ -139,71 +154,30 @@ async fn local_presets_initialize_device_preferences_without_losing_existing_wor
         .unwrap()
         .await
         .unwrap();
-    let other = session(
-        Arc::new(Storage {
-            device: storage.device.clone(),
-            ..Default::default()
-        }),
-        Arc::default(),
-    )
-    .restore(false, None)
-    .await
-    .unwrap();
-    assert_eq!(other.model_defaults, saved.model_defaults);
-    assert_eq!(other.scoped_model_defaults, saved.scoped_model_defaults);
+    let other = session(with_disk(storage.device.clone()), Arc::default())
+        .restore(false, None)
+        .await
+        .unwrap();
+    assert_eq!(other.model_preferences, saved.model_preferences);
     assert!(other.drafts.is_empty());
 }
 
 #[tokio::test]
-async fn simultaneous_views_keep_independent_preference_edits_when_closed_in_reverse_order() {
+async fn simultaneous_views_keep_each_providers_choice_when_closed_in_reverse_order() {
     let disk = Arc::new(DeviceDisk::default());
     let device = Arc::new(DevicePreferences::default());
-    let main_storage = Arc::new(Storage {
-        device: disk.clone(),
-        ..Default::default()
-    });
-    let side_storage = Arc::new(Storage {
-        device: disk.clone(),
-        ..Default::default()
-    });
+    let main_storage = with_disk(disk.clone());
+    let side_storage = with_disk(disk.clone());
     let main = session(main_storage.clone(), device.clone());
-    let side = session(side_storage.clone(), device.clone());
+    let side = session(side_storage.clone(), device);
     let mut first = main.restore(false, None).await.unwrap();
     let mut second = side.restore(false, None).await.unwrap();
     main.start(&first);
     side.start(&second);
-    let starting_model = agent_protocol::models::ModelRef {
-        provider: ProviderKind::Codex,
-        id: "preferred".into(),
-    };
-    first = edit(
-        &first,
-        Intent::SelectNewChatModel {
-            scope: ModelDefaultsScope::Global,
-            model: Some(starting_model.clone()),
-        },
-    );
-    for scope in [
-        ModelDefaultsScope::Global,
-        ModelDefaultsScope::Environment { id: "host".into() },
-    ] {
-        first = edit(
-            &first,
-            Intent::SelectDefaultEffort {
-                scope: scope.clone(),
-                provider: ProviderKind::Codex,
-                effort: Some("high".into()),
-            },
-        );
-        second = edit(
-            &second,
-            Intent::SelectDefaultServiceTier {
-                scope,
-                provider: ProviderKind::Codex,
-                service_tier: Some("priority".into()),
-            },
-        );
-    }
+    let codex = selection(ProviderKind::Codex, "preferred", Some("high".into()), None);
+    let claude = selection(ProviderKind::Claude, "other", None, Some("fast".into()));
+    remember(&mut first, codex.clone());
+    remember(&mut second, claude.clone());
     draft(&mut first, "main draft");
     draft(&mut second, "side draft");
     main.enqueue(Arc::new(first.clone()))
@@ -216,27 +190,22 @@ async fn simultaneous_views_keep_independent_preference_edits_when_closed_in_rev
         .unwrap();
     side.finish(Arc::new(second)).unwrap().await.unwrap();
     main.finish(Arc::new(first)).unwrap().await.unwrap();
-    let restored = session(
-        Arc::new(Storage {
-            device: disk,
-            ..Default::default()
-        }),
-        Arc::default(),
-    )
-    .restore(false, None)
-    .await
-    .unwrap();
-    assert_eq!(settings(&restored).effort.as_deref(), Some("high"));
-    assert_eq!(restored.model_defaults.new_chat_model, Some(starting_model));
+    let restored = session(with_disk(disk), Arc::default())
+        .restore(false, None)
+        .await
+        .unwrap();
     assert_eq!(
-        settings(&restored).service_tier.as_deref(),
-        Some("priority")
+        restored.model_preferences.provider,
+        Some(ProviderKind::Claude)
     );
-    let scoped = &restored.scoped_model_defaults
-        [&ModelDefaultsScope::Environment { id: "host".into() }]
-        .providers[&ProviderKind::Codex];
-    assert_eq!(scoped.effort.as_deref(), Some("high"));
-    assert_eq!(scoped.service_tier.as_deref(), Some("priority"));
+    assert_eq!(
+        restored.model_preferences.selections[&ProviderKind::Codex],
+        codex
+    );
+    assert_eq!(
+        restored.model_preferences.selections[&ProviderKind::Claude],
+        claude
+    );
     let main = crate::persistence::decode(&main_storage.local.lock().unwrap()).unwrap();
     let side = crate::persistence::decode(&side_storage.local.lock().unwrap()).unwrap();
     assert_eq!(main.drafts[&"draft".into()].text, "main draft");
@@ -245,32 +214,64 @@ async fn simultaneous_views_keep_independent_preference_edits_when_closed_in_rev
 }
 
 #[tokio::test]
+async fn simultaneous_option_edits_do_not_overwrite_each_other() {
+    let disk = Arc::new(DeviceDisk::default());
+    let device = Arc::new(DevicePreferences::default());
+    let mut initial = Snapshot::default();
+    remember(
+        &mut initial,
+        selection(ProviderKind::Codex, "chosen", None, None),
+    );
+    *disk.models.lock().unwrap() = serde_json::to_vec(&initial.model_preferences).unwrap();
+    let main = session(with_disk(disk.clone()), device.clone());
+    let side = session(with_disk(disk.clone()), device);
+    let mut first = main.restore(false, None).await.unwrap();
+    let mut second = side.restore(false, None).await.unwrap();
+    main.start(&first);
+    side.start(&second);
+    first
+        .model_preferences
+        .selections
+        .get_mut(&ProviderKind::Codex)
+        .unwrap()
+        .effort = Some("high".into());
+    second
+        .model_preferences
+        .selections
+        .get_mut(&ProviderKind::Codex)
+        .unwrap()
+        .service_tier = Some("priority".into());
+    main.enqueue(Arc::new(first.clone()))
+        .unwrap()
+        .await
+        .unwrap();
+    side.finish(Arc::new(second)).unwrap().await.unwrap();
+    main.finish(Arc::new(first)).unwrap().await.unwrap();
+    let restored = session(with_disk(disk), Arc::default())
+        .restore(false, None)
+        .await
+        .unwrap();
+    assert_eq!(selected(&restored).effort.as_deref(), Some("high"));
+    assert_eq!(
+        selected(&restored).service_tier.as_deref(),
+        Some("priority")
+    );
+}
+
+#[tokio::test]
 async fn retrying_a_failed_local_save_does_not_reapply_obsolete_device_edits() {
     let disk = Arc::new(DeviceDisk::default());
     let device = Arc::new(DevicePreferences::default());
-    let storage = Arc::new(Storage {
-        device: disk.clone(),
-        ..Default::default()
-    });
+    let storage = with_disk(disk.clone());
     let first = session(storage.clone(), device.clone());
-    let second = session(
-        Arc::new(Storage {
-            device: disk.clone(),
-            ..Default::default()
-        }),
-        device,
-    );
-    let initial = first.restore(false, None).await.unwrap();
-    let other = second.restore(false, None).await.unwrap();
-    first.start(&initial);
-    second.start(&other);
-    let mut high = edit(
-        &initial,
-        Intent::SelectDefaultEffort {
-            scope: ModelDefaultsScope::Global,
-            provider: ProviderKind::Codex,
-            effort: Some("high".into()),
-        },
+    let second = session(with_disk(disk), device);
+    let mut high = first.restore(false, None).await.unwrap();
+    let mut low = second.restore(false, None).await.unwrap();
+    first.start(&high);
+    second.start(&low);
+    remember(
+        &mut high,
+        selection(ProviderKind::Codex, "chosen", Some("high".into()), None),
     );
     draft(&mut high, "recover this draft");
     storage.fail_local.store(true, Ordering::SeqCst);
@@ -282,13 +283,9 @@ async fn retrying_a_failed_local_save_does_not_reapply_obsolete_device_edits() {
             .is_err()
     );
     assert!(first.failure().unwrap().contains("disk unavailable"));
-    let low = edit(
-        &other,
-        Intent::SelectDefaultEffort {
-            scope: ModelDefaultsScope::Global,
-            provider: ProviderKind::Codex,
-            effort: Some("low".into()),
-        },
+    remember(
+        &mut low,
+        selection(ProviderKind::Codex, "chosen", Some("low".into()), None),
     );
     second.finish(Arc::new(low)).unwrap().await.unwrap();
     storage.fail_local.store(false, Ordering::SeqCst);
@@ -298,7 +295,7 @@ async fn retrying_a_failed_local_save_does_not_reapply_obsolete_device_edits() {
         .restore(false, None)
         .await
         .unwrap();
-    assert_eq!(settings(&restored).effort.as_deref(), Some("low"));
+    assert_eq!(selected(&restored).effort.as_deref(), Some("low"));
     assert_eq!(restored.drafts[&"draft".into()].text, "recover this draft");
 }
 
@@ -333,31 +330,15 @@ async fn corrupted_state_or_preferences_are_rejected_without_writing() {
 async fn failed_device_writes_remain_dirty_when_another_session_saves() {
     let disk = Arc::new(DeviceDisk::default());
     let device = Arc::new(DevicePreferences::default());
-    let first = session(
-        Arc::new(Storage {
-            device: disk.clone(),
-            ..Default::default()
-        }),
-        device.clone(),
-    );
-    let second = session(
-        Arc::new(Storage {
-            device: disk.clone(),
-            ..Default::default()
-        }),
-        device,
-    );
-    let baseline = first.restore(false, None).await.unwrap();
-    let other = second.restore(false, None).await.unwrap();
-    first.start(&baseline);
+    let first = session(with_disk(disk.clone()), device.clone());
+    let second = session(with_disk(disk.clone()), device);
+    let mut high = first.restore(false, None).await.unwrap();
+    let mut other = second.restore(false, None).await.unwrap();
+    first.start(&high);
     second.start(&other);
-    let high = edit(
-        &baseline,
-        Intent::SelectDefaultEffort {
-            scope: ModelDefaultsScope::Global,
-            provider: ProviderKind::Codex,
-            effort: Some("high".into()),
-        },
+    remember(
+        &mut high,
+        selection(ProviderKind::Codex, "chosen", Some("high".into()), None),
     );
     disk.fail_models.store(true, Ordering::SeqCst);
     assert!(
@@ -369,25 +350,14 @@ async fn failed_device_writes_remain_dirty_when_another_session_saves() {
     );
     assert!(disk.models.lock().unwrap().is_empty());
     disk.fail_models.store(false, Ordering::SeqCst);
-    let other = edit(
-        &other,
-        Intent::SetPreferredEditor {
-            editor: EditorId::Zed,
-        },
-    );
+    other.preferred_editor = Some(EditorId::Zed);
     second.finish(Arc::new(other)).unwrap().await.unwrap();
     first.finish(Arc::new(high)).unwrap().await.unwrap();
-    let restored = session(
-        Arc::new(Storage {
-            device: disk,
-            ..Default::default()
-        }),
-        Arc::default(),
-    )
-    .restore(false, None)
-    .await
-    .unwrap();
-    assert_eq!(settings(&restored).effort.as_deref(), Some("high"));
+    let restored = session(with_disk(disk), Arc::default())
+        .restore(false, None)
+        .await
+        .unwrap();
+    assert_eq!(selected(&restored).effort.as_deref(), Some("high"));
     assert_eq!(restored.preferred_editor, Some(EditorId::Zed));
 }
 
@@ -449,88 +419,79 @@ async fn autosave_observes_core_changes_without_ui_notifications() {
 }
 
 #[test]
-fn model_replacement_resets_its_options_and_inheritance_removes_only_its_scope() {
-    use agent_protocol::models::ModelRef;
-    let scope = ModelDefaultsScope::Environment { id: "host".into() };
+fn model_replacement_and_removal_keep_other_providers_choices() {
     let mut before = Snapshot::default();
-    for provider in [ProviderKind::Codex, ProviderKind::Claude] {
-        before = edit(
-            &before,
-            Intent::SelectDefaultModel {
-                scope: scope.clone(),
-                provider,
-                model: Some(ModelRef {
-                    provider,
-                    id: "old".into(),
-                }),
-            },
-        );
-        before = edit(
-            &before,
-            Intent::SelectDefaultEffort {
-                scope: scope.clone(),
-                provider,
-                effort: Some("high".into()),
-            },
-        );
-    }
+    remember(
+        &mut before,
+        selection(ProviderKind::Claude, "other", Some("medium".into()), None),
+    );
+    remember(
+        &mut before,
+        selection(
+            ProviderKind::Codex,
+            "old",
+            Some("high".into()),
+            Some("priority".into()),
+        ),
+    );
+    let mut current = before.model_preferences.clone();
+    current
+        .selections
+        .get_mut(&ProviderKind::Claude)
+        .unwrap()
+        .service_tier = Some("fast".into());
+    let mut after = before.model_preferences.clone();
+    after.selections.insert(
+        ProviderKind::Codex,
+        selection(ProviderKind::Codex, "new", None, None),
+    );
+    let merged = merge_model_preferences(&current, &before.model_preferences, &after);
+    assert_eq!(
+        merged.selections[&ProviderKind::Codex],
+        after.selections[&ProviderKind::Codex]
+    );
+    assert_eq!(
+        merged.selections[&ProviderKind::Claude],
+        current.selections[&ProviderKind::Claude]
+    );
+    let before = after.clone();
+    after.selections.remove(&ProviderKind::Codex);
+    after.provider = None;
+    let inherited = merge_model_preferences(&merged, &before, &after);
+    assert!(!inherited.selections.contains_key(&ProviderKind::Codex));
+    assert_eq!(inherited.provider, None);
+    assert_eq!(
+        inherited.selections[&ProviderKind::Claude],
+        current.selections[&ProviderKind::Claude]
+    );
+}
+
+#[test]
+fn stale_model_options_never_attach_to_a_different_models_selection() {
+    let before = ModelPreferences {
+        provider: Some(ProviderKind::Codex),
+        selections: [(
+            ProviderKind::Codex,
+            selection(ProviderKind::Codex, "old", None, None),
+        )]
+        .into(),
+    };
     let mut current = before.clone();
-    current.preferred_editor = Some(EditorId::Zed);
-    current = edit(
-        &current,
-        Intent::SelectDefaultServiceTier {
-            scope: ModelDefaultsScope::Global,
-            provider: ProviderKind::Claude,
-            service_tier: Some("fast".into()),
-        },
+    current.selections.insert(
+        ProviderKind::Codex,
+        selection(ProviderKind::Codex, "new", None, Some("priority".into())),
     );
-    let after = edit(
-        &before,
-        Intent::SelectDefaultModel {
-            scope: scope.clone(),
-            provider: ProviderKind::Codex,
-            model: Some(ModelRef {
-                provider: ProviderKind::Codex,
-                id: "new".into(),
-            }),
-        },
-    );
-    let mut merged = current.clone();
-    ModelPreferences::capture(&current)
-        .merge(
-            &ModelPreferences::capture(&before),
-            &ModelPreferences::capture(&after),
-        )
-        .apply(&mut merged);
-    let scoped = &merged.scoped_model_defaults[&scope];
+    let mut after = before.clone();
+    after
+        .selections
+        .get_mut(&ProviderKind::Codex)
+        .unwrap()
+        .effort = Some("high".into());
+    let merged = merge_model_preferences(&current, &before, &after);
     assert_eq!(
-        scoped.providers[&ProviderKind::Codex]
-            .model
-            .as_ref()
-            .unwrap()
-            .id,
-        "new"
+        merged.selections[&ProviderKind::Codex],
+        after.selections[&ProviderKind::Codex]
     );
-    assert!(scoped.providers[&ProviderKind::Codex].effort.is_none());
-    assert_eq!(
-        scoped.providers[&ProviderKind::Claude].effort.as_deref(),
-        Some("high")
-    );
-    assert_eq!(merged.model_defaults, current.model_defaults);
-    let inherited = edit(
-        &after,
-        Intent::InheritModelDefaults {
-            scope: scope.clone(),
-        },
-    );
-    ModelPreferences::capture(&merged)
-        .merge(
-            &ModelPreferences::capture(&after),
-            &ModelPreferences::capture(&inherited),
-        )
-        .apply(&mut merged);
-    assert!(!merged.scoped_model_defaults.contains_key(&scope));
-    assert_eq!(merged.model_defaults, current.model_defaults);
 }
 
 proptest::proptest! {
@@ -541,25 +502,16 @@ proptest::proptest! {
         effort in proptest::option::of("[a-z]{1,8}"),
         tier in proptest::option::of("[a-z]{1,8}"),
     ) {
-        let mut before = Snapshot::default();
-        before = edit(&before, Intent::SelectDefaultEffort { scope: ModelDefaultsScope::Global,
-            provider: ProviderKind::Codex, effort: original_effort.clone() });
-        before = edit(&before, Intent::SelectDefaultServiceTier { scope: ModelDefaultsScope::Global,
-            provider: ProviderKind::Codex, service_tier: original_tier.clone() });
-        let first = edit(&before, Intent::SelectDefaultEffort { scope: ModelDefaultsScope::Global,
-            provider: ProviderKind::Codex, effort: effort.clone() });
-        let second = edit(&before, Intent::SelectDefaultServiceTier { scope: ModelDefaultsScope::Global,
-            provider: ProviderKind::Codex, service_tier: tier.clone() });
-        let baseline = ModelPreferences::capture(&before);
-        let first = ModelPreferences::capture(&first);
-        let second = ModelPreferences::capture(&second);
-        let forward = first.merge(&baseline, &second);
-        let backward = second.merge(&baseline, &first);
+        let baseline = ModelPreferences { provider: Some(ProviderKind::Codex), selections: [(ProviderKind::Codex,
+            selection(ProviderKind::Codex, "chosen", original_effort, original_tier))].into() };
+        let mut first = baseline.clone();
+        first.selections.get_mut(&ProviderKind::Codex).unwrap().effort = effort.clone();
+        let mut second = baseline.clone();
+        second.selections.get_mut(&ProviderKind::Codex).unwrap().service_tier = tier.clone();
+        let forward = merge_model_preferences(&first, &baseline, &second);
+        let backward = merge_model_preferences(&second, &baseline, &first);
         proptest::prop_assert_eq!(&forward, &backward);
-        let mut restored = Snapshot::default();
-        forward.apply(&mut restored);
-        let actual = restored.model_defaults.providers.get(&ProviderKind::Codex).cloned().unwrap_or_default();
-        proptest::prop_assert_eq!(actual.effort, effort);
-        proptest::prop_assert_eq!(actual.service_tier, tier);
+        proptest::prop_assert_eq!(&forward.selections[&ProviderKind::Codex].effort, &effort);
+        proptest::prop_assert_eq!(&forward.selections[&ProviderKind::Codex].service_tier, &tier);
     }
 }

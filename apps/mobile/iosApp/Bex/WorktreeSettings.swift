@@ -15,12 +15,8 @@ struct SettingsSheet: View {
                 }
                 Section {
                     NavigationLink {
-                        ModelSettingsScreen(model: model, scope: .global, close: { dismiss() })
-                    } label: { Label("モデル", systemImage: "slider.horizontal.3") }
-                        .accessibilityIdentifier("settings.models")
-                    NavigationLink {
                         AgentSettingsScreen(model: model, close: { dismiss() })
-                    } label: { Label("エージェント", systemImage: "bubble.left.and.bubble.right") }
+                    } label: { Label("アカウント", systemImage: "person.crop.circle") }
                         .accessibilityIdentifier("settings.agents")
                         .disabled(!model.isConnected)
                     Button {

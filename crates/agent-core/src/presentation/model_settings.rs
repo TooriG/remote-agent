@@ -2,7 +2,7 @@
 use crate::{
     models::{Model, ModelRef},
     session::ProviderKind,
-    state::{ModelDefaults, ModelDefaultsScope, ProviderModelDefaults, Snapshot},
+    state::Snapshot,
 };
 use agent_protocol::operations::UsageWindow;
 
@@ -48,7 +48,6 @@ pub struct ModelQuickControls {
     pub effort_level: u32,
     pub fast: bool,
     pub toggle_fast_to: Option<String>,
-    pub fast_service_tier: Option<String>,
     pub speed_choices: Vec<ModelSpeedChoice>,
 }
 #[derive(Clone, Debug, PartialEq)]
@@ -59,133 +58,8 @@ pub struct ModelSpeedChoice {
     pub description: Option<String>,
     pub selected: bool,
 }
-#[derive(Clone, Debug)]
-#[cfg_attr(feature = "bindings", derive(uniffi::Record))]
-pub struct ModelScopeChoice {
-    pub id: String,
-    pub label: String,
-    pub scope: ModelDefaultsScope,
-}
-
 #[cfg_attr(feature = "bindings", uniffi::export)]
 impl Snapshot {
-    pub fn model_defaults(&self, scope: ModelDefaultsScope) -> ModelDefaults {
-        if scope == ModelDefaultsScope::Global {
-            return self.model_defaults.clone();
-        }
-        let inherited = match &scope {
-            ModelDefaultsScope::Project { environment, .. } => {
-                self.scoped_model_defaults
-                    .get(&ModelDefaultsScope::Environment {
-                        id: environment.clone(),
-                    })
-            }
-            _ => None,
-        };
-        self.scoped_model_defaults
-            .get(&scope)
-            .or(inherited)
-            .unwrap_or(&self.model_defaults)
-            .clone()
-    }
-
-    pub fn has_model_defaults_override(&self, scope: ModelDefaultsScope) -> bool {
-        self.scoped_model_defaults.contains_key(&scope)
-    }
-
-    pub fn model_project_scope_choices(&self, scope: ModelDefaultsScope) -> Vec<ModelScopeChoice> {
-        let all = match scope {
-            ModelDefaultsScope::Global => ModelDefaultsScope::Global,
-            _ if !self.storage_scope.is_empty() => ModelDefaultsScope::Environment {
-                id: self.model_environment_id().to_owned(),
-            },
-            _ => ModelDefaultsScope::Global,
-        };
-        let mut choices = vec![ModelScopeChoice {
-            id: "all".into(),
-            label: "すべてのプロジェクト".into(),
-            scope: all,
-        }];
-        if !self.storage_scope.is_empty() {
-            choices.extend(
-                self.threads
-                    .iter()
-                    .flat_map(|list| &list.projects)
-                    .map(|project| ModelScopeChoice {
-                        id: project.id.clone(),
-                        label: project.name.clone(),
-                        scope: ModelDefaultsScope::Project {
-                            environment: self.model_environment_id().to_owned(),
-                            project: project.id.clone(),
-                        },
-                    }),
-            );
-        }
-        choices
-    }
-
-    pub fn model_environment_scope_choices(
-        &self,
-        scope: ModelDefaultsScope,
-    ) -> Vec<ModelScopeChoice> {
-        let mut choices = Vec::new();
-        if !self.storage_scope.is_empty() {
-            let current = match scope {
-                ModelDefaultsScope::Global => ModelDefaultsScope::Environment {
-                    id: self.model_environment_id().to_owned(),
-                },
-                other => other,
-            };
-            choices.push(ModelScopeChoice {
-                id: "current".into(),
-                label: self.host_name.clone().unwrap_or("この環境".into()),
-                scope: current,
-            });
-        }
-        choices.push(ModelScopeChoice {
-            id: "all".into(),
-            label: "すべての環境".into(),
-            scope: ModelDefaultsScope::Global,
-        });
-        choices
-    }
-
-    pub fn provider_model_defaults(
-        &self,
-        scope: ModelDefaultsScope,
-        provider: ProviderKind,
-    ) -> ProviderModelDefaults {
-        self.model_defaults(scope)
-            .providers
-            .get(&provider)
-            .cloned()
-            .unwrap_or_default()
-    }
-
-    pub fn default_model_controls(
-        &self,
-        scope: ModelDefaultsScope,
-        provider: ProviderKind,
-    ) -> ModelQuickControls {
-        let defaults = self.provider_model_defaults(scope, provider);
-        let (model, effort, tier) = crate::state::supported_settings(
-            defaults.model.as_ref(),
-            defaults.effort.as_deref(),
-            defaults.service_tier.as_deref(),
-            Some(provider),
-            &self.models,
-            &self.model_errors,
-            self.allows_custom_codex_models(),
-        );
-        quick_controls(
-            self.models
-                .iter()
-                .find(|choice| Some(&choice.model) == model),
-            effort,
-            tier,
-        )
-    }
-
     pub fn model_provider_for_draft(
         &self,
         thread_id: crate::state::DraftKey,
@@ -255,15 +129,10 @@ impl Snapshot {
             .drafts
             .get(&thread_id)
             .and_then(|draft| draft.model.as_ref());
-        let defaults = self.model_defaults_for_cwd(&self.navigation.cwd);
+        let remembered = self.model_preferences.selections.get(&provider);
         let preferred = saved
             .filter(|model| model.provider == provider)
-            .or_else(|| {
-                defaults
-                    .providers
-                    .get(&provider)
-                    .and_then(|settings| settings.model.as_ref())
-            });
+            .or_else(|| remembered.map(|settings| &settings.model));
         let (model, _, _) = crate::state::supported_settings(
             preferred,
             None,
@@ -371,7 +240,6 @@ fn quick_controls(
         effort,
         effort_level,
         fast,
-        fast_service_tier: fast_tier.map(|tier| tier.id.clone()),
         speed_choices,
         toggle_fast_to: fast_tier.map(|tier| {
             if fast {

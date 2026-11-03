@@ -498,7 +498,7 @@ mod tests {
         fn save(&self, key: StorageKey, bytes: Vec<u8>) -> Result<(), AgentError> {
             match key {
                 StorageKey::ModelPreferences => {
-                    serde_json::from_slice::<crate::persistence::ModelPreferences>(&bytes).unwrap();
+                    serde_json::from_slice::<crate::state::ModelPreferences>(&bytes).unwrap();
                     *self.model_preferences.lock().unwrap() = bytes;
                     return Ok(());
                 }
@@ -803,10 +803,8 @@ mod tests {
             let old = open(old_storage.clone());
             old.clone().ready().await.unwrap();
             old.dispatch(edit("preserve old Host")).unwrap();
-            old.dispatch(Intent::SelectDefaultEffort {
-                scope: crate::state::ModelDefaultsScope::Global,
-                provider: agent_protocol::session::ProviderKind::Codex,
-                effort: Some("high".into()),
+            old.dispatch(Intent::SetPreferredEditor {
+                editor: agent_protocol::editors::EditorId::Zed,
             })
             .unwrap();
             let gate = Arc::new(Gate::default());
@@ -834,11 +832,8 @@ mod tests {
             receipt.wait().await.unwrap();
             assert!(next.snapshot().recent_chats);
             assert_eq!(
-                next.snapshot().model_defaults.providers
-                    [&agent_protocol::session::ProviderKind::Codex]
-                    .effort
-                    .as_deref(),
-                Some("high")
+                next.snapshot().preferred_editor,
+                Some(agent_protocol::editors::EditorId::Zed)
             );
             assert_eq!(
                 text(&old_storage.bytes.lock().unwrap()),

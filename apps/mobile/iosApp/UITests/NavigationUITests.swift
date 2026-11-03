@@ -239,8 +239,8 @@ extension LaunchUITests {
     }
 
     func openModelChoices(_ app: XCUIApplication) {
-        if app.navigationBars["エージェント"].exists {
-            app.navigationBars["エージェント"].buttons["BackButton"].tap()
+        if app.navigationBars["アカウント"].exists {
+            app.navigationBars["アカウント"].buttons["BackButton"].tap()
         }
         XCTAssertTrue(app.searchFields.firstMatch.waitForExistence(timeout: 15))
     }

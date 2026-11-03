@@ -36,8 +36,6 @@ fn missing_or_invalid_user_work_is_not_silently_discarded() {
     let saved: serde_json::Value =
         serde_json::from_slice(&persistence::encode(&Snapshot::default()).unwrap()).unwrap();
     for field in [
-        "model_defaults",
-        "scoped_model_defaults",
         "storage_scope",
         "archived_scopes",
         "drafts",

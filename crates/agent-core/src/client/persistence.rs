@@ -2,8 +2,8 @@
 //! atomically replace opaque payloads; device preferences have one shared owner.
 use super::{AgentError, error};
 use crate::{
-    persistence::{EditorPreferences, ModelPreferences},
-    state::Snapshot,
+    persistence::{EditorPreferences, merge_model_preferences},
+    state::{ModelPreferences, Snapshot},
 };
 use futures_util::{
     FutureExt,
@@ -48,12 +48,12 @@ struct Preferences {
 impl Preferences {
     fn capture(snapshot: &Snapshot) -> Self {
         Self {
-            models: ModelPreferences::capture(snapshot),
+            models: snapshot.model_preferences.clone(),
             editor: EditorPreferences::capture(snapshot),
         }
     }
     fn apply(&self, snapshot: &mut Snapshot) {
-        self.models.apply(snapshot);
+        snapshot.model_preferences = self.models.clone();
         snapshot.preferred_editor = self.editor.preferred;
     }
 }
@@ -116,7 +116,8 @@ impl DevicePreferences {
             Ok(state) => state,
             Err(reason) => return (before, Err(reason)),
         };
-        state.current.models = state.current.models.merge(&before.models, &after.models);
+        state.current.models =
+            merge_model_preferences(&state.current.models, &before.models, &after.models);
         if before.editor != after.editor {
             state.current.editor = after.editor.clone();
         }
@@ -195,7 +196,7 @@ impl Persistence {
                 crate::persistence::decode(&bytes).map_err(RestoreError::InvalidState)?;
             let preferences = persistence
                 .device
-                .load(storage, ModelPreferences::capture(&snapshot))?;
+                .load(storage, snapshot.model_preferences.clone())?;
             preferences.apply(&mut snapshot);
             *persistence.baseline.lock().unwrap() = Some(preferences);
             if let Some(directory) = &conversations {

@@ -34,7 +34,7 @@ final class MobileSessionStorage: ClientStorage, ClientPlatform, @unchecked Send
                 let url = try location()
                 return FileManager.default.fileExists(atPath: url.path) ? try Data(contentsOf: url) : Data()
             case .modelPreferences:
-                return UserDefaults.standard.data(forKey: "bex.model-defaults") ?? Data()
+                return UserDefaults.standard.data(forKey: "bex.model-preferences") ?? Data()
             case .editorPreferences:
                 return UserDefaults.standard.data(forKey: "bex.editor-preferences") ?? Data()
             }
@@ -45,7 +45,7 @@ final class MobileSessionStorage: ClientStorage, ClientPlatform, @unchecked Send
         try access {
             switch key {
             case .localState: try bytes.write(to: location(), options: .atomic)
-            case .modelPreferences: UserDefaults.standard.set(bytes, forKey: "bex.model-defaults")
+            case .modelPreferences: UserDefaults.standard.set(bytes, forKey: "bex.model-preferences")
             case .editorPreferences: UserDefaults.standard.set(bytes, forKey: "bex.editor-preferences")
             }
         }

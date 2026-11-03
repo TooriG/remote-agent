@@ -170,10 +170,12 @@ mod tests {
             };
             session.persist(persistence(path.clone()), updates, |_| Update::Error);
             store
-                .dispatch(Intent::SelectDefaultEffort {
-                    provider: agent_protocol::session::ProviderKind::Codex,
-                    scope: agent_core::state::ModelDefaultsScope::Environment { id: "vm".into() },
-                    effort: Some("high".into()),
+                .dispatch(Intent::SelectModel {
+                    thread_id: "draft".into(),
+                    model: agent_protocol::models::ModelRef {
+                        provider: agent_protocol::session::ProviderKind::Codex,
+                        id: "gpt-6.1-sol".into(),
+                    },
                 })
                 .await
                 .unwrap();
@@ -199,9 +201,9 @@ mod tests {
             let preferences =
                 std::fs::read(directory.path().join("model-preferences.json")).unwrap();
             assert_eq!(
-                serde_json::from_slice::<agent_core::persistence::ModelPreferences>(&preferences)
+                serde_json::from_slice::<agent_core::state::ModelPreferences>(&preferences)
                     .unwrap(),
-                agent_core::persistence::ModelPreferences::capture(&restored)
+                restored.model_preferences
             );
         })
         .await

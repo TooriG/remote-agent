@@ -28,7 +28,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.LoadModels
-import dev.remoteagent.core.ModelDefaultsScope
 import dev.remoteagent.core.ModelRef
 import dev.remoteagent.core.Outcome
 import dev.remoteagent.core.ProviderKind
@@ -115,51 +114,12 @@ private fun ModelPickerDialog(
                 }
                 if (choices.isEmpty()) Text(language.text("モデルがありません。検索条件やPCとの接続を確認してください。"))
                 ModelQuickSettings(snapshot, perform)
-                SaveNewChatDefaultsButton(snapshot, selected, perform)
                 if (selected?.provider == dev.remoteagent.core.ProviderKind.DEEP_SEEK)
                     CredentialSettings(snapshot, perform)
             }
         },
         confirmButton = { TextButton(onClick = { dismiss() }) { Text(language.text("完了")) } },
     )
-}
-
-@Composable
-private fun SaveNewChatDefaultsButton(
-    snapshot: Snapshot,
-    selected: ModelRef?,
-    perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
-) {
-    val language = LocalUiLanguage.current
-    val key = snapshot.navigation().draftKey
-    val controls = snapshot.modelQuickControls(key)
-    val tier = controls.speedChoices.firstOrNull { it.selected }?.id
-    var defaultsNotice by remember(selected, controls.effort, tier) { mutableStateOf<String?>(null) }
-    var savingDefaults by remember { mutableStateOf(false) }
-    Column {
-        TextButton(
-            enabled = selected != null && !savingDefaults,
-            modifier = Modifier.fillMaxWidth().testTag("model.save-defaults"),
-            onClick = {
-                savingDefaults = true
-                perform(Intent.SaveDraftModelDefaults(ModelDefaultsScope.Global, snapshot.navigation().draftKey)) {
-                    result ->
-                    savingDefaults = false
-                    defaultsNotice =
-                        result.fold(
-                            onSuccess = { "新規チャットの既定に保存しました" },
-                            onFailure = { it.displayMessage() ?: "既定の保存に失敗しました" },
-                        )
-                }
-            },
-        ) {
-            Text(language.text("この設定を新規チャットの既定にする"))
-        }
-        Text(
-            language.text(defaultsNotice ?: "この端末で、次の新規チャットからモデル・推論量・速度を引き継ぎます。"),
-            style = MaterialTheme.typography.bodySmall,
-        )
-    }
 }
 
 @Composable

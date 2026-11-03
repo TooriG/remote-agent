@@ -5249,22 +5249,6 @@
         }
       }
     },
-    "このプロバイダで使うモデル・推論強度・速度の初期値です。": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "このプロバイダで使うモデル・推論強度・速度の初期値です。"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Default model, reasoning effort and speed for this provider."
-          }
-        }
-      }
-    },
     "この会話": {
       "localizations": {
         "ja": {
@@ -5485,22 +5469,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "This device"
-          }
-        }
-      }
-    },
-    "この端末で、次の新規チャットからモデル・推論量・速度を引き継ぎます。": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "この端末で、次の新規チャットからモデル・推論量・速度を引き継ぎます。"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "New chats on this device will inherit the model, reasoning effort and speed."
           }
         }
       }
@@ -7729,54 +7697,6 @@
         }
       }
     },
-    "デフォルトの推論強度": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "デフォルトの推論強度"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Default reasoning effort"
-          }
-        }
-      }
-    },
-    "デフォルトの速度": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "デフォルトの速度"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Default speed"
-          }
-        }
-      }
-    },
-    "デフォルトモデル": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "デフォルトモデル"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Default model"
-          }
-        }
-      }
-    },
     "バイナリ": {
       "localizations": {
         "ja": {
@@ -9041,54 +8961,6 @@
         }
       }
     },
-    "プロバイダごとのデフォルト": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "プロバイダごとのデフォルト"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Defaults by provider"
-          }
-        }
-      }
-    },
-    "プロバイダごとの初期値と、新規チャットのモデルを設定します。": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "プロバイダごとの初期値と、新規チャットのモデルを設定します。"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Set defaults for each provider and the model for new chats."
-          }
-        }
-      }
-    },
-    "プロバイダのデフォルトモデル": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "プロバイダのデフォルトモデル"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Provider's default model"
-          }
-        }
-      }
-    },
     "プロファイルを開けません。": {
       "localizations": {
         "ja": {
@@ -9485,22 +9357,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Model and run settings"
-          }
-        }
-      }
-    },
-    "モデルのデフォルト": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "モデルのデフォルト"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Model defaults"
           }
         }
       }
@@ -11697,22 +11553,6 @@
         }
       }
     },
-    "共通設定を使う": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "共通設定を使う"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Use shared settings"
-          }
-        }
-      }
-    },
     "内容は保存されています。自動再送はしません。": {
       "localizations": {
         "ja": {
@@ -12573,22 +12413,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "No changes"
-          }
-        }
-      }
-    },
-    "変更はこの端末に自動保存されます。会話ごとに変更できます。": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "変更はこの端末に自動保存されます。会話ごとに変更できます。"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Changes are saved automatically on this device. You can change them per conversation."
           }
         }
       }
@@ -13921,22 +13745,6 @@
         }
       }
     },
-    "新しい会話のモデル": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "新しい会話のモデル"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Model for new conversations"
-          }
-        }
-      }
-    },
     "新しい会話の作業場所": {
       "localizations": {
         "ja": {
@@ -13981,54 +13789,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Start new sessions in a worktree"
-          }
-        }
-      }
-    },
-    "新規チャットのモデル": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "新規チャットのモデル"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Model for new chats"
-          }
-        }
-      }
-    },
-    "新規チャットの既定に保存しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "新規チャットの既定に保存しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Saved as the default for new chats"
-          }
-        }
-      }
-    },
-    "新規チャットを開始するときのモデルです。自動は利用可能なエージェントのデフォルトを使います。": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "新規チャットを開始するときのモデルです。自動は利用可能なエージェントのデフォルトを使います。"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The model used to start new chats. Automatic uses an available agent's default."
           }
         }
       }
@@ -14093,22 +13853,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Default"
-          }
-        }
-      }
-    },
-    "既定の保存に失敗しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "既定の保存に失敗しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Could not save defaults"
           }
         }
       }
@@ -15857,22 +15601,6 @@
         }
       }
     },
-    "自動": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "自動"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Automatic"
-          }
-        }
-      }
-    },
     "自動削除": {
       "localizations": {
         "ja": {
@@ -15933,22 +15661,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Automatic review cancelled"
-          }
-        }
-      }
-    },
-    "自動（利用可能なエージェントのデフォルト）": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "自動（利用可能なエージェントのデフォルト）"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Automatic (available agent's default)"
           }
         }
       }
@@ -16845,22 +16557,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Weekly allowance"
-          }
-        }
-      }
-    },
-    "週間残量": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "週間残量"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Weekly remaining"
           }
         }
       }
@@ -17837,6 +17533,54 @@
           "stringUnit": {
             "state": "translated",
             "value": "送信結果を確認できません。二重実行を避けるため再送していません。"
+          }
+        }
+      }
+    },
+    "{0} · 週間枠": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} · 週間枠"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} · Weekly allowance"
+          }
+        }
+      }
+    },
+    "{0} 残り {1}%": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} 残り {1}%"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}, {1}% remaining"
+          }
+        }
+      }
+    },
+    "選んだモデルと応答設定は、次の新規チャットにも引き継ぎます。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "選んだモデルと応答設定は、次の新規チャットにも引き継ぎます。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your model and response settings carry over to the next new chat."
           }
         }
       }

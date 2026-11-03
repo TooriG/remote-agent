@@ -85,7 +85,7 @@ struct AgentSettingsScreen: View {
                 }
             }
         }
-        .navigationTitle("エージェント")
+        .navigationTitle("アカウント")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(loginInProgress)
         .toolbar {

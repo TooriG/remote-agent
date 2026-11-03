@@ -31,6 +31,7 @@ struct AccountUsageView: View {
 }
 
 struct WeeklyUsageView: View {
+    @Environment(\.locale) private var locale
     let windows: [UsageWindow]
 
     var body: some View {
@@ -40,14 +41,18 @@ struct WeeklyUsageView: View {
             }
             ForEach(Array(windows.enumerated()), id: \.offset) { _, window in
                 HStack(spacing: 8) {
-                    Text("週間残量")
+                    AppText(window.label)
                     ProgressView(value: Double(window.remainingPercent), total: 100)
                         .tint(window.remainingPercent <= 20 ? .orange : .accentColor)
                     Text("\(window.remainingPercent)%").monospacedDigit()
                 }
                 .font(.caption2).foregroundStyle(.secondary)
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel("週間残量 \(window.remainingPercent)%")
+                .accessibilityLabel(localizedUiFormat(
+                    language: locale.appLanguage, source: "{0} 残り {1}%",
+                    arguments: [localizedUiText(language: locale.appLanguage, source: window.label),
+                                String(window.remainingPercent)]
+                ))
             }
         }
     }

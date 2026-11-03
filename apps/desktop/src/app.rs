@@ -17,7 +17,7 @@ use agent_core::{
         conversation::{ActivityExpansion, ConversationRowContent},
         error::ErrorScope,
     },
-    state::{Attachment, Draft, DraftKey, Intent, ModelDefaultsScope, Snapshot},
+    state::{Attachment, Draft, DraftKey, Intent, Snapshot},
     store::Outcome,
 };
 use agent_protocol::{
@@ -97,7 +97,6 @@ enum Tab {
 }
 #[derive(Clone, Copy, PartialEq)]
 enum SettingsPage {
-    Models,
     Agents,
     Connections,
     Worktrees,
@@ -205,12 +204,12 @@ fn general_snapshot_changed(before: &Snapshot, after: &Snapshot) -> bool {
         }};
     }
     let changed = changed!(
-        shared: [project_import, project_preferences, operations, scoped_model_defaults,
+        shared: [project_import, project_preferences, operations,
             archived_scopes, account, terminals, conversations, expanded_projects,
             project_threads, models, model_errors, question_drafts, draft_sessions, pending_submissions,
             workspace, workspaces, navigation, activity, management, list_query, subscriptions],
         optional: [permission_settings, task_activity, threads, file_open_capabilities],
-        values: [recent_chats, operation_sequence, model_defaults, preferred_editor, file_open_capabilities_requested, host_name, host_ticket, host_home_directory, storage_scope,
+        values: [recent_chats, operation_sequence, model_preferences, preferred_editor, file_open_capabilities_requested, host_name, host_ticket, host_home_directory, storage_scope,
             observed_agents, epoch, connected, connection_generation, connection_failure, error]
     );
     let empty = Draft::default();
@@ -1301,7 +1300,6 @@ impl Desktop {
         self.close_file_browser();
         let previous = self.session.take();
         self.remote = remote;
-        self.model_controls.settings_scope = ModelDefaultsScope::Global;
         self.snapshot = Arc::default();
         self.pending_quote = None;
         self.pending_explanation = None;
