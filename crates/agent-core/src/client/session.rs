@@ -9,6 +9,7 @@ use crate::{
     state::{Intent, Snapshot},
     store::Outcome,
 };
+use agent_protocol::models::Invitation;
 use futures_util::FutureExt;
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
@@ -92,8 +93,7 @@ impl ClientSession {
         storage: Arc<dyn ClientStorage>,
         platform: Arc<dyn ClientPlatform>,
         previous: Option<Arc<ClientSession>>,
-        ticket: String,
-        invitation: String,
+        invitation: Invitation,
         recent_chats: bool,
         client_build: ClientBuild,
         device_name: String,
@@ -117,7 +117,11 @@ impl ClientSession {
         );
         let store = session.restore(true).await?;
         store
-            .reconnect(session.connection(ticket, Some(invitation)).await?)
+            .reconnect(
+                session
+                    .connection(invitation.endpoint, Some(invitation.invitation.to_string()))
+                    .await?,
+            )
             .await?;
         session.install(store, false)?;
         Ok(session)
@@ -568,6 +572,17 @@ mod tests {
         }
     }
 
+    fn invalid_invitation() -> Invitation {
+        Invitation {
+            endpoint: "invalid ticket".into(),
+            invitation: uuid::Uuid::nil(),
+            expires_at: u64::MAX,
+            host_name: "Fixture Host".into(),
+            ai_recipients: Vec::new(),
+            transcription_recipient: None,
+        }
+    }
+
     fn open(storage: Arc<Storage>) -> Arc<ClientSession> {
         ClientSession::open(
             storage.clone(),
@@ -635,8 +650,7 @@ mod tests {
                 storage.clone(),
                 storage.clone(),
                 Some(current.clone()),
-                "invalid ticket".into(),
-                "invalid invitation".into(),
+                invalid_invitation(),
                 false,
                 client_build(0),
                 "Fixture device".into(),
@@ -936,8 +950,7 @@ mod tests {
                     storage.clone(),
                     storage.clone(),
                     None,
-                    "invalid ticket".into(),
-                    "invalid invitation".into(),
+                    invalid_invitation(),
                     false,
                     client_build(0),
                     "Fixture device".into()

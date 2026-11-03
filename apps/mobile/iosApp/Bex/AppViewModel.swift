@@ -169,7 +169,7 @@ final class AppViewModel: ObservableObject {
                     let storage = MobileSessionStorage(host: id)
                     let owner = try await ClientSession.pair(
                         storage: storage, platform: storage, previous: self?.session,
-                        ticket: invitation.endpoint, invitation: invitation.invitation, recentChats: false,
+                        invitation: invitation, recentChats: false,
                         clientBuild: Self.clientBuild, deviceName: UIDevice.current.name
                     )
                     guard let self, !Task.isCancelled else { try? await owner.shutdown(); return }
