@@ -132,6 +132,8 @@ enum WorktreeStatus {
     Merged,
 }
 #[uniffi::remote(Record)]
+struct CreateInvitation {}
+#[uniffi::remote(Record)]
 struct Invitation {
     pub endpoint: String,
     pub invitation: uuid::Uuid,

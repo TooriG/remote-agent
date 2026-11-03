@@ -1,6 +1,7 @@
 //! Loopback-only UI test controls. No saved application profiles are used.
 
 use crate::{Result, test_support::Connection};
+use agent_protocol::operations::{CreateInvitation, CreateSession};
 use agent_transport::transport::{Identity, Ticket};
 use serde_json::json;
 use std::fs;
@@ -116,12 +117,7 @@ fn route(
     if method == &Method::Get && path == "/pairing" {
         return Ok((
             200,
-            serde_json::to_vec(&rpc(
-                runtime,
-                ticket,
-                identity,
-                &agent_core::state::operations::CreateInvitation {},
-            )?)?,
+            serde_json::to_vec(&rpc(runtime, ticket, identity, &CreateInvitation {})?)?,
         ));
     }
     if method != &Method::Post {
@@ -193,7 +189,7 @@ fn route(
                 runtime,
                 ticket,
                 identity,
-                &agent_core::state::operations::CreateSession { initial_input: None,provider: agent_protocol::session::ProviderKind::Codex, cwd: Some(root.join("project").to_string_lossy().into_owned()), model: None},
+                &CreateSession { initial_input: None,provider: agent_protocol::session::ProviderKind::Codex, cwd: Some(root.join("project").to_string_lossy().into_owned()), model: None},
             )?;
             return Ok((
                 200,

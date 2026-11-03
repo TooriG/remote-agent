@@ -84,6 +84,10 @@ pub struct HostIdentity {
 pub struct ReadHostStatus {}
 rpc_method!(ReadHostStatus, HostStatus, |self| crate::models::Empty {});
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateInvitation {}
+rpc_method!(CreateInvitation, Invite, |self| crate::models::Empty {});
+
 /// Local updater only: persist interrupted work before shutting down this Host.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrepareHostUpdate {}

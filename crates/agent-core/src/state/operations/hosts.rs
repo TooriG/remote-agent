@@ -106,10 +106,7 @@ impl Operation for LoadHostName {
     }
 }
 
-#[cfg_attr(feature = "bindings", derive(uniffi::Record))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CreateInvitation {}
-rpc::rpc_method!(CreateInvitation, Invite, |self| crate::models::Empty {});
+pub use agent_protocol::operations::CreateInvitation;
 
 impl Operation for CreateInvitation {
     rpc_operation!(management.invitation);

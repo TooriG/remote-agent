@@ -41,9 +41,14 @@ fn reachable(manifest: &Path, visited: &mut BTreeSet<PathBuf>) -> BTreeSet<Strin
 }
 
 #[test]
-fn production_host_transport_and_protocol_stay_independent_of_clients() {
+fn host_binaries_and_protocol_stay_independent_of_clients() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    for crate_name in ["host-daemon", "agent-transport", "agent-protocol"] {
+    for crate_name in [
+        "host-daemon",
+        "host-fixture",
+        "agent-transport",
+        "agent-protocol",
+    ] {
         let names = reachable(
             &root.join("crates").join(crate_name).join("Cargo.toml"),
             &mut BTreeSet::new(),
