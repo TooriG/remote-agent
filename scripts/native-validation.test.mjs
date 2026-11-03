@@ -39,7 +39,7 @@ if [[ -n \${NATIVE_VALIDATION_FAIL:-} && "$name $*" == "$NATIVE_VALIDATION_FAIL"
       const result = spawnSync('/bin/bash', [join(root, script), ...args], {
         cwd: root,
         encoding: 'utf8',
-        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, CARGO_TARGET_DIR: target, NATIVE_VALIDATION_LOG: log, NATIVE_VALIDATION_FAIL: failure, AGENT_REMOTE_BUILDER: 'validation-builder', ...overrides },
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, CARGO_TARGET_DIR: target, NATIVE_VALIDATION_LOG: log, NATIVE_VALIDATION_FAIL: failure, AGENT_REMOTE_BUILDER: '', ...overrides },
       });
       assert.ifError(result.error);
       return { ...result, commands: readFileSync(log, 'utf8').trim().split('\n').filter(Boolean) };
@@ -47,10 +47,10 @@ if [[ -n \${NATIVE_VALIDATION_FAIL:-} && "$name $*" == "$NATIVE_VALIDATION_FAIL"
   };
 }
 
-test('Swift formatting and lint failures stop before Markdown builds and UI acceptance', async (t) => {
+test('Swift formatting and lint failures stop validation', async (t) => {
   for (const failure of ['swiftformat', 'swiftlint']) {
     await t.test(failure, (t) => {
-      const result = fixture(t).run('scripts/quality.sh', ['swift', '--build-only'], failure);
+      const result = fixture(t).run('scripts/quality.sh', ['swift'], failure);
       assert.equal(result.status, 17, result.stderr);
       assert.equal(result.commands.length, failure === 'swiftformat' ? 1 : 2);
       assert.ok(result.commands.every(command => command.startsWith('swift')));
@@ -58,7 +58,7 @@ test('Swift formatting and lint failures stop before Markdown builds and UI acce
   }
 });
 
-test('Rust formatting fails before compiling and contract failures stop native acceptance', async (t) => {
+test('Rust formatting and contract failures stop validation', async (t) => {
   for (const [failure, lastCommand] of [
     ['cargo fmt', 'cargo fmt --all --check'],
     ['cargo clippy', 'cargo clippy --locked --workspace --all-targets -- --no-deps -D warnings'],
@@ -70,26 +70,47 @@ test('Rust formatting fails before compiling and contract failures stop native a
       assert.ok(!result.commands.includes('just macos-e2e'));
       if (lastCommand) assert.equal(result.commands.at(-1), lastCommand);
       if (failure === 'cargo fmt') assert.ok(!result.commands.some(command => command.startsWith('nix ')));
-      else assert.ok(result.commands.includes('remote-run --native validation-builder cargo clippy --locked --workspace --all-targets -- --no-deps -D warnings'));
       if (failure === 'just unit-tests') assert.ok(result.commands.at(-1).startsWith('just unit-tests --test errors'));
     });
   }
 });
 
-test('Rust quality keeps the current build environment when no remote builder is configured', (t) => {
-  const result = fixture(t).run('scripts/quality.sh', ['rust'], '', { AGENT_REMOTE_BUILDER: '' });
+test('Rust quality validates contracts without native builds, acceptance or cleanup', (t) => {
+  const result = fixture(t).run('scripts/quality.sh', ['rust']);
   assert.equal(result.status, 0, result.stderr);
   assert.ok(result.commands.includes('cargo clippy --locked --workspace --all-targets -- --no-deps -D warnings'));
   assert.ok(!result.commands.some(command => command.startsWith('remote-run ')));
+  assert.ok(result.commands.at(-1).startsWith('just unit-tests '));
+  assert.ok(!result.commands.some(command => /macos-e2e|conversation-ui|clean-builds/.test(command)));
 });
 
-test('Swift build checks run once and forward the selected build mode', (t) => {
-  const result = fixture(t).run('scripts/quality.sh', ['swift', '--build-only']);
+test('Swift quality checks sources without compiling or starting a Simulator', (t) => {
+  const result = fixture(t).run('scripts/quality.sh', ['swift']);
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(result.commands.map(command => command.split(' ').slice(0, 2).join(' ')), [
-    'swiftformat --lint', 'swiftlint lint', 'just ios-markdown', 'just conversation-ui', 'just clean-builds',
+  assert.deepEqual(result.commands, [
+    'swiftformat --lint apps/mobile/iosApp/Bex apps/mobile/iosApp/UITests apps/mobile/iosApp/TaskActivity',
+    'swiftlint lint --strict',
   ]);
-  assert.equal(result.commands[3], 'just conversation-ui --build-only');
+});
+
+test('Apple quality runs Swift checks locally and delegates Rust verification as one remote command', async (t) => {
+  for (const failure of ['', 'just quality rust']) {
+    await t.test(failure || 'success', (t) => {
+      const result = fixture(t).run('scripts/quality.sh', [], failure, { AGENT_REMOTE_BUILDER: 'validation-builder' });
+      assert.equal(result.status, failure ? 17 : 0, result.stderr);
+      assert.deepEqual(result.commands.slice(2), [
+        'remote-run --native validation-builder just quality rust',
+        'just quality rust',
+      ]);
+      assert.ok(result.commands.slice(0, 2).every(command => command.startsWith('swift')));
+    });
+  }
+});
+
+test('quality rejects acceptance options before doing work', (t) => {
+  const result = fixture(t).run('scripts/quality.sh', ['swift', '--build-only']);
+  assert.equal(result.status, 2, result.stderr);
+  assert.deepEqual(result.commands, []);
 });
 
 test('prebuilt acceptance executes the shipped runner without invoking Cargo', (t) => {

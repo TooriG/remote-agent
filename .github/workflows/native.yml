@@ -323,7 +323,11 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p target/qa
-          nix develop .#native --command just quality rust 2>&1 | tee target/qa/quality.log
+          nix develop .#native --command bash -euo pipefail <<'CHECKS' 2>&1 | tee target/qa/quality.log
+          just quality rust
+          just apple-unit-tests
+          just macos-e2e
+          CHECKS
       - &finish-local-rust-cache
         name: Finish the local Rust compiler cache
         id: finish-local-rust-cache
@@ -411,7 +415,11 @@ jobs:
             read -r -a ios_tests <<< "$AGENT_IOS_TESTS"
             nix develop .#ios-build --command just ios-e2e --build-only "${ios_tests[@]}" 2>&1 | tee target/qa/quality.log
           else
-            nix develop .#ios-build --command just quality swift --build-only 2>&1 | tee target/qa/quality.log
+            nix develop .#ios-build --command bash -euo pipefail <<'CHECKS' 2>&1 | tee target/qa/quality.log
+          just quality swift
+          just ios-markdown
+          just conversation-ui --build-only
+          CHECKS
           fi
       - name: Share the iPhone app, Host fixtures and test runner
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

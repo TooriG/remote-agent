@@ -73,7 +73,7 @@ kill "$client" 2> /dev/null
 git update-index -q --refresh
 {
     git ls-files -z --modified --others --exclude-standard
-    find target \( -path target/cargo-home -o -path target/tool-cache -o -path target/tmp -o -path 'target/.*' \
+    find target \( -path target/tool-cache -o -path target/tmp -o -path 'target/.*' \
         -o \( -type d -exec test -e '{}/.fingerprint' \; \) \) -prune -o -type f -newer "../$key.marker" -print0
 } | while IFS= read -r -d '' path; do
     [[ -e $path ]] && printf '%s\0' "$path"

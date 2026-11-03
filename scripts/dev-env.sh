@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Share fixed tooling and dependency bytes; keep mutable Cargo state local.
+# Share tooling and Cargo downloads; keep compilation outputs per worktree.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Portable builder checks do not need the mobile SDKs in the default shell.
@@ -34,7 +34,7 @@ if [[ ! -e $agent_root/target/CACHEDIR.TAG && ! -L $agent_root/target/CACHEDIR.T
     (set -o noclobber; printf '%s\n' 'Signature: 8a477f597d28d172789f06886806bc55' > "$agent_root/target/CACHEDIR.TAG") ||
         [[ -f $agent_root/target/CACHEDIR.TAG && ! -L $agent_root/target/CACHEDIR.TAG ]]
 fi
-agent_seed_cargo=${CARGO_HOME:-$HOME/.cargo}
+agent_cargo_home=${CARGO_HOME:-$HOME/.cargo}
 export XDG_CACHE_HOME="$agent_root/target/tool-cache"
 agent_env_key=$({ git hash-object flake.nix flake.lock tools/github-release-binary.nix tools/cccc/package.nix tools/kache/package.nix tools/node-runtime/package.nix; uname -sm; printf '%s\n' "$agent_env_shell"; } | git hash-object --stdin)
 agent_env_dir="$(git rev-parse --git-common-dir)/agent-dev-env/$agent_env_key"
@@ -67,8 +67,9 @@ else
     unset NIX_BUILD_TOP
 fi
 export CARGO_TARGET_DIR="$agent_root/target"
-export CARGO_HOME="$agent_root/target/cargo-home"
-# Cargo checks and tests, and recipes in the portable group, run on the
+# Cargo owns locking and cache maintenance for its shared dependency storage.
+export CARGO_HOME="$agent_cargo_home"
+# Cargo builds and verification, and recipes in the portable group, run on the
 # configured Linux builder. Builds for Apple targets and all else stay here.
 agent_portable() {
     if [[ ${1-} == env ]]; then
@@ -79,9 +80,10 @@ agent_portable() {
         done
     fi
     case "${1-} ${2-}" in
-        "cargo check" | "cargo clippy" | "cargo test" | "cargo nextest" | "cargo mutants")
+        "cargo build" | "cargo rustc" | "cargo run" | "cargo check" | "cargo clippy" | "cargo test" | "cargo nextest" | "cargo mutants")
             local previous='' argument
             for argument; do
+                [[ $argument == -- ]] && break
                 [[ $argument == --target=*-apple-* || ($previous == --target && $argument == *-apple-*) ]] && return 1
                 previous=$argument
             done
@@ -97,76 +99,5 @@ export AGENT_REMOTE_BUILDER
 AGENT_REMOTE_BUILDER=$(git config --get bex.remoteBuilder || true)
 if [[ -n $AGENT_REMOTE_BUILDER ]] && agent_portable "$@"; then
     exec scripts/remote-run.sh --native "$AGENT_REMOTE_BUILDER" "$@"
-fi
-agent_seed_key=$(git hash-object Cargo.lock tools/agent-peer/Cargo.lock | git hash-object --stdin)
-if [[ ! -f $CARGO_HOME/.seeded || $(< "$CARGO_HOME/.seeded") != "$agent_seed_key" ]]; then
-    mkdir -p "$CARGO_HOME/registry" "$CARGO_HOME/git/db" "$CARGO_HOME/git/checkouts"
-    agent_copy_cache() {
-        if [[ $(uname -s) == Darwin ]]; then
-            /bin/cp -cpR "$@" || /bin/cp -pR "$@"
-        else
-            cp --reflink=auto -pR "$@"
-        fi
-    }
-    # Clone locked archives; Cargo unpacks only the crates the command needs.
-    # Fall back to source-only entries. APFS/reflinks share their bytes without
-    # sharing Cargo's locks, index updates or automatic cache deletion.
-    agent_packages=()
-    while IFS= read -r agent_package; do agent_packages+=("$agent_package"); done < <(
-        awk '/^name = / { name = $3; gsub(/"/, "", name) }
-             /^version = / { version = $3; gsub(/"/, "", version) }
-             /^source = "registry\+https:\/\/github.com\/rust-lang\/crates.io-index"/ { print name "-" version }' \
-            Cargo.lock tools/agent-peer/Cargo.lock | sort -u
-    )
-    if [[ $agent_seed_cargo != "$CARGO_HOME" ]]; then
-        for agent_index in "$agent_seed_cargo/registry/index"/index.crates.io-*; do
-            [[ -d $agent_index ]] || continue
-            agent_registry=${agent_index##*/}
-            mkdir -p "$CARGO_HOME/registry/index"
-            if [[ ! -d $CARGO_HOME/registry/index/$agent_registry ]]; then
-                agent_copy_cache "$agent_index" "$CARGO_HOME/registry/index/"
-            fi
-            for agent_kind in cache src; do
-                agent_suffix=
-                [[ $agent_kind == cache ]] && agent_suffix=.crate
-                agent_destination="$CARGO_HOME/registry/$agent_kind/$agent_registry"
-                mkdir -p "$agent_destination"
-                agent_sources=()
-                for agent_package in "${agent_packages[@]}"; do
-                    if [[ $agent_kind == src && -f $CARGO_HOME/registry/cache/$agent_registry/$agent_package.crate ]]; then
-                        continue
-                    fi
-                    agent_cached="$agent_seed_cargo/registry/$agent_kind/$agent_registry/$agent_package$agent_suffix"
-                    if [[ -e $agent_cached && ! -e $agent_destination/$agent_package$agent_suffix ]]; then
-                        agent_sources+=("$agent_cached")
-                    fi
-                done
-                if (( ${#agent_sources[@]} )); then
-                    agent_copy_cache "${agent_sources[@]}" "$agent_destination/"
-                fi
-            done
-        done
-        while read -r agent_repo agent_revision; do
-            for agent_cached in "$agent_seed_cargo/git/db/$agent_repo"-*; do
-                if [[ -d $agent_cached && ! -e $CARGO_HOME/git/db/${agent_cached##*/} ]]; then
-                    agent_copy_cache "$agent_cached" "$CARGO_HOME/git/db/"
-                fi
-            done
-            for agent_checkout in "$agent_seed_cargo/git/checkouts/$agent_repo"-*; do
-                agent_cached="$agent_checkout/$agent_revision"
-                agent_destination="$CARGO_HOME/git/checkouts/${agent_checkout##*/}"
-                if [[ -d $agent_cached && ! -e $agent_destination/$agent_revision ]]; then
-                    mkdir -p "$agent_destination"
-                    agent_copy_cache "$agent_cached" "$agent_destination/"
-                fi
-            done
-        done < <(awk '/^source = "git\+/ {
-            source = $3; gsub(/"/, "", source); split(source, parts, "#")
-            revision = substr(parts[2], 1, 7)
-            sub(/[?#].*/, "", source); sub(/.*\//, "", source); sub(/\.git$/, "", source)
-            print source, revision
-        }' Cargo.lock tools/agent-peer/Cargo.lock | sort -u)
-    fi
-    printf '%s\n' "$agent_seed_key" > "$CARGO_HOME/.seeded"
 fi
 exec "$@"

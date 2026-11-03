@@ -44,6 +44,8 @@ scripts/dev-env.sh node scripts/install-claude-sdk.mjs target/debug
 scripts/dev-env.sh cargo run -p host-daemon -- --name 'BEX Host'
 ```
 
+リモートビルダーを設定した場合、Cargoのビルド・実行はそちらで動きます。Mac上でHostを起動する場合は`scripts/dev-env.sh just build-host-macos dev`でSDKを配置して署名した後、`target/debug/host-daemon --name 'BEX Host'`を実行します。
+
 | オプション | 内容 |
 | --- | --- |
 | `--state-dir` | 新しいHostの認証情報ディレクトリ。未指定なら記憶したディレクトリを使用（macOSの初期値は`~/Library/Application Support/app.bex.BEX/`）。通常Hostを2つ起動するための指定ではありません |
@@ -188,14 +190,14 @@ git push git@github.com:ttizze/agent-peer.git "$peer_commit:refs/heads/main"
 ## 検証
 
 ```sh
-scripts/dev-env.sh just unit-tests                  # 全ユニットテスト。Simulator・エミュレーターは起動しない
+scripts/dev-env.sh just unit-tests                  # 共通ユニットテスト。設定済みビルダーで実行
 scripts/dev-env.sh cargo test --workspace           # 振る舞いコーパスを含むRustテスト
 scripts/dev-env.sh just iroh-e2e                    # 隔離iroh接続で実デーモンを検証
 scripts/dev-env.sh just android-e2e                 # Android 17: 接続許可、Markdown、永続化、Host復帰
 scripts/dev-env.sh just ios-e2e [TestMethod…]        # フィクスチャHostに対するSimulator XCUITest
 scripts/dev-env.sh just conversation-ui            # 選択、サイドチャット、実行表示の回帰確認
 scripts/dev-env.sh just macos-e2e                  # ネイティブBrowserの認証と永続化
-scripts/dev-env.sh just quality [apple|rust|kotlin|swift]  # 既定はMac Host・デスクトップとiPhone
+scripts/dev-env.sh just quality [apple|rust|kotlin|swift]  # 静的検査と契約検証。ネイティブビルド・E2Eは実行しない
 ```
 
 Claudeの契約テストは`scripts/dev-env.sh cargo test --locked -p host-fixture --test claude`です。先に監視用実行ファイルをビルドしてください。決定的に動作する外部CLI境界と、実際のStore・iroh・Hostルーティング・ネイティブ会話ファイル・隔離Git環境を使います。Claude Code 2.1.266の匿名化した記録でもネイティブ形式との互換性を確認します。任意実行の`live_claude_subscription_completes_and_resumes_through_store_and_host`は実際の認証済みCLIを使います。`AGENT_LIVE_CLAUDE_PROGRAM`に絶対パスを設定し、`-- --ignored --exact`を付けて実行すると、サブスクリプションでの推論、Host再起動後の再開、中断、中断後の入力を確認できます。
@@ -204,15 +206,15 @@ Claudeの契約テストは`scripts/dev-env.sh cargo test --locked -p host-fixtu
 
 開発・テストビルドは、全変数のデバッグ情報を含めず、ファイル名・行番号付きバックトレースを保持します。デバッガーで変数が必要なら`CARGO_PROFILE_DEV_DEBUG=full`を指定してください。品質チェックではRustのインクリメンタルコンパイルを無効にし、通常のローカルビルドのインクリメンタル状態はKacheが管理します。
 
-Nixシェルは固定したKacheでワークツリー間のビルド結果を再利用します。`KACHE_CACHE_DIR`でキャッシュ先を指定でき、`bex.buildRoot`設定時の既定値は`<buildRoot>/.kache`です。`scripts/dev-env.sh kache stats --last-build`で再利用、`scripts/dev-env.sh kache explain`でミスの原因を確認できます。キャッシュの方針は[.kache.toml](.kache.toml)で管理します。AppleのCIでは、Cargoの依存キャッシュに加え、同梱したRust依存のビルド結果をKacheで再利用します。
+Cargoの依存ファイルは`CARGO_HOME`（既定は`~/.cargo`）で共有し、コンパイル成果物は各ワークツリーの`target`に保持します。Nixシェルは固定したKacheでワークツリー間のビルド結果を再利用します。`KACHE_CACHE_DIR`でキャッシュ先を指定でき、`bex.buildRoot`設定時の既定値は`<buildRoot>/.kache`です。`scripts/dev-env.sh kache stats --last-build`で再利用、`scripts/dev-env.sh kache explain`でミスの原因を確認できます。キャッシュの方針は[.kache.toml](.kache.toml)で管理します。AppleのCIでは、Cargoの依存キャッシュに加え、同梱したRust依存のビルド結果をKacheで再利用します。
 
 接続時間は`scripts/dev-env.sh cargo xtask connection-diagnostics`で解析できます。対象を絞った検証コマンドは`scripts/dev-env.sh just --list`で確認できます。iOSの受け入れ検証は`AGENT_IOS_TEST_WORKERS=1`〜`10`で並列数を指定できます。ランナーはワークツリー間で実行を直列化し、結果を`target/qa`へ残します。ビルドキャッシュの詳細は[scripts/dev-env.sh](scripts/dev-env.sh)と各ネイティブランナーで管理します。
 
 新規ワークツリーのビルド出力を外付けディスクへ置くには、マウント済みディスクにディレクトリを作り、`git config --local bex.buildRoot /absolute/path/to/builds`を設定します。このローカル設定は全ワークツリーで共有します。`scripts/dev-env.sh`は新しい`target`を外付け上の専用ディレクトリへのシンボリックリンクにし、Cargo・Xcode・生成バインディング・キャッシュの既存パスを維持します。既存`target`は移動しません。移す場合は使用していない間に移動して元の場所をリンクへ置き換えてください。指定ディレクトリは事前に存在する必要があり、ディスク取り外しなどで利用できなければコマンドは失敗します。`git config --local --unset bex.buildRoot`で設定を削除すると、その後の新規ワークツリーはローカル出力へ戻ります。
 
-RustのチェックとテストをLinuxマシンで実行するには、対話なしで接続できるSSHホスト名を用意し、`git config --local bex.remoteBuilder <host>`を設定します。ビルダーにはNix、Git、Bash 5.1以降、util-linux、GNU tarが必要です。設定すると`scripts/dev-env.sh`は、`cargo check`・`clippy`・`test`・`nextest`・`mutants`と、`just --list`の`portable`グループのレシピを、ワークツリーをコミットした場合と同じファイルでビルダー上で実行します。`just unit-tests`は、macOS専用のテストだけをこのMacで実行します。コマンドが作成・変更したソースと`target`内のレポートは手元に戻ります。`--target aarch64-apple-darwin`などApple向けのビルドは手元で実行します。ビルダーに接続できなければコマンドは失敗します。`just clean-builds`はビルダーの出力も整理します。`git config --local --unset bex.remoteBuilder`で設定を削除すると手元のビルドに戻ります。
+Rustのビルド・検証をLinuxへ移すには、対話なしで接続できるSSHホスト名を用意し、`git config --local bex.remoteBuilder <host>`を設定します。ビルダーにはNix、Git、Bash 5.1以降、util-linux、GNU tarが必要です。`scripts/dev-env.sh`は`cargo build`・`rustc`・`run`・`check`・`clippy`・`test`・`nextest`・`mutants`と、`just --list`の`portable`グループをワークツリーのスナップショットで実行します。`just unit-tests`は全体をビルダーで実行し、`just quality`はSwiftの静的検査だけを手元に残してRustの検証を転送します。変更されたソースとレポートは手元に戻り、Linuxの実行ファイルはビルダーに保持します。`--target aarch64-apple-darwin`などApple向けのビルドと明示したネイティブレシピは手元で実行します。接続できなければコマンドは失敗します。`git config --local --unset bex.remoteBuilder`でローカル実行へ戻せます。
 
-`just quality`は未使用のビルド出力を整理します。`scripts/dev-env.sh just clean-builds --dry-run`で計画を確認でき、保持条件と使用中ビルドの保護は[整理処理](crates/xtask/src/build_cleanup.rs)で定義しています。バックアップや検証記録はCargoの`debug`・`release`ディレクトリの外へ保存してください。
+`just apple-unit-tests`・ネイティブビルド・E2EはNative clients CIが明示的に実行します。手元でのネイティブ検証は依頼されたデバッグ用です。`just quality`からネイティブ検証や成果物の整理は起動しません。未使用のCargo成果物を整理するには、`scripts/dev-env.sh just clean-builds --dry-run`で計画を確認してから`--dry-run`を外して実行します。ビルダー側も対象になり、使用中のビルドは[整理処理](crates/xtask/src/build_cleanup.rs)が保護します。バックアップや検証記録はCargoの`debug`・`release`ディレクトリの外へ保存してください。
 
 Simulator・フィクスチャの実行では、実機、本番キーチェーン、カメラ、実際のCodexアカウントは検証できません。
 

@@ -23,12 +23,9 @@ function fixture(t, builder = '') {
   if (builder) git('config', 'bex.remoteBuilder', builder);
   for (const path of [
     'flake.nix', 'flake.lock', 'tools/github-release-binary.nix', 'tools/cccc/package.nix',
-    'tools/kache/package.nix', 'tools/node-runtime/package.nix', 'tools/agent-peer/Cargo.lock',
+    'tools/kache/package.nix', 'tools/node-runtime/package.nix',
   ]) put(root, path, '');
-  const lock = ['archived', 'source-only', 'missing'].map(name =>
-    `[[package]]\nname = "${name}"\nversion = "1.0.0"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n`).join('\n');
-  put(root, 'Cargo.lock', lock);
-  put(root, 'justfile', '[group("portable")]\ncheck:\n    true\n');
+  copyFileSync('justfile', join(root, 'justfile'));
   put(root, 'scripts/remote-run.sh', '#!/usr/bin/env bash\nprintf "%s\\n" "$@"\nexit "${DEV_ENV_REMOTE_STATUS:-0}"\n');
   chmodSync(join(root, 'scripts/remote-run.sh'), 0o755);
   copyFileSync('scripts/dev-env.sh', join(root, 'scripts/dev-env.sh'));
@@ -43,15 +40,10 @@ printf 'export NIX_BUILD_TOP=$(mktemp -d)\\n'
   chmodSync(nix, 0o755);
   const cargo = put(root, 'bin/cargo', '#!/usr/bin/env bash\necho local-cargo\n');
   chmodSync(cargo, 0o755);
-  const registry = 'registry/index/index.crates.io-fixture/config.json';
-  put(root, `seed/${registry}`, '{}');
   const archive = 'registry/cache/index.crates.io-fixture/archived-1.0.0.crate';
   put(root, `seed/${archive}`, 'archive');
-  for (const name of ['archived', 'source-only', 'unlocked']) {
-    put(root, `seed/registry/src/index.crates.io-fixture/${name}-1.0.0/src/lib.rs`, name);
-  }
   return {
-    archive, registry, nixLog,
+    archive, nixLog, sharedHome: join(root, 'seed'),
     home: join(root, 'target/cargo-home'),
     run(args = ['true'], overrides = {}) {
       const result = spawnSync('bash', ['scripts/dev-env.sh', ...args], {
@@ -64,24 +56,24 @@ printf 'export NIX_BUILD_TOP=$(mktemp -d)\\n'
   };
 }
 
-test('local setup seeds archives and source-only entries without duplicating extracted sources', (t) => {
+test('local commands reuse Cargo-owned dependency storage without copying it into the worktree', (t) => {
   const build = fixture(t);
-  const result = build.run();
+  const result = build.run(['bash', '-c', 'printf "%s" "$CARGO_HOME"']);
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(readFileSync(join(build.home, build.archive), 'utf8'), 'archive');
-  assert.ok(existsSync(join(build.home, build.registry)));
-  assert.equal(readFileSync(join(build.home, 'registry/src/index.crates.io-fixture/source-only-1.0.0/src/lib.rs'), 'utf8'), 'source-only');
-  for (const name of ['archived', 'unlocked', 'missing']) {
-    assert.ok(!existsSync(join(build.home, `registry/src/index.crates.io-fixture/${name}-1.0.0`)));
-  }
-  assert.ok(existsSync(join(build.home, '.seeded')));
+  assert.equal(result.stdout, build.sharedHome);
+  assert.equal(readFileSync(join(build.sharedHome, build.archive), 'utf8'), 'archive');
+  assert.ok(!existsSync(build.home));
 });
 
-test('portable commands reach the builder before local Cargo cache setup, including failures', async (t) => {
+test('portable builds and verification reach the builder and preserve failures', async (t) => {
   for (const args of [
     ['cargo', 'check', '--locked'],
+    ['cargo', 'build', '--locked', '-p', 'agent-core'],
+    ['cargo', 'rustc', '--lib'],
+    ['cargo', 'run', '-p', 'agent-cli', '--', '--target=aarch64-apple-ios'],
     ['env', '-u', 'CARGO_TARGET_DIR', 'CARGO_INCREMENTAL=0', 'cargo', 'test'],
     ['just', 'check'],
+    ['just', 'unit-tests'],
   ]) {
     await t.test(args.join(' '), (t) => {
       const build = fixture(t, 'test-builder');
@@ -103,14 +95,16 @@ test('native and mobile environments are cached independently and reused', (t) =
   assert.equal(readFileSync(build.nixLog, 'utf8').trim().split('\n').length, 2);
 });
 
-test('Apple checks keep local cache setup when a remote builder is configured', async (t) => {
-  for (const target of [['--target', 'aarch64-apple-darwin'], ['--target=aarch64-apple-ios']]) {
-    await t.test(target.join(' '), (t) => {
-      const build = fixture(t, 'test-builder');
-      const result = build.run(['cargo', 'check', ...target]);
-      assert.equal(result.status, 0, result.stderr);
-      assert.equal(result.stdout.trim(), 'local-cargo');
-      assert.ok(existsSync(join(build.home, build.archive)));
-    });
+test('explicit Apple builds and checks run locally', async (t) => {
+  for (const command of ['check', 'build', 'rustc', 'run']) {
+    for (const target of [['--target', 'aarch64-apple-darwin'], ['--target=aarch64-apple-ios']]) {
+      await t.test([command, ...target].join(' '), (t) => {
+        const build = fixture(t, 'test-builder');
+        const result = build.run(['cargo', command, ...target]);
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.stdout.trim(), 'local-cargo');
+        assert.ok(!existsSync(build.home));
+      });
+    }
   }
 });
