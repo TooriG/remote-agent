@@ -301,9 +301,8 @@ jobs:
       - *prepare-zsh
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          cmd-format: nix develop . --command {0}
-          # Publish native dependencies for both Apple builders.
-          shared-key: &apple-native-cargo-key macos-rust-xcode-26.6-${{ hashFiles('flake.lock') }}-mac
+          cmd-format: nix develop .#native --command {0}
+          key: macos-rust-xcode-26.6-${{ hashFiles('flake.lock') }}
           save-if: ${{ github.event_name != 'pull_request' }}
           cache-on-failure: true
       - &restore-local-rust-cache
@@ -324,20 +323,21 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p target/qa
-          nix develop . --command just quality rust 2>&1 | tee target/qa/quality.log
+          nix develop .#native --command just quality rust 2>&1 | tee target/qa/quality.log
       - &finish-local-rust-cache
         name: Finish the local Rust compiler cache
         id: finish-local-rust-cache
         if: ${{ !cancelled() }}
+        # A cache failure must not prevent acceptance of the completed build.
+        # Save below only when shutdown succeeds; never snapshot a live store.
+        continue-on-error: true
         env: *local-rust-cache-env
         run: |
-          nix develop . --command bash -euo pipefail <<'CACHE'
-          kache stats --last-build
-          kache daemon stop
-          CACHE
+          nix run .#kache -- stats --last-build
+          nix run .#kache -- daemon stop
       - &save-local-rust-cache
         name: Save compiled vendored Rust dependencies
-        if: ${{ !cancelled() && github.event_name != 'pull_request' && steps.finish-local-rust-cache.outcome == 'success' && steps.local-rust-cache.outputs.cache-primary-key != '' && steps.local-rust-cache.outputs.cache-hit != 'true' }}
+        if: ${{ !cancelled() && github.event_name != 'pull_request' && !inputs.ios-tests && steps.finish-local-rust-cache.outcome == 'success' && steps.local-rust-cache.outputs.cache-primary-key != '' && steps.local-rust-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ${{ runner.temp }}/kache-store
@@ -367,15 +367,6 @@ jobs:
       AGENT_XCODE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       NEXTEST_TEST_THREADS: 6
       AGENT_IOS_TESTS: ${{ inputs.ios-tests }}
-      # Native Mac dependencies come from the Mac job's cache. Keep only the
-      # cross-compiled profile and its host build dependencies in this cache.
-      AGENT_IOS_RUST_CACHE_PATHS: |
-        target/aarch64-apple-ios-sim/release/.fingerprint
-        target/aarch64-apple-ios-sim/release/build
-        target/aarch64-apple-ios-sim/release/deps
-        target/release/.fingerprint
-        target/release/build
-        target/release/deps
       # The builders validate Swift content/toolchain hashes before reuse.
       AGENT_IOS_SWIFT_CACHE_PATHS: |
         target/qa/ios-derived-data
@@ -393,16 +384,11 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           cmd-format: nix develop . --command {0}
-          shared-key: *apple-native-cargo-key
-          save-if: false
-      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
-        id: ios-rust-cache
-        env:
-          AGENT_IOS_RUST_CACHE_PREFIX: ios-rust-xcode-26.6-${{ hashFiles('flake.lock') }}
-        with:
-          path: ${{ env.AGENT_IOS_RUST_CACHE_PATHS }}
-          key: ${{ env.AGENT_IOS_RUST_CACHE_PREFIX }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/config.toml', 'crates/*/Cargo.toml', 'scripts/build-agent-ios.sh') }}
-          restore-keys: ${{ env.AGENT_IOS_RUST_CACHE_PREFIX }}-
+          # Either Apple job may be unavailable; each must publish its own cache.
+          key: macos-swift-xcode-26.6-${{ hashFiles('flake.lock') }}
+          # Focused tests may omit the desktop renderer; only full builds publish.
+          save-if: ${{ github.event_name != 'pull_request' && !inputs.ios-tests }}
+          cache-on-failure: true
       - *restore-local-rust-cache
       - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         id: ios-cache
@@ -436,17 +422,11 @@ jobs:
           compression-level: 0
           retention-days: 1
       - name: Save iPhone Swift builds
-        if: ${{ !cancelled() && github.event_name != 'pull_request' && steps.ios-cache.outputs.cache-primary-key != '' && steps.ios-cache.outputs.cache-hit != 'true' }}
+        if: ${{ !cancelled() && github.event_name != 'pull_request' && !inputs.ios-tests && steps.ios-cache.outputs.cache-primary-key != '' && steps.ios-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ${{ env.AGENT_IOS_SWIFT_CACHE_PATHS }}
           key: ${{ steps.ios-cache.outputs.cache-primary-key }}
-      - name: Save cross-compiled iPhone Rust dependencies
-        if: ${{ !cancelled() && github.event_name != 'pull_request' && steps.ios-rust-cache.outputs.cache-primary-key != '' && steps.ios-rust-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
-        with:
-          path: ${{ env.AGENT_IOS_RUST_CACHE_PATHS }}
-          key: ${{ steps.ios-rust-cache.outputs.cache-primary-key }}
       - *finish-local-rust-cache
       - *save-local-rust-cache
       - name: Retain Apple acceptance logs and result bundles

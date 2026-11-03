@@ -140,7 +140,7 @@
             packages = with pkgs; [ hostRustToolchain kache cccc cargo-mutants cargo-nextest just jq git perl ] ++ nativeBuildTools
               ++ [ workflowLinter nodejs powershell ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux linuxDesktopLibraries;
             LD_LIBRARY_PATH = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux linuxDesktopLibraryPath;
-            shellHook = kacheHook;
+            shellHook = kacheHook + appleSdkHook;
           };
           ios-test = pkgs.mkShellNoCC {
             packages = with pkgs; [ just gitMinimal nodejs zsh ];
