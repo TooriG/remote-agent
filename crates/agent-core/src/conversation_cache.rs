@@ -1,5 +1,5 @@
-//! Device copies of opened conversations, one directory per Host, so that a
-//! conversation opened before shows at once while the Host confirms it.
+//! Device copies of the conversation list and opened conversations, one
+//! directory per Host, shown before the Host confirms them.
 //!
 //! A copy is the newest window of a settled conversation: running and
 //! expanded conversations keep their last settled copy. Writes follow the
@@ -8,9 +8,12 @@
 //! older copy is removed when read; removing a Host removes its directory.
 //! Copies are best effort: failed reads and writes leave the Host as the source.
 use crate::{
-    models::{SessionStatus, Thread, TurnStatus},
+    models::{ListQuery, SessionStatus, Thread, ThreadList, TurnStatus},
     session::{HistoryReadKind, SessionRef},
-    state::{Snapshot, operations::HISTORY_WINDOW_TURNS},
+    state::{
+        Snapshot,
+        operations::{HISTORY_WINDOW_TURNS, OperationKey},
+    },
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -30,6 +33,75 @@ const FORMAT: u32 = 1;
 struct Copy {
     format: u32,
     thread: Thread,
+}
+
+/// Like T3 Code's separate shell/thread caches (cefb544a), the list has no
+/// conversation bodies. Search results must never replace the unfiltered list.
+#[derive(Clone, Serialize, Deserialize)]
+struct ListCopy {
+    format: u32,
+    storage_scope: String,
+    query: Arc<ListQuery>,
+    threads: Arc<ThreadList>,
+    projects: Arc<BTreeMap<String, Arc<ThreadList>>>,
+    expanded: Arc<BTreeMap<String, u32>>,
+}
+
+impl ListCopy {
+    fn unchanged(&self, previous: &Self) -> bool {
+        self.storage_scope == previous.storage_scope
+            && self.query == previous.query
+            && Arc::ptr_eq(&self.threads, &previous.threads)
+            && Arc::ptr_eq(&self.projects, &previous.projects)
+            && self.expanded == previous.expanded
+    }
+
+    fn write(mut self, path: &Path) -> std::io::Result<()> {
+        self.threads = Arc::new(list_metadata(&self.threads));
+        self.projects = Arc::new(
+            self.projects
+                .iter()
+                .map(|(id, page)| (id.clone(), Arc::new(list_metadata(page))))
+                .collect(),
+        );
+        write_value(path, self)
+    }
+}
+
+fn list_metadata(list: &ThreadList) -> ThreadList {
+    ThreadList {
+        data: list
+            .data
+            .iter()
+            .map(|thread| Thread {
+                id: thread.id.clone(),
+                active_provider: thread.active_provider,
+                parent_id: thread.parent_id.clone(),
+                name: thread.name.clone(),
+                cwd: thread.cwd.clone(),
+                worktree_status: thread.worktree_status,
+                git_branch: thread.git_branch.clone(),
+                project_id: thread.project_id.clone(),
+                preview: thread.preview.clone(),
+                updated_at: thread.updated_at,
+                agent_id: thread.agent_id.clone(),
+                ..Default::default()
+            })
+            .collect(),
+        ..list.clone()
+    }
+}
+
+fn read_list(directory: &Path, storage_scope: &str) -> Option<ListCopy> {
+    let path = directory.join("list.cache");
+    let copy = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| agent_protocol::protocol::decode::<ListCopy>(&bytes).ok())
+        .filter(|copy| copy.format == FORMAT && copy.query.search_term.trim().is_empty());
+    if copy.is_none() {
+        let _ = std::fs::remove_file(path);
+    }
+    copy.filter(|copy| copy.storage_scope == storage_scope)
 }
 
 fn file(directory: &Path, id: &SessionRef) -> PathBuf {
@@ -76,12 +148,18 @@ fn read(path: &Path) -> Option<Thread> {
 
 fn write(directory: &Path, thread: &Thread) -> std::io::Result<()> {
     let id = thread.id.as_ref().expect("savable threads have IDs");
-    let bytes = agent_protocol::protocol::encode(Copy {
-        format: FORMAT,
-        thread: copy(thread),
-    })?;
-    std::fs::create_dir_all(directory)?;
-    let path = file(directory, id);
+    write_value(
+        &file(directory, id),
+        Copy {
+            format: FORMAT,
+            thread: copy(thread),
+        },
+    )
+}
+
+fn write_value(path: &Path, value: impl Serialize) -> std::io::Result<()> {
+    let bytes = agent_protocol::protocol::encode(value)?;
+    std::fs::create_dir_all(path.parent().expect("cache files have a directory"))?;
     let pending = path.with_extension("pending");
     std::fs::write(&pending, bytes)?;
     std::fs::rename(pending, path)
@@ -89,6 +167,23 @@ fn write(directory: &Path, thread: &Thread) -> std::io::Result<()> {
 
 /// Add the most recently saved copies that `snapshot` does not hold yet.
 pub fn restore(directory: &Path, snapshot: &mut Snapshot) {
+    if snapshot.threads.is_none()
+        && let Some(list) = read_list(directory, &snapshot.storage_scope)
+    {
+        snapshot.list_query = list.query;
+        snapshot.threads = Some(list.threads);
+        snapshot.project_threads = list.projects;
+        snapshot.expanded_projects = list.expanded;
+        snapshot.unconfirmed_lists = Arc::new(
+            std::iter::once(OperationKey::SessionList)
+                .chain(snapshot.project_threads.keys().map(|project_id| {
+                    OperationKey::ProjectList {
+                        project_id: project_id.clone(),
+                    }
+                }))
+                .collect(),
+        );
+    }
     let Ok(entries) = std::fs::read_dir(directory) else {
         return;
     };
@@ -117,15 +212,48 @@ pub fn clear(directory: &Path) {
     let _ = std::fs::remove_dir_all(directory);
 }
 
-/// Save changed, settled conversations until the Store stops publishing.
+/// Save changed lists and settled conversations until the Store stops publishing.
 pub async fn run(directory: PathBuf, mut updates: watch::Receiver<Arc<Snapshot>>) {
     // The state published before this task started is written as a change.
     let mut saved = BTreeMap::<SessionRef, Arc<Thread>>::new();
+    let mut saved_list: Option<ListCopy> = None;
     updates.mark_changed();
     while updates.changed().await.is_ok() {
         tokio::time::sleep(Duration::from_millis(500)).await;
-        let conversations = updates.borrow_and_update().conversations.clone();
-        let changed: Vec<_> = conversations
+        let snapshot = updates.borrow_and_update().clone();
+        let mut writing = false;
+        if snapshot.connected
+            && !snapshot.unconfirmed_lists.contains(&OperationKey::SessionList)
+            && snapshot.list_query.search_term.trim().is_empty()
+            // A pending or failed search reset still holds the previous query's rows.
+            && !snapshot.operations.contains_key(&OperationKey::SessionList)
+            && let Some(threads) = &snapshot.threads
+        {
+            let list = ListCopy {
+                format: FORMAT,
+                storage_scope: snapshot.storage_scope.clone(),
+                query: snapshot.list_query.clone(),
+                threads: threads.clone(),
+                projects: snapshot.project_threads.clone(),
+                expanded: snapshot.expanded_projects.clone(),
+            };
+            if saved_list
+                .as_ref()
+                .is_none_or(|previous| !list.unchanged(previous))
+            {
+                writing = true;
+                let path = directory.join("list.cache");
+                let pending = list.clone();
+                if tokio::task::spawn_blocking(move || pending.write(&path))
+                    .await
+                    .is_ok_and(|result| result.is_ok())
+                {
+                    saved_list = Some(list);
+                }
+            }
+        }
+        let changed: Vec<_> = snapshot
+            .conversations
             .iter()
             .filter(|(id, thread)| {
                 saved
@@ -136,6 +264,7 @@ pub async fn run(directory: PathBuf, mut updates: watch::Receiver<Arc<Snapshot>>
             .map(|(id, thread)| (id.clone(), thread.clone()))
             .collect();
         if !changed.is_empty() {
+            writing = true;
             let target = directory.clone();
             let pending = changed.clone();
             let written = tokio::task::spawn_blocking(move || {
@@ -152,15 +281,19 @@ pub async fn run(directory: PathBuf, mut updates: watch::Receiver<Arc<Snapshot>>
                 }
             }
         }
-        tokio::time::sleep(Duration::from_secs(10)).await;
+        if writing {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::Turn;
+    use crate::models::{Project, ProjectMembership, Turn};
     use crate::session::ProviderKind;
+    use crate::state::{Event, Intent, operations as op, reduce};
+    use op::Operation;
 
     fn thread(id: &str, turns: usize, status: TurnStatus) -> Thread {
         Thread {
@@ -204,6 +337,221 @@ mod tests {
 
     fn name(directory: &Path) -> Option<String> {
         restored(directory).values().next()?.name.clone()
+    }
+
+    fn page(data: Vec<Thread>, projects: Vec<Project>) -> Arc<ThreadList> {
+        Arc::new(ThreadList {
+            revision: 17,
+            limit: 5,
+            data,
+            projects,
+            has_more: true,
+            has_more_projects: false,
+            project_pages: Default::default(),
+            provider_errors: None,
+        })
+    }
+
+    fn listed(title: &str) -> Arc<Snapshot> {
+        let mut standalone = thread(title, 2, TurnStatus::Completed);
+        standalone.project_id = ProjectMembership::Unassigned {};
+        let mut child = thread("project chat", 1, TurnStatus::Completed);
+        child.project_id = ProjectMembership::Assigned("p".into());
+        let mut state = (*snapshot([standalone.clone(), child.clone()])).clone();
+        state.storage_scope = "volume".into();
+        state.connected = true;
+        state.threads = Some(page(
+            vec![standalone],
+            vec![Project {
+                id: "p".into(),
+                name: "Project".into(),
+                ..Default::default()
+            }],
+        ));
+        state.project_threads = Arc::new(BTreeMap::from([("p".into(), page(vec![child], vec![]))]));
+        state.expanded_projects = Arc::new(BTreeMap::from([("p".into(), 5)]));
+        Arc::new(state)
+    }
+
+    fn restored_state(directory: &Path, scope: &str) -> Snapshot {
+        let mut snapshot = Snapshot {
+            storage_scope: scope.into(),
+            ..Default::default()
+        };
+        restore(directory, &mut snapshot);
+        snapshot
+    }
+
+    async fn list_written(directory: &Path, title: &str) {
+        for _ in 0..1000 {
+            let state = restored_state(directory, "volume");
+            if state
+                .thread_list()
+                .is_some_and(|list| list.threads.first().is_some_and(|row| row.title == title))
+                && state.conversations.len() == 2
+            {
+                return;
+            }
+            tokio::task::yield_now().await;
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        panic!("list {title} was not written");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn first_host_results_are_saved_without_an_offline_startup_cooldown() {
+        let directory = tempfile::tempdir().unwrap();
+        let (updates, receiver) = watch::channel(Arc::new(Snapshot::default()));
+        let saving = tokio::spawn(run(directory.path().into(), receiver));
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert!(!directory.path().join("list.cache").exists());
+        updates.send_replace(listed("first host result"));
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        list_written(directory.path(), "first host result").await;
+        drop(updates);
+        saving.await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cached_list_and_project_chats_open_before_connection_and_refresh_without_disappearing()
+    {
+        let directory = tempfile::tempdir().unwrap();
+        let (updates, receiver) = watch::channel(listed("saved chat"));
+        let saving = tokio::spawn(run(directory.path().into(), receiver));
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        list_written(directory.path(), "saved chat").await;
+        drop(updates);
+        saving.await.unwrap();
+
+        let offline = restored_state(directory.path(), "volume");
+        assert!(!offline.connected);
+        let list = offline.thread_list().unwrap();
+        assert_eq!(list.threads[0].title, "saved chat");
+        assert!(
+            !list.threads[0].active,
+            "a cache is not live execution status"
+        );
+        assert!(list.has_more);
+        assert_eq!(list.projects[0].name, "Project");
+        assert_eq!(list.projects[0].threads[0].title, "project chat");
+        assert!(
+            offline.threads.as_ref().unwrap().data[0].turns.is_none(),
+            "list records do not duplicate conversation bodies"
+        );
+
+        let id = list.threads[0].id.clone();
+        let (mut selected, _) = reduce(
+            &offline,
+            Event::Intent(Intent::ReadThread(op::ReadThread::open(id))),
+        );
+        assert_eq!(
+            selected
+                .conversation_thread()
+                .unwrap()
+                .turns
+                .as_ref()
+                .unwrap()
+                .len(),
+            2
+        );
+        let (mut connected, _) = reduce(&selected, Event::Connected);
+        assert_eq!(
+            connected.thread_list().unwrap().threads[0].title,
+            "saved chat"
+        );
+
+        // A lower revision from a restarted Host must replace the saved rows.
+        let fresh = listed("fresh chat");
+        let mut response = fresh.threads.as_ref().unwrap().as_ref().clone();
+        response.revision = 1;
+        op::ListSessions::new((*connected.list_query).clone()).apply(&mut connected, response);
+        assert_eq!(
+            connected.thread_list().unwrap().threads[0].title,
+            "fresh chat"
+        );
+
+        // Reopening a held project shows its rows and refreshes them.
+        Arc::make_mut(&mut connected.expanded_projects).clear();
+        let (opened, _) = reduce(
+            &connected,
+            Event::Intent(Intent::SetProjectExpanded {
+                project_id: "p".into(),
+                expanded: true,
+            }),
+        );
+        assert_eq!(
+            opened.thread_list().unwrap().projects[0].threads[0].title,
+            "project chat"
+        );
+
+        // Reading a bad list must leave local drafts and saved bodies usable.
+        assert!(
+            restored_state(directory.path(), "another volume")
+                .thread_list()
+                .is_none()
+        );
+        let path = directory.path().join("list.cache");
+        std::fs::write(&path, b"damaged list").unwrap();
+        Arc::make_mut(&mut selected.drafts).insert(
+            "draft".into(),
+            Arc::new(crate::state::Draft {
+                text: "keep this".into(),
+                ..Default::default()
+            }),
+        );
+        selected.threads = None;
+        restore(directory.path(), &mut selected);
+        assert!(!path.exists());
+        assert!(selected.thread_list().is_none());
+        assert_eq!(selected.drafts[&"draft".into()].text, "keep this");
+        assert_eq!(selected.conversations.len(), 2);
+        clear(directory.path());
+        assert!(restored(directory.path()).is_empty());
+    }
+
+    #[rstest::rstest]
+    #[case("search")]
+    #[case("offline")]
+    #[case("search reset pending")]
+    #[case("search reset failed")]
+    #[tokio::test(start_paused = true)]
+    async fn search_and_offline_changes_do_not_replace_the_saved_list(#[case] state: &str) {
+        let directory = tempfile::tempdir().unwrap();
+        let (updates, receiver) = watch::channel(listed("saved chat"));
+        let saving = tokio::spawn(run(directory.path().into(), receiver));
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        list_written(directory.path(), "saved chat").await;
+        let mut next = (*listed("not the full live list")).clone();
+        match state {
+            "search" => Arc::make_mut(&mut next.list_query).search_term = "filtered".into(),
+            "offline" => next.connected = false,
+            _ => {
+                Arc::make_mut(&mut next.operations).insert(
+                    OperationKey::SessionList,
+                    op::OperationState {
+                        generation: 1,
+                        phase: if state == "search reset pending" {
+                            op::OperationPhase::Running
+                        } else {
+                            op::OperationPhase::Failed {
+                                message: "unavailable".into(),
+                            }
+                        },
+                    },
+                );
+            }
+        }
+        updates.send_replace(Arc::new(next));
+        drop(updates);
+        saving.await.unwrap();
+        assert_eq!(
+            restored_state(directory.path(), "volume")
+                .thread_list()
+                .unwrap()
+                .threads[0]
+                .title,
+            "saved chat"
+        );
     }
 
     /// Writes run on blocking threads, outside the paused clock.
