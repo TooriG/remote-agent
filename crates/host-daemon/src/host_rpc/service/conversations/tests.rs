@@ -31,6 +31,8 @@ pub(in crate::host_rpc::service) struct NativeAgent {
     pub(in crate::host_rpc::service) records: Arc<Mutex<HashMap<String, ThreadResponse>>>,
     pub(in crate::host_rpc::service) idle_warning: Option<&'static str>,
     deferred_history: bool,
+    /// Item IDs whose native bodies cannot be read.
+    unreadable: Mutex<std::collections::HashSet<String>>,
     pub(in crate::host_rpc::service) inputs: Arc<Mutex<Vec<op::Submission>>>,
     injected: Arc<Mutex<Vec<(String, handoff::Context)>>>,
     released: Arc<Mutex<Vec<String>>>,
@@ -64,6 +66,7 @@ impl NativeAgent {
             records: Default::default(),
             idle_warning: None,
             deferred_history: false,
+            unreadable: Default::default(),
             inputs: Default::default(),
             injected: Default::default(),
             released: Default::default(),
@@ -89,6 +92,7 @@ impl NativeAgent {
             records: self.records.clone(),
             idle_warning: self.idle_warning,
             deferred_history: self.deferred_history,
+            unreadable: Default::default(),
             inputs: self.inputs.clone(),
             injected: self.injected.clone(),
             released: self.released.clone(),
@@ -254,6 +258,14 @@ impl Agent for NativeAgent {
         })
     }
     async fn read_item(&self, params: &op::ReadItem) -> Result<op::ItemResponse, Failure> {
+        if self
+            .unreadable
+            .lock()
+            .unwrap()
+            .contains(params.item_id.as_str())
+        {
+            return Err(Failure::new("unreadable", "the native body is not UTF-8"));
+        }
         let records = self.records.lock().unwrap();
         let item = records
             .get(&params.thread_id.id)
@@ -2639,4 +2651,65 @@ async fn transcripts_replace_native_reads_until_the_project_is_imported_again() 
     .await
     .unwrap();
     imported_turns(&host, &root, &["turn-0", "outside", "turn-2"]).await;
+}
+
+#[tokio::test]
+async fn unreadable_native_bodies_stay_deferred_without_blocking_their_import() {
+    let directory = tempfile::tempdir().unwrap();
+    let directory = dunce::canonicalize(directory.path()).unwrap();
+    let mut codex = NativeAgent::new(ProviderKind::Codex, directory.join("codex"));
+    Arc::get_mut(&mut codex).unwrap().deferred_history = true;
+    let claude = NativeAgent::new(ProviderKind::Claude, directory.join("claude"));
+    let host = service(&directory, &codex, &claude);
+    let client = host.open_session();
+    let root = codex
+        .create(directory.to_str().unwrap(), None, None)
+        .await
+        .unwrap()
+        .thread
+        .id
+        .unwrap();
+    send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "first",
+        "hello",
+    )
+    .await
+    .unwrap();
+    codex.unreadable.lock().unwrap().insert("answer-0".into());
+    history(&host, client.id(), &root).await;
+    imported_turns(&host, &root, &["turn-0"]).await;
+    let stored = host
+        .inner
+        .transcripts
+        .turn(&root, &"turn-0".into())
+        .unwrap()
+        .unwrap()
+        .items
+        .unwrap();
+    let deferred = |id: &str| {
+        stored
+            .iter()
+            .find(|item| item.id.as_str() == id)
+            .unwrap()
+            .is_deferred()
+    };
+    assert!(!deferred("user-0"));
+    assert!(deferred("answer-0"));
+    // Reading the unreadable body reports the provider's failure, as before.
+    let failure = call::<op::ItemResponse>(
+        &host,
+        client.id(),
+        Call::ReadItem(op::ReadItem {
+            thread_id: root.clone(),
+            turn_id: "turn-0".into(),
+            item_id: "answer-0".into(),
+        }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(failure.code, "unreadable");
 }

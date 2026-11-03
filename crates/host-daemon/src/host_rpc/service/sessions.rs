@@ -589,7 +589,7 @@ impl HostRpcService {
                 .and_then(|turn| {
                     turn.items?
                         .into_iter()
-                        .find(|item| item.id == params.item_id)
+                        .find(|item| item.id == params.item_id && !item.is_deferred())
                 }),
         };
         let mut response = if let Some(item) = known {

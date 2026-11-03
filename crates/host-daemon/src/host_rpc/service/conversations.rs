@@ -215,19 +215,27 @@ impl HostRpcService {
                                     | agent_protocol::items::ItemBody::Plan { .. }
                             ))
                     {
-                        let output = agent
+                        let output = match agent
                             .read_item(&op::ReadItem {
                                 thread_id: session.clone(),
                                 turn_id: turn.id.clone(),
                                 item_id: item.id.clone(),
                             })
-                            .await?;
-                        if output.item.is_deferred() {
-                            return Err(Failure::new(
-                                "incomplete_history",
-                                "Historical item could not be read.",
-                            ));
-                        }
+                            .await
+                        {
+                            Ok(output) if !output.item.is_deferred() => output,
+                            // A transcript keeps an unreadable body deferred, such
+                            // as a non-UTF-8 tool output; reading the item later
+                            // reports the provider's failure.
+                            _ if usage == HistoryUse::Import => continue,
+                            Ok(_) => {
+                                return Err(Failure::new(
+                                    "incomplete_history",
+                                    "Historical item could not be read.",
+                                ));
+                            }
+                            Err(error) => return Err(error),
+                        };
                         *item = Arc::new(output.item);
                     }
                 }
