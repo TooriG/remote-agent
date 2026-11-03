@@ -162,14 +162,14 @@ enum Role {
 pub struct Endpoint(Arc<iroh::Endpoint>, Arc<Trace>);
 impl Endpoint {
     pub async fn bind(identity: Identity, relays: Relays) -> Result<Self, TransportError> {
-        Self::bind_recording(identity, relays, Trace::new()).await
+        Self::bind_recording(identity, relays, Trace::new("development".into())).await
     }
     /// Paired clients dial the direct addresses from their saved ticket before
     /// relay or lookup can help, so a Host keeps one port per identity instead
     /// of a new ephemeral port per launch. Another process holding that port
     /// costs only this launch an ephemeral port.
     pub async fn bind_host(identity: Identity, relays: Relays) -> Result<Self, TransportError> {
-        let trace = Trace::new();
+        let trace = Trace::new("development".into());
         let port = host_port(identity.node_id());
         let host = |port| Role::Host { port };
         match Self::bind_as(

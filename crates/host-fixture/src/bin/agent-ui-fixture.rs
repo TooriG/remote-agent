@@ -26,6 +26,7 @@ async fn main() {
         &directory,
         agent_transport::diagnostics::Component::Host,
         env!("CARGO_PKG_VERSION"),
+        option_env!("AGENT_BUILD_REVISION").unwrap_or("development"),
     )
     .unwrap();
     let workspace = directory.join("project");

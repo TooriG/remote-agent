@@ -8,8 +8,13 @@ async fn rotation_failure_does_not_deadlock_and_logging_recovers() {
     const FIXTURE: &str = "AGENT_DIAGNOSTICS_ROTATION_FIXTURE";
     if let Some(directory) = std::env::var_os(FIXTURE) {
         let directory = std::path::PathBuf::from(directory);
-        diagnostics::initialize(&directory, diagnostics::Component::Desktop, "rotation-test")
-            .unwrap();
+        diagnostics::initialize(
+            &directory,
+            diagnostics::Component::Desktop,
+            "rotation-test",
+            "test-revision",
+        )
+        .unwrap();
         let logs = directory.join("logs");
         let path = logs.join("desktop.jsonl");
         fs::write(&path, "{}\n".repeat(5 * 1024 * 1024 / 3 + 1)).unwrap();
@@ -79,8 +84,13 @@ async fn closed_stderr_does_not_turn_a_log_failure_into_a_panic() {
     const FIXTURE: &str = "AGENT_DIAGNOSTICS_STDERR_FIXTURE";
     if let Some(directory) = std::env::var_os(FIXTURE) {
         let directory = std::path::PathBuf::from(directory);
-        diagnostics::initialize(&directory, diagnostics::Component::Desktop, "stderr-test")
-            .unwrap();
+        diagnostics::initialize(
+            &directory,
+            diagnostics::Component::Desktop,
+            "stderr-test",
+            "test-revision",
+        )
+        .unwrap();
         let path = directory.join("logs/desktop.jsonl");
         fs::remove_file(&path).unwrap();
         fs::create_dir(&path).unwrap();

@@ -33,6 +33,7 @@ pub(crate) async fn run(config: StartupConfig) -> Result<()> {
         &directory,
         agent_transport::diagnostics::Component::Host,
         env!("CARGO_PKG_VERSION"),
+        option_env!("AGENT_BUILD_REVISION").unwrap_or("development"),
     )
     .context("cannot initialize Host error log")?;
     let store = Arc::new(FileKeyStore(agent_local_host::identity_path(&directory)));

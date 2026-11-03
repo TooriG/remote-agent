@@ -7,9 +7,6 @@ case "${1:-simulator}" in
     device) rust_target=aarch64-apple-ios; sdk=iphoneos; swift_target=arm64-apple-ios26.0 ;;
     *) echo "usage: $0 [simulator|device]" >&2; exit 2 ;;
 esac
-export AGENT_BUILD_REVISION
-AGENT_BUILD_REVISION=$(git rev-parse HEAD)
-if ! git diff --quiet HEAD --; then AGENT_BUILD_REVISION+=-dirty; fi
 target=$(cargo metadata --no-deps --format-version 1 | jq -er .target_directory)
 CC=/usr/bin/clang CXX=/usr/bin/clang++ \
 CARGO_TARGET_AARCH64_APPLE_IOS_LINKER=/usr/bin/clang \

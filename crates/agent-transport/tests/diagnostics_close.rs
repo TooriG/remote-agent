@@ -12,6 +12,7 @@ async fn expected_close_is_quiet_but_disconnects_and_timeouts_are_retained() {
         directory.path(),
         diagnostics::Component::Desktop,
         "test-application",
+        "test-revision",
     )
     .unwrap();
     for cause in ["intentional", "eof", "timeout", "silent"] {

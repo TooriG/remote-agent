@@ -9,6 +9,7 @@ fn transport_failures_survive_without_payloads_or_a_log_storm() {
         directory.path(),
         diagnostics::Component::Host,
         "network-test",
+        "test-revision",
     )
     .unwrap();
     // These are the event shapes emitted by the locked iroh/netwatch/noq

@@ -25,6 +25,7 @@ async fn rpc_failure_is_persisted_before_delivery_and_success_preserves_it() {
         directory.path(),
         diagnostics::Component::Desktop,
         "test-application",
+        "test-revision",
     )
     .unwrap();
     let (client, server) = tokio::io::duplex(8192);
@@ -79,6 +80,7 @@ async fn rpc_failure_is_persisted_before_delivery_and_success_preserves_it() {
     assert_eq!(error["operation"], "thread/read");
     assert_eq!(error["errorCode"], -32603);
     assert_eq!(error["version"], "test-application");
+    assert_eq!(error["revision"], "test-revision");
     assert_eq!(
         error["message"],
         "failed to read session metadata: rollout is empty"

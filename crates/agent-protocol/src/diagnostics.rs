@@ -46,6 +46,16 @@ pub struct ConnectionPerformance {
     pub timeline: ConnectionTimeline,
 }
 
+impl ConnectionPerformance {
+    pub fn with_client(self, revision: &str, platform: ClientPlatform) -> Self {
+        Self {
+            client_revision: revision.into(),
+            platform,
+            ..self
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConnectionPhase {
     AppPreparation,

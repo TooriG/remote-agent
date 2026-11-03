@@ -66,7 +66,7 @@ class StorePersistenceTest {
         val source = fixture.conversation(session)
         val bytes = fixture.serializeLocalState()
         fixture.close()
-        val store = AgentStore.offline(bytes, null)
+        val store = AgentStore.offline(bytes, null, "test-revision")
         try {
             val snapshot = store.snapshot()
             val first = requireNotNull(projectConversationRows(snapshot, source, null))
@@ -104,7 +104,7 @@ class StorePersistenceTest {
                     base.getSharedPreferences("$token-$name", mode)
             }
         val repository = AndroidMobileRepository(context)
-        val store = AgentStore.offline(byteArrayOf(), null)
+        val store = AgentStore.offline(byteArrayOf(), null, "test-revision")
         try {
             store.dispatch(Intent.NewChat("/fixture")).wait()
             val key = store.snapshot().navigation().draftKey
@@ -113,8 +113,8 @@ class StorePersistenceTest {
             repository.save("host-a", store.snapshot().serializeLocalState())
             store.dispatch(Intent.SetDraftText(key, "別の Host の下書き")).wait()
             repository.save("host-b", store.snapshot().serializeLocalState())
-            val restoredA = AgentStore.offline(repository.load("host-a"), null)
-            val restoredB = AgentStore.offline(repository.load("host-b"), null)
+            val restoredA = AgentStore.offline(repository.load("host-a"), null, "test-revision")
+            val restoredB = AgentStore.offline(repository.load("host-b"), null, "test-revision")
             try {
                 assertEquals("日本語の下書き", restoredA.snapshot().draft(key).text)
                 assertEquals("別の Host の下書き", restoredB.snapshot().draft(key).text)
@@ -134,7 +134,7 @@ class StorePersistenceTest {
 
     @Test
     fun shutdownCompletesTheNativeSnapshotWait() = runBlocking {
-        val store = AgentStore.offline(byteArrayOf(), null)
+        val store = AgentStore.offline(byteArrayOf(), null, "test-revision")
         val waiter =
             async(start = CoroutineStart.UNDISPATCHED) {
                 var previous = store.snapshot()
