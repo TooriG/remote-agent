@@ -6,8 +6,8 @@ license.workspace = true
 rust-version.workspace = true
 
 [lib]
-crate-type = ["lib", "staticlib", "cdylib"]
+# iOS requests staticlib explicitly; the other consumers load a dynamic library.
+crate-type = ["cdylib"]
 
 [dependencies]
 agent-core = { path = "../agent-core", features = ["bindings"] }
-uniffi.workspace = true
