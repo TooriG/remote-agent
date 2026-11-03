@@ -161,15 +161,9 @@ jobs:
       - &free-space
         name: Free space for pinned Nix tools and Cargo builds
         run: |
-          df -h /
-          # These jobs use Nix tools, not the image's Android or .NET SDK.
-          # Large binaries provide the space; unlinking every small file is slow.
-          for sdk in /usr/local/lib/android /usr/share/dotnet; do
-            if [[ -d "$sdk" ]]; then
-              sudo find "$sdk" -type f -size +10M -delete
-            fi
-          done
-          df -h /
+          # Project tools come from Nix; Actions' own Node runtimes live outside this tool cache.
+          bash scripts/free-runner-space.sh /usr/local/lib/android /usr/share/dotnet \
+            /usr/share/swift /usr/local/.ghcup /opt/hostedtoolcache
       - &prepare-zsh
         name: Prepare isolated Zsh startup for terminal tests
         shell: bash
