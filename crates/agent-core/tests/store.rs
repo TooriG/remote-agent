@@ -2390,7 +2390,7 @@ async fn creating_a_chat_updates_matching_search_results_without_reading_the_lis
 
 #[tokio::test]
 async fn expanded_history_failure_preserves_cache_and_retry_adopts_complete_window() {
-    let initial: Thread = serde_json::from_value(json!({"id":{"provider":"codex","id":"thread"},"historyLimit":5,"historyHasMore":true,"turns":[{"id":"latest","items":[],"status":"unknown"}]})).unwrap();
+    let initial: Thread = serde_json::from_value(json!({"id":{"provider":"codex","id":"thread"},"historyLimit":10,"historyHasMore":true,"turns":[{"id":"latest","items":[],"status":"unknown"}]})).unwrap();
     let (store, mut reader, writer) = setup(Snapshot {
         conversations: Arc::new(BTreeMap::from([(
             SessionRef {
@@ -2409,7 +2409,7 @@ async fn expanded_history_failure_preserves_cache_and_retry_adopts_complete_wind
             assert_eq!(request["method"], "host/session/open");
             assert_eq!(
                 request["params"],
-                json!({"session":{"provider":"codex","id":"thread"},"limit":10,"includeActivity":false})
+                json!({"session":{"provider":"codex","id":"thread"},"limit":20,"includeActivity":false})
             );
             let response = if failed {
                 json!({"error":{"code":"request_failed","message":"temporary history failure"}})
@@ -2468,7 +2468,7 @@ async fn expanded_history_failure_preserves_cache_and_retry_adopts_complete_wind
 
 #[tokio::test]
 async fn expanded_history_replaces_the_window_preserving_native_item_ids() {
-    let initial: Thread = serde_json::from_value(json!({"id":{"provider":"codex","id":"thread"},"historyLimit":5,"historyHasMore":true,"turns":[{"id":"new","status":"completed","items":[{"id":"new-item","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"new","phase":"unknown"}}}}}]}]})).unwrap();
+    let initial: Thread = serde_json::from_value(json!({"id":{"provider":"codex","id":"thread"},"historyLimit":10,"historyHasMore":true,"turns":[{"id":"new","status":"completed","items":[{"id":"new-item","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"new","phase":"unknown"}}}}}]}]})).unwrap();
     let (store, mut reader, writer) = setup(Snapshot {
         conversations: Arc::new(BTreeMap::from([(
             SessionRef {
@@ -2481,7 +2481,7 @@ async fn expanded_history_replaces_the_window_preserving_native_item_ids() {
     })
     .await;
     let server = tokio::spawn(async move {
-        for (limit, complete) in [(10, false), (15, true)] {
+        for (limit, complete) in [(20, false), (30, true)] {
             let request = read(&mut reader).await;
             assert_eq!(request["method"], "host/session/open");
             assert_eq!(request["params"]["limit"], limit);
@@ -3904,7 +3904,7 @@ async fn session_update_gap_preserves_history_and_only_reports_failed_recovery(
         .unwrap();
     let recovery = read(&mut reader).await;
     assert_eq!(recovery["method"], "host/session/open");
-    assert_eq!(recovery["params"]["limit"], 5);
+    assert_eq!(recovery["params"]["limit"], op::HISTORY_WINDOW_TURNS);
     assert!(!store.snapshot().subscriptions.contains_key(&id));
     assert!(store.snapshot().error.is_none());
     assert_eq!(

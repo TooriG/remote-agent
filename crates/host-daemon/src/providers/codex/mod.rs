@@ -685,6 +685,12 @@ impl Agent for Codex {
             model_change: true,
         }
     }
+    fn summary_items(
+        &self,
+        items: &[Arc<agent_protocol::items::Item>],
+    ) -> Option<Vec<Arc<agent_protocol::items::Item>>> {
+        Some(native::summary_items(items.to_vec()))
+    }
     fn availability(&self) -> Result<(), Failure> {
         self.server().map(|_| ())
     }

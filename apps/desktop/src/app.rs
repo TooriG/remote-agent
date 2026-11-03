@@ -649,6 +649,14 @@ impl Desktop {
                         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
                         Err(error) => return Err(error.to_string()),
                     };
+                let conversations = platform::conversation_copies(&host)?;
+                let restoring = conversations.clone();
+                let snapshot = tokio::task::spawn_blocking(move || {
+                    agent_core::conversation_cache::restore(&restoring, &mut snapshot);
+                    snapshot
+                })
+                .await
+                .map_err(|error| error.to_string())?;
                 let initial_cwd = initial_cwd.or_else(|| {
                     snapshot
                         .navigation
@@ -663,6 +671,10 @@ impl Desktop {
                     )
                     .await
                     .map_err(|error| format!("{error:#}"))?;
+                tokio::spawn(agent_core::conversation_cache::run(
+                    conversations,
+                    store.subscribe(),
+                ));
                 if let Some(cwd) = initial_cwd {
                     drop(store.dispatch(Intent::NewChat { cwd }));
                 }

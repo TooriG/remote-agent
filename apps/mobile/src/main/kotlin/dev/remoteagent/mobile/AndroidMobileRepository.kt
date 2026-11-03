@@ -85,6 +85,10 @@ internal class AndroidMobileRepository(private val context: Context) {
             override fun diagnosticsDirectory(): String? = access {
                 this@AndroidMobileRepository.diagnosticsDirectory(id)
             }
+
+            override fun conversationDirectory(): String? = access {
+                File(directory, "conversations/${encodedId(id)}").absolutePath
+            }
         }
 
     private fun snapshotFile(id: String) = AtomicFile(File(directory, "agent-snapshot-${encodedId(id)}.json"))

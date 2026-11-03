@@ -199,15 +199,18 @@ pub struct ReadThread {
     #[cfg_attr(feature = "bindings", uniffi(default = false))]
     pub open: bool,
     #[serde(default)]
-    #[cfg_attr(feature = "bindings", uniffi(default = 5))]
+    // UniFFI defaults must be literals; keep this equal to HISTORY_WINDOW_TURNS.
+    #[cfg_attr(feature = "bindings", uniffi(default = 10))]
     pub limit: u32,
 }
+/// Turns an opened conversation shows first, and each older page adds.
+pub const HISTORY_WINDOW_TURNS: u32 = 10;
 impl ReadThread {
     pub fn new(thread_id: crate::session::SessionRef) -> Self {
         Self {
             thread_id,
             open: false,
-            limit: 5,
+            limit: HISTORY_WINDOW_TURNS,
         }
     }
     pub fn open(thread_id: crate::session::SessionRef) -> Self {
@@ -217,7 +220,13 @@ impl ReadThread {
         }
     }
 }
-impl rpc::RpcMethod for ReadThread {
+/// The request for a ReadThread: the Host omits a window the client holds.
+#[derive(Debug, Serialize)]
+pub struct OpenThread<'a> {
+    pub read: &'a ReadThread,
+    pub known_version: Option<u64>,
+}
+impl rpc::RpcMethod for OpenThread<'_> {
     agent_protocol::operations::rpc_contract!(OpenSession);
     fn subscription(output: &mut Self::Output, id: uuid::Uuid) {
         output.subscription_id = id;
@@ -226,16 +235,38 @@ impl rpc::RpcMethod for ReadThread {
         &self,
     ) -> Result<<Self::Contract as crate::protocol::contracts::Contract>::Params, PeerError> {
         Ok(crate::session::OpenSession {
-            session: self.thread_id.clone(),
-            limit: self.limit as usize,
+            session: self.read.thread_id.clone(),
+            limit: self.read.limit as usize,
             include_activity: false,
+            known_version: self.known_version,
         })
     }
     fn validate(&self, output: &Self::Output) -> Result<(), &'static str> {
-        if output.session != self.thread_id {
+        if output.session != self.read.thread_id {
             return Err("session identity does not match");
         }
-        rpc::validate_thread(&output.response, Some(&self.thread_id))
+        if output.unchanged {
+            return Ok(());
+        }
+        rpc::validate_thread(&output.response, Some(&self.read.thread_id))
+    }
+}
+
+/// An unchanged reply keeps the held window's turns and paging.
+fn held_window(
+    snapshot: &Snapshot,
+    id: &crate::session::SessionRef,
+    output: &mut crate::session::OpenedSession,
+) {
+    if !output.unchanged {
+        return;
+    }
+    if let Some(held) = snapshot.conversations.get(id) {
+        let thread = &mut output.response.thread;
+        thread.turns = held.turns.clone();
+        thread.history_cursor = held.history_cursor.clone();
+        thread.history_has_more = held.history_has_more;
+        thread.history_read_state = held.history_read_state.clone();
     }
 }
 
@@ -245,7 +276,30 @@ impl Operation for ReadThread {
             session: self.thread_id.clone(),
         })
     }
-    rpc_operation!();
+    /// A held window's version, when it has the requested size.
+    type Input = Option<u64>;
+    fn capture(&self, snapshot: &Snapshot) -> Result<Self::Input, PeerError> {
+        Ok(snapshot
+            .conversations
+            .get(&self.thread_id)
+            .filter(|thread| {
+                thread.turns.is_some() && thread.history_limit == Some(u64::from(self.limit))
+            })
+            .and_then(|thread| thread.transcript_version))
+    }
+    type Output = crate::session::OpenedSession;
+    async fn run(
+        &self,
+        known_version: Self::Input,
+        context: &mut Execution<'_>,
+    ) -> Result<Self::Output, PeerError> {
+        context
+            .call(&OpenThread {
+                read: self,
+                known_version,
+            })
+            .await
+    }
     fn invalidates(&self) -> bool {
         self.open
     }
@@ -261,6 +315,7 @@ impl Operation for ReadThread {
         Ok(())
     }
     fn apply(self, snapshot: &mut Snapshot, mut output: Self::Output) -> Vec<Effect> {
+        held_window(snapshot, &self.thread_id, &mut output);
         if output
             .response
             .thread
@@ -309,7 +364,8 @@ impl Operation for ReadThread {
         Arc::make_mut(&mut snapshot.subscriptions).insert(self.thread_id, output.subscription_id);
         effects
     }
-    fn stale(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
+    fn stale(self, snapshot: &mut Snapshot, mut output: Self::Output) -> Vec<Effect> {
+        held_window(snapshot, &self.thread_id, &mut output);
         // A late navigation result can warm the cache, but must never replace
         // an already subscribed, more recent view or change the selected draft.
         if !snapshot.subscriptions.contains_key(&self.thread_id) {
@@ -590,8 +646,13 @@ impl Operation for OpenRequest {
         context: &mut Execution<'_>,
     ) -> Result<Self::Output, PeerError> {
         let id = context.client.call(self).await?;
-        let open = ReadThread::new(id);
-        context.call(&open).await
+        let read = ReadThread::new(id);
+        context
+            .call(&OpenThread {
+                read: &read,
+                known_version: None,
+            })
+            .await
     }
     fn apply(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
         ReadThread::new(output.session.clone()).apply(snapshot, output)
@@ -605,6 +666,56 @@ impl Operation for OpenRequest {
 mod tests {
     use super::*;
     use crate::session::{HistoryReadKind, ProviderKind, SessionRef};
+
+    #[test]
+    fn a_held_current_window_is_reused_and_only_its_metadata_refreshes() {
+        let id = SessionRef::new(ProviderKind::Codex, "held".into()).unwrap();
+        let held = Thread {
+            id: Some(id.clone()),
+            name: Some("old".into()),
+            history_limit: Some(u64::from(HISTORY_WINDOW_TURNS)),
+            history_cursor: Some("t3".into()),
+            history_has_more: Some(true),
+            transcript_version: Some(5),
+            turns: Some(vec![Arc::new(crate::models::Turn {
+                id: "turn".into(),
+                ..Default::default()
+            })]),
+            ..Default::default()
+        };
+        let mut snapshot = Snapshot::default();
+        Arc::make_mut(&mut snapshot.conversations).insert(id.clone(), Arc::new(held));
+        let open = ReadThread::open(id.clone());
+        assert_eq!(open.capture(&snapshot).unwrap(), Some(5));
+        let other_size = ReadThread {
+            limit: 5,
+            ..ReadThread::open(id.clone())
+        };
+        assert_eq!(other_size.capture(&snapshot).unwrap(), None);
+        open.apply(
+            &mut snapshot,
+            crate::session::OpenedSession {
+                session: id.clone(),
+                subscription_id: uuid::Uuid::new_v4(),
+                unchanged: true,
+                response: crate::models::ThreadResponse {
+                    thread: Thread {
+                        id: Some(id.clone()),
+                        name: Some("renamed".into()),
+                        history_limit: Some(u64::from(HISTORY_WINDOW_TURNS)),
+                        transcript_version: Some(5),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            },
+        );
+        let thread = &snapshot.conversations[&id];
+        assert_eq!(thread.name.as_deref(), Some("renamed"));
+        assert_eq!(thread.turns.as_ref().unwrap()[0].id, "turn".into());
+        assert_eq!(thread.history_cursor.as_deref(), Some("t3"));
+        assert_eq!(thread.history_has_more, Some(true));
+    }
 
     #[rstest::rstest]
     #[case(HistoryReadKind::Incomplete, vec!["claude: Claude failed to start".into()])]
@@ -855,6 +966,7 @@ mod tests {
             crate::session::OpenedSession {
                 session: id.clone(),
                 subscription_id: uuid::Uuid::new_v4(),
+                unchanged: false,
                 response: crate::models::ThreadResponse {
                     thread: Thread {
                         id: Some(id.clone()),

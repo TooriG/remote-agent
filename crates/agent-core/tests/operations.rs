@@ -47,13 +47,18 @@ async fn execute(client: &Client, command: &Value) -> Result<Value, PeerError> {
         .unwrap(),
         "readThread" | "readOlder" => serde_json::to_value(
             client
-                .call(&ReadThread {
-                    limit: if command["type"] == "readOlder" {
-                        10
-                    } else {
-                        5
+                .call(&agent_core::state::operations::OpenThread {
+                    read: &ReadThread {
+                        limit: if command["type"] == "readOlder" {
+                            10
+                        } else {
+                            5
+                        },
+                        ..ReadThread::new(
+                            serde_json::from_value(command["threadId"].clone()).unwrap(),
+                        )
                     },
-                    ..ReadThread::new(serde_json::from_value(command["threadId"].clone()).unwrap())
+                    known_version: None,
                 })
                 .await?
                 .response,

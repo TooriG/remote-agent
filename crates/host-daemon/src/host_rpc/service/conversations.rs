@@ -10,13 +10,21 @@ use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 #[cfg(test)]
 pub(super) mod tests;
 
-// Browsing and excerpts may report missing providers. AI handoffs must transfer
-// complete source history rather than silently dropping context.
+// Browsing and excerpts may report missing providers. AI handoffs and imports
+// must transfer complete source history rather than silently dropping context.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum HistoryUse {
     Read,
     Excerpt,
     Handoff,
+    /// A transcript copies messages and generated images in full.
+    Import,
+}
+
+impl HistoryUse {
+    fn complete(self) -> bool {
+        matches!(self, Self::Handoff | Self::Import)
+    }
 }
 
 impl HostRpcService {
@@ -27,7 +35,8 @@ impl HostRpcService {
         let history = if let Some(row) = self.inner.conversations.get(&params.session)? {
             self.conversation_history(&row, HistoryUse::Excerpt).await?
         } else {
-            self.native_history(&params.session, true).await?
+            self.native_history(&params.session, HistoryUse::Excerpt)
+                .await?
         };
         let messages = history
             .thread
@@ -66,7 +75,7 @@ impl HostRpcService {
                 "The source provider cannot fork this response.",
             ));
         }
-        let history = self.native_history(&native, false).await?;
+        let history = self.native_history(&native, HistoryUse::Read).await?;
         let boundary = history
             .thread
             .turns
@@ -98,7 +107,7 @@ impl HostRpcService {
         let mut fork = Conversation::new(&response.thread)?;
         let target = fork.id.clone();
         let count = self
-            .native_history(&target, false)
+            .native_history(&target, HistoryUse::Read)
             .await?
             .thread
             .turns
@@ -142,7 +151,7 @@ impl HostRpcService {
     pub(super) async fn native_history(
         &self,
         session: &SessionRef,
-        hydrate: bool,
+        usage: HistoryUse,
     ) -> Result<ThreadResponse, Failure> {
         let agent = self.inner.providers.get(session.provider)?;
         let mut response = agent.open(&session.id, 100, true).await?;
@@ -185,7 +194,7 @@ impl HostRpcService {
                 "The provider did not supply complete history.",
             ));
         }
-        if hydrate {
+        if usage != HistoryUse::Read {
             for turn in response.thread.turns.iter_mut().flatten() {
                 let turn = Arc::make_mut(turn);
                 if turn.items_summary {
@@ -196,28 +205,35 @@ impl HostRpcService {
                     // Handoffs deliberately omit reasoning and native tool
                     // state. Their deferred bodies need not be recovered.
                     if item.is_deferred()
-                        && matches!(
-                            item.body(),
-                            agent_protocol::items::ItemBody::UserMessage { .. }
-                                | agent_protocol::items::ItemBody::AssistantText { .. }
-                                | agent_protocol::items::ItemBody::CommandExecution { .. }
-                                | agent_protocol::items::ItemBody::FileChange { .. }
-                                | agent_protocol::items::ItemBody::Plan { .. }
-                        )
+                        && (transcripts::content(item.body())
+                            || (usage != HistoryUse::Import
+                                && matches!(
+                                    item.body(),
+                                    agent_protocol::items::ItemBody::CommandExecution { .. }
+                                        | agent_protocol::items::ItemBody::FileChange { .. }
+                                        | agent_protocol::items::ItemBody::Plan { .. }
+                                )))
                     {
-                        let output = agent
+                        let output = match agent
                             .read_item(&op::ReadItem {
                                 thread_id: session.clone(),
                                 turn_id: turn.id.clone(),
                                 item_id: item.id.clone(),
                             })
-                            .await?;
-                        if output.item.is_deferred() {
-                            return Err(Failure::new(
-                                "incomplete_history",
-                                "Historical item could not be read.",
-                            ));
-                        }
+                            .await
+                        {
+                            Ok(output) if !output.item.is_deferred() => output,
+                            // A transcript keeps an unreadable body deferred;
+                            // reading the item later reports the provider's failure.
+                            _ if usage == HistoryUse::Import => continue,
+                            Ok(_) => {
+                                return Err(Failure::new(
+                                    "incomplete_history",
+                                    "Historical item could not be read.",
+                                ));
+                            }
+                            Err(error) => return Err(error),
+                        };
                         *item = Arc::new(output.item);
                     }
                 }
@@ -272,22 +288,19 @@ impl HostRpcService {
             };
             let agent = match self.inner.providers.get(segment.session.provider) {
                 Ok(agent) => agent,
-                Err(error) if usage != HistoryUse::Handoff => {
+                Err(error) if !usage.complete() => {
                     slot.insert(Err(error));
                     continue;
                 }
                 Err(error) => return Err(error),
             };
-            let history = match self
-                .native_history(&segment.session, usage != HistoryUse::Read)
-                .await
-            {
+            let history = match self.native_history(&segment.session, usage).await {
                 Ok(response) => Ok((
                     response,
                     agent.availability().is_ok() && agent.capabilities().fork,
                 )),
                 Err(error)
-                    if usage != HistoryUse::Handoff
+                    if !usage.complete()
                         && error.code == "provider_unavailable"
                         && agent.availability().is_err() =>
                 {
@@ -424,7 +437,7 @@ impl HostRpcService {
         let active = previous
             .as_ref()
             .map_or_else(|| root.clone(), |row| row.active.clone());
-        let source = self.native_history(&active, false).await?;
+        let source = self.native_history(&active, HistoryUse::Read).await?;
         let selected = input
             .model
             .as_ref()
@@ -526,7 +539,7 @@ impl HostRpcService {
             target = None;
         }
         let mut target_history = if let Some(target) = &target {
-            match self.native_history(target, false).await {
+            match self.native_history(target, HistoryUse::Read).await {
                 Ok(history) => history,
                 Err(_) => self.create_handoff_target(&row, selected).await?,
             }
@@ -610,7 +623,7 @@ impl HostRpcService {
                 .expect("target binding")
                 .seen = seen;
             self.inner.conversations.save(row.clone())?;
-            target_history = self.native_history(&target, false).await?;
+            target_history = self.native_history(&target, HistoryUse::Read).await?;
         }
         let from = target_history.thread.turns.as_ref().map_or(0, Vec::len);
         row.activate(target.clone(), from);

@@ -12,7 +12,15 @@ impl HostRpcService {
             .router
             .retain_execution(params.session.clone())
             .map_err(|error| Failure::new("invalid_params", error))?;
-        let items = if let Some(row) = self.inner.conversations.get(&params.session)? {
+        let stored = self
+            .inner
+            .transcripts
+            .turn(&params.session, &params.turn_id)
+            .map_err(transcripts::storage_failure)?
+            .and_then(|turn| turn.items);
+        let items = if let Some(items) = stored {
+            items
+        } else if let Some(row) = self.inner.conversations.get(&params.session)? {
             let (source, turn) = row.source(&params.turn_id)?;
             if !row.segments.iter().any(|segment| segment.session == source) {
                 return Err(Failure::new(
@@ -48,7 +56,26 @@ impl HostRpcService {
         &self,
         params: &agent_protocol::session::ReadHistory,
     ) -> Result<agent_protocol::session::HistoryPage, Failure> {
-        let mut page = if let Some(row) = self.inner.conversations.get(&params.session)? {
+        let row = self.inner.conversations.get(&params.session)?;
+        // Transcript cursors are positions. A window read from native history
+        // before its import keeps paging native history.
+        let stored = match transcripts::position(row.is_some(), &params.cursor) {
+            Some(end) => self.stored_history(
+                &params.session,
+                row.as_ref(),
+                Some(end),
+                transcripts::WINDOW_TURNS,
+                params.include_activity,
+            )?,
+            None => None,
+        };
+        let mut page = if let Some(response) = stored {
+            agent_protocol::session::HistoryPage {
+                history_read_state: response.thread.history_read_state,
+                turns: response.thread.turns.unwrap_or_default(),
+                next_cursor: response.thread.history_cursor,
+            }
+        } else if let Some(row) = row {
             self.read_conversation_page(&row, &params.cursor).await?
         } else {
             self.inner
@@ -192,7 +219,12 @@ impl HostRpcService {
         require_capability::<agent_protocol::protocol::contracts::RenameSession>(
             agent.capabilities().rename,
         )?;
-        agent.rename(&target.id, &params.name).await
+        let renamed = agent.rename(&target.id, &params.name).await?;
+        self.inner
+            .transcripts
+            .rename(target, Some(&params.name))
+            .map_err(transcripts::storage_failure)?;
+        Ok(renamed)
     }
 
     pub(super) async fn submit_input(
@@ -468,7 +500,20 @@ impl HostRpcService {
                 .map_err(anyhow::Error::msg)?;
             let revision = self.inner.router.list_revision();
             let started = std::time::Instant::now();
-            let mut response = if let Some(row) = &row {
+            let mut stored = self.stored_history(&target, row.as_ref(), None, limit, params.include_activity)?;
+            // A conversation's first open imports it; native history serves
+            // only conversations whose import failed or is not possible yet.
+            if stored.is_none()
+                && row.as_ref().is_none_or(|row| row.startup.is_none())
+                && let Some(importing) = self.import_transcript(target.clone(), false)
+                && importing.await
+            {
+                stored = self.stored_history(&target, row.as_ref(), None, limit, params.include_activity)?;
+            }
+            let source = if stored.is_some() { "transcript" } else { "native" };
+            let mut response = if let Some(response) = stored {
+                response
+            } else if let Some(row) = &row {
                 Self::conversation_page(self.conversation_history(row, conversations::HistoryUse::Read).await?, None, limit)?
             } else {
                 let agent = self.inner.providers.get(native.provider)?;
@@ -503,12 +548,13 @@ impl HostRpcService {
                     Vec::new(),
                 )
             });
+            let known = params.known_version.is_some() && params.known_version == response.thread.transcript_version;
             let reply = self.inner
                 .router
-                .finish_session_read(read, session, response)
+                .finish_session_read(read, session, response, known)
                 .map_err(anyhow::Error::msg)?;
             tracing::info!(target: "agent", operation = "history.open",
-                message = %format_args!("native_ms={native_ms} project_ms={project_ms} total_ms={} bytes={} limit={limit}",
+                message = %format_args!("source={source} known={known} native_ms={native_ms} project_ms={project_ms} total_ms={} bytes={} limit={limit}",
                     started.elapsed().as_millis(), reply.initial.len()));
             Ok(reply)
         }
@@ -540,7 +586,20 @@ impl HostRpcService {
                     .filter(|item| !item.is_deferred())
                     .cloned()
             });
-        let mut response = if let Some(item) = live {
+        let known = match live {
+            Some(item) => Some(item),
+            None => self
+                .inner
+                .transcripts
+                .turn(target, &params.turn_id)
+                .map_err(transcripts::storage_failure)?
+                .and_then(|turn| {
+                    turn.items?
+                        .into_iter()
+                        .find(|item| item.id == params.item_id && !item.is_deferred())
+                }),
+        };
+        let mut response = if let Some(item) = known {
             agent_protocol::operations::ItemResponse {
                 item: Arc::unwrap_or_clone(item),
                 transfer: None,
@@ -926,7 +985,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn opening_claude_history_reads_native_files_without_starting_a_cli() {
+    async fn opening_claude_history_imports_native_files_once_without_starting_a_cli() {
         use super::*;
         let root = tempfile::tempdir().unwrap();
         let native = root.path().join("native");
@@ -953,6 +1012,7 @@ mod tests {
         let call =
             agent_protocol::protocol::Call::OpenSession(agent_protocol::session::OpenSession {
                 include_activity: false,
+                known_version: None,
                 session: agent_protocol::session::SessionRef {
                     provider: agent_protocol::session::ProviderKind::Claude,
                     id: id.into(),
@@ -969,12 +1029,30 @@ mod tests {
         let thread = &reply["result"]["response"]["thread"];
         assert!(!thread["turns"].as_array().unwrap().is_empty());
         assert_ne!(thread["historyReadState"]["type"], "unavailable");
+        let target = agent_protocol::session::SessionRef {
+            provider: agent_protocol::session::ProviderKind::Claude,
+            id: id.into(),
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while service
+                .inner
+                .transcripts
+                .window(&target, None, 1)
+                .unwrap()
+                .is_none()
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the first open imports native history");
         let transcript = project.join(format!("{id}.jsonl"));
         let changed = std::fs::read_to_string(&transcript)
             .unwrap()
             .replace("Fixture user input", "Changed outside Bex");
         std::fs::write(transcript, changed).unwrap();
-        // Even with the original subscription open, every open reads native data.
+        // Later opens read the Host transcript; changes made outside the Host
+        // wait for the project to be imported again.
         let response = service.dispatch(session.id(), &call).await.unwrap();
         let reply = agent_protocol::protocol::decode::<
             agent_protocol::protocol::Response<agent_protocol::session::OpenedSession>,
@@ -982,7 +1060,7 @@ mod tests {
         .unwrap()
         .into_value()
         .to_string();
-        assert!(reply.contains("Changed outside Bex"), "{reply}");
-        assert!(!reply.contains("Fixture user input"));
+        assert!(reply.contains("Fixture user input"), "{reply}");
+        assert!(!reply.contains("Changed outside Bex"));
     }
 }

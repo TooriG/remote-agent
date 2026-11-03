@@ -290,78 +290,91 @@ impl Hosts {
             } else {
                 language.text("保存済み")
             };
-            let mut card = v_flex()
-                .gap_3()
-                .p_4()
-                .when(cards, |view| {
-                    view.rounded(px(12.))
-                        .border_1()
-                        .border_color(if selected {
-                            rgb(appearance::ACCENT)
-                        } else {
-                            rgb(appearance::BORDER)
-                        })
-                        .bg(rgb(appearance::SURFACE))
-                })
-                .when(!cards, |view| {
-                    view.border_b_1().border_color(rgb(appearance::BORDER))
-                })
-                .child(
-                    h_flex()
-                        .items_center()
-                        .gap_3()
-                        .child(
-                            Button::new(format!("onboarding-host-{index}"))
-                                .accessibility_label(name.to_owned())
-                                .child(
-                                    h_flex()
-                                        .w_full()
-                                        .gap_2()
-                                        .child(if remote.is_some() {
-                                            Icon::new(IconName::Network)
-                                        } else {
-                                            Icon::default().path("icons/monitor.svg")
-                                        })
-                                        .child(name.to_owned()),
-                                )
-                                .ghost()
-                                .flex_1()
-                                .on_click(cx.listener(move |_, _, _, cx| {
-                                    cx.emit(HostEvent::Selected(destination.clone()));
-                                })),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(if selected && connected {
-                                    rgb(0x88c9a0)
-                                } else {
-                                    rgb(appearance::MUTED)
-                                })
-                                .child(label),
-                        )
-                        .when_some(remote.filter(|_| !cards), |row, remote| {
-                            let id = remote.id.clone();
-                            row.child(
-                                Button::new(format!("remove-{id}"))
-                                    .icon(IconName::Close)
-                                    .small()
+            let mut card =
+                v_flex()
+                    .gap_3()
+                    .p_4()
+                    .when(cards, |view| {
+                        view.rounded(px(12.))
+                            .border_1()
+                            .border_color(if selected {
+                                rgb(appearance::ACCENT)
+                            } else {
+                                rgb(appearance::BORDER)
+                            })
+                            .bg(rgb(appearance::SURFACE))
+                    })
+                    .when(!cards, |view| {
+                        view.border_b_1().border_color(rgb(appearance::BORDER))
+                    })
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap_3()
+                            .child(
+                                Button::new(format!("onboarding-host-{index}"))
+                                    .accessibility_label(name.to_owned())
+                                    .child(
+                                        h_flex()
+                                            .w_full()
+                                            .gap_2()
+                                            .child(if remote.is_some() {
+                                                Icon::new(IconName::Network)
+                                            } else {
+                                                Icon::default().path("icons/monitor.svg")
+                                            })
+                                            .child(name.to_owned()),
+                                    )
                                     .ghost()
-                                    .accessibility_label(language.text("保存した接続を削除"))
-                                    .tooltip(language.text("保存した接続を削除"))
-                                    .disabled(self.busy || !self.snapshot.connected)
-                                    .on_click(cx.listener(move |view, _, _, cx| {
-                                        view.dispatch(
-                                            Intent::RemoveRemoteHost(op::RemoveRemoteHost {
-                                                id: id.clone(),
-                                            }),
-                                            Action::Remove(id.clone()),
-                                        );
-                                        cx.notify();
+                                    .flex_1()
+                                    .on_click(cx.listener(move |_, _, _, cx| {
+                                        cx.emit(HostEvent::Selected(destination.clone()));
                                     })),
                             )
-                        }),
-                );
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(if selected && connected {
+                                        rgb(0x88c9a0)
+                                    } else {
+                                        rgb(appearance::MUTED)
+                                    })
+                                    .child(label),
+                            )
+                            .when_some(remote.filter(|_| !cards), |row, remote| {
+                                let id = remote.id.clone();
+                                let ticket = remote.ticket.clone();
+                                row.child(
+                                    Button::new(format!("remove-{id}"))
+                                        .icon(IconName::Close)
+                                        .small()
+                                        .ghost()
+                                        .accessibility_label(language.text("保存した接続を削除"))
+                                        .tooltip(language.text("保存した接続を削除"))
+                                        .disabled(self.busy || !self.snapshot.connected)
+                                        .on_click(cx.listener(move |view, _, _, cx| {
+                                            view.dispatch(
+                                                Intent::RemoveRemoteHost(op::RemoveRemoteHost {
+                                                    id: id.clone(),
+                                                }),
+                                                Action::Remove(id.clone()),
+                                            );
+                                            if let Ok(ticket) =
+                                                ticket.parse::<agent_transport::transport::Ticket>()
+                                                && let Ok(copies) =
+                                                    crate::platform::conversation_copies(
+                                                        &ticket.node_id().to_string(),
+                                                    )
+                                            {
+                                                std::thread::spawn(move || {
+                                                    agent_core::conversation_cache::clear(&copies)
+                                                });
+                                            }
+                                            cx.notify();
+                                        })),
+                                )
+                            }),
+                    );
             if selected {
                 let details = v_flex()
                     .gap_2()

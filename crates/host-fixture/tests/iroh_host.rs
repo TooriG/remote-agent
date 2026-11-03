@@ -66,6 +66,7 @@ async fn open_session(
         .request_stream::<agent_protocol::session::OpenedSession>(
             &agent_protocol::protocol::Call::OpenSession(agent_protocol::session::OpenSession {
                 include_activity: false,
+                known_version: None,
                 session: serde_json::from_value(id.clone()).unwrap(),
                 limit,
             }),
@@ -95,6 +96,33 @@ async fn completed_turn(events: &mut agent_transport::framing::Reader) -> Value 
             return change["turn"].clone();
         }
     }
+}
+/// A conversation's first open imports its native history in the background;
+/// later opens read the Host transcript, which reports its version.
+async fn imported(fixture: &HostFixture, session: &agent_protocol::session::SessionRef) {
+    let local = fixture.local().await.unwrap();
+    for _ in 0..1000 {
+        let opened = local
+            .peer
+            .request::<agent_protocol::session::OpenedSession>(
+                &agent_protocol::protocol::Call::OpenSession(
+                    agent_protocol::session::OpenSession {
+                        session: session.clone(),
+                        limit: 1,
+                        include_activity: false,
+                        known_version: None,
+                    },
+                ),
+            )
+            .await
+            .unwrap();
+        if opened.response.thread.transcript_version.is_some() {
+            local.close().await;
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("{session:?} was not imported");
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn pairing_is_atomic_local_management_is_private_and_revocation_closes_active_sessions() {
@@ -1200,32 +1228,39 @@ async fn opening_a_task_uses_cached_history_while_the_host_read_is_pending() {
             };
             assert_eq!(store.snapshot().conversations.contains_key(&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "selected".into() }), cached);
             if cached {
+                // The imported transcript answers; a native change made outside
+                // the Host waits for the project to be imported again.
+                imported(&fixture, &agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "selected".into() }).await;
                 std::fs::write(root.join("background-reply"), "Latest reply from another client").unwrap();
+            } else {
+                std::fs::write(root.join("hold-history-reads"), []).unwrap();
             }
-            std::fs::write(root.join("hold-history-reads"), []).unwrap();
             let opening = store.dispatch(Intent::ReadThread(op::ReadThread::open(agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "selected".into() })));
             tokio::pin!(opening);
             assert_eq!(store.snapshot().navigation.thread_id.as_ref().map(|session| session.id.as_str()), Some("selected"));
             assert_eq!(store.snapshot().navigation.draft_key, agent_core::state::DraftKey::from(agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "selected".into() }));
             assert_eq!(store.snapshot().drafts[&agent_core::state::DraftKey::from(agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "selected".into() })].text, "Unsent draft");
-            while !root.join("history-read-held").exists() {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-            assert!(tokio::time::timeout(Duration::from_millis(50), &mut opening).await.is_err());
-            if cached {
+            if !cached {
+                while !root.join("history-read-held").exists() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                assert!(tokio::time::timeout(Duration::from_millis(50), &mut opening).await.is_err());
+            } else {
                 let thread = &store.snapshot().conversations[&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "selected".into() }];
                 assert_eq!(item_text(&(thread.turns.as_ref().unwrap().last().unwrap().items.as_ref().unwrap()[0])), Some("History for Selected task"));
             }
             // List refresh shares the production transport but must not wait for history.
             store.dispatch(Intent::ListSessions(op::ListSessions::new(Default::default()))).await.unwrap();
             assert!(store.snapshot().threads.as_ref().unwrap().data.iter().any(|thread| thread.id.as_ref().map(|session| session.id.as_str()) == Some("selected")));
-            std::fs::remove_file(root.join("hold-history-reads")).unwrap();
-            std::fs::remove_file(root.join("history-read-held")).unwrap();
+            if !cached {
+                std::fs::remove_file(root.join("hold-history-reads")).unwrap();
+                std::fs::remove_file(root.join("history-read-held")).unwrap();
+            }
             opening.await.unwrap();
             let current = store.snapshot();
             let last = current.conversations[&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "selected".into() }].turns.as_ref().unwrap().last().unwrap();
             assert_eq!(last.status.label(), "completed");
-            assert_eq!(item_text(&(last.items.as_ref().unwrap()[0])), Some(if cached { "Latest reply from another client" } else { "History for Selected task" }));
+            assert_eq!(item_text(&(last.items.as_ref().unwrap()[0])), Some("History for Selected task"));
             assert_eq!(current.navigation.thread_id.as_ref().map(|session| session.id.as_str()), Some("selected"));
             assert_eq!(current.drafts[&agent_core::state::DraftKey::from(agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "selected".into() })].text, "Unsent draft");
             assert!(current.error.is_none(), "{:?}", current.error);
@@ -1400,36 +1435,35 @@ async fn refreshed_history_pages_recover_every_turn_and_item_through_store() {
         };
         let store = Store::new((local.peer, local.events), initial);
         store.dispatch(Intent::ListSessions(op::ListSessions::new(Default::default()))).await.unwrap();
-        store.dispatch(Intent::ReadThread(op::ReadThread::new(agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "history".into() }))).await.unwrap();
+        let session = agent_protocol::session::SessionRef::new(agent_protocol::session::ProviderKind::Codex, "history".into()).unwrap();
+        // The first open reads native history and imports it once.
+        store.dispatch(Intent::ReadThread(op::ReadThread::new(session.clone()))).await.unwrap();
+        imported(&fixture, &session).await;
+        let read = |directory: &Path| -> Vec<Value> {
+            std::fs::read_to_string(directory.join("rpc-trace.jsonl")).unwrap()
+                .lines().map(|line| serde_json::from_str(line).unwrap()).collect()
+        };
+        let timeline: Vec<_> = read(directory.path()).into_iter().filter(|entry| entry["method"] == "thread/turns/list").collect();
+        assert!(timeline.len() > 1);
+        assert!(timeline.iter().any(|entry| entry["cursor"].is_string()), "the import reads every older page");
+        let imported_reads = read(directory.path()).len();
+        store.dispatch(Intent::ReadThread(op::ReadThread::new(session.clone()))).await.unwrap();
         let snapshot = store.snapshot();
-        let thread = &snapshot.conversations[&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "history".into() }];
-        assert_eq!(thread.turns.as_ref().unwrap().len(), 5, "initial display is a bounded turn summary page");
+        let thread = &snapshot.conversations[&session];
+        let window = op::HISTORY_WINDOW_TURNS as usize;
+        assert_eq!(thread.turns.as_ref().unwrap().len(), window, "initial display is a bounded turn summary page");
         assert_eq!(thread.history_has_more, Some(true));
         let latest = thread.turns.as_ref().unwrap().last().unwrap();
         assert_eq!(latest.items.as_ref().unwrap().len(), 1);
         assert!(latest.items_summary);
         assert_eq!(latest.items.as_ref().unwrap()[0].id, "item-11-619".into());
-        let trace = std::fs::read_to_string(directory.path().join("rpc-trace.jsonl")).unwrap();
-        let reads: Vec<Value> = trace.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
-        assert_eq!(reads.iter().filter(|entry| entry["method"] == "thread/turns/list").count(), 1,
-            "initial loading is one summary page");
-        assert!(reads.iter().all(|entry| entry["method"] != "thread/items/list" && entry["method"] != "thread/timeline/list"),
-            "initial history does not hydrate activity or use unsupported methods");
         let rendered = agent_core::presentation::conversation::project_conversation(&snapshot, thread.clone(), &None);
-        assert_eq!(rendered.turns.len(), 5, "the rendered history must contain no empty turn placeholders");
+        assert_eq!(rendered.turns.len(), window, "the rendered history must contain no empty turn placeholders");
         for _ in 0..20 {
             let snapshot = store.snapshot();
-            if snapshot.conversations[&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "history".into() }].history_has_more != Some(true) { break; }
-            store.dispatch(Intent::ReadOlder { thread_id: agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "history".into() } }).await.unwrap();
+            if snapshot.conversations[&session].history_has_more != Some(true) { break; }
+            store.dispatch(Intent::ReadOlder { thread_id: session.clone() }).await.unwrap();
         }
-        let reads: Vec<Value> = std::fs::read_to_string(directory.path().join("rpc-trace.jsonl")).unwrap()
-            .lines().map(|line| serde_json::from_str(line).unwrap()).collect();
-        let timeline: Vec<_> = reads.iter().filter(|entry| entry["method"] == "thread/turns/list").collect();
-        assert!(timeline.len() > 1);
-        assert!(timeline[0]["cursor"].is_null());
-        assert!(timeline[1..].iter().all(|entry| entry["cursor"].is_string()), "older reads must not restart at the newest page");
-        assert_eq!(timeline.iter().map(|entry| entry["cursor"].clone()).collect::<std::collections::HashSet<_>>().len(), timeline.len());
-        let session = agent_protocol::session::SessionRef::new(agent_protocol::session::ProviderKind::Codex, "history".into()).unwrap();
         let ids: Vec<_> = store.snapshot().conversations[&session].turns.as_ref().unwrap().iter().map(|turn| turn.id.clone()).collect();
         for turn_id in ids {
             store.dispatch(Intent::LoadTurnItems(op::LoadTurnItems { thread_id: session.clone(), turn_id: turn_id.clone() })).await.unwrap();
@@ -1438,6 +1472,7 @@ async fn refreshed_history_pages_recover_every_turn_and_item_through_store() {
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
         }
+        assert_eq!(read(directory.path()).len(), imported_reads, "imported history is read from the transcript");
         for reopen in [false, true] {
             if reopen {
                 store.dispatch(Intent::ReadThread(op::ReadThread::open(agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "history".into() }))).await.unwrap();
@@ -1499,7 +1534,7 @@ async fn generated_images_are_visible_on_open_reopen_and_older_pages_without_exp
             let rendered = project_conversation(&Default::default(), Arc::new(response.thread), &None);
             assert_eq!(rendered.turns.len(), 6);
             for (index, turn) in rendered.turns.iter().enumerate() {
-                assert!(turn.source.items_summary);
+                assert!(!turn.source.items_summary, "imported turns hold no hidden work");
                 let images: Vec<_> = turn.rows.iter().filter_map(|row| match &row.content {
                     ConversationRowContent::Response { item, .. } if !item.data.image_sources.is_empty() => Some(item),
                     ConversationRowContent::ActivityHeader { activity } => {
@@ -1546,7 +1581,7 @@ async fn summary_history_rejects_repeated_cursors_and_oversized_pages() {
         local.peer.call(&op::ListSessions::new(Default::default())).await.unwrap();
         for (id, limit, _, message) in cases {
             let result = local.peer.request_stream::<agent_protocol::session::OpenedSession>(
-                &agent_protocol::protocol::Call::OpenSession(agent_protocol::session::OpenSession { include_activity: false,
+                &agent_protocol::protocol::Call::OpenSession(agent_protocol::session::OpenSession { include_activity: false, known_version: None,
                     session: agent_protocol::session::SessionRef::new(agent_protocol::session::ProviderKind::Codex, id.into()).unwrap(), limit,
                 })
             ).await;
@@ -1587,7 +1622,7 @@ async fn many_small_command_outputs_do_not_delay_opening_history() {
         let local = fixture.local().await.unwrap();
         local.peer.call(&op::ListSessions::new(Default::default())).await.unwrap();
         let (opened, mut updates) = local.peer.request_stream::<agent_protocol::session::OpenedSession>(
-            &agent_protocol::protocol::Call::OpenSession(agent_protocol::session::OpenSession { include_activity: false,
+            &agent_protocol::protocol::Call::OpenSession(agent_protocol::session::OpenSession { include_activity: false, known_version: None,
                 session: agent_protocol::session::SessionRef::new(agent_protocol::session::ProviderKind::Codex, "command-history".to_string()).unwrap(), limit: 5,
             }),
         ).await.unwrap();
@@ -1595,22 +1630,16 @@ async fn many_small_command_outputs_do_not_delay_opening_history() {
         assert!(bytes < 100 * 1024, "collapsed command bodies delayed history: {bytes} bytes");
         let turn = &opened.response.thread.turns.as_ref().unwrap()[0];
         let loaded = turn.items.as_ref().unwrap();
+        // Imported history keeps the conversation's messages, not past commands.
         assert_eq!(loaded.len(), 2);
-        assert!(turn.items_summary);
+        assert!(!turn.items_summary, "no details are hidden behind the messages");
         assert_eq!(item_text(&loaded[1]), Some("The build passed"));
         local.peer.call(&agent_protocol::session::ReadTurnItems {
             session: agent_protocol::session::SessionRef::new(agent_protocol::session::ProviderKind::Codex, "command-history".into()).unwrap(), turn_id: "turn".into(),
         }).await.unwrap();
         let hydrated = next_change(&mut updates, "turnItems").await;
         let loaded: Vec<Arc<models::Item>> = serde_json::from_value(hydrated["items"].clone()).unwrap();
-        assert_eq!(loaded.len(), 500);
-        assert_eq!(loaded.iter().filter(|item| item.is_deferred()).count(), 498);
-        for index in [0, 49, 97] {
-            let detail = local.peer.call(&rpc::ReadItem {
-                thread_id: agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "command-history".into() }, turn_id: "turn".into(), item_id: loaded[index + 1].id.clone(),
-            }).await.unwrap();
-            assert!(matches!(detail.item.body(), agent_protocol::items::ItemBody::CommandExecution {output, ..} if output == items[index + 1]["aggregatedOutput"].as_str().unwrap())); assert!(!detail.item.is_deferred());
-        }
+        assert_eq!(loaded.len(), 2);
         local.close().await;
         fixture.close().await.unwrap();
     }).await.expect("command history exceeded its deadline");
@@ -1655,7 +1684,7 @@ async fn large_history_loads_conversation_before_lossless_item_details() {
         assert_eq!(body_json(&turn["items"][0])["userMessage"]["content"][0]["text"]["text"], "Read the whole output");
         assert_eq!(body_json(&turn["items"][1])["assistantText"]["text"], "Large history is complete");
         assert_eq!(turn["items"].as_array().unwrap().len(), 2);
-        assert_eq!(turn["itemsSummary"], true);
+        assert_eq!(turn["itemsSummary"], false, "past commands are not imported");
         let detail = mobile.peer.call(&serde_json::from_value::<rpc::ReadItem>(json!({"threadId":thread,"turnId":"large-turn","itemId":"large-command"})).unwrap()).await.unwrap();
         let detail = serde_json::to_value(agent_transport::transfers::resolve_item(detail, Some(&mobile.session)).await.unwrap()).unwrap();
         assert_eq!(body_json(&detail["item"])["commandExecution"]["output"], format!("{}END_OF_LARGE_OUTPUT", "output line\n".repeat(700000)));
@@ -1691,7 +1720,7 @@ async fn large_history_loads_conversation_before_lossless_item_details() {
         let (_, mut messages) = open_session(&mobile.peer, image_thread, 5).await;
         mobile.peer.call(&serde_json::from_value::<rpc::Submission>(json!({"clientUserMessageId":next_submission_id(),"threadId":image_thread,"input":[{"text":{"text":"[generated-images]"}}]})).unwrap()).await.map(|output| serde_json::to_value(output).unwrap()).unwrap();
         completed_turn(&mut messages).await;
-        let history = mobile.peer.request::<agent_protocol::session::OpenedSession>(&agent_protocol::protocol::Call::OpenSession(agent_protocol::session::OpenSession { session: serde_json::from_value(image_thread.clone()).unwrap(), limit: 5, include_activity: true })).await.map(|output| serde_json::to_value(output).unwrap()).unwrap()["response"].clone();
+        let history = mobile.peer.request::<agent_protocol::session::OpenedSession>(&agent_protocol::protocol::Call::OpenSession(agent_protocol::session::OpenSession { session: serde_json::from_value(image_thread.clone()).unwrap(), limit: 5, include_activity: true , known_version: None})).await.map(|output| serde_json::to_value(output).unwrap()).unwrap()["response"].clone();
         let turn = &history["thread"]["turns"][0];
         let images: Vec<_> = turn["items"].as_array().unwrap().iter().filter(|item| body_json(item)["imageGeneration"].is_object()).collect();
         assert_eq!(images.len(), 2);
@@ -2098,7 +2127,7 @@ async fn daemon_exposes_project_roots_and_structured_tool_results() {
         local.peer.call(&serde_json::from_value::<rpc::Submission>(json!({"threadId":thread_id,"clientUserMessageId":"wire-fixture","input":[{"text":{"text":"[items]"}}]})).unwrap()).await.map(|output| serde_json::to_value(output).unwrap()).unwrap();
         completed_turn(&mut events).await;
         let list = local.peer.request::<models::ThreadList>(&agent_protocol::protocol::Call::ListSessions(agent_protocol::operations::ListSessions { query: serde_json::from_value::<models::ListQuery>(json!({})).unwrap() })).await.map(|output| serde_json::to_value(output).unwrap()).unwrap();
-        let history = local.peer.request::<agent_protocol::session::OpenedSession>(&agent_protocol::protocol::Call::OpenSession(agent_protocol::session::OpenSession { session: serde_json::from_value(thread_id.clone()).unwrap(), limit: 5, include_activity: true })).await.map(|output| serde_json::to_value(output).unwrap()).unwrap()["response"].clone();
+        let history = local.peer.request::<agent_protocol::session::OpenedSession>(&agent_protocol::protocol::Call::OpenSession(agent_protocol::session::OpenSession { session: serde_json::from_value(thread_id.clone()).unwrap(), limit: 5, include_activity: true , known_version: None})).await.map(|output| serde_json::to_value(output).unwrap()).unwrap()["response"].clone();
         assert_eq!(list["projects"][0]["roots"][0]["path"], directory.path().to_str().unwrap());
         assert!(history["thread"]["turns"][0]["items"].as_array().unwrap().iter().any(|item| item["body"]["inline"]["body"]["toolCall"]["result"].is_object()));
         local.close().await;
@@ -3440,7 +3469,7 @@ async fn session_open_delivers_a_snapshot_before_updates_and_reopens_current_sta
         let id = &created["thread"]["id"];
         let (opened, mut events) = client
             .peer
-            .request_stream::<agent_protocol::session::OpenedSession>(&agent_protocol::protocol::Call::OpenSession(agent_protocol::session::OpenSession { include_activity: false,
+            .request_stream::<agent_protocol::session::OpenedSession>(&agent_protocol::protocol::Call::OpenSession(agent_protocol::session::OpenSession { include_activity: false, known_version: None,
                     session: serde_json::from_value(id.clone()).unwrap(),
                     limit: 5,
                 }))
@@ -3501,14 +3530,33 @@ async fn gallery_reads_native_older_images_after_a_live_turn_completes() {
     let (_, mut events) = open_session(&mobile.peer, id, 5).await;
     mobile.peer.call(&serde_json::from_value::<rpc::Submission>(json!({"clientUserMessageId":next_submission_id(),"threadId":id,"input":[{"text":{"text":"[generated-images] [gallery] Browse all generated images"}}]})).unwrap()).await.map(|output| serde_json::to_value(output).unwrap()).unwrap();
     completed_turn(&mut events).await;
-    let peer = Arc::new(mobile.peer);
-    let images = peer
-        .session_images(
-            &serde_json::from_value(id.clone()).unwrap(),
-            Some(&mobile.session),
+    // Native history the turn added outside its live stream arrives when the
+    // project is imported again.
+    let session: agent_protocol::session::SessionRef = serde_json::from_value(id.clone()).unwrap();
+    imported(&fixture, &session).await;
+    mobile
+        .peer
+        .request::<agent_protocol::project_import::ProjectImportResult>(
+            &agent_protocol::protocol::Call::ImportProjects(
+                agent_protocol::project_import::ImportProjects {
+                    paths: vec![directory.path().to_str().unwrap().into()],
+                },
+            ),
         )
         .await
         .unwrap();
+    let peer = Arc::new(mobile.peer);
+    let mut images = Vec::new();
+    for _ in 0..500 {
+        images = peer
+            .session_images(&session, Some(&mobile.session))
+            .await
+            .unwrap();
+        if images.len() == 8 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     assert_eq!(
         images.len(),
         8,
@@ -3539,13 +3587,17 @@ async fn oversized_session_opens_repeatedly_and_downloads_lossless_items_without
             .map(|output| serde_json::to_value(output.response).unwrap())
             .unwrap();
         let thread = &started["thread"]["id"];
+        let thread_id: agent_protocol::session::SessionRef =
+            serde_json::from_value(thread.clone()).unwrap();
         for _ in 0..2 {
-            let opened = mobile.peer.request::<agent_protocol::session::OpenedSession>(&agent_protocol::protocol::Call::OpenSession(agent_protocol::session::OpenSession { session: serde_json::from_value(thread.clone()).unwrap(), limit: 5, include_activity: true })).await.map(|output| serde_json::to_value(output).unwrap()).unwrap();
+            let opened = mobile.peer.request::<agent_protocol::session::OpenedSession>(&agent_protocol::protocol::Call::OpenSession(agent_protocol::session::OpenSession { session: thread_id.clone(), limit: 5, include_activity: true , known_version: None})).await.map(|output| serde_json::to_value(output).unwrap()).unwrap();
             assert!(agent_protocol::protocol::encode(&opened).unwrap().len() < 16 * 1024);
             let turn = &opened["response"]["thread"]["turns"][0];
+            // An import copies messages and images; past tool activity stays native.
+            let deferred = ["oversized-text", "oversized-image"];
             assert_eq!(
                 turn["items"].as_array().unwrap().iter().filter(|item| item["body"]["deferred"].is_object()).map(|item| item["id"].as_str().unwrap()).collect::<Vec<_>>(),
-                ["oversized-text","oversized-image","oversized-tool"]
+                deferred
             );
             assert!(
                 body_json(&turn["items"][1])["imageGeneration"]["data"].is_null(),
@@ -3591,8 +3643,6 @@ async fn oversized_session_opens_repeatedly_and_downloads_lossless_items_without
             .await
             .unwrap();
         let mut updates = store.subscribe();
-        let thread_id: agent_protocol::session::SessionRef =
-            serde_json::from_value(thread.clone()).unwrap();
         store
             .dispatch(Intent::ReadThread(op::ReadThread::open(thread_id.clone())))
             .await
@@ -3615,15 +3665,11 @@ async fn oversized_session_opens_repeatedly_and_downloads_lossless_items_without
             }
             updates.changed().await.unwrap();
         }
-        store
-            .dispatch(Intent::ReadItem(op::ReadItem {
-                thread_id: thread_id.clone(),
-                turn_id: "oversized-turn".into(),
-                item_id: "oversized-tool".into(),
-            }))
-            .await
-            .unwrap();
-        assert!(matches!(store.snapshot().conversations[&thread_id].turns.as_ref().unwrap()[0].items.as_ref().unwrap()[2].body(), agent_protocol::items::ItemBody::CommandExecution {output, ..} if output.len() == 17 * 1024 * 1024));
+        assert_eq!(
+            store.snapshot().conversations[&thread_id].turns.as_ref().unwrap()[0].items.as_ref().unwrap().len(),
+            2,
+            "imported turn details hold messages and images"
+        );
         store.close().await.unwrap();
         endpoint.close().await;
         mobile
@@ -3885,6 +3931,7 @@ async fn host_routes_client_intents_and_replays_delivery_before_native_echo() {
                         session: thread.clone(),
                         limit: 5,
                         include_activity: true,
+                        known_version: None,
                     },
                 ),
             )
@@ -4022,7 +4069,7 @@ async fn native_history_errors_preserve_failure_and_only_confirmed_empty_history
         local.peer.call(&op::ListSessions::new(Default::default())).await.unwrap();
         for ((_, id, _, succeeds, _), native) in cases.iter().zip(&threads) {
             let result = local.peer.request_stream::<agent_protocol::session::OpenedSession>(
-                &agent_protocol::protocol::Call::OpenSession(agent_protocol::session::OpenSession { include_activity: false,
+                &agent_protocol::protocol::Call::OpenSession(agent_protocol::session::OpenSession { include_activity: false, known_version: None,
                     session: agent_protocol::session::SessionRef::new(agent_protocol::session::ProviderKind::Codex, id.to_string()).unwrap(), limit:5,
                 })
             ).await;

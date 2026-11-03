@@ -122,6 +122,7 @@ async fn admission_lists_and_reopens_the_same_task_before_workspace_preparation(
                 session: root.clone(),
                 limit: 5,
                 include_activity: true,
+                known_version: None,
             }),
         )
         .await
@@ -157,6 +158,7 @@ async fn admission_lists_and_reopens_the_same_task_before_workspace_preparation(
             session: root.clone(),
             limit: 5,
             include_activity: true,
+            known_version: None,
         }),
     )
     .await
@@ -250,6 +252,7 @@ async fn admitted_public_identity_keeps_native_history_through_provider_switchin
             session: opened.session.clone(),
             limit: 5,
             include_activity: true,
+            known_version: None,
         }),
     )
     .await
@@ -328,6 +331,7 @@ async fn retry_restores_a_removed_workspace_before_creating_the_first_provider_s
                 session: opened.session.clone(),
                 limit: 5,
                 include_activity: true,
+                known_version: None,
             }),
         )
         .await
@@ -539,6 +543,7 @@ async fn uncertain_initial_delivery_survives_restart_without_resubmission() {
                 session: opened.session.clone(),
                 limit: 5,
                 include_activity: true,
+                known_version: None,
             }),
         )
         .await

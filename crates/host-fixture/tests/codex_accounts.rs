@@ -60,6 +60,7 @@ async fn completed_turn(
 ) -> String {
     let open = agent_protocol::protocol::Call::OpenSession(agent_protocol::session::OpenSession {
         include_activity: false,
+        known_version: None,
         session: agent_protocol::session::SessionRef {
             provider: agent_protocol::session::ProviderKind::Codex,
             id: thread.into(),

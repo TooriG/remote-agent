@@ -52,6 +52,15 @@ final class MobileSessionStorage: ClientStorage, @unchecked Sendable {
     func diagnosticsDirectory() throws -> String? {
         try access { try location().deletingPathExtension().appendingPathExtension("diagnostics").path }
     }
+
+    func conversationDirectory() throws -> String? {
+        try access { try conversations().path }
+    }
+
+    /// Saved conversation copies for this Host; removing the Host removes them.
+    func conversations() throws -> URL {
+        try location().deletingPathExtension().appendingPathExtension("conversations")
+    }
 }
 
 enum DeviceIdentity {

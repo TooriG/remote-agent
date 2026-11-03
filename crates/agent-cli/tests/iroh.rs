@@ -77,7 +77,7 @@ async fn exercise(command: &[&str], expected: Value) {
                     reads += 1;
                     assert_eq!(
                         request["params"],
-                        json!({"session":{"provider":"codex","id":"fixture-thread"},"limit":5,"includeActivity":false})
+                        json!({"session":{"provider":"codex","id":"fixture-thread"},"limit":10,"includeActivity":false})
                     );
                     let mut thread = json!({"id":{"provider":"codex","id":"fixture-thread"},"cwd":"/fixture","status":"idle","turns":[]});
                     if let Some(id) = &approval {

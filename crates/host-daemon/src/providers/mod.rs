@@ -302,6 +302,11 @@ pub(crate) trait Agent: Identity {
     fn data_recipient(&self) -> &'static str;
     fn running_input(&self) -> RunningInput;
     fn capabilities(&self) -> Capabilities;
+    /// The items an opened turn shows before its details are read. Providers
+    /// whose opened histories include activity keep every item.
+    fn summary_items(&self, _items: &[Arc<Item>]) -> Option<Vec<Arc<Item>>> {
+        None
+    }
     fn availability(&self) -> Result<(), Failure>;
     /// Reject creation before the Host creates a workspace. Some adapters can
     /// create a conversation locally and defer starting an executable.

@@ -282,9 +282,12 @@ impl Operation for SendSubmission {
         context: &mut Execution<'_>,
     ) -> Result<Self::Output, PeerError> {
         if needs_subscription {
-            let open = ReadThread::new(self.thread_id.clone());
+            let read = ReadThread::new(self.thread_id.clone());
             return context
-                .call(&open)
+                .call(&OpenThread {
+                    read: &read,
+                    known_version: None,
+                })
                 .await
                 .map(|opened| SubmissionProgress::Opened(Box::new(opened)));
         }

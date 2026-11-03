@@ -31,6 +31,8 @@ pub(in crate::host_rpc::service) struct NativeAgent {
     pub(in crate::host_rpc::service) records: Arc<Mutex<HashMap<String, ThreadResponse>>>,
     pub(in crate::host_rpc::service) idle_warning: Option<&'static str>,
     deferred_history: bool,
+    /// Item IDs whose native bodies cannot be read.
+    unreadable: Mutex<std::collections::HashSet<String>>,
     pub(in crate::host_rpc::service) inputs: Arc<Mutex<Vec<op::Submission>>>,
     injected: Arc<Mutex<Vec<(String, handoff::Context)>>>,
     released: Arc<Mutex<Vec<String>>>,
@@ -40,6 +42,8 @@ pub(in crate::host_rpc::service) struct NativeAgent {
     pub(in crate::host_rpc::service) create_started: tokio::sync::Notify,
     fail_inject: AtomicUsize,
     open_error: Mutex<Option<Failure>>,
+    /// Every open fails with this, including the open an import makes.
+    open_failure: Mutex<Option<Failure>>,
     pub(in crate::host_rpc::service) fail_list: AtomicUsize,
     pub(in crate::host_rpc::service) fail_accounts: AtomicUsize,
     pub(in crate::host_rpc::service) accounts_gate: tokio::sync::Semaphore,
@@ -64,6 +68,7 @@ impl NativeAgent {
             records: Default::default(),
             idle_warning: None,
             deferred_history: false,
+            unreadable: Default::default(),
             inputs: Default::default(),
             injected: Default::default(),
             released: Default::default(),
@@ -73,6 +78,7 @@ impl NativeAgent {
             create_started: tokio::sync::Notify::new(),
             fail_inject: AtomicUsize::new(0),
             open_error: Mutex::new(None),
+            open_failure: Mutex::new(None),
             fail_list: AtomicUsize::new(0),
             fail_accounts: AtomicUsize::new(0),
             accounts_gate: tokio::sync::Semaphore::new(1),
@@ -89,6 +95,7 @@ impl NativeAgent {
             records: self.records.clone(),
             idle_warning: self.idle_warning,
             deferred_history: self.deferred_history,
+            unreadable: Default::default(),
             inputs: self.inputs.clone(),
             injected: self.injected.clone(),
             released: self.released.clone(),
@@ -98,6 +105,7 @@ impl NativeAgent {
             create_started: tokio::sync::Notify::new(),
             fail_inject: AtomicUsize::new(0),
             open_error: Mutex::new(None),
+            open_failure: Mutex::new(None),
             fail_list: AtomicUsize::new(0),
             fail_accounts: AtomicUsize::new(0),
             accounts_gate: tokio::sync::Semaphore::new(1),
@@ -219,6 +227,9 @@ impl Agent for NativeAgent {
         if let Some(error) = self.open_error.lock().unwrap().take() {
             return Err(error);
         }
+        if let Some(error) = self.open_failure.lock().unwrap().clone() {
+            return Err(error);
+        }
         let mut response = self
             .records
             .lock()
@@ -254,6 +265,14 @@ impl Agent for NativeAgent {
         })
     }
     async fn read_item(&self, params: &op::ReadItem) -> Result<op::ItemResponse, Failure> {
+        if self
+            .unreadable
+            .lock()
+            .unwrap()
+            .contains(params.item_id.as_str())
+        {
+            return Err(Failure::new("unreadable", "the native body is not UTF-8"));
+        }
         let records = self.records.lock().unwrap();
         let item = records
             .get(&params.thread_id.id)
@@ -701,6 +720,7 @@ async fn history(
             session: root.clone(),
             limit: 1000,
             include_activity: true,
+            known_version: None,
         }),
     )
     .await
@@ -838,6 +858,7 @@ async fn unavailable_current_provider_does_not_block_earlier_segments_or_local_r
                 session: root.clone(),
                 limit: 100,
                 include_activity: true,
+                known_version: None,
             }),
         )
         .await
@@ -1114,6 +1135,7 @@ async fn unavailable_past_provider_keeps_current_history_and_operations_usable()
             session: root.clone(),
             limit: 100,
             include_activity: true,
+            known_version: None,
         }),
     )
     .await
@@ -1248,6 +1270,7 @@ async fn loaded_provider_failure_keeps_the_handoff_open_and_discoverable() {
             session: root.clone(),
             limit: 100,
             include_activity: true,
+            known_version: None,
         }),
     )
     .await
@@ -1301,7 +1324,7 @@ async fn opening_does_not_hide_native_history_errors_as_startup_failures() {
         let directory = tempfile::tempdir().unwrap();
         let HandoffFixture { codex, root, .. } = saved_handoff(directory.path()).await;
         let codex = codex.restarted();
-        *codex.open_error.lock().unwrap() =
+        *codex.open_failure.lock().unwrap() =
             Some(Failure::new(code, "native session cannot be loaded"));
         let host = HostRpcService::new(
             [
@@ -1318,6 +1341,7 @@ async fn opening_does_not_hide_native_history_errors_as_startup_failures() {
                 session: root,
                 limit: 100,
                 include_activity: true,
+                known_version: None,
             }),
         )
         .await
@@ -1368,6 +1392,7 @@ async fn handoff_does_not_silently_transfer_only_the_readable_sources() {
                 session: root,
                 limit: 100,
                 include_activity: true,
+                known_version: None,
             }),
         )
         .await
@@ -1398,6 +1423,7 @@ async fn all_unavailable_providers_still_open_saved_metadata_and_report_each_fai
             session: root.clone(),
             limit: 100,
             include_activity: true,
+            known_version: None,
         }),
     )
     .await
@@ -2227,7 +2253,7 @@ async fn claude_history_beyond_one_hundred_turns_opens_and_pages_in_order() {
         ProjectStore::new(directory.path().join("worktrees.json")),
     );
     let client = host.open_session();
-    let complete = host.native_history(&root, false).await.unwrap();
+    let complete = host.native_history(&root, HistoryUse::Read).await.unwrap();
     assert_eq!(complete.thread.turns.unwrap().len(), 201);
     let opened: agent_protocol::session::OpenedSession = call(
         &host,
@@ -2236,6 +2262,7 @@ async fn claude_history_beyond_one_hundred_turns_opens_and_pages_in_order() {
             session: root.clone(),
             limit: 5,
             include_activity: true,
+            known_version: None,
         }),
     )
     .await
@@ -2360,6 +2387,7 @@ async fn long_history_is_transferred_beyond_the_visible_page_and_older_pages_kee
             session: root.clone(),
             limit: 5,
             include_activity: true,
+            known_version: None,
         }),
     )
     .await
@@ -2485,6 +2513,20 @@ async fn handoff_and_excerpts_recover_deferred_native_messages() {
     )
     .await
     .unwrap();
+    // Native history defers the message; the Host transcript recovers it.
+    assert!(
+        codex
+            .open(&root.id, 100, true)
+            .await
+            .unwrap()
+            .thread
+            .turns
+            .unwrap()[0]
+            .items
+            .as_ref()
+            .unwrap()[0]
+            .is_deferred()
+    );
     let opened: agent_protocol::session::OpenedSession = call(
         &host,
         client.id(),
@@ -2492,12 +2534,13 @@ async fn handoff_and_excerpts_recover_deferred_native_messages() {
             session: root.clone(),
             limit: 100,
             include_activity: true,
+            known_version: None,
         }),
     )
     .await
     .unwrap();
     assert!(
-        opened.response.thread.turns.as_ref().unwrap()[0]
+        !opened.response.thread.turns.as_ref().unwrap()[0]
             .items
             .as_ref()
             .unwrap()[0]
@@ -2529,4 +2572,322 @@ async fn handoff_and_excerpts_recover_deferred_native_messages() {
     .await
     .unwrap();
     assert_eq!(page.items[0].message.text, text);
+}
+
+/// Imports run in the background; wait until the stored turns are `expected`.
+async fn imported_turns(host: &HostRpcService, root: &SessionRef, expected: &[&str]) {
+    let stored = || {
+        host.inner
+            .transcripts
+            .window(root, None, 1000)
+            .unwrap()
+            .map(|window| {
+                window
+                    .response
+                    .thread
+                    .turns
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|turn| turn.id.to_string())
+                    .collect::<Vec<_>>()
+            })
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while stored().is_none_or(|turns| turns != expected) {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("transcript {:?} never became {expected:?}", stored()));
+}
+
+#[tokio::test]
+async fn transcripts_replace_native_reads_until_the_project_is_imported_again() {
+    let directory = tempfile::tempdir().unwrap();
+    let directory = dunce::canonicalize(directory.path()).unwrap();
+    let codex = NativeAgent::new(ProviderKind::Codex, directory.join("codex"));
+    let claude = NativeAgent::new(ProviderKind::Claude, directory.join("claude"));
+    let host = service(&directory, &codex, &claude);
+    let client = host.open_session();
+    let root = codex
+        .create(directory.to_str().unwrap(), None, None)
+        .await
+        .unwrap()
+        .thread
+        .id
+        .unwrap();
+    send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "first",
+        "hello",
+    )
+    .await
+    .unwrap();
+    history(&host, client.id(), &root).await;
+    imported_turns(&host, &root, &["turn-0"]).await;
+
+    // Native history continued outside the Host waits for a re-import, while
+    // turns run through the Host are recorded as they finish.
+    codex
+        .records
+        .lock()
+        .unwrap()
+        .get_mut(&root.id)
+        .unwrap()
+        .thread
+        .turns
+        .as_mut()
+        .unwrap()
+        .push(Arc::new(Turn {
+            id: "outside".into(),
+            status: TurnStatus::Completed,
+            items: Some(vec![]),
+            ..Default::default()
+        }));
+    send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "second",
+        "again",
+    )
+    .await
+    .unwrap();
+    *codex.open_error.lock().unwrap() = Some(Failure::new(
+        "unreadable",
+        "native history must not be read",
+    ));
+    let opened = history(&host, client.id(), &root).await;
+    let ids: Vec<_> = opened
+        .thread
+        .turns
+        .unwrap()
+        .iter()
+        .map(|turn| turn.id.clone())
+        .collect();
+    assert_eq!(ids, [TurnId::from("turn-0"), "turn-2".into()]);
+    assert!(codex.open_error.lock().unwrap().take().is_some());
+
+    call::<agent_protocol::project_import::ProjectImportResult>(
+        &host,
+        client.id(),
+        Call::ImportProjects(agent_protocol::project_import::ImportProjects {
+            paths: vec![directory.to_str().unwrap().into()],
+        }),
+    )
+    .await
+    .unwrap();
+    imported_turns(&host, &root, &["turn-0", "outside", "turn-2"]).await;
+}
+
+#[tokio::test]
+async fn unreadable_native_bodies_stay_deferred_without_blocking_their_import() {
+    let directory = tempfile::tempdir().unwrap();
+    let directory = dunce::canonicalize(directory.path()).unwrap();
+    let mut codex = NativeAgent::new(ProviderKind::Codex, directory.join("codex"));
+    Arc::get_mut(&mut codex).unwrap().deferred_history = true;
+    let claude = NativeAgent::new(ProviderKind::Claude, directory.join("claude"));
+    let host = service(&directory, &codex, &claude);
+    let client = host.open_session();
+    let root = codex
+        .create(directory.to_str().unwrap(), None, None)
+        .await
+        .unwrap()
+        .thread
+        .id
+        .unwrap();
+    send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "first",
+        "hello",
+    )
+    .await
+    .unwrap();
+    codex.unreadable.lock().unwrap().insert("answer-0".into());
+    history(&host, client.id(), &root).await;
+    imported_turns(&host, &root, &["turn-0"]).await;
+    let stored = host
+        .inner
+        .transcripts
+        .turn(&root, &"turn-0".into())
+        .unwrap()
+        .unwrap()
+        .items
+        .unwrap();
+    let deferred = |id: &str| {
+        stored
+            .iter()
+            .find(|item| item.id.as_str() == id)
+            .unwrap()
+            .is_deferred()
+    };
+    assert!(!deferred("user-0"));
+    assert!(deferred("answer-0"));
+    // Reading the unreadable body reports the provider's failure, as before.
+    let failure = call::<op::ItemResponse>(
+        &host,
+        client.id(),
+        Call::ReadItem(op::ReadItem {
+            thread_id: root.clone(),
+            turn_id: "turn-0".into(),
+            item_id: "answer-0".into(),
+        }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(failure.code, "unreadable");
+}
+
+#[tokio::test]
+async fn imports_copy_message_text_while_host_turns_keep_activity() {
+    let directory = tempfile::tempdir().unwrap();
+    let directory = dunce::canonicalize(directory.path()).unwrap();
+    let codex = NativeAgent::new(ProviderKind::Codex, directory.join("codex"));
+    let claude = NativeAgent::new(ProviderKind::Claude, directory.join("claude"));
+    let host = service(&directory, &codex, &claude);
+    let client = host.open_session();
+    let root = codex
+        .create(directory.to_str().unwrap(), None, None)
+        .await
+        .unwrap()
+        .thread
+        .id
+        .unwrap();
+    let turn = |id: &str| Turn {
+        id: id.into(),
+        status: TurnStatus::Completed,
+        items: Some(
+            [
+                ItemBody::UserMessage {
+                    text: Some(format!("{id} request")),
+                    content: vec![],
+                },
+                ItemBody::Reasoning {
+                    content: vec![format!("{id} activity")],
+                    summary: vec![],
+                },
+                ItemBody::AssistantText {
+                    text: format!("{id} answer"),
+                    phase: AssistantPhase::Final,
+                },
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(index, body)| {
+                Arc::new(Item::new(
+                    format!("{id}-{index}").into(),
+                    ItemStatus::Completed,
+                    body,
+                ))
+            })
+            .collect(),
+        ),
+        ..Default::default()
+    };
+    codex
+        .records
+        .lock()
+        .unwrap()
+        .get_mut(&root.id)
+        .unwrap()
+        .thread
+        .turns = Some(vec![Arc::new(turn("past"))]);
+    emit(
+        &codex.events,
+        AgentChange::Session {
+            session: root.clone(),
+            change: SessionChange::Turn {
+                turn: turn("live"),
+                completed: true,
+            },
+        },
+    )
+    .await
+    .unwrap();
+    history(&host, client.id(), &root).await;
+    imported_turns(&host, &root, &["past", "live"]).await;
+    let items = |id: &str| {
+        host.inner
+            .transcripts
+            .turn(&root, &id.into())
+            .unwrap()
+            .unwrap()
+            .items
+            .unwrap()
+            .iter()
+            .map(|item| item.id.to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(items("past"), ["past-0", "past-2"]);
+    assert_eq!(items("live"), ["live-0", "live-1", "live-2"]);
+}
+
+#[tokio::test]
+async fn a_client_holding_the_current_transcript_receives_no_turns() {
+    let directory = tempfile::tempdir().unwrap();
+    let directory = dunce::canonicalize(directory.path()).unwrap();
+    let codex = NativeAgent::new(ProviderKind::Codex, directory.join("codex"));
+    let claude = NativeAgent::new(ProviderKind::Claude, directory.join("claude"));
+    let host = service(&directory, &codex, &claude);
+    let client = host.open_session();
+    let root = codex
+        .create(directory.to_str().unwrap(), None, None)
+        .await
+        .unwrap()
+        .thread
+        .id
+        .unwrap();
+    send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "first",
+        "hello",
+    )
+    .await
+    .unwrap();
+    history(&host, client.id(), &root).await;
+    imported_turns(&host, &root, &["turn-0"]).await;
+    let open = |known_version| {
+        call::<agent_protocol::session::OpenedSession>(
+            &host,
+            client.id(),
+            Call::OpenSession(agent_protocol::session::OpenSession {
+                session: root.clone(),
+                limit: 10,
+                include_activity: true,
+                known_version,
+            }),
+        )
+    };
+    let current = open(None).await.unwrap();
+    let version = current.response.thread.transcript_version;
+    assert!(version.is_some() && !current.unchanged);
+    let held = open(version).await.unwrap();
+    assert!(held.unchanged);
+    assert!(held.response.thread.turns.is_none());
+    assert_eq!(held.response.thread.name, current.response.thread.name);
+
+    send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "second",
+        "again",
+    )
+    .await
+    .unwrap();
+    let changed = open(version).await.unwrap();
+    assert!(!changed.unchanged);
+    assert!(changed.response.thread.transcript_version > version);
+    assert_eq!(changed.response.thread.turns.unwrap().len(), 2);
 }
