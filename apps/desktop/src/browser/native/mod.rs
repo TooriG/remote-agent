@@ -2,7 +2,7 @@
 //! tool operations to this owner; losing one RPC never destroys its tabs.
 mod cookies;
 mod delegate;
-mod focus;
+use native_focus as focus;
 mod input;
 mod platform;
 

@@ -1,12 +1,8 @@
 //! AppKit needs the process main thread, so this native boundary test has its
 //! own harness. It uses an invisible window and never starts the application.
 #[cfg(target_os = "macos")]
-#[path = "../src/browser/native/focus.rs"]
-mod focus;
-
-#[cfg(target_os = "macos")]
 mod appkit {
-    use super::focus;
+    use native_focus as focus;
     use objc2::{MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained};
     use objc2_app_kit::{NSApplication, NSBackingStoreType, NSView, NSWindow, NSWindowStyleMask};
     use objc2_foundation::{NSObjectProtocol, NSPoint, NSRect, NSSize};

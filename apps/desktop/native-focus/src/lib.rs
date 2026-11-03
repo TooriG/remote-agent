@@ -1,5 +1,7 @@
 //! GPUI focus and AppKit's first responder are separate. A native child must
 //! return keyboard input to its parent when hidden or when GPUI is clicked.
+//! A separate crate keeps its AppKit test from building the desktop app.
+#![cfg(target_os = "macos")]
 use objc2_app_kit::NSView;
 use objc2_foundation::NSObjectProtocol;
 

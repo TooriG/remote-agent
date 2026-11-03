@@ -42,6 +42,7 @@ raw-window-handle = "0.6"
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Graphics_Dwm"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+native-focus = { path = "native-focus" }
 wry = { package = "lb-wry", version = "=0.53.3" }
 zeroize.workspace = true
 objc2 = "0.6"
@@ -62,6 +63,3 @@ gpui-apple = { package = "gpui-pre-apple", version = "=0.3.11" }
 name = "agent-desktop"
 path = "src/main.rs"
 
-[[test]]
-name = "native_focus"
-harness = false
