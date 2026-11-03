@@ -618,9 +618,8 @@ impl Desktop {
                     Arc::new(platform::SessionStorage { path }),
                     connections.preferences.clone(),
                 );
-                let conversations = platform::conversation_copies(&host)?;
                 let snapshot = persistence
-                    .restore(false, Some(conversations.clone()))
+                    .restore(false, Some(platform::conversation_copies(&host)?))
                     .await
                     .map_err(|reason| match reason {
                         RestoreError::InvalidState(reason) => {
@@ -642,10 +641,6 @@ impl Desktop {
                     )
                     .await
                     .map_err(|error| format!("{error:#}"))?;
-                tokio::spawn(agent_core::conversation_cache::run(
-                    conversations,
-                    store.subscribe(),
-                ));
                 if let Some(cwd) = initial_cwd {
                     drop(store.dispatch(Intent::NewChat { cwd }));
                 }

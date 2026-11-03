@@ -7,8 +7,13 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import dev.remoteagent.core.AgentStore
+import dev.remoteagent.core.ClientBuild
+import dev.remoteagent.core.ClientPlatform
+import dev.remoteagent.core.ClientSession
+import dev.remoteagent.core.ClientStorage
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.Snapshot
+import dev.remoteagent.core.StorageKey
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
@@ -18,6 +23,25 @@ import org.junit.Test
 
 class ModelSelectionTest {
     @get:Rule val compose = createComposeRule()
+
+    private class Storage(snapshot: Snapshot) : ClientStorage, ClientPlatform {
+        private val values = mutableMapOf(StorageKey.LOCAL_STATE to snapshot.serializeLocalState())
+
+        override fun load(key: StorageKey): ByteArray = synchronized(values) { values[key] ?: byteArrayOf() }
+
+        override fun save(key: StorageKey, bytes: ByteArray) {
+            synchronized(values) { values[key] = bytes }
+        }
+
+        override fun identity(): ByteArray = error("offline fixture does not connect")
+
+        override fun diagnosticsDirectory(): String? = null
+
+        override fun conversationDirectory(): String? = null
+
+        fun open(): ClientSession =
+            ClientSession.open(this, this, null, false, ClientBuild(0uL, "test-revision"), "Fixture")
+    }
 
     private fun fixture(): Snapshot {
         val key = JSONObject().put("Local", JSONObject().put("key", "new:/original"))
@@ -52,7 +76,9 @@ class ModelSelectionTest {
     @Test
     fun pickerChoicesSurviveRestartAndSeedNewChats() = runBlocking {
         fixture().use { selected ->
-            val store = AgentStore.offline(selected.serializeLocalState(), null, "test-revision")
+            val storage = Storage(selected)
+            val session = storage.open()
+            val store = session.ready()
             try {
                 compose.setContent {
                     MaterialTheme {
@@ -67,8 +93,10 @@ class ModelSelectionTest {
                 compose.onNodeWithTag("model.settings").performClick()
                 compose.onNodeWithTag("model.save-defaults").assertDoesNotExist()
                 compose.onNodeWithText("低").performScrollTo().performClick()
-                val restored = AgentStore.offline(store.snapshot().serializeLocalState(), null, "test-revision")
+                session.shutdown()
+                val restarted = storage.open()
                 try {
+                    val restored = restarted.ready()
                     restored.dispatch(Intent.NewChat("/another-project")).wait()
                     val snapshot = restored.snapshot()
                     val draft = snapshot.draft(snapshot.navigation().draftKey)
@@ -78,10 +106,10 @@ class ModelSelectionTest {
                     assertEquals("keep draft", snapshot.draft(selected.navigation().draftKey).text)
                     assertEquals("low", snapshot.draft(selected.navigation().draftKey).effort)
                 } finally {
-                    restored.shutdown()
+                    restarted.shutdown()
                 }
             } finally {
-                store.shutdown()
+                session.shutdown()
             }
         }
     }

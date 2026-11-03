@@ -73,7 +73,9 @@ impl StoreSession {
         updates: async_channel::Sender<E>,
         failure: impl Fn(String) -> E + Send + 'static,
     ) {
-        persistence.start(&self.store.snapshot());
+        if let Some(task) = persistence.start(self.store.subscribe()) {
+            self.runtime.handle.spawn(task);
+        }
         let mut failures = persistence.failures();
         let stop = self.persistence_stop.clone();
         self.runtime.handle.spawn(
@@ -150,6 +152,51 @@ mod tests {
         )
     }
 
+    #[test]
+    fn persistence_starts_outside_the_runtime_and_flushes_on_close() {
+        let executor = tokio::runtime::Runtime::new().unwrap();
+        let runtime = executor.block_on(async { runtime() });
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("snapshot.json");
+        let store = executor.block_on(async { Arc::new(Store::offline(Snapshot::default())) });
+        let (updates, incoming) = async_channel::unbounded();
+        let publish = runtime.handle.spawn(StoreSession::publish(
+            Ok(store.clone()),
+            runtime.clone(),
+            updates.clone(),
+            Update::Connected,
+            |_| Update::Snapshot,
+        ));
+        let Update::Connected(Ok(mut session)) = executor.block_on(incoming.recv()).unwrap() else {
+            panic!("missing session")
+        };
+        // GPUI delivers Connected on its main thread, without a Tokio context.
+        assert!(tokio::runtime::Handle::try_current().is_err());
+        session.persist(persistence(path.clone()), updates, |_| Update::Error);
+        executor.block_on(async {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                store
+                    .dispatch(Intent::SetDraftText {
+                        thread_id: "draft".into(),
+                        text: "saved from the UI thread".into(),
+                    })
+                    .await
+                    .unwrap();
+                drop(session);
+                runtime.closing.close();
+                runtime.closing.wait().await;
+                publish.await.unwrap();
+            })
+            .await
+            .expect("persistence outside the runtime stalled");
+        });
+        let restored = agent_core::persistence::decode(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(
+            restored.drafts[&"draft".into()].text,
+            "saved from the UI thread"
+        );
+    }
+
     #[tokio::test]
     async fn closing_flushes_the_latest_draft_and_closes_the_store() {
         tokio::time::timeout(Duration::from_secs(5), async {
@@ -203,7 +250,7 @@ mod tests {
             assert_eq!(
                 serde_json::from_slice::<agent_core::state::ModelPreferences>(&preferences)
                     .unwrap(),
-                restored.model_preferences
+                store.snapshot().model_preferences
             );
         })
         .await

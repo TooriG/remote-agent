@@ -231,12 +231,10 @@ impl AgentStore {
 }
 
 impl AgentStore {
-    /// A store for saved device state. With a conversation directory, saved
-    /// conversation copies show at once and later windows are saved there.
-    pub(crate) async fn restored(
+    /// A store for restored device state and its connection diagnostics.
+    pub(crate) fn restored(
         snapshot: Snapshot,
         diagnostics_directory: Option<String>,
-        conversations: Option<std::path::PathBuf>,
         client_revision: String,
     ) -> Result<Arc<Self>, AgentError> {
         let started = std::time::Instant::now();
@@ -246,9 +244,6 @@ impl AgentStore {
         }
         trace.activate();
         let store = crate::store::Store::offline(snapshot);
-        if let Some(directory) = conversations {
-            tokio::spawn(crate::conversation_cache::run(directory, store.subscribe()));
-        }
         trace.record(
             ConnectionPhase::StoreRestored,
             0,
@@ -277,10 +272,8 @@ impl AgentStore {
         Self::restored(
             crate::persistence::decode(&persisted).map_err(error)?,
             diagnostics_directory,
-            None,
             client_revision,
         )
-        .await
     }
 
     pub async fn reconnect(&self, connection: Connection) -> Result<(), AgentError> {

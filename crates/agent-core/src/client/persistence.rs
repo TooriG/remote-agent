@@ -71,19 +71,14 @@ pub struct DevicePreferences {
     state: Mutex<Option<DeviceState>>,
 }
 impl DevicePreferences {
-    fn load(
-        &self,
-        storage: &dyn ClientStorage,
-        fallback: ModelPreferences,
-    ) -> Result<Preferences, AgentError> {
+    fn load(&self, storage: &dyn ClientStorage) -> Result<Preferences, AgentError> {
         let mut state = self.state.lock().unwrap();
-        let state = Self::initialize(&mut state, storage, fallback)?;
+        let state = Self::initialize(&mut state, storage)?;
         Ok(state.current.clone())
     }
     fn initialize<'a>(
         state: &'a mut Option<DeviceState>,
         storage: &dyn ClientStorage,
-        fallback: ModelPreferences,
     ) -> Result<&'a mut DeviceState, AgentError> {
         if state.is_none() {
             let models = storage.load(StorageKey::ModelPreferences)?;
@@ -96,7 +91,7 @@ impl DevicePreferences {
                 .transpose()?;
             *state = Some(DeviceState {
                 current: Preferences {
-                    models: saved_models.clone().unwrap_or(fallback),
+                    models: saved_models.clone().unwrap_or_default(),
                     editor: saved_editor.clone().unwrap_or_default(),
                 },
                 saved_models,
@@ -112,7 +107,7 @@ impl DevicePreferences {
         after: Preferences,
     ) -> (Preferences, Result<(), AgentError>) {
         let mut state = self.state.lock().unwrap();
-        let state = match Self::initialize(&mut state, storage, before.models.clone()) {
+        let state = match Self::initialize(&mut state, storage) {
             Ok(state) => state,
             Err(reason) => return (before, Err(reason)),
         };
@@ -152,10 +147,15 @@ struct Save {
     complete: oneshot::Sender<Result<(), AgentError>>,
 }
 
+struct Restored {
+    preferences: Preferences,
+    conversations: Option<PathBuf>,
+}
+
 pub struct Persistence {
     storage: Arc<dyn ClientStorage>,
     pub(super) device: Arc<DevicePreferences>,
-    baseline: Mutex<Option<Preferences>>,
+    restored: Mutex<Option<Restored>>,
     queue: Mutex<Option<mpsc::UnboundedSender<Save>>>,
     failure: watch::Sender<Option<String>>,
 }
@@ -164,7 +164,7 @@ impl Persistence {
         Arc::new(Self {
             storage,
             device,
-            baseline: Mutex::default(),
+            restored: Mutex::default(),
             queue: Mutex::default(),
             failure: watch::channel(None).0,
         })
@@ -194,39 +194,51 @@ impl Persistence {
             };
             let mut snapshot =
                 crate::persistence::decode(&bytes).map_err(RestoreError::InvalidState)?;
-            let preferences = persistence
-                .device
-                .load(storage, snapshot.model_preferences.clone())?;
+            let preferences = persistence.device.load(storage)?;
             preferences.apply(&mut snapshot);
-            *persistence.baseline.lock().unwrap() = Some(preferences);
             if let Some(directory) = &conversations {
                 if new_pairing {
                     crate::conversation_cache::clear(directory);
                 }
                 crate::conversation_cache::restore(directory, &mut snapshot);
             }
+            *persistence.restored.lock().unwrap() = Some(Restored {
+                preferences,
+                conversations,
+            });
             Ok::<_, RestoreError>(snapshot)
         })
         .await
         .map_err(error)?
     }
-    pub fn start(&self, snapshot: &Snapshot) {
+    /// Prepare the ordered writer and conversation copies without entering a
+    /// runtime. The caller must spawn the returned task on its own executor.
+    pub fn start(
+        &self,
+        snapshots: watch::Receiver<Arc<Snapshot>>,
+    ) -> Option<impl Future<Output = ()> + Send + use<>> {
         let mut queue = self.queue.lock().unwrap();
         if queue.is_some() {
-            return;
+            return None;
         }
         let (send, mut receive) = mpsc::unbounded_channel::<Save>();
         *queue = Some(send);
-        let mut baseline = self
-            .baseline
+        let Restored {
+            preferences: mut baseline,
+            conversations,
+        } = self
+            .restored
             .lock()
             .unwrap()
             .take()
-            .unwrap_or_else(|| Preferences::capture(snapshot));
+            .unwrap_or_else(|| Restored {
+                preferences: Preferences::capture(&snapshots.borrow()),
+                conversations: None,
+            });
         let storage = self.storage.clone();
         let device = self.device.clone();
         let failure = self.failure.clone();
-        tokio::spawn(async move {
+        let saving = async move {
             while let Some(Save { snapshot, complete }) = receive.recv().await {
                 let storage = storage.clone();
                 let device = device.clone();
@@ -257,7 +269,15 @@ impl Persistence {
                 failure.send_replace(result.as_ref().err().map(ToString::to_string));
                 let _ = complete.send(result);
             }
-        });
+        };
+        Some(async move {
+            let copies = async move {
+                if let Some(directory) = conversations {
+                    crate::conversation_cache::run(directory, snapshots).await;
+                }
+            };
+            tokio::join!(saving, copies);
+        })
     }
     pub fn enqueue(&self, snapshot: Arc<Snapshot>) -> Result<Completion<()>, AgentError> {
         self.send(snapshot, false)

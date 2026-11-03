@@ -81,9 +81,6 @@ fn remember(snapshot: &mut Snapshot, selection: ModelSelection) {
 fn selected(snapshot: &Snapshot) -> &ModelSelection {
     &snapshot.model_preferences.selections[&ProviderKind::Codex]
 }
-fn session(storage: Arc<Storage>, device: Arc<DevicePreferences>) -> Arc<Persistence> {
-    Persistence::new(storage, device)
-}
 fn with_disk(disk: Arc<DeviceDisk>) -> Arc<Storage> {
     Arc::new(Storage {
         device: disk,
@@ -117,7 +114,7 @@ async fn device_preferences_apply_across_hosts_without_replacing_their_work() {
         };
         draft(&mut saved, &format!("{host}'s draft"));
         *storage.local.lock().unwrap() = crate::persistence::encode(&saved).unwrap();
-        let restored = session(storage, device.clone())
+        let restored = Persistence::new(storage, device.clone())
             .restore(false, None)
             .await
             .unwrap();
@@ -131,49 +128,23 @@ async fn device_preferences_apply_across_hosts_without_replacing_their_work() {
 }
 
 #[tokio::test]
-async fn local_choices_initialize_device_preferences_without_losing_existing_work() {
-    let storage = Arc::new(Storage::default());
-    let mut saved = Snapshot::default();
-    remember(
-        &mut saved,
-        selection(ProviderKind::Codex, "chosen", Some("high".into()), None),
-    );
-    remember(
-        &mut saved,
-        selection(ProviderKind::Claude, "other", None, Some("fast".into())),
-    );
-    draft(&mut saved, "existing Android draft");
-    *storage.local.lock().unwrap() = crate::persistence::encode(&saved).unwrap();
-    let persistence = session(storage.clone(), Arc::default());
-    let restored = persistence.restore(false, None).await.unwrap();
-    assert_eq!(restored.model_preferences, saved.model_preferences);
-    assert_eq!(restored.drafts, saved.drafts);
-    persistence.start(&restored);
-    persistence
-        .finish(Arc::new(restored))
-        .unwrap()
-        .await
-        .unwrap();
-    let other = session(with_disk(storage.device.clone()), Arc::default())
-        .restore(false, None)
-        .await
-        .unwrap();
-    assert_eq!(other.model_preferences, saved.model_preferences);
-    assert!(other.drafts.is_empty());
-}
-
-#[tokio::test]
 async fn simultaneous_views_keep_each_providers_choice_when_closed_in_reverse_order() {
     let disk = Arc::new(DeviceDisk::default());
     let device = Arc::new(DevicePreferences::default());
     let main_storage = with_disk(disk.clone());
     let side_storage = with_disk(disk.clone());
-    let main = session(main_storage.clone(), device.clone());
-    let side = session(side_storage.clone(), device);
+    let main = Persistence::new(main_storage.clone(), device.clone());
+    let side = Persistence::new(side_storage.clone(), device);
     let mut first = main.restore(false, None).await.unwrap();
     let mut second = side.restore(false, None).await.unwrap();
-    main.start(&first);
-    side.start(&second);
+    tokio::spawn(
+        main.start(watch::channel(Arc::new(first.clone())).1)
+            .unwrap(),
+    );
+    tokio::spawn(
+        side.start(watch::channel(Arc::new(second.clone())).1)
+            .unwrap(),
+    );
     let codex = selection(ProviderKind::Codex, "preferred", Some("high".into()), None);
     let claude = selection(ProviderKind::Claude, "other", None, Some("fast".into()));
     remember(&mut first, codex.clone());
@@ -190,7 +161,7 @@ async fn simultaneous_views_keep_each_providers_choice_when_closed_in_reverse_or
         .unwrap();
     side.finish(Arc::new(second)).unwrap().await.unwrap();
     main.finish(Arc::new(first)).unwrap().await.unwrap();
-    let restored = session(with_disk(disk), Arc::default())
+    let restored = Persistence::new(with_disk(disk), Arc::default())
         .restore(false, None)
         .await
         .unwrap();
@@ -223,12 +194,18 @@ async fn simultaneous_option_edits_do_not_overwrite_each_other() {
         selection(ProviderKind::Codex, "chosen", None, None),
     );
     *disk.models.lock().unwrap() = serde_json::to_vec(&initial.model_preferences).unwrap();
-    let main = session(with_disk(disk.clone()), device.clone());
-    let side = session(with_disk(disk.clone()), device);
+    let main = Persistence::new(with_disk(disk.clone()), device.clone());
+    let side = Persistence::new(with_disk(disk.clone()), device);
     let mut first = main.restore(false, None).await.unwrap();
     let mut second = side.restore(false, None).await.unwrap();
-    main.start(&first);
-    side.start(&second);
+    tokio::spawn(
+        main.start(watch::channel(Arc::new(first.clone())).1)
+            .unwrap(),
+    );
+    tokio::spawn(
+        side.start(watch::channel(Arc::new(second.clone())).1)
+            .unwrap(),
+    );
     first
         .model_preferences
         .selections
@@ -247,7 +224,7 @@ async fn simultaneous_option_edits_do_not_overwrite_each_other() {
         .unwrap();
     side.finish(Arc::new(second)).unwrap().await.unwrap();
     main.finish(Arc::new(first)).unwrap().await.unwrap();
-    let restored = session(with_disk(disk), Arc::default())
+    let restored = Persistence::new(with_disk(disk), Arc::default())
         .restore(false, None)
         .await
         .unwrap();
@@ -263,12 +240,20 @@ async fn retrying_a_failed_local_save_does_not_reapply_obsolete_device_edits() {
     let disk = Arc::new(DeviceDisk::default());
     let device = Arc::new(DevicePreferences::default());
     let storage = with_disk(disk.clone());
-    let first = session(storage.clone(), device.clone());
-    let second = session(with_disk(disk), device);
+    let first = Persistence::new(storage.clone(), device.clone());
+    let second = Persistence::new(with_disk(disk), device);
     let mut high = first.restore(false, None).await.unwrap();
     let mut low = second.restore(false, None).await.unwrap();
-    first.start(&high);
-    second.start(&low);
+    tokio::spawn(
+        first
+            .start(watch::channel(Arc::new(high.clone())).1)
+            .unwrap(),
+    );
+    tokio::spawn(
+        second
+            .start(watch::channel(Arc::new(low.clone())).1)
+            .unwrap(),
+    );
     remember(
         &mut high,
         selection(ProviderKind::Codex, "chosen", Some("high".into()), None),
@@ -291,7 +276,7 @@ async fn retrying_a_failed_local_save_does_not_reapply_obsolete_device_edits() {
     storage.fail_local.store(false, Ordering::SeqCst);
     first.finish(Arc::new(high)).unwrap().await.unwrap();
     assert!(first.failure().is_none());
-    let restored = session(storage, Arc::default())
+    let restored = Persistence::new(storage, Arc::default())
         .restore(false, None)
         .await
         .unwrap();
@@ -309,12 +294,18 @@ async fn an_option_edit_reselects_its_provider_without_erasing_the_other_windows
         selection(ProviderKind::Codex, "chosen", None, None),
     );
     *disk.models.lock().unwrap() = serde_json::to_vec(&initial.model_preferences).unwrap();
-    let main = session(with_disk(disk.clone()), device.clone());
-    let side = session(with_disk(disk.clone()), device);
+    let main = Persistence::new(with_disk(disk.clone()), device.clone());
+    let side = Persistence::new(with_disk(disk.clone()), device);
     let mut first = main.restore(false, None).await.unwrap();
     let mut second = side.restore(false, None).await.unwrap();
-    main.start(&first);
-    side.start(&second);
+    tokio::spawn(
+        main.start(watch::channel(Arc::new(first.clone())).1)
+            .unwrap(),
+    );
+    tokio::spawn(
+        side.start(watch::channel(Arc::new(second.clone())).1)
+            .unwrap(),
+    );
     remember(
         &mut second,
         selection(ProviderKind::Claude, "other", None, None),
@@ -331,7 +322,7 @@ async fn an_option_edit_reselects_its_provider_without_erasing_the_other_windows
         .effort = Some("high".into());
     main.finish(Arc::new(first)).unwrap().await.unwrap();
     side.finish(Arc::new(second)).unwrap().await.unwrap();
-    let restored = session(with_disk(disk), Arc::default())
+    let restored = Persistence::new(with_disk(disk), Arc::default())
         .restore(false, None)
         .await
         .unwrap();
@@ -366,7 +357,7 @@ async fn corrupted_state_or_preferences_are_rejected_without_writing() {
             }
         }
         assert!(
-            session(storage.clone(), Arc::default())
+            Persistence::new(storage.clone(), Arc::default())
                 .restore(false, None)
                 .await
                 .is_err()
@@ -379,12 +370,20 @@ async fn corrupted_state_or_preferences_are_rejected_without_writing() {
 async fn failed_device_writes_remain_dirty_when_another_session_saves() {
     let disk = Arc::new(DeviceDisk::default());
     let device = Arc::new(DevicePreferences::default());
-    let first = session(with_disk(disk.clone()), device.clone());
-    let second = session(with_disk(disk.clone()), device);
+    let first = Persistence::new(with_disk(disk.clone()), device.clone());
+    let second = Persistence::new(with_disk(disk.clone()), device);
     let mut high = first.restore(false, None).await.unwrap();
     let mut other = second.restore(false, None).await.unwrap();
-    first.start(&high);
-    second.start(&other);
+    tokio::spawn(
+        first
+            .start(watch::channel(Arc::new(high.clone())).1)
+            .unwrap(),
+    );
+    tokio::spawn(
+        second
+            .start(watch::channel(Arc::new(other.clone())).1)
+            .unwrap(),
+    );
     remember(
         &mut high,
         selection(ProviderKind::Codex, "chosen", Some("high".into()), None),
@@ -402,7 +401,7 @@ async fn failed_device_writes_remain_dirty_when_another_session_saves() {
     other.preferred_editor = Some(EditorId::Zed);
     second.finish(Arc::new(other)).unwrap().await.unwrap();
     first.finish(Arc::new(high)).unwrap().await.unwrap();
-    let restored = session(with_disk(disk), Arc::default())
+    let restored = Persistence::new(with_disk(disk), Arc::default())
         .restore(false, None)
         .await
         .unwrap();
@@ -413,15 +412,19 @@ async fn failed_device_writes_remain_dirty_when_another_session_saves() {
 #[tokio::test]
 async fn final_save_seals_the_queue_even_if_earlier_waiters_are_cancelled() {
     let storage = Arc::new(Storage::default());
-    let persistence = session(storage.clone(), Arc::default());
+    let persistence = Persistence::new(storage.clone(), Arc::default());
     let mut snapshot = persistence.restore(false, None).await.unwrap();
-    persistence.start(&snapshot);
+    let snapshots = watch::channel(Arc::new(snapshot.clone())).1;
+    let task = persistence.start(snapshots.clone()).unwrap();
+    assert!(persistence.start(snapshots).is_none());
+    let saving = tokio::spawn(task);
     draft(&mut snapshot, "earlier");
     drop(persistence.enqueue(Arc::new(snapshot.clone())).unwrap());
     draft(&mut snapshot, "final");
     let final_save = persistence.finish(Arc::new(snapshot.clone())).unwrap();
     assert!(persistence.enqueue(Arc::new(Snapshot::default())).is_err());
     final_save.await.unwrap();
+    saving.await.unwrap();
     assert_eq!(
         crate::persistence::decode(&storage.local.lock().unwrap())
             .unwrap()
@@ -431,13 +434,89 @@ async fn final_save_seals_the_queue_even_if_earlier_waiters_are_cancelled() {
 }
 
 #[tokio::test]
+async fn conversation_copies_are_saved_restored_and_cleared_on_pairing() {
+    use crate::models::{Thread, ThreadList};
+    use agent_protocol::session::SessionRef;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let directory = tempfile::tempdir().unwrap();
+        let copies = Some(directory.path().join("copies"));
+        let storage = Arc::new(Storage::default());
+        let persistence = Persistence::new(storage.clone(), Arc::default());
+        let mut snapshot = persistence.restore(false, copies.clone()).await.unwrap();
+        let id = SessionRef::new(ProviderKind::Codex, "cached".into()).unwrap();
+        let thread = Thread {
+            id: Some(id.clone()),
+            name: Some("saved conversation".into()),
+            turns: Some(Vec::new()),
+            ..Default::default()
+        };
+        snapshot.connected = true;
+        snapshot.threads = Some(Arc::new(ThreadList {
+            revision: 1,
+            limit: 5,
+            data: vec![thread.clone()],
+            projects: Vec::new(),
+            has_more: false,
+            has_more_projects: false,
+            project_pages: Default::default(),
+            provider_errors: None,
+        }));
+        Arc::make_mut(&mut snapshot.conversations).insert(id.clone(), Arc::new(thread));
+        draft(&mut snapshot, "host draft");
+        remember(
+            &mut snapshot,
+            selection(ProviderKind::Codex, "chosen", None, None),
+        );
+        let (updates, snapshots) = watch::channel(Arc::new(snapshot));
+        let saving = tokio::spawn(persistence.start(snapshots).unwrap());
+        let snapshot = updates.borrow().clone();
+        persistence.finish(snapshot).unwrap().await.unwrap();
+        let restored = loop {
+            let restored = Persistence::new(storage.clone(), Arc::default())
+                .restore(false, copies.clone())
+                .await
+                .unwrap();
+            if restored.conversations.contains_key(&id) && restored.thread_list().is_some() {
+                break restored;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        };
+        assert_eq!(
+            restored.conversations[&id].name.as_deref(),
+            Some("saved conversation")
+        );
+        assert_eq!(
+            restored.thread_list().unwrap().threads[0].title,
+            "saved conversation"
+        );
+        assert_eq!(restored.drafts[&"draft".into()].text, "host draft");
+        assert_eq!(selected(&restored).model.id, "chosen");
+        saving.abort();
+        assert!(saving.await.unwrap_err().is_cancelled());
+        // A new pairing must ignore the old Host state, even if it is damaged.
+        *storage.local.lock().unwrap() = b"damaged previous Host".to_vec();
+        let paired = Persistence::new(storage, Arc::default())
+            .restore(true, copies.clone())
+            .await
+            .unwrap();
+        assert!(paired.conversations.is_empty());
+        assert!(paired.thread_list().is_none());
+        assert!(paired.drafts.is_empty());
+        assert_eq!(selected(&paired).model.id, "chosen");
+        assert!(!copies.unwrap().exists());
+    })
+    .await
+    .expect("conversation persistence stalled");
+}
+
+#[tokio::test]
 async fn autosave_observes_core_changes_without_ui_notifications() {
     tokio::time::timeout(std::time::Duration::from_secs(3), async {
         let storage = Arc::new(Storage::default());
-        let persistence = session(storage.clone(), Arc::default());
+        let persistence = Persistence::new(storage.clone(), Arc::default());
         let restored = persistence.restore(false, None).await.unwrap();
         let store = crate::store::Store::offline(restored);
-        persistence.start(&store.snapshot());
+        tokio::spawn(persistence.start(store.subscribe()).unwrap());
         let stop = CancellationToken::new();
         let observe = tokio::spawn(persistence.clone().observe(store.subscribe(), stop.clone()));
         store

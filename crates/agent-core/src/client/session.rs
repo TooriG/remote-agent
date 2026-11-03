@@ -190,7 +190,11 @@ impl ClientSession {
             }
         };
         if observe {
-            self.observe(store.clone());
+            tokio::spawn(
+                self.persistence
+                    .clone()
+                    .observe(store.store.subscribe(), self.stop.clone()),
+            );
         }
         Ok(store)
     }
@@ -331,17 +335,11 @@ impl ClientSession {
         .map_err(error)??;
         let snapshot = self
             .persistence
-            .restore(new_pairing, conversations.clone())
+            .restore(new_pairing, conversations)
             .await
             .map_err(error)?;
         let read = started.elapsed().as_micros() as u64;
-        let store = AgentStore::restored(
-            snapshot,
-            directory,
-            conversations,
-            self.client_build.revision.clone(),
-        )
-        .await?;
+        let store = AgentStore::restored(snapshot, directory, self.client_build.revision.clone())?;
         store.record_connection_event(ConnectionPhase::SnapshotRead, read);
         store.record_connection_event(
             ConnectionPhase::AppPreparation,
@@ -382,7 +380,9 @@ impl ClientSession {
         let Phase::Loading(pending) = &mut *phase else {
             return Err(error("session closed"));
         };
-        self.persistence.start(&store.snapshot());
+        if let Some(task) = self.persistence.start(store.store.subscribe()) {
+            runtime.spawn(task);
+        }
         // Navigation comes before queued UI intents, just as on both platforms.
         let _ = store.dispatch(Intent::ShowThreadList);
         if self.recent_chats {
@@ -431,13 +431,6 @@ impl ClientSession {
         }
     }
 
-    fn observe(self: &Arc<Self>, store: Arc<AgentStore>) {
-        tokio::spawn(
-            self.persistence
-                .clone()
-                .observe(store.store.subscribe(), self.stop.clone()),
-        );
-    }
     fn save(&self) -> Result<Completion<()>, AgentError> {
         let phase = self.phase.lock().unwrap();
         match &*phase {

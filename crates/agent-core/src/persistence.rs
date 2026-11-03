@@ -6,9 +6,10 @@
 //! preferences and navigation across Host storage scopes. Reject damaged required
 //! fields rather than silently replacing user work with empty state; ignore
 //! unrelated runtime fields. Empty bytes represent a new installation.
-//! Native clients own private atomic writes and lifecycle flushes. Restoration
-//! marks unconfirmed sends as delivery-unknown until Host evidence reconciles
-//! them, preserving their content and order without automatically resending.
+//! Core coordinates ordered saves and lifecycle flushes; native adapters own
+//! private atomic writes. Restoration marks unconfirmed sends as delivery-unknown
+//! until Host evidence reconciles them, preserving their content and order
+//! without automatically resending.
 use crate::state::{
     Draft, FileDraft, ModelPreferences, ModelSelection, Navigation, PendingSubmission, ScopedData,
     Snapshot,
@@ -34,9 +35,22 @@ impl EditorPreferences {
 }
 
 #[cfg(test)]
-mod editor_tests {
+mod tests {
     use super::*;
     use agent_protocol::editors::EditorId;
+
+    #[test]
+    fn host_state_excludes_device_model_preferences() {
+        let mut snapshot = Snapshot::default();
+        snapshot.model_preferences.provider = Some(agent_protocol::session::ProviderKind::Claude);
+        let bytes = encode(&snapshot).unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(saved.get("model_preferences").is_none());
+        assert_eq!(
+            decode(&bytes).unwrap().model_preferences,
+            ModelPreferences::default()
+        );
+    }
 
     #[test]
     fn editor_preferences_are_device_owned_and_never_serialize_host_discovery() {
@@ -73,8 +87,6 @@ mod editor_tests {
 #[derive(Serialize, Deserialize)]
 pub struct PersistedState {
     #[serde(default)]
-    model_preferences: ModelPreferences,
-    #[serde(default)]
     project_preferences: Arc<BTreeMap<String, BTreeMap<String, crate::state::ProjectPreferences>>>,
     storage_scope: String,
     archived_scopes: Arc<BTreeMap<String, Arc<ScopedData>>>,
@@ -88,7 +100,6 @@ pub struct PersistedState {
 impl PersistedState {
     pub fn capture(snapshot: &Snapshot) -> Self {
         Self {
-            model_preferences: snapshot.model_preferences.clone(),
             project_preferences: snapshot.project_preferences.clone(),
             storage_scope: snapshot.storage_scope.clone(),
             archived_scopes: snapshot.archived_scopes.clone(),
@@ -175,7 +186,6 @@ pub fn decode(bytes: &[u8]) -> Result<Snapshot, serde_json::Error> {
     }
     let saved: PersistedState = serde_json::from_slice(bytes)?;
     Ok(Snapshot {
-        model_preferences: saved.model_preferences,
         project_preferences: saved.project_preferences,
         storage_scope: saved.storage_scope,
         archived_scopes: saved.archived_scopes,

@@ -14,6 +14,39 @@ use agent_protocol::{
 use serde_json::json;
 use std::sync::Arc;
 
+fn restart(snapshot: &Snapshot) -> Snapshot {
+    use crate::client::persistence::{ClientStorage, Persistence, StorageKey};
+    struct Storage {
+        local: Vec<u8>,
+        models: Vec<u8>,
+    }
+    impl ClientStorage for Storage {
+        fn load(&self, key: StorageKey) -> Result<Vec<u8>, crate::client::AgentError> {
+            Ok(match key {
+                StorageKey::LocalState => self.local.clone(),
+                StorageKey::ModelPreferences => self.models.clone(),
+                StorageKey::EditorPreferences => Vec::new(),
+            })
+        }
+        fn save(&self, _: StorageKey, _: Vec<u8>) -> Result<(), crate::client::AgentError> {
+            panic!("restoration must not write")
+        }
+    }
+    let persistence = Persistence::new(
+        Arc::new(Storage {
+            local: persistence::encode(snapshot).unwrap(),
+            models: serde_json::to_vec(&snapshot.model_preferences).unwrap(),
+        }),
+        Arc::default(),
+    );
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(persistence.restore(false, None))
+        .unwrap()
+}
+
 fn catalog() -> Vec<Model> {
     serde_json::from_value(json!([
         {"id":"gpt","model":{"provider":"codex","id":"shared"},"displayName":"GPT",
@@ -320,7 +353,7 @@ proptest::proptest! {
         let key = snapshot.navigation.draft_key.clone();
         let snapshot = select(&snapshot, &key, provider, effort, tier);
         let preferences = snapshot.model_preferences.clone();
-        let mut restored = persistence::decode(&persistence::encode(&snapshot).unwrap()).unwrap();
+        let mut restored = restart(&snapshot);
         restored.models = snapshot.models.clone();
         restored.account = snapshot.account.clone();
         let next = apply(&restored, Intent::NewChat { cwd });
@@ -533,7 +566,7 @@ fn remembered_deepseek_route_waits_for_capabilities_without_losing_choices() {
             effort: "max".into(),
         },
     );
-    let mut snapshot = persistence::decode(&persistence::encode(&snapshot).unwrap()).unwrap();
+    let mut snapshot = restart(&snapshot);
     snapshot = apply(
         &snapshot,
         Intent::NewChat {
