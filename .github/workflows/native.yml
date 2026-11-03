@@ -137,9 +137,11 @@ jobs:
       rust-version: ${{ steps.rust.outputs.version }}
       nextest-version: ${{ steps.rust.outputs.nextest-version }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - &windows-checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ inputs.desktop-release-tag || github.ref }}
+          # Delayed stages must use the event commit even when main advances.
+          ref: ${{ inputs.desktop-release-tag || github.sha }}
           persist-credentials: false
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
       - id: rust
@@ -508,10 +510,7 @@ jobs:
     env:
       WSL_PROFILE: ${{ (github.event_name == 'release' || inputs.desktop-release-tag != '') && 'release' || 'dev' }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ inputs.desktop-release-tag || github.ref }}
-          persist-credentials: false
+      - *windows-checkout
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
@@ -547,10 +546,7 @@ jobs:
       # rust-cache prunes non-Cargo files inside target, leaving empty tool caches.
       AGENT_FXC_CACHE_ROOT: ${{ github.workspace }}/output/tool-cache/windows-fxc
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ inputs.desktop-release-tag || github.ref }}
-          persist-credentials: false
+      - *windows-checkout
       - name: Require a verified production revision for release packaging
         if: inputs.desktop-release-tag != ''
         env:
