@@ -97,15 +97,28 @@
             openssl procps
           ];
           linuxDesktopLibraryPath = pkgs.lib.makeLibraryPath [ pkgs.vulkan-loader pkgs.libGL pkgs.libxkbcommon pkgs.wayland ];
+          runtimeShellHook = ''
+            # Keep child processes and interactive sessions on the pinned shell.
+            export SHELL="${pkgs.zsh}/bin/zsh"
+            ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
+              # Use the kernel-matched process inspector on macOS.
+              export PATH="/usr/sbin:$PATH"
+            ''}
+            case $- in *i*) exec "$SHELL" ;; esac
+          '';
+          appleSdkHook = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
+            # The Nix compiler setup overwrites DEVELOPER_DIR with its own SDK.
+            if [ -d "''${AGENT_XCODE_DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}" ]; then
+              export DEVELOPER_DIR="''${AGENT_XCODE_DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
+              unset SDKROOT
+              # Xcode expects clang, not Nix's LD override with clang-only flags.
+              unset LD
+            fi
+          '';
           mkDevShell = attrs: pkgs.mkShell (attrs // {
             LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
             packages = [ pkgs.zsh ] ++ (attrs.packages or [ ]);
-            shellHook = (attrs.shellHook or "") + ''
-              # Nix initializes its build environment with Bash. Child processes
-              # and interactive development sessions should use the pinned Zsh.
-              export SHELL="${pkgs.zsh}/bin/zsh"
-              case $- in *i*) exec "$SHELL" ;; esac
-            '';
+            shellHook = (attrs.shellHook or "") + runtimeShellHook;
           });
         in
         {
@@ -125,9 +138,11 @@
             packages = with pkgs; [ rustToolchain kache cccc cargo-mutants cargo-nextest just jq git perl ] ++ nativeBuildTools
               ++ [ workflowLinter nodejs powershell ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux linuxDesktopLibraries;
             LD_LIBRARY_PATH = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux linuxDesktopLibraryPath;
-            shellHook = kacheHook + pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
-              export PATH="/usr/sbin:$PATH"
-            '';
+            shellHook = kacheHook;
+          };
+          ios-test = pkgs.mkShellNoCC {
+            packages = with pkgs; [ just gitMinimal nodejs zsh ];
+            shellHook = appleSdkHook + runtimeShellHook;
           };
           android-test = mkDevShell {
             packages = [ androidTestSdk pkgs.jdk21 rustToolchain pkgs.coreutils ];
@@ -164,19 +179,7 @@
               pkgs.swiftformat
             ];
 
-            shellHook = kacheHook + pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
-              # Use macOS's kernel-matched process inspector. The Nix lsof
-              # build scans this host much more slowly under Simulator load.
-              export PATH="/usr/sbin:$PATH"
-              # The Nix compiler setup overwrites DEVELOPER_DIR with its own SDK.
-              if [ -d "''${AGENT_XCODE_DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}" ]; then
-                export DEVELOPER_DIR="''${AGENT_XCODE_DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
-                unset SDKROOT
-                # Xcode expects to drive clang itself. Nix's LD override makes
-                # xcodebuild invoke ld directly with clang-only -Xlinker flags.
-                unset LD
-              fi
-            '';
+            shellHook = kacheHook + appleSdkHook;
           } // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
             LD_LIBRARY_PATH = linuxDesktopLibraryPath;
             JAVA_HOME = pkgs.jdk21.home;

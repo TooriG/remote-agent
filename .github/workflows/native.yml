@@ -498,9 +498,9 @@ jobs:
           set -o pipefail
           if [[ -n "$AGENT_IOS_TESTS" ]]; then
             read -r -a ios_tests <<< "$AGENT_IOS_TESTS"
-            nix develop . --command just ios-e2e --prebuilt "${ios_tests[@]}" 2>&1 | tee target/qa/quality.log
+            nix develop .#ios-test --command just ios-e2e --prebuilt "${ios_tests[@]}" 2>&1 | tee target/qa/quality.log
           else
-            nix develop . --command just conversation-ui --prebuilt 2>&1 | tee target/qa/quality.log
+            nix develop .#ios-test --command just conversation-ui --prebuilt 2>&1 | tee target/qa/quality.log
           fi
       - name: Retain Apple acceptance logs and result bundles
         if: always()

@@ -1012,6 +1012,35 @@ fn xctestrun_files(products: &Path) -> Result<Vec<PathBuf>> {
         .collect())
 }
 
+async fn target_directory(
+    mode: BuildMode,
+    cwd: &Path,
+    cancel: &watch::Receiver<bool>,
+) -> Result<PathBuf> {
+    if mode == BuildMode::Prebuilt {
+        // The shared archive carries debug/xtask beside its qa/ products.
+        return std::env::current_exe()?
+            .parent()
+            .and_then(Path::parent)
+            .map(Path::to_path_buf)
+            .ok_or_else(|| "Prebuilt iOS runner has no target directory".into());
+    }
+    let metadata = supervision::run(
+        &args!["cargo", "metadata", "--no-deps", "--format-version", "1"],
+        cwd,
+        Io::Capture,
+        cancel,
+        SETUP_TIMEOUT,
+    )
+    .await?;
+    let metadata: Value = serde_json::from_slice(&metadata.stdout)?;
+    Ok(PathBuf::from(
+        metadata["target_directory"]
+            .as_str()
+            .ok_or("missing Cargo target directory")?,
+    ))
+}
+
 pub async fn run(
     tests: Vec<String>,
     without_codex: bool,
@@ -1031,20 +1060,7 @@ pub async fn run(
     let cancel = supervision::cancellation();
     let started = Instant::now();
     let cwd = std::env::current_dir()?;
-    let metadata = supervision::run(
-        &args!["cargo", "metadata", "--no-deps", "--format-version", "1"],
-        &cwd,
-        Io::Capture,
-        &cancel,
-        SETUP_TIMEOUT,
-    )
-    .await?;
-    let metadata: Value = serde_json::from_slice(&metadata.stdout)?;
-    let target = PathBuf::from(
-        metadata["target_directory"]
-            .as_str()
-            .ok_or("missing Cargo target directory")?,
-    );
+    let target = target_directory(build_mode, &cwd, &cancel).await?;
     let qa = target.join("qa");
     fs::create_dir_all(&qa)?;
     let records = qa.join(format!(
@@ -1209,6 +1225,65 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn prebuilt_target_needs_no_cargo_while_builds_respect_project_configuration() {
+        const ROOT: &str = "AGENT_IOS_TARGET_TEST_ROOT";
+        const MODE: &str = "AGENT_IOS_TARGET_TEST_MODE";
+        if let Ok(mode) = std::env::var(MODE) {
+            let root = PathBuf::from(std::env::var_os(ROOT).unwrap());
+            let mode = match mode.as_str() {
+                "prebuilt" => BuildMode::Prebuilt,
+                "build-only" => BuildMode::BuildOnly,
+                "build" => BuildMode::BuildAndTest,
+                _ => panic!("unexpected test mode"),
+            };
+            let (_sender, cancel) = watch::channel(false);
+            let target = target_directory(mode, &root, &cancel).await.unwrap();
+            let expected = if mode == BuildMode::Prebuilt {
+                root.join("shared-build")
+            } else {
+                root.join("custom-cargo-target")
+            };
+            assert_eq!(target, expected);
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        for mode in ["prebuilt", "build-only", "build"] {
+            let temporary = tempfile::tempdir().unwrap();
+            let root = temporary.path().canonicalize().unwrap();
+            let bin = root.join("bin");
+            fs::create_dir(&bin).unwrap();
+            let cargo = bin.join("cargo");
+            fs::write(
+                &cargo,
+                "#!/bin/sh\n[ \"$1\" = metadata ] || exit 17\nprintf '{\"target_directory\":\"%s/custom-cargo-target\"}\\n' \"$AGENT_IOS_TARGET_TEST_ROOT\"\n",
+            )
+            .unwrap();
+            fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
+            let runner = root.join("shared-build/debug/xtask");
+            fs::create_dir_all(runner.parent().unwrap()).unwrap();
+            fs::copy(std::env::current_exe().unwrap(), &runner).unwrap();
+            let output = Command::new(&runner)
+                .args([
+                    "--exact",
+                    "ios_e2e::tests::prebuilt_target_needs_no_cargo_while_builds_respect_project_configuration",
+                    "--nocapture",
+                ])
+                .env(ROOT, &root)
+                .env(MODE, mode)
+                .env("PATH", if mode == "prebuilt" { Path::new("") } else { &bin })
+                .output()
+                .await
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{mode}: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
 
     #[tokio::test]
     async fn build_uses_one_host_graph_and_stops_on_failure() {
