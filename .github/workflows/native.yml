@@ -226,20 +226,13 @@ jobs:
         with:
           cache-provider: basic
           cache-read-only: ${{ github.event_name == 'pull_request' }}
-      - name: Check Android formatting and lint
+      - name: Check, test and build Android app and test APKs
         env:
           GRADLE_USER_HOME: ${{ runner.temp }}/gradle
           ANDROID_USER_HOME: ${{ runner.temp }}/android
         run: >-
           nix develop . --command ./gradlew
           :apps:mobile:ktfmtCheck :apps:mobile:detekt
-          --no-daemon --parallel --max-workers=4 --build-cache --console=plain
-      - name: Test Android and build app and test APKs
-        env:
-          GRADLE_USER_HOME: ${{ runner.temp }}/gradle
-          ANDROID_USER_HOME: ${{ runner.temp }}/android
-        run: >-
-          nix develop . --command ./gradlew
           :apps:mobile:testDebugUnitTest
           :apps:mobile:assembleDebug :apps:mobile:assembleDebugAndroidTest
           --no-daemon --parallel --max-workers=4 --build-cache --console=plain

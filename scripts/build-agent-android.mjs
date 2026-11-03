@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync } from 'node:fs';
 import { availableParallelism } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -68,7 +68,7 @@ try {
   // dependency cdylibs; keep those and retired build hashes out of the APK.
   for (const abi of abis) {
     mkdirSync(join(next, abi), { recursive: true });
-    copyFileSync(join(generated, abi, 'libagent_ffi.so'), join(next, abi, 'libagent_ffi.so'));
+    renameSync(join(generated, abi, 'libagent_ffi.so'), join(next, abi, 'libagent_ffi.so'));
   }
   if (existsSync(output)) renameSync(output, previous);
   renameSync(next, output);

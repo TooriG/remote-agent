@@ -67,6 +67,11 @@ val buildAgentAndroid =
         outputs.dir(layout.buildDirectory.dir("generated/jniLibs"))
     }
 
+// When requested together, finish static checks before starting Rust builds.
+listOf(generateAgentBindings, buildAgentAndroid).forEach { task ->
+    task.configure { mustRunAfter("ktfmtCheck", "detekt") }
+}
+
 tasks
     .matching { it.name.startsWith("compile") && it.name.endsWith("Kotlin") }
     .configureEach { dependsOn(generateAgentBindings) }
