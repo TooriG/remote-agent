@@ -40,7 +40,8 @@
               go test . -run '^TestLinterLint(OK|Error)$'
             '';
           });
-          hostRustToolchain = pkgs.rust-bin.stable.latest.minimal.override {
+          buildRustToolchain = pkgs.rust-bin.stable.latest.minimal;
+          hostRustToolchain = buildRustToolchain.override {
             extensions = [ "clippy" "rustfmt" "rust-analyzer" "rust-src" ];
           };
           mobileRustToolchain = hostRustToolchain.override {
@@ -152,11 +153,12 @@
             packages = with pkgs; [ just gitMinimal nodejs zsh ];
             shellHook = appleSdkHook + runtimeShellHook;
           };
-          android-test = mkDevShell {
-            packages = [ androidTestSdk pkgs.jdk21 hostRustToolchain pkgs.coreutils ];
+          android-test = pkgs.mkShell {
+            packages = [ androidTestSdk pkgs.jdk21 buildRustToolchain pkgs.coreutils pkgs.zsh ];
             JAVA_HOME = pkgs.jdk21.home;
             ANDROID_HOME = "${androidTestSdk}/libexec/android-sdk";
             ANDROID_SDK_ROOT = "${androidTestSdk}/libexec/android-sdk";
+            shellHook = runtimeShellHook;
           };
           default = mkDevShell ({
             AGENT_NODE_RUNTIME = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "${nodeRuntime}";
@@ -192,10 +194,15 @@
             LD_LIBRARY_PATH = linuxDesktopLibraryPath;
           }));
         } // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          host-build = mkDevShell {
+            packages = with pkgs; [
+              buildRustToolchain kache just jq gitMinimal nodejs pkg-config cmake clang zig
+            ];
+            shellHook = kacheHook;
+          };
           android-build = pkgs.mkShell (androidBuildEnvironment // {
             packages = with pkgs; [
-              (hostRustToolchain.override {
-                extensions = [ ];
+              (buildRustToolchain.override {
                 targets = [ "aarch64-linux-android" "x86_64-linux-android" ];
               })
               kache zsh just jq gitMinimal nodejs cargo-ndk jdk21 androidSdk
@@ -205,8 +212,7 @@
         } // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
           ios-build = mkDevShell {
             packages = with pkgs; [
-              (hostRustToolchain.override {
-                extensions = [ ];
+              (buildRustToolchain.override {
                 targets = [ "aarch64-apple-ios-sim" ];
               })
               kache just jq gitMinimal nodejs zig swiftlint swiftformat
