@@ -531,26 +531,44 @@ mod tests {
         let path = log.path.clone();
         let subscriber = tracing_subscriber::registry().with(log);
         tracing::subscriber::with_default(subscriber, || {
-            connection_performance(&ConnectionPerformance {
+            let performance = ConnectionPerformance {
                 total_ms: 1743,
                 endpoint_ms: 53,
                 transport_ms: 1083,
                 verification_ms: 580,
                 route: ConnectionRoute::Relay,
-                platform: ClientPlatform::Ios,
+                platform: ClientPlatform::Macos,
+                client_revision: "stale-revision".into(),
                 resolution_ms: 7,
                 rtt_ms: 90,
+                timeline: connection::ConnectionTimeline {
+                    id: 17,
+                    ..Default::default()
+                },
                 ..Default::default()
-            });
+            }
+            .with_client("client-revision", ClientPlatform::Ios);
+            connection_performance(&performance);
         });
-        let record: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+        let records: Vec<Value> = fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let record = &records[0];
         assert_eq!(record["operation"], "client.connection");
         assert_eq!(
             record["message"],
-            "platform=Ios total_ms=1743 endpoint_ms=53 transport_ms=1083 verification_ms=580 reused=false route=Relay resolution_ms=7 rtt_ms=90 trace=0 attempt=0 connection=0"
+            "platform=Ios total_ms=1743 endpoint_ms=53 transport_ms=1083 verification_ms=580 reused=false route=Relay resolution_ms=7 rtt_ms=90 trace=17 attempt=0 connection=0"
         );
         assert_eq!(record["component"], "host");
+        assert_eq!(record["revision"], "test-revision");
         assert!(record.get("requestId").is_none());
+        assert_eq!(records[1]["operation"], "client.connection.timeline");
+        assert_eq!(
+            records[1]["message"],
+            "trace=17 attempt=0 connection=0 dropped=0 platform=Ios client_revision=client-revision recovered=false started_at_ms=0"
+        );
     }
 
     #[test]
