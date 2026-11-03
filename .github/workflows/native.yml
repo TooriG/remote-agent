@@ -366,6 +366,8 @@ jobs:
           KACHE_MAX_SIZE: 2GiB
           # Bound the snapshot even when target/ still shares the cached files.
           KACHE_GC_EVICT_SHARED: '1'
+          # Only the final sweep may change the store that is about to be archived.
+          KACHE_AUTO_GC: '0'
         run: |
           set -o pipefail
           mkdir -p target/qa
@@ -382,12 +384,7 @@ jobs:
         # Save below only when shutdown succeeds; never snapshot a live store.
         continue-on-error: true
         env: *local-rust-cache-env
-        run: |
-          # Local-only compiles need no daemon; start one before verified shutdown.
-          nix run .#kache -- daemon start
-          nix run .#kache -- stats --last-build
-          nix run .#kache -- gc
-          nix run .#kache -- daemon stop
+        run: nix develop '.#${{ github.job == 'mac' && 'native' || 'ios-build' }}' --command node scripts/finish-ci-rust-cache.mjs
       - &save-local-rust-cache
         name: Save compiled repository Rust crates
         id: save-local-rust-cache
