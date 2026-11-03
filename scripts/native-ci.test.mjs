@@ -138,15 +138,20 @@ test('Android acceptance counts include every test declared by its selected clas
   }
 });
 
-test('iPhone conversation acceptance selects existing tests exactly once', () => {
+test('iPhone acceptance selects existing tests exactly once in each suite', () => {
   const justfile = readFileSync(new URL('../justfile', import.meta.url), 'utf8');
   const recipe = justfile.match(/^conversation-ui \*options:\n((?:[ \t]+.*\n)+)/m);
   assert.ok(recipe, 'iPhone conversation acceptance recipe is missing');
-  const selected = [...recipe[1].matchAll(/\b(testSimulator\w+)\b/g)].map(match => match[1]);
-  assert.ok(selected.length > 0, 'iPhone conversation acceptance must select tests');
-  assert.equal(new Set(selected).size, selected.length, 'duplicate iPhone acceptance selectors');
   const directory = new URL('../apps/mobile/iosApp/UITests/', import.meta.url);
   const declared = new Set(readdirSync(directory).filter(name => name.endsWith('.swift')).flatMap(name =>
     [...readFileSync(new URL(name, directory), 'utf8').matchAll(/\bfunc (testSimulator\w+)\s*\(/g)].map(match => match[1])));
-  for (const name of selected) assert.ok(declared.has(name), `iPhone acceptance selector is missing: ${name}`);
+  for (const [suite, source] of [
+    ['conversation', recipe[1]],
+    ['default', readFileSync(new URL('./ios-e2e.sh', import.meta.url), 'utf8')],
+  ]) {
+    const selected = [...source.matchAll(/\b(testSimulator\w+)\b/g)].map(match => match[1]);
+    assert.ok(selected.length > 0, `${suite} acceptance must select tests`);
+    assert.equal(new Set(selected).size, selected.length, `duplicate ${suite} acceptance selectors`);
+    for (const name of selected) assert.ok(declared.has(name), `${suite} acceptance selector is missing: ${name}`);
+  }
 });

@@ -53,7 +53,7 @@ if [[ $# == 0 ]]; then
         testSimulatorUsesNativeHostNavigationAndPairingDismissal \
         testSimulatorOpensQrScannerWhileAddingHost \
         testSimulatorRemovesHostAndRequiresPairingAfterRelaunch \
-        testSimulatorUsesNativeProjectDisclosureAndDirectoryNavigation \
+        testSimulatorUsesNativeProjectDisclosureAndWorkspaceTree \
         testSimulatorCanStartAConversationInAProject \
         testSimulatorKeepsChatUnassignedAfterSendingAndReopening \
         testSimulatorMarksUnseenCompletionUntilOpened \
