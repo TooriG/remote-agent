@@ -159,7 +159,7 @@ private struct WorkspaceDirectoryScreen: View {
                 }
             }
         }
-        .navigationTitle("Files")
+        .navigationTitle("ファイル")
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: Binding(get: { tree.query }, set: { send(.query(text: $0)) }), prompt: "Search files")
         .onAppear {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -136,4 +136,17 @@ test('Android acceptance counts include every test declared by its selected clas
     }, 0);
     assert.equal(Number(expected), count, `${label} acceptance count is out of date`);
   }
+});
+
+test('iPhone conversation acceptance selects existing tests exactly once', () => {
+  const justfile = readFileSync(new URL('../justfile', import.meta.url), 'utf8');
+  const recipe = justfile.match(/^conversation-ui \*options:\n((?:[ \t]+.*\n)+)/m);
+  assert.ok(recipe, 'iPhone conversation acceptance recipe is missing');
+  const selected = [...recipe[1].matchAll(/\b(testSimulator\w+)\b/g)].map(match => match[1]);
+  assert.ok(selected.length > 0, 'iPhone conversation acceptance must select tests');
+  assert.equal(new Set(selected).size, selected.length, 'duplicate iPhone acceptance selectors');
+  const directory = new URL('../apps/mobile/iosApp/UITests/', import.meta.url);
+  const declared = new Set(readdirSync(directory).filter(name => name.endsWith('.swift')).flatMap(name =>
+    [...readFileSync(new URL(name, directory), 'utf8').matchAll(/\bfunc (testSimulator\w+)\s*\(/g)].map(match => match[1])));
+  for (const name of selected) assert.ok(declared.has(name), `iPhone acceptance selector is missing: ${name}`);
 });
