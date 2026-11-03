@@ -45,13 +45,6 @@ internal class AndroidMobileRepository(private val context: Context) {
         preferences.edit().putString("profiles", Json.encodeToString(profiles)).apply()
     }
 
-    private fun diagnosticsDirectory(id: String): String =
-        File(
-                directory,
-                "connection-diagnostics/${encodedId(id)}",
-            )
-            .absolutePath
-
     fun sessionStorage(id: String) = SessionStorage(id)
 
     inner class SessionStorage(private val id: String) : ClientStorage, ClientPlatform {
@@ -68,7 +61,7 @@ internal class AndroidMobileRepository(private val context: Context) {
 
         private fun file(key: StorageKey): AtomicFile =
             when (key) {
-                StorageKey.LOCAL_STATE -> snapshotFile(id)
+                StorageKey.LOCAL_STATE -> AtomicFile(File(directory, "agent-snapshot-${encodedId(id)}.json"))
                 StorageKey.MODEL_PREFERENCES -> AtomicFile(File(directory, "model-preferences.json"))
                 StorageKey.EDITOR_PREFERENCES -> AtomicFile(File(directory, "editor-preferences.json"))
             }
@@ -84,14 +77,14 @@ internal class AndroidMobileRepository(private val context: Context) {
             AndroidCredentialStore(context, id).loadOrCreate(::generateIdentity)
         }
 
-        override fun diagnosticsDirectory(): String? = access { this@AndroidMobileRepository.diagnosticsDirectory(id) }
+        override fun diagnosticsDirectory(): String? = access {
+            File(directory, "connection-diagnostics/${encodedId(id)}").absolutePath
+        }
 
         override fun conversationDirectory(): String? = access {
             File(directory, "conversations/${encodedId(id)}").absolutePath
         }
     }
-
-    private fun snapshotFile(id: String) = AtomicFile(File(directory, "agent-snapshot-${encodedId(id)}.json"))
 
     private fun encodedId(id: String): String =
         Base64.getUrlEncoder().withoutPadding().encodeToString(id.encodeToByteArray())

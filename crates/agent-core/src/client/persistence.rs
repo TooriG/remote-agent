@@ -171,6 +171,7 @@ impl Persistence {
     pub fn failure(&self) -> Option<String> {
         self.failure.borrow().clone()
     }
+    #[cfg(feature = "bindings")]
     pub(crate) fn report_failure(&self, reason: String) {
         self.failure.send_replace(Some(reason));
     }
