@@ -1,11 +1,11 @@
-[bindings.swift]
+[crates.agent_core.bindings.swift]
 module_name = "AgentCore"
 ffi_module_name = "AgentCoreFFI"
 generate_module_map = true
 # The iOS client presents AgentError.reason through its LocalizedError conformance.
 omit_localized_error_conformance = true
 
-[bindings.kotlin]
+[crates.agent_core.bindings.kotlin]
 package_name = "dev.remoteagent.core"
 cdylib_name = "agent_ffi"
 android = true

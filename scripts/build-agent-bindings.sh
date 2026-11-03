@@ -16,7 +16,8 @@ fi
 mkdir -p target
 generated=$(mktemp -d target/agent-bindings.XXXXXX)
 trap 'rm -rf "$generated"' EXIT
-cargo run --locked -p agent-bindgen -- generate "$library" --language swift --language kotlin --out-dir "$generated" --no-format
+cargo run --locked -p agent-bindgen -- generate "$library" --config crates/agent-core/uniffi.toml \
+    --language swift --language kotlin --out-dir "$generated" --no-format
 if [[ ! -d target/agent-bindings ]] || ! diff -qr target/agent-bindings "$generated" >/dev/null; then
     rm -rf target/agent-bindings
     mv "$generated" target/agent-bindings
