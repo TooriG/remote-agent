@@ -7,12 +7,9 @@ if [[ $# == 1 ]]; then
     library=$1
 else
     target=$(cargo metadata --no-deps --format-version 1 | jq -er .target_directory)
-    case "$(uname -s)" in
-        Darwin) library="$target/debug/libagent_ffi.dylib" ;;
-        Linux) library="$target/debug/libagent_ffi.so" ;;
-        *) library="$target/debug/agent_ffi.dll" ;;
-    esac
-    cargo build --locked -p agent-ffi --lib
+    # Core's rlib already contains UniFFI metadata; generating sources needs no FFI link.
+    library="$target/debug/libagent_core.rlib"
+    cargo build --locked -p agent-core --features bindings --lib
 fi
 # Preserve timestamps for unchanged bindings, but replace the complete directory
 # after a schema change so retired generated files cannot survive.

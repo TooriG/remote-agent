@@ -25,13 +25,11 @@ const args = process.argv.slice(2);
 const target = process.env.BINDINGS_TARGET;
 fs.appendFileSync(process.env.BINDINGS_LOG, JSON.stringify({ name, args }) + '\\n');
 const write = (file, content = '') => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, content); };
-if (name === 'git') { if (args[0] === 'rev-parse') console.log('revision'); }
-if (name === 'uname') console.log('Darwin');
 if (name === 'cargo') {
   if (args[0] === 'metadata') console.log(JSON.stringify({ target_directory: target }));
   if (args[0] === 'build' || args[0] === 'rustc') {
     if (args.includes('--target')) write(path.join(target, args[args.indexOf('--target') + 1], 'release/libagent_ffi.a'));
-    else for (const file of ['libagent_ffi.dylib', 'libagent_ffi.so', 'agent_ffi.dll']) write(path.join(target, 'debug', file));
+    else write(path.join(target, 'debug/libagent_core.rlib'));
   }
   if (args[0] === 'run') {
     if (process.env.BINDINGS_FAIL) process.exit(19);
@@ -55,7 +53,7 @@ if (name === 'xcrun') {
 }
 `);
   chmodSync(command, 0o755);
-  for (const name of ['cargo', 'git', 'uname', 'xcrun']) symlinkSync(command, join(bin, name));
+  for (const name of ['cargo', 'xcrun']) symlinkSync(command, join(bin, name));
   return {
     root, target,
     run(script = 'scripts/build-agent-ios.sh', args = ['device'], overrides = {}) {
@@ -100,12 +98,14 @@ test('iOS uses its target archive and reuses Swift outputs across invocation pat
   }
 });
 
-test('standalone generation builds the host library and retains bindings after generator failure', (t) => {
+test('standalone generation reads Core metadata without an FFI link and retains bindings after failure', (t) => {
   const build = fixture(t);
   const first = build.run('scripts/build-agent-bindings.sh', []);
   assert.equal(first.status, 0, first.stderr);
   const libraryBuild = first.commands.find(command => command.name === 'cargo' && command.args[0] === 'build');
-  assert.deepEqual(libraryBuild.args, ['build', '--locked', '-p', 'agent-ffi', '--lib']);
+  assert.deepEqual(libraryBuild.args, ['build', '--locked', '-p', 'agent-core', '--features', 'bindings', '--lib']);
+  const generation = first.commands.find(command => command.args.includes('generate'));
+  assert.equal(generation.args[generation.args.indexOf('generate') + 1], join(build.target, 'debug/libagent_core.rlib'));
   const failed = build.run('scripts/build-agent-bindings.sh', [], { BINDINGS_FAIL: '1' });
   assert.equal(failed.status, 19, failed.stderr);
   assert.equal(readFileSync(join(build.target, 'agent-bindings/AgentCore.swift'), 'utf8'), 'schema');

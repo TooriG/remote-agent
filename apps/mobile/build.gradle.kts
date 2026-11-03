@@ -37,7 +37,6 @@ val generateAgentBindings =
         inputs.file(rootProject.file("scripts/build-agent-bindings.sh"))
         inputs.files(rootProject.file("Cargo.toml"), rootProject.file("Cargo.lock"))
         inputs.dir(rootProject.file("crates/agent-bindgen"))
-        inputs.dir(rootProject.file("crates/agent-ffi"))
         inputs.dir(rootProject.file("crates/agent-core"))
         inputs.dir(rootProject.file("crates/agent-protocol"))
         inputs.dir(rootProject.file("crates/agent-transport"))

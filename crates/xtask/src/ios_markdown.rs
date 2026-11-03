@@ -13,14 +13,6 @@ pub async fn run() -> Result<()> {
     }
     let cancel = supervision::cancellation();
     let cwd = std::env::current_dir()?;
-    supervision::run(
-        &args!["scripts/build-agent-bindings.sh"],
-        &cwd,
-        Io::Inherit,
-        &cancel,
-        Duration::from_secs(3600),
-    )
-    .await?;
     let metadata = supervision::run(
         &args!["cargo", "metadata", "--no-deps", "--format-version", "1"],
         &cwd,
@@ -35,6 +27,19 @@ pub async fn run() -> Result<()> {
             .as_str()
             .ok_or("missing Cargo target directory")?,
     );
+    for arguments in [
+        args![vec; "cargo", "build", "--locked", "-p", "agent-ffi", "--lib"],
+        args![vec; "scripts/build-agent-bindings.sh", target.join("debug/libagent_ffi.dylib")],
+    ] {
+        supervision::run(
+            &arguments,
+            &cwd,
+            Io::Inherit,
+            &cancel,
+            Duration::from_secs(3600),
+        )
+        .await?;
+    }
     let bindings = cwd.join("target/agent-bindings");
     let mut hash = Sha256::new();
     for path in [
