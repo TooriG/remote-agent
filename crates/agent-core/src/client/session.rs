@@ -21,6 +21,8 @@ pub trait ClientStorage: Send + Sync {
     fn save(&self, local_state: Vec<u8>, model_preferences: Vec<u8>) -> Result<(), AgentError>;
     fn identity(&self) -> Result<Vec<u8>, AgentError>;
     fn diagnostics_directory(&self) -> Result<Option<String>, AgentError>;
+    /// Private directory for this Host's conversation copies.
+    fn conversation_directory(&self) -> Result<Option<String>, AgentError>;
 }
 
 type Pending = (Intent, oneshot::Sender<Result<Outcome, AgentError>>);
@@ -277,13 +279,23 @@ impl ClientSession {
     async fn restore(&self, new_pairing: bool) -> Result<Arc<AgentStore>, AgentError> {
         let started = std::time::Instant::now();
         let storage = self.persistence.storage.clone();
-        let (bytes, directory) = tokio::task::spawn_blocking(move || {
-            Ok::<_, AgentError>((storage.load(new_pairing)?, storage.diagnostics_directory()?))
+        let (bytes, directory, conversations) = tokio::task::spawn_blocking(move || {
+            let conversations = storage
+                .conversation_directory()?
+                .map(std::path::PathBuf::from);
+            if new_pairing && let Some(conversations) = &conversations {
+                crate::conversation_cache::clear(conversations);
+            }
+            Ok::<_, AgentError>((
+                storage.load(new_pairing)?,
+                storage.diagnostics_directory()?,
+                conversations,
+            ))
         })
         .await
         .map_err(error)??;
         let read = started.elapsed().as_micros() as u64;
-        let store = AgentStore::offline(bytes, directory).await?;
+        let store = AgentStore::restored(bytes, directory, conversations).await?;
         store.record_connection_event(ConnectionPhase::SnapshotRead, read);
         store.record_connection_event(
             ConnectionPhase::AppPreparation,
@@ -543,6 +555,9 @@ mod tests {
             Ok(vec![1; 32])
         }
         fn diagnostics_directory(&self) -> Result<Option<String>, AgentError> {
+            Ok(None)
+        }
+        fn conversation_directory(&self) -> Result<Option<String>, AgentError> {
             Ok(None)
         }
     }

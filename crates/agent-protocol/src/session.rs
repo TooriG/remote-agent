@@ -228,6 +228,26 @@ pub struct Timeline {
 }
 
 impl SessionChange {
+    /// The turn a turn-scoped change updates.
+    pub fn turn_id(&self) -> Option<&crate::ids::TurnId> {
+        match self {
+            Self::Turn { turn, .. } => Some(&turn.id),
+            Self::Item { turn_id, .. }
+            | Self::TurnItems { turn_id, .. }
+            | Self::RemoveItem { turn_id, .. }
+            | Self::Text { turn_id, .. }
+            | Self::ReasoningPart { turn_id, .. }
+            | Self::Error { turn_id, .. } => Some(turn_id),
+            Self::Status { .. }
+            | Self::Workspace { .. }
+            | Self::Preparation { .. }
+            | Self::Submission { .. }
+            | Self::Request { .. }
+            | Self::RequestDelivery { .. }
+            | Self::ResolveRequest { .. }
+            | Self::Unsupported => None,
+        }
+    }
     pub fn apply(&self, previous: &Thread) -> Result<Thread, UpdateError> {
         let next = previous.clone();
         let (timeline, result) = self.apply_timeline(Timeline {
@@ -292,23 +312,7 @@ impl SessionChange {
                 next.status = *status;
                 return Ok(());
             }
-            let turn_id = match self {
-                Self::Turn { turn, .. } => &turn.id,
-                Self::Item { turn_id, .. }
-                | Self::TurnItems { turn_id, .. }
-                | Self::RemoveItem { turn_id, .. }
-                | Self::Text { turn_id, .. }
-                | Self::ReasoningPart { turn_id, .. }
-                | Self::Error { turn_id, .. } => turn_id,
-                Self::Status { .. }
-                | Self::Workspace { .. }
-                | Self::Preparation { .. }
-                | Self::Submission { .. }
-                | Self::Request { .. }
-                | Self::RequestDelivery { .. }
-                | Self::ResolveRequest { .. }
-                | Self::Unsupported => unreachable!(),
-            };
+            let turn_id = self.turn_id().expect("other changes returned above");
             if turn_id.is_empty() {
                 return Err(UpdateError::InvalidTurnId);
             }
@@ -614,6 +618,9 @@ pub struct OpenSession {
     pub limit: usize,
     #[serde(default)]
     pub include_activity: bool,
+    /// The transcript version of the window the client already holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub known_version: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -745,6 +752,9 @@ pub struct OpenedSession {
     #[serde(skip)]
     pub subscription_id: uuid::Uuid,
     pub response: crate::models::ThreadResponse,
+    /// The known window is current: the response omits its turns and paging.
+    #[serde(default)]
+    pub unchanged: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

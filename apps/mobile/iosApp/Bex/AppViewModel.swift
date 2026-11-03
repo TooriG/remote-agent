@@ -97,6 +97,7 @@ final class AppViewModel: ObservableObject {
         do {
             let remaining = profiles.filter { $0.id != id }
             try DeviceIdentity.remove(id)
+            try? FileManager.default.removeItem(at: MobileSessionStorage(host: id).conversations())
             if selectedProfileId == id {
                 let old = detachStore()
                 selectedProfileId = nil

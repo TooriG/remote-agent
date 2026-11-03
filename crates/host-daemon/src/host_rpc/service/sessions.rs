@@ -500,11 +500,17 @@ impl HostRpcService {
                 .map_err(anyhow::Error::msg)?;
             let revision = self.inner.router.list_revision();
             let started = std::time::Instant::now();
-            let stored = self.stored_history(&target, row.as_ref(), None, limit, params.include_activity)?;
-            let source = if stored.is_some() { "transcript" } else { "native" };
-            if stored.is_none() && row.as_ref().is_none_or(|row| row.startup.is_none()) {
-                self.import_transcript(target.clone(), false);
+            let mut stored = self.stored_history(&target, row.as_ref(), None, limit, params.include_activity)?;
+            // A conversation's first open imports it; native history serves
+            // only conversations whose import failed or is not possible yet.
+            if stored.is_none()
+                && row.as_ref().is_none_or(|row| row.startup.is_none())
+                && let Some(importing) = self.import_transcript(target.clone(), false)
+                && importing.await
+            {
+                stored = self.stored_history(&target, row.as_ref(), None, limit, params.include_activity)?;
             }
+            let source = if stored.is_some() { "transcript" } else { "native" };
             let mut response = if let Some(response) = stored {
                 response
             } else if let Some(row) = &row {
@@ -542,12 +548,13 @@ impl HostRpcService {
                     Vec::new(),
                 )
             });
+            let known = params.known_version.is_some() && params.known_version == response.thread.transcript_version;
             let reply = self.inner
                 .router
-                .finish_session_read(read, session, response)
+                .finish_session_read(read, session, response, known)
                 .map_err(anyhow::Error::msg)?;
             tracing::info!(target: "agent", operation = "history.open",
-                message = %format_args!("source={source} native_ms={native_ms} project_ms={project_ms} total_ms={} bytes={} limit={limit}",
+                message = %format_args!("source={source} known={known} native_ms={native_ms} project_ms={project_ms} total_ms={} bytes={} limit={limit}",
                     started.elapsed().as_millis(), reply.initial.len()));
             Ok(reply)
         }
@@ -1005,6 +1012,7 @@ mod tests {
         let call =
             agent_protocol::protocol::Call::OpenSession(agent_protocol::session::OpenSession {
                 include_activity: false,
+                known_version: None,
                 session: agent_protocol::session::SessionRef {
                     provider: agent_protocol::session::ProviderKind::Claude,
                     id: id.into(),

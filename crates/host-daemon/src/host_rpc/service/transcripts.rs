@@ -3,12 +3,17 @@ use super::*;
 use crate::host_rpc::conversations::Conversation;
 use agent_protocol::session::SessionRef;
 use conversations::HistoryUse;
+use futures_util::FutureExt;
 
 /// Every transcript window, including older pages, holds at most this many turns.
 pub(super) const WINDOW_TURNS: usize = 10;
 
+/// Resolves to whether the conversation's transcript is stored.
+pub(super) type Importing =
+    futures_util::future::Shared<futures_util::future::BoxFuture<'static, bool>>;
+
 pub(super) enum Import {
-    Running,
+    Running(Importing),
     Failed,
 }
 
@@ -88,10 +93,13 @@ impl HostRpcService {
                 let Ok(agent) = self.inner.providers.get(provider) else {
                     continue;
                 };
-                if let Some(items) = agent.summary_items(turn.items.as_deref().unwrap_or_default())
+                let items = turn.items.as_deref().unwrap_or_default();
+                // Only a summary that hides items offers to load the turn's details.
+                if let Some(summary) = agent.summary_items(items)
+                    && summary.len() < items.len()
                 {
                     let turn = Arc::make_mut(turn);
-                    turn.items = Some(items);
+                    turn.items = Some(summary);
                     turn.items_summary = true;
                 }
             }
@@ -110,55 +118,62 @@ impl HostRpcService {
         Ok(Some(response))
     }
 
-    /// Copy native history in the background, once per conversation at a time.
-    /// A failed import waits for a re-import or a Host restart; an unavailable
-    /// provider, often one still starting, lets the next open try again.
-    pub(super) fn import_transcript(&self, target: SessionRef, retry: bool) {
-        {
-            let mut imports = self.inner.imports.lock().unwrap();
-            match imports.get(&target) {
-                Some(Import::Running) => return,
-                Some(Import::Failed) if !retry => return,
-                _ => {}
-            }
-            imports.insert(target.clone(), Import::Running);
+    /// Copy native history once; concurrent callers share one import, which
+    /// completes even if they stop waiting. A failed import waits for a
+    /// re-import or a Host restart; an unavailable provider, often one still
+    /// starting, lets the next open try again.
+    pub(super) fn import_transcript(&self, target: SessionRef, retry: bool) -> Option<Importing> {
+        let mut imports = self.inner.imports.lock().unwrap();
+        match imports.get(&target) {
+            Some(Import::Running(importing)) => return Some(importing.clone()),
+            Some(Import::Failed) if !retry => return None,
+            _ => {}
         }
         let service = self.clone();
-        tokio::spawn(async move {
-            let started = std::time::Instant::now();
-            let result = match service.import_history(&target).await {
-                Ok(response) => {
-                    let transcripts = service.inner.transcripts.clone();
-                    let key = target.clone();
-                    tokio::task::spawn_blocking(move || transcripts.import(&key, response))
-                        .await
-                        .map_err(|error| error.to_string())
-                        .and_then(|result| result)
-                        .map_err(storage_failure)
-                }
-                Err(error) => Err(error),
-            };
-            let mut imports = service.inner.imports.lock().unwrap();
-            match result {
-                Ok(()) => {
-                    imports.remove(&target);
-                    tracing::info!(target: "agent", operation = "transcript.import",
-                        message = %format_args!("provider={} total_ms={}", target.provider.key(), started.elapsed().as_millis()));
-                }
-                Err(error) => {
-                    if error.code == "provider_unavailable" {
-                        imports.remove(&target);
-                    } else {
-                        imports.insert(target, Import::Failed);
-                    }
-                    tracing::warn!(target: "agent", operation = "transcript.import", message = %error.message);
-                }
-            }
-        });
+        let key = target.clone();
+        let importing = tokio::spawn(async move { service.import(key).await })
+            .map(|finished| finished.unwrap_or(false))
+            .boxed()
+            .shared();
+        imports.insert(target, Import::Running(importing.clone()));
+        Some(importing)
     }
 
-    /// History in public identity, keeping the text of every user and
-    /// assistant message.
+    async fn import(&self, target: SessionRef) -> bool {
+        let started = std::time::Instant::now();
+        let result = match self.import_history(&target).await {
+            Ok(response) => {
+                let transcripts = self.inner.transcripts.clone();
+                let key = target.clone();
+                tokio::task::spawn_blocking(move || transcripts.import(&key, response))
+                    .await
+                    .map_err(|error| error.to_string())
+                    .and_then(|result| result)
+                    .map_err(storage_failure)
+            }
+            Err(error) => Err(error),
+        };
+        let mut imports = self.inner.imports.lock().unwrap();
+        match result {
+            Ok(()) => {
+                imports.remove(&target);
+                tracing::info!(target: "agent", operation = "transcript.import",
+                    message = %format_args!("provider={} total_ms={}", target.provider.key(), started.elapsed().as_millis()));
+                true
+            }
+            Err(error) => {
+                if error.code == "provider_unavailable" {
+                    imports.remove(&target);
+                } else {
+                    imports.insert(target, Import::Failed);
+                }
+                tracing::warn!(target: "agent", operation = "transcript.import", message = %error.message);
+                false
+            }
+        }
+    }
+
+    /// History in public identity, keeping the conversation's content.
     async fn import_history(&self, target: &SessionRef) -> Result<ThreadResponse, Failure> {
         let mut response = if let Some(row) = self.inner.conversations.get(target)? {
             if row.startup.is_some() {
@@ -174,18 +189,19 @@ impl HostRpcService {
         // Past activity is not imported; turns the Host runs keep every item.
         for turn in response.thread.turns.iter_mut().flatten() {
             if let Some(items) = &mut Arc::make_mut(turn).items {
-                items.retain(|item| text(item.body()));
+                items.retain(|item| content(item.body()));
             }
         }
         Ok(response)
     }
 }
 
-/// The conversation's text: what an import copies from native history.
-pub(super) fn text(body: &agent_protocol::items::ItemBody) -> bool {
+/// What an import copies from native history: messages and generated images.
+pub(super) fn content(body: &agent_protocol::items::ItemBody) -> bool {
     matches!(
         body,
         agent_protocol::items::ItemBody::UserMessage { .. }
             | agent_protocol::items::ItemBody::AssistantText { .. }
+            | agent_protocol::items::ItemBody::ImageGeneration { .. }
     )
 }

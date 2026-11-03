@@ -240,12 +240,13 @@ impl AgentStore {
     }
 }
 
-#[uniffi::export(async_runtime = "tokio")]
 impl AgentStore {
-    #[uniffi::constructor]
-    pub async fn offline(
+    /// A store for saved device state. With a conversation directory, saved
+    /// conversation copies show at once and later windows are saved there.
+    pub(crate) async fn restored(
         persisted: Vec<u8>,
         diagnostics_directory: Option<String>,
+        conversations: Option<std::path::PathBuf>,
     ) -> Result<Arc<Self>, AgentError> {
         let started = std::time::Instant::now();
         let trace = Trace::new();
@@ -253,8 +254,19 @@ impl AgentStore {
             trace.persist(directory.into()).map_err(error)?;
         }
         trace.activate();
-        let snapshot = crate::persistence::decode(&persisted).map_err(error)?;
+        let mut snapshot = crate::persistence::decode(&persisted).map_err(error)?;
+        if let Some(directory) = conversations.clone() {
+            snapshot = tokio::task::spawn_blocking(move || {
+                crate::conversation_cache::restore(&directory, &mut snapshot);
+                snapshot
+            })
+            .await
+            .map_err(error)?;
+        }
         let store = crate::store::Store::offline(snapshot);
+        if let Some(directory) = conversations {
+            tokio::spawn(crate::conversation_cache::run(directory, store.subscribe()));
+        }
         trace.record(
             ConnectionPhase::StoreRestored,
             0,
@@ -269,6 +281,17 @@ impl AgentStore {
             endpoint: Default::default(),
             trace,
         }))
+    }
+}
+
+#[uniffi::export(async_runtime = "tokio")]
+impl AgentStore {
+    #[uniffi::constructor]
+    pub async fn offline(
+        persisted: Vec<u8>,
+        diagnostics_directory: Option<String>,
+    ) -> Result<Arc<Self>, AgentError> {
+        Self::restored(persisted, diagnostics_directory, None).await
     }
 
     pub async fn reconnect(&self, connection: Connection) -> Result<(), AgentError> {

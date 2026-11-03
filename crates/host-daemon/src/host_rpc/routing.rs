@@ -409,6 +409,7 @@ impl SessionRouter {
         read: SessionLease,
         session: SessionId,
         mut response: ThreadResponse,
+        known: bool,
     ) -> Result<HostReply, String> {
         let connection = self
             .connection(session)
@@ -417,13 +418,24 @@ impl SessionRouter {
         if response.thread.id.as_ref() != Some(&read.target) {
             return Err("native session ID does not match".into());
         }
+        // Without live turns, a client holding this transcript version needs
+        // only the current metadata; its turns and paging are unchanged.
+        let unchanged = known && actor.timeline.turns.is_none();
         response.thread = actor.overlay(response.thread);
+        if unchanged {
+            let thread = &mut response.thread;
+            thread.turns = None;
+            thread.history_cursor = None;
+            thread.history_has_more = None;
+            thread.history_read_state = None;
+        }
         response
             .thread
             .defer_item_details(agent_protocol::models::MAX_INLINE_ITEM_BYTES);
         let mut opened = OpenedSession {
             session: read.target.clone(),
             subscription_id: uuid::Uuid::nil(),
+            unchanged,
             response,
         };
         let mut initial = protocol::encode(protocol::Response::Success { result: &opened })
@@ -592,24 +604,23 @@ impl SessionRouter {
         }
         let (next, result) = change.apply_timeline(std::mem::take(&mut actor.timeline));
         actor.timeline = next;
-        let finished = match change {
-            SessionChange::Turn {
-                turn,
-                completed: true,
-            } => actor
+        // Finished turns, and later updates to them, are recorded as they change.
+        let finished = change.turn_id().and_then(|turn_id| {
+            actor
                 .timeline
                 .turns
                 .iter()
                 .flatten()
                 .rev()
-                .find(|current| current.id == turn.id)
-                .cloned(),
-            _ => None,
-        };
-        // An update may target native history that the Host deliberately does
-        // not retain. Subscribers still apply it to their own history window.
+                .find(|current| &current.id == turn_id)
+                .filter(|current| current.status != agent_protocol::execution::TurnStatus::Running)
+                .cloned()
+        });
+        // An update may target a finished turn that live execution no longer
+        // retains; the transcript applies it, and so do subscribers.
+        let late = result == Err(agent_protocol::session::UpdateError::MissingTurn);
         if let Err(reason) = result
-            && reason != agent_protocol::session::UpdateError::MissingTurn
+            && !late
         {
             tracing::warn!(target: "agent", operation = "host.session.invalid_update", message = %reason);
             actor.release();
@@ -642,8 +653,18 @@ impl SessionRouter {
         ));
         let transcripts = state.transcripts.clone();
         drop(state);
-        if let (Some(transcripts), Some(turn)) = (transcripts, finished) {
+        if let (Some(transcripts), Some(turn)) = (&transcripts, finished) {
             record_failure(transcripts.record(target, &turn));
+        }
+        if let (Some(transcripts), true, Some(turn_id)) = (&transcripts, late, change.turn_id()) {
+            record_failure(transcripts.update_turn(target, turn_id, |turn| {
+                let (timeline, result) = change.apply_timeline(agent_protocol::session::Timeline {
+                    turns: Some(vec![Arc::new(turn)]),
+                    ..Default::default()
+                });
+                result.ok()?;
+                timeline.turns?.pop().map(Arc::unwrap_or_clone)
+            }));
         }
         actor.release();
     }

@@ -114,12 +114,20 @@ impl HostRpcService {
             .imported()
             .map_err(transcripts::storage_failure)?;
         for (conversation, cwd) in conversations {
+            // Registered roots are canonical; a recorded cwd may not be.
+            let cwd = cwd.map(|cwd| {
+                dunce::canonicalize(&cwd)
+                    .ok()
+                    .and_then(|path| path.into_os_string().into_string().ok())
+                    .unwrap_or(cwd)
+            });
             if cwd
                 .as_deref()
                 .and_then(|cwd| projects.project_for_workspace(cwd))
                 .is_some_and(|project| imported.contains(project))
             {
-                self.import_transcript(conversation, true);
+                // Re-imports run in the background.
+                drop(self.import_transcript(conversation, true));
             }
         }
         Ok(())

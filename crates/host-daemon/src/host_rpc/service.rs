@@ -222,7 +222,7 @@ impl HostRpcService {
                 let reply = self
                     .inner
                     .router
-                    .finish_session_read(read, session, response)
+                    .finish_session_read(read, session, response, false)
                     .map_err(|error| Failure::new("session_create_failed", error));
                 // Attach the creating client before work can complete. A
                 // disconnected caller still owns an admitted durable task.

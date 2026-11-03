@@ -111,6 +111,7 @@ fn unavailable_history_preserves_live_turn_requests_and_subsequent_text() {
             )
             .unwrap(),
             subscription_id: subscription,
+            unchanged: false,
             response,
         },
     );

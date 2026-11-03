@@ -161,10 +161,17 @@ impl ClientExt for Client {
                     session: thread_id.clone(),
                     limit: 1000,
                     include_activity: true,
+                    known_version: None,
                 },
             ))
             .await?;
-        validate_output(&read, &opened)?;
+        validate_output(
+            &crate::state::operations::OpenThread {
+                read: &read,
+                known_version: None,
+            },
+            &opened,
+        )?;
         drop(stream);
         let mut thread = opened.response.thread;
         let mut seen = std::collections::HashSet::new();

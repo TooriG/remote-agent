@@ -43,6 +43,11 @@ pub(crate) fn state_dir() -> Result<PathBuf, String> {
         .ok_or_else(|| "application data directory unavailable".into())
 }
 
+/// One Host's conversation copies, shared by its main and side windows.
+pub(crate) fn conversation_copies(host: &str) -> Result<PathBuf, String> {
+    Ok(state_dir()?.join(format!("desktop-conversations-{host}")))
+}
+
 pub(crate) fn development_app() -> bool {
     #[cfg(target_os = "macos")]
     {

@@ -475,12 +475,12 @@ async fn detail_reads_are_ordered_with_live_changes_and_stay_on_the_requesting_c
         ..Default::default()
     };
     let mut first_updates = router
-        .finish_session_read(open(&router, "native"), first.id(), response.clone())
+        .finish_session_read(open(&router, "native"), first.id(), response.clone(), false)
         .unwrap()
         .updates
         .unwrap();
     let mut second_updates = router
-        .finish_session_read(open(&router, "native"), second.id(), response)
+        .finish_session_read(open(&router, "native"), second.id(), response, false)
         .unwrap()
         .updates
         .unwrap();
@@ -648,7 +648,12 @@ async fn malformed_delta_keeps_all_subscriptions_and_the_last_valid_item() {
     for connection in &connections {
         streams.push(
             router
-                .finish_session_read(open(&router, "native"), connection.id(), response.clone())
+                .finish_session_read(
+                    open(&router, "native"),
+                    connection.id(),
+                    response.clone(),
+                    false,
+                )
                 .unwrap()
                 .updates
                 .unwrap(),
@@ -870,7 +875,7 @@ async fn history_is_not_retained_or_trimmed_and_subscriptions_do_not_pin_executi
         ..Default::default()
     };
     let mut response = router
-        .finish_session_read(open(&router, "native"), connection.id(), response)
+        .finish_session_read(open(&router, "native"), connection.id(), response, false)
         .unwrap();
     let reply = agent_protocol::protocol::decode::<
         agent_protocol::protocol::Response<agent_protocol::session::OpenedSession>,
@@ -935,7 +940,7 @@ async fn aggregate_item_bodies_are_deferred_to_fit_one_rpc() {
     )
     .unwrap();
     let response = router
-        .finish_session_read(open(&router, "native"), connection.id(), response)
+        .finish_session_read(open(&router, "native"), connection.id(), response, false)
         .unwrap();
     let line = response.initial;
     assert!(line.len() < 64 * 1024);
@@ -968,7 +973,7 @@ async fn oversized_rpc_returns_an_error_without_dropping_the_connection_or_subsc
         )
         .unwrap();
         let response = router
-            .finish_session_read(open(&router, "native"), connection.id(), response)
+            .finish_session_read(open(&router, "native"), connection.id(), response, false)
             .unwrap();
         let reply = agent_protocol::protocol::decode::<
             agent_protocol::protocol::Response<agent_protocol::session::OpenedSession>,
@@ -1032,6 +1037,7 @@ async fn completion_during_native_read_is_overlaid_before_live_updates() {
             connection.id(),
             serde_json::from_value(json!({"thread":{"id":{"provider":"codex","id":"native"},"turns":[{"id":"run","status":"running","items":[]}]}}))
             .unwrap(),
+            false,
         )
         .unwrap();
     let reply = agent_protocol::protocol::decode::<
@@ -1141,7 +1147,7 @@ async fn burst_of_small_updates_keeps_the_connection_and_delivers_every_update()
     )
     .unwrap();
     let mut subscription = router
-        .finish_session_read(open(&router, "native"), connection.id(), response)
+        .finish_session_read(open(&router, "native"), connection.id(), response, false)
         .unwrap()
         .updates
         .unwrap();
@@ -1215,7 +1221,7 @@ async fn slow_session_subscribers_do_not_block_other_devices_or_destroy_current_
     for connection in [slow.id(), healthy.id()] {
         streams.push(
             router
-                .finish_session_read(open(&router, "native"), connection, response.clone())
+                .finish_session_read(open(&router, "native"), connection, response.clone(), false)
                 .unwrap()
                 .updates
                 .unwrap(),
@@ -1246,12 +1252,17 @@ fn subscriptions_share_the_connection_budget_and_drop_releases_unread_bytes() {
     )
     .unwrap();
     let first = router
-        .finish_session_read(open(&router, "native"), connection.id(), response.clone())
+        .finish_session_read(
+            open(&router, "native"),
+            connection.id(),
+            response.clone(),
+            false,
+        )
         .unwrap()
         .updates
         .unwrap();
     let second = router
-        .finish_session_read(open(&router, "native"), connection.id(), response)
+        .finish_session_read(open(&router, "native"), connection.id(), response, false)
         .unwrap()
         .updates
         .unwrap();

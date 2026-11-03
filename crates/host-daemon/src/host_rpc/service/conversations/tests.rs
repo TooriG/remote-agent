@@ -42,6 +42,8 @@ pub(in crate::host_rpc::service) struct NativeAgent {
     pub(in crate::host_rpc::service) create_started: tokio::sync::Notify,
     fail_inject: AtomicUsize,
     open_error: Mutex<Option<Failure>>,
+    /// Every open fails with this, including the open an import makes.
+    open_failure: Mutex<Option<Failure>>,
     pub(in crate::host_rpc::service) fail_list: AtomicUsize,
     pub(in crate::host_rpc::service) fail_accounts: AtomicUsize,
     pub(in crate::host_rpc::service) accounts_gate: tokio::sync::Semaphore,
@@ -76,6 +78,7 @@ impl NativeAgent {
             create_started: tokio::sync::Notify::new(),
             fail_inject: AtomicUsize::new(0),
             open_error: Mutex::new(None),
+            open_failure: Mutex::new(None),
             fail_list: AtomicUsize::new(0),
             fail_accounts: AtomicUsize::new(0),
             accounts_gate: tokio::sync::Semaphore::new(1),
@@ -102,6 +105,7 @@ impl NativeAgent {
             create_started: tokio::sync::Notify::new(),
             fail_inject: AtomicUsize::new(0),
             open_error: Mutex::new(None),
+            open_failure: Mutex::new(None),
             fail_list: AtomicUsize::new(0),
             fail_accounts: AtomicUsize::new(0),
             accounts_gate: tokio::sync::Semaphore::new(1),
@@ -221,6 +225,9 @@ impl Agent for NativeAgent {
     }
     async fn open(&self, id: &str, limit: usize, _: bool) -> Result<ThreadResponse, Failure> {
         if let Some(error) = self.open_error.lock().unwrap().take() {
+            return Err(error);
+        }
+        if let Some(error) = self.open_failure.lock().unwrap().clone() {
             return Err(error);
         }
         let mut response = self
@@ -713,6 +720,7 @@ async fn history(
             session: root.clone(),
             limit: 1000,
             include_activity: true,
+            known_version: None,
         }),
     )
     .await
@@ -850,6 +858,7 @@ async fn unavailable_current_provider_does_not_block_earlier_segments_or_local_r
                 session: root.clone(),
                 limit: 100,
                 include_activity: true,
+                known_version: None,
             }),
         )
         .await
@@ -1126,6 +1135,7 @@ async fn unavailable_past_provider_keeps_current_history_and_operations_usable()
             session: root.clone(),
             limit: 100,
             include_activity: true,
+            known_version: None,
         }),
     )
     .await
@@ -1260,6 +1270,7 @@ async fn loaded_provider_failure_keeps_the_handoff_open_and_discoverable() {
             session: root.clone(),
             limit: 100,
             include_activity: true,
+            known_version: None,
         }),
     )
     .await
@@ -1313,7 +1324,7 @@ async fn opening_does_not_hide_native_history_errors_as_startup_failures() {
         let directory = tempfile::tempdir().unwrap();
         let HandoffFixture { codex, root, .. } = saved_handoff(directory.path()).await;
         let codex = codex.restarted();
-        *codex.open_error.lock().unwrap() =
+        *codex.open_failure.lock().unwrap() =
             Some(Failure::new(code, "native session cannot be loaded"));
         let host = HostRpcService::new(
             [
@@ -1330,6 +1341,7 @@ async fn opening_does_not_hide_native_history_errors_as_startup_failures() {
                 session: root,
                 limit: 100,
                 include_activity: true,
+                known_version: None,
             }),
         )
         .await
@@ -1380,6 +1392,7 @@ async fn handoff_does_not_silently_transfer_only_the_readable_sources() {
                 session: root,
                 limit: 100,
                 include_activity: true,
+                known_version: None,
             }),
         )
         .await
@@ -1410,6 +1423,7 @@ async fn all_unavailable_providers_still_open_saved_metadata_and_report_each_fai
             session: root.clone(),
             limit: 100,
             include_activity: true,
+            known_version: None,
         }),
     )
     .await
@@ -2248,6 +2262,7 @@ async fn claude_history_beyond_one_hundred_turns_opens_and_pages_in_order() {
             session: root.clone(),
             limit: 5,
             include_activity: true,
+            known_version: None,
         }),
     )
     .await
@@ -2372,6 +2387,7 @@ async fn long_history_is_transferred_beyond_the_visible_page_and_older_pages_kee
             session: root.clone(),
             limit: 5,
             include_activity: true,
+            known_version: None,
         }),
     )
     .await
@@ -2497,6 +2513,20 @@ async fn handoff_and_excerpts_recover_deferred_native_messages() {
     )
     .await
     .unwrap();
+    // Native history defers the message; the Host transcript recovers it.
+    assert!(
+        codex
+            .open(&root.id, 100, true)
+            .await
+            .unwrap()
+            .thread
+            .turns
+            .unwrap()[0]
+            .items
+            .as_ref()
+            .unwrap()[0]
+            .is_deferred()
+    );
     let opened: agent_protocol::session::OpenedSession = call(
         &host,
         client.id(),
@@ -2504,12 +2534,13 @@ async fn handoff_and_excerpts_recover_deferred_native_messages() {
             session: root.clone(),
             limit: 100,
             include_activity: true,
+            known_version: None,
         }),
     )
     .await
     .unwrap();
     assert!(
-        opened.response.thread.turns.as_ref().unwrap()[0]
+        !opened.response.thread.turns.as_ref().unwrap()[0]
             .items
             .as_ref()
             .unwrap()[0]
@@ -2796,4 +2827,67 @@ async fn imports_copy_message_text_while_host_turns_keep_activity() {
     };
     assert_eq!(items("past"), ["past-0", "past-2"]);
     assert_eq!(items("live"), ["live-0", "live-1", "live-2"]);
+}
+
+#[tokio::test]
+async fn a_client_holding_the_current_transcript_receives_no_turns() {
+    let directory = tempfile::tempdir().unwrap();
+    let directory = dunce::canonicalize(directory.path()).unwrap();
+    let codex = NativeAgent::new(ProviderKind::Codex, directory.join("codex"));
+    let claude = NativeAgent::new(ProviderKind::Claude, directory.join("claude"));
+    let host = service(&directory, &codex, &claude);
+    let client = host.open_session();
+    let root = codex
+        .create(directory.to_str().unwrap(), None, None)
+        .await
+        .unwrap()
+        .thread
+        .id
+        .unwrap();
+    send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "first",
+        "hello",
+    )
+    .await
+    .unwrap();
+    history(&host, client.id(), &root).await;
+    imported_turns(&host, &root, &["turn-0"]).await;
+    let open = |known_version| {
+        call::<agent_protocol::session::OpenedSession>(
+            &host,
+            client.id(),
+            Call::OpenSession(agent_protocol::session::OpenSession {
+                session: root.clone(),
+                limit: 10,
+                include_activity: true,
+                known_version,
+            }),
+        )
+    };
+    let current = open(None).await.unwrap();
+    let version = current.response.thread.transcript_version;
+    assert!(version.is_some() && !current.unchanged);
+    let held = open(version).await.unwrap();
+    assert!(held.unchanged);
+    assert!(held.response.thread.turns.is_none());
+    assert_eq!(held.response.thread.name, current.response.thread.name);
+
+    send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "second",
+        "again",
+    )
+    .await
+    .unwrap();
+    let changed = open(version).await.unwrap();
+    assert!(!changed.unchanged);
+    assert!(changed.response.thread.transcript_version > version);
+    assert_eq!(changed.response.thread.turns.unwrap().len(), 2);
 }

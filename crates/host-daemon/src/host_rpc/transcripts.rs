@@ -58,6 +58,10 @@ impl Transcripts {
                 std::fs::create_dir_all(parent).map_err(failure)?;
             }
             let connection = Connection::open(path).map_err(failure)?;
+            // A restarting Host can briefly overlap its predecessor.
+            connection
+                .busy_timeout(std::time::Duration::from_secs(10))
+                .map_err(failure)?;
             connection
                 .execute_batch(
                     "PRAGMA journal_mode = WAL;
@@ -78,7 +82,14 @@ impl Transcripts {
                          body BLOB NOT NULL,
                          PRIMARY KEY (provider, id, position)
                      ) WITHOUT ROWID;
-                     CREATE INDEX IF NOT EXISTS turn_ids ON turns (provider, id, turn_id, position);",
+                     CREATE INDEX IF NOT EXISTS turn_ids ON turns (provider, id, turn_id, position);
+                     -- Host-wide order of each conversation's latest change.
+                     CREATE TABLE IF NOT EXISTS versions (
+                         provider TEXT NOT NULL,
+                         id TEXT NOT NULL,
+                         version INTEGER NOT NULL,
+                         PRIMARY KEY (provider, id)
+                     ) WITHOUT ROWID;",
                 )
                 .map_err(failure)?;
             Ok(connection)
@@ -159,7 +170,7 @@ impl Transcripts {
                     params![conversation.provider.key(), conversation.id, response.thread.cwd, metadata],
                 )
                 .map_err(failure)?;
-            Ok(())
+            advance(transaction, conversation.provider.key(), &conversation.id)
         })
     }
 
@@ -210,7 +221,43 @@ impl Transcripts {
                     params![conversation.provider.key(), conversation.id, position],
                 )
                 .map_err(failure)?;
-            insert(transaction, conversation, position, &turn)
+            insert(transaction, conversation, position, &turn)?;
+            advance(transaction, conversation.provider.key(), &conversation.id)
+        })
+    }
+
+    /// Change the latest stored occurrence of a turn, such as with an update
+    /// a provider sent after the turn finished.
+    pub(crate) fn update_turn(
+        &self,
+        conversation: &SessionRef,
+        turn_id: &TurnId,
+        change: impl FnOnce(Turn) -> Option<Turn>,
+    ) -> Result<(), String> {
+        self.write(|transaction| {
+            let Some((position, body)) = transaction
+                .query_row(
+                    "SELECT position, body FROM turns WHERE provider = ?1 AND id = ?2 AND turn_id = ?3
+                     ORDER BY position DESC LIMIT 1",
+                    params![conversation.provider.key(), conversation.id, turn_id.as_str()],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?)),
+                )
+                .optional()
+                .map_err(failure)?
+            else {
+                return Ok(());
+            };
+            let Some(turn) = change(decode_turn(&body)?) else {
+                return Ok(());
+            };
+            transaction
+                .execute(
+                    "DELETE FROM turns WHERE provider = ?1 AND id = ?2 AND position = ?3",
+                    params![conversation.provider.key(), conversation.id, position],
+                )
+                .map_err(failure)?;
+            insert(transaction, conversation, position, &turn)?;
+            advance(transaction, conversation.provider.key(), &conversation.id)
         })
     }
 
@@ -242,6 +289,7 @@ impl Transcripts {
                         params![provider, id, position, body],
                     )
                     .map_err(failure)?;
+                advance(transaction, &provider, &id)?;
             }
             Ok(())
         })
@@ -306,6 +354,15 @@ impl Transcripts {
             let mut response: ThreadResponse = protocol::decode(&metadata).map_err(failure)?;
             let start = end - turns.len();
             response.thread.turns = Some(turns);
+            response.thread.transcript_version = connection
+                .query_row(
+                    "SELECT version FROM versions WHERE provider = ?1 AND id = ?2",
+                    key,
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()
+                .map_err(failure)?
+                .map(|version| version as u64);
             Ok(Some(Window { response, start }))
         })
     }
@@ -389,9 +446,22 @@ impl Transcripts {
                     ],
                 )
                 .map_err(failure)?;
-            Ok(())
+            advance(transaction, conversation.provider.key(), &conversation.id)
         })
     }
+}
+
+/// Give the conversation the next Host-wide version.
+fn advance(transaction: &Transaction, provider: &str, id: &str) -> Result<(), String> {
+    transaction
+        .execute(
+            "INSERT INTO versions (provider, id, version)
+             VALUES (?1, ?2, (SELECT COALESCE(MAX(version), 0) + 1 FROM versions))
+             ON CONFLICT (provider, id) DO UPDATE SET version = excluded.version",
+            params![provider, id],
+        )
+        .map_err(failure)?;
+    Ok(())
 }
 
 fn insert(
@@ -652,6 +722,76 @@ mod tests {
             window.response.thread.turns.as_ref().unwrap()[0].status,
             TurnStatus::Interrupted
         );
+    }
+
+    #[test]
+    fn late_updates_change_the_stored_turn_and_its_version() {
+        let (_root, store) = store();
+        let target = conversation();
+        store
+            .import(
+                &target,
+                history(vec![turn("done", &["answer"], TurnStatus::Completed)]),
+            )
+            .unwrap();
+        let before = store
+            .window(&target, None, 10)
+            .unwrap()
+            .unwrap()
+            .response
+            .thread
+            .transcript_version;
+        store
+            .update_turn(&target, &"done".into(), |mut turn| {
+                turn.items.as_mut()?.push(Arc::new(Item::new(
+                    "late".into(),
+                    Default::default(),
+                    ItemBody::AssistantText {
+                        text: "done/late".into(),
+                        phase: AssistantPhase::Final,
+                    },
+                )));
+                Some(turn)
+            })
+            .unwrap();
+        store
+            .update_turn(&target, &"missing".into(), |_| unreachable!())
+            .unwrap();
+        let window = store.window(&target, None, 10).unwrap().unwrap();
+        assert_eq!(texts(&window), ["done/answer", "done/late"]);
+        assert!(window.response.thread.transcript_version > before);
+    }
+
+    #[test]
+    fn every_change_gives_its_conversation_a_newer_version() {
+        let (_root, store) = store();
+        let target = conversation();
+        let other = SessionRef::new(ProviderKind::Codex, "other".into()).unwrap();
+        let version = |target: &SessionRef| {
+            store
+                .window(target, None, 10)
+                .unwrap()
+                .unwrap()
+                .response
+                .thread
+                .transcript_version
+                .unwrap()
+        };
+        store.import(&target, history(vec![])).unwrap();
+        store.import(&other, history(vec![])).unwrap();
+        let imported = version(&target);
+        assert!(version(&other) > imported);
+        store
+            .record(&target, &turn("t", &["i"], TurnStatus::Running))
+            .unwrap();
+        let recorded = version(&target);
+        assert!(recorded > version(&other));
+        store.rename(&target, Some("renamed")).unwrap();
+        let renamed = version(&target);
+        assert!(renamed > recorded);
+        store.interrupt_running().unwrap();
+        assert!(version(&target) > renamed);
+        assert_eq!(version(&target), version(&target), "reads keep the version");
     }
 
     #[test]

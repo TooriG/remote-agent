@@ -104,6 +104,7 @@ fn reply(thread: Thread) -> agent_protocol::session::OpenedSession {
     agent_protocol::session::OpenedSession {
         session: thread.id.clone().unwrap(),
         subscription_id: uuid::Uuid::nil(),
+        unchanged: false,
         response: ThreadResponse {
             thread,
             ..Default::default()

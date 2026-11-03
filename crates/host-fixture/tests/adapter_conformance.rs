@@ -17,6 +17,7 @@ async fn open(client: &Client, session: &SessionRef) -> (OpenedSession, Reader) 
     client
         .request_stream(&Call::OpenSession(OpenSession {
             include_activity: true,
+            known_version: None,
             session: session.clone(),
             limit: 20,
         }))
@@ -573,6 +574,24 @@ async fn scenarios(provider: ProviderKind) {
         .call(&op::ListSessions::new(Default::default()))
         .await
         .unwrap();
+    if provider == ProviderKind::Codex {
+        // The archived native state reaches the Host transcript on re-import.
+        local
+            .peer
+            .request::<agent_protocol::project_import::ProjectImportResult>(&Call::ImportProjects(
+                agent_protocol::project_import::ImportProjects {
+                    paths: vec![root.to_str().unwrap().into()],
+                },
+            ))
+            .await
+            .unwrap();
+        for _ in 0..500 {
+            if open(&local.peer, &session).await.0.response.model.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
     let (history, mut events) = open(&local.peer, &session).await;
     if provider == ProviderKind::Codex {
         assert_eq!(

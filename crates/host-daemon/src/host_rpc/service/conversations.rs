@@ -17,7 +17,7 @@ pub(super) enum HistoryUse {
     Read,
     Excerpt,
     Handoff,
-    /// A transcript copies the full text of user and assistant messages.
+    /// A transcript copies messages and generated images in full.
     Import,
 }
 
@@ -205,7 +205,7 @@ impl HostRpcService {
                     // Handoffs deliberately omit reasoning and native tool
                     // state. Their deferred bodies need not be recovered.
                     if item.is_deferred()
-                        && (transcripts::text(item.body())
+                        && (transcripts::content(item.body())
                             || (usage != HistoryUse::Import
                                 && matches!(
                                     item.body(),
