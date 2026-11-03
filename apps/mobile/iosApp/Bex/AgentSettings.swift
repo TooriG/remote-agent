@@ -2,9 +2,9 @@ import AgentCore
 import SwiftUI
 
 struct AgentSettingsScreen: View {
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
-    @ObservedObject var model: BexAppViewModel
+    @Environment(\.locale) private var locale
+    @ObservedObject var model: AppViewModel
     @State var provider: ProviderKind?
     let close: () -> Void
     @State private var changingAccount = false
@@ -17,7 +17,9 @@ struct AgentSettingsScreen: View {
     @State private var pollingLogin: Task<Void, Never>?
     @State private var signOutId: String?
     private var providerName: String {
-        guard let provider = login?.provider ?? provider else { return "エージェント" }
+        guard let provider = login?.provider ?? provider else {
+            return localizedUiText(language: locale.appLanguage, source: "エージェント")
+        }
         return provider.bexName
     }
 
@@ -47,6 +49,10 @@ struct AgentSettingsScreen: View {
 
     var body: some View {
         List {
+            Section("適用範囲") {
+                SettingsScopeFields(profiles: model.profiles, selectedProfileId: model.selectedProfileId,
+                                    disabled: changingAccount || loginInProgress, select: model.selectProfile)
+            }
             if let login {
                 AccountLoginSection(
                     login: login, providerName: providerName, loginCode: $loginCode,
@@ -79,25 +85,16 @@ struct AgentSettingsScreen: View {
                 }
             }
         }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            SettingsScopeBar { Text("すべてのプロジェクト") } environment: {
-                EnvironmentScopeMenu(model: model).disabled(changingAccount || loginInProgress)
-            }
-        }
         .navigationTitle("エージェント")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(true)
+        .navigationBarBackButtonHidden(loginInProgress)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("戻る", systemImage: "chevron.left") {
-                    if loginInProgress {
-                        cancelLogin()
-                    } else {
-                        dismiss()
-                    }
+                if loginInProgress {
+                    Button("キャンセル", action: cancelLogin)
+                        .disabled(cancellingLogin)
+                        .accessibilityIdentifier("model.back")
                 }
-                .disabled(cancellingLogin)
-                .accessibilityIdentifier("model.back")
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button("完了", action: close).disabled(loginInProgress)
@@ -158,7 +155,7 @@ extension AgentSettingsScreen {
                 ForEach(controls, id: \.provider) { route in Text(route.label).tag(route.provider) }
             }.onChange(of: credentialProvider) { _ in loginCode = "" }
             if let selected {
-                Text(selected.status).font(.caption).foregroundStyle(.secondary)
+                AppText(selected.status).font(.caption).foregroundStyle(.secondary)
                 if let url = URL(string: selected.keyUrl) {
                     Link("APIキーを取得", destination: url)
                 }
@@ -178,7 +175,7 @@ extension AgentSettingsScreen {
             Button("設定状態を取得", action: refresh).disabled(updating || !model.isConnected)
             if let error = model.snapshot
                 .operationError(key: .dshCredentials) {
-                Text(error).font(.caption).foregroundStyle(.red)
+                AppText(error).font(.caption).foregroundStyle(.red)
             }
         }
     }
@@ -228,7 +225,7 @@ extension AgentSettingsScreen {
                 ProgressView(loginProgressMessage)
             }
             if let error = loginError ?? model.accountError {
-                Text(accountErrorMessage(message: error)).font(.caption).foregroundStyle(.red)
+                AppText(accountErrorMessage(message: error)).font(.caption).foregroundStyle(.red)
             }
         } header: {
             HStack {
@@ -297,7 +294,7 @@ extension AgentSettingsScreen {
             cancelLogin(); return
         }
         if case let .failure(error) = result {
-            loginError = model.snapshot.error() ?? error.localizedDescription
+            loginError = error.localizedDescription
         } else if let login {
             pollLogin(login.loginId, provider: login.provider)
         }
@@ -322,7 +319,7 @@ extension AgentSettingsScreen {
                 }
                 guard !Task.isCancelled else { return }
                 if case let .failure(error) = result {
-                    loginError = model.snapshot.error() ?? error.localizedDescription; return
+                    loginError = error.localizedDescription; return
                 }
             }
         }
@@ -344,7 +341,7 @@ extension AgentSettingsScreen {
         ))) { result in
             cancellingLogin = false
             if case let .failure(error) = result {
-                loginError = model.snapshot.error() ?? error.localizedDescription
+                loginError = error.localizedDescription
             }
         }
     }

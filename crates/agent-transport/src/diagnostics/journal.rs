@@ -45,7 +45,7 @@ impl Journal {
                     if save(&directory, &report).is_ok() {
                         saved = sequence(&report);
                     } else {
-                        tracing::warn!(target: "bex", operation = "client.connection.storage", "connection diagnostic could not be saved");
+                        tracing::warn!(target: "agent", operation = "client.connection.storage", "connection diagnostic could not be saved");
                     }
                 }
                 match command {

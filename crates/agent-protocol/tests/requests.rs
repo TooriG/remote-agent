@@ -8,7 +8,8 @@ fn body(value: Value) -> RequestBody {
 
 #[test]
 fn choices_are_ids_and_answers_must_match_the_request_family() {
-    let choice = json!({"id":"opaque","label":"Allow","description":"turn permission"});
+    let choice =
+        json!({"id":"opaque","label":"Allow","description":"turn permission","effect":"allow"});
     let approval = body(
         json!({"approval":{"kind":"command","description":"run","details":"pwd","choices":[choice]}}),
     );
@@ -220,7 +221,7 @@ fn form_and_url_answers_cannot_bypass_field_constraints() {
 }
 
 #[test]
-fn requests_and_specialized_tool_answers_round_trip_through_postcard() {
+fn requests_and_specialized_tool_answers_round_trip_through_the_wire_format() {
     let request = agent_protocol::requests::Request {
         id: "request".into(),
         target: RequestTarget::Turn {

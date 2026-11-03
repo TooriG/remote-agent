@@ -1,78 +1,35 @@
-use agent_protocol::session::ProviderKind;
-use std::sync::{Arc, OnceLock};
-
-use agent_protocol::operations as op;
-
-use agent_protocol::models::Thread;
-
-use agent_protocol::models::ThreadResponse;
-
-use crate::adapters::Backend;
-use agent_protocol::protocol::{Body, Call, Response};
-use agent_transport::peer::RpcMessageError;
-use serde::Serialize;
-
-use super::agent::{Agent, Identity, SessionListScope, read_session_page, session_pages};
-use futures_util::{StreamExt, TryStreamExt};
-use std::collections::HashMap;
+//! The Host's RPC entry point. Dispatch admits each call, then routes it to the
+//! owner of its resource; workflows that span owners live in the domain files.
+mod activity;
+mod conversations;
+mod model_selections;
+mod preparation;
+mod project_import;
+mod sessions;
+mod titles;
+mod update;
+mod worktrees;
 
 use super::routing::{HostReply, HostSession, SessionId, SessionRouter};
 use crate::ProjectStore;
+use crate::providers::{
+    Agent, Backend, Failure, SessionListScope, read_session_page, session_pages,
+};
+use agent_protocol::{
+    models::{Thread, ThreadResponse},
+    operations as op,
+    protocol::{Body, Call, Response},
+    session::ProviderKind,
+};
+use futures_util::{StreamExt, TryStreamExt};
+use sessions::describe_thread;
+use std::{
+    collections::HashMap,
+    sync::{Arc, OnceLock},
+};
+use worktrees::worktree_active;
 
 const SESSION_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-
-#[derive(Debug, Clone, Serialize, thiserror::Error)]
-#[error("{message}")]
-pub(crate) struct Failure {
-    pub(crate) code: &'static str,
-    pub(crate) message: String,
-    pub(crate) delivery: agent_protocol::error::Delivery,
-    pub(crate) execution: Option<Box<agent_protocol::execution::ExecutionError>>,
-}
-impl From<Failure> for agent_protocol::error::RpcFailure {
-    fn from(error: Failure) -> Self {
-        Self {
-            code: error.code.into(),
-            message: error.message,
-            delivery: error.delivery,
-            execution: error.execution,
-        }
-    }
-}
-impl From<RpcMessageError> for Failure {
-    fn from(error: RpcMessageError) -> Self {
-        Self::new("invalid_params", error)
-    }
-}
-
-impl From<serde_json::Error> for Failure {
-    fn from(error: serde_json::Error) -> Self {
-        Self::new("invalid_params", error)
-    }
-}
-
-impl Failure {
-    pub(crate) fn before_submission(mut self) -> Self {
-        self.delivery = agent_protocol::error::Delivery::NotSent;
-        self
-    }
-    pub(crate) fn unknown(code: &'static str, error: impl std::fmt::Display) -> Self {
-        Self {
-            code,
-            message: format!("{error:#}"),
-            delivery: agent_protocol::error::Delivery::Unknown,
-            execution: None,
-        }
-    }
-    pub(crate) fn new(code: &'static str, error: impl std::fmt::Display) -> Self {
-        Self {
-            code,
-            message: format!("{error:#}"),
-            delivery: agent_protocol::error::Delivery::NotSent,
-            execution: None,
-        }
-    }
-}
 
 #[derive(Clone)]
 pub struct HostRpcService {
@@ -81,8 +38,7 @@ pub struct HostRpcService {
 
 struct ServiceInner {
     browser: OnceLock<Arc<crate::browser::Browser>>,
-    agents: HashMap<ProviderKind, Arc<dyn Agent>>,
-    startup_errors: HashMap<ProviderKind, Failure>,
+    providers: crate::providers::Registry,
     projects: ProjectStore,
     router: SessionRouter,
     event_pumps: std::sync::Once,
@@ -92,163 +48,55 @@ struct ServiceInner {
     permission_settings_access: tokio::sync::Mutex<()>,
     terminals: crate::terminals::Terminals,
     dictation: crate::dictation::Dictation,
+    conversations: super::conversations::Conversations,
+    model_selections: model_selections::ModelSelections,
+    history_scope: OnceLock<(std::path::PathBuf, bool)>,
+    updating: std::sync::atomic::AtomicBool,
 }
 
 impl HostRpcService {
-    async fn read_task_activity(
-        &self,
-    ) -> Result<agent_protocol::live_activity::TaskActivityState, Failure> {
-        let revision = self.inner.router.task_activity_revision();
-        let agents = self.agents();
-        let has_sources = !agents.is_empty() || !self.inner.startup_errors.is_empty();
-        let listings =
-            futures_util::future::join_all(agents.into_iter().map(|(_, agent)| async move {
-                tokio::time::timeout(
-                    SESSION_LIST_TIMEOUT,
-                    session_pages(
-                        agent.as_ref(),
-                        "",
-                        SessionListScope::Loaded,
-                        100,
-                        100,
-                        None,
-                        None,
-                    )
-                    .try_collect::<Vec<_>>(),
-                )
-                .await
-            }))
-            .await;
-        let mut native = Vec::new();
-        let mut successful = false;
-        let mut complete = self.inner.startup_errors.is_empty();
-        for result in listings {
-            if let Ok(Ok(pages)) = result {
-                let fresh = pages
-                    .iter()
-                    .flatten()
-                    .all(|summary| summary.thread.list_stale != Some(true));
-                successful |= fresh;
-                complete &= fresh;
-                native.extend(pages.into_iter().flatten().map(|summary| summary.thread));
-            } else {
-                complete = false;
-            }
-        }
-        let state = self.inner.router.task_activity(native, revision);
-        if !successful && has_sources {
-            return Err(Failure::new(
-                "task_activity_unavailable",
-                "タスクの状態を取得できません。",
-            ));
-        }
-        if complete && let Some(apns) = self.inner.router.apns() {
-            apns.activate(state.display.clone());
-        }
-        Ok(state)
-    }
-
-    pub async fn enable_apns(
-        &self,
-        path: &std::path::Path,
-        host_name: &str,
-        host_id: &str,
-    ) -> anyhow::Result<()> {
-        self.inner
-            .router
-            .set_apns(crate::apns::Apns::load(path, host_name, host_id).await?);
-        Ok(())
-    }
     pub fn new(backends: impl IntoIterator<Item = Backend>, projects: ProjectStore) -> Self {
         let files = crate::workspace_files::WorkspaceFiles::new(
             projects.path().with_file_name("bex-attachments"),
         );
-        let mut agents = HashMap::new();
-        let mut startup_errors = HashMap::new();
-        let mut dictation = crate::dictation::Dictation::default();
-        for backend in backends {
-            match backend.agent {
-                Ok(agent) => {
-                    agents.insert(backend.provider, agent);
-                }
-                Err(error) => {
-                    startup_errors.insert(backend.provider, error);
-                }
-            }
-            if let Some(backend) = backend.dictation {
-                dictation = backend;
-            }
-        }
+        let router = SessionRouter::new()
+            .with_read_state(projects.path().with_file_name("bex-read-state.json"));
+        let (providers, dictation) = crate::providers::Registry::new(backends);
         Self {
             inner: Arc::new(ServiceInner {
+                history_scope: OnceLock::new(),
+                updating: std::sync::atomic::AtomicBool::new(false),
+                conversations: super::conversations::Conversations::new(
+                    projects.path().with_file_name("bex-conversations.json"),
+                ),
+                model_selections: model_selections::ModelSelections::new(
+                    projects.path().with_file_name("bex-model-selections.json"),
+                ),
                 browser: OnceLock::new(),
-                agents,
-                startup_errors,
+                providers,
                 dictation,
                 worktrees: crate::worktrees::Worktrees::new(projects.path()),
                 worktree_access: tokio::sync::RwLock::new(()),
                 permission_settings_access: Default::default(),
                 terminals: Default::default(),
                 projects,
-                router: SessionRouter::new(),
+                router,
                 event_pumps: std::sync::Once::new(),
                 files,
             }),
         }
     }
 
-    fn agent(&self, provider: ProviderKind) -> Result<Arc<dyn Agent>, Failure> {
-        self.inner.agents.get(&provider).cloned().ok_or_else(|| {
-            self.inner
-                .startup_errors
-                .get(&provider)
-                .cloned()
-                .unwrap_or_else(|| {
-                    Failure::new(
-                        "provider_unavailable",
-                        format!("{provider:?} is unavailable"),
-                    )
-                })
-        })
+    /// Clients compare this with cached state at the start of every connection.
+    pub(crate) fn storage_scope(&self) -> Result<String, serde_json::Error> {
+        self.inner.providers.storage_scope()
     }
 
-    fn agents(&self) -> Vec<(ProviderKind, Arc<dyn Agent>)> {
-        let mut agents: Vec<_> = self
-            .inner
-            .agents
-            .iter()
-            .map(|(p, a)| (*p, a.clone()))
-            .collect();
-        agents.sort_by_key(|(p, _)| *p);
-        agents
-    }
     async fn account_request(&self, request: Call) -> Result<Body, Failure> {
         if matches!(request, Call::ListAccounts(_)) {
-            let mut combined = op::Accounts {
-                accounts: Vec::new(),
-                selected: HashMap::new(),
-                error: None,
-            };
-            let mut errors = self
-                .inner
-                .startup_errors
-                .values()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>();
-            for (_, agent) in self.agents() {
-                match Identity::list(agent.as_ref()).await {
-                    Ok(accounts) => {
-                        combined.accounts.extend(accounts.accounts);
-                        combined.selected.extend(accounts.selected);
-                        errors.extend(accounts.error);
-                    }
-                    Err(error) => errors.push(error.to_string()),
-                }
-            }
-            combined.error = (!errors.is_empty()).then(|| errors.join("\n"));
-            return Ok(combined.into());
+            return Ok(self.inner.providers.accounts().await.into());
         }
-        use super::agent::{AccountCommand as Command, AccountReply};
+        use crate::providers::{AccountCommand as Command, AccountReply};
         let (provider, command) = match request {
             Call::StartAccountLogin(p) => (p.provider, Command::StartLogin),
             Call::SelectAccount(p) => (p.provider, Command::Select { id: p.id }),
@@ -264,12 +112,14 @@ impl HostRpcService {
             ),
             _ => return Err(Failure::new("invalid_params", "not an account request")),
         };
-        Ok(match self.agent(provider)?.account(command).await? {
-            AccountReply::Selection(value) => value.into(),
-            AccountReply::Login(value) => value.into(),
-            AccountReply::Status(value) => value.into(),
-            AccountReply::Complete => agent_protocol::models::Empty {}.into(),
-        })
+        Ok(
+            match self.inner.providers.get(provider)?.account(command).await? {
+                AccountReply::Selection(value) => value.into(),
+                AccountReply::Login(value) => value.into(),
+                AccountReply::Status(value) => value.into(),
+                AccountReply::Complete => agent_protocol::models::Empty {}.into(),
+            },
+        )
     }
 
     pub async fn enable_browser(&self, profile: std::path::PathBuf) -> Result<(), String> {
@@ -297,9 +147,7 @@ impl HostRpcService {
             browser.shutdown().await;
         }
         self.inner.terminals.shutdown().await;
-        for (_, agent) in self.agents() {
-            agent.shutdown().await;
-        }
+        self.inner.providers.shutdown().await;
     }
 
     pub(crate) fn revoke_device(&self, principal: &str) {
@@ -326,34 +174,13 @@ impl HostRpcService {
     }
 
     pub(crate) fn data_recipients(&self) -> (Vec<String>, Option<String>) {
-        let ai = self
-            .agents()
-            .into_iter()
-            .filter(|(_, a)| a.availability().is_ok())
-            .map(|(_, agent)| agent.data_recipient().into())
-            .collect();
-        (ai, self.inner.dictation.data_recipient())
+        (
+            self.inner.providers.data_recipients(),
+            self.inner.dictation.data_recipient(),
+        )
     }
     pub(crate) fn provider_errors(&self) -> serde_json::Value {
-        let mut errors: serde_json::Map<_, _> = self
-            .agents()
-            .into_iter()
-            .filter_map(|(p, a)| {
-                a.availability().err().map(|e| {
-                    (
-                        p.key().to_owned(),
-                        serde_json::to_value(e).expect("failure serializes"),
-                    )
-                })
-            })
-            .collect();
-        errors.extend(self.inner.startup_errors.iter().map(|(provider, error)| {
-            (
-                provider.key().to_owned(),
-                serde_json::to_value(error).expect("failure serializes"),
-            )
-        }));
-        serde_json::Value::Object(errors)
+        self.inner.providers.errors()
     }
 
     pub fn start(&self) {
@@ -367,21 +194,32 @@ impl HostRpcService {
             return self.session_open(session, params).await;
         }
         if let Call::CreateSession(params) = message {
-            let _workspace = self.inner.worktree_access.read().await;
             let result = async {
-                let response = self.create_session(params.clone()).await?;
+                let (response, prepare) = if params.initial_input.is_some() {
+                    self.admit_task(params).await?
+                } else {
+                    let _workspace = self.inner.worktree_access.read().await;
+                    (self.create_session(params.clone()).await?, false)
+                };
                 let target = response.thread.id.clone().ok_or_else(|| {
                     Failure::new("invalid_thread", "created session ID is missing")
                 })?;
                 let read = self
                     .inner
                     .router
-                    .retain_execution(target)
+                    .retain_execution(target.clone())
                     .map_err(|error| Failure::new("invalid_thread", error))?;
-                self.inner
+                let reply = self
+                    .inner
                     .router
                     .finish_session_read(read, session, response)
-                    .map_err(|error| Failure::new("session_create_failed", error))
+                    .map_err(|error| Failure::new("session_create_failed", error));
+                // Attach the creating client before work can complete. A
+                // disconnected caller still owns an admitted durable task.
+                if prepare {
+                    self.schedule_preparation(target);
+                }
+                reply
             }
             .await;
             return match result {
@@ -399,7 +237,15 @@ impl HostRpcService {
                 .map(|(target, _)| self.inner.router.retain_execution(target.clone()))
                 .transpose()
                 .map_err(|error| Failure::new("invalid_params", error))?;
-            let _serial = if let Some((target, _)) = submission {
+            let _serial = if let Some(target) = target.as_ref().filter(|_| {
+                matches!(
+                    message,
+                    Call::Submit(_)
+                        | Call::RenameSession(_)
+                        | Call::ForkSession(_)
+                        | Call::RetryPreparation(_)
+                )
+            }) {
                 Some(self.inner.router.submission_lock(target).lock_owned().await)
             } else {
                 None
@@ -418,6 +264,17 @@ impl HostRpcService {
             } else {
                 None
             };
+            if _workspace_read.is_some()
+                && self
+                    .inner
+                    .updating
+                    .load(std::sync::atomic::Ordering::Acquire)
+            {
+                return Err(Failure::new(
+                    "host_updating",
+                    "Bexを更新しています。再接続後にもう一度お試しください。",
+                ));
+            }
             if let Some((target, id)) = submission {
                 if matches!(message, Call::Submit(_))
                     && let Some(receipt) = self.inner.router.submission_receipt(target, id)
@@ -460,239 +317,6 @@ impl HostRpcService {
         Ok(Response::from_result(result).into())
     }
 
-    async fn submit_input(
-        &self,
-        target: &agent_protocol::session::SessionRef,
-        input: &op::Submission,
-    ) -> Result<op::SubmissionReceipt, Failure> {
-        if input
-            .model
-            .as_ref()
-            .is_some_and(|model| model.provider != target.provider || model.id.trim().is_empty())
-        {
-            return Err(Failure::new(
-                "provider_mismatch",
-                "別のプロバイダーのモデルを使う場合は新しい会話を作成してください。",
-            ));
-        }
-        let agent = self.agent(target.provider)?;
-        agent.availability()?;
-        let state = agent.state(&target.id).await?;
-        let mut response = state.response;
-        if response.thread.id.as_ref() != Some(target) {
-            return Err(Failure::new(
-                "invalid_session",
-                "native session identity changed",
-            ));
-        }
-        response.thread = self.inner.router.overlay_execution(target, response.thread);
-        let projects = self.project_snapshot().await?;
-        describe_thread(&mut response.thread, agent.capabilities(), &projects);
-        if response
-            .thread
-            .preview
-            .as_deref()
-            .is_none_or(|preview| preview.trim().is_empty())
-        {
-            response.thread.preview = input.input.iter().find_map(|part| match part {
-                op::Input::Text { text } => Some(text.clone()),
-                _ => None,
-            });
-        }
-        let running_turn = response
-            .thread
-            .turns
-            .iter()
-            .flatten()
-            .rev()
-            .find(|t| {
-                t.status == agent_protocol::models::TurnStatus::Running && !t.id.trim().is_empty()
-            })
-            .map(|t| t.id.as_str());
-        let route = super::submission::submission_target(
-            response.thread.status,
-            running_turn,
-            agent.running_input(),
-            response.thread.cwd.as_deref(),
-        )
-        .map_err(|e| Failure::new("submission_unavailable", e))?;
-        let mut reload = state.needs_reload;
-        if let super::submission::SubmissionTarget::Start { cwd } = route
-            && let Some(directory) = self
-                .inner
-                .worktrees
-                .ensure_available(cwd)
-                .await
-                .map_err(|e| Failure::new("worktree_creation_failed", e))?
-        {
-            for (_, adapter) in self.agents() {
-                adapter.discard_workspace_processes(&directory).await?;
-            }
-            reload = true;
-        }
-        let receipt = agent
-            .submit(
-                input,
-                route,
-                reload,
-                self.browser_config(&target.to_string())?,
-            )
-            .await?;
-        response.thread.updated_at = Some(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs_f64(),
-        );
-        response.thread = self.inner.router.overlay_execution(target, response.thread);
-        self.notify_session_updated(response.thread, &projects.projects);
-        Ok(receipt)
-    }
-
-    fn notify_session_updated(&self, thread: Thread, projects: &[agent_protocol::models::Project]) {
-        let project = thread
-            .project_id
-            .as_ref()
-            .and_then(|id| projects.iter().find(|project| &project.id == id))
-            .cloned();
-        self.inner
-            .router
-            .broadcast(agent_protocol::protocol::Notification::SessionUpdated {
-                thread: crate::projects::titles::summary(thread).into(),
-                project,
-            });
-    }
-
-    async fn answer_request(
-        &self,
-        session: SessionId,
-        id: agent_protocol::ids::RequestId,
-        answer: agent_protocol::requests::Answer,
-    ) -> Result<agent_protocol::models::Empty, Failure> {
-        use agent_protocol::session::RequestDelivery;
-        let (origin, body) = self
-            .inner
-            .router
-            .claim_response(session, &id, &answer)
-            .map_err(|error| Failure::new("invalid_answer", error))?;
-        // Until a native command is admitted, cancellation is proven not sent.
-        let mut delivery = scopeguard::guard((id, RequestDelivery::Awaiting), |(id, state)| {
-            self.inner.router.response_delivery(&id, state)
-        });
-        let write = origin
-            .source
-            .prepare(&origin.native_id, &body, &answer)
-            .await?;
-        delivery.1 = RequestDelivery::Unknown;
-        write.await?;
-        delivery.1 = RequestDelivery::Sent;
-        Ok(agent_protocol::models::Empty {})
-    }
-
-    async fn session_open(
-        &self,
-        session: SessionId,
-        params: &agent_protocol::session::OpenSession,
-    ) -> Result<HostReply, String> {
-        let result: anyhow::Result<HostReply> = async {
-            if params.limit == 0 {
-                anyhow::bail!("invalid session reference or zero history limit");
-            }
-            let target = params.session.clone();
-            let agent = self.agent(target.provider)?;
-            let limit = params.limit;
-            let read = self
-                .inner
-                .router
-                .retain_execution(target.clone())
-                .map_err(anyhow::Error::msg)?;
-            let revision = self.inner.router.list_revision();
-            let started = std::time::Instant::now();
-            let mut response = agent.open(&target.id, limit, params.include_activity).await?;
-            response.thread.list_revision = revision;
-            let native_ms = started.elapsed().as_millis();
-            if response.thread.id.as_ref() != Some(&target) {
-                return Err(anyhow::anyhow!("native session identity changed"));
-            }
-            describe_thread(
-                &mut response.thread,
-                agent.capabilities(),
-                &self.project_snapshot().await?,
-            );
-            let project_ms = started.elapsed().as_millis() - native_ms;
-            let more = response.thread.history_has_more == Some(true);
-            response.thread.history_has_more = Some(more);
-            response.thread.history_limit = Some(limit as u64);
-            response.thread.history_read_state.get_or_insert_with(|| {
-                agent_protocol::session::HistoryReadState::new(
-                    if more {
-                        agent_protocol::session::HistoryReadKind::Partial
-                    } else {
-                        agent_protocol::session::HistoryReadKind::Complete
-                    },
-                    Vec::new(),
-                )
-            });
-            let reply = self.inner
-                .router
-                .finish_session_read(read, session, response)
-                .map_err(anyhow::Error::msg)?;
-            tracing::info!(target: "bex", operation = "history.open",
-                message = %format_args!("native_ms={native_ms} project_ms={project_ms} total_ms={} bytes={} limit={limit}",
-                    started.elapsed().as_millis(), reply.initial.len()));
-            Ok(reply)
-        }
-        .await;
-        match result {
-            Ok(reply) => Ok(reply),
-            Err(error) => {
-                let message = format!("{error:#}");
-                tracing::error!(target: "bex", operation = "history.open", message);
-                Ok(Response::error("session_open_failed", &message).into())
-            }
-        }
-    }
-
-    async fn read_item(
-        &self,
-        session: SessionId,
-        params: &op::ReadItem,
-        target: &agent_protocol::session::SessionRef,
-    ) -> Result<agent_protocol::operations::ItemResponse, Failure> {
-        let live = self
-            .inner
-            .router
-            .current_turn(target, &params.turn_id)
-            .and_then(|turn| {
-                turn.items
-                    .as_ref()?
-                    .iter()
-                    .find(|item| item.id == params.item_id)
-                    .filter(|item| !item.is_deferred())
-                    .cloned()
-            });
-        let mut response = if let Some(item) = live {
-            agent_protocol::operations::ItemResponse {
-                item: Arc::unwrap_or_clone(item),
-                transfer: None,
-            }
-        } else {
-            self.agent(target.provider)?.read_item(params).await?
-        };
-        let bytes = agent_protocol::protocol::encode(&response.item).expect("item serializes");
-        if bytes.len() > agent_protocol::models::MAX_INLINE_ITEM_BYTES {
-            response.transfer = Some(
-                self.inner
-                    .files
-                    .download_bytes(session, bytes)
-                    .await
-                    .map_err(|error| Failure::new("item_transfer_failed", error))?,
-            );
-            response.item.defer();
-        }
-        Ok(response)
-    }
-
     async fn request(
         &self,
         session: SessionId,
@@ -712,7 +336,6 @@ impl HostRpcService {
                 .map(Into::into)
                 .map_err(|e| Failure::new("browser_failed", e));
         }
-        let method = request.method();
         if let Call::ReadItem(params) = request {
             let Some(target) = target_session else {
                 return Err(Failure::new("invalid_params", "session ID is required"));
@@ -722,216 +345,27 @@ impl HostRpcService {
                 .await
                 .map(Into::into);
         }
-        if let Some(target) = target_session {
-            let capabilities = self.agent(target.provider)?.capabilities();
-            if matches!(request, Call::ForkSession(_)) && !capabilities.fork
-                || matches!(request, Call::RenameSession(_)) && !capabilities.rename
-            {
+        let response = match request {
+            Call::ReadHandoffHistory(params) => self.read_handoff_history(params).await?.into(),
+            Call::Unsupported => {
                 return Err(Failure::new(
-                    "unsupported_operation",
-                    format!("{method} is unsupported by this provider"),
+                    "method_not_found",
+                    "このHostはこの操作に対応していません。PC側のBEXを更新してください。",
                 ));
             }
-        }
-        let response = match request {
-            Call::ReadTaskActivity(_) => self.read_task_activity().await?.into(),
+            Call::MarkSessionRead(params) => {
+                self.inner.router.mark_session_read(params)?;
+                agent_protocol::models::Empty {}.into()
+            }
+            Call::ReadTaskActivity(_) => self.read_task_activity(false).await?.into(),
             Call::RegisterLiveActivity(params) => {
-                params
-                    .validate()
-                    .map_err(|error| Failure::new("invalid_params", error))?;
-                let enabled = self
-                    .inner
-                    .router
-                    .apns()
-                    .is_some_and(|apns| apns.environment() == params.environment);
-                if enabled {
-                    self.inner
-                        .router
-                        .register_live_activity(session, params)
-                        .map_err(|error| Failure::new("live_activity_failed", error))?;
-                }
-                agent_protocol::live_activity::LiveActivityRegistration { enabled }.into()
+                self.register_live_activity(session, params)?.into()
             }
             Call::UnregisterLiveActivity(params) => {
-                let principal = self
-                    .inner
-                    .router
-                    .principal(session)
-                    .map_err(|error| Failure::new("connection_closed", error))?;
-                if let Some(apns) = self.inner.router.apns() {
-                    apns.unregister(&principal, &params.activity_id);
-                }
-                agent_protocol::models::Empty {}.into()
+                self.unregister_live_activity(session, params)?.into()
             }
-            Call::ReadTurnItems(params) => {
-                let read = self
-                    .inner
-                    .router
-                    .retain_execution(params.session.clone())
-                    .map_err(|error| Failure::new("invalid_params", error))?;
-                let items = self
-                    .agent(params.session.provider)?
-                    .read_turn_items(&params.session.id, &params.turn_id)
-                    .await?;
-                self.inner
-                    .router
-                    .finish_turn_read(read, session, params.turn_id.clone(), items)
-                    .map_err(|error| Failure::new("turn_details_failed", error))?;
-                agent_protocol::models::Empty {}.into()
-            }
-            Call::ReadHistory(params) => {
-                let mut page = self
-                    .agent(params.session.provider)?
-                    .read_history(&params.session.id, &params.cursor, params.include_activity)
-                    .await?;
-                agent_protocol::models::defer_item_details(
-                    &mut page.turns,
-                    agent_protocol::models::MAX_INLINE_ITEM_BYTES,
-                );
-                if agent_protocol::protocol::encode(Response::Success { result: &page })
-                    .map_err(|error| Failure::new("invalid_thread_history", error))?
-                    .len()
-                    > agent_protocol::protocol::MAX_FRAME_BYTES
-                {
-                    agent_protocol::models::defer_item_details(&mut page.turns, 0);
-                }
-                page.into()
-            }
-            Call::ReadPermissionSettings(params) => {
-                let _guard = self.inner.permission_settings_access.lock().await;
-                self.agent(params.provider)?
-                    .read_permissions()
-                    .await?
-                    .into()
-            }
-            Call::UpdatePermissionSettings(params) => {
-                let _guard = self.inner.permission_settings_access.lock().await;
-                self.agent(params.provider)?
-                    .update_permissions(params.mode, &params.version)
-                    .await?
-                    .into()
-            }
-            Call::ComposerCatalog(params) => {
-                let cwd = params.cwd.as_str();
-                let results = futures_util::future::join_all(
-                    self.agents()
-                        .into_iter()
-                        .map(|(_, agent)| async move { agent.catalog(cwd).await }),
-                )
-                .await;
-                let mut catalog = agent_protocol::composer::ComposerCatalog {
-                    cwd: params.cwd.clone(),
-                    ..Default::default()
-                };
-                for (provider, error) in self.inner.startup_errors.iter() {
-                    catalog.errors.insert(*provider, vec![error.to_string()]);
-                }
-                for result in results {
-                    catalog.candidates.extend(result.candidates);
-                    catalog.errors.extend(result.errors);
-                }
-                catalog.candidates.sort_by(|a, b| {
-                    a.invocation
-                        .name
-                        .to_lowercase()
-                        .cmp(&b.invocation.name.to_lowercase())
-                        .then(a.invocation.path.cmp(&b.invocation.path))
-                        .then(a.invocation.provider.cmp(&b.invocation.provider))
-                });
-                catalog
-                    .candidates
-                    .dedup_by(|a, b| a.invocation == b.invocation);
-                catalog.into()
-            }
-            Call::ReadAccountUsage(params) => {
-                self.agent(params.provider)?.usage(&params.id).await?.into()
-            }
-            Call::ListAccounts(_)
-            | Call::SelectAccount(_)
-            | Call::LogoutAccount(_)
-            | Call::StartAccountLogin(_)
-            | Call::ReadAccountLogin(_)
-            | Call::SubmitAccountLogin(_)
-            | Call::CancelAccountLogin(_) => self.account_request(request.clone()).await?,
-
-            Call::CodexCli(params) => self
-                .agent(ProviderKind::Codex)?
-                .codex_cli(params.update)
-                .await?
-                .into(),
-            Call::ReadModelSettings(params) => self
-                .agent(params.model.provider)?
-                .model_settings(&params.model.id)
-                .await?
-                .into(),
-            Call::ReadDshCredentials(_) => self
-                .agent(ProviderKind::DeepSeek)?
-                .dsh_credentials()
-                .await?
-                .into(),
-            Call::UpdateDshCredential(update) => self
-                .agent(ProviderKind::DeepSeek)?
-                .update_dsh_credential(update.clone())
-                .await?
-                .into(),
-            Call::ListModels(params) => {
-                let cursors: std::collections::BTreeMap<ProviderKind, Option<String>> = params
-                    .cursor
-                    .as_deref()
-                    .map(serde_json::from_str)
-                    .transpose()?
-                    .unwrap_or_else(|| {
-                        self.agents()
-                            .into_iter()
-                            .map(|(provider, _)| provider)
-                            .chain(self.inner.startup_errors.keys().copied())
-                            .map(|provider| (provider, None))
-                            .collect()
-                    });
-                let mut page = op::ModelPage {
-                    data: Vec::new(),
-                    next_cursor: None,
-                    provider_errors: None,
-                };
-                let mut next = std::collections::BTreeMap::new();
-                for (provider, cursor) in cursors {
-                    let result = match self.agent(provider) {
-                        Ok(agent) => {
-                            agent
-                                .models(&op::ListModels {
-                                    cursor,
-                                    ..params.clone()
-                                })
-                                .await
-                        }
-                        Err(error) => Err(error),
-                    };
-                    match result {
-                        Ok(result) => {
-                            page.data.extend(result.data);
-                            if let Some(cursor) = result.next_cursor {
-                                next.insert(provider, Some(cursor));
-                            }
-                        }
-                        Err(error) => {
-                            page.provider_errors
-                                .get_or_insert_default()
-                                .insert(provider.key().to_owned(), serde_json::to_value(error)?);
-                        }
-                    }
-                }
-                if !next.is_empty() {
-                    page.next_cursor = Some(serde_json::to_string(&next)?);
-                }
-                if params.cursor.is_none() && page.data.is_empty() && page.provider_errors.is_some()
-                {
-                    return Err(Failure::new(
-                        "models_unavailable",
-                        serde_json::to_value(&page.provider_errors)?,
-                    ));
-                }
-                page.into()
-            }
+            Call::ReadTurnItems(params) => self.read_turn_items(session, params).await?.into(),
+            Call::ReadHistory(params) => self.read_history(params).await?.into(),
 
             Call::RequestSession(params) => (self
                 .inner
@@ -941,17 +375,6 @@ impl HostRpcService {
                     Failure::new("request_unavailable", "request is no longer pending")
                 })?)
             .into(),
-            Call::SessionScope(_) => {
-                let started = std::time::Instant::now();
-                let scope =
-                    provider_storage_scope(self.agents().into_iter().filter_map(|(p, a)| {
-                        a.history_scope_directory()
-                            .map(|path| (p, canonical_storage_path(path)))
-                    }))?;
-                tracing::info!(target: "bex", operation = "host.connection.scope",
-                    message = %format_args!("elapsed_ms={}", started.elapsed().as_millis()));
-                scope.into()
-            }
             Call::ConnectionPerformance(performance) => {
                 let performance = performance.clone();
                 tokio::task::spawn_blocking(move || {
@@ -972,65 +395,12 @@ impl HostRpcService {
                 .await
                 .map_err(|error| Failure::new("project_add_failed", error))?)
             .into(),
+            Call::ScanProjects(_) => self.scan_projects().await?.into(),
+            Call::ImportProjects(params) => self.import_projects(&params.paths).await?.into(),
             Call::ReadListDecorations(params) => self.list_decorations(params).await?.into(),
-            Call::ListSessions(params) => {
-                let started = std::time::Instant::now();
-                let result = self
-                    .host_title_list(
-                        &params.query.search_term,
-                        crate::projects::titles::TitleQuery::Root {
-                            limit: params.query.limit,
-                            project_limit: params.query.project_limit,
-                            project_limits: params.query.project_limits.as_ref(),
-                            part: params.query.part,
-                            searching: !params.query.search_term.trim().is_empty(),
-                        },
-                    )
-                    .await;
-                tracing::info!(target: "bex", operation = "host.thread.list.performance",
-                    message = %format_args!("elapsed_ms={} success={}", started.elapsed().as_millis(), result.is_ok()));
-                result?.into()
-            }
-            Call::ListProjectSessions(params) => self
-                .host_title_list(
-                    &params.search_term,
-                    crate::projects::titles::TitleQuery::Project {
-                        id: &params.project_id,
-                        limit: params.limit,
-                        searching: !params.search_term.trim().is_empty(),
-                    },
-                )
-                .await?
-                .into(),
-            Call::ListAgents(params) => {
-                let agent = self.agent(params.thread_id.provider)?;
-                let deadline = tokio::time::Instant::now() + SESSION_LIST_TIMEOUT;
-                let mut threads = session_pages(
-                    agent.as_ref(),
-                    "",
-                    SessionListScope::Descendants(&params.thread_id.id),
-                    100,
-                    100,
-                    Some(deadline),
-                    None,
-                )
-                .map_ok(|page| futures_util::stream::iter(page.into_iter().map(Ok::<_, Failure>)))
-                .try_flatten()
-                .boxed();
-                let mut agents = Vec::new();
-                while let Some(summary) = threads.try_next().await? {
-                    let thread = crate::projects::titles::summary(summary.thread);
-                    if let (Some(id), Some(parent_id)) = (thread.id, thread.parent_id) {
-                        agents.push(agent_protocol::models::AgentObservation {
-                            id,
-                            parent_id,
-                            name: thread.name,
-                            status: thread.status,
-                        });
-                    }
-                }
-                agents.into()
-            }
+            Call::ListSessions(params) => self.list_sessions(params).await?.into(),
+            Call::ListProjectSessions(params) => self.list_project_sessions(params).await?.into(),
+            Call::ListAgents(params) => self.list_agents(params).await?.into(),
             Call::ReadWorktreeSettings(_) | Call::UpdateWorktreeSettings(_) => {
                 let update = if let Call::UpdateWorktreeSettings(settings) = request {
                     Some(settings.clone())
@@ -1047,11 +417,13 @@ impl HostRpcService {
             }
             Call::ListWorktrees(_) => (self.worktree_list().await?).into(),
             Call::RemoveWorktree(params) => {
-                let _exclusive = self.inner.worktree_access.write().await;
                 (self.remove_worktree(params.path.clone()).await?).into()
             }
 
             Call::CreateSession(_) => unreachable!("creation owns its subscription"),
+            Call::RetryPreparation(params) => {
+                self.retry_preparation(&params.thread_id).await?.into()
+            }
             Call::StartTerminal(params) => (self
                 .inner
                 .terminals
@@ -1100,554 +472,108 @@ impl HostRpcService {
                 .into()
             }
             Call::ListFiles(_)
+            | Call::ResolveFile(_)
             | Call::ReadFile(_)
             | Call::WriteFile(_)
             | Call::Upload(_)
             | Call::Download(_)
-            | Call::ReadVisualization(_) => self
-                .inner
-                .files
-                .request(session, request.clone())
-                .await
-                .map_err(|error| Failure::new("file_operation_failed", error))?,
+            | Call::ReadVisualization(_) => {
+                self.inner.files.request(session, request.clone()).await?
+            }
             Call::ForkSession(params) => {
                 let target = target_session.expect("session-scoped fork");
-                let agent = self.agent(target.provider)?;
-                self.start_thread(agent.as_ref(), |browser| {
-                    agent.fork(&target.id, &params.last_turn_id, browser)
-                })
-                .await?
-                .into()
+                self.fork_session(target, params).await?.into()
             }
             Call::Interrupt(params) => {
                 let target = target_session.expect("session-scoped interrupt");
-                self.agent(target.provider)?
-                    .interrupt(&target.id, &params.turn_id)
-                    .await?
-                    .into()
+                self.interrupt(target, params).await?.into()
             }
             Call::RenameSession(params) => {
                 let target = target_session.expect("session-scoped rename");
-                let result = self
-                    .agent(target.provider)?
-                    .rename(&target.id, &params.name)
-                    .await?;
-                result.into()
+                self.rename_session(target, params).await?.into()
             }
+            _ => self.provider_request(request).await?,
+        };
+        Ok(response)
+    }
+
+    /// Dispatch remaining provider requests; unknown requests return method_not_found.
+    async fn provider_request(&self, request: &Call) -> Result<Body, Failure> {
+        Ok(match request {
+            Call::ReadPermissionSettings(params) => {
+                let _guard = self.inner.permission_settings_access.lock().await;
+                self.inner
+                    .providers
+                    .get(params.provider)?
+                    .read_permissions()
+                    .await?
+                    .into()
+            }
+            Call::UpdatePermissionSettings(params) => {
+                let _guard = self.inner.permission_settings_access.lock().await;
+                self.inner
+                    .providers
+                    .get(params.provider)?
+                    .update_permissions(params.mode, &params.version)
+                    .await?
+                    .into()
+            }
+            Call::ComposerCatalog(params) => self.inner.providers.catalog(&params.cwd).await.into(),
+            Call::ReadAccountUsage(params) => self
+                .inner
+                .providers
+                .get(params.provider)?
+                .usage(&params.id)
+                .await?
+                .into(),
+            Call::ListAccounts(_)
+            | Call::SelectAccount(_)
+            | Call::LogoutAccount(_)
+            | Call::StartAccountLogin(_)
+            | Call::ReadAccountLogin(_)
+            | Call::SubmitAccountLogin(_)
+            | Call::CancelAccountLogin(_) => self.account_request(request.clone()).await?,
+
+            Call::CodexCli(params) => self
+                .inner
+                .providers
+                .get(ProviderKind::Codex)?
+                .codex_cli(params.update)
+                .await?
+                .into(),
+            Call::ReadModelSettings(params) => self
+                .inner
+                .providers
+                .get(params.model.provider)?
+                .model_settings(&params.model.id)
+                .await?
+                .into(),
+            Call::ReadDshCredentials(_) => self
+                .inner
+                .providers
+                .get(ProviderKind::DeepSeek)?
+                .dsh_credentials()
+                .await?
+                .into(),
+            Call::UpdateDshCredential(update) => self
+                .inner
+                .providers
+                .get(ProviderKind::DeepSeek)?
+                .update_dsh_credential(update.clone())
+                .await?
+                .into(),
+            Call::ListModels(params) => self.inner.providers.models(params).await?.into(),
             _ => {
                 return Err(Failure::new(
                     "method_not_found",
-                    format!("unregistered method: {method}"),
+                    format!("unregistered method: {}", request.method()),
                 ));
             }
-        };
-        Ok(response)
+        })
     }
 
     pub(crate) fn files(&self) -> &crate::workspace_files::WorkspaceFiles {
         &self.inner.files
-    }
-
-    async fn worktree_list(&self) -> Result<Vec<agent_protocol::models::Worktree>, Failure> {
-        let mut worktrees = self
-            .inner
-            .worktrees
-            .list()
-            .await
-            .map_err(|error| Failure::new("worktree_list_failed", error))?;
-        if worktrees.is_empty() {
-            return Ok(worktrees);
-        }
-        for error in self.inner.startup_errors.values() {
-            for worktree in &mut worktrees {
-                worktree.blocked_reason =
-                    Some(format!("稼働状況を確認できないため削除できません: {error}"));
-            }
-        }
-        let mut threads = Vec::new();
-        for (_, agent) in self.agents() {
-            let pages = session_pages(
-                agent.as_ref(),
-                "",
-                SessionListScope::All,
-                100,
-                100,
-                None,
-                None,
-            );
-            futures_util::pin_mut!(pages);
-            while let Some(result) = pages.next().await {
-                match result {
-                    Ok(page) => threads.extend(page.into_iter().map(|summary| summary.thread)),
-                    Err(error) if error.code == "invalid_session_list" => return Err(error),
-                    Err(error) => {
-                        for w in &mut worktrees {
-                            w.blocked_reason =
-                                Some(format!("稼働状況を確認できないため削除できません: {error}"));
-                        }
-                        break;
-                    }
-                }
-            }
-        }
-        // Providers can omit a first, still-running turn from their history list.
-        // Resolve every retained execution before allowing any checkout removal.
-        for target in self.inner.router.execution_targets() {
-            if threads
-                .iter()
-                .any(|thread| thread.id.as_ref() == Some(&target))
-            {
-                continue;
-            }
-            let response = self
-                .agent(target.provider)?
-                .state(&target.id)
-                .await?
-                .response;
-            if response.thread.id.as_ref() != Some(&target) {
-                return Err(Failure::new(
-                    "invalid_thread",
-                    "native session identity changed",
-                ));
-            }
-            threads.push(response.thread);
-        }
-        for thread in threads {
-            let thread = match thread.id.clone() {
-                Some(id) => self.inner.router.overlay_execution(&id, thread),
-                None => thread,
-            };
-            let active = worktree_active(
-                thread.status,
-                thread.turns.as_deref().unwrap_or_default(),
-                !thread.requests.is_empty(),
-                thread.submissions.values(),
-            );
-            let Some(cwd) = thread.cwd.as_deref().filter(|cwd| !cwd.trim().is_empty()) else {
-                if active {
-                    return Err(Failure::new(
-                        "worktree_activity_unknown",
-                        "実行中の会話の作業場所を確認できないため削除できません。",
-                    ));
-                }
-                continue;
-            };
-            let cwd = tokio::fs::canonicalize(cwd)
-                .await
-                .unwrap_or_else(|_| std::path::PathBuf::from(cwd));
-            let cwd = dunce::simplified(&cwd);
-            let matching: Vec<_> = worktrees
-                .iter()
-                .enumerate()
-                .filter_map(|(index, tree)| cwd.starts_with(&tree.path).then_some(index))
-                .collect();
-            if matching.is_empty() {
-                continue;
-            }
-            // Resolve provider-specific uncertainty once per matching session,
-            // reusing the history scan instead of rereading it for every tree.
-            let idle_warning = if !active && let Some(id) = &thread.id {
-                self.agent(id.provider)?
-                    .workspace_idle_warning(&id.id)
-                    .await
-            } else {
-                None
-            };
-            for index in matching {
-                let worktree = &mut worktrees[index];
-                if active {
-                    worktree.blocked_reason = Some("このワークツリーで作業を実行中です。完了または停止してから削除してください。".into());
-                } else if let Some(warning) = idle_warning {
-                    worktree.blocked_reason = Some(format!(
-                        "稼働状況を確認できないため削除できません: {warning}"
-                    ));
-                }
-                if let Some(id) = &thread.id {
-                    worktree
-                        .threads
-                        .push(agent_protocol::models::WorktreeThread {
-                            id: id.clone(),
-                            name: thread
-                                .name
-                                .clone()
-                                .filter(|name| !name.is_empty())
-                                .or_else(|| {
-                                    thread
-                                        .preview
-                                        .as_deref()
-                                        .map(|preview| preview.chars().take(120).collect())
-                                })
-                                .unwrap_or_else(|| "新しいチャット".into()),
-                            active,
-                        });
-                }
-            }
-        }
-        for worktree in &mut worktrees {
-            if self
-                .inner
-                .terminals
-                .in_use(std::path::Path::new(&worktree.path))
-            {
-                worktree.blocked_reason =
-                    Some("このワークツリーのターミナルを閉じてから削除してください。".into());
-            }
-        }
-        Ok(worktrees)
-    }
-
-    async fn remove_worktree(&self, path: String) -> Result<(), Failure> {
-        let entries = self.worktree_list().await?;
-        let entry = entries
-            .iter()
-            .find(|entry| entry.path == path)
-            .ok_or_else(|| {
-                Failure::new(
-                    "worktree_remove_failed",
-                    "Bexが作成したワークツリーではありません。",
-                )
-            })?;
-        if let Some(reason) = &entry.blocked_reason {
-            return Err(Failure::new("worktree_remove_failed", reason));
-        }
-        self.inner
-            .worktrees
-            .remove(path, false)
-            .await
-            .map_err(|error| Failure::new("worktree_remove_failed", error))
-    }
-
-    pub(crate) async fn cleanup_merged_worktrees(&self) -> anyhow::Result<()> {
-        if !self.inner.worktrees.settings(None).await?.delete_merged {
-            return Ok(());
-        }
-        let _exclusive = self.inner.worktree_access.write().await;
-        let entries = self.worktree_list().await?;
-        let statuses = crate::worktrees::directory_statuses(
-            entries
-                .iter()
-                .filter(|entry| entry.blocked_reason.is_none())
-                .map(|entry| crate::worktrees::StatusSource {
-                    cwd: entry.path.clone(),
-                    checkout: None,
-                    repository: None,
-                    branch: None,
-                })
-                .collect(),
-        )
-        .await?;
-        for (source, status) in statuses {
-            if status == agent_protocol::models::WorktreeStatus::Merged
-                && let Err(error) = self.inner.worktrees.remove(source.cwd, true).await
-            {
-                tracing::warn!(target: "bex", operation = "host.worktree.cleanup", message = %error);
-            }
-        }
-        Ok(())
-    }
-
-    async fn project_snapshot(&self) -> Result<crate::projects::state::Snapshot, Failure> {
-        self.inner
-            .projects
-            .load()
-            .await
-            .map_err(|error| Failure::new("project_state_unavailable", error))
-    }
-
-    async fn host_title_list(
-        &self,
-        search: &str,
-        query: crate::projects::titles::TitleQuery<'_>,
-    ) -> Result<agent_protocol::models::ThreadList, Failure> {
-        let revision = self.inner.router.list_revision();
-        let agents = self.agents();
-        // One title walk supplies each requested quota plus lookahead.
-        let (first_page_size, later_page_size) = match query {
-            crate::projects::titles::TitleQuery::Root {
-                limit,
-                project_limits,
-                part,
-                ..
-            } => {
-                let chats = if part == Some(agent_protocol::models::ListPart::Projects) {
-                    0
-                } else {
-                    limit.max(1).saturating_add(1)
-                };
-                let projects = project_limits.map_or(30, |limits| {
-                    limits.values().fold(0u32, |sum, limit| {
-                        sum.saturating_add(limit.max(&1).saturating_add(1))
-                    })
-                });
-                ((chats.saturating_add(projects)).clamp(1, 100), 100)
-            }
-            crate::projects::titles::TitleQuery::Project { .. } => (100, 100),
-        };
-        let started = std::time::Instant::now();
-        let scope = if search.trim().is_empty() {
-            SessionListScope::Roots
-        } else {
-            SessionListScope::All
-        };
-        let ((snapshot, projects_elapsed), (first_pages, first_pages_elapsed)) = tokio::join!(
-            async { (self.project_snapshot().await, started.elapsed()) },
-            async {
-                let started = tokio::time::Instant::now();
-                let deadline = started + SESSION_LIST_TIMEOUT;
-                let pages = futures_util::future::join_all(agents.iter().map(|(_, agent)| {
-                    read_session_page(
-                        Agent::list(agent.as_ref(), search, None, scope, first_page_size),
-                        deadline,
-                    )
-                }))
-                .await;
-                (pages, started.elapsed())
-            },
-        );
-        let snapshot = snapshot?;
-        // Project discovery must not consume the native page-read budget.
-        // Reuse the first pages and give subsequent reads only the time left.
-        let deadline =
-            tokio::time::Instant::now() + SESSION_LIST_TIMEOUT.saturating_sub(first_pages_elapsed);
-        let initial_elapsed = started.elapsed();
-        let mut listings = futures_util::future::join_all(agents.iter().zip(first_pages).map(
-            |((provider, agent), page)| async move {
-                let mut threads = session_pages(
-                    agent.as_ref(),
-                    search,
-                    scope,
-                    first_page_size,
-                    later_page_size,
-                    Some(deadline),
-                    Some(page),
-                )
-                .map_ok(|page| futures_util::stream::iter(page.into_iter().map(Ok::<_, Failure>)))
-                .try_flatten()
-                .boxed();
-                let head = threads.try_next().await;
-                (*provider, agent.capabilities(), threads, head)
-            },
-        ))
-        .await;
-        let mut titles = crate::projects::titles::TitleList::new(&snapshot.projects, query);
-        let mut provider_errors = self
-            .provider_errors()
-            .as_object()
-            .cloned()
-            .unwrap_or_default();
-        let successful = listings.iter().any(|(_, _, _, head)| head.is_ok());
-        while let Some(newest) = listings
-            .iter()
-            .filter_map(|(_, _, _, head)| head.as_ref().ok()?.as_ref())
-            .map(|summary| summary.thread.updated_at.unwrap_or_default())
-            .max_by(f64::total_cmp)
-        {
-            // Never scan additional pages merely to exhaust a timestamp tie in
-            // the requested root window. Order ties within that window by ID.
-            let maximum = titles.remaining_chats().unwrap_or(usize::MAX).max(1);
-            let mut group = Vec::new();
-            for (_, capabilities, threads, head) in &mut listings {
-                while group.len() < maximum
-                    && head.as_ref().is_ok_and(|thread| {
-                        thread.as_ref().is_some_and(|summary| {
-                            summary
-                                .thread
-                                .updated_at
-                                .unwrap_or_default()
-                                .total_cmp(&newest)
-                                == std::cmp::Ordering::Equal
-                        })
-                    })
-                {
-                    group.push((head.as_mut().unwrap().take().unwrap(), *capabilities));
-                    if group.len() < maximum {
-                        *head = threads.try_next().await;
-                    }
-                }
-            }
-            group.sort_by(|(a, _), (b, _)| a.thread.id.cmp(&b.thread.id));
-            for (summary, capabilities) in group {
-                let mut thread = summary.thread;
-                thread.git_branch = summary.branch;
-                describe_thread(&mut thread, capabilities, &snapshot);
-                titles.push(thread);
-                if titles.done() {
-                    break;
-                }
-            }
-            if titles.done() {
-                break;
-            }
-            // A group can fill its allowance with assigned rows that are not
-            // retained. Continue that provider only if the visible page still
-            // needs rows; do not start another read after its lookahead.
-            for (_, _, threads, head) in &mut listings {
-                if matches!(head, Ok(None)) {
-                    *head = threads.try_next().await;
-                }
-            }
-        }
-        for (provider, _, _, head) in listings {
-            if let Err(error) = head {
-                provider_errors.insert(provider.key().to_owned(), serde_json::to_value(error)?);
-            }
-        }
-        if !successful && !provider_errors.is_empty() {
-            return Err(Failure::new(
-                "sessions_unavailable",
-                serde_json::to_value(provider_errors)?,
-            ));
-        }
-        let mut page = titles.finish();
-        page.revision = revision;
-        for thread in &mut page.data {
-            thread.list_revision = revision;
-        }
-        for project in &mut page.projects {
-            project.list_revision = revision;
-        }
-        if !provider_errors.is_empty() {
-            page.provider_errors = Some(provider_errors);
-        }
-        tracing::info!(target: "bex", operation = "host.thread.list.stages",
-            message = %format_args!("projects_ms={} titles_ms={} titles={}", projects_elapsed.as_millis(), (first_pages_elapsed + started.elapsed().saturating_sub(initial_elapsed)).as_millis(), page.data.len()));
-        Ok(page)
-    }
-
-    async fn list_decorations(
-        &self,
-        params: &op::ReadListDecorations,
-    ) -> Result<op::ListDecorations, Failure> {
-        let projects = params.projects.clone();
-        let icons = tokio::task::spawn_blocking(move || {
-            projects
-                .into_iter()
-                .map(|(id, roots)| {
-                    let icon = roots.iter().find_map(|root| {
-                        crate::projects::icons::resolve(std::path::Path::new(root))
-                    });
-                    (id, icon)
-                })
-                .collect()
-        });
-        let worktrees = if params.threads.is_empty() {
-            Default::default()
-        } else {
-            crate::worktrees::workspace_roots(self.inner.projects.path())
-                .await
-                .map_err(|error| Failure::new("worktree_status_failed", error))?
-        };
-        let sources: Vec<_> = params
-            .threads
-            .iter()
-            .map(|(id, cwd, branch)| {
-                let mapping =
-                    crate::projects::state::worktree_mapping(&worktrees, std::path::Path::new(cwd));
-                (
-                    id.clone(),
-                    crate::worktrees::StatusSource {
-                        cwd: cwd.clone(),
-                        checkout: mapping.map(|(checkout, _)| checkout.to_owned()),
-                        repository: mapping.map(|(_, repository)| repository.to_owned()),
-                        branch: branch.clone(),
-                    },
-                )
-            })
-            .collect();
-        let (icons, statuses) = tokio::join!(
-            icons,
-            crate::worktrees::directory_statuses(
-                sources.iter().map(|(_, source)| source.clone()).collect()
-            )
-        );
-        let icons = icons.map_err(|error| Failure::new("project_icons_unavailable", error))?;
-        let statuses = statuses.map_err(|error| Failure::new("worktree_status_failed", error))?;
-        Ok(op::ListDecorations {
-            icons,
-            statuses: sources
-                .into_iter()
-                .map(|(id, source)| (id, statuses.get(&source).copied()))
-                .collect(),
-        })
-    }
-
-    async fn create_session(
-        &self,
-        mut params: agent_protocol::operations::CreateSession,
-    ) -> Result<ThreadResponse, Failure> {
-        let provider = params.provider;
-        if params
-            .model
-            .as_ref()
-            .is_some_and(|model| model.provider != provider || model.id.trim().is_empty())
-        {
-            return Err(Failure::new(
-                "provider_mismatch",
-                "model must name a model of the requested provider",
-            ));
-        }
-        let agent = self.agent(provider)?;
-        agent.validate_create()?;
-        // A missing selection must not inherit the App Server's checkout.
-        // Keep the real cwd on the thread; project enrichment identifies
-        // this persisted location as a chat even after a Host restart.
-        if params
-            .cwd
-            .as_deref()
-            .is_none_or(|cwd| cwd.trim().is_empty())
-        {
-            let directory = self.inner.projects.chat_directory();
-            tokio::fs::create_dir_all(&directory)
-                .await
-                .map_err(|error| Failure::new("chat_directory_unavailable", error))?;
-            let directory = tokio::fs::canonicalize(directory)
-                .await
-                .map_err(|error| Failure::new("chat_directory_unavailable", error))?;
-            let directory = dunce::simplified(&directory).to_owned();
-            params.cwd = Some(directory.into_os_string().into_string().map_err(|_| {
-                Failure::new("chat_directory_unavailable", "chat path is not UTF-8")
-            })?);
-        } else {
-            match self.inner.worktrees.prepare(params.cwd.as_deref()).await {
-                Ok(Some(cwd)) => {
-                    params.cwd = Some(cwd.into_os_string().into_string().map_err(|_| {
-                        Failure::new("worktree_creation_failed", "worktree path is not UTF-8")
-                    })?)
-                }
-                Ok(None) => {}
-                Err(error) => return Err(Failure::new("worktree_creation_failed", error)),
-            }
-        }
-        self.start_thread(agent.as_ref(), |browser| {
-            agent.create(
-                params.cwd.as_deref().unwrap_or_default(),
-                params.model.as_ref().map(|m| m.id.as_str()),
-                browser,
-            )
-        })
-        .await
-    }
-
-    /// New threads browse under a provisional scope until their native ID exists.
-    async fn start_thread<F>(
-        &self,
-        agent: &dyn Agent,
-        start: impl FnOnce(Option<serde_json::Value>) -> F,
-    ) -> Result<ThreadResponse, Failure>
-    where
-        F: std::future::Future<Output = Result<ThreadResponse, Failure>>,
-    {
-        let scope = uuid::Uuid::new_v4().to_string();
-        let mut response = start(self.browser_config(&scope)?).await?;
-        if let Some(browser) = self.inner.browser.get()
-            && let Some(id) = &response.thread.id
-        {
-            browser.bind_scope(scope, id.to_string()).await;
-        }
-        let projects = self.project_snapshot().await?;
-        describe_thread(&mut response.thread, agent.capabilities(), &projects);
-        self.notify_session_updated(response.thread.clone(), &projects.projects);
-        Ok(response)
     }
 
     fn start_event_pumps(&self) {
@@ -1665,7 +591,7 @@ impl HostRpcService {
                         if apns.is_ready() {
                             break;
                         }
-                        let _ = service.read_task_activity().await;
+                        let _ = service.read_task_activity(false).await;
                         if apns.is_ready() {
                             break;
                         }
@@ -1677,12 +603,35 @@ impl HostRpcService {
                 });
             }
 
-            for (_, agent) in self.agents() {
+            for (_, agent) in self.inner.providers.all() {
                 if let Some(mut events) = agent.event_stream() {
+                    let supports_fork = agent.capabilities().fork;
                     let router = self.inner.router.clone();
+                    let owner = Arc::downgrade(&self.inner);
                     tokio::spawn(async move {
                         while let Some(event) = events.recv().await {
-                            let result = event.change.apply(&router);
+                            let Some(inner) = owner.upgrade() else {
+                                break;
+                            };
+                            let bindings = if matches!(
+                                event.change,
+                                crate::providers::AgentChange::Stopped { .. }
+                            ) {
+                                inner.conversations.active_bindings()
+                            } else {
+                                Ok(Vec::new())
+                            };
+                            let result = bindings
+                                .and_then(|bindings| {
+                                    inner
+                                        .conversations
+                                        .route(event.change, supports_fork)
+                                        .map(|event| (bindings, event))
+                                })
+                                .map_err(|error| error.to_string())
+                                .and_then(|(bindings, event)| {
+                                    event.map_or(Ok(()), |event| router.apply(event, &bindings))
+                                });
                             if let Some(applied) = event.applied {
                                 let _ = applied.send(result);
                             }
@@ -1694,71 +643,12 @@ impl HostRpcService {
     }
 }
 
-fn worktree_active<'a>(
-    status: agent_protocol::models::SessionStatus,
-    turns: &[Arc<agent_protocol::models::Turn>],
-    has_requests: bool,
-    mut submissions: impl Iterator<Item = &'a agent_protocol::session::SubmissionDelivery>,
-) -> bool {
-    use agent_protocol::{
-        execution::TurnStatus, models::SessionStatus, session::SubmissionDelivery,
-    };
-    status == SessionStatus::Running
-        || has_requests
-        || turns.iter().any(|turn| turn.status == TurnStatus::Running)
-        || submissions.any(|delivery| match delivery {
-            SubmissionDelivery::Rejected => false,
-            SubmissionDelivery::Accepted { turn_id: Some(id) } => {
-                // Completed receipts can remain for replay after interruption.
-                // Only a known finished turn proves that input no longer owns work.
-                !turns.iter().any(|turn| {
-                    &turn.id == id
-                        && matches!(
-                            turn.status,
-                            TurnStatus::Completed | TurnStatus::Failed | TurnStatus::Interrupted
-                        )
-                })
-            }
-            _ => true,
-        })
-}
-
 fn invalid_message(error: impl std::fmt::Display) -> String {
     format!("invalid request: {error}")
 }
 
 // Serialize the sorted map directly: a JSON Value's object ordering can vary
 // with serde_json features unified by unrelated client dependencies.
-fn provider_storage_scope(
-    areas: impl IntoIterator<Item = (ProviderKind, std::path::PathBuf)>,
-) -> Result<String, serde_json::Error> {
-    let areas: std::collections::BTreeMap<_, _> = areas
-        .into_iter()
-        .map(|(provider, path)| (provider.key().to_owned(), path))
-        .collect();
-    let bytes = serde_json::to_vec(&areas)?;
-    let digest = ring::digest::digest(&ring::digest::SHA256, &bytes);
-    Ok(digest
-        .as_ref()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect())
-}
-
-// Resolve existing ancestors too: a newly created native directory must not
-// change a scope merely because /var is a symlink to /private/var on macOS.
-fn canonical_storage_path(path: &std::path::Path) -> std::path::PathBuf {
-    if let Ok(path) = dunce::canonicalize(path) {
-        return path;
-    }
-    match (path.parent(), path.file_name()) {
-        (Some(parent), Some(name)) if !parent.as_os_str().is_empty() => {
-            canonical_storage_path(parent).join(name)
-        }
-        _ => std::env::current_dir().unwrap_or_default().join(path),
-    }
-}
-
 // Every session-scoped operation provides its target here. Submission IDs
 // additionally identify the operations whose delivery must be tracked.
 fn session_target(request: &Call) -> (Option<&agent_protocol::session::SessionRef>, Option<&str>) {
@@ -1766,6 +656,7 @@ fn session_target(request: &Call) -> (Option<&agent_protocol::session::SessionRe
         Call::Submit(p) => (Some(&p.thread_id), Some(p.client_user_message_id.as_str())),
         Call::ForkSession(p) => (Some(&p.thread_id), None),
         Call::Interrupt(p) => (Some(&p.thread_id), None),
+        Call::RetryPreparation(p) => (Some(&p.thread_id), None),
         Call::ReadItem(p) => (Some(&p.thread_id), None),
         Call::ReadTurnItems(p) => (Some(&p.session), None),
         Call::RenameSession(p) => (Some(&p.thread_id), None),
@@ -1773,342 +664,162 @@ fn session_target(request: &Call) -> (Option<&agent_protocol::session::SessionRe
     }
 }
 
-fn describe_thread(
-    thread: &mut Thread,
-    capabilities: agent_protocol::session::Capabilities,
-    projects: &crate::projects::state::Snapshot,
-) {
-    thread.project_id = projects.project_membership(thread.cwd.as_deref());
-    thread.capabilities = Some(capabilities);
-}
-
 #[cfg(test)]
 mod tests {
     #[tokio::test]
-    async fn prefetched_project_titles_continue_past_the_first_native_page() {
+    async fn file_failures_are_classified_without_losing_visualization_recovery() {
+        use super::conversations::tests::call;
         use super::*;
         let root = tempfile::tempdir().unwrap();
-        let cwd = dunce::canonicalize(root.path()).unwrap();
-        let native = root.path().join("native");
-        let transcripts = native.join("projects/shared");
-        std::fs::create_dir_all(&transcripts).unwrap();
-        let mut expected = std::collections::HashSet::new();
-        for _ in 0..102 {
-            let id = uuid::Uuid::new_v4();
-            expected.insert(id.to_string());
-            let user = serde_json::json!({"type":"user","sessionId":id,"cwd":cwd,"message":{"content":"hello"}});
-            std::fs::write(transcripts.join(format!("{id}.jsonl")), format!("{user}\n")).unwrap();
-        }
-        let agent = crate::adapters::Claude::load(
-            root.path().join("missing-cli"),
-            root.path().join("state"),
-            Some(native),
-        )
-        .await
-        .unwrap();
-        let projects = ProjectStore::new(root.path().join("bex-worktrees.json"));
-        projects.register(&cwd).await.unwrap();
-        let service = HostRpcService::new([agent.into()], projects);
-        let snapshot = service.project_snapshot().await.unwrap();
-        let page = service
-            .host_title_list(
-                "",
-                crate::projects::titles::TitleQuery::Project {
-                    id: &snapshot.projects[0].id,
-                    limit: 101,
-                    searching: false,
-                },
-            )
-            .await
-            .unwrap();
-        assert_eq!(page.data.len(), 101, "{:?}", page.provider_errors);
-        assert!(page.has_more);
-        let ids: std::collections::HashSet<_> = page
-            .data
-            .into_iter()
-            .map(|thread| thread.id.unwrap().id)
-            .collect();
-        assert_eq!(ids.len(), 101);
-        assert!(ids.is_subset(&expected));
-    }
-
-    #[tokio::test]
-    async fn list_decorations_use_the_listed_roots_without_reloading_project_catalogs() {
-        use super::*;
-        let directory = tempfile::tempdir().unwrap();
-        let root = dunce::canonicalize(directory.path()).unwrap();
-        std::fs::write(
-            root.join("favicon.svg"),
-            r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><path fill="red" d="M0 0h8v8H0z"/></svg>"#,
-        )
-        .unwrap();
-        let state = root.join("bex-worktrees.json");
-        std::fs::write(state.with_file_name("bex-projects.json"), "{").unwrap();
         let service = HostRpcService::new(
-            [crate::adapters::codex::Codex::new(Err("provider is offline".into())).into()],
-            ProjectStore::new(state),
+            std::iter::empty::<Backend>(),
+            ProjectStore::new(root.path().join("worktrees.json")),
         );
-        let params = op::ReadListDecorations {
-            scope: op::ListDecorationScope::Root { part: None },
-            projects: vec![(
-                "listed-project".into(),
-                vec![root.to_string_lossy().into_owned()],
-            )],
-            threads: Vec::new(),
-        };
-        let result = service.list_decorations(&params).await.unwrap();
-        assert!(result.icons["listed-project"].is_some());
-        assert!(result.statuses.is_empty());
-    }
-
-    #[tokio::test]
-    async fn native_project_metadata_does_not_change_registered_membership() {
-        use super::*;
-        let root = tempfile::tempdir().unwrap();
-        let workspace = root.path().join("workspace");
-        std::fs::create_dir(&workspace).unwrap();
-        let workspace = dunce::canonicalize(&workspace).unwrap();
-        let projects = ProjectStore::new(root.path().join("bex-worktrees.json"));
-        projects.register(&workspace).await.unwrap();
-        let registered = projects.load().await.unwrap().projects[0].id.clone();
-        let native = root.path().join("native");
-        let transcripts = native.join("projects/shared");
-        std::fs::create_dir_all(&transcripts).unwrap();
-        let mut expected = Vec::new();
-        for cwd in [&workspace, &root.path().join("outside")] {
-            let id = uuid::Uuid::new_v4();
-            let metadata = serde_json::json!({"type":"attachment","attachment":{
-                "type":"prompt_snapshot","systemPrompt":[
-                    "## Where you are\n\nProject: \"Native\" (id: `chan_native`)\n"
-                ]
-            }});
-            let user = serde_json::json!({"type":"user","sessionId":id,"cwd":cwd,"message":{"content":"hello"}});
-            std::fs::write(
-                transcripts.join(format!("{id}.jsonl")),
-                format!("{metadata}\n{user}\n"),
-            )
-            .unwrap();
-            expected.push(id.to_string());
-        }
-        std::fs::write(native.join(".claude.json"), "{").unwrap();
-        let claude = crate::adapters::Claude::load(
-            root.path().join("missing-cli"),
-            root.path().join("state"),
-            Some(native.clone()),
-        )
-        .await
-        .unwrap();
-        let service = HostRpcService::new([claude.into()], projects);
         let session = service.open_session();
-        for repaired in [false, true] {
-            if repaired {
-                std::fs::write(native.join(".claude.json"), "{}").unwrap();
-            }
-            let response = service
-                .dispatch(
-                    session.id(),
-                    &Call::ListSessions(op::ListSessions {
-                        query: Default::default(),
-                    }),
-                )
+        let missing = root.path().join("missing.mp4").to_str().unwrap().to_owned();
+        for request in [
+            Call::ResolveFile(op::ResolveFile {
+                path: missing.clone(),
+            }),
+            Call::ReadFile(op::ListFiles {
+                path: missing.clone(),
+            }),
+            Call::Download(op::ListFiles { path: missing }),
+        ] {
+            let failure = call::<serde_json::Value>(&service, session.id(), request)
                 .await
-                .unwrap();
-            let Response::Success { result } = agent_protocol::protocol::decode::<
-                Response<agent_protocol::models::ThreadList>,
-            >(&response.initial)
-            .unwrap() else {
-                panic!("project metadata failure must not fail session listing")
-            };
-            assert!(
-                result
-                    .projects
-                    .iter()
-                    .any(|project| project.id == registered)
-            );
-            assert_eq!(result.data.len(), 2);
-            for id in &expected {
-                assert!(
-                    result
-                        .data
-                        .iter()
-                        .any(|thread| thread.id.as_ref().is_some_and(|thread| &thread.id == id))
-                );
-            }
-            assert_eq!(result.projects.len(), 1);
-            assert!(
-                result
-                    .data
-                    .iter()
-                    .any(|thread| thread.project_id.as_deref() == Some(registered.as_str()))
-            );
-            assert!(result.data.iter().any(|thread| thread.project_id.is_none()));
+                .unwrap_err();
+            assert_eq!(failure.code, "file_not_found");
         }
+        let failure = call::<String>(
+            &service,
+            session.id(),
+            Call::ReadVisualization(op::LoadVisualization {
+                path: "missing.html".into(),
+                cwd: root.path().to_str().unwrap().into(),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(failure.code, "file_operation_failed");
+        assert!(
+            failure
+                .message
+                .contains("表示ファイルが見つかりません。HostでHTMLを再作成してください。")
+        );
     }
 
     #[tokio::test]
-    async fn registered_roots_determine_membership_for_both_providers() {
+    async fn account_providers_are_read_in_parallel_without_blocking_conversation_lists() {
+        use super::conversations::tests::{NativeAgent, call};
         use super::*;
-        use agent_protocol::models::ProjectMembership;
         let directory = tempfile::tempdir().unwrap();
-        let root = dunce::canonicalize(directory.path()).unwrap();
-        let project = root.join("project");
-        std::fs::create_dir(&project).unwrap();
-        let store = ProjectStore::new(root.join("bex-worktrees.json"));
-        store.register(&project).await.unwrap();
-        let projects = store.load().await.unwrap();
-        let registered = projects.projects[0].id.as_str();
-        for provider in [ProviderKind::Codex, ProviderKind::Claude] {
-            for (cwd, membership, expected) in [
-                (
-                    project.clone(),
-                    ProjectMembership::Unassigned {},
-                    Some(registered),
-                ),
-                (
-                    project.clone(),
-                    ProjectMembership::Unknown {},
-                    Some(registered),
-                ),
-                (
-                    project.clone(),
-                    ProjectMembership::Assigned("native-other".into()),
-                    Some(registered),
-                ),
-                (
-                    root.join("outside"),
-                    ProjectMembership::Assigned("native-other".into()),
-                    None,
-                ),
-            ] {
-                let mut thread = Thread {
-                    id: Some(agent_protocol::session::SessionRef {
-                        provider,
-                        id: "thread".into(),
-                    }),
-                    cwd: Some(cwd.to_str().unwrap().into()),
-                    project_id: membership,
-                    ..Default::default()
-                };
-                describe_thread(&mut thread, Default::default(), &projects);
-                assert_eq!(thread.project_id.as_deref(), expected);
-            }
-        }
-    }
-    #[tokio::test]
-    async fn live_activity_registration_falls_back_without_apns_and_rejects_malformed_tokens() {
-        use super::*;
-        use agent_protocol::live_activity::{
-            LiveActivityRegistration, PushEnvironment, RegisterLiveActivity,
-        };
-        let directory = tempfile::tempdir().unwrap();
-        let service = HostRpcService::new(
-            [crate::adapters::codex::Codex::new(Err("provider is offline".into())).into()],
-            ProjectStore::new(directory.path().join("projects.json")),
+        let a = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));
+        let b = NativeAgent::new(ProviderKind::Claude, directory.path().join("claude"));
+        a.accounts_gate.forget_permits(1);
+        b.accounts_gate.forget_permits(1);
+        let host = HostRpcService::new(
+            [a.backend(), b.backend()],
+            ProjectStore::new(directory.path().join("worktrees.json")),
         );
-        let connection = service.open_session();
-        let mut params = RegisterLiveActivity {
-            activity_id: Some("activity".into()),
-            allow_start: false,
-            token: vec![1; 32],
-            environment: PushEnvironment::Sandbox,
-        };
-        for configured in [false, true] {
-            if configured {
-                service
-                    .inner
-                    .router
-                    .set_apns(Some(crate::apns::Apns::testing()));
-                params.environment = PushEnvironment::Production;
-            }
-            let response = service
-                .dispatch(connection.id(), &Call::RegisterLiveActivity(params.clone()))
-                .await
-                .unwrap();
-            let Response::Success { result } = agent_protocol::protocol::decode::<
-                Response<LiveActivityRegistration>,
-            >(&response.initial)
-            .unwrap() else {
-                panic!("unconfigured or mismatched APNs must keep local updates available");
-            };
-            assert!(!result.enabled);
+        let client = host.open_session();
+        let mut accounts = Box::pin(call::<op::Accounts>(
+            &host,
+            client.id(),
+            Call::ListAccounts(agent_protocol::models::Empty {}),
+        ));
+        tokio::select! {
+            result = &mut accounts => panic!("withheld accounts returned early: {result:?}"),
+            result = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                a.accounts_started.notified().await;
+                b.accounts_started.notified().await;
+            }) => result.expect("both providers must start before either one finishes"),
         }
-        params.token.clear();
+        let list = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            call::<agent_protocol::models::ThreadList>(
+                &host,
+                client.id(),
+                Call::ListSessions(op::ListSessions::new(Default::default())),
+            ),
+        )
+        .await
+        .expect("conversation lists must not wait for accounts")
+        .unwrap();
+        assert!(list.provider_errors.is_none());
+        a.accounts_gate.add_permits(1);
+        b.accounts_gate.add_permits(1);
+        assert!(accounts.await.unwrap().error.is_none());
+    }
+
+    #[tokio::test]
+    async fn account_read_failures_are_ordered_with_other_providers_startup_errors() {
+        use super::conversations::tests::{NativeAgent, call};
+        use super::*;
+        use std::sync::atomic::Ordering;
+        let directory = tempfile::tempdir().unwrap();
+        let a = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));
+        let host = HostRpcService::new(
+            [
+                Backend::unavailable(ProviderKind::DeepSeek, "deepseek startup failed"),
+                Backend::unavailable(ProviderKind::Claude, "claude startup failed"),
+                a.backend(),
+            ],
+            ProjectStore::new(directory.path().join("worktrees.json")),
+        );
+        let client = host.open_session();
+
+        a.fail_accounts.store(1, Ordering::SeqCst);
+        let accounts: op::Accounts = call(
+            &host,
+            client.id(),
+            Call::ListAccounts(agent_protocol::models::Empty {}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            accounts.error.as_deref(),
+            Some("codex accounts failed\nclaude startup failed\ndeepseek startup failed")
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_model_providers_remain_identifiable_when_no_catalog_is_available() {
+        use super::*;
+        let root = tempfile::tempdir().unwrap();
+        let providers = [
+            ProviderKind::Codex,
+            ProviderKind::Claude,
+            ProviderKind::DeepSeek,
+        ];
+        let service = HostRpcService::new(
+            providers.map(|provider| Backend::unavailable(provider, "offline")),
+            ProjectStore::new(root.path().join("worktrees.json")),
+        );
+        let session = service.open_session();
         let response = service
-            .dispatch(connection.id(), &Call::RegisterLiveActivity(params))
+            .dispatch(
+                session.id(),
+                &Call::ListModels(op::ListModels {
+                    cursor: None,
+                    limit: 100,
+                }),
+            )
             .await
             .unwrap();
-        assert!(matches!(
-            agent_protocol::protocol::decode::<Response<LiveActivityRegistration>>(
-                &response.initial
-            )
-            .unwrap(),
-            Response::Failure { .. }
-        ));
-    }
-    #[test]
-    fn worktree_activity_requires_finished_delivery_and_no_other_live_work() {
-        use super::worktree_active;
-        use agent_protocol::{
-            execution::TurnStatus, models::SessionStatus, session::SubmissionDelivery,
+        let Response::Success { result: page } =
+            agent_protocol::protocol::decode::<Response<op::ModelPage>>(&response.initial).unwrap()
+        else {
+            panic!("catalog failures must retain each provider's error");
         };
-        let receipt = SubmissionDelivery::Accepted {
-            turn_id: Some("accepted".into()),
-        };
-        for status in [
-            TurnStatus::Running,
-            TurnStatus::Unknown,
-            TurnStatus::Completed,
-            TurnStatus::Failed,
-            TurnStatus::Interrupted,
-        ] {
-            let turns = [std::sync::Arc::new(agent_protocol::models::Turn {
-                id: "accepted".into(),
-                status,
-                ..Default::default()
-            })];
-            let busy = |session, requests, deliveries: &[SubmissionDelivery]| {
-                worktree_active(session, &turns, requests, deliveries.iter())
-            };
-            assert_eq!(
-                busy(SessionStatus::Idle, false, &[]),
-                status == TurnStatus::Running
-            );
-            assert_eq!(
-                busy(SessionStatus::Idle, false, std::slice::from_ref(&receipt)),
-                matches!(status, TurnStatus::Running | TurnStatus::Unknown)
-            );
-            assert!(busy(SessionStatus::Running, false, &[]));
-            assert!(busy(SessionStatus::Idle, true, &[]));
-            for unresolved in [
-                SubmissionDelivery::Sending,
-                SubmissionDelivery::Unknown,
-                SubmissionDelivery::Accepted { turn_id: None },
-                SubmissionDelivery::Accepted {
-                    turn_id: Some("other".into()),
-                },
-            ] {
-                assert!(busy(
-                    SessionStatus::Idle,
-                    false,
-                    &[receipt.clone(), unresolved]
-                ));
-            }
+        assert!(page.data.is_empty());
+        assert!(page.next_cursor.is_none());
+        let errors = page.provider_errors.unwrap();
+        assert_eq!(errors.len(), providers.len());
+        for provider in providers {
+            assert_eq!(errors[provider.key()]["code"], "provider_unavailable");
         }
-        assert!(!worktree_active(
-            SessionStatus::Idle,
-            &[],
-            false,
-            [SubmissionDelivery::Rejected].iter()
-        ));
-        assert!(worktree_active(
-            SessionStatus::Idle,
-            &[],
-            false,
-            [receipt].iter()
-        ));
     }
-
-    use agent_protocol::session::ProviderKind;
 
     #[tokio::test]
     async fn successful_configuration_clears_the_provider_startup_error() {
@@ -2121,7 +832,7 @@ mod tests {
         let program = root.path().join("native-cli.exe");
         std::fs::write(&program, []).unwrap();
         let configure = || {
-            crate::adapters::Claude::load(
+            crate::providers::Claude::load(
                 program.clone(),
                 directory.clone(),
                 Some(root.path().join("native")),
@@ -2150,6 +861,7 @@ mod tests {
             .dispatch(
                 session.id(),
                 &Call::CreateSession(op::CreateSession {
+                    initial_input: None,
                     provider: ProviderKind::Claude,
                     cwd: Some(root.path().to_string_lossy().into_owned()),
                     model: None,
@@ -2169,236 +881,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn answers_keep_delivery_evidence_until_the_source_resolves_them() {
-        use super::*;
-        use agent_protocol::{
-            requests::{Answer, ElicitationAnswer},
-            session::{RequestDelivery, SessionChange},
-        };
-        use futures_util::FutureExt;
-        let root = tempfile::tempdir().unwrap();
-        let claude = crate::adapters::Claude::load(
-            root.path().join("unused-cli"),
-            root.path().join("claude"),
-            Some(root.path().join("native")),
-        )
-        .await
-        .unwrap();
-        let service = HostRpcService::new(
-            [claude.into()],
-            ProjectStore::new(root.path().join("worktrees.json")),
-        );
-        let connection = service.open_session();
-        let router = &service.inner.router;
-        let target =
-            agent_protocol::session::SessionRef::new(ProviderKind::Claude, "native".into())
-                .unwrap();
-        let (input, mut receiver) = tokio::sync::mpsc::channel(1);
-        let instance = uuid::Uuid::new_v4();
-        let answer = Answer::Elicitation {
-            action: ElicitationAnswer::Accept {
-                values: serde_json::json!({}),
-            },
-        };
-        let delivery = |id: &agent_protocol::ids::RequestId| {
-            let thread = router.overlay_execution(&target, Thread::default());
-            thread.requests.get(id).map(|request| request.delivery)
-        };
-        for native in ["cancelled", "interrupted", "written"] {
-            let adapted = crate::adapters::requests::claude(
-                uuid::Uuid::new_v4().to_string().into(),
-                &"unrelated".into(),
-                &crate::claude::SdkRequest::Elicitation {
-                    server_name: "server".into(),
-                    message: String::new(),
-                    mode: None,
-                    url: None,
-                    requested_schema: Some(serde_json::json!({"type":"object","properties":{}})),
-                },
-            )
-            .unwrap();
-            let id = adapted.request.id.clone();
-            router
-                .request(
-                    target.clone(),
-                    crate::claude::request_origin(
-                        instance,
-                        serde_json::json!(native),
-                        input.clone(),
-                        adapted.answers,
-                    ),
-                    adapted.request,
-                )
-                .unwrap();
-            // Session-scoped elicitation works without a live turn and survives another turn's completion.
-            router.session_change(
-                &target,
-                SessionChange::Turn {
-                    turn: agent_protocol::models::Turn {
-                        id: "unrelated".into(),
-                        ..Default::default()
-                    },
-                    completed: true,
-                },
-            );
-            assert_eq!(delivery(&id), Some(RequestDelivery::Awaiting));
-            if native == "cancelled" {
-                assert!(
-                    input
-                        .try_send(crate::claude::Command {
-                            value: crate::claude::SdkInput::Interrupt {
-                                request_id: "unused".into()
-                            },
-                            user: None,
-                            delivered: None,
-                        })
-                        .is_ok()
-                );
-            }
-            let mut operation =
-                Box::pin(service.answer_request(connection.id(), id.clone(), answer.clone()));
-            assert!(operation.as_mut().now_or_never().is_none());
-            assert_eq!(delivery(&id), Some(RequestDelivery::Sending));
-            assert!(
-                router
-                    .claim_response(connection.id(), &id, &answer)
-                    .is_err()
-            );
-            let command = receiver.try_recv().unwrap();
-            if native == "cancelled" {
-                drop(operation);
-                assert_eq!(delivery(&id), Some(RequestDelivery::Awaiting));
-                assert!(command.delivered.is_none());
-            } else if native == "interrupted" {
-                drop(operation);
-                assert_eq!(delivery(&id), Some(RequestDelivery::Unknown));
-                assert!(command.delivered.is_some());
-            } else {
-                assert!(
-                    matches!(command.value, crate::claude::SdkInput::Answer { request_id, .. } if request_id == native)
-                );
-                command.delivered.unwrap().send(Ok(())).unwrap();
-                operation.await.unwrap();
-                assert_eq!(delivery(&id), Some(RequestDelivery::Sent));
-            }
-            if native != "cancelled" {
-                assert!(
-                    router
-                        .claim_response(connection.id(), &id, &answer)
-                        .is_err()
-                );
-            }
-            router.resolve_native_request(instance, &serde_json::json!(native));
-            assert_eq!(delivery(&id), None);
-        }
-    }
-
-    #[tokio::test]
-    async fn answer_preflight_failures_keep_awaiting_and_prove_non_delivery() {
-        use super::*;
-        use agent_protocol::requests::{Answer, ElicitationAnswer};
-        for case in [
-            "invalidClaudeId",
-            "closedClaude",
-            "unavailableCodex",
-            "stoppedCodex",
-        ] {
-            let root = tempfile::tempdir().unwrap();
-            let claude = case.ends_with("Claude") || case == "invalidClaudeId";
-            let provider = if claude {
-                ProviderKind::Claude
-            } else {
-                ProviderKind::Codex
-            };
-            let backend = if claude {
-                crate::adapters::Claude::load(
-                    root.path().join("unused-cli"),
-                    root.path().join("claude"),
-                    Some(root.path().join("native")),
-                )
-                .await
-                .unwrap()
-                .into()
-            } else {
-                Backend::unavailable(provider, "unavailable")
-            };
-            let service = HostRpcService::new(
-                [backend],
-                ProjectStore::new(root.path().join("worktrees.json")),
-            );
-            let connection = service.open_session();
-            let target =
-                agent_protocol::session::SessionRef::new(provider, "native".into()).unwrap();
-            let (input, mut receiver) = tokio::sync::mpsc::channel(1);
-            let stopped = tokio_util::sync::CancellationToken::new();
-            let adapted = if claude {
-                crate::adapters::requests::claude("request".into(), &"turn".into(), &crate::claude::SdkRequest::Elicitation { server_name: String::new(), message: String::new(), mode: None, url: None, requested_schema: Some(serde_json::json!({"type":"object","properties":{}})) })
-            } else {
-                crate::adapters::requests::codex("request".into(),"mcpServer/elicitation/request",&serde_json::json!({"mode":"form","requestedSchema":{"type":"object","properties":{}}}))
-            }.unwrap();
-            let id = adapted.request.id.clone();
-            let instance = uuid::Uuid::new_v4();
-            let native_id = if case == "invalidClaudeId" {
-                serde_json::json!(1)
-            } else {
-                serde_json::json!("native-request")
-            };
-            let origin = if claude {
-                crate::claude::request_origin(instance, native_id.clone(), input, adapted.answers)
-            } else {
-                super::super::requests::unavailable_origin(
-                    instance,
-                    native_id.clone(),
-                    stopped.clone(),
-                )
-            };
-            service
-                .inner
-                .router
-                .request(target.clone(), origin, adapted.request)
-                .unwrap();
-            if case == "closedClaude" {
-                receiver.close();
-            }
-            if case == "stoppedCodex" {
-                stopped.cancel();
-            }
-            for _ in 0..2 {
-                let failure = service
-                    .answer_request(
-                        connection.id(),
-                        id.clone(),
-                        Answer::Elicitation {
-                            action: ElicitationAnswer::Accept {
-                                values: serde_json::json!({}),
-                            },
-                        },
-                    )
-                    .await
-                    .unwrap_err();
-                assert_eq!(
-                    failure.delivery,
-                    agent_transport::peer::Delivery::NotSent,
-                    "{case}"
-                );
-                let thread = service
-                    .inner
-                    .router
-                    .overlay_execution(&target, Thread::default());
-                assert_eq!(
-                    thread.requests[&id].delivery,
-                    agent_protocol::session::RequestDelivery::Awaiting,
-                    "{case}"
-                );
-                assert!(receiver.try_recv().is_err());
-            }
-            service
-                .inner
-                .router
-                .resolve_native_request(instance, &native_id);
-        }
-    }
     #[test]
     fn unknown_and_native_methods_are_rejected_before_dispatch() {
         for method in [
@@ -2427,7 +909,7 @@ mod tests {
     async fn provider_capabilities_are_checked_before_provider_availability() {
         use super::*;
         let root = tempfile::tempdir().unwrap();
-        let claude = crate::adapters::Claude::load(
+        let claude = crate::providers::Claude::load(
             root.path().join("missing-claude"),
             root.path().join("claude"),
             Some(root.path().join("native")),
@@ -2440,7 +922,6 @@ mod tests {
         );
         let session = service.open_session();
         for (method, expected) in [
-            ("host/session/fork", "unsupported_operation"),
             ("host/session/rename", "unsupported_operation"),
             ("host/session/submit", "provider_unavailable"),
         ] {
@@ -2452,6 +933,12 @@ mod tests {
             .unwrap()
             .into_value();
             assert_eq!(response["error"]["code"], expected, "{method}");
+            if expected == "unsupported_operation" {
+                assert_eq!(
+                    response["error"]["message"],
+                    format!("{method} is unsupported by this provider")
+                );
+            }
         }
     }
 
@@ -2481,332 +968,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn task_list_refreshes_branding_for_all_project_headers() {
-        use super::*;
-        let root = tempfile::tempdir().unwrap();
-        let workspace = root.path().join("remote-agent");
-        let workspaces = std::iter::once(workspace.clone())
-            .chain((0..5).map(|index| root.path().join(format!("empty-project-{index}"))))
-            .collect::<Vec<_>>();
-        let native = root.path().join("native");
-        for workspace in &workspaces {
-            std::fs::create_dir(workspace).unwrap();
-            std::fs::write(workspace.join("favicon.svg"),
-                r##"<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" fill="#ff0000"/></svg>"##).unwrap();
-        }
-        let transcript = native.join("projects/p");
-        std::fs::create_dir_all(&transcript).unwrap();
-        let id = "12345678-1234-4234-8234-123456789abc";
-        std::fs::write(transcript.join(format!("{id}.jsonl")),serde_json::json!({"type":"user","sessionId":id,"cwd":dunce::canonicalize(&workspace).unwrap(),"message":{"content":"Branding task"}}).to_string()+"\n").unwrap();
-        let projects = ProjectStore::new(root.path().join("bex-worktrees.json"));
-        for workspace in &workspaces {
-            projects.register(workspace).await.unwrap();
-        }
-        let claude = crate::adapters::Claude::load(
-            root.path().join("does-not-exist"),
-            root.path().join("state"),
-            Some(native),
-        )
-        .await
-        .unwrap();
-        let service = HostRpcService::new(
-            [
-                Backend::unavailable(ProviderKind::Codex, "unavailable"),
-                claude.into(),
-            ],
-            projects,
-        );
-        let session = service.open_session();
-        for has_icon in [true, false] {
-            if !has_icon {
-                for workspace in &workspaces {
-                    std::fs::remove_file(workspace.join("favicon.svg")).unwrap();
-                }
-            }
-            for project_limit in [5, 15] {
-                let call = Call::ListSessions(op::ListSessions {
-                    query: agent_protocol::models::ListQuery {
-                        project_limit,
-                        ..Default::default()
-                    },
-                });
-                let response = service.dispatch(session.id(), &call).await.unwrap();
-                let reply = agent_protocol::protocol::decode::<
-                    Response<agent_protocol::models::ThreadList>,
-                >(&response.initial)
-                .unwrap();
-                let Response::Success { result } = reply else {
-                    panic!("task list failed: {reply:?}")
-                };
-                assert_eq!(result.data.len(), 1);
-                assert!(result.data[0].turns.is_none() && result.data[0].preview.is_none());
-                let decoration = op::ReadListDecorations {
-                    scope: op::ListDecorationScope::Root { part: None },
-                    projects: result
-                        .projects
-                        .iter()
-                        .map(|project| {
-                            (
-                                project.id.clone(),
-                                project.roots.iter().map(|root| root.path.clone()).collect(),
-                            )
-                        })
-                        .collect(),
-                    threads: Vec::new(),
-                };
-                let decorated = service
-                    .dispatch(session.id(), &Call::ReadListDecorations(decoration))
-                    .await
-                    .unwrap();
-                let Response::Success { result: decorated } = agent_protocol::protocol::decode::<
-                    Response<op::ListDecorations>,
-                >(&decorated.initial)
-                .unwrap() else {
-                    panic!("decoration failed")
-                };
-                let mut result = result;
-                for project in &mut result.projects {
-                    project.favicon_png = decorated.icons[&project.id].clone();
-                }
-                assert_eq!(result.projects.len(), (project_limit as usize).min(6));
-                assert_eq!(result.has_more_projects, project_limit == 5);
-                let project_id = result.projects[0].id.clone();
-                let response = service
-                    .dispatch(
-                        session.id(),
-                        &Call::ListProjectSessions(op::ListProjectSessions {
-                            project_id: project_id.clone(),
-                            limit: 5,
-                            search_term: String::new(),
-                        }),
-                    )
-                    .await
-                    .unwrap();
-                let Response::Success { result: page } = agent_protocol::protocol::decode::<
-                    Response<agent_protocol::models::ThreadList>,
-                >(&response.initial)
-                .unwrap() else {
-                    panic!("project list failed")
-                };
-                let snapshot = agent_core::state::Snapshot {
-                    threads: Some(Arc::new(result)),
-                    expanded_projects: Arc::new([(project_id.clone(), 5)].into()),
-                    project_threads: Arc::new([(project_id, Arc::new(page))].into()),
-                    ..Default::default()
-                };
-                let list = snapshot.thread_list().unwrap();
-                assert_eq!(list.projects.len(), (project_limit as usize).min(6));
-                assert!(list.threads.is_empty());
-                assert_eq!(list.projects[0].threads.len(), 1);
-                assert_eq!(
-                    list.projects[0].threads[0].project_id.as_ref(),
-                    Some(&list.projects[0].id)
-                );
-                assert!(
-                    list.projects[1..]
-                        .iter()
-                        .all(|project| project.threads.is_empty())
-                );
-                assert_eq!(list.projects[0].monogram, "RA");
-                for project in &list.projects {
-                    assert_eq!(project.icon_png.is_some(), has_icon, "{}", project.name);
-                    if let Some(png) = &project.icon_png {
-                        let image = image::load_from_memory(png).unwrap().into_rgba8();
-                        assert_eq!(image.dimensions(), (64, 64));
-                        assert_eq!(image.get_pixel(32, 32).0, [255, 0, 0, 255]);
-                    }
-                }
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn worktree_listing_blocks_only_checkouts_with_unverified_claude_activity() {
-        use super::*;
-        let root = tempfile::tempdir().unwrap();
-        let repository = root.path().join("repository");
-        std::fs::create_dir(&repository).unwrap();
-        crate::git::text(&repository, &["init", "--quiet", "--initial-branch=main"]).unwrap();
-        crate::git::text(
-            &repository,
-            &[
-                "-c",
-                "user.name=Fixture",
-                "-c",
-                "user.email=fixture@example.invalid",
-                "-c",
-                "commit.gpgsign=false",
-                "commit",
-                "--allow-empty",
-                "--quiet",
-                "-m",
-                "fixture",
-            ],
-        )
-        .unwrap();
-        let native = root.path().join("native");
-        let project = native.join("projects/example");
-        std::fs::create_dir_all(&project).unwrap();
-        let claude = crate::adapters::Claude::load(
-            root.path().join("unused-cli"),
-            root.path().join("state"),
-            Some(native),
-        )
-        .await
-        .unwrap();
-        let service = HostRpcService::new(
-            [claude.into()],
-            ProjectStore::new(root.path().join("projects.json")),
-        );
-        service
-            .inner
-            .worktrees
-            .settings(Some(agent_protocol::models::WorktreeSettings {
-                create_on_new_session: true,
-                ..Default::default()
-            }))
-            .await
-            .unwrap();
-        let first = service
-            .inner
-            .worktrees
-            .prepare(repository.to_str())
-            .await
-            .unwrap()
-            .unwrap();
-        let other = service
-            .inner
-            .worktrees
-            .prepare(repository.to_str())
-            .await
-            .unwrap()
-            .unwrap();
-        let id = "12345678-1234-4234-8234-123456789abc";
-        let transcript = project.join(format!("{id}.jsonl"));
-        let history = include_str!("../../tests/fixtures/claude-2.1.266.jsonl")
-            .lines()
-            .map(|line| {
-                let mut entry: serde_json::Value = serde_json::from_str(line).unwrap();
-                entry["cwd"] = serde_json::json!(first);
-                entry.to_string()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        std::fs::write(&transcript, history).unwrap();
-        let entries = service.worktree_list().await.unwrap();
-        let first_entry = entries
-            .iter()
-            .find(|entry| std::path::Path::new(&entry.path) == first)
-            .unwrap();
-        assert_eq!(first_entry.threads[0].id.id, id);
-        assert!(!first_entry.threads[0].active);
-        assert!(
-            first_entry
-                .blocked_reason
-                .as_ref()
-                .unwrap()
-                .contains("native transcript does not expose external process activity")
-        );
-        let other_entry = entries
-            .iter()
-            .find(|entry| std::path::Path::new(&entry.path) == other)
-            .unwrap();
-        assert!(other_entry.blocked_reason.is_none());
-        assert!(
-            service
-                .remove_worktree(first_entry.path.clone())
-                .await
-                .is_err()
-        );
-        assert!(first.is_dir());
-        std::fs::remove_file(transcript).unwrap();
-        assert!(
-            service
-                .worktree_list()
-                .await
-                .unwrap()
-                .iter()
-                .all(|entry| entry.blocked_reason.is_none())
-        );
-    }
-
-    #[tokio::test]
-    async fn opening_claude_history_reads_native_files_without_starting_a_cli() {
-        use super::*;
-        let root = tempfile::tempdir().unwrap();
-        let native = root.path().join("native");
-        let project = native.join("projects/example");
-        std::fs::create_dir_all(&project).unwrap();
-        let id = "12345678-1234-4234-8234-123456789abc";
-        std::fs::write(
-            project.join(format!("{id}.jsonl")),
-            include_str!("../../tests/fixtures/claude-2.1.266.jsonl"),
-        )
-        .unwrap();
-        let claude = crate::adapters::Claude::load(
-            root.path().join("does-not-exist"),
-            root.path().join("state"),
-            Some(native),
-        )
-        .await
-        .unwrap();
-        let service = HostRpcService::new(
-            [claude.into()],
-            ProjectStore::new(root.path().join("bex-worktrees.json")),
-        );
-        let session = service.open_session();
-        let call =
-            agent_protocol::protocol::Call::OpenSession(agent_protocol::session::OpenSession {
-                include_activity: false,
-                session: agent_protocol::session::SessionRef {
-                    provider: agent_protocol::session::ProviderKind::Claude,
-                    id: id.into(),
-                },
-                limit: 5,
-            });
-        let response = service.dispatch(session.id(), &call).await.unwrap();
-        let reply = agent_protocol::protocol::decode::<
-            agent_protocol::protocol::Response<agent_protocol::session::OpenedSession>,
-        >(&response.initial)
-        .unwrap()
-        .into_value();
-        assert!(reply.get("error").is_none(), "{reply}");
-        let thread = &reply["result"]["response"]["thread"];
-        assert!(!thread["turns"].as_array().unwrap().is_empty());
-        assert_ne!(thread["historyReadState"]["type"], "unavailable");
-        let transcript = project.join(format!("{id}.jsonl"));
-        let changed = std::fs::read_to_string(&transcript)
-            .unwrap()
-            .replace("Fixture user input", "Changed outside Bex");
-        std::fs::write(transcript, changed).unwrap();
-        // Even with the original subscription open, every open reads native data.
-        let response = service.dispatch(session.id(), &call).await.unwrap();
-        let reply = agent_protocol::protocol::decode::<
-            agent_protocol::protocol::Response<agent_protocol::session::OpenedSession>,
-        >(&response.initial)
-        .unwrap()
-        .into_value()
-        .to_string();
-        assert!(reply.contains("Changed outside Bex"), "{reply}");
-        assert!(!reply.contains("Fixture user input"));
-    }
-
-    #[test]
-    fn storage_scope_has_a_fixed_encoding() {
-        let areas = [
-            (ProviderKind::Codex, "/fixtures/codex".into()),
-            (ProviderKind::Claude, "/fixtures/claude".into()),
-        ];
-        assert_eq!(
-            super::provider_storage_scope(areas).unwrap(),
-            "8170d6192a00957e1b3b4a3da16963137015f8d36f1efaa8b8b347090f78476b",
-        );
-    }
-
-    #[tokio::test]
     async fn enabling_host_owned_harness_keeps_the_existing_draft_namespace() {
         let root = tempfile::tempdir().unwrap();
-        let claude = crate::claude::Claude::load(
+        let claude = crate::providers::claude::Claude::load(
             "claude".into(),
             root.path().join("accounts"),
             Some(root.path().join("native")),
@@ -2817,15 +981,8 @@ mod tests {
             [claude.into()],
             crate::ProjectStore::new(root.path().join("projects.json")),
         );
-        let request =
-            agent_protocol::protocol::Call::SessionScope(agent_protocol::models::Empty {});
-        let session = service.open_session();
-        let before = service
-            .dispatch(session.id(), &request)
-            .await
-            .unwrap()
-            .initial;
-        let claude = crate::claude::Claude::load(
+        let before = service.storage_scope().unwrap();
+        let claude = crate::providers::claude::Claude::load(
             "claude".into(),
             root.path().join("accounts"),
             Some(root.path().join("native")),
@@ -2833,80 +990,17 @@ mod tests {
         .await
         .unwrap();
         let harness =
-            crate::adapters::deepseek::DeepSeek::load("dsh".into(), root.path().join("harness"))
+            crate::providers::deepseek::DeepSeek::load("dsh".into(), root.path().join("harness"))
                 .await
                 .unwrap();
         let service = super::HostRpcService::new(
             [claude.into(), harness.into()],
             crate::ProjectStore::new(root.path().join("projects.json")),
         );
-        let session = service.open_session();
-        let after = service
-            .dispatch(session.id(), &request)
-            .await
-            .unwrap()
-            .initial;
+        let after = service.storage_scope().unwrap();
         assert_eq!(
             before, after,
             "Adding Harness must not archive existing drafts or navigation"
         );
-    }
-
-    proptest::proptest! {
-        #[test]
-        fn storage_scope_ignores_input_order_but_tracks_provider_paths(
-            codex in "[a-zA-Z0-9/_ .あ界é-]{1,64}",
-            claude in "[a-zA-Z0-9/_ .あ界é-]{1,64}",
-        ) {
-            let codex = std::path::PathBuf::from(codex);
-            let claude = std::path::PathBuf::from(claude);
-            let original = super::provider_storage_scope([
-                (ProviderKind::Codex, codex.clone()),
-                (ProviderKind::Claude, claude.clone()),
-            ]).unwrap();
-            proptest::prop_assert_eq!(&original, &super::provider_storage_scope([
-                (ProviderKind::Claude, claude.clone()),
-                (ProviderKind::Codex, codex.clone()),
-            ]).unwrap());
-            for areas in [
-                [(ProviderKind::Codex, codex.join("different")), (ProviderKind::Claude, claude.clone())],
-                [(ProviderKind::Codex, codex.clone()), (ProviderKind::Claude, claude.join("different"))],
-            ] {
-                proptest::prop_assert_ne!(&original, &super::provider_storage_scope(areas).unwrap());
-            }
-            proptest::prop_assert_ne!(&original, &super::provider_storage_scope([
-                (ProviderKind::Codex, codex),
-            ]).unwrap());
-        }
-    }
-
-    #[test]
-    fn creating_native_storage_does_not_change_its_identity() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("native").join("projects");
-        let before = super::canonical_storage_path(&path);
-        std::fs::create_dir_all(&path).unwrap();
-        let scope = super::provider_storage_scope([(ProviderKind::Codex, before)]).unwrap();
-        assert_eq!(
-            scope,
-            super::provider_storage_scope([(
-                ProviderKind::Codex,
-                super::canonical_storage_path(&path)
-            ),])
-            .unwrap()
-        );
-        #[cfg(unix)]
-        {
-            let alias = root.path().join("alias");
-            std::os::unix::fs::symlink(root.path(), &alias).unwrap();
-            assert_eq!(
-                scope,
-                super::provider_storage_scope([(
-                    ProviderKind::Codex,
-                    super::canonical_storage_path(&alias.join("native/projects"))
-                ),])
-                .unwrap()
-            );
-        }
     }
 }

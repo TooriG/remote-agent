@@ -46,6 +46,7 @@ import dev.remoteagent.core.Intent
 import dev.remoteagent.core.MarkdownFileKind
 import dev.remoteagent.core.MarkdownFileReference
 import dev.remoteagent.core.Outcome
+import dev.remoteagent.core.localizedUiFormat
 import dev.remoteagent.core.markdownFileTarget
 import java.io.File
 import java.util.Base64
@@ -57,6 +58,7 @@ private const val THUMBNAIL_MAX_PIXELS = 512
 
 @Composable
 internal fun ImageSkeleton(modifier: Modifier, label: String = "画像を読み込み中", tag: String = "image.loading.skeleton") {
+    val localizedLabel = LocalUiLanguage.current.text(label)
     Box(
         modifier
             .placeholder(
@@ -65,7 +67,7 @@ internal fun ImageSkeleton(modifier: Modifier, label: String = "画像を読み�
                 shape = RoundedCornerShape(10.dp),
                 highlight = PlaceholderDefaults.pulse,
             )
-            .semantics { contentDescription = label }
+            .semantics { contentDescription = localizedLabel }
             .testTag(tag)
     )
 }
@@ -76,6 +78,7 @@ internal fun DraftAttachments(
     draftKey: DraftKey,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
 ) {
+    val language = LocalUiLanguage.current
     if (attachments.isEmpty()) return
     var preview by remember(draftKey) { mutableStateOf<MarkdownFileReference?>(null) }
     Row(
@@ -101,33 +104,26 @@ internal fun DraftAttachments(
                         Modifier.size(120.dp)
                             .clip(RoundedCornerShape(12.dp))
                             .background(MaterialTheme.colorScheme.surfaceVariant)
-                            .clickable(onClickLabel = "プレビュー") { preview = reference },
+                            .clickable(onClickLabel = language.text("プレビュー")) { preview = reference },
                         contentScale = ContentScale.Crop,
                     )
                 } else
                     Text(
-                        "▤ ${attachment.name}\nタップしてプレビュー",
+                        localizedUiFormat(language, "▤ {0}\nタップしてプレビュー", listOf(attachment.name)),
                         Modifier.clip(RoundedCornerShape(12.dp))
-                            .clickable(onClickLabel = "${attachment.name}をプレビュー") { preview = reference }
+                            .clickable(
+                                onClickLabel = localizedUiFormat(language, "{0}をプレビュー", listOf(attachment.name))
+                            ) {
+                                preview = reference
+                            }
                             .background(MaterialTheme.colorScheme.surface)
                             .padding(start = 12.dp, end = 48.dp, top = 12.dp, bottom = 12.dp),
                     )
-                IconButton(
-                    onClick = { perform(Intent.RemoveAttachment(draftKey, index.toUInt())) {} },
-                    modifier =
-                        Modifier.size(48.dp).align(Alignment.TopEnd).offset(x = 4.dp, y = -4.dp).semantics {
-                            contentDescription = "${attachment.name}を外す"
-                        },
-                ) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopEnd) {
-                        Icon(
-                            painterResource(R.drawable.ic_close),
-                            contentDescription = null,
-                            tint = Color.Black,
-                            modifier = Modifier.size(18.dp).background(Color.White, CircleShape).padding(3.dp),
-                        )
-                    }
-                }
+                RemoveAttachmentButton(
+                    localizedUiFormat(language, "{0}を外す", listOf(attachment.name)),
+                    { perform(Intent.RemoveAttachment(draftKey, index.toUInt())) {} },
+                    Modifier.size(48.dp).align(Alignment.TopEnd).offset(x = 4.dp, y = -4.dp),
+                )
             }
         }
     }
@@ -142,6 +138,7 @@ internal fun AttachmentThumbnail(
     modifier: Modifier,
     contentScale: ContentScale = ContentScale.Fit,
 ) {
+    val language = LocalUiLanguage.current
     val context = LocalContext.current
     var bitmap by remember(path) { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
     var failed by remember(path) { mutableStateOf(false) }
@@ -181,7 +178,21 @@ internal fun AttachmentThumbnail(
     Box(modifier, contentAlignment = Alignment.Center) {
         val loaded = bitmap
         if (loaded != null) Image(loaded, name, Modifier.fillMaxSize(), contentScale = contentScale)
-        else if (failed) Text("画像を表示できません", style = MaterialTheme.typography.labelSmall)
+        else if (failed) Text(language.text("画像を表示できません"), style = MaterialTheme.typography.labelSmall)
         else ImageSkeleton(Modifier.fillMaxSize())
+    }
+}
+
+@Composable
+private fun RemoveAttachmentButton(label: String, remove: () -> Unit, modifier: Modifier) {
+    IconButton(onClick = remove, modifier = modifier.semantics { contentDescription = label }) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopEnd) {
+            Icon(
+                painterResource(R.drawable.ic_close),
+                contentDescription = null,
+                tint = Color.Black,
+                modifier = Modifier.size(18.dp).background(Color.White, CircleShape).padding(3.dp),
+            )
+        }
     }
 }

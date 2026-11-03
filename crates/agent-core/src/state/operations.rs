@@ -39,6 +39,9 @@ macro_rules! rpc_operation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
 pub enum Intent {
+    DismissError {
+        id: ErrorId,
+    },
     ManageCodexCli(ManageCodexCli),
     ReadTaskActivity(ReadTaskActivity),
     RegisterLiveActivity(RegisterLiveActivity),
@@ -64,6 +67,7 @@ pub enum Intent {
     RemoveRemoteHost(RemoveRemoteHost),
     RevokeDevice(RevokeDevice),
     ListFiles(ListFiles),
+    ResolveFile(ResolveFile),
     ReadFile(ReadFile),
     SaveFile(SaveFile),
     ReviewWorkspace(ReviewWorkspace),
@@ -78,6 +82,15 @@ pub enum Intent {
         thread_id: Option<crate::session::SessionRef>,
     },
     AddProject(AddProject),
+    ScanProjects(ScanProjects),
+    ImportProjects(ImportProjects),
+    SelectImportProject {
+        path: String,
+        selected: bool,
+    },
+    SelectAllImportProjects {
+        selected: bool,
+    },
     ShowRecentChats,
     ExpandRecentChats,
     ExpandProjects,
@@ -125,6 +138,7 @@ pub enum Intent {
         project_id: String,
     },
     CreateSession(CreateSession),
+    RetryPreparation(RetryPreparation),
     ReadThread(ReadThread),
     OpenRequest(OpenRequest),
     ReadItem(ReadItem),
@@ -231,18 +245,22 @@ pub enum Intent {
         client_user_message_id: agent_protocol::ids::ClientInputId,
     },
     Respond(Respond),
+    AnswerQuestion {
+        request_id: agent_protocol::ids::RequestId,
+        action: crate::questions::QuestionAction,
+    },
 }
 
 pub enum StalePolicy {
     Discard,
     Apply,
-    /// Fetch current data again instead of publishing a response from an older epoch.
-    Retry,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
 pub enum OperationKey {
+    ProjectScan,
+    ProjectImport,
     TaskActivity,
     LiveActivity {
         activity_id: Option<String>,
@@ -313,6 +331,13 @@ pub enum OperationKey {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
+pub enum ErrorId {
+    Application { message: String },
+    Operation { key: OperationKey, generation: u64 },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
 pub enum OperationPhase {
@@ -332,22 +357,27 @@ impl OperationKey {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Scheduling {
     Concurrent,
     Control,
-    LatestTaskActivity,
+    /// Host-owned state for the whole connection: navigation never makes it
+    /// stale, and only the newest read of the key runs.
+    LatestHostState(OperationKey),
     LatestList(Option<crate::models::ListPart>),
     LatestAgents(crate::session::SessionRef),
     LatestProject(String),
     LatestReview,
     Item(ReadItem),
-    Terminal { handle: String, starts: bool },
+    Terminal {
+        handle: String,
+        starts: bool,
+    },
 }
 impl Scheduling {
     pub(crate) fn latest_key(&self) -> Option<OperationKey> {
         match self {
-            Self::LatestTaskActivity => Some(OperationKey::TaskActivity),
+            Self::LatestHostState(key) => Some(key.clone()),
             Self::LatestList(part) => Some(OperationKey::list(*part)),
             Self::LatestProject(project_id) => Some(OperationKey::ProjectList {
                 project_id: project_id.clone(),
@@ -414,8 +444,7 @@ pub trait Operation: Send + Sync + std::fmt::Debug + Sized + 'static {
     fn stale(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
         match Self::STALE_POLICY {
             StalePolicy::Apply => self.apply(snapshot, output),
-            StalePolicy::Retry if snapshot.connected => vec![Effect::execute(self)],
-            StalePolicy::Discard | StalePolicy::Retry => Vec::new(),
+            StalePolicy::Discard => Vec::new(),
         }
     }
     fn complete(
@@ -449,8 +478,14 @@ mod hosts;
 pub use hosts::*;
 mod workspace;
 pub use workspace::*;
-mod threads;
-pub use threads::*;
+mod lists;
+pub use lists::*;
+mod models;
+pub use models::*;
+mod sessions;
+pub use sessions::*;
+mod project_import;
+pub use project_import::*;
 mod submission;
 pub use submission::*;
 

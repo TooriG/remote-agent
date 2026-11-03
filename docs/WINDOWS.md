@@ -44,19 +44,21 @@ directory and fails on another PC with `Error creating DirectWriteTextSystem`
 and a missing-path error. Runtime users do not need the SDK or Cargo sources.
 
 Shader compilation uses the Microsoft Windows SDK C++ NuGet package pinned
-in `tools/windows-fxc/manifest.json`. Both ordinary Cargo builds and CI use the
-same verified x64 `fxc.exe` and `d3dcompiler_47.dll`; the package is downloaded
-from Microsoft's official NuGet feed into `target/tool-cache/windows-fxc`.
-The package and extracted files are checked with SHA-256. Missing or modified
-cached files stop the build; installed SDKs, PATH and `GPUI_FXC_PATH` cannot
-select a different shader compiler. Delete the affected version's cache to
-restore it from the pinned package. Initial setup needs network access.
+in `tools/windows-fxc/manifest.json`. CI and `scripts/package-windows.ps1`
+run `tools/windows-fxc/prepare.ps1`, which downloads the package from
+Microsoft's official NuGet feed into `target/tool-cache/windows-fxc`, checks
+the package and the extracted `fxc.exe` and `d3dcompiler_47.dll` with SHA-256,
+and prints the compiler path. They pass it to GPUI through `GPUI_FXC_PATH`.
+Missing or modified cached files stop the build; delete the affected version's
+cache to restore it from the pinned package. Initial setup needs network access.
+Other local Cargo builds use GPUI's own compiler discovery unless
+`GPUI_FXC_PATH` is set to the prepared compiler. After changing the pin, run
+`cargo clean -p gpui-pre-windows` so its shaders are compiled again.
 
-The vendored GPUI build script tracks the manifest, preparation script and all
-HLSL inputs, so changing a pin or shader recompiles its bytecode. Windows CI
-also checks rejection of missing/corrupted compiler files and identical shader
-bytecode from two different source directories. This pins shader compilation;
-it does not establish byte-for-byte reproducibility of the entire MSVC build.
+Windows CI also checks rejection of missing/corrupted compiler files and
+identical shader bytecode from two different source directories. This pins
+shader compilation; it does not establish byte-for-byte reproducibility of the
+entire MSVC build.
 
 **Update Windows shader compiler** checks the official NuGet feed every Sunday
 at 04:00 Japan time (GitHub may delay scheduled runs). It selects the newest
@@ -93,7 +95,7 @@ For NanoGPT, save its key under **NanoGPT** and choose **NanoGPT · DeepSeek V4.
 
 Choose the **DeepSeek公式** route to use the official `deepseek-flash` model. Model names come from Harness's live catalog. BEX uses the official ACP interface for prompts, reasoning, tool results, permissions, cancellation and resuming the same native session after a Host restart. Additional messages wait until the current task finishes; fork is unavailable. Permission defaults belong to Harness; permission requests are answered in BEX.
 
-For a separate installation, pass `host-daemon --deepseek C:\path\to\dsh\lib\bin.js`. `BEX_DEEPSEEK_NODE` selects its Node runtime. The standard Windows installation also detects a BEX-managed Harness under `%LOCALAPPDATA%\BEX\deepseek-harness`.
+For a separate installation, pass `host-daemon --deepseek C:\path\to\dsh\lib\bin.js`. `AGENT_DEEPSEEK_NODE` selects its Node runtime. The standard Windows installation also detects a BEX-managed Harness under `%LOCALAPPDATA%\BEX\deepseek-harness`.
 
 Host・Windows版・Android版は同じ対応版へ更新してください。DeepSeek用APIキーをPCのBEXで設定すると、そのHostへ接続するAndroid端末からも利用できます。
 

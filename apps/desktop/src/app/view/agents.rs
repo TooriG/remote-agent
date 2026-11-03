@@ -1,8 +1,10 @@
 use super::*;
 
 impl Desktop {
-    pub(super) fn agents_panel(&self) -> AnyElement {
-        let agents = self.snapshot.agent_panel();
+    pub(super) fn agents_panel(
+        agents: &[agent_core::presentation::agents::AgentSummary],
+        language: agent_core::localization::UiLanguage,
+    ) -> AnyElement {
         let working = agents.iter().filter(|agent| agent.active).count();
         v_flex()
             .debug_selector(|| "agents-panel".into())
@@ -14,13 +16,19 @@ impl Desktop {
                 h_flex()
                     .gap_2()
                     .child(IconName::Network)
-                    .child(div().flex_1().font_semibold().child("エージェント"))
                     .child(
                         div()
-                            .text_sm()
-                            .text_color(rgb(appearance::MUTED))
-                            .child(format!("{working} 件が実行中")),
-                    ),
+                            .flex_1()
+                            .font_semibold()
+                            .child(language.text("エージェント")),
+                    )
+                    .child(div().text_sm().text_color(rgb(appearance::MUTED)).child(
+                        agent_core::localization::localized_ui_format(
+                            language,
+                            "{0} 件が実行中".into(),
+                            vec![working.to_string()],
+                        ),
+                    )),
             )
             .child(
                 div()
@@ -33,15 +41,16 @@ impl Desktop {
                             .gap_2()
                             .when(agents.is_empty(), |list| {
                                 list.child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(rgb(appearance::MUTED))
-                                        .child("サブエージェントが起動するとここに表示されます。"),
+                                    div().text_sm().text_color(rgb(appearance::MUTED)).child(
+                                        language.text(
+                                            "サブエージェントが起動するとここに表示されます。",
+                                        ),
+                                    ),
                                 )
                             })
-                            .children(agents.into_iter().map(|agent| {
+                            .children(agents.iter().map(|agent| {
                                 v_flex()
-                                    .id(SharedString::from(agent.key))
+                                    .id(SharedString::from(agent.key.clone()))
                                     .debug_selector(|| "agent-row".into())
                                     .ml(px(agent.depth as f32 * 16.))
                                     .gap_1()
@@ -55,7 +64,7 @@ impl Desktop {
                                             .h(px(20.))
                                             .gap_2()
                                             .when(agent.active, |row| {
-                                                row.child(spinner::Spinner::new().small())
+                                                row.child(crate::activity::indicator())
                                             })
                                             .child(
                                                 div()
@@ -63,7 +72,7 @@ impl Desktop {
                                                     .min_w_0()
                                                     .text_sm()
                                                     .text_ellipsis()
-                                                    .child(agent.title),
+                                                    .child(agent.title.clone()),
                                             )
                                             .when(agent.unread, |row| {
                                                 row.child(
@@ -77,7 +86,12 @@ impl Desktop {
                                                 div()
                                                     .text_xs()
                                                     .text_color(rgb(appearance::MUTED))
-                                                    .child(agent.status),
+                                                    .child(
+                                                        agent_core::localization::localized_ui_text(
+                                                            language,
+                                                            agent.status.clone(),
+                                                        ),
+                                                    ),
                                             ),
                                     )
                                     .child(
@@ -86,14 +100,14 @@ impl Desktop {
                                             .text_sm()
                                             .text_ellipsis()
                                             .text_color(rgb(appearance::MUTED))
-                                            .child(agent.detail.unwrap_or_default()),
+                                            .child(agent.detail.clone().unwrap_or_default()),
                                     )
                                     .child(
                                         div()
                                             .h(px(16.))
                                             .text_xs()
                                             .text_color(rgb(appearance::MUTED))
-                                            .child(agent.model.unwrap_or_default()),
+                                            .child(agent.model.clone().unwrap_or_default()),
                                     )
                             })),
                     ),
@@ -126,7 +140,7 @@ mod tests {
         let (view, window) = cx.add_window_view(|window,cx| {
             let mut desktop = Desktop::new(Mode::Main,window,cx);
             desktop.onboarding = false;
-            desktop.panel_open = false;
+            desktop.panels.set_open(desktop.panel_scope(), false);
             let parent = agent_protocol::session::SessionRef { provider:agent_protocol::session::ProviderKind::Codex, id:"parent".into() };
             let snapshot = Arc::make_mut(&mut desktop.snapshot);
             snapshot.threads = Some(Arc::new(serde_json::from_value(serde_json::json!({
@@ -144,8 +158,11 @@ mod tests {
         window.simulate_resize(size(px(1600.), px(900.)));
         window.run_until_parked();
         assert!(window.debug_bounds("agents-panel").is_none());
-        let toggle = window.debug_bounds("agents-toggle").unwrap().center();
+        let toggle = window.debug_bounds("panel-toggle").unwrap().center();
         window.simulate_click(toggle, Modifiers::default());
+        window.run_until_parked();
+        let agents = window.debug_bounds("surface-5").unwrap().center();
+        window.simulate_click(agents, Modifiers::default());
         window.run_until_parked();
         let agents = window.debug_bounds("agents-panel").unwrap();
         let chat = window.debug_bounds("conversation-chat").unwrap();
@@ -155,7 +172,7 @@ mod tests {
         );
         let row_before = window.debug_bounds("agent-row").unwrap();
         view.update(window, |desktop, cx| {
-            assert!(desktop.panel == Panel::Agents);
+            assert!(desktop.panels.get(desktop.panel_scope()).kind() == Panel::Agents);
             assert_eq!(desktop.selected().unwrap().id, "parent");
             assert_eq!(desktop.draft().text, "Keep my draft");
             assert_eq!(desktop.snapshot.thread_list().unwrap().threads.len(), 1);

@@ -35,7 +35,7 @@ pub(crate) fn query(
     Some((start..cursor, kind, filter))
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ComposerSuggestions {
     pub candidates: Vec<ComposerCandidate>,
@@ -371,7 +371,7 @@ mod tests {
                 .candidates
                 .is_empty()
         );
-        let (disconnected, _) = reduce(&other, Event::Disconnected("offline".into()));
+        let (disconnected, _) = reduce(&other, Event::Disconnected);
         assert!(disconnected.composer_catalog.is_none());
         let (reconnected, _) = reduce(&disconnected, Event::Connected);
         assert_eq!(reconnected.composer_catalog.as_ref().unwrap().cwd, "/other");

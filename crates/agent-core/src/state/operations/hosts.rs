@@ -1,6 +1,6 @@
 use super::*;
 pub use agent_protocol::live_activity::{
-    ReadTaskActivity, RegisterLiveActivity, UnregisterLiveActivity,
+    MarkSessionRead, ReadTaskActivity, RegisterLiveActivity, UnregisterLiveActivity,
 };
 
 impl Operation for ReadTaskActivity {
@@ -10,11 +10,10 @@ impl Operation for ReadTaskActivity {
         Some(OperationKey::TaskActivity)
     }
     fn scheduling(&self) -> Scheduling {
-        Scheduling::LatestTaskActivity
+        Scheduling::LatestHostState(OperationKey::TaskActivity)
     }
     fn apply(self, snapshot: &mut Snapshot, state: Self::Output) -> Vec<Effect> {
-        snapshot.accept_task_activity(state);
-        Vec::new()
+        snapshot.accept_task_activity(state)
     }
 }
 
@@ -52,7 +51,7 @@ mod task_activity_tests {
             }
             store.dispatch(Intent::NewChat { cwd: String::new() }).await.unwrap();
             let display = agent_protocol::live_activity::TaskActivitySummary { running: 1, ..Default::default() }.display();
-            writer.reply(&activity.unwrap(), json!({"result":{"revision":1,"statuses":[],"display":display}})).await.unwrap();
+            writer.reply(&activity.unwrap(), json!({"result":{"revision":1,"statuses":[],"waiting":[],"unread":[],"display":display}})).await.unwrap();
             while store.snapshot().task_activity.is_none() { updates.changed().await.unwrap(); }
             assert_eq!(store.snapshot().task_activity.as_ref().unwrap().display.current.total, 1);
             tokio::time::timeout(std::time::Duration::from_secs(5), store.dispatch(Intent::ReadTaskActivity(ReadTaskActivity {})))
@@ -136,9 +135,36 @@ impl Operation for RevokeDevice {
     fn apply(self, snapshot: &mut Snapshot, _output: Self::Output) -> Vec<Effect> {
         let Self { id } = self;
         if let Some(status) = Arc::make_mut(&mut snapshot.management).status.as_mut() {
-            Arc::make_mut(status).devices.retain(|device| device != &id);
+            Arc::make_mut(status)
+                .devices
+                .retain(|device| device.id != id);
         }
         Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod device_tests {
+    use super::*;
+
+    #[test]
+    fn revocation_removes_only_the_selected_id_even_when_names_match() {
+        let devices = ["phone", "tablet"].map(|id| agent_protocol::models::HostDevice {
+            id: id.into(),
+            name: Some("My device".into()),
+        });
+        let mut snapshot = Snapshot::default();
+        Arc::make_mut(&mut snapshot.management).status = Some(Arc::new(HostStatus {
+            node_id: "host".into(),
+            name: "My PC".into(),
+            devices: devices.to_vec(),
+            provider_errors: None,
+        }));
+        RevokeDevice { id: "phone".into() }.apply(&mut snapshot, crate::models::Empty {});
+        assert_eq!(
+            snapshot.management.status.as_ref().unwrap().devices,
+            [devices[1].clone()]
+        );
     }
 }
 
@@ -240,4 +266,9 @@ impl Operation for PairRemoteHost {
             id: output.id.clone(),
         }
     }
+}
+
+impl Operation for MarkSessionRead {
+    rpc_operation!();
+    const BACKGROUND: bool = true;
 }

@@ -5,9 +5,9 @@ use crate::{
     peer::PeerError,
     state::{Event, Intent, Snapshot, operations as op, reduce},
 };
-use agent_protocol::operations::{Pair, RpcMethod};
+use agent_protocol::operations::{IdentifyDevice, Pair, RpcMethod};
 use agent_transport::client::{Client, Updates};
-use futures_util::{StreamExt, stream::FuturesUnordered};
+use futures_util::{FutureExt, StreamExt, stream::FuturesUnordered};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     sync::{Arc, Mutex},
@@ -44,6 +44,12 @@ pub enum Outcome {
     Visualization {
         html: String,
     },
+    ResolvedFile {
+        entry: crate::models::FileEntry,
+    },
+    Directory {
+        listing: crate::models::FileList,
+    },
     SessionImages {
         images: Vec<SessionImage>,
     },
@@ -79,14 +85,63 @@ struct Connection {
     peer: Arc<Client>,
     events: Updates,
     session: Option<crate::transport::Session>,
+    /// Until the Host answers, cached storage may belong to an older Host
+    /// configuration, so only the connection's own refresh reads run.
+    introduction: Option<Introducing>,
 }
+
+/// Host facts that confirm or replace state cached from an earlier connection.
+struct Introduction {
+    storage_scope: String,
+    ticket: Option<String>,
+}
+type Introducing = futures_util::future::BoxFuture<'static, Result<Introduction, PeerError>>;
+
+fn introduce(
+    peer: Arc<Client>,
+    node: crate::transport::NodeId,
+    device_name: String,
+) -> Introducing {
+    async move {
+        let identity = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            peer.call(&IdentifyDevice { name: device_name }),
+        )
+        .await
+        .map_err(|_| PeerError::RequestTimeout {
+            method: "host/device/identify".into(),
+        })??;
+        if identity.storage_scope.is_empty() || identity.storage_scope.len() > 256 {
+            return Err(PeerError::InvalidMessage(
+                "invalid provider storage scope".into(),
+            ));
+        }
+        // Only addresses of the authenticated Host may replace a saved ticket.
+        let ticket = identity
+            .ticket
+            .parse::<crate::transport::Ticket>()
+            .ok()
+            .filter(|ticket| ticket.node_id() == node)
+            .map(|ticket| ticket.to_string());
+        Ok(Introduction {
+            storage_scope: format!("{node}:{}", identity.storage_scope),
+            ticket,
+        })
+    }
+    .boxed()
+}
+
 impl Connection {
+    /// A scope cached from this Host lets attach start before the Host confirms it.
     async fn open(
         endpoint: &crate::transport::Endpoint,
         ticket: &crate::transport::Ticket,
         invitation: Option<uuid::Uuid>,
+        device_name: &str,
+        cached_scope: &str,
     ) -> Result<(Self, String, ConnectionPerformance), crate::transport::TransportError> {
-        let (session, peer, events, scope, transport_ms, verification_ms) =
+        let node = ticket.node_id();
+        let (session, peer, events, introduction, scope, transport_ms, verification_ms) =
             tokio::time::timeout(std::time::Duration::from_secs(10), async {
                 let started = std::time::Instant::now();
                 let session =
@@ -99,11 +154,25 @@ impl Connection {
                 if let Some(invitation) = invitation {
                     peer.call(&Pair { invitation }).await?;
                 }
-                let scope = read_storage_scope(&peer).await?;
+                let peer = Arc::new(peer);
+                let mut introduction = introduce(peer.clone(), node, device_name.to_owned());
+                let scope = if cached_scope.starts_with(&format!("{node}:")) {
+                    // Write the request now so it precedes the connection's own reads.
+                    if let std::task::Poll::Ready(result) = futures_util::poll!(&mut introduction) {
+                        introduction = futures_util::future::ready(result).boxed();
+                    }
+                    cached_scope.to_owned()
+                } else {
+                    let introduced = (&mut introduction).await?;
+                    let scope = introduced.storage_scope.clone();
+                    introduction = futures_util::future::ready(Ok(introduced)).boxed();
+                    scope
+                };
                 Ok::<_, crate::transport::TransportError>((
                     scopeguard::ScopeGuard::into_inner(session),
                     peer,
                     events,
+                    introduction,
                     scope,
                     transport_ms,
                     started.elapsed().as_millis() as u64,
@@ -125,11 +194,12 @@ impl Connection {
         };
         Ok((
             Self {
-                peer: Arc::new(peer),
+                peer,
                 events,
                 session: Some(session),
+                introduction: Some(introduction),
             },
-            format!("{}:{scope}", ticket.node_id()),
+            scope,
             performance,
         ))
     }
@@ -241,6 +311,21 @@ impl Scope {
 }
 impl Scheduled {
     fn new(mut effect: Effect, snapshot: &mut Snapshot, continuation: Option<&Scope>) -> Self {
+        // Stamp the input being sent before publication, including dictation.
+        // Restoring cached input never schedules a send or invents a send time.
+        if let Some(id) = effect.operation.submission_id()
+            && snapshot
+                .pending_submissions
+                .get(id)
+                .is_some_and(|pending| pending.submitted_at_ms.is_none())
+        {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            let inputs = Arc::make_mut(&mut snapshot.pending_submissions);
+            Arc::make_mut(inputs.get_mut(id).unwrap()).submitted_at_ms = Some(now);
+        }
         let operation = effect.operation.key().map(|key| {
             let generation = if (matches!(key, op::OperationKey::Item { .. })
                 || continuation
@@ -294,7 +379,7 @@ impl Store {
         Self::start(Some(peer), snapshot)
     }
     pub fn offline(snapshot: Snapshot) -> Self {
-        let (snapshot, _) = reduce(&snapshot, Event::Disconnected("Host not connected".into()));
+        let (snapshot, _) = reduce(&snapshot, Event::Disconnected);
         Self::start(None, snapshot)
     }
     fn start(peer: Option<(Client, Updates)>, snapshot: Snapshot) -> Self {
@@ -305,6 +390,7 @@ impl Store {
                     peer: Arc::new(peer),
                     events,
                     session: None,
+                    introduction: None,
                 },
                 apply(&writer, Event::Connected),
             )
@@ -333,7 +419,7 @@ impl Store {
                     break;
                 }
             }
-            apply(&publications, Event::Disconnected("store closed".into()));
+            apply(&publications, Event::Disconnected);
             finished_tx.send_replace(true);
         });
         Self {
@@ -373,9 +459,12 @@ impl Store {
         ticket: &crate::transport::Ticket,
         snapshot: Snapshot,
         invitation: Option<uuid::Uuid>,
+        device_name: &str,
     ) -> Result<Self, crate::transport::TransportError> {
         let store = Self::offline(snapshot);
-        store.reconnect(endpoint, ticket, invitation).await?;
+        store
+            .reconnect(endpoint, ticket, invitation, device_name)
+            .await?;
         Ok(store)
     }
     /// Reuse a responsive Host connection, then refresh without blocking interaction.
@@ -384,6 +473,7 @@ impl Store {
         &self,
         endpoint: &crate::transport::Endpoint,
         ticket: &crate::transport::Ticket,
+        device_name: &str,
     ) -> Result<ConnectionPerformance, crate::transport::TransportError> {
         let attempt = {
             let mut current = self.connection_attempt.lock().unwrap();
@@ -391,7 +481,8 @@ impl Store {
             *current = self.stop.child_token();
             current.clone()
         };
-        let guard = attempt.clone().drop_guard();
+        // Attach acknowledges transferred ownership before successful setup returns.
+        let _cancel = attempt.clone().drop_guard();
         let setup = async {
             endpoint.network_change().await;
             let (complete, receiver) = oneshot::channel();
@@ -403,9 +494,15 @@ impl Store {
                 })
                 .map_err(command_error)?;
             let reusable = receiver.await.unwrap_or(None);
+            // Racing a live session, only a verified replacement may retire it.
+            let cached_scope = if reusable.is_some() {
+                String::new()
+            } else {
+                self.snapshot().storage_scope.clone()
+            };
             let replacement = async {
                 let (connection, scope, performance) =
-                    Connection::open(endpoint, ticket, None).await?;
+                    Connection::open(endpoint, ticket, None, device_name, &cached_scope).await?;
                 Ok::<_, crate::transport::TransportError>((Some((connection, scope)), performance))
             };
             let (prepared, performance) = if let Some(peer) = reusable {
@@ -416,22 +513,21 @@ impl Store {
                     let started = std::time::Instant::now();
                     match tokio::time::timeout(
                         std::time::Duration::from_secs(1),
-                        read_storage_scope(&peer),
+                        introduce(peer.clone(), ticket.node_id(), device_name.to_owned()),
                     )
                     .await
                     {
-                        Ok(Ok(current)) => Ok((scope == format!("{}:{current}", ticket.node_id()))
-                            .then(|| {
-                                let (route, rtt_ms) = peer.connection_path();
-                                ConnectionPerformance {
-                                    reused: true,
-                                    connection_id: peer.diagnostic_id,
-                                    verification_ms: started.elapsed().as_millis() as u64,
-                                    route,
-                                    rtt_ms,
-                                    ..Default::default()
-                                }
-                            })),
+                        Ok(Ok(current)) => Ok((scope == current.storage_scope).then(|| {
+                            let (route, rtt_ms) = peer.connection_path();
+                            ConnectionPerformance {
+                                reused: true,
+                                connection_id: peer.diagnostic_id,
+                                verification_ms: started.elapsed().as_millis() as u64,
+                                route,
+                                rtt_ms,
+                                ..Default::default()
+                            }
+                        })),
                         Ok(Err(
                             error @ (PeerError::Remote { .. } | PeerError::InvalidResponse { .. }),
                         )) => Err(error),
@@ -484,16 +580,14 @@ impl Store {
                 .await?;
             Ok(performance)
         };
-        tokio::select! {
+        let result = tokio::select! {
             biased;
             _ = attempt.cancelled() => Err(PeerError::ConnectionClosed("connection attempt cancelled".into()).into()),
-            result = tokio::time::timeout(std::time::Duration::from_secs(45), setup) => {
-                let result = result.map_err(|_| crate::transport::TransportError::Connection("Host recovery timed out".into()))?;
-                let performance = result?;
-                guard.disarm();
-                Ok(performance)
-            }
-        }
+            result = tokio::time::timeout(std::time::Duration::from_secs(45), setup) => result
+                .unwrap_or_else(|_| Err(crate::transport::TransportError::Connection("Host recovery timed out".into()))),
+        };
+        self.report_attempt(&attempt, &result);
+        result
     }
     /// Replace transport while retaining local edits. A newer reconnect or
     /// disconnect cancels setup before it can attach an obsolete connection.
@@ -502,6 +596,7 @@ impl Store {
         endpoint: &crate::transport::Endpoint,
         ticket: &crate::transport::Ticket,
         invitation: Option<uuid::Uuid>,
+        device_name: &str,
     ) -> Result<ConnectionPerformance, crate::transport::TransportError> {
         let (attempt, disconnected) = {
             let mut current = self.connection_attempt.lock().unwrap();
@@ -510,25 +605,50 @@ impl Store {
             // Explicit replacement releases the old connection before pairing.
             (current.clone(), self.request_disconnect()?)
         };
-        let guard = attempt.clone().drop_guard();
+        let _cancel = attempt.clone().drop_guard();
         let setup = async {
             disconnected
                 .await
                 .map_err(|_| PeerError::ConnectionClosed("store is closed".into()))??;
-            let (connection, scope, performance) =
-                Connection::open(endpoint, ticket, invitation).await?;
+            let (connection, scope, performance) = Connection::open(
+                endpoint,
+                ticket,
+                invitation,
+                device_name,
+                &self.snapshot().storage_scope,
+            )
+            .await?;
             self.attach_connection(connection, scope, attempt.clone())
                 .await?;
             Ok::<_, crate::transport::TransportError>(performance)
         };
-        tokio::select! {
+        let result = tokio::select! {
             biased;
             _ = attempt.cancelled() => Err(PeerError::ConnectionClosed("connection attempt cancelled".into()).into()),
-            result = setup => {
-                let performance = result?;
-                guard.disarm();
-                Ok(performance)
-            }
+            result = setup => result,
+        };
+        self.report_attempt(&attempt, &result);
+        result
+    }
+    /// A newer attempt or disconnect owns the outcome of the attempt it cancelled.
+    /// An attached connection reports through its own lifecycle, because its
+    /// Host can still reject the introduction after setup returns.
+    fn report_attempt(
+        &self,
+        attempt: &CancellationToken,
+        result: &Result<ConnectionPerformance, crate::transport::TransportError>,
+    ) {
+        let failure = match result {
+            Ok(performance) if !performance.reused => return,
+            Ok(_) => None,
+            Err(error) => Some(error.to_string()),
+        };
+        let _current = self.connection_attempt.lock().unwrap();
+        let updates = self.publications.lock().unwrap().clone();
+        if !attempt.is_cancelled()
+            && let Some(updates) = updates
+        {
+            apply(&updates, Event::ConnectionChecked { failure });
         }
     }
     async fn attach_connection(
@@ -669,20 +789,6 @@ impl Store {
     }
 }
 
-async fn read_storage_scope(peer: &Client) -> Result<String, PeerError> {
-    let scope = peer
-        .request::<String>(&crate::protocol::Call::SessionScope(
-            crate::models::Empty {},
-        ))
-        .await?;
-    if scope.is_empty() || scope.len() > 256 {
-        return Err(PeerError::InvalidMessage(
-            "invalid provider storage scope".into(),
-        ));
-    }
-    Ok(scope)
-}
-
 fn apply(updates: &watch::Sender<Arc<Snapshot>>, event: Event) -> Vec<Scheduled> {
     let mut effects = Vec::new();
     updates.send_if_modified(|current| {
@@ -714,9 +820,18 @@ fn apply_locked(current: &mut Arc<Snapshot>, event: Event) -> (Vec<Scheduled>, b
     let changed = publish_locked(current, next);
     (scheduled, changed)
 }
-fn publish_locked(current: &mut Arc<Snapshot>, next: Snapshot) -> bool {
+struct SharedIdentity<'a, T>(&'a Arc<T>);
+
+impl<T> PartialEq for SharedIdentity<'_, T> {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(self.0, other.0)
+    }
+}
+
+fn publication_key(snapshot: &Snapshot) -> impl PartialEq + '_ {
     // No `..`: adding a Snapshot field must update the publication contract.
     let Snapshot {
+        project_import,
         recent_chats,
         operations,
         operation_sequence,
@@ -726,6 +841,7 @@ fn publish_locked(current: &mut Arc<Snapshot>, next: Snapshot) -> bool {
         permission_settings,
         composer_catalog,
         host_name,
+        host_ticket,
         task_activity,
         storage_scope,
         archived_scopes,
@@ -739,9 +855,12 @@ fn publish_locked(current: &mut Arc<Snapshot>, next: Snapshot) -> bool {
         models,
         model_errors,
         drafts,
+        question_drafts,
+        draft_sessions,
         pending_submissions,
         file_drafts,
         workspace,
+        workspaces,
         navigation,
         activity,
         management,
@@ -749,65 +868,99 @@ fn publish_locked(current: &mut Arc<Snapshot>, next: Snapshot) -> bool {
         epoch,
         connected,
         connection_generation,
+        connection_failure,
         subscriptions,
         error,
-    } = &next;
-    let same_threads = match (&current.threads, threads) {
-        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-        (None, None) => true,
-        _ => false,
-    };
-    if current.recent_chats == *recent_chats
-        && Arc::ptr_eq(&current.operations, operations)
-        && current.operation_sequence == *operation_sequence
-        && current.model_defaults == *model_defaults
-        && Arc::ptr_eq(&current.project_preferences, project_preferences)
-        && Arc::ptr_eq(&current.scoped_model_defaults, scoped_model_defaults)
-        && current.host_name == *host_name
-        && current.task_activity == *task_activity
-        && current.permission_settings == *permission_settings
-        && current.composer_catalog == *composer_catalog
-        && current.storage_scope == *storage_scope
-        && Arc::ptr_eq(&current.archived_scopes, archived_scopes)
-        && Arc::ptr_eq(&current.terminals, terminals)
-        && Arc::ptr_eq(&current.subscriptions, subscriptions)
-        && Arc::ptr_eq(&current.account, account)
-        && Arc::ptr_eq(&current.conversations, conversations)
-        && same_threads
-        && Arc::ptr_eq(&current.expanded_projects, expanded_projects)
-        && Arc::ptr_eq(&current.project_threads, project_threads)
-        && current.observed_agents == *observed_agents
-        && Arc::ptr_eq(&current.models, models)
-        && Arc::ptr_eq(&current.model_errors, model_errors)
-        && Arc::ptr_eq(&current.drafts, drafts)
-        && Arc::ptr_eq(&current.pending_submissions, pending_submissions)
-        && Arc::ptr_eq(&current.file_drafts, file_drafts)
-        && Arc::ptr_eq(&current.workspace, workspace)
-        && Arc::ptr_eq(&current.navigation, navigation)
-        && Arc::ptr_eq(&current.activity, activity)
-        && Arc::ptr_eq(&current.management, management)
-        && Arc::ptr_eq(&current.list_query, list_query)
-        && &current.epoch == epoch
-        && current.connection_generation == *connection_generation
-        && &current.connected == connected
-        && &current.error == error
-    {
+    } = snapshot;
+    // Nest tuples because std implements tuple equality only up to 12 elements.
+    // Equality short-circuits; shared caches compare allocation identity.
+    (
+        (
+            recent_chats,
+            model_defaults,
+            SharedIdentity(project_preferences),
+            SharedIdentity(scoped_model_defaults),
+        ),
+        (
+            host_name,
+            host_ticket,
+            task_activity,
+            permission_settings,
+            composer_catalog,
+            SharedIdentity(account),
+            SharedIdentity(models),
+            SharedIdentity(model_errors),
+        ),
+        (
+            SharedIdentity(operations),
+            operation_sequence,
+            SharedIdentity(conversations),
+            threads.as_ref().map(SharedIdentity),
+            SharedIdentity(subscriptions),
+            observed_agents,
+            SharedIdentity(activity),
+        ),
+        (
+            SharedIdentity(drafts),
+            SharedIdentity(question_drafts),
+            SharedIdentity(draft_sessions),
+            SharedIdentity(pending_submissions),
+            SharedIdentity(file_drafts),
+        ),
+        (
+            SharedIdentity(project_import),
+            SharedIdentity(terminals),
+            SharedIdentity(expanded_projects),
+            SharedIdentity(project_threads),
+            SharedIdentity(workspace),
+            SharedIdentity(workspaces),
+            SharedIdentity(navigation),
+            SharedIdentity(management),
+            SharedIdentity(list_query),
+        ),
+        (
+            storage_scope,
+            SharedIdentity(archived_scopes),
+            epoch,
+            connected,
+            connection_generation,
+            connection_failure,
+            error,
+        ),
+    )
+}
+
+fn publish_locked(current: &mut Arc<Snapshot>, next: Snapshot) -> bool {
+    if publication_key(current) == publication_key(&next) {
         return false;
     }
     *current = Arc::new(next);
     true
 }
+
+fn finish_unobserved(updates: &watch::Sender<Arc<Snapshot>>, scheduled: Scheduled) {
+    updates.send_if_modified(|snapshot| {
+        let mut next = snapshot.as_ref().clone();
+        scheduled.scope.finish(&mut next.operations, None);
+        publish_locked(snapshot, next)
+    });
+    if let Some(complete) = scheduled.complete {
+        complete.send(Ok(Outcome::Applied));
+    }
+}
+
 fn finish(updates: &watch::Sender<Arc<Snapshot>>, completed: Completed) -> Vec<Scheduled> {
     let mut effects = Vec::new();
     let mut scheduled = Vec::new();
     let mut result = Ok(Outcome::Applied);
     updates.send_if_modified(|snapshot| {
         // Dispatch and completion share this lock. List results and failures
-        // belong to their query; view work belongs to the navigation epoch.
+        // belong to their query, Host state to the connection, and view work
+        // to the navigation epoch.
         let current = match &completed.scheduling {
             op::Scheduling::LatestList(_)
             | op::Scheduling::LatestProject(_)
-            | op::Scheduling::LatestTaskActivity => {
+            | op::Scheduling::LatestHostState(_) => {
                 generation_current(completed.scope.operation.as_ref(), &snapshot.operations)
             }
             _ => completed
@@ -815,9 +968,10 @@ fn finish(updates: &watch::Sender<Arc<Snapshot>>, completed: Completed) -> Vec<S
                 .current(snapshot.epoch, &snapshot.operations),
         };
         let global_error = current
+            && completed.scope.operation.is_none()
             && !matches!(
                 &completed.scheduling,
-                op::Scheduling::LatestProject(_) | op::Scheduling::LatestTaskActivity
+                op::Scheduling::LatestProject(_) | op::Scheduling::LatestHostState(_)
             );
         let mut next = snapshot.as_ref().clone();
         result = match completed.result {
@@ -997,25 +1151,120 @@ impl ItemReads {
             .insert(scheduled.effect.scheduling.item().unwrap().clone());
         Some(scheduled)
     }
-    fn finish(
-        &mut self,
-        updates: &watch::Sender<Arc<Snapshot>>,
-        completed: Completed,
-    ) -> Vec<Scheduled> {
-        let key = completed.scheduling.item().cloned();
-        let effects = finish(updates, completed);
-        if let Some(key) = key
-            && !effects.iter().any(|s| {
-                s.effect.receipt == ReceiptPolicy::Continue
-                    && s.effect.scheduling.item() == Some(&key)
-            })
-        {
-            self.running.remove(&key);
-            self.receipts.remove(&key);
-        }
-        effects
+    fn release(&mut self, key: &op::ReadItem) {
+        self.running.remove(key);
+        self.receipts.remove(key);
     }
 }
+#[derive(Default)]
+struct Scheduler {
+    latest_reads: BTreeMap<op::OperationKey, Option<Scheduled>>,
+    terminal_commands: VecDeque<Scheduled>,
+    terminal_running: BTreeSet<String>,
+    item_reads: ItemReads,
+}
+
+enum Admission {
+    Run(Scheduled),
+    Queued,
+    Unobserved(Scheduled),
+    Rejected(Box<(Scheduled, PeerError)>),
+}
+
+impl Scheduler {
+    fn admit(
+        &mut self,
+        mut scheduled: Scheduled,
+        snapshot: &Snapshot,
+        running_jobs: usize,
+    ) -> Admission {
+        // Dispatch publishes before enqueueing. Newer notifications can arrive
+        // first; older work must not replace the latest pending read.
+        let unobserved = (scheduled.effect.scheduling.latest_key().is_some()
+            && !generation_current(scheduled.scope.operation.as_ref(), &snapshot.operations))
+            || matches!(&scheduled.effect.scheduling, op::Scheduling::LatestAgents(session)
+                if snapshot.observed_agents.as_ref() != Some(session));
+        if unobserved {
+            return Admission::Unobserved(scheduled);
+        }
+        if let Some(key) = scheduled.effect.scheduling.latest_key()
+            && let Some(pending) = self.latest_reads.get_mut(&key)
+        {
+            if let Some(previous) = pending.take()
+                && let Some(complete) = previous.complete
+            {
+                scheduled.complete.get_or_insert_default().join(complete);
+            }
+            *pending = Some(scheduled);
+            return Admission::Queued;
+        }
+        let limit = match &scheduled.effect.scheduling {
+            op::Scheduling::Terminal { .. } => {
+                if self.terminal_commands.len() >= MAX_TERMINAL_QUEUE {
+                    return Admission::Rejected(Box::new((scheduled, busy_error())));
+                }
+                self.terminal_commands.push_back(scheduled);
+                return Admission::Queued;
+            }
+            op::Scheduling::Item(_) => {
+                return match self.item_reads.enqueue(scheduled) {
+                    Ok(()) => Admission::Queued,
+                    Err(rejected) => Admission::Rejected(rejected),
+                };
+            }
+            op::Scheduling::Control => MAX_RPC_JOBS + CONTROL_RESERVE,
+            _ => MAX_RPC_JOBS,
+        };
+        if running_jobs >= limit {
+            return Admission::Rejected(Box::new((scheduled, busy_error())));
+        }
+        if let Some(key) = scheduled.effect.scheduling.latest_key() {
+            self.latest_reads.insert(key, None);
+        }
+        Admission::Run(scheduled)
+    }
+
+    fn next(&mut self, running_jobs: usize) -> Option<Scheduled> {
+        if running_jobs >= MAX_RPC_JOBS {
+            return None;
+        }
+        if let Some(scheduled) = self.item_reads.next() {
+            return Some(scheduled);
+        }
+        if self.terminal_running.len() >= MAX_TERMINAL_JOBS {
+            return None;
+        }
+        let index = self.terminal_commands.iter().position(|scheduled| {
+            !self
+                .terminal_running
+                .contains(scheduled.effect.scheduling.terminal().unwrap())
+        })?;
+        let scheduled = self.terminal_commands.remove(index).unwrap();
+        self.terminal_running
+            .insert(scheduled.effect.scheduling.terminal().unwrap().to_owned());
+        Some(scheduled)
+    }
+
+    fn complete(&mut self, scheduling: &op::Scheduling, followups: &[Scheduled]) -> Vec<Scheduled> {
+        if let Some(handle) = scheduling.terminal() {
+            self.terminal_running.remove(handle);
+        }
+        let pending = scheduling
+            .latest_key()
+            .and_then(|key| self.latest_reads.remove(&key))
+            .flatten();
+        if let Some(key) = scheduling.item()
+            && !followups.iter().any(|scheduled| {
+                scheduled.effect.receipt == ReceiptPolicy::Continue
+                    && scheduled.effect.scheduling.item() == Some(key)
+            })
+        {
+            self.item_reads.release(key);
+        }
+        pending.into_iter().collect()
+    }
+}
+
 async fn run(
     mut connection: Connection,
     updates: watch::Sender<Arc<Snapshot>>,
@@ -1031,12 +1280,11 @@ async fn run(
     let mut diagnostic_jobs = FuturesUnordered::new();
     let mut preparation_jobs = FuturesUnordered::new();
     let mut subscriptions = tokio_stream::StreamMap::new();
-    let mut terminal_commands = VecDeque::new();
-    let mut item_reads = ItemReads::default();
-    let mut terminal_running = BTreeSet::new();
-    let mut latest_reads: BTreeMap<op::OperationKey, Option<Scheduled>> = BTreeMap::new();
+    let mut scheduler = Scheduler::default();
     let mut disconnected = None;
-    let reason = loop {
+    let mut introduction = connection.introduction.take();
+    let mut held = Vec::new();
+    loop {
         let unused: Vec<_> = subscriptions
             .keys()
             .filter(|id| {
@@ -1051,95 +1299,29 @@ async fn run(
         for id in unused {
             subscriptions.remove(&id);
         }
-        for mut scheduled in std::mem::take(&mut effects) {
-            let unobserved = {
-                let snapshot = updates.borrow();
-                // Dispatch publishes before enqueueing. Newer notifications can
-                // reach the executor before an older command; never let that
-                // older work replace the latest pending read.
-                (scheduled.effect.scheduling.latest_key().is_some()
-                    && !generation_current(
-                        scheduled.scope.operation.as_ref(),
-                        &snapshot.operations,
-                    ))
-                    || matches!(&scheduled.effect.scheduling, op::Scheduling::LatestAgents(session)
-                        if snapshot.observed_agents.as_ref() != Some(session))
-            };
-            if unobserved {
-                updates.send_if_modified(|snapshot| {
-                    let mut next = snapshot.as_ref().clone();
-                    scheduled.scope.finish(&mut next.operations, None);
-                    publish_locked(snapshot, next)
-                });
-                if let Some(complete) = scheduled.complete {
-                    complete.send(Ok(Outcome::Applied));
+        for scheduled in std::mem::take(&mut effects) {
+            let admission = scheduler.admit(scheduled, &updates.borrow(), jobs.len());
+            // Publish each rejection before deciding the next effect: recovery
+            // can change the operation generation used by admission.
+            match admission {
+                Admission::Run(scheduled) => {
+                    jobs.push(perform(Some(peer), session.as_ref(), scheduled))
                 }
-                continue;
-            }
-            if let Some(key) = scheduled.effect.scheduling.latest_key()
-                && let Some(pending) = latest_reads.get_mut(&key)
-            {
-                if let Some(previous) = pending.take()
-                    && let Some(complete) = previous.complete
-                {
-                    scheduled.complete.get_or_insert_default().join(complete);
+                Admission::Queued => {}
+                Admission::Unobserved(scheduled) => finish_unobserved(&updates, scheduled),
+                Admission::Rejected(rejection) => {
+                    let (scheduled, error) = *rejection;
+                    effects.extend(finish(&updates, rejected(scheduled, error)));
                 }
-                *pending = Some(scheduled);
-                continue;
             }
-            let limit = match &scheduled.effect.scheduling {
-                op::Scheduling::Terminal { .. } => {
-                    if terminal_commands.len() >= MAX_TERMINAL_QUEUE {
-                        effects.extend(finish(&updates, rejected(scheduled, busy_error())));
-                    } else {
-                        terminal_commands.push_back(scheduled);
-                    }
-                    continue;
-                }
-                op::Scheduling::Item(_) => {
-                    if let Err(rejection) = item_reads.enqueue(scheduled) {
-                        let (scheduled, error) = *rejection;
-                        effects.extend(finish(&updates, rejected(scheduled, error)));
-                    }
-                    continue;
-                }
-                op::Scheduling::Control => MAX_RPC_JOBS + CONTROL_RESERVE,
-                op::Scheduling::Concurrent
-                | op::Scheduling::LatestTaskActivity
-                | op::Scheduling::LatestList(_)
-                | op::Scheduling::LatestAgents(_)
-                | op::Scheduling::LatestProject(_)
-                | op::Scheduling::LatestReview => MAX_RPC_JOBS,
-            };
-            if jobs.len() >= limit {
-                effects.extend(finish(&updates, rejected(scheduled, busy_error())));
-                continue;
-            }
-            if let Some(key) = scheduled.effect.scheduling.latest_key() {
-                latest_reads.insert(key, None);
-            }
-            jobs.push(perform(Some(peer), session.as_ref(), scheduled));
         }
-        while jobs.len() < MAX_RPC_JOBS {
-            let Some(scheduled) = item_reads.next() else {
-                break;
-            };
-            jobs.push(perform(Some(peer), session.as_ref(), scheduled));
-        }
-        while terminal_running.len() < MAX_TERMINAL_JOBS && jobs.len() < MAX_RPC_JOBS {
-            let Some(index) = terminal_commands.iter().position(|scheduled| {
-                !terminal_running.contains(scheduled.effect.scheduling.terminal().unwrap())
-            }) else {
-                break;
-            };
-            let scheduled = terminal_commands.remove(index).unwrap();
-            terminal_running.insert(scheduled.effect.scheduling.terminal().unwrap().to_owned());
+        while let Some(scheduled) = scheduler.next(jobs.len()) {
             jobs.push(perform(Some(peer), session.as_ref(), scheduled));
         }
         tokio::select! {
-            _ = stop.cancelled() => break "store closed".into(),
+            _ = stop.cancelled() => break,
             command = commands.recv() => {
-                let Some(command) = command else { break "store closed".into() };
+                let Some(command) = command else { break };
                 let command = match command {
                     Command::PrepareDictation { id, cancel } => {
                         if preparation_jobs.len() < MAX_RPC_JOBS {
@@ -1173,7 +1355,7 @@ async fn run(
                     }
                     Command::Disconnect(complete) => {
                         disconnected = Some(complete);
-                        break "Host disconnected".into();
+                        break;
                     }
                     Command::Attach { connection, complete, .. } => {
                         drop(connection);
@@ -1184,10 +1366,35 @@ async fn run(
                 let mut complete = Some(Receipt::new(command.complete));
                 for mut scheduled in command.effects {
                     scheduled.complete = if scheduled.effect.receipt == ReceiptPolicy::Background { None } else { complete.take() };
-                    effects.push(scheduled);
+                    if introduction.is_some() { held.push(scheduled) } else { effects.push(scheduled) }
                 }
                 if let Some(complete) = complete {
                     complete.send(Ok(Outcome::Applied));
+                }
+            }
+            introduced = async { introduction.as_mut().unwrap().await }, if introduction.is_some() => {
+                introduction = None;
+                let introduced = match introduced {
+                    Ok(introduced) => introduced,
+                    // The Host never confirmed this connection, so its setup failed.
+                    Err(error) => {
+                        apply(&updates, Event::ConnectionChecked { failure: Some(error.to_string()) });
+                        break;
+                    }
+                };
+                if introduced.storage_scope == updates.borrow().storage_scope {
+                    effects.append(&mut held);
+                } else {
+                    // Work started against the cached storage must not reach the Host's new one.
+                    for scheduled in held.drain(..) {
+                        let error = PeerError::InvalidMessage("Hostの保存先が変わったため、操作を取り消しました。".into());
+                        effects.extend(finish(&updates, rejected(scheduled, error)));
+                    }
+                    apply(&updates, Event::StorageScope(introduced.storage_scope));
+                    effects.extend(apply(&updates, Event::Connected));
+                }
+                if let Some(ticket) = introduced.ticket {
+                    apply(&updates, Event::HostTicket(ticket));
                 }
             }
             _ = browser_jobs.next(), if !browser_jobs.is_empty() => {},
@@ -1199,27 +1406,24 @@ async fn run(
                     }).chain(futures_util::stream::once(async {
                     Err(std::io::Error::other("subscription ended"))
                 })).boxed()); }
-                if let Some(handle) = result.scheduling.terminal() { terminal_running.remove(handle); }
-                if let Some(key) = result.scheduling.latest_key()
-                    && let Some(Some(scheduled)) = latest_reads.remove(&key) {
-                    effects.push(scheduled);
-                }
-                effects.extend(item_reads.finish(&updates, result));
+                let scheduling = result.scheduling.clone();
+                let followups = finish(&updates, result);
+                effects.extend(scheduler.complete(&scheduling, &followups));
+                effects.extend(followups);
             }
             Some(()) = preparation_jobs.next(), if !preparation_jobs.is_empty() => {},
             Some((id, update)) = subscriptions.next(), if !subscriptions.is_empty() => {
                 match update {
                     Ok(change) => effects.extend(apply(&updates, Event::SessionUpdate(Box::new(crate::session::SessionUpdate { subscription_id: id, change })))),
-                    Err(error) => break error.to_string(),
+                    Err(_) => break,
                 }
             }
             event = events.read::<crate::protocol::Notification>() => match event {
                 Ok(Some(notification)) => effects.extend(apply(&updates, Event::Notification(notification))),
-                Ok(None) => break "Host event stream ended".into(),
-                Err(error) => break error.to_string(),
+                Ok(None) | Err(_) => break,
             }
         }
-    };
+    }
     // The Host owns connection-scoped PTYs and grants, including starts in flight.
     // Replacement must not wait for delivery acknowledgments from the old peer.
     let replacing = disconnected.is_some() && session.is_some();
@@ -1230,9 +1434,11 @@ async fn run(
     drop(browser_jobs);
     drop(diagnostic_jobs);
     drop(preparation_jobs);
+    // A missing CLOSE acknowledgement can delay transport cleanup. Native
+    // input and recovery must observe the lost event stream immediately.
+    apply(&updates, Event::Disconnected);
     peer.close().await;
     drop(connection);
-    apply(&updates, Event::Disconnected(reason));
     if let Some(complete) = disconnected {
         let _ = complete.send(Ok(()));
     }
@@ -1501,9 +1707,563 @@ impl Execution<'_> {
 mod tests {
     use super::*;
 
+    fn queued(scheduling: op::Scheduling) -> Scheduled {
+        let mut effect = Effect::execute(op::ReadTaskActivity {});
+        effect.scheduling = scheduling;
+        Scheduled {
+            effect,
+            scope: Scope {
+                navigation: 0,
+                operation: None,
+            },
+            complete: None,
+        }
+    }
+
+    fn item(id: &str) -> op::ReadItem {
+        op::ReadItem {
+            thread_id: crate::session::SessionRef {
+                provider: crate::session::ProviderKind::Codex,
+                id: "chat".into(),
+            },
+            turn_id: "turn".into(),
+            item_id: id.into(),
+        }
+    }
+
+    fn enqueue(queue: &mut Scheduler, scheduling: op::Scheduling) {
+        assert!(matches!(
+            queue.admit(queued(scheduling), &Snapshot::default(), 0),
+            Admission::Queued
+        ));
+    }
+
+    #[test]
+    fn scheduler_serializes_each_terminal_and_releases_completed_work() {
+        let mut queue = Scheduler::default();
+        let terminal = |handle: &str| op::Scheduling::Terminal {
+            handle: handle.into(),
+            starts: false,
+        };
+        for handle in ["a", "a", "b"] {
+            enqueue(&mut queue, terminal(handle));
+        }
+        let first = queue.next(0).unwrap();
+        assert_eq!(first.effect.scheduling.terminal(), Some("a"));
+        assert_eq!(
+            queue.next(1).unwrap().effect.scheduling.terminal(),
+            Some("b")
+        );
+        assert!(queue.next(2).is_none());
+        assert!(queue.complete(&first.effect.scheduling, &[]).is_empty());
+        assert_eq!(
+            queue.next(1).unwrap().effect.scheduling.terminal(),
+            Some("a")
+        );
+    }
+
+    #[test]
+    fn scheduler_reserves_control_capacity_and_bounds_terminal_concurrency() {
+        let mut queue = Scheduler::default();
+        assert!(matches!(
+            queue.admit(
+                queued(op::Scheduling::Concurrent),
+                &Snapshot::default(),
+                MAX_RPC_JOBS
+            ),
+            Admission::Rejected(_)
+        ));
+        assert!(matches!(
+            queue.admit(
+                queued(op::Scheduling::Control),
+                &Snapshot::default(),
+                MAX_RPC_JOBS
+            ),
+            Admission::Run(_)
+        ));
+        assert!(matches!(
+            queue.admit(
+                queued(op::Scheduling::Control),
+                &Snapshot::default(),
+                MAX_RPC_JOBS + CONTROL_RESERVE
+            ),
+            Admission::Rejected(_)
+        ));
+        let mut running = Vec::new();
+        for index in 0..=MAX_TERMINAL_JOBS {
+            enqueue(
+                &mut queue,
+                op::Scheduling::Terminal {
+                    handle: index.to_string(),
+                    starts: false,
+                },
+            );
+        }
+        for index in 0..MAX_TERMINAL_JOBS {
+            running.push(queue.next(index).unwrap());
+        }
+        assert!(queue.next(MAX_TERMINAL_JOBS).is_none());
+        queue.complete(&running.pop().unwrap().effect.scheduling, &[]);
+        assert!(queue.next(MAX_TERMINAL_JOBS - 1).is_some());
+    }
+
+    #[test]
+    fn scheduler_coalesces_latest_reads_until_completion() {
+        let mut queue = Scheduler::default();
+        let latest = || queued(op::Scheduling::LatestHostState(op::OperationKey::Models));
+        let Admission::Run(first) = queue.admit(latest(), &Snapshot::default(), 0) else {
+            panic!("initial read must run")
+        };
+        assert!(matches!(
+            queue.admit(latest(), &Snapshot::default(), 1),
+            Admission::Queued
+        ));
+        let mut newest = latest();
+        newest.scope.navigation = 9;
+        assert!(matches!(
+            queue.admit(newest, &Snapshot::default(), 1),
+            Admission::Queued
+        ));
+        assert!(queue.next(1).is_none());
+        let mut followups = queue.complete(&first.effect.scheduling, &[]);
+        assert_eq!(followups.len(), 1);
+        assert_eq!(followups[0].scope.navigation, 9);
+        assert!(matches!(
+            queue.admit(followups.pop().unwrap(), &Snapshot::default(), 0),
+            Admission::Run(_)
+        ));
+    }
+
+    #[test]
+    fn scheduler_releases_item_slots_and_prioritizes_items_over_terminals() {
+        let mut queue = Scheduler::default();
+        enqueue(
+            &mut queue,
+            op::Scheduling::Terminal {
+                handle: "terminal".into(),
+                starts: false,
+            },
+        );
+        for index in 0..MAX_ITEM_TRANSFERS {
+            enqueue(&mut queue, op::Scheduling::Item(item(&index.to_string())));
+        }
+        assert!(queue.next(MAX_RPC_JOBS).is_none());
+        let first = queue.next(0).unwrap();
+        assert_eq!(first.effect.scheduling.item(), Some(&item("0")));
+        for index in 1..MAX_ITEM_TRANSFERS {
+            assert!(
+                queue
+                    .next(index)
+                    .unwrap()
+                    .effect
+                    .scheduling
+                    .item()
+                    .is_some()
+            );
+        }
+        queue.complete(&first.effect.scheduling, &[]);
+        enqueue(&mut queue, op::Scheduling::Item(item("new")));
+        let replacement = queue.next(0).unwrap();
+        assert_eq!(replacement.effect.scheduling.item(), Some(&item("new")));
+        queue.complete(&replacement.effect.scheduling, &[]);
+        enqueue(&mut queue, op::Scheduling::Item(item("0")));
+        assert_eq!(
+            queue.next(0).unwrap().effect.scheduling.item(),
+            Some(&item("0"))
+        );
+        assert_eq!(
+            queue.next(0).unwrap().effect.scheduling.terminal(),
+            Some("terminal")
+        );
+    }
+
+    #[test]
+    fn scheduler_continuations_keep_joined_receipts_and_release_unrelated_items() {
+        let mut queue = Scheduler::default();
+        let (first, mut first_receipt) = oneshot::channel();
+        let mut scheduled = queued(op::Scheduling::Item(item("one")));
+        scheduled.complete = Some(Receipt::new(first));
+        assert!(matches!(
+            queue.admit(scheduled, &Snapshot::default(), 0),
+            Admission::Queued
+        ));
+        let reading = queue.next(0).unwrap();
+        let mut continuation = queued(op::Scheduling::Item(item("one")));
+        continuation.effect.receipt = ReceiptPolicy::Continue;
+        continuation.complete = reading.complete;
+        queue.complete(
+            &reading.effect.scheduling,
+            std::slice::from_ref(&continuation),
+        );
+        let (second, mut second_receipt) = oneshot::channel();
+        let mut duplicate = queued(op::Scheduling::Item(item("one")));
+        duplicate.complete = Some(Receipt::new(second));
+        assert!(matches!(
+            queue.admit(duplicate, &Snapshot::default(), 0),
+            Admission::Queued
+        ));
+        assert!(queue.next(0).is_none());
+        assert!(matches!(
+            queue.admit(continuation, &Snapshot::default(), 0),
+            Admission::Queued
+        ));
+        let continued = queue.next(0).unwrap();
+        continued.complete.unwrap().send(Ok(Outcome::Applied));
+        assert!(first_receipt.try_recv().unwrap().is_ok());
+        assert!(second_receipt.try_recv().unwrap().is_ok());
+        let mut unrelated = queued(op::Scheduling::Item(item("other")));
+        unrelated.effect.receipt = ReceiptPolicy::Continue;
+        queue.complete(&continued.effect.scheduling, &[unrelated]);
+        enqueue(&mut queue, op::Scheduling::Item(item("one")));
+        assert_eq!(
+            queue.next(0).unwrap().effect.scheduling.item(),
+            Some(&item("one"))
+        );
+    }
+
+    #[test]
+    fn scheduler_ignores_superseded_and_unobserved_reads() {
+        let mut queue = Scheduler::default();
+        let mut scheduled = queued(op::Scheduling::LatestHostState(op::OperationKey::Models));
+        scheduled.scope.operation = Some((op::OperationKey::Models, 1));
+        assert!(matches!(
+            queue.admit(scheduled, &Snapshot::default(), 0),
+            Admission::Unobserved(_)
+        ));
+        assert!(matches!(
+            queue.admit(
+                queued(op::Scheduling::LatestAgents(item("one").thread_id)),
+                &Snapshot::default(),
+                0
+            ),
+            Admission::Unobserved(_)
+        ));
+    }
+
     #[allow(dead_code)]
     mod host_fixture {
         include!("../tests/support/host.rs");
+    }
+
+    #[tokio::test]
+    async fn new_task_admits_the_initial_input_in_one_rpc() {
+        use crate::state::operations::Operation;
+        use serde_json::json;
+        let ((client, _events), mut reader, writer) =
+            host_fixture::connect(&Snapshot::default()).await;
+        let mut subscriptions = Vec::new();
+        let mut context = Execution {
+            client: &client,
+            session: None,
+            subscriptions: &mut subscriptions,
+        };
+        let operation = op::StartSubmission {
+            provider: agent_protocol::session::ProviderKind::Codex,
+            draft_key: "local".into(),
+            cwd: Some("/project".into()),
+            client_user_message_id: "initial-input".into(),
+            draft: Arc::new(crate::state::Draft {
+                text: "initial message".into(),
+                attachments: vec![crate::state::Attachment {
+                    path: "/image.png".into(),
+                    name: "image.png".into(),
+                    is_image: true,
+                }],
+                model: Some(agent_protocol::models::ModelRef {
+                    provider: agent_protocol::session::ProviderKind::Codex,
+                    id: "chosen-model".into(),
+                }),
+                effort: Some("high".into()),
+                service_tier: Some("fast".into()),
+                ..Default::default()
+            }),
+        };
+        let reply = async {
+            let request = reader.read_request().await.unwrap().unwrap();
+            assert_eq!(request["method"], "host/session/create");
+            assert_eq!(
+                request["params"]["initialInput"]["clientUserMessageId"],
+                "initial-input"
+            );
+            assert_eq!(
+                request["params"]["initialInput"]["input"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                2
+            );
+            assert_eq!(request["params"]["initialInput"]["effort"], "high");
+            assert_eq!(request["params"]["initialInput"]["serviceTier"], "fast");
+            let mut submission = request["params"]["initialInput"].clone();
+            submission["threadId"] = json!({"provider":"codex","id":"admitted"});
+            submission["model"] = request["params"]["model"].clone();
+            let tier = submission
+                .as_object_mut()
+                .unwrap()
+                .remove("serviceTier")
+                .unwrap();
+            submission["serviceTierForTurn"] = tier;
+            writer.reply(&request, json!({"result":{"thread":{"id":{"provider":"codex","id":"admitted"},"cwd":"/project","status":"preparing","preparation":{"submission":submission,"status":"preparing"}}}})).await.unwrap();
+        };
+        let (opened, ()) = tokio::join!(operation.run((), &mut context), reply);
+        let mut snapshot = Snapshot::default();
+        Arc::make_mut(&mut snapshot.pending_submissions).insert(
+            "initial-input".into(),
+            Arc::new(crate::state::PendingSubmission {
+                sequence: 0,
+                submitted_at_ms: None,
+                draft_key: "local".into(),
+                draft: operation.draft.clone(),
+                turn_id: None,
+                after_item_id: None,
+                accepted: false,
+                delivery_unknown: false,
+            }),
+        );
+        let effects = operation.apply(&mut snapshot, opened.unwrap());
+        assert!(snapshot.pending_submissions["initial-input"].accepted);
+        let thread = snapshot.conversations.values().next().unwrap();
+        assert_eq!(
+            thread
+                .preparation
+                .as_ref()
+                .unwrap()
+                .submission
+                .service_tier
+                .as_deref(),
+            Some("fast")
+        );
+        let rendered = crate::presentation::conversation::project_conversation(
+            &snapshot,
+            thread.clone(),
+            &None,
+        );
+        assert_eq!(rendered.queued.len(), 1);
+        assert_eq!(
+            rendered.queued[0].data.body.as_deref(),
+            Some("initial message")
+        );
+        let mut accepted = thread.as_ref().clone();
+        accepted.preparation = None;
+        let rendered = crate::presentation::conversation::project_conversation(
+            &snapshot,
+            Arc::new(accepted),
+            &Some(rendered),
+        );
+        assert_eq!(
+            rendered.queued.len(),
+            1,
+            "acceptance can precede the provider echo"
+        );
+        assert_eq!(
+            rendered.queued[0].data.body.as_deref(),
+            Some("initial message")
+        );
+        assert!(
+            effects.is_empty(),
+            "acceptance must not schedule another send"
+        );
+        client.close().await;
+    }
+
+    #[rstest::rstest]
+    #[case("ready")]
+    #[case("failed")]
+    #[case("rejected")]
+    #[case("aborted")]
+    #[case("disconnected")]
+    #[tokio::test]
+    async fn only_a_failed_connection_attempt_reports_that_the_host_is_unreachable(
+        #[case] outcome: &str,
+    ) {
+        use crate::{
+            presentation::error::ErrorScope,
+            transport::{Endpoint, Identity, Relays, Trust},
+        };
+        use serde_json::json;
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            let client = Endpoint::bind(Identity::generate(), Relays::Loopback)
+                .await
+                .unwrap();
+            let host = Endpoint::bind(Identity::generate(), Relays::Loopback)
+                .await
+                .unwrap();
+            let trust = Trust {
+                allowed: [client.node_id()].into(),
+                ..Default::default()
+            };
+            let mut initial = Snapshot::default();
+            if outcome == "rejected" {
+                // A cached scope attaches before the Host answers the introduction.
+                initial.storage_scope = format!("{}:cached", host.node_id());
+            }
+            let draft_key = initial.navigation.draft_key.clone();
+            Arc::make_mut(&mut initial.drafts).insert(
+                draft_key.clone(),
+                Arc::new(crate::state::Draft {
+                    text: "unsent draft".into(),
+                    ..Default::default()
+                }),
+            );
+            let (peer, _old_reader, old_writer) = host_fixture::connect(&initial).await;
+            let store = Arc::new(Store::new(peer, initial));
+            let mut snapshots = store.subscribe();
+            drop(old_writer);
+            snapshots
+                .wait_for(|snapshot| !snapshot.connected)
+                .await
+                .unwrap();
+            let notices = || store.snapshot().error_notices(ErrorScope::Application);
+            assert!(
+                notices().is_empty(),
+                "losing an established connection, for example while suspended, is not a failure"
+            );
+            let recovering = tokio::spawn({
+                let store = store.clone();
+                let endpoint = client.clone();
+                let ticket = host.local_ticket();
+                async move { store.resume(&endpoint, &ticket, "Fixture device").await }
+            });
+            let incoming = host
+                .accept()
+                .await
+                .unwrap()
+                .unwrap()
+                .authorize(&trust)
+                .unwrap();
+            let (session, mut reader, writer) = host_fixture::accept(incoming).await;
+            let scope = reader.read_request().await.unwrap().unwrap();
+            assert_eq!(scope["method"], "host/device/identify");
+            assert!(notices().is_empty());
+            match outcome {
+                "ready" => {
+                    writer
+                        .reply(
+                            &scope,
+                            json!({"result":{"storageScope":"restored-storage","ticket":""}}),
+                        )
+                        .await
+                        .unwrap();
+                    recovering.await.unwrap().unwrap();
+                    assert!(store.snapshot().connected);
+                    assert!(notices().is_empty());
+                }
+                "failed" => {
+                    writer
+                        .reply(
+                            &scope,
+                            json!({"error":{"code":"unavailable","message":"Host unavailable"}}),
+                        )
+                        .await
+                        .unwrap();
+                    assert!(recovering.await.unwrap().is_err());
+                    let notices = notices();
+                    assert_eq!(notices.len(), 1, "{notices:?}");
+                    assert_eq!(notices[0].title, "Hostに接続できません");
+                    assert!(
+                        notices[0].message.contains("Host unavailable"),
+                        "{notices:?}"
+                    );
+                }
+                "rejected" => {
+                    recovering.await.unwrap().unwrap();
+                    writer
+                        .reply(
+                            &scope,
+                            json!({"error":{"code":"unavailable","message":"Host unavailable"}}),
+                        )
+                        .await
+                        .unwrap();
+                    snapshots
+                        .wait_for(|snapshot| !snapshot.connected)
+                        .await
+                        .unwrap();
+                    let notices = notices();
+                    assert_eq!(notices.len(), 1, "{notices:?}");
+                    assert_eq!(notices[0].title, "Hostに接続できません");
+                    assert!(
+                        notices[0].message.contains("Host unavailable"),
+                        "{notices:?}"
+                    );
+                }
+                "aborted" => {
+                    recovering.abort();
+                    assert!(recovering.await.unwrap_err().is_cancelled());
+                    assert!(notices().is_empty());
+                }
+                "disconnected" => {
+                    store.disconnect().await.unwrap();
+                    assert!(recovering.await.unwrap().is_err());
+                    assert!(notices().is_empty(), "a cancelled attempt is not a failure");
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(store.snapshot().drafts[&draft_key].text, "unsent draft");
+            store.close().await.unwrap();
+            session.close();
+            client.close().await;
+            host.close().await;
+        })
+        .await
+        .expect("connection recovery did not settle");
+    }
+
+    #[tokio::test]
+    async fn restoring_offline_does_not_report_a_connection_failure() {
+        use crate::presentation::error::ErrorScope;
+        let initial = Snapshot {
+            connected: true,
+            error: Some("previous runtime error".into()),
+            ..Default::default()
+        };
+        let store = Store::offline(initial);
+        assert!(!store.snapshot().connected);
+        assert!(
+            store
+                .snapshot()
+                .error_notices(ErrorScope::Application)
+                .is_empty()
+        );
+        store.close().await.unwrap();
+        assert!(
+            store
+                .snapshot()
+                .error_notices(ErrorScope::Application)
+                .is_empty()
+        );
+    }
+
+    #[rstest::rstest]
+    #[case("disconnect")]
+    #[case("close")]
+    #[case("transport loss")]
+    #[tokio::test]
+    async fn losing_a_connection_publishes_it_without_reporting_a_failure(#[case] action: &str) {
+        use crate::presentation::error::ErrorScope;
+        let initial = Snapshot::default();
+        let (peer, _reader, writer) = host_fixture::connect(&initial).await;
+        let store = Store::new(peer, initial);
+        let mut snapshots = store.subscribe();
+        match action {
+            "disconnect" => store.disconnect().await.unwrap(),
+            "close" => store.close().await.unwrap(),
+            "transport loss" => drop(writer),
+            _ => unreachable!(),
+        }
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            snapshots.wait_for(|snapshot| !snapshot.connected),
+        )
+        .await
+        .expect("the disconnection must be published")
+        .unwrap();
+        assert!(
+            store
+                .snapshot()
+                .error_notices(ErrorScope::Application)
+                .is_empty()
+        );
+        store.close().await.unwrap();
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1545,8 +2305,10 @@ mod tests {
                         json!({"data":[{"id":{"provider":"claude","id":"latest"}}],
                         "projects":[],"hasMore":false,"hasMoreProjects":false,"limit":5,"projectPages":{}})
                     }
-                    "host/taskActivity/read" => json!({"revision":0,"statuses":[],
-                        "display":agent_protocol::live_activity::TaskActivitySummary::default().display()}),
+                    "host/taskActivity/read" => {
+                        json!({"revision":0,"statuses":[],"waiting":[],"unread":[],
+                        "display":agent_protocol::live_activity::TaskActivitySummary::default().display()})
+                    }
                     "host/model/list" => json!({"data":[]}),
                     "host/account/list" => json!({"accounts":[],"selected":{}}),
                     "host/name" => json!("Fixture"),
@@ -1628,9 +2390,70 @@ mod tests {
         store.close().await.unwrap();
     }
     #[test]
+    fn scheduling_a_submission_dates_only_that_input_once() {
+        let pending = |submitted_at_ms| {
+            Arc::new(crate::state::PendingSubmission {
+                sequence: 0,
+                submitted_at_ms,
+                draft_key: "draft".into(),
+                draft: Arc::default(),
+                turn_id: None,
+                after_item_id: None,
+                accepted: false,
+                delivery_unknown: false,
+            })
+        };
+        let mut current = Snapshot {
+            pending_submissions: Arc::new(
+                [
+                    ("unknown-time".into(), pending(None)),
+                    ("known-time".into(), pending(Some(12_000))),
+                    ("new".into(), pending(None)),
+                ]
+                .into(),
+            ),
+            ..Default::default()
+        };
+        let send = |id: &str| {
+            Effect::execute(op::StartSubmission {
+                provider: crate::session::ProviderKind::Codex,
+                draft_key: "draft".into(),
+                cwd: None,
+                client_user_message_id: id.into(),
+                draft: Arc::default(),
+            })
+        };
+        let before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        Scheduled::new(send("new"), &mut current, None);
+        let after = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let submitted_at = current.pending_submissions["new"].submitted_at_ms.unwrap();
+        assert!((before..=after).contains(&submitted_at));
+        assert_eq!(
+            current.pending_submissions["unknown-time"].submitted_at_ms,
+            None
+        );
+        Scheduled::new(send("known-time"), &mut current, None);
+        assert_eq!(
+            current.pending_submissions["known-time"].submitted_at_ms,
+            Some(12_000)
+        );
+    }
+
+    #[test]
+    // Reading store.snapshot() after a receipt cannot prove subscribers were
+    // notified. Keep publication coverage independent of operation behavior.
     fn every_snapshot_field_notifies_subscribers_independently() {
         type Change = fn(&mut Snapshot);
         let changes: &[(&str, Change)] = &[
+            ("project_import", |snapshot| {
+                snapshot.project_import = Arc::default()
+            }),
             ("operations", |snapshot| {
                 snapshot.operations = Arc::default()
             }),
@@ -1656,6 +2479,8 @@ mod tests {
             ("task_activity", |snapshot| {
                 snapshot.task_activity =
                     Some(Arc::new(agent_protocol::live_activity::TaskActivityState {
+                        waiting: Vec::new(),
+                        unread: Vec::new(),
                         statuses: Vec::new(),
                         revision: 1,
                         display: agent_protocol::live_activity::TaskActivitySummary {
@@ -1726,6 +2551,9 @@ mod tests {
             }),
             ("epoch", |snapshot| snapshot.epoch += 1),
             ("connected", |snapshot| snapshot.connected = true),
+            ("connection_failure", |snapshot| {
+                snapshot.connection_failure = Some("fixture failure".into())
+            }),
             ("error", |snapshot| {
                 snapshot.error = Some("fixture failure".into())
             }),

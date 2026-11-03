@@ -1,10 +1,9 @@
 // Platform-aware download buttons. Edit DL to change files and links.
 (() => {
-  const REL = 'https://github.com/ttizze/remote-agent/releases/tag/prd-74';
   const SRC = 'https://github.com/ttizze/remote-agent/blob/main/README.md';
   const DL = window.BEX_DL = {
     mac:     { name: 'macOS',         file: { ja: 'Apple Silicon · macOS 26 · .zip 34MB', en: 'Apple Silicon · macOS 26 · .zip 34MB' }, url: 'https://github.com/ttizze/remote-agent/releases/download/prd-74/bex-74-macOS-arm64.zip', ready: true },
-    ios:     { name: 'iPhone / iPad', file: { ja: 'iOS 26 · TestFlightで配布中', en: 'iOS 26 · via TestFlight' }, url: 'https://testflight.apple.com/join/UJbK9Ww7', ready: true, cta: { ja: 'TestFlightで入手', en: 'Get on TestFlight' } },
+    ios:     { name: 'iPhone', file: { ja: 'iOS 26 · TestFlightで配布中', en: 'iOS 26 · via TestFlight' }, url: 'https://testflight.apple.com/join/UJbK9Ww7', ready: true, cta: { ja: 'TestFlightで入手', en: 'Get on TestFlight' } },
     win:     { name: 'Windows',       file: { ja: 'Windows 11 · x86-64 · EXE（プレビュー）', en: 'Windows 11 · x86-64 · preview EXE' }, url: 'https://github.com/TooriG/remote-agent/releases/download/windows-preview-20261020-storage-notice/bex-windows-x86_64-setup.exe', ready: true },
     android: { name: 'Android',       file: { ja: 'Android 8.0以降 · 64-bit · APK（プレビュー）', en: 'Android 8.0+ · 64-bit · preview APK' }, url: 'https://github.com/TooriG/remote-agent/releases/download/android-preview-69/bex-android-preview.apk', ready: true, cta: { ja: 'Androidで使う', en: 'Use on Android' } },
     linux:   { name: 'Linux',         file: { ja: 'ヘッドレスHost・CLI', en: 'Headless Host and CLI' }, url: SRC + '#headless-linux-and-iphone-pairing', ready: true, source: true }
@@ -91,26 +90,34 @@
   document.addEventListener('keydown', e => { if (e.key === 'Escape') document.querySelectorAll('[data-dl-menu]').forEach(m => m.hidden = true); });
   new MutationObserver(render).observe(document.documentElement, { attributes: true, attributeFilter: ['lang'] });
   render();
-  // Publish a direct download only after GitHub reports the release asset.
-  // A Mac-only release, an API failure or an unpublished installer keeps the pinned download available.
+  // Select each platform independently: an Apple release need not contain Windows assets.
+  // Keep pinned downloads available when the API or an upload is unavailable.
   async function loadReleaseDownloads() {
     try {
-      const response = await fetch('https://api.github.com/repos/ttizze/remote-agent/releases/latest', {
+      const response = await fetch('https://api.github.com/repos/ttizze/remote-agent/releases?per_page=20', {
         headers: { Accept: 'application/vnd.github+json' },
         signal: AbortSignal.timeout(5000)
       });
       if (!response.ok) return;
-      const release = await response.json();
-      for (const [platform, filename] of [['win', 'bex-windows-x86_64-setup.exe']]) {
-        const asset = release.assets?.find(x => x.name === filename && x.state === 'uploaded');
+      const releases = await response.json();
+      const assets = releases.filter(x => !x.draft && !x.prerelease).flatMap(x => x.assets || []);
+      for (const [platform, filename, description] of [
+        ['mac', /^bex-(?:\d+-)?macOS-arm64\.zip$/, 'Apple Silicon · macOS 26 · ZIP'],
+        ['win', /^bex-windows-x86_64-setup\.exe$/, 'Windows 11 · x86-64 · EXE']
+      ]) {
+        const asset = assets.find(x => {
+          if (!filename.test(x.name) || x.state !== 'uploaded') return false;
+          try {
+            const url = new URL(x.browser_download_url);
+            return url.origin === 'https://github.com' && url.pathname.startsWith('/ttizze/remote-agent/releases/download/');
+          } catch { return false; }
+        });
         if (!asset) continue;
-        const url = new URL(asset.browser_download_url);
-        if (url.origin !== 'https://github.com' || !url.pathname.startsWith('/ttizze/remote-agent/releases/download/')) continue;
         const target = DL[platform];
-        target.url = url.href;
+        target.url = new URL(asset.browser_download_url).href;
         target.ready = true;
         target.source = false;
-        target.file = { ja: 'Windows 11 · x86-64 · EXE', en: 'Windows 11 · x86-64 · EXE' };
+        target.file = { ja: description, en: description };
       }
       render();
     } catch { /* Keep the pinned, published preview download. */ }

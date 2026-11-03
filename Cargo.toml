@@ -4,14 +4,16 @@ members = [
     "crates/agent-core",
     "crates/agent-protocol",
     "crates/agent-transport",
+    "crates/agent-local-host",
     "crates/agent-cli",
     "crates/agent-ffi",
     "crates/codex-app-server",
-    "crates/bex-process",
+    "crates/agent-process",
     "crates/host-daemon",
     "crates/xtask",
     "crates/host-fixture",
 ]
+exclude = ["vendor/gpui-pre"]
 resolver = "2"
 
 [workspace.package]
@@ -21,6 +23,16 @@ rust-version = "1.98"
 
 [profile.dev]
 debug = "line-tables-only"
+
+# Development Hosts and clients run daily. Unoptimized GPUI layout and rendering
+# keep desktop frames over budget, and debug compression is slow.
+[profile.dev.package."*"]
+opt-level = 3
+
+# UI builders and their GPUI monomorphizations compile in the desktop crate,
+# not in GPUI. Keep them responsive in the development app as well.
+[profile.dev.package.agent-desktop]
+opt-level = 1
 
 # GPUI's Windows debug renderer reads HLSL from its build-time Cargo source
 # directory. Embed compiled shaders so development packages also run on other PCs.
@@ -34,19 +46,20 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 anyhow = "1.0.104"
 dunce = "1.0.5"
 base64 = "0.23.1"
-futures-util = "0.3.31"
+futures-util = "0.3.34"
 ring = "0.17.14"
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.143"
-thiserror = "2.0.16"
-tokio = { version = "1.47.1", features = ["io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
-tokio-util = { version = "0.7.16", features = ["codec"] }
-url = "2.5.4"
-zeroize = "1.8.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-util = { version = "0.7.20", features = ["codec"] }
+url = "2.5.8"
+zeroize = "1.9.1"
 
 [patch.crates-io]
+# Retain nested caches and expose current-frame state for activity overlays.
+gpui-pre = { path = "vendor/gpui-pre" }
 # UDP rebind recovery: https://github.com/n0-computer/net-tools/pull/235
 netwatch = { git = "https://github.com/ttizze/net-tools", rev = "1d54cca14f47ebfa20a75234e8a08351d9f5a8d4" }
 alacritty_terminal = { path = "vendor/alacritty_terminal" }
 vte = { path = "vendor/vte" }
-gpui-pre-windows = { path = "vendor/gpui_windows" }

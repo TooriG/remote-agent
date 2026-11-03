@@ -16,6 +16,8 @@ if [[ ${1:-} == --without-codex ]]; then
 fi
 if [[ $# == 0 ]]; then
     set -- \
+        testSimulatorWorkbenchStartsEmptyAndOwnsOnlyOpenedTabs \
+        testSimulatorBrowserUsesOneSharedImportMenu \
         testSimulatorNativeTerminalRetainsShellAfterReopening \
         testSimulatorNativeTerminalPastesMultilineText \
         testSimulatorNativeTerminalDoesNotDuplicateQueryResponses \
@@ -36,7 +38,7 @@ if [[ $# == 0 ]]; then
         testSimulatorOpensAccountManagementFromSettingsAndModelPicker \
         testSimulatorModelDefaultsPersistAndApplyOnlyToNewConversations \
         testSimulatorModelDefaultsInheritAndPersistAcrossScopes \
-        testSimulatorModelPickerUsesAgentRailAndCompactControls \
+        testSimulatorModelPickerUsesNativeFormAndAgentPicker \
         testSimulatorSignsInDirectlyFromModelSettings \
         testSimulatorGoesBackFromAccountLoginAndCanStartAgain \
         testSimulatorComposerOffersFastModelAndEffortBeforeMicrophone \
@@ -54,13 +56,16 @@ if [[ $# == 0 ]]; then
         testSimulatorDictationPermissionDenialPreservesDraftAndSend \
         testSimulatorDictationContinuesPastThirtySecondsAndReachesHost \
         testSimulatorOpensOnlyTheTappedImageAndSavesIt \
-        testSimulatorCopiesOnlySelectedMessageText \
+        testSimulatorCopiesSelectedOrWholeUserMessageText \
         testSimulatorSelectsAssistantTextInPlaceAndAddsOnlySelectionToDraft \
         testSimulatorOpensSideChatWithoutLosingOriginalDraft \
         testSimulatorRetriesSideChatPreparationWithoutLosingOriginalDraft \
         testSimulatorGroupsLiveCommandsBetweenCommentaryAndExpandsOnTap \
         testSimulatorApprovalEditorAndDraftSurviveReconnect \
         testSimulatorKeepsInputRequestVisibleUntilResolved \
+        testSimulatorQuestionChoiceReturnsTypedAnswerToDraft \
+        testSimulatorSendsQuestionChoiceOnTap \
+        testSimulatorCanSkipQuestion \
         testSimulatorShowsRetryingStreamErrorThenRecovers \
         testSimulatorKeepsFailedWorkCollapsedWithVisibleTerminalError \
         testSimulatorRendersEveryActivityFamilyAndHidesStateOnlyItems \
@@ -70,6 +75,7 @@ if [[ $# == 0 ]]; then
         testSimulatorRendersMarkdownTableAndReopensIt \
         testSimulatorKeepsDraftDuringLongMarkdownStreamAndReopensFinalText \
         testSimulatorOpensLongInterruptedHistoryAtLatestMessage \
+        testSimulatorLoadsEarlierHistoryOnTapAndRetriesFailedPage \
         testSimulatorReopensRunningLongHistoryWithoutBlankViewport \
         testSimulatorKeepsSmallOlderScrollDuringLiveUpdate \
         testSimulatorShowsAcceptedAdditionalInputBeforeCodexProcessesIt \

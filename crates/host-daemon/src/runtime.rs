@@ -1,10 +1,8 @@
 use crate::command_line::StartupConfig;
+use agent_local_host::{HostLease, LocalHostRegistry};
 use agent_transport::transport::{Endpoint, Relays};
 use anyhow::{Context, Result};
-use host_daemon::{
-    FileKeyStore, HostCredentials, HostRpcService, HostRuntime, ProjectStore,
-    local_host::{HostLease, LocalHostRegistry},
-};
+use host_daemon::{FileKeyStore, HostCredentials, HostRpcService, HostRuntime, ProjectStore};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
@@ -37,7 +35,7 @@ pub(crate) async fn run(config: StartupConfig) -> Result<()> {
         env!("CARGO_PKG_VERSION"),
     )
     .context("cannot initialize Host error log")?;
-    let store = Arc::new(FileKeyStore(directory.join("identity.keys")));
+    let store = Arc::new(FileKeyStore(agent_local_host::identity_path(&directory)));
     let credentials = Arc::new(
         HostCredentials::load(store, directory.clone())
             .await
@@ -50,12 +48,12 @@ pub(crate) async fn run(config: StartupConfig) -> Result<()> {
     } else {
         Relays::Custom(config.relay_url)
     };
-    let endpoint = Endpoint::bind(credentials.host_identity().await, relays)
+    let endpoint = Endpoint::bind_host(credentials.host_identity().await, relays)
         .await
         .context("cannot bind Host endpoint")?;
     let account_directory = config.account_state_dir.as_deref().unwrap_or(&directory);
-    let codex = host_daemon::adapters::codex::Codex::spawn(
-        host_daemon::adapters::codex::Config {
+    let codex = host_daemon::providers::codex::Codex::spawn(
+        host_daemon::providers::codex::Config {
             program: config.codex,
             codex_home: config.codex_home,
             ..Default::default()
@@ -63,7 +61,7 @@ pub(crate) async fn run(config: StartupConfig) -> Result<()> {
         account_directory.join("codex-accounts"),
     )
     .await;
-    let claude = match host_daemon::adapters::Claude::load(
+    let claude = match host_daemon::providers::Claude::load(
         config.claude,
         account_directory.join("claude"),
         config.claude_home,
@@ -72,21 +70,21 @@ pub(crate) async fn run(config: StartupConfig) -> Result<()> {
     {
         Ok(adapter) => adapter.into(),
         Err(error) => {
-            tracing::error!(target: "bex", operation = "host.claude", message = %error);
-            host_daemon::adapters::Backend::unavailable(
+            tracing::error!(target: "agent", operation = "host.claude", message = %error);
+            host_daemon::providers::Backend::unavailable(
                 agent_protocol::session::ProviderKind::Claude,
                 error,
             )
         }
     };
-    let deepseek = match host_daemon::adapters::deepseek::DeepSeek::load(
+    let deepseek = match host_daemon::providers::deepseek::DeepSeek::load(
         config.deepseek,
         account_directory.join("deepseek"),
     )
     .await
     {
         Ok(adapter) => adapter.into(),
-        Err(error) => host_daemon::adapters::Backend::unavailable(
+        Err(error) => host_daemon::providers::Backend::unavailable(
             agent_protocol::session::ProviderKind::DeepSeek,
             error,
         ),
@@ -95,6 +93,7 @@ pub(crate) async fn run(config: StartupConfig) -> Result<()> {
         [codex.into(), claude, deepseek],
         ProjectStore::new(directory.join("bex-worktrees.json")),
     );
+    service.set_history_scope(directory.clone(), config.isolated);
     service
         .enable_apns(
             &directory.join("bex-apns.json"),
@@ -108,6 +107,9 @@ pub(crate) async fn run(config: StartupConfig) -> Result<()> {
         .await
         .map_err(anyhow::Error::msg)?;
     service.start();
+    if let Err(error) = service.resume_after_update(&directory).await {
+        tracing::error!(target: "agent", operation = "host.update.resume", message = %error);
+    }
     let local_ticket = endpoint.local_ticket();
     let runtime = Arc::new(
         HostRuntime::new(

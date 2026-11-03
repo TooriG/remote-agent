@@ -45,6 +45,7 @@ import dev.remoteagent.core.requestInputDefault
 
 @Composable
 internal fun RequestCard(request: Request, submit: (Answer, (String?) -> Unit) -> Unit) {
+    val language = LocalUiLanguage.current
     var busy by remember(request.id) { mutableStateOf(false) }
     var error by remember(request.id) { mutableStateOf<String?>(null) }
     fun respond(answer: Answer) {
@@ -72,25 +73,26 @@ internal fun RequestCard(request: Request, submit: (Answer, (String?) -> Unit) -
                             onClick = { respond(Answer.Elicitation(ElicitationAnswer.Decline)) },
                             enabled = !disabled,
                         ) {
-                            Text("辞退")
+                            Text(language.text("辞退"))
                         }
                         TextButton(
                             onClick = { respond(Answer.Elicitation(ElicitationAnswer.Cancel)) },
                             enabled = !disabled,
                         ) {
-                            Text("キャンセル")
+                            Text(language.text("キャンセル"))
                         }
                     }
                 }
                 is RequestBody.ToolExecution -> StructuredAnswer(request, disabled, ::respond) { error = it }
             }
-            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            error?.let { Text(language.text(it), color = MaterialTheme.colorScheme.error) }
         }
     }
 }
 
 @Composable
 private fun ElicitationDescription(input: ElicitationInput, enabled: Boolean) {
+    val language = LocalUiLanguage.current
     when (input) {
         is ElicitationInput.Url -> {
             val context = androidx.compose.ui.platform.LocalContext.current
@@ -102,7 +104,7 @@ private fun ElicitationDescription(input: ElicitationInput, enabled: Boolean) {
                 },
                 enabled = enabled,
             ) {
-                Text("リンクを開く")
+                Text(language.text("リンクを開く"))
             }
         }
         is ElicitationInput.Form ->
@@ -128,6 +130,7 @@ private fun ChoiceButtons(choices: List<Choice>, permission: Boolean, disabled: 
 
 @Composable
 private fun QuestionAnswers(key: String, questions: List<Question>, disabled: Boolean, respond: (Answer) -> Unit) {
+    val language = LocalUiLanguage.current
     val colorScheme = MaterialTheme.colorScheme
     var answers by remember(key) { mutableStateOf(emptyMap<String, String>()) }
     var selections by remember(key) { mutableStateOf(emptyMap<String, List<String>>()) }
@@ -153,8 +156,7 @@ private fun QuestionAnswers(key: String, questions: List<Question>, disabled: Bo
                 shape = RoundedCornerShape(8.dp),
                 colors =
                     ButtonDefaults.textButtonColors(
-                        containerColor =
-                            if (isSelected) colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent,
+                        containerColor = if (isSelected) colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent,
                         contentColor = colorScheme.onSurface,
                     ),
             ) {
@@ -172,15 +174,14 @@ private fun QuestionAnswers(key: String, questions: List<Question>, disabled: Bo
     }
     Button(
         onClick = {
-            val values =
-                questions.associate {
-                    it.id to buildQuestionAnswer(it.multiple, answers[it.id].orEmpty(), selections[it.id].orEmpty())
-                }
+            val values = questions.associate {
+                it.id to buildQuestionAnswer(it.multiple, answers[it.id].orEmpty(), selections[it.id].orEmpty())
+            }
             respond(Answer.Questions(values))
         },
         enabled = !disabled,
     ) {
-        Text("回答を送信")
+        Text(language.text("回答を送信"))
     }
 }
 
@@ -222,6 +223,7 @@ private fun StructuredAnswer(
     respond: (Answer) -> Unit,
     onError: (String?) -> Unit,
 ) {
+    val language = LocalUiLanguage.current
     var text by remember(request.id) { mutableStateOf(requestInputDefault(request.requestBody)) }
     val urlConfirmation = (request.requestBody as? RequestBody.Elicitation)?.input is ElicitationInput.Url
     if (!urlConfirmation) OutlinedTextField(text, { text = it }, Modifier.fillMaxWidth(), enabled = !disabled)
@@ -230,11 +232,11 @@ private fun StructuredAnswer(
             try {
                 respond(requestAnswerFromJson(request.requestBody, text))
             } catch (failure: AgentException) {
-                onError(failure.message)
+                onError(failure.displayMessage())
             }
         },
         enabled = !disabled,
     ) {
-        Text(if (urlConfirmation) "確認して送信" else "回答を送信")
+        Text(if (urlConfirmation) language.text("確認して送信") else language.text("回答を送信"))
     }
 }

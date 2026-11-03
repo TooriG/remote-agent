@@ -1,5 +1,5 @@
 use super::{
-    threads::{open_thread, refresh_thread},
+    sessions::{open_thread, refresh_thread},
     *,
 };
 use crate::client::ClientExt;
@@ -154,6 +154,17 @@ impl Operation for StartSubmission {
                 provider: self.provider,
                 cwd: self.cwd.clone(),
                 model: self.draft.model.clone(),
+                initial_input: Some(rpc::InitialInput {
+                    client_user_message_id: self.client_user_message_id.clone(),
+                    input: submission_input(
+                        &self.draft.text,
+                        &self.draft.attachments,
+                        &self.draft.invocations,
+                        Some(self.provider),
+                    ),
+                    effort: self.draft.effort.clone(),
+                    service_tier: self.draft.service_tier.clone(),
+                }),
             })
             .await
     }
@@ -164,7 +175,12 @@ impl Operation for StartSubmission {
 }
 
 impl StartSubmission {
-    fn complete(self, snapshot: &mut Snapshot, thread: Thread, current_view: bool) -> Vec<Effect> {
+    fn complete(
+        self,
+        snapshot: &mut Snapshot,
+        mut thread: Thread,
+        current_view: bool,
+    ) -> Vec<Effect> {
         let Self {
             draft_key,
             client_user_message_id,
@@ -175,6 +191,11 @@ impl StartSubmission {
             snapshot.error = Some("thread ID is missing".into());
             return Vec::new();
         };
+        thread
+            .submissions
+            .entry(client_user_message_id.clone())
+            .or_insert(crate::session::SubmissionDelivery::Accepted { turn_id: None });
+        Arc::make_mut(&mut snapshot.draft_sessions).insert(draft_key.clone(), id.clone());
         let current = snapshot.drafts.get(&draft_key);
         let empty = Arc::new(Draft {
             text: String::new(),
@@ -188,8 +209,16 @@ impl StartSubmission {
         } else {
             empty
         };
-        let mut effects = if current_view {
-            open_thread(snapshot, thread, None)
+        if current_view {
+            Arc::make_mut(&mut snapshot.workspaces).insert(
+                id.clone().into(),
+                snapshot.workspace.location(snapshot.navigation.cwd.clone()),
+            );
+        } else if let Some(workspace) = Arc::make_mut(&mut snapshot.workspaces).remove(&draft_key) {
+            Arc::make_mut(&mut snapshot.workspaces).insert(id.clone().into(), workspace);
+        }
+        let effects = if current_view {
+            open_thread(snapshot, thread, None, None, None)
         } else {
             refresh_thread(snapshot, thread);
             Vec::new()
@@ -197,6 +226,7 @@ impl StartSubmission {
         let drafts = Arc::make_mut(&mut snapshot.drafts);
         if remove_original {
             drafts.remove(&draft_key);
+            Arc::make_mut(&mut snapshot.workspaces).remove(&draft_key);
         }
         drafts.insert(id.clone().into(), target);
         if let Some(pending) =
@@ -204,11 +234,8 @@ impl StartSubmission {
         {
             Arc::make_mut(pending).draft_key = id.clone().into();
         }
-        effects.push(Effect::execute(SendSubmission {
-            thread_id: id,
-            client_user_message_id,
-            draft,
-        }));
+        // Keep the accepted local input until the provider echoes its body.
+        reconcile_pending(snapshot, &id);
         effects
     }
 }
@@ -229,9 +256,12 @@ impl Operation for SendSubmission {
             draft_key: self.thread_id.clone().into(),
         })
     }
-    type Input = bool;
+    type Input = (bool, Option<crate::session::ProviderKind>);
     fn capture(&self, snapshot: &Snapshot) -> Result<Self::Input, PeerError> {
-        Ok(!snapshot.subscriptions.contains_key(&self.thread_id))
+        Ok((
+            !snapshot.subscriptions.contains_key(&self.thread_id),
+            snapshot.draft_provider(&self.thread_id.clone().into(), self.draft.model.as_ref()),
+        ))
     }
     const STALE_POLICY: StalePolicy = StalePolicy::Apply;
     fn submission_id(&self) -> Option<&str> {
@@ -248,7 +278,7 @@ impl Operation for SendSubmission {
     }
     async fn run(
         &self,
-        needs_subscription: Self::Input,
+        (needs_subscription, provider): Self::Input,
         context: &mut Execution<'_>,
     ) -> Result<Self::Output, PeerError> {
         if needs_subscription {
@@ -258,41 +288,17 @@ impl Operation for SendSubmission {
                 .await
                 .map(|opened| SubmissionProgress::Opened(Box::new(opened)));
         }
-        let mut input = Vec::with_capacity(
-            self.draft.attachments.len() + usize::from(!self.draft.text.is_empty()),
-        );
-        if !self.draft.text.is_empty() {
-            input.push(Input::Text {
-                text: self.draft.text.clone(),
-            });
-        }
-        input.extend(
-            self.draft
-                .invocations
-                .iter()
-                .filter(|item| {
-                    item.provider == self.thread_id.provider && item.is_in(&self.draft.text)
-                })
-                .map(agent_protocol::composer::Invocation::input),
-        );
-        for attachment in &self.draft.attachments {
-            input.push(if attachment.is_image {
-                Input::LocalImage {
-                    path: attachment.path.clone(),
-                }
-            } else {
-                Input::Mention {
-                    path: attachment.path.clone(),
-                    name: attachment.name.clone(),
-                }
-            });
-        }
         let reply = context
             .client
             .call(&Submission {
                 thread_id: self.thread_id.clone(),
                 client_user_message_id: self.client_user_message_id.clone(),
-                input,
+                input: submission_input(
+                    &self.draft.text,
+                    &self.draft.attachments,
+                    &self.draft.invocations,
+                    provider,
+                ),
                 model: self.draft.model.clone(),
                 effort: self.draft.effort.clone(),
                 service_tier: self.draft.service_tier.clone(),
@@ -327,6 +333,37 @@ impl Operation for SendSubmission {
     }
 }
 
+fn submission_input(
+    text: &str,
+    attachments: &[Attachment],
+    invocations: &[agent_protocol::composer::Invocation],
+    provider: Option<crate::session::ProviderKind>,
+) -> Vec<Input> {
+    let mut input = Vec::with_capacity(attachments.len() + usize::from(!text.is_empty()));
+    if !text.is_empty() {
+        input.push(Input::Text { text: text.into() });
+    }
+    input.extend(
+        invocations
+            .iter()
+            .filter(|item| Some(item.provider) == provider && item.is_in(text))
+            .map(agent_protocol::composer::Invocation::input),
+    );
+    input.extend(attachments.iter().map(|attachment| {
+        if attachment.is_image {
+            Input::LocalImage {
+                path: attachment.path.clone(),
+            }
+        } else {
+            Input::Mention {
+                path: attachment.path.clone(),
+                name: attachment.name.clone(),
+            }
+        }
+    }));
+    input
+}
+
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UploadAttachment {
@@ -344,10 +381,6 @@ impl Operation for UploadAttachment {
     no_input!();
     type Output = String;
     const STALE_POLICY: StalePolicy = StalePolicy::Apply;
-    fn prepare(&mut self, snapshot: &mut Snapshot) -> Result<(), String> {
-        snapshot.error = None;
-        Ok(())
-    }
     async fn run(
         &self,
         _: Self::Input,
@@ -364,13 +397,56 @@ impl Operation for UploadAttachment {
             &self.attachment.name,
         )
         .await
-        .map_err(|error| PeerError::InvalidMessage(error.to_string()))?;
+        .map_err(PeerError::from)?;
         Ok(uploaded.path)
     }
     fn apply(mut self, snapshot: &mut Snapshot, path: Self::Output) -> Vec<Effect> {
         self.attachment.path = path;
         add_attachment(snapshot, self.draft_key, self.attachment);
         Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod startup_identity_tests {
+    use super::*;
+    #[rstest::rstest]
+    fn completed_startup_keeps_the_panel_identity_after_pending_input_is_gone(
+        #[values(true, false)] current_view: bool,
+    ) {
+        let draft_key = DraftKey::from("local");
+        let session = crate::session::SessionRef {
+            provider: crate::session::ProviderKind::Codex,
+            id: "created".into(),
+        };
+        let mut snapshot = Snapshot::default();
+        Arc::make_mut(&mut snapshot.navigation).draft_key = if current_view {
+            draft_key.clone()
+        } else {
+            DraftKey::from("other")
+        };
+        let navigation = snapshot.navigation.clone();
+        let thread: Thread =
+            serde_json::from_value(serde_json::json!({"id":session, "cwd":"/project"})).unwrap();
+        let effects = StartSubmission {
+            provider: session.provider,
+            draft_key: draft_key.clone(),
+            cwd: Some("/project".into()),
+            client_user_message_id: "submitted".into(),
+            draft: Arc::default(),
+        }
+        .complete(&mut snapshot, thread, current_view);
+        assert!(effects.is_empty(), "the Host owns the admitted first input");
+        assert!(snapshot.pending_submissions.is_empty());
+        assert_eq!(snapshot.draft_sessions.get(&draft_key), Some(&session));
+        if current_view {
+            assert_eq!(snapshot.navigation.thread_id.as_ref(), Some(&session));
+        } else {
+            assert_eq!(snapshot.navigation, navigation);
+        }
+        let restored =
+            crate::persistence::decode(&crate::persistence::encode(&snapshot).unwrap()).unwrap();
+        assert!(restored.draft_sessions.is_empty());
     }
 }
 
@@ -414,6 +490,11 @@ mod dictation_tests {
             snapshot.drafts[&draft_key].text,
             "typed while recording\nrecognized speech"
         );
-        assert_eq!(snapshot.error.is_some(), send);
+        assert_eq!(
+            snapshot
+                .operation_error(OperationKey::Submission { draft_key })
+                .is_some(),
+            send
+        );
     }
 }

@@ -31,6 +31,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.ProjectSummary
+import dev.remoteagent.core.localizedUiFormat
 import kotlin.math.abs
 
 private const val NANOS_PER_SECOND = 1_000_000_000f
@@ -134,23 +135,24 @@ internal fun ProjectDropMarker(state: ProjectReorder, id: String, after: Boolean
 
 @Composable
 internal fun ProjectDragHandle(project: ProjectSummary, state: ProjectReorder) {
+    val language = LocalUiLanguage.current
     val currentProject by rememberUpdatedState(project)
     val pinnable by rememberUpdatedState(LocalPinnableContainer.current)
     Box(
         Modifier.size(40.dp, 48.dp)
             .semantics {
-                contentDescription = "${project.name}の順番を変更。上下にドラッグ"
+                contentDescription = localizedUiFormat(language, "{0}の順番を変更。上下にドラッグ", listOf(project.name))
                 val index = state.projects.indexOfFirst { it.id == project.id }
                 customActions =
                     listOfNotNull(
                         state.projects.getOrNull(index - 1)?.let { previous ->
-                            CustomAccessibilityAction("上へ移動") {
+                            CustomAccessibilityAction(language.text("上へ移動")) {
                                 state.perform(Intent.ReorderProject(project.id, previous.id, false))
                                 true
                             }
                         },
                         state.projects.getOrNull(index + 1)?.let { next ->
-                            CustomAccessibilityAction("下へ移動") {
+                            CustomAccessibilityAction(language.text("下へ移動")) {
                                 state.perform(Intent.ReorderProject(project.id, next.id, true))
                                 true
                             }

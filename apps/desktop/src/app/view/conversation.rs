@@ -1,24 +1,307 @@
 use super::*;
 use agent_core::presentation::conversation::{
-    ActivityExpansion, ConversationRowContent, activity_is_expanded,
+    ActionTone, ActivityExpansion, ConversationRowContent, WorkProgress, activity_is_expanded,
 };
 
+#[derive(Default, PartialEq)]
+pub(in crate::app) struct ConversationModel {
+    draft_key: DraftKey,
+    session: Option<SessionRef>,
+    cwd: String,
+    connected: bool,
+    busy: bool,
+    input_notice: Option<String>,
+    history_notice: Option<String>,
+    history: Option<agent_core::presentation::conversation::HistoryControl>,
+    docked: Vec<agent_core::presentation::conversation::Request>,
+    errors: Vec<super::errors::ErrorRow>,
+    running: std::collections::BTreeSet<op::OperationKey>,
+    failures: BTreeMap<op::OperationKey, String>,
+}
+
+pub(in crate::app) enum ConversationAction {
+    Dispatch(Intent),
+    Detail(TurnId, ItemId),
+    Download(String),
+    Edit(String),
+    Usage(Option<agent_protocol::session::ProviderKind>),
+    OpenUsage,
+    Fork(SessionRef, TurnId),
+    Respond(RequestId, Answer),
+    Error(String),
+    OpenLink(String, bool),
+}
+
+pub(in crate::app) struct ConversationView {
+    desktop: WeakEntity<Desktop>,
+    model: ConversationModel,
+    pub(in crate::app) timeline: Timeline,
+    selection: Entity<selection::ConversationSelection>,
+    _observation: Subscription,
+    #[cfg(test)]
+    pub(in crate::app) renders: usize,
+}
+impl EventEmitter<ConversationAction> for ConversationView {}
+impl ConversationView {
+    pub(in crate::app) fn new(
+        desktop: &Entity<Desktop>,
+        selection: Entity<selection::ConversationSelection>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self {
+            desktop: desktop.downgrade(),
+            model: ConversationModel::default(),
+            timeline: Timeline::new(),
+            selection,
+            _observation: cx.observe_in(desktop, window, |view, desktop, window, cx| {
+                let desktop = desktop.read(cx);
+                let model = desktop.conversation_model();
+                let rendered = desktop.snapshot.conversation_thread().map(|thread| {
+                    agent_core::presentation::conversation::project_conversation(
+                        &desktop.snapshot,
+                        thread,
+                        &view.timeline.rendered,
+                    )
+                });
+                let requests = desktop.snapshot.requests().cloned().collect();
+                view.sync(model, rendered, requests, window, cx);
+            }),
+            #[cfg(test)]
+            renders: 0,
+        }
+    }
+    pub(in crate::app) fn sync(
+        &mut self,
+        model: ConversationModel,
+        rendered: Option<Arc<agent_core::presentation::conversation::RenderedConversation>>,
+        requests: Vec<Arc<agent_protocol::requests::Request>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let same_content = match (&rendered, &self.timeline.rendered) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        if self.model == model && same_content {
+            return;
+        }
+        self.sync_request_inputs(&requests, window, cx);
+        let reset = self.model.draft_key != model.draft_key;
+        if reset {
+            self.timeline.forget_rendering();
+        }
+        #[cfg(test)]
+        eprintln!(
+            "SYNC reset={reset} old={:?} new={:?} top={:?}",
+            self.model.draft_key,
+            model.draft_key,
+            self.timeline.list.logical_scroll_top()
+        );
+        self.timeline.sync(rendered, model.history.clone(), reset);
+        self.model = model;
+        cx.notify();
+    }
+}
 impl Desktop {
+    pub(in crate::app) fn conversation_model(&self) -> ConversationModel {
+        let mut running = std::collections::BTreeSet::new();
+        let mut failures = BTreeMap::new();
+        for key in self.snapshot.operations.keys().filter(|key| match key {
+            op::OperationKey::Item { item } => self.selected() == Some(&item.thread_id),
+            op::OperationKey::Fork { session, .. } => self.selected() == Some(session),
+            op::OperationKey::Request { id } => self
+                .thread()
+                .is_some_and(|thread| thread.requests.contains_key(id)),
+            _ => false,
+        }) {
+            if self.snapshot.operation_running(key.clone()) {
+                running.insert(key.clone());
+            }
+            if let Some(error) = self.snapshot.operation_error(key.clone()) {
+                failures.insert(key.clone(), error);
+            }
+        }
+        ConversationModel {
+            draft_key: self.draft_key().clone(),
+            session: self.selected().cloned(),
+            cwd: self.snapshot.navigation.cwd.clone(),
+            connected: self.snapshot.connected,
+            busy: self.busy > 0,
+            input_notice: self
+                .thread()
+                .and_then(|thread| agent_protocol::session::input_unavailable_reason(thread)),
+            history_notice: self
+                .thread()
+                .and_then(|thread| agent_core::presentation::conversation::history_notice(thread)),
+            history: self
+                .selected()
+                .cloned()
+                .and_then(|session| self.snapshot.history_control(session)),
+            docked: self
+                .selected()
+                .into_iter()
+                .flat_map(|session| self.snapshot.docked_requests(session.clone()))
+                // Questions use the composer's answer field and question panel.
+                .filter(|request| {
+                    !matches!(
+                        request.request_body,
+                        agent_protocol::requests::RequestBody::Question { .. }
+                    )
+                })
+                .collect(),
+            errors: self.error_rows(&ErrorScope::Conversation {
+                draft_key: self.draft_key().clone(),
+            }),
+            running,
+            failures,
+        }
+    }
+    #[cfg(test)]
+    pub(in crate::app) fn sync_conversation(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let model = self.conversation_model();
+        let rendered = self.snapshot.conversation_thread().map(|thread| {
+            agent_core::presentation::conversation::project_conversation(
+                &self.snapshot,
+                thread,
+                &self.conversation.read(cx).timeline.rendered,
+            )
+        });
+        let requests = self.snapshot.requests().cloned().collect();
+        self.conversation.update(cx, |view, cx| {
+            view.sync(model, rendered, requests, window, cx)
+        });
+    }
+    pub(in crate::app) fn conversation_action(
+        &mut self,
+        action: &ConversationAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match action {
+            ConversationAction::Dispatch(intent) => self.dispatch(intent.clone()),
+            ConversationAction::Detail(turn, item) => self.detail(turn.clone(), item.clone()),
+            ConversationAction::Download(path) => self.download(path.clone()),
+            ConversationAction::Edit(text) => {
+                selection::set_composer_text(&self.composer.input, text.clone().into(), window, cx)
+            }
+            ConversationAction::Usage(provider) => {
+                self.open_settings();
+                self.model_controls.provider = *provider;
+                self.model_controls.panel = ModelPanel::Manage;
+            }
+            ConversationAction::OpenUsage => {
+                self.open_browser(self.panel_scope(), "https://chatgpt.com/settings/usage", cx)
+            }
+            ConversationAction::Fork(thread, turn) => {
+                if !self.snapshot.connected || self.busy > 0 {
+                    return;
+                }
+                self.busy += 1;
+                self.perform(
+                    Intent::ForkSession(op::ForkSession::new(thread.clone(), turn.clone())),
+                    OperationCompletion::Busy,
+                );
+                self.accept_snapshot(window, cx);
+                self.conversation
+                    .update(cx, |view, _| view.timeline.list.remeasure());
+            }
+            ConversationAction::Respond(id, answer) => {
+                self.conversation.update(cx, |view, cx| {
+                    if let Some(inputs) = view.timeline.requests.get_mut(id) {
+                        inputs.sent = true;
+                    }
+                    cx.notify();
+                });
+                self.respond(id.clone(), answer.clone());
+            }
+            ConversationAction::Error(error) => self.set_error(error.clone()),
+            ConversationAction::OpenLink(source, control) => {
+                self.click_conversation_link(source, *control, cx)
+            }
+        }
+    }
+}
+
+struct WorkProgressView {
+    progress: WorkProgress,
+    _clock: Task<()>,
+}
+
+impl WorkProgressView {
+    fn view(id: &str, progress: WorkProgress, window: &mut Window, cx: &mut App) -> Entity<Self> {
+        // use_keyed_state observes its entity and notifies the parent view.
+        // Retain the clock without forwarding each tick as an entity notification.
+        // Its changing text width still requires GPUI to lay out the ancestors.
+        let view = window.with_global_id(
+            SharedString::from(format!("work-progress-{id}")).into(),
+            |id, window| {
+                window.with_element_state::<Entity<Self>, _>(id, |retained, _| {
+                    let view = retained.unwrap_or_else(|| {
+                        cx.new(|cx| Self {
+                            progress: progress.clone(),
+                            _clock: cx.spawn(async move |view, cx| {
+                                loop {
+                                    cx.background_executor()
+                                        .timer(std::time::Duration::from_secs(1))
+                                        .await;
+                                    if view.update(cx, |_, cx| cx.notify()).is_err() {
+                                        break;
+                                    }
+                                }
+                            }),
+                        })
+                    });
+                    (view.clone(), view)
+                })
+            },
+        );
+        view.update(cx, |view, cx| {
+            if view.progress != progress {
+                view.progress = progress;
+                cx.notify();
+            }
+        });
+        view
+    }
+    fn label(&self, language: agent_core::localization::UiLanguage) -> String {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0., |duration| duration.as_secs_f64());
+        agent_core::localization::localized_ui_text(language, self.progress.label(now))
+    }
+}
+
+impl Render for WorkProgressView {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div().child(self.label(crate::localization::language(cx)))
+    }
+}
+
+impl ConversationView {
     pub(super) fn conversation_navigation(&self, cx: &Context<Self>) -> AnyElement {
+        let language = crate::localization::language(cx);
         let entries: Vec<_> = self
+            .timeline
             .rows
             .iter()
             .enumerate()
             .filter_map(|(index, row)| {
-                let ConversationRow::Turn(turn) = row else {
+                let ConversationRow::Turn {
+                    turn,
+                    index: row_index,
+                    ..
+                } = row
+                else {
                     return None;
                 };
-                turn.rows.iter().find_map(|row| match &row.content {
+                match &turn.rows[*row_index].content {
                     ConversationRowContent::User { item } => {
                         item.data.body.as_ref().map(|text| (index, text, turn))
                     }
                     _ => None,
-                })
+                }
             })
             .collect();
         let count = entries.len().min(8);
@@ -29,7 +312,7 @@ impl Desktop {
             .h_full()
             .w(px(56.))
             .justify_center();
-        let current = self.list.logical_scroll_top().item_ix;
+        let current = self.timeline.list.logical_scroll_top().item_ix;
         for position in 0..count {
             let sample = position * (entries.len() - 1) / count.saturating_sub(1).max(1);
             let (index, user, turn) = entries[sample];
@@ -38,7 +321,8 @@ impl Desktop {
                     || current < entries[(position + 1) * (entries.len() - 1) / (count - 1)].0);
             let user: String = user.chars().take(160).collect();
             let distance = self
-                .hovered_conversation_marker
+                .timeline
+                .hovered_marker
                 .map(|hovered| position.abs_diff(hovered));
             let width = match distance {
                 Some(0) => 28.,
@@ -57,8 +341,8 @@ impl Desktop {
                         .map(|text| text.chars().take(240).collect::<String>()),
                     _ => None,
                 });
-                let preview_width =
-                    (self.list.viewport_bounds().size.width - px(48.)).clamp(px(100.), px(300.));
+                let preview_width = (self.timeline.list.viewport_bounds().size.width - px(48.))
+                    .clamp(px(100.), px(300.));
                 v_flex()
                     .absolute()
                     .left(px(56.))
@@ -86,9 +370,9 @@ impl Desktop {
                     .id(marker_id.clone())
                     .on_hover(cx.listener(move |view, hovered, _, cx| {
                         if *hovered {
-                            view.hovered_conversation_marker = Some(position);
-                        } else if view.hovered_conversation_marker == Some(position) {
-                            view.hovered_conversation_marker = None;
+                            view.timeline.hovered_marker = Some(position);
+                        } else if view.timeline.hovered_marker == Some(position) {
+                            view.timeline.hovered_marker = None;
                         }
                         cx.notify();
                     }))
@@ -98,14 +382,18 @@ impl Desktop {
                             .text()
                             .small()
                             .on_click(cx.listener(move |view, _, _, cx| {
-                                view.list.scroll_to(ListOffset {
+                                view.timeline.list.scroll_to(ListOffset {
                                     item_ix: index,
                                     offset_in_item: px(0.),
                                 });
                                 cx.notify();
                             }))
                             .debug_selector(move || format!("conversation-marker-{index}"))
-                            .accessibility_label(format!("この発言へ移動: {user}"))
+                            .accessibility_label(agent_core::localization::localized_ui_format(
+                                language,
+                                "この発言へ移動: {0}".into(),
+                                vec![user.to_string()],
+                            ))
                             .w(px(56.))
                             .h(px(10.))
                             .pl(px(16.5))
@@ -139,10 +427,8 @@ impl Desktop {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let view = diffs
-            .entry(id.clone())
-            .or_insert_with(|| {
-                cx.new(|_| DiffView::new(patch.to_owned().into(), id == "workspace-patch"))
-            })
+            .entry(id)
+            .or_insert_with(|| cx.new(|_| DiffView::new(patch.to_owned().into(), false)))
             .clone();
         view.update(cx, |s, cx| s.set_source(patch, cx));
         view.into_any_element()
@@ -156,6 +442,52 @@ impl Desktop {
             .scrollable(true)
             .h(px(lines as f32 * 22. + 32.))
     }
+    fn user_message_body(
+        &mut self,
+        id: &str,
+        text: Option<&str>,
+        content: &[agent_protocol::items::MessagePart],
+        image_sources: &[String],
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let mut body = user_message_bubble();
+        let mut has_body = false;
+        if !content.is_empty() {
+            for (i, part) in content.iter().enumerate() {
+                use agent_protocol::items::MessagePart;
+                let rendered = match part {
+                    MessagePart::Image { .. } => continue,
+                    MessagePart::Text { text } if text.is_empty() => continue,
+                    MessagePart::Text { text } => self.markdown(format!("{id}-{i}"), text, cx),
+                    MessagePart::Attachment { name, path }
+                    | MessagePart::Invocation { name, path } => {
+                        let path = path.clone();
+                        button(
+                            format!("{id}-{i}"),
+                            if path.is_empty() {
+                                name.clone()
+                            } else {
+                                file_name(&path)
+                            },
+                            cx,
+                            move |_, _, cx| {
+                                if !path.is_empty() {
+                                    cx.emit(ConversationAction::Download(path.clone()));
+                                }
+                            },
+                        )
+                        .into_any_element()
+                    }
+                };
+                has_body = true;
+                body = body.child(rendered);
+            }
+        } else {
+            has_body = !text.unwrap_or_default().is_empty();
+            body = body.child(self.markdown(id.to_owned(), text.unwrap_or_default(), cx));
+        }
+        self.user_message_content(body, has_body, image_sources.iter().map(String::as_str), cx)
+    }
     pub(super) fn item(
         &mut self,
         projected: &agent_core::presentation::conversation::RenderedItem,
@@ -163,56 +495,67 @@ impl Desktop {
         turn: Option<&Turn>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let language = crate::localization::language(cx);
         let id = item.id.to_string();
         let title = projected.data.title.as_deref();
         let body_text = projected.data.body.as_deref();
-        let expanded = self.expanded_items.contains(&id);
+        let expanded = self.timeline.expanded_items.contains(&id);
         let deferred = projected.data.deferred;
         if expanded && deferred {
             let key = (
                 turn.map(|turn| turn.id.clone()).unwrap_or_default(),
                 item.id.clone(),
             );
-            let operation = self
-                .selected()
-                .cloned()
-                .map(|thread_id| op::OperationKey::Item {
-                    item: op::ReadItem {
-                        thread_id,
-                        turn_id: turn.map(|turn| turn.id.clone()).unwrap_or_default(),
-                        item_id: item.id.clone(),
-                    },
-                });
+            let operation =
+                self.model
+                    .session
+                    .as_ref()
+                    .cloned()
+                    .map(|thread_id| op::OperationKey::Item {
+                        item: op::ReadItem {
+                            thread_id,
+                            turn_id: turn.map(|turn| turn.id.clone()).unwrap_or_default(),
+                            item_id: item.id.clone(),
+                        },
+                    });
             let label = if operation
                 .as_ref()
-                .is_some_and(|key| self.snapshot.operation_running(key.clone()))
+                .is_some_and(|key| self.model.running.contains(key))
             {
-                "詳細を読み込み中…".to_owned()
-            } else if let Some(error) = operation.and_then(|key| self.snapshot.operation_error(key))
+                language.text("詳細を読み込み中…").to_owned()
+            } else if let Some(error) =
+                operation.and_then(|key| self.model.failures.get(&key).cloned())
             {
-                format!("{error} · 再試行")
+                agent_core::localization::localized_ui_format(
+                    language,
+                    "{0} · 再試行".into(),
+                    vec![error.to_string()],
+                )
             } else {
-                "詳細を読み込む".to_owned()
+                language.text("詳細を読み込む").to_owned()
             };
             let title = title.expect("activity has a title");
             let toggle = id.clone();
             return v_flex()
                 .gap_2()
-                .child(self.button(
+                .child(button(
                     format!("collapse-{id}"),
                     format!("⌄ {title}"),
                     cx,
                     move |s, _, _| {
-                        s.expanded_items.remove(&toggle);
-                        s.remeasure_item(&toggle);
+                        s.timeline.expanded_items.remove(&toggle);
+                        s.timeline.remeasure_item(&toggle);
                     },
                 ))
-                .child(
-                    self.button(format!("detail-{id}"), label, cx, move |s, _, _| {
-                        s.detail(key.0.clone(), key.1.clone());
-                        s.remeasure_item(&key.0);
-                    }),
-                )
+                .child(button(
+                    format!("detail-{id}"),
+                    label,
+                    cx,
+                    move |s, _, cx| {
+                        cx.emit(ConversationAction::Detail(key.0.clone(), key.1.clone()));
+                        s.timeline.remeasure_item(key.1.as_str());
+                    },
+                ))
                 .into_any_element();
         }
         let turn_id = turn.map(|turn| turn.id.clone()).unwrap_or_default();
@@ -226,7 +569,13 @@ impl Desktop {
                     body = body.child(image_skeleton(320., cx.theme().secondary));
                 }
                 for source in &projected.data.image_sources {
-                    body = body.child(self.image(source, false, 320., true, cx));
+                    body = body.child(
+                        self.desktop
+                            .update(cx, |desktop, cx| {
+                                desktop.image(source, false, 320., true, cx)
+                            })
+                            .unwrap_or_else(|_| div().into_any_element()),
+                    );
                 }
                 body.when_some(body_text, |body, text| {
                     body.child(div().text_sm().child(text.to_owned()))
@@ -234,61 +583,24 @@ impl Desktop {
                 .into_any_element()
             }
             agent_protocol::items::ItemBody::UserMessage { text, content } => {
-                let mut body = user_message_bubble();
-                let mut has_body = false;
-                if !content.is_empty() {
-                    for (i, part) in content.iter().enumerate() {
-                        use agent_protocol::items::MessagePart;
-                        let rendered = match part {
-                            MessagePart::Image { .. } => continue,
-                            MessagePart::Text { text } if text.is_empty() => continue,
-                            MessagePart::Text { text } => {
-                                self.markdown(format!("{id}-{i}"), text, cx)
-                            }
-                            MessagePart::Attachment { name, path }
-                            | MessagePart::Invocation { name, path } => {
-                                let path = path.clone();
-                                self.button(
-                                    format!("{id}-{i}"),
-                                    if path.is_empty() {
-                                        name.clone()
-                                    } else {
-                                        file_name(&path)
-                                    },
-                                    cx,
-                                    move |s, _, _| {
-                                        if !path.is_empty() {
-                                            s.download(path.clone());
-                                        }
-                                    },
-                                )
-                                .into_any_element()
-                            }
-                        };
-                        has_body = true;
-                        body = body.child(rendered);
-                    }
-                } else {
-                    has_body = !text.as_deref().unwrap_or_default().is_empty();
-                    body = body.child(self.markdown(
-                        id.clone(),
-                        text.as_deref().unwrap_or_default(),
-                        cx,
-                    ));
-                }
-                let body = self.user_message_content(
-                    body,
-                    has_body,
-                    projected.data.image_sources.iter().map(String::as_str),
+                let body = self.user_message_body(
+                    &id,
+                    text.as_deref(),
+                    content,
+                    &projected.data.image_sources,
                     cx,
                 );
                 let text = body_text.expect("user message has text");
                 let copied = text.to_owned();
-                let edit = self.button(format!("edit-{id}"), "", cx, move |s, window, cx| {
-                    selection::set_composer_text(&s.composer, copied.clone().into(), window, cx);
+                let edit = button(format!("edit-{id}"), "", cx, move |_, _, cx| {
+                    cx.emit(ConversationAction::Edit(copied.clone()));
                 });
-                let timestamp = turn.and_then(|turn| turn.started_at.map(|time| time as i64));
-                user_message_row(&id, text, body, timestamp, edit).into_any_element()
+                let timestamp = projected
+                    .data
+                    .timestamp_ms
+                    .and_then(|time| i64::try_from(time / 1000).ok())
+                    .or_else(|| turn.and_then(|turn| turn.started_at.map(|time| time as i64)));
+                user_message_row(&id, text, body, timestamp, edit, language).into_any_element()
             }
             agent_protocol::items::ItemBody::CommandExecution {
                 command,
@@ -300,17 +612,20 @@ impl Desktop {
                 let label = title.expect("command has a title");
                 let toggle = id.clone();
                 let mut body = v_flex().gap_2().child(
-                    self.button(
+                    button(
                         format!("expand-{id}"),
                         format!("{label} {}", if expanded { "⌄" } else { "›" }),
                         cx,
-                        move |s, _, _| {
-                            toggle_set(&mut s.expanded_items, &toggle);
-                            if s.expanded_items.contains(&toggle) {
-                                s.detail(turn_id.clone(), toggle.clone().into());
+                        move |s, _, cx| {
+                            toggle_set(&mut s.timeline.expanded_items, &toggle);
+                            if s.timeline.expanded_items.contains(&toggle) {
+                                cx.emit(ConversationAction::Detail(
+                                    turn_id.clone(),
+                                    toggle.clone().into(),
+                                ));
                             }
-                            s.pause_tail();
-                            s.remeasure_item(&toggle);
+                            s.timeline.pause_tail();
+                            s.timeline.remeasure_item(&toggle);
                         },
                     )
                     .icon(IconName::SquareTerminal)
@@ -335,11 +650,11 @@ impl Desktop {
                                     div()
                                         .text_sm()
                                         .text_color(rgb(appearance::MUTED))
-                                        .child("プレーンテキスト"),
+                                        .child(language.text("プレーンテキスト")),
                                 )
                                 .child(
                                     Button::new(format!("copy-output-{id}"))
-                                        .label("出力をコピー")
+                                        .label(language.text("出力をコピー"))
                                         .small()
                                         .ghost()
                                         .on_click(move |_, _, cx| {
@@ -373,30 +688,33 @@ impl Desktop {
                     let row = h_flex()
                         .debug_selector(move || selector.clone())
                         .gap_2()
-                        .child(self.button(
+                        .child(button(
                             format!("change-{id}-{i}"),
                             format!("{} {}", if expanded { "⌄" } else { "›" }, file_name(&path)),
                             cx,
-                            move |s, _, _| {
-                                toggle_set(&mut s.expanded_items, &toggle);
-                                if s.expanded_items.contains(&toggle) {
-                                    s.detail(turn_id.clone(), toggle.clone().into());
+                            move |s, _, cx| {
+                                toggle_set(&mut s.timeline.expanded_items, &toggle);
+                                if s.timeline.expanded_items.contains(&toggle) {
+                                    cx.emit(ConversationAction::Detail(
+                                        turn_id.clone(),
+                                        toggle.clone().into(),
+                                    ));
                                 }
-                                s.pause_tail();
-                                s.remeasure_item(&toggle);
+                                s.timeline.pause_tail();
+                                s.timeline.remeasure_item(&toggle);
                             },
                         ))
-                        .child(self.button(
+                        .child(button(
                             format!("download-{id}-{i}"),
-                            "ダウンロード",
+                            language.text("ダウンロード"),
                             cx,
-                            move |s, _, _| s.download(path.clone()),
+                            move |_, _, cx| cx.emit(ConversationAction::Download(path.clone())),
                         ));
                     body = body.child(row);
                     if expanded {
                         if let Some(diff) = &change.diff {
                             body = body.child(Self::diff(
-                                &mut self.diffs,
+                                &mut self.timeline.diffs,
                                 format!("diff-{id}-{i}"),
                                 diff,
                                 cx,
@@ -428,15 +746,20 @@ impl Desktop {
                     .border_color(cx.theme().border)
                     .rounded_md()
                     .child(
-                        h_flex().justify_between().child("計画").child(
-                            Button::new(format!("copy-plan-{id}"))
-                                .icon(IconName::Copy)
-                                .small()
-                                .ghost()
-                                .on_click(move |_, _, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(copied.clone()))
-                                }),
-                        ),
+                        h_flex()
+                            .justify_between()
+                            .child(language.text("計画"))
+                            .child(
+                                Button::new(format!("copy-plan-{id}"))
+                                    .icon(IconName::Copy)
+                                    .small()
+                                    .ghost()
+                                    .on_click(move |_, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            copied.clone(),
+                                        ))
+                                    }),
+                            ),
                     )
                     .child(content)
                     .into_any_element()
@@ -445,7 +768,7 @@ impl Desktop {
                 let toggle = id.clone();
                 v_flex()
                     .gap_2()
-                    .child(self.button(
+                    .child(button(
                         format!("unknown-{id}"),
                         format!(
                             "{} {}",
@@ -453,13 +776,16 @@ impl Desktop {
                             title.expect("activity has a title")
                         ),
                         cx,
-                        move |s, _, _| {
-                            toggle_set(&mut s.expanded_items, &toggle);
-                            if s.expanded_items.contains(&toggle) {
-                                s.detail(turn_id.clone(), toggle.clone().into());
+                        move |s, _, cx| {
+                            toggle_set(&mut s.timeline.expanded_items, &toggle);
+                            if s.timeline.expanded_items.contains(&toggle) {
+                                cx.emit(ConversationAction::Detail(
+                                    turn_id.clone(),
+                                    toggle.clone().into(),
+                                ));
                             }
-                            s.pause_tail();
-                            s.remeasure_item(&toggle);
+                            s.timeline.pause_tail();
+                            s.timeline.remeasure_item(&toggle);
                         },
                     ))
                     .when(expanded, |body| {
@@ -473,235 +799,372 @@ impl Desktop {
             }
         }
     }
-    pub(super) fn turn(
+    pub(super) fn turn_row(
         &mut self,
         session: Option<&SessionRef>,
         projected: &Arc<agent_core::presentation::conversation::RenderedTurn>,
+        index: usize,
+        last: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let language = crate::localization::language(cx);
         let turn = &projected.source;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0., |duration| duration.as_secs_f64());
         let mut body = v_flex().w_full().max_w(px(CHAT_WIDTH)).gap_4();
-        let mut expanded = false;
-        for row in &projected.rows {
-            match &row.content {
-                ConversationRowContent::User { item } => {
-                    body = body.child(self.projected_item(item, turn, cx));
-                }
-                ConversationRowContent::ActivityHeader { activity } => {
-                    let id = &activity.id;
-                    expanded = activity_is_expanded(activity, self.expanded_work.get(id).cloned());
-                    let label = if activity.is_in_progress {
-                        projected.progress_label(!expanded, now)
-                    } else {
-                        activity.activity_summary.clone()
-                    };
-                    let header = if activity.activity_can_collapse {
-                        let toggle = id.clone();
-                        let status = activity.status.clone();
-                        let turn_id = turn.id.clone();
-                        let load_items = activity.load_items.clone();
-                        self.button(
-                            format!("work-{id}"),
-                            format!("{label} {}", if expanded { "⌄" } else { "›" }),
-                            cx,
-                            move |view, _, _| {
-                                view.expanded_work.insert(
-                                    toggle.clone(),
-                                    ActivityExpansion {
-                                        status: status.clone(),
-                                        expanded: !expanded,
-                                    },
-                                );
-                                if !expanded && let Some(params) = &load_items {
-                                    view.dispatch(Intent::LoadTurnItems(params.clone()));
-                                }
-                                view.pause_tail();
-                                view.remeasure_item(&turn_id);
-                            },
-                        )
+        let row = &projected.rows[index];
+        match &row.content {
+            ConversationRowContent::User { item } => {
+                body = body.child(self.projected_item(item, turn, cx));
+            }
+            ConversationRowContent::ActivityHeader { activity } => {
+                let id = &activity.id;
+                let expanded =
+                    activity_is_expanded(activity, self.timeline.expanded_work.get(id).cloned());
+                let (label, content) = if activity.is_in_progress {
+                    let view = WorkProgressView::view(
+                        &row.id,
+                        projected.work_progress(!expanded),
+                        window,
+                        cx,
+                    );
+                    (
+                        view.read(cx).label(crate::localization::language(cx)),
+                        view.into_any_element(),
+                    )
+                } else {
+                    let label = agent_core::localization::localized_ui_text(
+                        language,
+                        activity.activity_summary.clone(),
+                    );
+                    (label.clone(), div().child(label).into_any_element())
+                };
+                let header = if activity.activity_can_collapse {
+                    let toggle = id.clone();
+                    let status = activity.status.clone();
+                    let load_items = activity.load_items.clone();
+                    Button::new(format!("work-{id}"))
+                        .accessibility_label(format!(
+                            "{label} {}",
+                            if expanded { "⌄" } else { "›" }
+                        ))
+                        .small()
+                        .ghost()
+                        .child(div().flex_1().min_w_0().text_ellipsis().child(content))
+                        .child(if expanded { "⌄" } else { "›" })
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            view.timeline.expanded_work.insert(
+                                toggle.clone(),
+                                ActivityExpansion {
+                                    status: status.clone(),
+                                    expanded: !expanded,
+                                },
+                            );
+                            if !expanded && let Some(params) = &load_items {
+                                cx.emit(ConversationAction::Dispatch(Intent::LoadTurnItems(
+                                    params.clone(),
+                                )));
+                            }
+                            view.timeline.pause_tail();
+                            view.timeline
+                                .rebuild_rows(view.model.history.clone(), false);
+                            cx.notify();
+                        }))
                         .text_color(rgb(appearance::MUTED))
                         .into_any_element()
-                    } else {
-                        div()
-                            .text_color(rgb(appearance::MUTED))
-                            .child(label.clone())
-                            .into_any_element()
-                    };
-                    let selector = format!("work-{id}");
-                    body = body.child(
-                        h_flex()
-                            .debug_selector(move || selector.clone())
-                            .gap_2()
-                            .child(header)
-                            .when(activity.is_in_progress, |row| {
-                                row.child(spinner::Spinner::new().small())
-                            }),
-                    );
-                }
-                ConversationRowContent::Activity { item, .. } => {
-                    if expanded {
-                        body = body.child(self.projected_item(item, turn, cx));
-                    }
-                }
-                ConversationRowContent::PendingRequest { request } => {
-                    body = body.child(self.request_card(request, cx));
-                }
-                ConversationRowContent::Error { error } => {
-                    let provider = session.map(|s| s.provider);
-                    body = body.child(
-                        v_flex().gap_2()
-                            .child(div().text_color(rgb(0xff8e86)).child(error.message.clone()))
-                            .when(error.is_usage_limit, |card| {
-                                card.child(
-                                    h_flex().gap_2().flex_wrap()
-                                        .child(self.button(format!("usage-settings-{}", turn.id), "使用量・リセット時刻", cx, move |s, _, _| {
-                                            s.open_settings();
-                                            s.model_provider = provider;
-                                            s.model_panel = ModelPanel::Manage;
-                                        }).small())
-                                        .when(provider == Some(agent_protocol::session::ProviderKind::Codex), |actions| {
-                                            actions.child(self.button(format!("usage-manage-{}", turn.id), "追加クレジット・上限を管理", cx, |s, window, cx| {
-                                                s.open_browser_url("https://chatgpt.com/settings/usage", window, cx);
-                                            }).small())
-                                        })
-                                )
-                            })
-                    );
-                }
-                ConversationRowContent::Response { item, fork_turn_id } => {
-                    body = body.child(self.projected_item(item, turn, cx));
-                    if item.data.kind == "agent" {
-                        let text = item.data.body.clone().expect("assistant message has text");
-                        body = body.child(
+                } else {
+                    div()
+                        .text_color(rgb(appearance::MUTED))
+                        .child(content)
+                        .into_any_element()
+                };
+                let selector = format!("work-{id}");
+                body = body.child(
+                    h_flex()
+                        .debug_selector(move || selector.clone())
+                        .gap_2()
+                        .child(header)
+                        .when(activity.is_in_progress, |row| {
+                            row.child(crate::activity::indicator())
+                        }),
+                );
+            }
+            ConversationRowContent::Activity { item, .. } => {
+                body = body.child(self.projected_item(item, turn, cx));
+            }
+            // Timeline rows leave requests to the composer's docked cards.
+            ConversationRowContent::PendingRequest { .. } => {}
+            ConversationRowContent::ProviderHandoff { text } => {
+                body = body.child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(appearance::MUTED))
+                        .py_2()
+                        .child(text.clone()),
+                );
+            }
+            ConversationRowContent::Error { error } => {
+                let provider = turn.provider.or_else(|| session.map(|s| s.provider));
+                let accent = if error.is_reconnecting {
+                    rgb(appearance::MUTED)
+                } else if error.is_usage_limit {
+                    rgb(0xe5b567)
+                } else {
+                    rgb(0xff8e86)
+                };
+                let copied = format!(
+                    "{}\n{}\n{}",
+                    error.title,
+                    error.message,
+                    error.details.as_deref().unwrap_or_default()
+                );
+                body = body.child(
+                    v_flex()
+                        .debug_selector(|| "turn-error".into())
+                        .p_3()
+                        .rounded_lg()
+                        .bg(rgb(appearance::RAISED))
+                        .border_1()
+                        .border_color(accent.opacity(0.25))
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(appearance::MUTED))
+                                .child(language.text("この応答")),
+                        )
+                        .child(
                             h_flex()
                                 .gap_2()
-                                .children(
-                                    row.timestamp_ms
-                                        .and_then(|time| {
-                                            i64::try_from(time)
-                                                .ok()
-                                                .and_then(chrono::DateTime::from_timestamp_millis)
-                                        })
-                                        .map(|time| {
-                                            div()
-                                                .text_xs()
-                                                .text_color(rgb(appearance::MUTED))
-                                                .child(
-                                                    time.with_timezone(&chrono::Local)
-                                                        .format("%H:%M")
-                                                        .to_string(),
-                                                )
-                                        }),
-                                )
-                                .child(
-                                    Button::new(format!("copy-{}", item.data.id))
-                                        .icon(IconName::Copy)
-                                        .small()
-                                        .ghost()
-                                        .debug_selector(|| "response-copy".into())
-                                        .tooltip("回答をコピー")
-                                        .accessibility_label("回答をコピー")
-                                        .on_click(move |_, _, cx| {
-                                            cx.write_to_clipboard(ClipboardItem::new_string(
-                                                text.clone(),
-                                            ));
-                                        }),
-                                )
-                                .when_some(
-                                    session.cloned().zip(fork_turn_id.clone()),
-                                    |actions, (thread_id, turn_id)| {
-                                        let forking = self.snapshot.operation_running(
-                                            op::OperationKey::Fork {
-                                                session: thread_id.clone(),
-                                                turn: turn_id.clone(),
-                                            },
-                                        );
-                                        actions
-                                            .child(
-                                                Button::new(format!("fork-{}", item.data.id))
-                                                    .small()
-                                                    .ghost()
-                                                    .loading(forking)
-                                                    .tooltip(if forking {
-                                                        "分岐を作成中…"
-                                                    } else {
-                                                        "ここから会話を分岐"
-                                                    })
-                                                    .accessibility_label(if forking {
-                                                        "分岐を作成中…"
-                                                    } else {
-                                                        "ここから会話を分岐"
-                                                    })
-                                                    .on_click(cx.listener(
-                                                        move |view, _, window, cx| {
-                                                            if !view.snapshot.connected
-                                                                || view.busy > 0
-                                                            {
-                                                                return;
-                                                            }
-                                                            view.busy += 1;
-                                                            view.perform(
-                                                                Intent::ForkSession(
-                                                                    op::ForkSession::new(
-                                                                        thread_id.clone(),
-                                                                        turn_id.clone(),
-                                                                    ),
-                                                                ),
-                                                                OperationCompletion::Busy,
-                                                            );
-                                                            view.accept_snapshot(window, cx);
-                                                            view.list.remeasure();
-                                                            cx.notify();
-                                                        },
-                                                    ))
-                                                    .icon(Icon::default().path("bex/branch.svg"))
-                                                    .debug_selector(|| "response-fork".into())
-                                                    .disabled(
-                                                        !self.snapshot.connected
-                                                            || self.busy > 0
-                                                            || forking,
-                                                    ),
-                                            )
-                                            .when(forking, |actions| {
-                                                actions.child(
-                                                    h_flex()
-                                                        .gap_2()
-                                                        .text_xs()
-                                                        .text_color(rgb(appearance::MUTED))
-                                                        .child("分岐を作成中…")
-                                                        .debug_selector(|| {
-                                                            "response-fork-progress".into()
-                                                        }),
-                                                )
-                                            })
+                                .when(error.is_reconnecting, |heading| {
+                                    heading.child(crate::activity::indicator())
+                                })
+                                .child(div().flex_1().font_semibold().text_color(accent).child(
+                                    agent_core::localization::localized_ui_text(
+                                        language,
+                                        error.title.clone(),
+                                    ),
+                                ))
+                                .child(icon_button(
+                                    format!("copy-turn-error-{}", turn.id),
+                                    IconName::Copy,
+                                    language.text("エラーの詳細をコピー"),
+                                    cx,
+                                    move |_, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            copied.clone(),
+                                        ))
                                     },
-                                ),
-                        );
-                    }
-                }
-                ConversationRowContent::InProgress { .. } => {
+                                )),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .child(agent_core::localization::localized_ui_text(
+                                    language,
+                                    error.message.clone(),
+                                )),
+                        )
+                        .when_some(error.details.clone(), |card, details| {
+                            card.child(
+                                div()
+                                    .id(format!("turn-error-details-{}", turn.id))
+                                    .text_xs()
+                                    .line_clamp(3)
+                                    .text_color(rgb(appearance::MUTED))
+                                    .tooltip({
+                                        let details = details.clone();
+                                        move |window, cx| {
+                                            tooltip::Tooltip::new(details.clone()).build(window, cx)
+                                        }
+                                    })
+                                    .child(details),
+                            )
+                        })
+                        .when(error.is_usage_limit, |card| {
+                            card.child(
+                                h_flex()
+                                    .gap_2()
+                                    .flex_wrap()
+                                    .child(
+                                        button(
+                                            format!("usage-settings-{}", turn.id),
+                                            language.text("使用量・リセット時刻"),
+                                            cx,
+                                            move |_, _, cx| {
+                                                cx.emit(ConversationAction::Usage(provider));
+                                            },
+                                        )
+                                        .small(),
+                                    )
+                                    .when(
+                                        provider
+                                            == Some(agent_protocol::session::ProviderKind::Codex),
+                                        |actions| {
+                                            actions.child(
+                                                button(
+                                                    format!("usage-manage-{}", turn.id),
+                                                    language.text("追加クレジット・上限を管理"),
+                                                    cx,
+                                                    |_, _, cx| {
+                                                        cx.emit(ConversationAction::OpenUsage);
+                                                    },
+                                                )
+                                                .small(),
+                                            )
+                                        },
+                                    ),
+                            )
+                        }),
+                );
+            }
+            ConversationRowContent::Response {
+                item,
+                show_actions,
+                fork_turn_id,
+            } => {
+                body = body.child(self.projected_item(item, turn, cx));
+                if *show_actions {
+                    let text = item.data.body.clone().expect("assistant message has text");
                     body = body.child(
                         h_flex()
-                            .debug_selector(|| "conversation-in-progress".into())
                             .gap_2()
-                            .text_sm()
-                            .text_color(rgb(appearance::MUTED))
-                            .child(spinner::Spinner::new().small())
-                            .child(projected.progress_label(false, now)),
+                            .child(
+                                Button::new(format!("copy-{}", item.data.id))
+                                    .icon(IconName::Copy)
+                                    .small()
+                                    .ghost()
+                                    .debug_selector(|| "response-copy".into())
+                                    .tooltip(language.text("回答をコピー"))
+                                    .accessibility_label(language.text("回答をコピー"))
+                                    .on_click(move |_, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            text.clone(),
+                                        ));
+                                    }),
+                            )
+                            .when_some(
+                                session.cloned().zip(fork_turn_id.clone()),
+                                |actions, (thread_id, turn_id)| {
+                                    let fork_error = self
+                                        .model
+                                        .failures
+                                        .get(&op::OperationKey::Fork {
+                                            session: thread_id.clone(),
+                                            turn: turn_id.clone(),
+                                        })
+                                        .cloned();
+                                    let forking =
+                                        self.model.running.contains(&op::OperationKey::Fork {
+                                            session: thread_id.clone(),
+                                            turn: turn_id.clone(),
+                                        });
+                                    actions
+                                        .when_some(fork_error, |row, error| {
+                                            row.child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(rgb(0xff8e86))
+                                                    .child(error_message(&error)),
+                                            )
+                                        })
+                                        .child(
+                                            Button::new(format!("fork-{}", item.data.id))
+                                                .small()
+                                                .ghost()
+                                                .when(forking, |button| {
+                                                    button
+                                                        .child(crate::activity::indicator())
+                                                        .size_6()
+                                                        .px_0()
+                                                })
+                                                .tooltip(if forking {
+                                                    language.text("分岐を作成中…")
+                                                } else {
+                                                    language.text("ここから会話を分岐")
+                                                })
+                                                .accessibility_label(if forking {
+                                                    language.text("分岐を作成中…")
+                                                } else {
+                                                    language.text("ここから会話を分岐")
+                                                })
+                                                .on_click(cx.listener(move |_, _, _, cx| {
+                                                    cx.emit(ConversationAction::Fork(
+                                                        thread_id.clone(),
+                                                        turn_id.clone(),
+                                                    ));
+                                                    cx.notify();
+                                                }))
+                                                .when(!forking, |button| {
+                                                    button.icon(
+                                                        Icon::default().path("icons/branch.svg"),
+                                                    )
+                                                })
+                                                .debug_selector(|| "response-fork".into())
+                                                .disabled(
+                                                    !self.model.connected
+                                                        || self.model.busy
+                                                        || forking,
+                                                ),
+                                        )
+                                        .when(forking, |actions| {
+                                            actions.child(
+                                                h_flex()
+                                                    .gap_2()
+                                                    .text_xs()
+                                                    .text_color(rgb(appearance::MUTED))
+                                                    .child(language.text("分岐を作成中…"))
+                                                    .debug_selector(|| {
+                                                        "response-fork-progress".into()
+                                                    }),
+                                            )
+                                        })
+                                },
+                            )
+                            .children(
+                                row.timestamp_ms
+                                    .and_then(|time| {
+                                        i64::try_from(time)
+                                            .ok()
+                                            .and_then(chrono::DateTime::from_timestamp_millis)
+                                    })
+                                    .map(|time| {
+                                        div().text_xs().text_color(rgb(appearance::MUTED)).child(
+                                            time.with_timezone(&chrono::Local)
+                                                .format("%H:%M")
+                                                .to_string(),
+                                        )
+                                    }),
+                            ),
                     );
                 }
             }
+            ConversationRowContent::InProgress { .. } => {
+                body = body.child(
+                    h_flex()
+                        .debug_selector(|| "conversation-in-progress".into())
+                        .gap_2()
+                        .text_sm()
+                        .text_color(rgb(appearance::MUTED))
+                        .child(crate::activity::indicator())
+                        .child(WorkProgressView::view(
+                            &row.id,
+                            projected.work_progress(false),
+                            window,
+                            cx,
+                        )),
+                );
+            }
+            ConversationRowContent::Preparation { preparation } => {
+                body = body.child(self.preparation_card(preparation, cx));
+            }
         }
-        let selector = format!("conversation-turn-{}", turn.id);
+        let selector = format!("conversation-row-{}", row.id);
         h_flex()
             .debug_selector(move || selector.clone())
             .justify_center()
             .w_full()
             .px_6()
-            .pb_8()
+            .pb(px(if last { 32. } else { 16. }))
             .child(body)
             .into_any_element()
     }
@@ -715,18 +1178,61 @@ impl Desktop {
             agent_core::presentation::conversation::ItemSource::Native(native) => {
                 self.item(item, native, Some(turn), cx)
             }
-            agent_core::presentation::conversation::ItemSource::Pending(id, pending) => {
-                self.pending_item(id, pending, cx)
+            agent_core::presentation::conversation::ItemSource::Pending(_, pending) => {
+                self.pending_item(&item.data, &pending.draft, cx)
             }
         }
     }
+    fn preparation_card(
+        &self,
+        preparation: &agent_core::presentation::conversation::PreparationPresentation,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let language = crate::localization::language(cx);
+        let mut body = v_flex()
+            .gap_2()
+            .px_6()
+            .pb_4()
+            .debug_selector(|| "task-preparation".into())
+            .child(div().text_sm().text_color(rgb(appearance::MUTED)).child(
+                agent_core::localization::localized_ui_text(language, preparation.text.clone()),
+            ));
+        if let Some(retry) = &preparation.retry {
+            let retry = retry.clone();
+            body = body.child(button(
+                "retry-preparation",
+                language.text("再試行"),
+                cx,
+                move |_, _, cx| {
+                    cx.emit(ConversationAction::Dispatch(Intent::RetryPreparation(
+                        retry.clone(),
+                    )));
+                },
+            ));
+        }
+        if let Some(interrupt) = &preparation.interrupt {
+            let interrupt = interrupt.clone();
+            body = body.child(button(
+                "interrupt-preparation",
+                language.text("停止"),
+                cx,
+                move |_, _, cx| {
+                    cx.emit(ConversationAction::Dispatch(Intent::Interrupt(
+                        interrupt.clone(),
+                    )));
+                },
+            ));
+        }
+        body.into_any_element()
+    }
     pub(super) fn pending_item(
         &mut self,
-        id: &str,
-        pending: &agent_core::state::PendingSubmission,
+        data: &agent_core::presentation::conversation::ItemPresentation,
+        draft: &agent_core::state::Draft,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let draft = &pending.draft;
+        let language = crate::localization::language(cx);
+        let id = &data.id;
         let mut body = user_message_bubble();
         if !draft.text.is_empty() {
             body = body.child(
@@ -740,11 +1246,11 @@ impl Desktop {
         for (index, attachment) in draft.attachments.iter().enumerate() {
             if !attachment.is_image {
                 let path = attachment.path.clone();
-                body = body.child(self.button(
+                body = body.child(button(
                     format!("pending-{id}-file-{index}"),
                     attachment.name.clone(),
                     cx,
-                    move |view, _, _| view.download(path.clone()),
+                    move |_, _, cx| cx.emit(ConversationAction::Download(path.clone())),
                 ));
             }
         }
@@ -758,18 +1264,25 @@ impl Desktop {
                 .map(|file| file.path.as_str()),
             cx,
         );
-        h_flex()
+        let text = data.body.as_deref().unwrap_or_default();
+        let copied = text.to_owned();
+        let edit = button(format!("edit-{id}"), "", cx, move |_, _, cx| {
+            cx.emit(ConversationAction::Edit(copied.clone()));
+        });
+        let timestamp = data
+            .timestamp_ms
+            .and_then(|time| i64::try_from(time / 1000).ok());
+        v_flex()
             .w_full()
-            .justify_end()
-            .my_4()
-            .child(
-                v_flex().min_w_0().gap_2().child(body).child(
-                    div()
-                        .text_sm()
-                        .text_color(rgb(appearance::MUTED))
-                        .child(pending.delivery_label()),
-                ),
-            )
+            .min_w_0()
+            .items_end()
+            .gap_2()
+            .child(user_message_row(id, text, body, timestamp, edit, language))
+            .when_some(data.title.as_deref(), |row, label| {
+                row.child(div().text_sm().text_color(rgb(appearance::MUTED)).child(
+                    agent_core::localization::localized_ui_text(language, label.into()),
+                ))
+            })
             .into_any_element()
     }
 
@@ -791,10 +1304,17 @@ impl Desktop {
                     .border_1()
                     .border_color(rgb(appearance::BORDER))
                     .debug_selector(|| "user-image-thumbnail".into())
-                    .child(self.image(source, false, 80., true, cx))
+                    .child(
+                        self.desktop
+                            .update(cx, |desktop, cx| {
+                                desktop.image(source, false, 80., true, cx)
+                            })
+                            .unwrap_or_else(|_| div().into_any_element()),
+                    )
             })
             .collect();
         v_flex()
+            .w_full()
             .min_w_0()
             .max_w(px(560.))
             .items_end()
@@ -805,38 +1325,49 @@ impl Desktop {
                         .justify_end()
                         .gap_2()
                         .flex_wrap()
-                        .max_w(px(560.))
+                        .max_w_full()
                         .children(images),
                 )
             })
             .when(has_body, |column| column.child(body))
     }
 
-    pub(super) fn request_card(
+    fn request_card(
         &mut self,
         request: &agent_core::presentation::conversation::Request,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let language = crate::localization::language(cx);
         use agent_protocol::requests::{Answer, ElicitationAnswer, ElicitationInput, RequestBody};
         let key = &request.id;
-        let Some(inputs) = self.requests.get(key) else {
+        let Some(inputs) = self.timeline.requests.get(key) else {
             return div().into_any_element();
         };
-        let is_question = matches!(request.request_body, RequestBody::Question { .. });
         let mut body = v_flex()
+            .w_full()
+            .max_w(px(CHAT_WIDTH))
             .gap_3()
             .p_4()
-            .rounded_lg()
-            .bg(rgb(if is_question {
-                appearance::SURFACE
-            } else {
-                0x30312a
-            }))
-            .child(request.title.clone())
-            .when(
-                !is_question || inputs.sent || !request.can_respond,
-                |body| body.child(request.body.clone()),
+            .rounded(px(20.))
+            .bg(rgb(appearance::SURFACE))
+            .border_1()
+            .border_color(rgb(appearance::BORDER))
+            .child(div().text_sm().text_color(rgb(appearance::MUTED)).child(
+                agent_core::localization::localized_ui_text(language, request.title.clone()),
+            ))
+            .child(request.body.clone());
+        if let Some(error) = self
+            .model
+            .failures
+            .get(&op::OperationKey::Request { id: key.clone() })
+        {
+            body = body.child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(0xff8e86))
+                    .child(error_message(error)),
             );
+        }
         if !request.details.is_empty() {
             body = body.child(
                 TextView::markdown(
@@ -850,155 +1381,37 @@ impl Desktop {
             return body.into_any_element();
         }
         match &request.request_body {
-            RequestBody::Question { .. } => {
-                for question in &inputs.questions {
-                    if !question.definition.header.is_empty() {
-                        body = body.child(
-                            div()
-                                .text_sm()
-                                .font_semibold()
-                                .child(question.definition.header.clone()),
-                        );
-                    }
-                    body = body.child(question.definition.prompt.clone());
-                    for (index, option) in question.definition.choices.iter().enumerate() {
-                        let request_key = key.to_owned();
-                        let question_id = question.definition.id.clone();
-                        let choice_id = option.id.clone();
-                        let selected = question.selected.contains(&option.id);
-                        let number = index + 1;
-                        body = body.child(
-                            Button::new(format!("answer-{key}-{}-{}", question_id, option.id))
-                                .accessibility_label(format!(
-                                    "{number}. {} {}",
-                                    option.label, option.description
-                                ))
-                                .ghost()
-                                .selected(selected)
-                                .toggled(selected)
-                                .w_full()
-                                .h_auto()
-                                .py_2()
-                                .child(
-                                    h_flex()
-                                        .w_full()
-                                        .min_w_0()
-                                        .items_start()
-                                        .gap_3()
-                                        .child(
-                                            div()
-                                                .flex_shrink_0()
-                                                .min_w_6()
-                                                .h_6()
-                                                .px_1()
-                                                .rounded_sm()
-                                                .bg(rgb(appearance::RAISED))
-                                                .text_sm()
-                                                .text_color(rgb(appearance::MUTED))
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .child(number.to_string()),
-                                        )
-                                        .child(
-                                            v_flex()
-                                                .flex_1()
-                                                .min_w_0()
-                                                .gap_1()
-                                                .whitespace_normal()
-                                                .text_left()
-                                                .child(option.label.clone())
-                                                .when(!option.description.is_empty(), |column| {
-                                                    column.child(
-                                                        div()
-                                                            .text_xs()
-                                                            .text_color(rgb(appearance::MUTED))
-                                                            .child(option.description.clone()),
-                                                    )
-                                                }),
-                                        )
-                                        .child(div().flex_shrink_0().size_6().children(
-                                            selected.then(|| Icon::new(IconName::Check).size_4()),
-                                        )),
-                                )
-                                .on_click(cx.listener(move |view, _, window, cx| {
-                                    let Some(question) =
-                                        view.requests.get_mut(&request_key).and_then(|inputs| {
-                                            inputs.questions.iter_mut().find(|question| {
-                                                question.definition.id == question_id
-                                            })
-                                        })
-                                    else {
-                                        return;
-                                    };
-                                    if question.definition.multiple {
-                                        toggle_set(&mut question.selected, &choice_id);
-                                    } else {
-                                        question.selected.clear();
-                                        question.selected.insert(choice_id.clone());
-                                    }
-                                    question
-                                        .input
-                                        .update(cx, |input, cx| input.set_value("", window, cx));
-                                    cx.notify();
-                                })),
-                        );
-                    }
-                    if question.definition.allow_free_text {
-                        body = body.child(Input::new(&question.input));
-                    }
-                }
-                let key = key.to_owned();
-                body = body.child(self.button(
-                    format!("respond-{key}"),
-                    "回答を送信",
-                    cx,
-                    move |view, _, cx| {
-                        let Some(inputs) = view.requests.get(&key) else {
-                            return;
-                        };
-                        let answers = inputs
-                            .questions
-                            .iter()
-                            .map(|question| {
-                                (
-                                    question.definition.id.clone(),
-                                    agent_core::presentation::conversation::build_question_answer(
-                                        question.definition.multiple,
-                                        question.input.read(cx).value().to_string(),
-                                        question.selected.iter().cloned().collect(),
-                                    ),
-                                )
-                            })
-                            .collect();
-                        view.respond(key.clone(), Answer::Questions { answers });
-                    },
-                ));
-            }
+            // The composer answers questions from its docked panel.
+            RequestBody::Question { .. } => {}
             RequestBody::Approval { choices, .. } | RequestBody::Permission { choices, .. } => {
                 let permission = matches!(request.request_body, RequestBody::Permission { .. });
                 let mut row = h_flex().gap_2().flex_wrap();
                 for choice in choices {
                     let key = key.to_owned();
                     let choice_id = choice.id.clone();
-                    row = row.child(self.button(
-                        format!("decision-{key}-{}", choice.id),
-                        choice.label.clone(),
+                    let tone = agent_core::presentation::conversation::choice_tone(choice.effect);
+                    row = row.child(ranked(
+                        button(
+                            format!("decision-{key}-{}", choice.id),
+                            choice.label.clone(),
+                            cx,
+                            move |_, _, cx| {
+                                cx.emit(ConversationAction::Respond(
+                                    key.clone(),
+                                    if permission {
+                                        Answer::Permission {
+                                            choice_id: choice_id.clone(),
+                                        }
+                                    } else {
+                                        Answer::Approval {
+                                            choice_id: choice_id.clone(),
+                                        }
+                                    },
+                                ))
+                            },
+                        ),
+                        tone,
                         cx,
-                        move |view, _, _| {
-                            view.respond(
-                                key.clone(),
-                                if permission {
-                                    Answer::Permission {
-                                        choice_id: choice_id.clone(),
-                                    }
-                                } else {
-                                    Answer::Approval {
-                                        choice_id: choice_id.clone(),
-                                    }
-                                },
-                            )
-                        },
                     ));
                     if !choice.description.is_empty() {
                         body = body.child(choice.description.clone());
@@ -1009,17 +1422,15 @@ impl Desktop {
             RequestBody::Elicitation { input, .. } => {
                 if let ElicitationInput::Url { url } = input {
                     let url = url.clone();
-                    body = body.child(self.button(
+                    body = body.child(button(
                         format!("elicitation-url-{key}"),
-                        "リンクを開く",
+                        language.text("リンクを開く"),
                         cx,
-                        move |view, window, cx| {
-                            view.click_conversation_link(
-                                &url,
+                        move |_, window, cx| {
+                            cx.emit(ConversationAction::OpenLink(
+                                url.clone(),
                                 window.modifiers().control,
-                                window,
-                                cx,
-                            )
+                            ))
                         },
                     ));
                 } else {
@@ -1027,106 +1438,133 @@ impl Desktop {
                 }
                 let accept_key = key.to_owned();
                 let request_body = request.request_body.clone();
-                body = body.child(self.button(
-                    format!("elicitation-accept-{accept_key}"),
-                    "確認して送信",
-                    cx,
-                    move |view, _, cx| {
-                        let Some(inputs) = view.requests.get(&accept_key) else {
-                            return;
-                        };
-                        match agent_core::presentation::conversation::answer_from_json(
-                            &request_body,
-                            &inputs.response.read(cx).value(),
-                        ) {
-                            Ok(answer) => view.respond(accept_key.clone(), answer),
-                            Err(error) => view.set_error(error),
-                        }
-                    },
-                ));
-                for (action, label) in [
-                    (ElicitationAnswer::Decline, "辞退"),
-                    (ElicitationAnswer::Cancel, "キャンセル"),
-                ] {
-                    let key = key.to_owned();
-                    body = body.child(self.button(
-                        format!("elicitation-{label}-{key}"),
-                        label,
-                        cx,
-                        move |view, _, _| {
-                            view.respond(
-                                key.clone(),
-                                Answer::Elicitation {
-                                    action: action.clone(),
-                                },
-                            )
-                        },
-                    ));
-                }
-            }
-            RequestBody::ToolExecution { .. } => {
-                let key = key.to_owned();
-                let request_body = request.request_body.clone();
-                body = body
-                    .child(Textarea::new(&inputs.response))
-                    .child(self.button(
-                        format!("tool-answer-{key}"),
-                        "実行結果を送信",
+                let mut row = h_flex().gap_2().flex_wrap().child(ranked(
+                    button(
+                        format!("elicitation-accept-{accept_key}"),
+                        language.text("確認して送信"),
                         cx,
                         move |view, _, cx| {
-                            let Some(inputs) = view.requests.get(&key) else {
+                            let Some(inputs) = view.timeline.requests.get(&accept_key) else {
                                 return;
                             };
                             match agent_core::presentation::conversation::answer_from_json(
                                 &request_body,
                                 &inputs.response.read(cx).value(),
                             ) {
-                                Ok(answer) => view.respond(key.clone(), answer),
-                                Err(error) => view.set_error(error),
+                                Ok(answer) => {
+                                    cx.emit(ConversationAction::Respond(accept_key.clone(), answer))
+                                }
+                                Err(error) => cx.emit(ConversationAction::Error(error)),
                             }
                         },
+                    ),
+                    ActionTone::Primary,
+                    cx,
+                ));
+                for (action, label, tone) in [
+                    (
+                        ElicitationAnswer::Decline,
+                        language.text("辞退"),
+                        ActionTone::Danger,
+                    ),
+                    (
+                        ElicitationAnswer::Cancel,
+                        language.text("キャンセル"),
+                        ActionTone::Secondary,
+                    ),
+                ] {
+                    let key = key.to_owned();
+                    row = row.child(ranked(
+                        button(
+                            format!("elicitation-{label}-{key}"),
+                            label,
+                            cx,
+                            move |_, _, cx| {
+                                cx.emit(ConversationAction::Respond(
+                                    key.clone(),
+                                    Answer::Elicitation {
+                                        action: action.clone(),
+                                    },
+                                ))
+                            },
+                        ),
+                        tone,
+                        cx,
                     ));
+                }
+                body = body.child(row);
+            }
+            RequestBody::ToolExecution { .. } => {
+                let key = key.to_owned();
+                let request_body = request.request_body.clone();
+                body = body.child(Textarea::new(&inputs.response)).child(ranked(
+                    button(
+                        format!("tool-answer-{key}"),
+                        language.text("実行結果を送信"),
+                        cx,
+                        move |view, _, cx| {
+                            let Some(inputs) = view.timeline.requests.get(&key) else {
+                                return;
+                            };
+                            match agent_core::presentation::conversation::answer_from_json(
+                                &request_body,
+                                &inputs.response.read(cx).value(),
+                            ) {
+                                Ok(answer) => {
+                                    cx.emit(ConversationAction::Respond(key.clone(), answer))
+                                }
+                                Err(error) => cx.emit(ConversationAction::Error(error)),
+                            }
+                        },
+                    ),
+                    ActionTone::Primary,
+                    cx,
+                ));
             }
         }
-        h_flex()
-            .w_full()
-            .justify_center()
-            .px_6()
-            .pb_5()
-            .child(body.max_w(px(CHAT_WIDTH)))
-            .into_any_element()
+        body.into_any_element()
+    }
+    /// Requests wait above the composer, as in T3 Code.
+    fn docked_requests(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let docked = self.model.docked.clone();
+        (!docked.is_empty()).then(|| {
+            // Long details scroll instead of hiding the conversation.
+            v_flex()
+                .id("docked-requests")
+                .w_full()
+                .max_h(relative(0.5))
+                .overflow_y_scroll()
+                .items_center()
+                .gap_3()
+                .px_6()
+                .pt_2()
+                .children(docked.iter().map(|request| self.request_card(request, cx)))
+                .into_any_element()
+        })
     }
     pub(in crate::app) fn sync_request_inputs(
         &mut self,
+        requests: &[Arc<agent_protocol::requests::Request>],
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.requests
-            .retain(|key, _| self.snapshot.request(key).is_some());
-        for request in self.snapshot.requests() {
+        self.timeline
+            .requests
+            .retain(|key, _| requests.iter().any(|request| &request.id == key));
+        for request in requests {
             let key = &request.id;
-            if self.requests.contains_key(key) {
+            // The composer's answer field answers questions.
+            if self.timeline.requests.contains_key(key)
+                || matches!(
+                    request.body,
+                    agent_protocol::requests::RequestBody::Question { .. }
+                )
+            {
                 continue;
             }
-            let questions = match &request.body {
-                agent_protocol::requests::RequestBody::Question { questions } => questions
-                    .iter()
-                    .map(|question| Question {
-                        definition: question.clone(),
-                        selected: HashSet::new(),
-                        input: cx.new(|cx| {
-                            InputState::new(window, cx)
-                                .placeholder("回答を入力")
-                                .masked(question.secret)
-                        }),
-                    })
-                    .collect(),
-                _ => Vec::new(),
-            };
-            self.requests.insert(
+            self.timeline.requests.insert(
                 key.clone(),
                 RequestInputs {
-                    questions,
                     response: cx.new(|cx| {
                         TextareaState::new(window, cx)
                             .default_value(
@@ -1143,12 +1581,29 @@ impl Desktop {
     }
 }
 
+/// Request actions in the tone the core ranks them, with T3 Code's danger tint.
+fn ranked(button: Button, tone: ActionTone, cx: &App) -> Button {
+    use gpui_kit::component::button::{ButtonCustomVariant, ButtonVariant};
+    match tone {
+        ActionTone::Primary => button.primary(),
+        ActionTone::Secondary => button.with_variant(ButtonVariant::Secondary),
+        ActionTone::Danger => button.custom(
+            ButtonCustomVariant::new(cx)
+                .color(rgb(0x301214).into())
+                .foreground(rgb(0xff6467).into())
+                .hover(rgb(0x3d171a).into())
+                .active(rgb(0x4a1c20).into()),
+        ),
+    }
+}
+
 fn user_message_row(
     id: &str,
     text: &str,
     body: Div,
     timestamp: Option<i64>,
     edit: Button,
+    language: agent_core::localization::UiLanguage,
 ) -> impl IntoElement {
     let time = timestamp
         .and_then(|value| chrono::DateTime::from_timestamp(value, 0))
@@ -1160,50 +1615,510 @@ fn user_message_row(
         });
     let copy_text = text.to_owned();
     let group = SharedString::from(format!("user-message-{id}"));
-    h_flex().w_full().justify_end().my_4().child(
-        v_flex()
-            .min_w_0()
-            .max_w_full()
-            .group(group.clone())
-            .items_end()
-            .gap_1()
-            .child(body.w_full())
+    v_flex()
+        .w_full()
+        .min_w_0()
+        .group(group.clone())
+        .items_end()
+        .gap_1()
+        .my_4()
+        .child(body)
+        .child(
+            h_flex()
+                .debug_selector(|| "user-message-actions".into())
+                .invisible()
+                .group_hover(group, |style| style.visible())
+                .children(time.map(|time| {
+                    div()
+                        .text_xs()
+                        .text_color(rgb(appearance::MUTED))
+                        .mr_2()
+                        .child(time)
+                }))
+                .child(
+                    Button::new(format!("copy-{id}"))
+                        .debug_selector(|| "user-message-copy".into())
+                        .icon(IconName::Copy)
+                        .small()
+                        .ghost()
+                        .tooltip(language.text("発言をコピー"))
+                        .accessibility_label(language.text("発言をコピー"))
+                        .disabled(copy_text.is_empty())
+                        .on_click(move |_, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()));
+                        }),
+                )
+                .child(
+                    edit.icon(Icon::default().path("icons/pencil.svg"))
+                        .small()
+                        .ghost()
+                        .debug_selector(|| "user-message-edit".into())
+                        .tooltip(language.text("入力欄で編集"))
+                        .accessibility_label(language.text("入力欄で編集"))
+                        .disabled(text.is_empty()),
+                ),
+        )
+}
+
+impl ConversationView {
+    fn history_control(
+        &self,
+        control: agent_core::presentation::conversation::HistoryControl,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let language = crate::localization::language(cx);
+        let label: SharedString = if control.has_more {
+            agent_core::localization::localized_ui_text(language, control.load_label).into()
+        } else {
+            language.text("再試行").into()
+        };
+        h_flex()
+            .w_full()
+            .justify_center()
+            .px_6()
+            .py_2()
             .child(
-                h_flex()
-                    .debug_selector(|| "user-message-actions".into())
-                    .invisible()
-                    .group_hover(group, |style| style.visible())
-                    .children(time.map(|time| {
+                v_flex()
+                    .w_full()
+                    .max_w(px(CHAT_WIDTH))
+                    .gap_1p5()
+                    .when(control.has_more || control.error.is_some(), |body| {
+                        body.child(
+                            Button::new("conversation-history-load")
+                                .debug_selector(|| "conversation-history-load".into())
+                                .accessibility_label(label.clone())
+                                .small()
+                                .ghost()
+                                .w_full()
+                                .disabled(control.loading)
+                                .child(
+                                    h_flex()
+                                        .w_full()
+                                        .gap_3()
+                                        .child(div().flex_1().h(px(1.)).bg(rgb(appearance::BORDER)))
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(rgb(appearance::MUTED))
+                                                .child(label),
+                                        )
+                                        .child(
+                                            div().flex_1().h(px(1.)).bg(rgb(appearance::BORDER)),
+                                        ),
+                                )
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    if let Some(thread_id) = view.model.session.as_ref().cloned() {
+                                        view.timeline.pause_tail();
+                                        cx.emit(ConversationAction::Dispatch(Intent::ReadOlder {
+                                            thread_id,
+                                        }));
+                                        cx.notify();
+                                    }
+                                })),
+                        )
+                    })
+                    .when_some(control.error, |body, error| {
+                        body.child(
+                            div()
+                                .debug_selector(|| "conversation-history-error".into())
+                                .text_xs()
+                                .text_center()
+                                .text_color(rgb(appearance::MUTED))
+                                .child(error),
+                        )
+                    }),
+            )
+            .into_any_element()
+    }
+    pub(super) fn conversation_list(&self, cx: &Context<Self>) -> List {
+        let entity = cx.entity().downgrade();
+        list(self.timeline.list.clone(), move |index, window, cx| {
+            entity
+                .update(cx, |view, cx| {
+                    match view.timeline.rows.get(index).cloned() {
+                        Some(ConversationRow::History(control)) => {
+                            view.history_control(control, cx)
+                        }
+                        Some(ConversationRow::Turn { turn, index, last }) => {
+                            let session = view
+                                .timeline
+                                .rendered
+                                .as_ref()
+                                .and_then(|conversation| conversation.source.id.clone());
+                            view.turn_row(session.as_ref(), &turn, index, last, window, cx)
+                        }
+                        Some(ConversationRow::Queued(item)) => {
+                            let row = match &item.source {
+                                agent_core::presentation::conversation::ItemSource::Native(
+                                    native,
+                                ) => view.item(&item, native, None, cx),
+                                agent_core::presentation::conversation::ItemSource::Pending(
+                                    _,
+                                    pending,
+                                ) => view.pending_item(&item.data, &pending.draft, cx),
+                            };
+                            h_flex()
+                                .justify_center()
+                                .w_full()
+                                .px_6()
+                                .pb_8()
+                                .child(v_flex().w_full().max_w(px(CHAT_WIDTH)).gap_4().child(row))
+                                .into_any_element()
+                        }
+                        Some(ConversationRow::Preparation(preparation)) => {
+                            view.preparation_card(&preparation, cx)
+                        }
+                        None => div().into_any_element(),
+                    }
+                })
+                .unwrap_or_else(|_| div().into_any_element())
+        })
+        .flex_1()
+        .min_h_0()
+    }
+    fn viewport(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let language = crate::localization::language(cx);
+        let history = self.conversation_list(cx);
+        let mut body = v_flex()
+            .debug_selector(|| "conversation-viewport".into())
+            .w_full()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .child(
+                div().w_full().max_w(px(CHAT_WIDTH)).mx_auto().px_4().child(
+                    self.desktop
+                        .update(cx, |_, cx| {
+                            Desktop::error_list(
+                                &self.model.errors,
+                                ErrorScope::Conversation {
+                                    draft_key: self.model.draft_key.clone(),
+                                },
+                                None,
+                                cx,
+                            )
+                        })
+                        .unwrap_or_else(|_| v_flex()),
+                ),
+            );
+        for notice in [&self.model.input_notice, &self.model.history_notice]
+            .into_iter()
+            .flatten()
+        {
+            body = body.child(div().px_4().py_2().text_sm().child(
+                agent_core::localization::localized_ui_text(language, notice.clone()),
+            ));
+        }
+        if self.timeline.rendered.is_none() {
+            if let Some(control) = self.model.history.clone() {
+                body = body.child(self.history_control(control, cx));
+            }
+            body = body.child(
+                v_flex()
+                    .flex_1()
+                    .items_center()
+                    .justify_center()
+                    .gap_4()
+                    .child(
                         div()
-                            .text_xs()
-                            .text_color(rgb(appearance::MUTED))
-                            .mr_2()
-                            .child(time)
-                    }))
-                    .child(
-                        Button::new(format!("copy-{id}"))
-                            .debug_selector(|| "user-message-copy".into())
-                            .icon(IconName::Copy)
-                            .small()
-                            .ghost()
-                            .tooltip("発言をコピー")
-                            .accessibility_label("発言をコピー")
-                            .disabled(copy_text.is_empty())
-                            .on_click(move |_, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()));
-                            }),
+                            .text_2xl()
+                            .child(language.text("何から始めましょうか？")),
                     )
-                    .child(
-                        edit.icon(Icon::default().path("bex/pencil.svg"))
-                            .small()
-                            .ghost()
-                            .debug_selector(|| "user-message-edit".into())
-                            .tooltip("入力欄で編集")
-                            .accessibility_label("入力欄で編集")
-                            .disabled(text.is_empty()),
-                    ),
-            ),
-    )
+                    .child(if self.model.cwd.is_empty() {
+                        language
+                            .text("メッセージを入力して、作業を始めましょう。")
+                            .into()
+                    } else {
+                        file_name(&self.model.cwd)
+                    }),
+            );
+        } else {
+            let mut viewport = div()
+                .relative()
+                .pl_4()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .child(selection::ConversationSelection::wrap(
+                    &self.selection,
+                    history,
+                ))
+                .child(deferred(self.conversation_navigation(cx)));
+            if !self.timeline.list.is_following_tail() {
+                viewport = viewport.child(deferred(
+                    h_flex()
+                        .absolute()
+                        .bottom_2()
+                        .left_0()
+                        .w_full()
+                        .justify_center()
+                        .child(
+                            icon_button(
+                                "conversation-latest",
+                                IconName::ArrowDown,
+                                language.text("最新のメッセージへ"),
+                                cx,
+                                |view, _, _| {
+                                    view.timeline.list.set_follow_mode(FollowMode::Tail);
+                                },
+                            )
+                            .debug_selector(|| "conversation-latest".into())
+                            .rounded_full()
+                            .bg(rgb(appearance::RAISED))
+                            .size(px(36.)),
+                        ),
+                ));
+            }
+            body = body.child(viewport);
+        }
+        body.children(self.docked_requests(cx)).into_any_element()
+    }
+}
+impl Render for ConversationView {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(test)]
+        {
+            self.renders += 1;
+        }
+        self.viewport(cx)
+    }
+}
+
+impl ConversationView {
+    pub(super) fn markdown(
+        &mut self,
+        id: String,
+        source: &str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let language = crate::localization::language(cx);
+        if self
+            .timeline
+            .markdown
+            .get(&id)
+            .is_none_or(|cached| cached.source != source)
+        {
+            let presentation = agent_core::presentation::markdown::markdown_presentation(source);
+            let source: SharedString = source.to_owned().into();
+            let (wrap_code, compact_tables) = self
+                .timeline
+                .markdown
+                .get(&id)
+                .map_or((false, false), |cached| {
+                    (cached.wrap_code, cached.compact_tables)
+                });
+            self.timeline.markdown.insert(
+                id.clone(),
+                MarkdownContent {
+                    source,
+                    rendered: presentation.source.into(),
+                    images: presentation.images.into(),
+                    code_headers: Arc::new(presentation.code_headers),
+                    diagrams: HashMap::new(),
+                    wrap_code,
+                    compact_tables,
+                },
+            );
+        }
+        let cached = &self.timeline.markdown[&id];
+        let images = cached.images.clone();
+        let view = cx.entity().downgrade();
+        let wrap_code = cached.wrap_code;
+        let compact_tables = cached.compact_tables;
+        let headers = cached.code_headers.clone();
+        let wrap_view = view.clone();
+        let table_view = view.clone();
+        let code_key = id.clone();
+        let table_key = id.clone();
+        let diagram_key = id.clone();
+        let diagram_view = view.clone();
+        let mut code_style = gpui_kit::StyleRefinement::default()
+            .pt(px(44.))
+            .border_1()
+            .border_color(cx.theme().border);
+        code_style.overflow.x = Some(gpui_kit::Overflow::Scroll);
+        code_style.text.white_space = Some(if wrap_code {
+            gpui_kit::WhiteSpace::Normal
+        } else {
+            gpui_kit::WhiteSpace::Nowrap
+        });
+        let mut table_cell = gpui_kit::StyleRefinement::default();
+        table_cell.text.white_space = Some(if compact_tables {
+            gpui_kit::WhiteSpace::Nowrap
+        } else {
+            gpui_kit::WhiteSpace::Normal
+        });
+        let mut table_style = gpui_kit::StyleRefinement::default();
+        table_style.overflow.x = Some(gpui_kit::Overflow::Scroll);
+        let style = gpui_kit::component::text::TextViewStyle::default()
+            .code_block(code_style)
+            .table(table_style)
+            .table_cell(table_cell);
+        let mut body = v_flex().gap_3().w_full().child(
+            TextView::markdown(SharedString::from(id), cached.rendered.clone())
+                .selectable(true)
+                .markdown_block_parser(|node, context| {
+                    let original = context.node_source(node)?;
+                    let diagram = agent_core::presentation::markdown::markdown_diagram(original)?;
+                    Some(
+                        gpui_kit::base::text::MarkdownNode::new("mermaid", diagram.clone())
+                            .text(diagram.source)
+                            .markdown(original.to_owned()),
+                    )
+                })
+                .markdown_block_renderer("mermaid", move |node, _, cx| {
+                    diagram_view
+                        .update(cx, |view, cx| view.markdown_diagram(&diagram_key, node, cx))
+                        .unwrap_or_else(|_| div().into_any_element())
+                })
+                .style(style)
+                .selection_format(gpui_kit::component::text::SelectionFormat::Source)
+                .code_block_actions(move |block, _, _| {
+                    let text = block.code();
+                    let label = block
+                        .span
+                        .and_then(|span| headers.get(&span.start))
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            block.lang().unwrap_or_else(|| "CODE".into()).to_string()
+                        });
+                    let wrap_view = wrap_view.clone();
+                    let code_key = code_key.clone();
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .child(
+                            div()
+                                .min_w_0()
+                                .max_w(px(220.))
+                                .text_ellipsis()
+                                .text_xs()
+                                .child(label),
+                        )
+                        .child(
+                            Button::new("wrap-code")
+                                .label(if wrap_code {
+                                    language.text("折り返し解除")
+                                } else {
+                                    language.text("折り返し")
+                                })
+                                .small()
+                                .ghost()
+                                .on_click(move |_, _, cx| {
+                                    let _ = wrap_view.update(cx, |view, cx| {
+                                        if let Some(cached) =
+                                            view.timeline.markdown.get_mut(&code_key)
+                                        {
+                                            cached.wrap_code = !cached.wrap_code;
+                                        }
+                                        view.timeline.remeasure_item(&code_key);
+                                        cx.notify();
+                                    });
+                                }),
+                        )
+                        .child(
+                            Button::new("copy-code")
+                                .icon(IconName::Copy)
+                                .small()
+                                .ghost()
+                                .tooltip(language.text("コードをコピー"))
+                                .on_click(move |_, _, cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(
+                                        text.to_string(),
+                                    ))
+                                }),
+                        )
+                })
+                .table_actions(move |table, _, _| {
+                    let table_view = table_view.clone();
+                    let table_key = table_key.clone();
+                    let markdown = table.markdown.clone();
+                    let mut rows = vec![table.headers.clone()];
+                    rows.extend(table.rows.clone());
+                    h_flex()
+                        .gap_2()
+                        .justify_end()
+                        .child(
+                            Button::new("wrap-table")
+                                .label(if compact_tables {
+                                    language.text("セルを折り返す")
+                                } else {
+                                    language.text("セルをコンパクトに表示")
+                                })
+                                .small()
+                                .ghost()
+                                .on_click(move |_, _, cx| {
+                                    let _ = table_view.update(cx, |view, cx| {
+                                        if let Some(cached) =
+                                            view.timeline.markdown.get_mut(&table_key)
+                                        {
+                                            cached.compact_tables = !cached.compact_tables;
+                                        }
+                                        view.timeline.remeasure_item(&table_key);
+                                        cx.notify();
+                                    });
+                                }),
+                        )
+                        .child(
+                            Button::new("copy-markdown")
+                                .label(language.text("Markdownをコピー"))
+                                .small()
+                                .ghost()
+                                .on_click(move |_, _, cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(
+                                        markdown.clone(),
+                                    ))
+                                }),
+                        )
+                        .child(
+                            Button::new("copy-csv")
+                                .label(language.text("CSVをコピー"))
+                                .small()
+                                .ghost()
+                                .on_click(move |_, _, cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(
+                                        agent_core::presentation::markdown::markdown_table_csv(
+                                            rows.clone(),
+                                        ),
+                                    ))
+                                }),
+                        )
+                })
+                .on_link_click(move |url, event, window, cx| {
+                    if let gpui_kit::ClickEvent::Mouse(click) = event
+                        && click.up.button == MouseButton::Right
+                    {
+                        let _ = view.update(cx, |view, cx| {
+                            view.selection.update(cx, |selection, cx| {
+                                selection.show_context_menu(
+                                    Some(url.to_string()),
+                                    click.up.position,
+                                    window,
+                                    cx,
+                                );
+                            });
+                        });
+                        return;
+                    }
+                    let _ = view.update(cx, |_, cx| {
+                        cx.emit(ConversationAction::OpenLink(
+                            url.to_string(),
+                            event.modifiers().control,
+                        ))
+                    });
+                }),
+        );
+        for source in images.iter() {
+            body = body.child(
+                self.desktop
+                    .update(cx, |desktop, cx| {
+                        desktop.image(source, false, 320., true, cx)
+                    })
+                    .unwrap_or_else(|_| div().into_any_element()),
+            );
+        }
+        body.into_any_element()
+    }
 }
 
 #[cfg(test)]
@@ -1224,6 +2139,7 @@ mod tests {
                 user_message_bubble().child("一行目\nsecond line"),
                 Some(1),
                 gpui::component::button::Button::new("edit"),
+                agent_core::localization::UiLanguage::Japanese,
             )
         }
     }
@@ -1252,26 +2168,38 @@ mod tests {
 mod rendering_tests {
     use super::{Desktop, Mode, Snapshot};
     use crate::app::ImageState;
-    use agent_core::presentation::conversation::{RenderedConversation, project_conversation};
     use agent_core::state::operations as op;
     use gpui_kit as gpui;
     use gpui_kit::{
-        AppContext, Context, Entity, IntoElement, Render, RenderImage, TestAppContext, Window, px,
-        size,
+        AppContext, Context, Entity, IntoElement, ParentElement, Render, RenderImage, Styled,
+        TestAppContext, Window, px, size,
     };
     use std::sync::Arc;
 
+    struct ClockView {
+        progress: super::WorkProgress,
+        clock: Option<Entity<super::WorkProgressView>>,
+    }
+
+    impl Render for ClockView {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let clock = super::WorkProgressView::view("fixture", self.progress.clone(), window, cx);
+            self.clock = Some(clock.clone());
+            clock
+        }
+    }
+
     struct ConversationView {
         desktop: Entity<Desktop>,
-        conversation: Arc<RenderedConversation>,
     }
     impl Render for ConversationView {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-            self.desktop.update(cx, |desktop, cx| {
-                desktop.turn(
-                    self.conversation.source.id.as_ref(),
-                    &self.conversation.turns[0],
-                    cx,
+            self.desktop.update(cx, |desktop, _| {
+                gpui_kit::div().size_full().flex().flex_col().child(
+                    desktop
+                        .conversation
+                        .clone()
+                        .cached(gpui_kit::StyleRefinement::default().size_full()),
                 )
             })
         }
@@ -1296,30 +2224,269 @@ mod rendering_tests {
 
     impl ConversationView {
         fn new(
-            snapshot: Snapshot,
+            mut snapshot: Snapshot,
             source: agent_protocol::models::Thread,
             window: &mut Window,
             cx: &mut Context<Self>,
         ) -> Self {
-            Self {
-                desktop: cx.new(|cx| {
-                    Desktop::new(
-                        Mode::SideChat {
-                            // Reject before reading preferences or connecting to a real Host.
-                            remote: Some(agent_protocol::models::RemoteHost {
-                                id: "fixture".into(),
-                                name: "fixture".into(),
-                                ticket: "invalid-fixture-ticket".into(),
-                            }),
-                            cwd: "/fixture".into(),
-                        },
-                        window,
-                        cx,
-                    )
-                }),
-                conversation: project_conversation(&snapshot, Arc::new(source), &None),
-            }
+            Arc::make_mut(&mut snapshot.navigation).thread_id = source.id.clone();
+            Arc::make_mut(&mut snapshot.conversations)
+                .insert(source.id.clone().unwrap(), Arc::new(source));
+            let desktop = cx.new(|cx| {
+                let mut desktop = Desktop::new(
+                    Mode::SideChat {
+                        // Reject before reading preferences or connecting to a real Host.
+                        remote: Some(agent_protocol::models::RemoteHost {
+                            id: "fixture".into(),
+                            name: "fixture".into(),
+                            ticket: "invalid-fixture-ticket".into(),
+                        }),
+                        cwd: "/fixture".into(),
+                    },
+                    window,
+                    cx,
+                );
+                desktop.snapshot = Arc::new(snapshot);
+                desktop.sync_conversation(window, cx);
+                desktop
+            });
+            Self { desktop }
         }
+    }
+
+    #[gpui::test]
+    fn streaming_keeps_an_unfinished_request_answer(cx: &mut TestAppContext) {
+        let _runtime = init(cx);
+        let mut source: agent_protocol::models::Thread =
+            serde_json::from_value(serde_json::json!({
+                "id":{"provider":"codex","id":"fixture"}, "turns":[]
+            }))
+            .unwrap();
+        source.requests.insert(
+            "request".into(),
+            Arc::new(agent_protocol::requests::Request {
+                id: "request".into(),
+                target: agent_protocol::requests::RequestTarget::Session,
+                delivery: agent_protocol::session::RequestDelivery::Awaiting,
+                body: agent_protocol::requests::RequestBody::Elicitation {
+                    server: "fixture".into(),
+                    message: "Answer".into(),
+                    input: agent_protocol::requests::ElicitationInput::Form { fields: vec![] },
+                },
+            }),
+        );
+        let (view, window) = cx.add_window_view(|window, cx| {
+            ConversationView::new(Snapshot::default(), source, window, cx)
+        });
+        window.run_until_parked();
+        let desktop = view.read_with(window, |view, _| view.desktop.clone());
+        window.update(|window, cx| {
+            let input = desktop.read(cx).conversation.read(cx).timeline.requests["request"]
+                .response
+                .clone();
+            input.update(cx, |input, cx| {
+                input.set_value("{\"answer\":\"Keep my answer\"}", window, cx)
+            });
+        });
+        desktop.update(window, |desktop, cx| {
+            let session = desktop.selected().unwrap().clone();
+            let snapshot = Arc::make_mut(&mut desktop.snapshot);
+            let thread = Arc::make_mut(
+                Arc::make_mut(&mut snapshot.conversations)
+                    .get_mut(&session)
+                    .unwrap(),
+            );
+            thread.name = Some("Updated while answering".into());
+            cx.notify();
+        });
+        window.run_until_parked();
+        desktop.read_with(window, |desktop, cx| {
+            assert_eq!(
+                desktop.conversation.read(cx).timeline.requests["request"]
+                    .response
+                    .read(cx)
+                    .value()
+                    .as_ref(),
+                "{\"answer\":\"Keep my answer\"}"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn elapsed_work_ticks_without_notifying_its_conversation(cx: &mut TestAppContext) {
+        use std::{cell::Cell, rc::Rc, time::Duration};
+        let _runtime = init(cx);
+        let source = serde_json::from_value(serde_json::json!({
+            "turns":[{"id":"running", "status":"running", "startedAt":100.}]
+        }))
+        .unwrap();
+        let conversation = agent_core::presentation::conversation::project_conversation(
+            &Snapshot::default(),
+            Arc::new(source),
+            &None,
+        );
+        let progress = conversation.turns[0].work_progress(false);
+        let (view, window) = cx.add_window_view(|_, _| ClockView {
+            progress,
+            clock: None,
+        });
+        window.run_until_parked();
+        let clock = view.read_with(window, |view, _| view.clock.clone().unwrap());
+        let parent_notifications = Rc::new(Cell::new(0));
+        let ticks = Rc::new(Cell::new(0));
+        let _subscriptions = window.update(|_, cx| {
+            let parents = parent_notifications.clone();
+            let ticks = ticks.clone();
+            (
+                cx.observe(&view, move |_, _| parents.set(parents.get() + 1)),
+                cx.observe(&clock, move |_, _| ticks.set(ticks.get() + 1)),
+            )
+        });
+        window.executor().advance_clock(Duration::from_secs(1));
+        window.run_until_parked();
+        assert!(ticks.get() > 0, "the visible elapsed label must update");
+        assert_eq!(
+            parent_notifications.get(),
+            0,
+            "a clock tick must not notify conversation observers"
+        );
+    }
+
+    #[gpui::test]
+    fn a_long_single_turn_only_mounts_messages_near_the_viewport(cx: &mut TestAppContext) {
+        use std::{cell::Cell, rc::Rc, time::Duration};
+        let _runtime = init(cx);
+        let source = serde_json::from_value(serde_json::json!({
+            "id": {"provider":"codex", "id":"fixture"},
+            "turns": [{"id":"long-turn", "status":"running", "items":
+                (0..1000).map(|index| serde_json::json!({
+                    "id":format!("answer-{index}"),
+                    "body":{"inline":{"body":{"assistantText":{
+                        "text":format!("Update {index}\n\nA paragraph explaining the current work."),
+                        "phase":"final"
+                    }}}}
+                })).collect::<Vec<_>>()
+            }]
+        })).unwrap();
+        let (view, window) = cx.add_window_view(|window, cx| {
+            ConversationView::new(Snapshot::default(), source, window, cx)
+        });
+        window.simulate_resize(size(px(900.), px(650.)));
+        window.run_until_parked();
+        view.update(window, |view, cx| {
+            let desktop = view.desktop.read(cx);
+            assert!(desktop.conversation.read(cx).timeline.rows.len() >= 1000);
+            assert!(
+                desktop
+                    .conversation
+                    .read(cx)
+                    .timeline
+                    .markdown
+                    .contains_key("answer-999")
+            );
+            assert!(
+                !desktop
+                    .conversation
+                    .read(cx)
+                    .timeline
+                    .markdown
+                    .contains_key("answer-0")
+            );
+            assert!(
+                desktop.conversation.read(cx).timeline.markdown.len() < 40,
+                "opening a turn must not parse its offscreen messages"
+            );
+        });
+        let notifications = Rc::new(Cell::new(0));
+        let _subscription = window.update(|_, cx| {
+            let count = notifications.clone();
+            let desktop = view.read(cx).desktop.clone();
+            cx.observe(&desktop, move |_, _| count.set(count.get() + 1))
+        });
+        window.executor().advance_clock(Duration::from_secs(1));
+        window.run_until_parked();
+        assert_eq!(
+            notifications.get(),
+            0,
+            "elapsed time must not notify Desktop observers"
+        );
+        view.update(window, |view, cx| {
+            view.desktop.update(cx, |desktop, cx| {
+                desktop.conversation.update(cx, |view, cx| {
+                    view.timeline
+                        .list
+                        .scroll_to(gpui_kit::ListOffset::default());
+                    cx.notify();
+                });
+                cx.notify();
+            });
+        });
+        window.run_until_parked();
+        view.update(window, |view, cx| {
+            assert!(
+                view.desktop
+                    .read(cx)
+                    .conversation
+                    .read(cx)
+                    .timeline
+                    .markdown
+                    .contains_key("answer-0")
+            );
+        });
+        let first_message = "conversation-row-history-item:long-turn:answer-0:occurrence:0";
+        let before = window.debug_bounds(first_message).unwrap().top();
+        view.update(window, |view, cx| {
+            view.desktop.update(cx, |desktop, cx| {
+                let session = desktop.selected().unwrap().clone();
+                let snapshot = Arc::make_mut(&mut desktop.snapshot);
+                let thread = Arc::make_mut(
+                    Arc::make_mut(&mut snapshot.conversations)
+                        .get_mut(&session)
+                        .unwrap(),
+                );
+                let items = Arc::make_mut(&mut thread.turns.as_mut().unwrap()[0])
+                    .items
+                    .as_mut()
+                    .unwrap();
+                items.insert(
+                    0,
+                    Arc::new(
+                        serde_json::from_value(serde_json::json!({
+                            "id":"older-answer", "body":{"inline":{"body":{"assistantText":{
+                                "text":"An earlier message from the same turn.", "phase":"final"
+                            }}}}
+                        }))
+                        .unwrap(),
+                    ),
+                );
+                items.push(Arc::new(
+                    serde_json::from_value(serde_json::json!({
+                        "id":"new-answer", "body":{"inline":{"body":{"assistantText":{
+                            "text":"A live update arriving with the history page.", "phase":"final"
+                        }}}}
+                    }))
+                    .unwrap(),
+                ));
+
+                cx.notify();
+            })
+        });
+        window.run_until_parked();
+        view.update(window, |view, cx| {
+            let desktop = view.desktop.read(cx);
+            assert!(
+                !desktop
+                    .conversation
+                    .read(cx)
+                    .timeline
+                    .list
+                    .is_following_tail()
+            );
+        });
+        assert!(
+            (window.debug_bounds(first_message).unwrap().top() - before).abs() < px(1.),
+            "prepending history while the same turn streams must preserve the visible message"
+        );
     }
 
     #[gpui::test]
@@ -1363,6 +2530,11 @@ mod rendering_tests {
                 window.debug_bounds("response-fork-progress").is_some(),
                 visible
             );
+            assert_eq!(
+                window.debug_bounds("response-fork").unwrap().size,
+                size(px(24.), px(24.)),
+                "pending and idle fork buttons must keep the same icon-button dimensions"
+            );
         }
     }
 
@@ -1376,10 +2548,13 @@ mod rendering_tests {
                 ConversationView::new(Snapshot::default(), source, window, cx)
             });
             window.run_until_parked();
-            assert_eq!(
-                window.debug_bounds("response-fork").is_some(),
-                status == "completed"
-            );
+            for selector in ["response-fork", "response-copy"] {
+                assert_eq!(
+                    window.debug_bounds(selector).is_some(),
+                    status == "completed",
+                    "{selector}/{status}"
+                );
+            }
         }
     }
 
@@ -1409,7 +2584,10 @@ mod rendering_tests {
                 let progress = window.debug_bounds("conversation-in-progress");
                 if status == "running" {
                     let progress = progress.expect("background work must remain visible");
-                    let response = window.debug_bounds("response-copy").unwrap();
+                    let response = window
+                        .debug_bounds("conversation-row-history-item:turn:answer:occurrence:0")
+                        .expect("the response must remain visible while background work runs");
+                    assert!(window.debug_bounds("response-copy").is_none());
                     assert!(progress.top() >= response.bottom());
                     assert!(progress.size.height > px(0.));
                 } else {
@@ -1425,7 +2603,7 @@ mod rendering_tests {
     struct ChatNavigationView(Entity<Desktop>);
     impl Render for ChatNavigationView {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-            self.0.update(cx, |desktop, cx| desktop.chat(cx))
+            self.0.update(cx, |desktop, _| desktop.chat())
         }
     }
 
@@ -1443,43 +2621,14 @@ mod rendering_tests {
         let (view, window) = cx.add_window_view(|window, cx| {
             let fixture =
                 cx.new(|cx| ConversationView::new(Snapshot::default(), source, window, cx));
-            let fixture = ConversationView {
-                desktop: fixture.read(cx).desktop.clone(),
-                conversation: fixture.read(cx).conversation.clone(),
-            };
-            fixture.desktop.update(cx, |desktop, _| {
-                let snapshot = std::sync::Arc::make_mut(&mut desktop.snapshot);
-                Arc::make_mut(&mut snapshot.navigation).thread_id =
-                    Some(agent_protocol::session::SessionRef {
-                        provider: agent_protocol::session::ProviderKind::Codex,
-                        id: "fixture".into(),
-                    });
-                std::sync::Arc::make_mut(&mut snapshot.conversations).insert(
-                    agent_protocol::session::SessionRef {
-                        provider: agent_protocol::session::ProviderKind::Codex,
-                        id: "fixture".into(),
-                    },
-                    fixture.conversation.source.clone(),
-                );
-                desktop.rendered = Some(fixture.conversation.clone());
-                desktop.rows = fixture
-                    .conversation
-                    .turns
-                    .iter()
-                    .cloned()
-                    .map(super::super::super::ConversationRow::Turn)
-                    .collect();
-                desktop.list.reset(desktop.rows.len());
-                desktop.list.set_follow_mode(gpui_kit::FollowMode::Tail);
-            });
-            ChatNavigationView(fixture.desktop)
+            ChatNavigationView(fixture.read(cx).desktop.clone())
         });
         window.simulate_resize(size(px(900.), px(650.)));
         window.run_until_parked();
         view.update(window, |_, cx| cx.notify());
         window.run_until_parked();
         assert!(window.debug_bounds("conversation-marker-0").is_some());
-        assert!(window.debug_bounds("conversation-marker-19").is_some());
+        assert!(window.debug_bounds("conversation-marker-38").is_some());
         assert!(
             window.debug_bounds("conversation-marker-1").is_none(),
             "Long histories must have at most eight evenly spaced markers"
@@ -1508,19 +2657,19 @@ mod rendering_tests {
             .size
             .width;
         let neighbor_width = window
-            .debug_bounds("conversation-marker-line-2")
+            .debug_bounds("conversation-marker-line-4")
             .unwrap()
             .size
             .width;
         let next_width = window
-            .debug_bounds("conversation-marker-line-5")
+            .debug_bounds("conversation-marker-line-10")
             .unwrap()
             .size
             .width;
         for selector in [
             "conversation-marker-line-0",
-            "conversation-marker-line-2",
-            "conversation-marker-line-5",
+            "conversation-marker-line-4",
+            "conversation-marker-line-10",
         ] {
             assert_eq!(
                 window.debug_bounds(selector).unwrap().left(),
@@ -1542,7 +2691,7 @@ mod rendering_tests {
         window.run_until_parked();
         assert_eq!(
             window
-                .debug_bounds("conversation-marker-line-2")
+                .debug_bounds("conversation-marker-line-4")
                 .unwrap()
                 .size
                 .width,
@@ -1553,17 +2702,56 @@ mod rendering_tests {
         window.run_until_parked();
         let latest = window.debug_bounds("conversation-latest").unwrap();
         view.update(window, |view, cx| {
-            assert!(!view.0.read(cx).list.is_following_tail());
-            assert_eq!(view.0.read(cx).list.logical_scroll_top().item_ix, 0);
+            assert!(
+                !view
+                    .0
+                    .read(cx)
+                    .conversation
+                    .read(cx)
+                    .timeline
+                    .list
+                    .is_following_tail()
+            );
+            assert_eq!(
+                view.0
+                    .read(cx)
+                    .conversation
+                    .read(cx)
+                    .timeline
+                    .list
+                    .logical_scroll_top()
+                    .item_ix,
+                0
+            );
         });
         window.simulate_click(latest.center(), gpui_kit::Modifiers::default());
         view.update(window, |_, cx| cx.notify());
         window.run_until_parked();
-        let last = window.debug_bounds("conversation-turn-turn-19").unwrap();
+        let last = window
+            .debug_bounds("conversation-row-history-item:turn-19:answer-19:occurrence:0")
+            .unwrap();
         view.update(window, |view, cx| {
             let desktop = view.0.read(cx);
-            assert!(desktop.list.is_following_tail());
-            assert!((last.bottom() - desktop.list.viewport_bounds().bottom()).abs() < px(1.));
+            assert!(
+                desktop
+                    .conversation
+                    .read(cx)
+                    .timeline
+                    .list
+                    .is_following_tail()
+            );
+            assert!(
+                (last.bottom()
+                    - desktop
+                        .conversation
+                        .read(cx)
+                        .timeline
+                        .list
+                        .viewport_bounds()
+                        .bottom())
+                .abs()
+                    < px(1.)
+            );
         });
         assert!(window.debug_bounds("conversation-latest").is_none());
     }
@@ -1571,7 +2759,7 @@ mod rendering_tests {
     #[gpui::test]
     fn file_changes_render_and_expand_in_the_desktop_view(cx: &mut TestAppContext) {
         let _runtime = init(cx);
-        let source = serde_json::from_value(serde_json::json!({"id":{"provider":"codex","id":"fixture"},"turns":[{"id":"turn","status":"completed","items":[{"id":"files","status":"completed","clientInputId":null,"body":{"inline":{"body":{"fileChange":{"changes":[{"path":"/fixture/a.txt","kind":{"update":{"movePath":null}},"diff":"@@ -1 +1 @@\n-old\n+new","proposal":null},{"path":"/fixture/b.txt","kind":"add","diff":"@@ -0,0 +1 @@\n+second","proposal":null}],"output":""}}}}}]}]}))
+        let source = serde_json::from_value(serde_json::json!({"id":{"provider":"codex","id":"fixture"},"turns":[{"id":"turn","status":"completed","items":[{"id":"files","status":"completed","clientInputId":"client-files","body":{"inline":{"body":{"fileChange":{"changes":[{"path":"/fixture/a.txt","kind":{"update":{"movePath":null}},"diff":"@@ -1 +1 @@\n-old\n+new","proposal":null},{"path":"/fixture/b.txt","kind":"add","diff":"@@ -0,0 +1 @@\n+second","proposal":null}],"output":""}}}}}]}]}))
         .unwrap();
         let (view, window) = cx.add_window_view(|window, cx| {
             ConversationView::new(Snapshot::default(), source, window, cx)
@@ -1594,7 +2782,8 @@ mod rendering_tests {
                 "file header must be visible"
             );
         }
-        let before = window.debug_bounds("change-files-1").unwrap().top();
+        let before = window.debug_bounds("change-files-1").unwrap().top()
+            - window.debug_bounds("change-files-0").unwrap().top();
         let bounds = window.debug_bounds("change-files-0").unwrap();
         window.simulate_click(
             gpui_kit::point(bounds.left() + px(20.), bounds.center().y),
@@ -1605,10 +2794,159 @@ mod rendering_tests {
         });
         window.run_until_parked();
         assert!(
-            window.debug_bounds("change-files-1").unwrap().top() > before,
+            window.debug_bounds("change-files-1").unwrap().top()
+                - window.debug_bounds("change-files-0").unwrap().top()
+                > before,
             "expanded diff must occupy space in the rendered conversation"
         );
     }
+    fn user_message_fixture(
+        text: &str,
+        image: Option<&str>,
+        pending: bool,
+    ) -> (Snapshot, agent_protocol::models::Thread) {
+        let message = image.map_or_else(
+            || serde_json::json!({"text":text,"content":[]}),
+            |source| serde_json::json!({"text":null,"content":[{"text":{"text":text}},{"image":{"source":source}}]}),
+        );
+        let items = if pending {
+            serde_json::json!([])
+        } else {
+            serde_json::json!([{"id":"user","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"userMessage":message}}}}])
+        };
+        let mut snapshot = Snapshot::default();
+        if pending {
+            Arc::make_mut(&mut snapshot.pending_submissions).insert(
+                "pending".into(),
+                Arc::new(agent_core::state::PendingSubmission {
+                    sequence: 0,
+                    submitted_at_ms: None,
+                    draft_key: agent_protocol::session::SessionRef {
+                        provider: agent_protocol::session::ProviderKind::Codex,
+                        id: "fixture".into(),
+                    }
+                    .into(),
+                    draft: Arc::new(agent_core::state::Draft {
+                        text: text.into(),
+                        attachments: image
+                            .map(|source| agent_core::state::Attachment {
+                                path: source.into(),
+                                name: "image.png".into(),
+                                is_image: true,
+                            })
+                            .into_iter()
+                            .collect(),
+                        ..Default::default()
+                    }),
+                    turn_id: Some("turn".into()),
+                    after_item_id: None,
+                    accepted: true,
+                    delivery_unknown: false,
+                }),
+            );
+        }
+        let source = serde_json::from_value(serde_json::json!({
+            "id":{"provider":"codex","id":"fixture"},
+            "turns":[{"id":"turn","status":"completed","items":items}]
+        }))
+        .unwrap();
+        (snapshot, source)
+    }
+
+    fn user_bubble_bounds(
+        text: &str,
+        viewport_width: f32,
+        cx: &mut TestAppContext,
+    ) -> gpui::Bounds<gpui::Pixels> {
+        let (snapshot, source) = user_message_fixture(text, None, false);
+        let (view, window) =
+            cx.add_window_view(|window, cx| ConversationView::new(snapshot, source, window, cx));
+        window.simulate_resize(size(px(viewport_width), px(600.)));
+        window.run_until_parked();
+        view.update(window, |_, cx| cx.notify());
+        window.run_until_parked();
+        window.debug_bounds("user-message-bubble").unwrap()
+    }
+
+    fn assert_user_list_bodies_visible(cx: &mut TestAppContext) {
+        let _runtime = init(cx);
+        for width in [780., 360.] {
+            for (source, body) in [
+                ("3. Hello world", "Hello world"),
+                ("3. はい", "はい"),
+                ("3. 長めの内容をここに書いた", "長めの内容をここに書いた"),
+                ("- はい", "はい"),
+                ("はい\n\n- はい", "はい"),
+                ("- 親\n  - はい", "はい"),
+                ("- [ ] はい", "はい"),
+                ("- [x] はい", "はい"),
+            ] {
+                let plain = user_bubble_bounds(body, width, cx);
+                let list = user_bubble_bounds(source, width, cx);
+                assert!(
+                    list.size.width > plain.size.width,
+                    "list must include its marker and full text: {source:?}, {list:?}, {plain:?}"
+                );
+                assert!(list.left() >= px(0.) && list.right() <= px(width));
+            }
+        }
+    }
+
+    #[gpui::test]
+    fn user_lists_keep_their_bodies_visible(cx: &mut TestAppContext) {
+        assert_user_list_bodies_visible(cx);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn user_lists_keep_their_bodies_visible_with_native_fonts() {
+        let mut cx = TestAppContext::build_with_text_system(
+            gpui::TestDispatcher::new(0),
+            None,
+            Arc::new(gpui_apple::AppleTextSystem::new()),
+        );
+        assert_user_list_bodies_visible(&mut cx);
+    }
+
+    #[gpui::test]
+    fn user_messages_keep_readable_widths(cx: &mut TestAppContext) {
+        let _runtime = init(cx);
+        for pending in [false, true] {
+            let long = "The development Host inherits `$SHELL` from its environment. \
+                長い発言も会話の幅に合わせて折り返し、箇条書きの本文をすべて読めるようにする。";
+            for text in ["おｋ".to_owned(), long.to_owned(), format!("- {long}")] {
+                let short = text == "おｋ";
+                let (snapshot, source) = user_message_fixture(&text, None, pending);
+                let (view, window) = cx.add_window_view(|window, cx| {
+                    ConversationView::new(snapshot, source, window, cx)
+                });
+                for viewport_width in [780_f32, 360.] {
+                    window.simulate_resize(size(px(viewport_width), px(600.)));
+                    window.run_until_parked();
+                    view.update(window, |_, cx| cx.notify());
+                    window.run_until_parked();
+                    let bubble = window.debug_bounds("user-message-bubble").unwrap();
+                    if short {
+                        assert!(bubble.size.width < px(120.), "short message: {bubble:?}");
+                    } else {
+                        assert!(
+                            bubble.size.width >= px((viewport_width - 48.).min(560.) * 0.9),
+                            "long message must use the available width (pending={pending}): {bubble:?}"
+                        );
+                    }
+                    assert!(
+                        bubble.size.height < px(240.),
+                        "message must wrap into readable lines: {bubble:?}"
+                    );
+                    assert!(
+                        bubble.left() >= px(0.) && bubble.right() <= px(viewport_width),
+                        "message overflows the conversation (pending={pending}, viewport={viewport_width}): {bubble:?}"
+                    );
+                }
+            }
+        }
+    }
+
     #[gpui::test]
     fn chat_images_stay_inside_the_bubble_at_different_window_sizes(cx: &mut TestAppContext) {
         let _runtime = init(cx);
@@ -1617,48 +2955,14 @@ mod rendering_tests {
                 let image = Arc::new(RenderImage::new(vec![image::Frame::new(
                     image::RgbaImage::new(width, height),
                 )]));
-                let items = if pending {
-                    serde_json::json!([])
-                } else {
-                    serde_json::json!([{"id":"user","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"userMessage":{"text":null,"content":[{"text":{"text":"caption"}},{"image":{"source":"/fixture/image.png"}}]}}}}}])
-                };
-                let mut snapshot = Snapshot::default();
-                if pending {
-                    Arc::make_mut(&mut snapshot.pending_submissions).insert(
-                        "pending".into(),
-                        Arc::new(agent_core::state::PendingSubmission {
-                            sequence: 0,
-                            draft_key: agent_protocol::session::SessionRef {
-                                provider: agent_protocol::session::ProviderKind::Codex,
-                                id: "fixture".into(),
-                            }
-                            .into(),
-                            draft: Arc::new(agent_core::state::Draft {
-                                text: "caption".into(),
-                                attachments: vec![agent_core::state::Attachment {
-                                    path: "/fixture/image.png".into(),
-                                    name: "image.png".into(),
-                                    is_image: true,
-                                }],
-                                ..Default::default()
-                            }),
-                            turn_id: Some("turn".into()),
-                            after_item_id: None,
-                            accepted: true,
-                            delivery_unknown: false,
-                        }),
-                    );
-                }
-                let source = serde_json::from_value(serde_json::json!({
-                    "id":{"provider":"codex","id":"fixture"}, "turns":[{"id":"turn", "status":"completed", "items":items}]
-                }))
-                .unwrap();
+                let (snapshot, source) =
+                    user_message_fixture("caption", Some("/fixture/image.png"), pending);
                 let (view, window) = cx.add_window_view(|window, cx| {
                     let view = ConversationView::new(snapshot, source, window, cx);
                     view.desktop.update(cx, |desktop, _| {
                         let source = "/fixture/image.png".to_owned();
                         let key = desktop.image_key(&source, false);
-                        desktop.images.insert(
+                        desktop.media.images.insert(
                             key,
                             ImageState {
                                 source: Arc::new(source),

@@ -19,7 +19,9 @@ import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
+import dev.remoteagent.core.FileEntry
 import dev.remoteagent.core.Intent
+import dev.remoteagent.core.Outcome
 import java.io.IOException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -72,13 +74,18 @@ class MarkdownLinkTest {
     fun workspaceLinkStillUsesAuthenticatedFilePreview() {
         val launched = mutableListOf<AndroidIntent>()
         val intents = mutableListOf<Intent>()
+        val resolvedPath = "/host/notes.md"
         compose.setContent {
             val base = LocalContext.current
             CompositionLocalProvider(LocalContext provides LinkContext(base) { launched.add(it) }) {
-                BexTheme {
+                AppTheme {
                     ConversationBody("[notes.md](/repo/notes.md)", "/repo") { intent, complete ->
                         intents.add(intent)
-                        complete(Result.failure(IOException("fixture preview")))
+                        complete(
+                            if (intent is Intent.ResolveFile)
+                                Result.success(Outcome.ResolvedFile(FileEntry("notes.md", resolvedPath, false, 0uL)))
+                            else Result.failure(IOException("fixture preview"))
+                        )
                     }
                 }
             }
@@ -88,7 +95,9 @@ class MarkdownLinkTest {
         compose.onNodeWithText("fixture preview").assertExists()
         compose.runOnIdle {
             assertTrue(launched.isEmpty())
-            assertTrue(intents.any { it is Intent.DownloadFile })
+            assertEquals(2, intents.size)
+            assertEquals("/repo/notes.md", (intents[0] as Intent.ResolveFile).v1.path)
+            assertEquals(resolvedPath, (intents[1] as Intent.DownloadFile).v1.source)
         }
     }
 
@@ -96,7 +105,7 @@ class MarkdownLinkTest {
         compose.setContent {
             val base = LocalContext.current
             CompositionLocalProvider(LocalContext provides LinkContext(base, launch)) {
-                BexTheme { Surface { Column(Modifier.width(240.dp)) { ConversationBody(markdown) } } }
+                AppTheme { Surface { Column(Modifier.width(240.dp)) { ConversationBody(markdown) } } }
             }
         }
     }

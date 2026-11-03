@@ -8,7 +8,11 @@ use crate::{
     },
     peer::PeerError,
 };
-use iroh::{EndpointAddr, RelayMode, SecretKey, TransportAddr, endpoint::presets};
+use iroh::{
+    EndpointAddr, RelayMode, SecretKey, TransportAddr,
+    address_lookup::{DnsAddressLookup, PkarrResolver},
+    endpoint::{BindOpts, presets},
+};
 use iroh_tickets::endpoint::EndpointTicket;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -16,6 +20,7 @@ use std::{
     fmt,
     future::Future,
     io,
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     pin::Pin,
     str::FromStr,
     sync::Arc,
@@ -26,10 +31,9 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tracing::Instrument;
 use uuid::Uuid;
 
-// Bump when shared Postcard types change incompatibly; enum indices and field
-// positions are part of the wire format, even when decoding still succeeds.
-// Version 12 separates model settings and typed credential operations.
-const ALPN: &[u8] = b"remote-agent/streams/13";
+// Versions describe the framing/codec, not application releases or RPC additions.
+// Named records and methods evolve under agent_protocol::protocol's contract.
+const ALPN: &[u8] = b"bex/messagepack/2";
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
     #[error("iroh transport failed: {0}")]
@@ -136,16 +140,65 @@ pub fn authorize(
     Ok(Some(next))
 }
 
+/// Outside the Linux, macOS and Windows ephemeral ranges, so outbound sockets
+/// of other processes cannot take the port while the Host restarts.
+const HOST_PORTS: std::ops::Range<u16> = 10_000..32_768;
+fn host_port(node: NodeId) -> u16 {
+    let [first, second, ..] = *node.0.as_bytes();
+    HOST_PORTS.start + u16::from_le_bytes([first, second]) % HOST_PORTS.len() as u16
+}
+
+/// Clients only dial. Hosts are dialed, so their addresses must be findable.
+#[derive(Clone, Copy)]
+enum Role {
+    Client,
+    /// Port 0 binds ephemeral ports.
+    Host {
+        port: u16,
+    },
+}
+
 #[derive(Clone)]
 pub struct Endpoint(Arc<iroh::Endpoint>, Arc<Trace>);
 impl Endpoint {
     pub async fn bind(identity: Identity, relays: Relays) -> Result<Self, TransportError> {
         Self::bind_recording(identity, relays, Trace::new()).await
     }
+    /// Paired clients dial the direct addresses from their saved ticket before
+    /// relay or lookup can help, so a Host keeps one port per identity instead
+    /// of a new ephemeral port per launch. Another process holding that port
+    /// costs only this launch an ephemeral port.
+    pub async fn bind_host(identity: Identity, relays: Relays) -> Result<Self, TransportError> {
+        let trace = Trace::new();
+        let port = host_port(identity.node_id());
+        let host = |port| Role::Host { port };
+        match Self::bind_as(
+            Identity(identity.0.clone()),
+            relays.clone(),
+            trace.clone(),
+            host(port),
+        )
+        .await
+        {
+            Err(error) => {
+                tracing::warn!(target: "agent", operation = "host.endpoint.port", message = %error);
+                Self::bind_as(identity, relays, trace, host(0)).await
+            }
+            bound => bound,
+        }
+    }
     pub async fn bind_recording(
         identity: Identity,
         relays: Relays,
         trace: Arc<Trace>,
+    ) -> Result<Self, TransportError> {
+        Self::bind_as(identity, relays, trace, Role::Client).await
+    }
+    async fn bind_as(
+        identity: Identity,
+        relays: Relays,
+        trace: Arc<Trace>,
+        role: Role,
     ) -> Result<Self, TransportError> {
         crate::diagnostics::connection::initialize_mobile();
         trace.activate();
@@ -158,6 +211,25 @@ impl Endpoint {
                 .clear_ip_transports()
                 .bind_addr("127.0.0.1:0")
                 .map_err(connection)?;
+        } else if let Role::Host { port } = role
+            && port != 0
+        {
+            builder = builder
+                .bind_addr(SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)))
+                .map_err(connection)?
+                // Like the default IPv6 socket, an unavailable IPv6 stack is not fatal.
+                .bind_addr_with_opts(
+                    SocketAddr::from((Ipv6Addr::UNSPECIFIED, port)),
+                    BindOpts::default().set_is_required(false),
+                )
+                .map_err(connection)?;
+        }
+        if matches!(role, Role::Client) && matches!(relays, Relays::Default | Relays::Custom(_)) {
+            // A client looks Hosts up but never publishes its own addresses.
+            builder = builder
+                .clear_address_lookup()
+                .address_lookup(PkarrResolver::n0_dns())
+                .address_lookup(DnsAddressLookup::n0_dns());
         }
         builder = match relays {
             Relays::Default => builder,
@@ -172,7 +244,7 @@ impl Endpoint {
                 builder.relay_mode(RelayMode::Custom(urls.into_iter().collect()))
             }
         };
-        let span = tracing::info_span!(target: "bex.net", "network", trace_id = trace.id);
+        let span = tracing::info_span!(target: "agent.net", "network", trace_id = trace.id);
         let endpoint = builder.bind().instrument(span).await.map_err(connection)?;
         trace.record(Phase::EndpointReady, 0, 0, 0);
         Ok(Self(Arc::new(endpoint), trace))
@@ -257,7 +329,7 @@ impl Endpoint {
             .elapsed_at(std::time::Instant::now())
             .saturating_sub(45_000_000);
         timeline.events.retain(|event| event.at_us >= cutoff);
-        tracing::info!(target: "bex", operation = "host.connection.timeline", message = %format_args!("trace={} dropped={}", timeline.id, timeline.dropped));
+        tracing::info!(target: "agent", operation = "host.connection.timeline", message = %format_args!("trace={} dropped={}", timeline.id, timeline.dropped));
         crate::diagnostics::connection_events("host.connection.event", &timeline);
     }
     pub async fn close(&self) {
@@ -375,39 +447,59 @@ impl Session {
     /// Hand each accepted stream directly to the resource owner.
     pub async fn accept_request(&self) -> Result<IncomingRequest, TransportError> {
         use crate::client::{BLOB, CALL, CLOSE};
-        let (mut send, mut recv) = self.connection.accept_bi().await.map_err(connection)?;
-        let accepted_at = std::time::Instant::now();
-        let mut kind = [0u8; 1];
-        recv.read_exact(&mut kind).await.map_err(connection)?;
-        match kind[0] {
-            BLOB => Ok(IncomingRequest::Blob(Stream {
-                send,
-                recv,
-                _session: self.clone(),
-                shutdown: None,
-            })),
-            CALL => {
-                let call = crate::framing::Reader::new(recv)
-                    .read::<crate::protocol::Call>()
-                    .await
-                    .map_err(connection)?
-                    .ok_or_else(|| connection("request stream ended before its request"))?;
-                if matches!(call, crate::protocol::Call::SessionScope(_)) {
-                    self._endpoint.1.activate();
+        loop {
+            let (mut send, mut recv) = self.connection.accept_bi().await.map_err(connection)?;
+            let accepted_at = std::time::Instant::now();
+            let mut kind = [0u8; 1];
+            recv.read_exact(&mut kind).await.map_err(connection)?;
+            match kind[0] {
+                BLOB => {
+                    return Ok(IncomingRequest::Blob(Stream {
+                        send,
+                        recv,
+                        _session: self.clone(),
+                        shutdown: None,
+                    }));
                 }
-                Ok(IncomingRequest::Call(HostRequest {
-                    call,
-                    send,
-                    accepted_at,
-                    decoded_at: std::time::Instant::now(),
-                }))
+                CALL => {
+                    let call = match crate::framing::Reader::new(recv)
+                        .read::<crate::protocol::Call>()
+                        .await
+                    {
+                        Ok(Some(call)) => call,
+                        // A newer peer may send parameters this Host cannot read.
+                        // Only this request failed, and no operation was executed.
+                        Ok(None) | Err(_) => {
+                            let response = crate::protocol::Response::<()>::Failure {
+                                error: agent_protocol::error::RpcFailure {
+                                    code: "invalid_params".into(),
+                                    message: "このHostは操作のパラメーターを読み取れません。PC側のBEXを更新してください。".into(),
+                                    delivery: agent_protocol::error::Delivery::NotSent,
+                                    execution: None,
+                                },
+                            };
+                            let _ = crate::framing::write(&mut send, response).await;
+                            let _ = send.finish();
+                            continue;
+                        }
+                    };
+                    if matches!(call, crate::protocol::Call::IdentifyDevice(_)) {
+                        self._endpoint.1.activate();
+                    }
+                    return Ok(IncomingRequest::Call(HostRequest {
+                        call,
+                        send,
+                        accepted_at,
+                        decoded_at: std::time::Instant::now(),
+                    }));
+                }
+                CLOSE => {
+                    send.write_all(&[0]).await.map_err(connection)?;
+                    send.finish().map_err(connection)?;
+                    return Ok(IncomingRequest::Close);
+                }
+                _ => return Err(connection("unknown stream kind")),
             }
-            CLOSE => {
-                send.write_all(&[0]).await.map_err(connection)?;
-                send.finish().map_err(connection)?;
-                Ok(IncomingRequest::Close)
-            }
-            _ => Err(connection("unknown stream kind")),
         }
     }
     pub async fn open_peer(
@@ -486,7 +578,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn current_peers_connect_but_pre_reasoning_protocol_is_rejected() {
+    async fn named_protocol_connects_but_positional_protocol_is_rejected() {
         tokio::time::timeout(Duration::from_secs(10), async {
             let host = Endpoint::bind(Identity::generate(), Relays::Loopback)
                 .await
@@ -500,17 +592,16 @@ mod tests {
             assert!(accepted.unwrap().is_ok());
             connected.close();
 
-            // A v12 peer looks up decoration roots on the Host. Reject at TLS
-            // negotiation, before any request can be decoded as another type.
+            // Positional frames cannot be interpreted as named records.
             let legacy = iroh::Endpoint::builder(presets::N0)
-                .alpns(vec![b"remote-agent/streams/12".to_vec()])
+                .alpns(vec![b"remote-agent/streams/14".to_vec()])
                 .relay_mode(RelayMode::Disabled)
                 .clear_address_lookup()
                 .bind()
                 .await
                 .unwrap();
             let (connected, accepted) = tokio::join!(
-                legacy.connect(host.0.addr(), b"remote-agent/streams/12"),
+                legacy.connect(host.0.addr(), b"remote-agent/streams/14"),
                 host.accept()
             );
             assert!(connected.is_err());
@@ -521,5 +612,45 @@ mod tests {
         })
         .await
         .expect("protocol negotiation must terminate");
+    }
+
+    #[tokio::test]
+    async fn ticket_from_before_a_host_restart_still_reaches_the_host() {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let identity = Identity::generate();
+            let host = |identity: &Identity| {
+                Endpoint::bind_host(Identity::from_bytes(identity.to_bytes()), Relays::Disabled)
+            };
+            let first = host(&identity).await.unwrap();
+            // Without relay or lookup only the ticket's direct address can connect.
+            let ticket = first.local_ticket();
+            first.close().await;
+            drop(first);
+            // An exited process releases its port at once; a dropped endpoint's
+            // background tasks may still hold it briefly.
+            let restarted = loop {
+                let restarted = host(&identity).await.unwrap();
+                if restarted.local_ticket() == ticket {
+                    break restarted;
+                }
+                restarted.close().await;
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            };
+            let client = Endpoint::bind(Identity::generate(), Relays::Disabled)
+                .await
+                .unwrap();
+            let (connected, accepted) = tokio::join!(client.connect(&ticket), restarted.accept());
+            connected.unwrap().close();
+            assert!(accepted.unwrap().is_ok());
+
+            // A port still held elsewhere must not keep the Host from starting.
+            let displaced = host(&identity).await.unwrap();
+            assert!(displaced.local_ticket() != ticket);
+            displaced.close().await;
+            client.close().await;
+            restarted.close().await;
+        })
+        .await
+        .expect("restarted Host must accept its previous ticket");
     }
 }

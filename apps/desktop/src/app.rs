@@ -2,19 +2,26 @@ use agent_core::state::operations as op;
 mod clipboard;
 mod completions;
 mod dictation;
+mod files;
+mod forms;
 mod hosts;
 mod selection;
+mod timeline;
 mod view;
 
 use crate::{Runtime, appearance, diff::DiffView, platform, store_session::StoreSession};
 use agent_core::{
-    presentation::conversation::{ActivityExpansion, ConversationRowContent},
-    state::{Attachment, Draft, DraftKey, Intent, ModelDefaultsScope, PendingSubmission, Snapshot},
+    panels::{PanelKind as Panel, PanelLayout, PanelScope, Panels},
+    presentation::{
+        conversation::{ActivityExpansion, ConversationRowContent},
+        error::ErrorScope,
+    },
+    state::{Attachment, Draft, DraftKey, Intent, ModelDefaultsScope, Snapshot},
     store::Outcome,
 };
 use agent_protocol::{
     ids::{ItemId, RequestId, TurnId},
-    models::{Item, Model, RemoteHost, Thread, Turn, WorktreeSettings},
+    models::{Item, Model, RemoteHost, Thread, Turn},
     requests::Answer,
     session::SessionRef,
 };
@@ -22,7 +29,7 @@ use dictation::{Dictation, Phase};
 use gpui_kit::{
     component::{
         button::{Button, ButtonVariants},
-        input::{Editor, EditorState, Input, InputEvent, InputState, Textarea, TextareaState},
+        input::{Editor, Input, InputEvent, InputState, Textarea, TextareaState},
         menu::{DropdownMenu, PopupMenuItem},
         text::TextView,
         *,
@@ -32,12 +39,16 @@ use gpui_kit::{
 };
 use hosts::{ConnectionLayout, HostEvent, Hosts};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     future::Future,
     path::{Path, PathBuf},
     rc::Rc,
-    sync::Arc,
+    sync::{Arc, Weak},
 };
+use timeline::{
+    ConversationRow, ImageGallery, ImageState, MarkdownContent, Media, RequestInputs, Timeline,
+};
+use view::icon_button;
 
 struct ProjectEditor {
     id: String,
@@ -47,16 +58,27 @@ struct ProjectEditor {
 }
 
 enum OperationCompletion {
+    ProjectImport,
     Busy,
     Composer(u64),
+    Answer(u64),
     Editor(u64),
-    Item { generation: u64, turn_id: TurnId },
+    Item {
+        generation: u64,
+        item_id: ItemId,
+    },
     WorktreeSettings,
     Request(RequestId),
     Dictation(uuid::Uuid),
     RemoveWorktree,
     Account,
     Gallery(uuid::Uuid),
+    OpenFile(u64),
+    Directory {
+        id: u64,
+        request: uuid::Uuid,
+        input: String,
+    },
 }
 enum Update {
     Connected(Result<(StoreSession, PathBuf), String>),
@@ -69,6 +91,10 @@ enum Update {
     },
     Recording(uuid::Uuid, platform::RecordingEvent),
     PersistenceError(String),
+    LocalCompleted {
+        scope: ErrorScope,
+        result: Result<Option<PathBuf>, String>,
+    },
     OnboardingCompleted(Result<(), String>),
 }
 #[derive(Clone, Copy, PartialEq)]
@@ -94,15 +120,21 @@ enum ModelPanel {
     Accounts,
     Manage,
 }
-#[derive(Clone, Copy, PartialEq)]
-enum Panel {
-    Home,
-    Agents,
-    Terminal,
-    SideChat,
-    Browser,
-    Files,
-    Diff,
+enum SurfaceResource {
+    Files {
+        request: uuid::Uuid,
+        listing: Option<Arc<agent_protocol::models::FileList>>,
+    },
+    Diff {
+        view: Entity<DiffView>,
+        source: Option<Weak<agent_protocol::models::WorkspaceReview>>,
+    },
+    Pending {
+        url: Option<String>,
+    },
+    Browser(Entity<crate::browser::Browser>),
+    Terminal(Entity<crate::terminal::Terminal>),
+    SideChat(Entity<Desktop>),
 }
 pub(crate) enum Mode {
     Main,
@@ -111,74 +143,6 @@ pub(crate) enum Mode {
         cwd: String,
     },
 }
-struct Question {
-    definition: agent_protocol::requests::Question,
-    input: Entity<InputState>,
-    selected: HashSet<String>,
-}
-struct RequestInputs {
-    questions: Vec<Question>,
-    response: Entity<TextareaState>,
-    sent: bool,
-}
-struct ImageGallery {
-    zoom: f32,
-    id: uuid::Uuid,
-    entries: Vec<(Arc<String>, bool)>,
-    initial: (Arc<String>, bool),
-    selected: Option<usize>,
-    list: ListState,
-    loading: bool,
-    saving: bool,
-    saved: bool,
-    error: String,
-}
-impl ImageGallery {
-    fn current_image(&self) -> &(Arc<String>, bool) {
-        self.selected
-            .and_then(|index| self.entries.get(index))
-            .unwrap_or(&self.initial)
-    }
-}
-struct ImageState {
-    source: Arc<String>,
-    path: Option<ImageSource>,
-    error: Option<String>,
-}
-struct MarkdownContent {
-    source: SharedString,
-    rendered: SharedString,
-    images: Rc<[String]>,
-    code_headers: Arc<HashMap<usize, String>>,
-    diagrams: HashMap<String, Arc<RenderImage>>,
-    wrap_code: bool,
-    compact_tables: bool,
-}
-#[derive(Clone)]
-enum ConversationRow {
-    Turn(Arc<agent_core::presentation::conversation::RenderedTurn>),
-    Pending(String, Arc<PendingSubmission>),
-    Request(Box<agent_core::presentation::conversation::Request>),
-}
-impl ConversationRow {
-    fn same_identity(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Turn(a), Self::Turn(b)) => a.source.id == b.source.id,
-            (Self::Pending(a, _), Self::Pending(b, _)) => a == b,
-            (Self::Request(a), Self::Request(b)) => a.id == b.id,
-            _ => false,
-        }
-    }
-    fn unchanged(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Turn(a), Self::Turn(b)) => Arc::ptr_eq(a, b),
-            (Self::Pending(a, x), Self::Pending(b, y)) => a == b && Arc::ptr_eq(x, y),
-            (Self::Request(a), Self::Request(b)) => a == b,
-            _ => false,
-        }
-    }
-}
-
 /// Business state is owned by Store. Everything else here is a widget, render
 /// cache, pending UI effect, or immutable snapshot retained for display.
 pub(crate) struct Desktop {
@@ -186,85 +150,116 @@ pub(crate) struct Desktop {
     snapshot: Arc<Snapshot>,
     runtime: Runtime,
     updates: async_channel::Sender<(u64, Update)>,
+    snapshot_pending: Option<u64>,
     epoch: u64,
     connecting: bool,
     remote: Option<RemoteHost>,
     hosts: Option<Entity<Hosts>>,
+    app_updates: Option<Entity<crate::updates::Updates>>,
     side_chat_mode: bool,
+    visible: bool,
     onboarding: bool,
+    import_projects: bool,
     initial_cwd: Option<String>,
     busy: usize,
-    error: String,
-    composer: Entity<TextareaState>,
+    local_errors: BTreeMap<ErrorScope, String>,
+    composer: forms::ComposerInput,
+    question: forms::QuestionInput,
     selection: Entity<selection::ConversationSelection>,
     pending_quote: Option<String>,
     pending_explanation: Option<String>,
-    composer_value: SharedString,
-    composer_revision: u64,
-    completion_index: usize,
-    completion_dismissed: bool,
-    composer_pending: Option<u64>,
-    editor_input: Entity<EditorState>,
-    editor_value: SharedString,
-    editor_path: Option<String>,
-    editor_revision: u64,
-    editor_pending: Option<u64>,
+    editor: forms::FileEditor,
     project_editor: Option<ProjectEditor>,
     search: Entity<InputState>,
     path: Entity<InputState>,
-    model_panel: ModelPanel,
-    model_search: Entity<InputState>,
-    model_provider: Option<agent_protocol::session::ProviderKind>,
-    settings_model_scope: ModelDefaultsScope,
-    account_sign_out: Option<String>,
-    dsh_key_provider: agent_protocol::dsh::KeyProvider,
-    account_login_draft: Option<DraftKey>,
-    worktree_copy_paths: Entity<TextareaState>,
-    worktree_directory: Entity<InputState>,
-    worktree_dirty: bool,
-    worktree_saved: bool,
-    worktree_saving: bool,
-    worktree_save_pending: bool,
-    worktree_removal: Option<String>,
-    worktree_busy: bool,
-    account_code: Entity<InputState>,
-    account_busy: bool,
-    account_polling: bool,
-    expanded_items: HashSet<String>,
-    expanded_work: HashMap<String, ActivityExpansion>,
+    model_controls: forms::ModelControls,
+    account: forms::AccountForm,
+    worktrees: forms::WorktreeForm,
     tab: Tab,
     settings_page: SettingsPage,
     sidebar: bool,
-    panel_open: bool,
-    panel: Panel,
-    side_chat: Option<Entity<Desktop>>,
-    terminal: Option<Entity<crate::terminal::Terminal>>,
-    browser: Option<Entity<crate::browser::Browser>>,
-    pending_browser_url: Option<String>,
-    #[cfg(target_os = "windows")]
-    browser_initialization: Option<Task<()>>,
+    panels: Panels,
+    surface_resources: HashMap<u64, SurfaceResource>,
+    panel_focus: FocusHandle,
     dictation: Option<Dictation>,
     review_expanded: bool,
     source_paths: Vec<String>,
     source_items: Vec<Arc<Item>>,
-    requests: HashMap<RequestId, RequestInputs>,
-    list: ListState,
-    hovered_conversation_marker: Option<usize>,
-    rows: Vec<ConversationRow>,
-    rendered: Option<Arc<agent_core::presentation::conversation::RenderedConversation>>,
-    diffs: HashMap<String, Entity<DiffView>>,
-    images: HashMap<String, ImageState>,
-    image_gallery: Option<ImageGallery>,
-    image_dir: tempfile::TempDir,
-    markdown_cache: HashMap<String, MarkdownContent>,
+    conversation: Entity<view::ConversationView>,
+    composer_view: Entity<view::ComposerView>,
+    workbench_view: Entity<view::WorkbenchView>,
+    header_view: Entity<view::HeaderView>,
+    media: Media,
+    /// Absent in side chats, which have no sidebar.
+    sidebar_view: Option<Entity<view::SidebarView>>,
     _subscriptions: Vec<Subscription>,
 }
+// Input text/catalog updates have their own owner. Other snapshot changes still
+// reach Desktop observers (including open menus) without comparing conversation,
+// file, or diff contents on each keystroke. Exhaustive matching keeps new fields
+// from being silently omitted from this routing decision.
+fn general_snapshot_changed(before: &Snapshot, after: &Snapshot) -> bool {
+    macro_rules! changed {
+        (shared: [$($shared:ident),*], optional: [$($optional:ident),*], values: [$($value:ident),*]) => {{
+            let Snapshot {
+                $($shared: _,)* $($optional: _,)* $($value: _,)*
+                drafts: _, file_drafts: _, composer_catalog: _,
+            } = after;
+            false
+                $(|| !Arc::ptr_eq(&before.$shared, &after.$shared))*
+                $(|| before.$optional.as_ref().map(Arc::as_ptr) != after.$optional.as_ref().map(Arc::as_ptr))*
+                $(|| before.$value != after.$value)*
+        }};
+    }
+    let changed = changed!(
+        shared: [project_import, project_preferences, operations, scoped_model_defaults,
+            archived_scopes, account, terminals, conversations, expanded_projects,
+            project_threads, models, model_errors, question_drafts, draft_sessions, pending_submissions,
+            workspace, workspaces, navigation, activity, management, list_query, subscriptions],
+        optional: [permission_settings, task_activity, threads],
+        values: [recent_chats, operation_sequence, model_defaults, host_name, host_ticket, storage_scope,
+            observed_agents, epoch, connected, connection_generation, connection_failure, error]
+    );
+    let empty = Draft::default();
+    macro_rules! controls {
+        ($draft:expr) => {{
+            let Draft {
+                text: _,
+                attachments,
+                invocations,
+                model,
+                effort,
+                service_tier,
+                model_settings_changed,
+            } = $draft;
+            (
+                attachments,
+                invocations,
+                model,
+                effort,
+                service_tier,
+                model_settings_changed,
+            )
+        }};
+    }
+    let before = before
+        .drafts
+        .get(&before.navigation.draft_key)
+        .map_or(&empty, Arc::as_ref);
+    let after = after
+        .drafts
+        .get(&after.navigation.draft_key)
+        .map_or(&empty, Arc::as_ref);
+    changed || controls!(before) != controls!(after)
+}
+
 impl Desktop {
     fn set_error(&mut self, error: String) {
-        tracing::error!(target: "bex", operation = "desktop", message = %error);
-        self.error = error;
+        tracing::error!(target: "agent", operation = "desktop", message = %error);
+        self.local_errors.insert(self.local_error_scope(), error);
     }
     pub(crate) fn new(mode: Mode, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let language = crate::localization::language(cx);
         StoreSession::on_app_quit(cx, |view| &mut view.session);
         let (remote, initial_cwd, side_chat_mode) = match mode {
             Mode::Main => (None, None, false),
@@ -288,27 +283,23 @@ impl Desktop {
                     .timer(std::time::Duration::from_secs(1))
                     .await;
                 if view
-                    .update(cx, |view, cx| {
-                        if view.account_polling
-                            && !view.account_busy
+                    .update(cx, |view, _| {
+                        if view.account.polling
+                            && !view.account.busy
                             && view.snapshot.connected
                             && let Some(login) = &view.snapshot.account.login
                         {
                             let id = login.login_id.clone();
                             let provider = login.provider;
-                            view.account_busy = true;
+                            view.account.busy = true;
                             view.perform(
                                 Intent::ReadAccountLogin(op::ReadAccountLogin {
                                     provider,
                                     id,
-                                    thread_id: view.account_login_draft.clone(),
+                                    thread_id: view.account.login_draft.clone(),
                                 }),
                                 OperationCompletion::Account,
                             );
-                        }
-                        if let Some(id) = view.thread().and_then(|thread| thread.active_turn_id()) {
-                            view.remeasure_item(&id);
-                            cx.notify();
                         }
                     })
                     .is_err()
@@ -318,31 +309,64 @@ impl Desktop {
             }
         })
         .detach();
-        let composer = cx.new(|cx| {
-            TextareaState::new(window, cx)
-                .placeholder("AI に依頼する")
-                .auto_grow(2, 8)
-        });
-        let editor_input = cx.new(|cx| EditorState::new(window, cx));
-        let model_search = cx.new(|cx| InputState::new(window, cx).placeholder("モデルを検索"));
-        let account_code = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("認証コード・APIキーを貼り付け")
-                .masked(true)
-        });
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("会話を検索"));
-        let path = cx.new(|cx| InputState::new(window, cx).placeholder("絶対パス"));
-        let worktree_copy_paths = cx.new(|cx| {
-            TextareaState::new(window, cx)
-                .placeholder(".env\n.env.local\nconfig/local")
-                .auto_grow(3, 8)
-        });
-        let worktree_directory = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("接続先 Host 上の絶対パス（空欄で既定）")
-        });
+        let composer = forms::ComposerInput::new(window, cx);
+        let question = forms::QuestionInput::new(window, cx);
+        let editor = forms::FileEditor::new(window, cx);
+        let model_controls = forms::ModelControls::new(window, cx);
+        let account = forms::AccountForm::new(window, cx);
+        let search =
+            cx.new(|cx| InputState::new(window, cx).placeholder(language.text("会話を検索")));
+        let path = cx.new(|cx| InputState::new(window, cx).placeholder(language.text("絶対パス")));
+        let worktrees = forms::WorktreeForm::new(window, cx);
         let hosts = (!side_chat_mode).then(|| cx.new(|cx| Hosts::new(window, cx)));
+        let app_updates = (!side_chat_mode
+            && cfg!(any(target_os = "macos", target_os = "windows")))
+        .then(|| cx.new(crate::updates::Updates::new));
         let selection = cx.new(|_| selection::ConversationSelection::new(!side_chat_mode));
+        let owner = cx.entity();
+        let conversation =
+            cx.new(|cx| view::ConversationView::new(&owner, selection.clone(), window, cx));
+        let composer_view =
+            cx.new(|cx| view::ComposerView::new(&owner, composer.input.clone(), cx));
+        let workbench_view = cx.new(|_| view::WorkbenchView::new(&owner));
+        let header_view = cx.new(|cx| view::HeaderView::new(&owner, cx));
         let mut subscriptions = vec![
+            cx.observe_global_in::<crate::localization::Language>(window, |view, window, cx| {
+                let language = crate::localization::language(cx);
+                for (input, source) in [
+                    (&view.search, language.text("会話を検索")),
+                    (&view.path, language.text("絶対パス")),
+                    (&view.model_controls.search, language.text("モデルを検索")),
+                    (
+                        &view.account.code,
+                        language.text("認証コード・APIキーを貼り付け"),
+                    ),
+                    (
+                        &view.worktrees.directory,
+                        language.text("接続先 Host 上の絶対パス（空欄で既定）"),
+                    ),
+                ] {
+                    input.update(cx, |input, cx| {
+                        input.set_placeholder(language.text(source), window, cx)
+                    });
+                }
+                view.composer.input.update(cx, |input, cx| {
+                    input.set_placeholder(language.text("AI に依頼する"), window, cx)
+                });
+                if let Some(prompt) = view.question_prompt() {
+                    view.question
+                        .set_placeholder(language.text(&prompt.placeholder), window, cx);
+                }
+                cx.notify();
+            }),
+            cx.observe_in(&owner, window, |view, _, window, cx| {
+                view.sync_surfaces(window, cx)
+            }),
+            cx.observe_window_bounds(window, |view, window, cx| view.sync_surfaces(window, cx)),
+            cx.subscribe_in(&conversation, window, |view, _, action, window, cx| {
+                view.conversation_action(action, window, cx);
+                cx.notify();
+            }),
             cx.subscribe_in(
                 &selection,
                 window,
@@ -352,7 +376,12 @@ impl Desktop {
                     }
                     selection::SelectionAction::AskSideChat(text) => {
                         view.open_panel(Panel::SideChat, window, cx);
-                        if let Some(chat) = &view.side_chat {
+                        if let Some(SurfaceResource::SideChat(chat)) = view
+                            .panels
+                            .get(view.panel_scope())
+                            .active
+                            .and_then(|id| view.surface_resources.get(&id))
+                        {
                             chat.update(cx, |chat, cx| chat.quote_selection(text, window, cx));
                         }
                     }
@@ -361,24 +390,23 @@ impl Desktop {
                             view.explain_selection(text, cx);
                         } else {
                             view.open_panel(Panel::SideChat, window, cx);
-                            if let Some(chat) = &view.side_chat {
+                            if let Some(SurfaceResource::SideChat(chat)) = view
+                                .panels
+                                .get(view.panel_scope())
+                                .active
+                                .and_then(|id| view.surface_resources.get(&id))
+                            {
                                 chat.update(cx, |chat, cx| chat.explain_selection(text, cx));
                             }
                         }
                     }
                 },
             ),
-            cx.subscribe(&composer, |view, input, event, cx| {
+            cx.subscribe(&composer.input, |view, input, event, cx| {
                 if matches!(event, InputEvent::Change) {
                     let value = input.read(cx).value();
-                    if value != view.composer_value {
-                        view.completion_index = 0;
-                        view.completion_dismissed = false;
+                    if let Some(revision) = view.composer.typed(value.clone()) {
                         let cursor = input.read(cx).cursor();
-                        view.composer_value = value.clone();
-                        view.composer_revision += 1;
-                        let revision = view.composer_revision;
-                        view.composer_pending = Some(revision);
                         view.perform(
                             Intent::EditComposer {
                                 thread_id: view.draft_key().clone(),
@@ -388,19 +416,23 @@ impl Desktop {
                             OperationCompletion::Composer(revision),
                         );
                     }
-                    cx.notify();
+                    view.sync_composer(cx);
                 }
             }),
-            cx.subscribe(&editor_input, |view, input, event, cx| {
+            cx.subscribe(&question.input, |view, input, event, cx| {
+                if matches!(event, InputEvent::Change) {
+                    view.answer_typed(input.read(cx).value());
+                }
+            }),
+            cx.subscribe(&question.secret, |view, input, event, cx| {
+                if matches!(event, InputEvent::Change) {
+                    view.answer_typed(input.read(cx).value());
+                }
+            }),
+            cx.subscribe(&editor.input, |view, input, event, cx| {
                 if matches!(event, InputEvent::Change) {
                     let value = input.read(cx).value();
-                    if value != view.editor_value
-                        && let Some(path) = view.editor_path.clone()
-                    {
-                        view.editor_value = value.clone();
-                        view.editor_revision += 1;
-                        let revision = view.editor_revision;
-                        view.editor_pending = Some(revision);
+                    if let Some((path, revision)) = view.editor.typed(value.clone()) {
                         view.perform(
                             Intent::SetFileDraft {
                                 path,
@@ -411,12 +443,12 @@ impl Desktop {
                     }
                 }
             }),
-            cx.subscribe(&model_search, |_, _, event, cx| {
+            cx.subscribe(&model_controls.search, |_, _, event, cx| {
                 if matches!(event, InputEvent::Change) {
                     cx.notify();
                 }
             }),
-            cx.subscribe(&account_code, |_, _, event, cx| {
+            cx.subscribe(&account.code, |_, _, event, cx| {
                 if matches!(event, InputEvent::Change) {
                     cx.notify();
                 }
@@ -431,20 +463,18 @@ impl Desktop {
                     }
                 }
             }),
-            cx.subscribe(&worktree_copy_paths, |view, _, event, cx| {
+            cx.subscribe(&worktrees.copy_paths, |view, _, event, cx| {
                 if matches!(event, InputEvent::Change) {
-                    view.worktree_dirty = !view.settings_match_inputs(cx);
-                    view.worktree_saved = false;
+                    view.worktree_input_changed(cx);
                     cx.notify();
                 }
                 if matches!(event, InputEvent::Blur) {
                     view.save_worktree_settings(None, cx);
                 }
             }),
-            cx.subscribe(&worktree_directory, |view, _, event, cx| {
+            cx.subscribe(&worktrees.directory, |view, _, event, cx| {
                 if matches!(event, InputEvent::Change) {
-                    view.worktree_dirty = !view.settings_match_inputs(cx);
-                    view.worktree_saved = false;
+                    view.worktree_input_changed(cx);
                     cx.notify();
                 }
                 if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
@@ -469,106 +499,87 @@ impl Desktop {
                 }),
             );
         }
-        let list = ListState::new(0, ListAlignment::Bottom, px(600.));
-        list.set_follow_mode(FollowMode::Tail);
+        if let Some(updates) = &app_updates {
+            subscriptions.push(
+                cx.subscribe(updates, |view, _, _: &crate::updates::RefreshThreads, _| {
+                    view.refresh_threads()
+                }),
+            );
+        }
         let mut view = Self {
             session: None,
             snapshot: Arc::default(),
             runtime: cx.global::<Runtime>().clone(),
             updates,
+            snapshot_pending: None,
             epoch: 0,
             connecting: false,
             remote,
             hosts,
+            app_updates,
             side_chat_mode,
+            visible: true,
             onboarding: !side_chat_mode
                 && !platform::state_dir()
                     .is_ok_and(|directory| directory.join("onboarding.completed").is_file()),
+            import_projects: false,
             initial_cwd,
             busy: 0,
-            error: String::new(),
+            local_errors: BTreeMap::new(),
             composer,
+            question,
             selection,
             pending_quote: None,
             pending_explanation: None,
-            composer_value: "".into(),
-            composer_revision: 0,
-            completion_index: 0,
-            completion_dismissed: false,
-            composer_pending: None,
-            editor_input,
-            editor_value: "".into(),
-            editor_path: None,
-            editor_revision: 0,
-            editor_pending: None,
+            editor,
             project_editor: None,
             search,
             path,
-            model_panel: ModelPanel::Models,
-            model_search,
-            model_provider: None,
-            settings_model_scope: ModelDefaultsScope::Global,
-            account_sign_out: None,
-            dsh_key_provider: Default::default(),
-            account_login_draft: None,
-            worktree_copy_paths,
-            worktree_directory,
-            worktree_dirty: false,
-            worktree_saved: false,
-            worktree_saving: false,
-            worktree_save_pending: false,
-            worktree_removal: None,
-            worktree_busy: false,
-            account_code,
-            account_busy: false,
-            account_polling: false,
-            expanded_items: HashSet::new(),
-            expanded_work: HashMap::new(),
+            model_controls,
+            account,
+            worktrees,
             tab: Tab::Chat,
             settings_page: SettingsPage::Agents,
             sidebar: true,
-            panel_open: false,
-            panel: Panel::Home,
-            side_chat: None,
-            terminal: None,
-            browser: None,
-            pending_browser_url: None,
-            #[cfg(target_os = "windows")]
-            browser_initialization: None,
+            panels: Panels::default(),
+            surface_resources: HashMap::new(),
+            panel_focus: cx.focus_handle(),
             dictation: None,
             review_expanded: false,
             source_paths: Vec::new(),
             source_items: Vec::new(),
-            requests: HashMap::new(),
-            list,
-            hovered_conversation_marker: None,
-            rows: Vec::new(),
-            rendered: None,
-            diffs: HashMap::new(),
-            images: HashMap::new(),
-            image_gallery: None,
-            image_dir: tempfile::Builder::new()
-                .prefix("bex-images-")
-                .tempdir()
-                .expect("image temporary directory"),
-            markdown_cache: HashMap::new(),
+            conversation,
+            composer_view,
+            workbench_view,
+            header_view,
+            media: Media::new(),
+            sidebar_view: None,
             _subscriptions: subscriptions,
         };
+        if !side_chat_mode {
+            let desktop = cx.entity();
+            let sidebar = cx.new(|cx| view::SidebarView::new(&desktop, &view, cx));
+            view.sidebar_view = Some(sidebar);
+        }
         view.connect(None);
+        cx.notify();
         view
     }
     fn connect(&mut self, preferences: Option<Vec<u8>>) {
         self.epoch += 1;
         self.connecting = true;
         self.busy = 0;
-        self.worktree_removal = None;
-        self.worktree_busy = false;
-        self.account_busy = false;
-        self.account_polling = false;
-        self.model_provider = None;
-        self.account_sign_out = None;
-        self.account_login_draft = None;
-        self.error = self.runtime.logging_error.clone().unwrap_or_default();
+        self.worktrees.removal = None;
+        self.worktrees.removing = false;
+        self.account.busy = false;
+        self.account.polling = false;
+        self.model_controls.provider = None;
+        self.account.sign_out = None;
+        self.account.login_draft = None;
+        self.local_errors.clear();
+        if let Some(error) = self.runtime.logging_error.clone() {
+            self.local_errors.insert(ErrorScope::Application, error);
+        }
         let epoch = self.epoch;
         let remote = self.remote.clone();
         let side = self.side_chat_mode;
@@ -714,19 +725,75 @@ impl Desktop {
                             self.explain_selection(&text, cx);
                         }
                         self.dispatch(Intent::ReadWorktreeSettings(op::ReadWorktreeSettings {}));
+                        if self.import_projects {
+                            self.dispatch(Intent::ScanProjects(op::ScanProjects {}));
+                        }
                         if self.tab == Tab::Settings {
                             self.dispatch(Intent::ListWorktrees(op::ListWorktrees {}));
                         }
                     }
-                    Err(error) => self.set_error(error),
+                    Err(error) => {
+                        self.local_errors.insert(ErrorScope::Application, error);
+                    }
                 }
             }
-            Update::Snapshot => self.accept_snapshot(window, cx),
-            Update::Completed(kind, result) => self.operation_completed(kind, result, window, cx),
-            Update::Recording(id, event) => self.recording_update(id, event),
-            Update::PersistenceError(error) => self.set_error(error),
+            Update::Snapshot => {
+                if self.snapshot_pending == Some(epoch) {
+                    return;
+                }
+                self.snapshot_pending = Some(epoch);
+                let view = cx.entity().downgrade();
+                window.on_next_frame(move |window, cx| {
+                    let _ = view.update(cx, |view, cx| {
+                        if view.snapshot_pending != Some(epoch) {
+                            return;
+                        }
+                        view.snapshot_pending = None;
+                        if view.epoch != epoch {
+                            return;
+                        }
+                        if view.accept_snapshot(window, cx) {
+                            cx.notify();
+                        } else {
+                            view.sync_composer(cx);
+                        }
+                    });
+                });
+                return;
+            }
+            Update::Completed(kind, result) => {
+                if !self.operation_completed(kind, result, window, cx) {
+                    self.sync_composer(cx);
+                    return;
+                }
+            }
+            Update::Recording(id, event) => {
+                let level = matches!(event, platform::RecordingEvent::Level(_));
+                self.recording_update(id, event);
+                if level {
+                    self.sync_composer(cx);
+                    return;
+                }
+            }
+            Update::LocalCompleted { scope, result } => {
+                self.busy = self.busy.saturating_sub(1);
+                match result {
+                    Ok(Some(path)) => cx.open_with_system(&path),
+                    Ok(None) => {}
+                    Err(error) => {
+                        self.local_errors.insert(scope, error);
+                    }
+                }
+                self.accept_snapshot(window, cx);
+            }
+            Update::PersistenceError(error) => {
+                self.local_errors.insert(ErrorScope::Application, error);
+            }
             Update::OnboardingCompleted(result) => match result {
-                Ok(()) => self.onboarding = false,
+                Ok(()) => {
+                    self.onboarding = false;
+                    self.import_projects = false;
+                }
                 Err(error) => self.set_error(error),
             },
             Update::Folder(result) => {
@@ -744,7 +811,7 @@ impl Desktop {
                 }
             }
             Update::Image { key, result } => {
-                if let Some(image) = self.images.get_mut(&key) {
+                if let Some(image) = self.media.images.get_mut(&key) {
                     match result {
                         Ok(path) => {
                             image.path = Some(if Path::new(&path).is_absolute() {
@@ -754,12 +821,20 @@ impl Desktop {
                             })
                         }
                         Err(error) => {
-                            tracing::error!(target: "bex", operation = "image.load", message = %error);
+                            tracing::error!(target: "agent", operation = "image.load", message = %error);
                             image.error = Some(error);
                         }
                     }
                 }
-                self.list.remeasure();
+                self.composer_view
+                    .read(cx)
+                    .content
+                    .clone()
+                    .update(cx, |_, cx| cx.notify());
+                self.conversation.update(cx, |view, cx| {
+                    view.timeline.list.remeasure();
+                    cx.notify();
+                });
             }
         }
         cx.notify();
@@ -770,82 +845,123 @@ impl Desktop {
         result: Result<Outcome, String>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
+        let input_save = matches!(
+            kind,
+            OperationCompletion::Composer(_)
+                | OperationCompletion::Answer(_)
+                | OperationCompletion::Editor(_)
+        );
         match kind {
-            OperationCompletion::Composer(revision) => {
-                if self.composer_pending == Some(revision) {
-                    self.composer_pending = None;
+            OperationCompletion::OpenFile(epoch) => {
+                if self.snapshot.epoch != epoch {
+                    return true;
                 }
-            }
-            OperationCompletion::Editor(revision) => {
-                if self.editor_pending == Some(revision) {
-                    self.editor_pending = None;
+                match result {
+                    Ok(Outcome::ResolvedFile { entry }) if entry.directory => {
+                        self.browse(entry.path, cx)
+                    }
+                    Ok(Outcome::ResolvedFile { entry }) => {
+                        self.open_file(PathBuf::from(entry.path), cx)
+                    }
+                    Err(error) => self.set_error(error),
+                    _ => {}
                 }
+                return true;
             }
+            OperationCompletion::Directory { id, request, input } => {
+                if let Ok(Outcome::Directory { listing }) = result {
+                    self.directory_loaded(id, request, &input, listing, window, cx);
+                }
+                self.accept_snapshot(window, cx);
+                return true;
+            }
+            OperationCompletion::ProjectImport => {
+                self.accept_snapshot(window, cx);
+                if result.is_ok()
+                    && self
+                        .snapshot
+                        .project_import
+                        .result
+                        .as_ref()
+                        .is_some_and(|result| result.errors.is_empty())
+                {
+                    self.complete_onboarding();
+                }
+                return true;
+            }
+            OperationCompletion::Composer(revision) => self.composer.text.saved(revision),
+            OperationCompletion::Answer(revision) => self.question.text.saved(revision),
+            OperationCompletion::Editor(revision) => self.editor.text.saved(revision),
             OperationCompletion::Busy => {
                 self.busy = self.busy.saturating_sub(1);
             }
             OperationCompletion::Item {
                 generation,
-                turn_id,
+                item_id,
             } => {
                 if self.snapshot.epoch != generation {
-                    return;
+                    return true;
                 }
                 self.accept_snapshot(window, cx);
-                self.remeasure_item(&turn_id);
-                return;
+                self.conversation.update(cx, |view, cx| {
+                    view.timeline.remeasure_item(item_id.as_str());
+                    cx.notify();
+                });
+                return true;
             }
             OperationCompletion::WorktreeSettings => {
-                self.worktree_saving = false;
-                if let Err(error) = result {
-                    self.set_error(error);
-                }
+                self.worktrees.saving = false;
                 self.accept_snapshot(window, cx);
-                self.worktree_dirty = !self.settings_match_inputs(cx);
-                self.worktree_saved = !self.worktree_dirty;
-                if std::mem::take(&mut self.worktree_save_pending) {
+                self.worktrees.dirty = !self
+                    .worktrees
+                    .matches(self.snapshot.workspace.settings.as_deref(), cx);
+                self.worktrees.saved = !self.worktrees.dirty;
+                if std::mem::take(&mut self.worktrees.save_pending) {
                     self.save_worktree_settings(None, cx);
                 }
-                return;
+                return true;
             }
             OperationCompletion::Request(key) => {
-                if let Err(error) = result {
-                    self.set_error(error);
-                    if let Some(inputs) = self.requests.get_mut(&key) {
-                        inputs.sent = false;
-                    }
+                if result.is_err() {
+                    self.conversation.update(cx, |view, cx| {
+                        if let Some(inputs) = view.timeline.requests.get_mut(&key) {
+                            inputs.sent = false;
+                        }
+                        cx.notify();
+                    });
                 }
                 self.accept_snapshot(window, cx);
-                self.list.remeasure();
-                return;
+                self.conversation.update(cx, |view, cx| {
+                    view.timeline.list.remeasure();
+                    cx.notify();
+                });
+                return true;
             }
             OperationCompletion::Account => {
-                self.account_busy = false;
-                if let Err(error) = result {
-                    self.account_polling = false;
-                    self.set_error(error);
+                self.account.busy = false;
+                if result.is_err() {
+                    self.account.polling = false;
                     self.dispatch(Intent::ListAccounts(op::ListAccounts {}));
                 } else {
                     self.accept_snapshot(window, cx);
-                    self.account_polling = self.snapshot.account.login.is_some();
+                    self.account.polling = self.snapshot.account.login.is_some();
                 }
                 if self.snapshot.account.login.is_none() {
-                    self.account_login_draft = None;
+                    self.account.login_draft = None;
                 }
-                return;
+                return true;
             }
             OperationCompletion::RemoveWorktree => {
-                self.worktree_busy = false;
+                self.worktrees.removing = false;
                 match result {
-                    Ok(_) => self.worktree_removal = None,
-                    Err(error) => {
-                        self.set_error(error);
+                    Ok(_) => self.worktrees.removal = None,
+                    Err(_) => {
                         self.dispatch(Intent::ListWorktrees(op::ListWorktrees {}));
                     }
                 }
                 self.accept_snapshot(window, cx);
-                return;
+                return true;
             }
             OperationCompletion::Dictation(id) => {
                 if self.dictation.as_ref().is_some_and(|state| state.id == id) {
@@ -854,11 +970,12 @@ impl Desktop {
             }
             OperationCompletion::Gallery(id) => {
                 let Some(gallery) = self
-                    .image_gallery
+                    .media
+                    .gallery
                     .as_mut()
                     .filter(|gallery| gallery.id == id)
                 else {
-                    return;
+                    return true;
                 };
                 gallery.loading = false;
                 match result {
@@ -878,26 +995,33 @@ impl Desktop {
                         }
                     }
                     Err(error) => {
-                        tracing::error!(target: "bex", operation = "gallery.load", message = %error);
+                        tracing::error!(target: "agent", operation = "gallery.load", message = %error);
                         gallery.error = error;
                     }
                     _ => unreachable!("session image outcome"),
                 }
-                return;
+                return true;
             }
         }
-        if let Err(error) = result {
-            self.set_error(error);
-        }
-        self.accept_snapshot(window, cx);
+        self.accept_snapshot(window, cx) || !input_save
     }
-    fn accept_snapshot(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(store) = self.session.as_ref().map(|session| &session.store) else {
-            return;
+    fn accept_snapshot(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(session) = &self.session else {
+            return false;
         };
-        let snapshot = store.snapshot();
+        let snapshot = session.store.snapshot();
         let changed = !Arc::ptr_eq(&snapshot, &self.snapshot);
+        let general_changed = changed && general_snapshot_changed(&self.snapshot, &snapshot);
+        if changed {
+            session.save(snapshot.clone());
+        }
         let previous = std::mem::replace(&mut self.snapshot, snapshot);
+        if !general_changed {
+            // A save acknowledgment can make the same snapshot adoptable, so
+            // input reconciliation also runs when the snapshot Arc is unchanged.
+            self.sync_inputs(window, cx);
+            return false;
+        }
         if previous.account.login.as_ref().map(|login| &login.login_id)
             != self
                 .snapshot
@@ -906,7 +1030,8 @@ impl Desktop {
                 .as_ref()
                 .map(|login| &login.login_id)
         {
-            self.account_code
+            self.account
+                .code
                 .update(cx, |input, cx| input.set_value("", window, cx));
         }
         if let Some(request) = self
@@ -919,13 +1044,8 @@ impl Desktop {
         if previous.error != self.snapshot.error
             && let Some(error) = &self.snapshot.error
         {
-            tracing::error!(target: "bex", operation = "store", message = %error);
+            tracing::error!(target: "agent", operation = "store", message = %error);
         }
-        sync_error_banner(
-            &mut self.error,
-            previous.error.as_deref(),
-            self.snapshot.error.as_deref(),
-        );
         let previous_draft = previous.drafts.get(&previous.navigation.draft_key);
         let sources_changed = previous_draft.map(|draft| &draft.attachments)
             != self
@@ -934,6 +1054,21 @@ impl Desktop {
                 .get(self.draft_key())
                 .map(|draft| &draft.attachments);
         let navigated = previous.navigation.draft_key != self.snapshot.navigation.draft_key;
+        // Store snapshots may coalesce creation and send acceptance. Use the
+        // durable core identity transition rather than transient pending sends.
+        for (draft, session) in self.snapshot.draft_sessions.iter() {
+            if previous.draft_sessions.get(draft) != Some(session) {
+                let before = PanelScope {
+                    draft: draft.clone(),
+                    ..self.panel_scope()
+                };
+                let after = PanelScope {
+                    draft: session.into(),
+                    ..self.panel_scope()
+                };
+                self.panels.rekey(before, after);
+            }
+        }
         let project_for_selected = |snapshot: &Snapshot| {
             snapshot
                 .thread_metadata(snapshot.navigation.thread_id.as_ref()?)
@@ -954,59 +1089,15 @@ impl Desktop {
             self.selection
                 .update(cx, |selection, cx| selection.clear(cx));
             self.cancel_recording();
-            self.composer_pending = None;
-            self.rendered = None;
-            self.diffs.clear();
-            self.markdown_cache.clear();
+            self.composer.text.pending = None;
         }
-        if self.composer_pending.is_none() && self.composer_value.as_ref() != self.draft().text {
-            let value: SharedString = self.draft().text.clone().into();
-            self.composer_value = value.clone();
-            self.composer
-                .update(cx, |input, cx| input.set_value(value, window, cx));
-        }
-        let file = self.snapshot.workspace.file.as_ref();
-        let path = file.map(|file| file.path.as_str());
-        let file_changed = self.editor_path.as_deref() != path;
-        let text = file.map_or("", |file| {
-            self.snapshot
-                .file_drafts
-                .get(&file.path)
-                .map_or(file.text.as_str(), |draft| draft.text.as_str())
-        });
-        if file_changed || (self.editor_pending.is_none() && self.editor_value.as_ref() != text) {
-            self.editor_path = path.map(str::to_owned);
-            self.editor_value = text.to_owned().into();
-            self.editor_pending = None;
-            self.editor_input.update(cx, |input, cx| {
-                input.set_value(self.editor_value.clone(), window, cx)
-            });
-        }
-        if !self.worktree_dirty
-            && !self.worktree_saving
+        self.sync_inputs(window, cx);
+        if !self.worktrees.dirty
+            && !self.worktrees.saving
             && previous.workspace.settings != self.snapshot.workspace.settings
             && let Some(settings) = &self.snapshot.workspace.settings
         {
-            self.worktree_copy_paths.update(cx, |input, cx| {
-                input.set_value(settings.copy_paths.join("\n"), window, cx)
-            });
-            self.worktree_directory.update(cx, |input, cx| {
-                input.set_value(settings.worktree_directory.clone(), window, cx)
-            });
-        }
-        let conversations_changed =
-            !Arc::ptr_eq(&previous.conversations, &self.snapshot.conversations);
-        if conversations_changed {
-            self.sync_request_inputs(window, cx);
-        }
-        if navigated
-            || conversations_changed
-            || !Arc::ptr_eq(
-                &previous.pending_submissions,
-                &self.snapshot.pending_submissions,
-            )
-        {
-            self.sync_rows(navigated, window, cx);
+            self.worktrees.show(settings, window, cx);
         }
         let user_items_changed = {
             let mut current = self.user_items();
@@ -1042,28 +1133,53 @@ impl Desktop {
             self.source_paths = paths.into_iter().map(str::to_owned).collect();
             self.source_items = self.user_items().cloned().collect();
         }
-        if previous.workspace.directory != self.snapshot.workspace.directory
-            && let Some(directory) = &self.snapshot.workspace.directory
-        {
-            let previous_path = previous
-                .workspace
-                .directory
-                .as_ref()
-                .map_or("", |directory| directory.path.as_str());
-            if self.path.read(cx).value().as_ref() == previous_path {
-                self.path.update(cx, |input, cx| {
-                    input.set_value(directory.path.clone(), window, cx)
-                });
-            }
-        }
         let cwd_changed = previous.navigation.cwd != self.snapshot.navigation.cwd;
         if cwd_changed {
             let cwd = self.snapshot.navigation.cwd.clone();
             self.path
                 .update(cx, |input, cx| input.set_value(cwd, window, cx));
         }
-        if changed && let Some(session) = &self.session {
-            session.save(self.snapshot.clone());
+        if navigated {
+            let panel = self.panels.get(self.panel_scope());
+            if panel.open
+                && matches!(panel.kind(), Panel::File | Panel::Files)
+                && let Some(id) = panel.active
+            {
+                self.activate_surface(id, window, cx);
+            }
+        }
+        true
+    }
+    fn sync_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self
+            .snapshot
+            .drafts
+            .get(&self.snapshot.navigation.draft_key)
+            .map_or("", |draft| draft.text.as_str());
+        if let Some(value) = self.composer.text.adopt(text) {
+            self.composer
+                .input
+                .update(cx, |input, cx| input.set_value(value, window, cx));
+        }
+        let prompt = self.question_prompt();
+        let answer = self.question.show(prompt.as_ref());
+        if let (Some(prompt), Some(answer)) = (prompt, answer) {
+            let language = crate::localization::language(cx);
+            self.question
+                .set_placeholder(language.text(&prompt.placeholder), window, cx);
+            self.question.set_value(answer, window, cx);
+        }
+        let file = self.snapshot.workspace.file.as_ref();
+        let text = file.map_or("", |file| {
+            self.snapshot
+                .file_drafts
+                .get(&file.path)
+                .map_or(file.text.as_str(), |draft| draft.text.as_str())
+        });
+        if let Some(value) = self.editor.show(file.map(|file| file.path.as_str()), text) {
+            self.editor
+                .input
+                .update(cx, |input, cx| input.set_value(value, window, cx));
         }
     }
     fn draft_key(&self) -> &DraftKey {
@@ -1084,6 +1200,7 @@ impl Desktop {
             model: None,
             effort: None,
             service_tier: None,
+            model_settings_changed: false,
         };
         self.snapshot
             .drafts
@@ -1106,23 +1223,6 @@ impl Desktop {
             self.snapshot.navigation.cwd
         )
     }
-    fn history_key(&self) -> Option<op::OperationKey> {
-        self.selected()
-            .cloned()
-            .map(|session| op::OperationKey::History { session })
-    }
-    fn history_loading(&self) -> bool {
-        self.history_key()
-            .is_some_and(|key| self.snapshot.operation_running(key))
-    }
-    fn history_error(&self) -> Option<String> {
-        self.history_key()
-            .and_then(|key| self.snapshot.operation_error(key))
-    }
-    fn has_older_history(&self) -> bool {
-        self.thread()
-            .is_some_and(|thread| thread.history_has_more == Some(true))
-    }
     fn user_items(&self) -> impl Iterator<Item = &Arc<Item>> {
         self.thread()
             .and_then(|thread| thread.turns.as_deref())
@@ -1136,139 +1236,25 @@ impl Desktop {
                 )
             })
     }
-    fn sync_rows(&mut self, reset: bool, window: &mut Window, cx: &mut Context<Self>) {
-        self.rendered = self.snapshot.conversation_thread().map(|thread| {
-            agent_core::presentation::conversation::project_conversation(
-                &self.snapshot,
-                thread,
-                &self.rendered,
-            )
-        });
-        let rows = conversation_rows(&self.rendered);
-        if reset {
-            self.list.reset(rows.len());
-            self.list.scroll_to_end();
-            self.rows = rows;
-            return;
-        }
-        let old = &self.rows;
-        let prefix = old
-            .iter()
-            .zip(&rows)
-            .take_while(|(a, b)| a.same_identity(b))
-            .count();
-        let suffix = old[prefix..]
-            .iter()
-            .rev()
-            .zip(rows[prefix..].iter().rev())
-            .take_while(|(a, b)| a.same_identity(b))
-            .count();
-        let anchor = self.list.logical_scroll_top();
-        let preserve = old
-            .get(anchor.item_ix)
-            .zip(rows.get(anchor.item_ix))
-            .filter(|(a, b)| a.same_identity(b) && !a.unchanged(b))
-            .and_then(|(a, b)| {
-                if let (ConversationRow::Turn(turn), ConversationRow::Turn(next)) = (a, b)
-                    && let Some(first) = turn.source.items.as_ref().and_then(|items| items.first())
-                    && next.source.items.as_ref().is_some_and(|items| {
-                        items
-                            .iter()
-                            .position(|item| item.id == first.id)
-                            .is_some_and(|index| index > 0)
-                    })
-                {
-                    Some((
-                        turn.source.id.clone(),
-                        self.list.bounds_for_item(anchor.item_ix)?.size.height,
-                    ))
-                } else {
-                    None
-                }
-            });
-        if prefix + suffix != old.len() || old.len() != rows.len() {
-            self.list
-                .splice(prefix..old.len() - suffix, rows.len() - prefix - suffix);
-        }
-        for index in 0..prefix {
-            if !old[index].unchanged(&rows[index]) {
-                self.list.remeasure_items(index..index + 1);
-            }
-        }
-        for offset in 0..suffix {
-            let index = rows.len() - suffix + offset;
-            if !old[old.len() - suffix + offset].unchanged(&rows[index]) {
-                self.list.remeasure_items(index..index + 1);
-            }
-        }
-        self.rows = rows;
-        if let Some((id, old_height)) = preserve {
-            let generation = self.snapshot.epoch;
-            let owner = cx.entity().downgrade();
-            window.on_next_frame(move |_, cx| { let _ = owner.update(cx, |view, cx| {
-                if view.snapshot.epoch == generation && !view.list.is_following_tail() && matches!(view.rows.get(anchor.item_ix), Some(ConversationRow::Turn(turn)) if turn.source.id == id)
-                    && let Some(bounds) = view.list.bounds_for_item(anchor.item_ix)
-                {
-                    view.list.scroll_to(ListOffset { item_ix: anchor.item_ix, offset_in_item: anchor.offset_in_item + bounds.size.height - old_height }); cx.notify();
-                }
-            }); });
-        }
-    }
-    fn pause_tail(&self) {
-        if self.list.logical_scroll_top().item_ix == self.list.item_count() {
-            self.list
-                .scroll_by(-self.list.viewport_bounds().size.height);
-        }
-        self.list.pause_following_tail();
-    }
-    fn remeasure_item(&self, id: &str) {
-        for (index, row) in self.rows.iter().enumerate() {
-            if let ConversationRow::Turn(turn) = row
-                && (turn.source.id.as_str() == id
-                    || turn
-                        .source
-                        .items
-                        .as_deref()
-                        .unwrap_or_default()
-                        .iter()
-                        .any(|item| item.id.as_str() == id))
-            {
-                self.list.remeasure_items(index..index + 1);
-            }
-        }
-    }
     fn new_chat(&mut self, cwd: String, window: &mut Window, cx: &mut Context<Self>) {
         self.tab = Tab::Chat;
         self.cancel_recording();
         self.dispatch(Intent::NewChat { cwd });
-        self.composer.read(cx).focus_handle(cx).focus(window, cx);
+        self.composer
+            .input
+            .read(cx)
+            .focus_handle(cx)
+            .focus(window, cx);
     }
     fn open_chat(&mut self, id: SessionRef, window: &mut Window, cx: &mut Context<Self>) {
         self.tab = Tab::Chat;
         self.cancel_recording();
         self.dispatch(Intent::ReadThread(op::ReadThread::open(id)));
-        self.composer.read(cx).focus_handle(cx).focus(window, cx);
-    }
-    fn load_visible_history(&mut self, cx: &mut Context<Self>) {
-        let viewport = self.list.viewport_bounds();
-        let oldest_visible = viewport.size.height > px(0.)
-            && (self.rows.is_empty()
-                || self.list.bounds_for_item(0).is_some_and(|bounds| {
-                    bounds.top() >= viewport.top() - viewport.size.height * 0.6
-                        && bounds.top() <= viewport.bottom()
-                }));
-        if agent_core::presentation::conversation::should_load_history(
-            self.has_older_history(),
-            self.history_loading() || self.history_error().is_some(),
-            oldest_visible,
-            self.list.is_scrolled_to_end() != Some(false),
-            self.list.is_following_tail(),
-        ) {
-            self.dispatch(Intent::ReadOlder {
-                thread_id: self.selected().expect("selected conversation").clone(),
-            });
-            cx.notify();
-        }
+        self.composer
+            .input
+            .read(cx)
+            .focus_handle(cx)
+            .focus(window, cx);
     }
     fn detail(&mut self, turn_id: TurnId, item_id: ItemId) {
         let Some(thread_id) = self.selected().cloned() else {
@@ -1296,12 +1282,12 @@ impl Desktop {
             return;
         }
         let generation = self.snapshot.epoch;
-        let turn_id = read.turn_id.clone();
+        let item_id = read.item_id.clone();
         self.perform(
             Intent::ReadItem(read),
             OperationCompletion::Item {
                 generation,
-                turn_id,
+                item_id,
             },
         );
     }
@@ -1326,35 +1312,32 @@ impl Desktop {
         let preferences = match preferences {
             Ok(preferences) => preferences,
             Err(error) => {
-                self.error = error.to_string();
+                self.set_error(error.to_string());
                 return;
             }
         };
         self.session.take();
         self.remote = remote;
-        self.settings_model_scope = ModelDefaultsScope::Global;
+        self.model_controls.settings_scope = ModelDefaultsScope::Global;
         self.snapshot = Arc::default();
-        self.composer_pending = None;
         self.pending_quote = None;
         self.pending_explanation = None;
-        self.editor_pending = None;
-        self.editor_path = None;
-        self.worktree_dirty = false;
-        self.worktree_saving = false;
-        self.worktree_save_pending = false;
-        self.side_chat = None;
-        self.terminal = None;
-        self.images.clear();
-        self.image_gallery = None;
-        self.rows.clear();
-        self.list.reset(0);
-        self.rendered = None;
-        self.requests.clear();
-        self.diffs.clear();
-        self.markdown_cache.clear();
-        self.composer_value = "".into();
+        self.editor.text.pending = None;
+        self.editor.path = None;
+        self.worktrees.dirty = false;
+        self.worktrees.saving = false;
+        self.worktrees.save_pending = false;
+        self.media.images.clear();
+        self.media.gallery = None;
+        self.conversation.update(cx, |view, cx| {
+            view.timeline.clear();
+            cx.notify();
+        });
+        self.question.text.pending = None;
+        let value = self.composer.text.replace("");
         self.composer
-            .update(cx, |input, cx| input.set_value("", window, cx));
+            .input
+            .update(cx, |input, cx| input.set_value(value, window, cx));
         self.connect(preferences);
     }
     fn send(&mut self, cx: &Context<Self>) {
@@ -1367,7 +1350,9 @@ impl Desktop {
             }
             return;
         }
-        if self.composer.read(cx).value().trim().is_empty() && self.draft().attachments.is_empty() {
+        if self.composer.input.read(cx).value().trim().is_empty()
+            && self.draft().attachments.is_empty()
+        {
             return;
         }
         self.busy += 1;
@@ -1388,10 +1373,11 @@ impl Desktop {
             queued.push_str(text);
             return;
         }
-        selection::append_to_composer(&self.composer, text, window, cx);
+        selection::append_to_composer(&self.composer.input, text, window, cx);
     }
 
     fn explain_selection(&mut self, text: &str, cx: &mut Context<Self>) {
+        let language = crate::localization::language(cx);
         let Some(store) = self.session.as_ref().map(|session| session.store.clone()) else {
             self.pending_explanation = Some(text.into());
             return;
@@ -1401,15 +1387,24 @@ impl Desktop {
             .snapshot
             .model_provider_for_draft(self.draft_key().clone())
         else {
-            self.error = "利用可能なエージェントを選択してください。".into();
+            self.set_error(
+                language
+                    .text("利用可能なエージェントを選択してください。")
+                    .into(),
+            );
             return;
         };
-        let prompt = format!("次の選択範囲について詳しく説明してください。\n\n{text}");
+        let prompt = agent_core::localization::localized_ui_format(
+            language,
+            "次の選択範囲について詳しく説明してください。\n\n{0}".into(),
+            vec![text.to_string()],
+        );
         self.busy += 1;
         self.effect(
             async move {
                 let Outcome::StartedThread { id } = store
                     .dispatch(Intent::CreateSession(op::CreateSession {
+                        initial_input: None,
                         provider,
                         cwd: Some(cwd),
                         model: None,
@@ -1417,7 +1412,9 @@ impl Desktop {
                     .await
                     .map_err(|error| error.to_string())?
                 else {
-                    return Err("新しいサイドチャットを作成できませんでした".into());
+                    return Err(language
+                        .text("新しいサイドチャットを作成できませんでした")
+                        .into());
                 };
                 // The new thread has its own draft; existing side-chat input stays intact.
                 store
@@ -1452,79 +1449,130 @@ impl Desktop {
             }));
         }
     }
-    fn open_panel(&mut self, panel: Panel, window: &mut Window, cx: &mut Context<Self>) {
-        let result = match panel {
-            Panel::SideChat if self.side_chat.is_none() => {
-                self.side_chat = Some(cx.new(|cx| {
-                    Self::new(
-                        Mode::SideChat {
-                            remote: self.remote.clone(),
-                            cwd: self.snapshot.selected_directory(),
-                        },
-                        window,
-                        cx,
-                    )
-                }));
-                Ok(())
-            }
-            Panel::Terminal if self.terminal.is_none() => {
-                self.terminal = Some(crate::terminal::Terminal::new(
-                    self.remote.as_ref().map_or("", |remote| &remote.ticket),
-                    self.snapshot.navigation.cwd.clone(),
-                    window,
-                    cx,
-                ));
-                Ok(())
-            }
-            #[cfg(target_os = "windows")]
-            Panel::Browser if self.browser.is_none() && self.browser_initialization.is_none() => {
-                let owner = cx.entity().downgrade();
-                crate::browser::Browser::start(window, cx, move |result, window, cx| {
-                    let _ = owner.update(cx, |s, cx| {
-                        s.browser_initialization = None;
-                        match result {
-                            Ok(view) => {
-                                s.browser = Some(view);
-                                s.navigate_pending_browser_url(window, cx);
-                            }
-                            Err(error) => s.set_error(error),
-                        }
-                        cx.notify();
-                    });
-                })
-                .map(|task| self.browser_initialization = Some(task))
-            }
-            #[cfg(not(target_os = "windows"))]
-            Panel::Browser if self.browser.is_none() => crate::browser::Browser::new(
-                wry::WebViewBuilder::new(),
-                #[cfg(target_os = "macos")]
-                crate::browser::ChromeProfileSource::default(),
-                window,
-                cx,
-            )
-            .map(|view| self.browser = Some(view)),
-            _ => Ok(()),
-        };
-        if let Err(error) = result {
+    fn panel_scope(&self) -> PanelScope {
+        self.snapshot.panel_scope(
+            self.remote
+                .as_ref()
+                .map_or_else(|| "local".into(), |host| host.id.clone()),
+            self.draft_key().clone(),
+        )
+    }
+    fn open_panel(&mut self, kind: Panel, window: &mut Window, cx: &mut Context<Self>) {
+        let id = self.panels.open(self.panel_scope(), kind, None);
+        self.tab = Tab::Chat;
+        self.activate_surface(id, window, cx);
+    }
+    fn set_visible(&mut self, visible: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.visible != visible {
+            self.visible = visible;
+            self.sync_surfaces(window, cx);
+            cx.notify();
+        }
+    }
+    fn open_browser(&mut self, scope: PanelScope, url: &str, cx: &mut Context<Self>) {
+        if let Err(error) = agent_protocol::browser::browser_url(url) {
             self.set_error(error);
+            cx.notify();
             return;
         }
-        self.panel = panel;
-        self.panel_open = true;
-        self.tab = Tab::Chat;
-        self.navigate_pending_browser_url(window, cx);
+        let current = scope == self.panel_scope();
+        let id = self.panels.open(scope, Panel::Browser, None);
+        self.surface_resources.insert(
+            id,
+            SurfaceResource::Pending {
+                url: Some(url.into()),
+            },
+        );
+        if current {
+            self.tab = Tab::Chat;
+        }
         cx.notify();
     }
-    fn open_browser_url(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
-        self.pending_browser_url = Some(url.to_owned());
-        self.open_panel(Panel::Browser, window, cx);
-    }
-    fn navigate_pending_browser_url(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(browser) = self.browser.clone()
-            && let Some(url) = self.pending_browser_url.take()
-        {
-            browser.update(cx, |browser, cx| browser.open_url(&url, window, cx));
+    fn activate_surface(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let key = self.panel_scope();
+        if !self.panels.activate(key.clone(), id) {
+            return;
         }
+        let surface = self.panels.get(key).selected().unwrap().clone();
+        match surface.kind {
+            Panel::Browser => {
+                self.surface_resources
+                    .entry(id)
+                    .or_insert(SurfaceResource::Pending { url: None });
+            }
+            Panel::Terminal => {
+                if !self.surface_resources.contains_key(&id) {
+                    let terminal = crate::terminal::Terminal::new(
+                        self.remote.as_ref().map_or("", |remote| &remote.ticket),
+                        self.snapshot.navigation.cwd.clone(),
+                        format!("agent-terminal-{}", uuid::Uuid::new_v4()),
+                        window,
+                        cx,
+                    );
+                    self.surface_resources
+                        .insert(id, SurfaceResource::Terminal(terminal));
+                }
+                if let Some(SurfaceResource::Terminal(terminal)) = self.surface_resources.get(&id) {
+                    terminal.update(cx, |terminal, cx| terminal.focus(window, cx));
+                }
+            }
+            Panel::SideChat => {
+                if !self.surface_resources.contains_key(&id) {
+                    let chat = cx.new(|cx| {
+                        Self::new(
+                            Mode::SideChat {
+                                remote: self.remote.clone(),
+                                cwd: self.snapshot.selected_directory(),
+                            },
+                            window,
+                            cx,
+                        )
+                    });
+                    self.surface_resources
+                        .insert(id, SurfaceResource::SideChat(chat));
+                }
+            }
+            Panel::File => {
+                if let Some(path) = surface.path {
+                    self.dispatch(Intent::ReadFile(op::ReadFile {
+                        path,
+                        discard_draft: false,
+                    }));
+                }
+            }
+            Panel::Files => self.read_directory(
+                id,
+                surface
+                    .path
+                    .unwrap_or_else(|| self.snapshot.navigation.cwd.clone()),
+                cx,
+            ),
+            Panel::Diff => self.refresh_review(),
+            Panel::Agents | Panel::Home => (),
+        }
+        cx.notify();
+    }
+    fn close_surface(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        if self.panels.scope(id) != Some(self.panel_scope()) {
+            return;
+        }
+        self.panels.close(self.panel_scope(), id);
+        match self.surface_resources.remove(&id) {
+            Some(SurfaceResource::Browser(view)) => {
+                view.update(cx, |view, cx| view.set_visible(false, cx));
+            }
+            Some(SurfaceResource::Terminal(view)) => view.update(cx, |view, _| view.close()),
+            Some(SurfaceResource::SideChat(view)) => {
+                view.update(cx, |view, cx| view.set_visible(false, window, cx))
+            }
+            _ => (),
+        }
+        if let Some(next) = self.panels.get(self.panel_scope()).active {
+            self.activate_surface(next, window, cx);
+        } else {
+            self.panel_focus.focus(window, cx);
+        }
+        cx.notify();
     }
     fn pick_folder(&mut self) {
         self.busy += 1;
@@ -1541,7 +1589,7 @@ impl Desktop {
         if self.completion_key(key, window, cx) {
             return;
         }
-        let moved = self.composer.update(cx, |input, cx| {
+        let moved = self.composer.input.update(cx, |input, cx| {
             if input.marked_text_range(window, cx).is_some() || !input.selected_range().is_empty() {
                 return false;
             }
@@ -1578,7 +1626,7 @@ impl Desktop {
             cx.stop_propagation();
             return;
         }
-        let submit = self.composer.update(cx, |input, cx| {
+        let submit = self.composer.input.update(cx, |input, cx| {
             composer_should_submit(input, action, window, cx)
         });
         if submit && self.snapshot.connected && self.busy == 0 {
@@ -1633,6 +1681,9 @@ impl Desktop {
         let remote = self.remote.is_some();
         let directory = self.snapshot.navigation.cwd.clone();
         self.busy += 1;
+        let error_scope = ErrorScope::Conversation {
+            draft_key: key.clone(),
+        };
         self.effect(
             async move {
                 let paths = tokio::task::spawn_blocking(sources)
@@ -1666,63 +1717,35 @@ impl Desktop {
                             attachment,
                         }
                     };
-                    store
-                        .dispatch(intent)
-                        .await
-                        .map_err(|error| error.to_string())?;
+                    if store.dispatch(intent).await.is_err() {
+                        break;
+                    }
                 }
-                Ok(Outcome::Applied)
+                Ok(())
             },
-            |result| Update::Completed(OperationCompletion::Busy, result),
+            move |result| Update::LocalCompleted {
+                scope: error_scope,
+                result: result.map(|()| None),
+            },
         );
     }
-    fn download(&mut self, source: String) {
-        let Some(store) = self.session.as_ref().map(|session| session.store.clone()) else {
-            return;
-        };
-        self.busy += 1;
-        self.effect(
-            async move {
-                let name = Path::new(&source)
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned();
-                let destination =
-                    tokio::task::spawn_blocking(move || platform::choose_destination(&name))
-                        .await
-                        .map_err(|error| error.to_string())?;
-                if let Some(destination) = destination {
-                    store
-                        .dispatch(Intent::DownloadFile(op::DownloadFile {
-                            source,
-                            destination: destination
-                                .into_os_string()
-                                .into_string()
-                                .map_err(|_| "download destination is not UTF-8")?,
-                        }))
-                        .await
-                        .map_err(|error| error.to_string())?;
-                }
-                Ok(Outcome::Applied)
-            },
-            |result| Update::Completed(OperationCompletion::Busy, result),
-        );
-    }
-    fn browse(&mut self, path: String) {
-        self.panel = Panel::Files;
-        self.panel_open = true;
+    fn browse(&mut self, path: String, cx: &Context<Self>) {
+        let id = self
+            .panels
+            .open(self.panel_scope(), Panel::Files, Some(path.clone()));
         self.tab = Tab::Chat;
-        self.dispatch(Intent::ListFiles(op::ListFiles { path }));
+        self.read_directory(id, path, cx);
     }
     fn edit(&mut self, path: String, discard_draft: bool) {
+        self.panels
+            .open(self.panel_scope(), Panel::File, Some(path.clone()));
         self.dispatch(Intent::ReadFile(op::ReadFile {
             path,
             discard_draft,
         }));
     }
     fn save_file(&mut self) {
-        let Some(path) = self.editor_path.clone() else {
+        let Some(path) = self.editor.path.clone() else {
             return;
         };
         self.busy += 1;
@@ -1731,28 +1754,17 @@ impl Desktop {
             OperationCompletion::Busy,
         );
     }
-    fn settings_match_inputs(&self, cx: &App) -> bool {
-        self.snapshot
-            .workspace
-            .settings
-            .as_ref()
-            .is_some_and(|settings| {
-                self.worktree_directory.read(cx).value().trim() == settings.worktree_directory
-                    && self
-                        .worktree_copy_paths
-                        .read(cx)
-                        .value()
-                        .lines()
-                        .map(str::trim)
-                        .filter(|line| !line.is_empty())
-                        .eq(settings.copy_paths.iter().map(String::as_str))
-            })
+    fn worktree_input_changed(&mut self, cx: &App) {
+        self.worktrees.dirty = !self
+            .worktrees
+            .matches(self.snapshot.workspace.settings.as_deref(), cx);
+        self.worktrees.saved = false;
     }
     fn save_worktree_settings(&mut self, toggle: Option<WorktreeToggle>, cx: &Context<Self>) {
         let Some(settings) = &self.snapshot.workspace.settings else {
             return;
         };
-        let mut settings: WorktreeSettings = settings.as_ref().clone();
+        let mut settings = self.worktrees.edited(settings, cx);
         if let Some(toggle) = toggle {
             match toggle {
                 WorktreeToggle::Create(checked) => settings.create_on_new_session = checked,
@@ -1760,34 +1772,21 @@ impl Desktop {
                 WorktreeToggle::DeleteMerged(checked) => settings.delete_merged = checked,
             }
         }
-        settings.worktree_directory = self.worktree_directory.read(cx).value().trim().into();
-        settings.copy_paths = self
-            .worktree_copy_paths
-            .read(cx)
-            .value()
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .map(str::to_owned)
-            .collect();
         if self.snapshot.workspace.settings.as_deref() == Some(&settings) {
             return;
         }
-        if self.worktree_saving {
-            self.worktree_save_pending = true;
+        if self.worktrees.saving {
+            self.worktrees.save_pending = true;
             return;
         }
-        self.worktree_saving = true;
-        self.worktree_saved = false;
+        self.worktrees.saving = true;
+        self.worktrees.saved = false;
         self.perform(
             Intent::UpdateWorktreeSettings(op::UpdateWorktreeSettings { settings }),
             OperationCompletion::WorktreeSettings,
         );
     }
     fn respond(&mut self, id: RequestId, answer: Answer) {
-        if let Some(inputs) = self.requests.get_mut(&id) {
-            inputs.sent = true;
-        }
         self.perform(
             Intent::Respond(op::Respond {
                 request_id: id.clone(),
@@ -1797,37 +1796,6 @@ impl Desktop {
         );
     }
 }
-fn conversation_rows(
-    rendered: &Option<Arc<agent_core::presentation::conversation::RenderedConversation>>,
-) -> Vec<ConversationRow> {
-    let mut rows = Vec::new();
-    if let Some(rendered) = rendered {
-        rows.extend(rendered.turns.iter().cloned().map(ConversationRow::Turn));
-        rows.extend(rendered.queued.iter().filter_map(|item| {
-            if let agent_core::presentation::conversation::ItemSource::Pending(id, pending) =
-                &item.source
-            {
-                Some(ConversationRow::Pending(id.clone(), pending.clone()))
-            } else {
-                None
-            }
-        }));
-    }
-    rows.extend(
-        rendered
-            .iter()
-            .flat_map(|conversation| &conversation.request_rows)
-            .filter_map(|row| {
-                if let ConversationRowContent::PendingRequest { request } = &row.content {
-                    Some(ConversationRow::Request(request.clone()))
-                } else {
-                    None
-                }
-            }),
-    );
-    rows
-}
-
 fn toggle_set(set: &mut HashSet<String>, key: &str) {
     if !set.remove(key) {
         set.insert(key.into());
@@ -1857,16 +1825,6 @@ fn literal(text: &str) -> String {
     }
     result
 }
-fn sync_error_banner(banner: &mut String, previous: Option<&str>, next: Option<&str>) {
-    if previous != next {
-        if let Some(error) = next {
-            *banner = error.to_owned();
-        } else if previous == Some(banner.as_str()) {
-            banner.clear();
-        }
-    }
-}
-
 fn composer_should_submit(
     input: &TextareaState,
     action: &gpui_kit::component::input::Enter,
@@ -1919,47 +1877,58 @@ mod composer_tests {
 }
 
 #[cfg(test)]
-mod error_tests {
-    use super::sync_error_banner;
-
-    #[test]
-    fn recovered_store_error_clears_its_banner() {
-        let mut banner = String::new();
-        sync_error_banner(&mut banner, None, Some("thread read failed"));
-        assert_eq!(banner, "thread read failed");
-        sync_error_banner(&mut banner, Some("thread read failed"), None);
-        assert!(banner.is_empty());
-    }
-
-    #[test]
-    fn recovery_preserves_a_newer_local_error_and_respects_dismissal() {
-        let mut banner = "draft save failed".to_owned();
-        sync_error_banner(&mut banner, Some("thread read failed"), None);
-        assert_eq!(banner, "draft save failed");
-        banner.clear();
-        sync_error_banner(
-            &mut banner,
-            Some("thread read failed"),
-            Some("thread read failed"),
-        );
-        assert!(banner.is_empty());
-        sync_error_banner(
-            &mut banner,
-            Some("thread read failed"),
-            Some("disconnected"),
-        );
-        assert_eq!(banner, "disconnected");
-    }
-}
-
-#[cfg(test)]
 mod completion_tests {
-    use super::{
-        Arc, Context, ConversationRow, Desktop, Mode, OperationCompletion, Outcome, Snapshot,
-        Thread, Update, Window, conversation_rows,
-    };
+    use super::{Arc, Context, Desktop, Mode, OperationCompletion, Outcome, Update, Window};
     use gpui_kit as gpui;
     use gpui_kit::TestAppContext;
+
+    #[gpui::test]
+    fn language_switch_updates_existing_inputs_and_preserves_drafts(cx: &mut TestAppContext) {
+        use crate::localization::Language;
+        use agent_core::localization::UiLanguage;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        cx.update(|cx| {
+            crate::appearance::init(cx);
+            cx.set_global(Language(UiLanguage::Japanese));
+            cx.set_global(crate::Runtime {
+                handle: runtime.handle().clone(),
+                connections: Arc::new(crate::platform::Connections::default()),
+                closing: tokio_util::task::TaskTracker::new(),
+                logging_error: None,
+            });
+        });
+        let view = cx.add_window(|window, cx| {
+            Desktop::new(
+                Mode::SideChat {
+                    remote: None,
+                    cwd: "/fixture".into(),
+                },
+                window,
+                cx,
+            )
+        });
+        view.update(cx, |view, window, cx| {
+            view.composer.input.update(cx, |input, cx| {
+                input.set_value("ユーザーの入力 {0}", window, cx)
+            });
+        })
+        .unwrap();
+        for (language, placeholder) in [
+            (UiLanguage::English, "Ask AI"),
+            (UiLanguage::Japanese, "AI に依頼する"),
+        ] {
+            cx.update(|cx| cx.set_global(Language(language)));
+            view.update(cx, |view, _, cx| {
+                let input = view.composer.input.read(cx);
+                assert_eq!(input.presentation().placeholder().as_ref(), placeholder);
+                assert_eq!(input.text().to_string(), "ユーザーの入力 {0}");
+            })
+            .unwrap();
+        }
+    }
 
     #[gpui::test]
     fn completion_messages_preserve_newer_host_navigation_and_input(cx: &mut TestAppContext) {
@@ -1991,8 +1960,8 @@ mod completion_tests {
             view.epoch = 3;
             Arc::make_mut(&mut view.snapshot).epoch = 5;
             view.busy = 2;
-            view.composer_pending = Some(9);
-            view.editor_pending = Some(12);
+            view.composer.text.pending = Some(9);
+            view.editor.text.pending = Some(12);
             let deliver = |view: &mut Desktop,
                            host,
                            kind,
@@ -2010,7 +1979,7 @@ mod completion_tests {
                 cx,
             );
             assert_eq!(view.busy, 2);
-            assert!(view.error.is_empty());
+            assert!(view.local_errors.is_empty());
             deliver(
                 view,
                 3,
@@ -2027,8 +1996,8 @@ mod completion_tests {
                 window,
                 cx,
             );
-            assert_eq!(view.composer_pending, Some(9));
-            assert_eq!(view.editor_pending, Some(12));
+            assert_eq!(view.composer.text.pending, Some(9));
+            assert_eq!(view.editor.text.pending, Some(12));
             deliver(
                 view,
                 3,
@@ -2045,8 +2014,8 @@ mod completion_tests {
                 window,
                 cx,
             );
-            assert_eq!(view.composer_pending, None);
-            assert_eq!(view.editor_pending, None);
+            assert_eq!(view.composer.text.pending, None);
+            assert_eq!(view.editor.text.pending, None);
             deliver(
                 view,
                 3,
@@ -2058,60 +2027,5 @@ mod completion_tests {
             assert_eq!(view.busy, 1);
         })
         .unwrap();
-    }
-
-    #[test]
-    fn row_projection_keeps_repeated_turns_and_scopes_requests_without_changing_input() {
-        let mut source: Arc<Thread> = Arc::new(serde_json::from_value(serde_json::json!({"id":{"provider":"codex","id":"selected"},"turns":[{"id":"repeated","items":[{"id":"first","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"first answer","phase":"unknown"}}}}}],"status":"unknown"},{"id":"repeated","items":[{"id":"second","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"second answer","phase":"unknown"}}}}}],"status":"unknown"}]})).unwrap());
-        let mut snapshot = Snapshot::default();
-        Arc::make_mut(&mut snapshot.navigation).thread_id =
-            Some(agent_protocol::session::SessionRef {
-                provider: agent_protocol::session::ProviderKind::Codex,
-                id: "selected".into(),
-            });
-        let request = Arc::new(agent_protocol::requests::Request {
-            id: "global".into(),
-            target: agent_protocol::requests::RequestTarget::Session,
-            delivery: agent_protocol::session::RequestDelivery::Awaiting,
-            body: agent_protocol::requests::RequestBody::Elicitation {
-                server: "fixture".into(),
-                message: "input".into(),
-                input: agent_protocol::requests::ElicitationInput::Form { fields: vec![] },
-            },
-        });
-        Arc::make_mut(&mut source)
-            .requests
-            .insert(request.id.clone(), request.clone());
-        let mut other = (*source).clone();
-        let request = Arc::make_mut(other.requests.get_mut("global").unwrap());
-        request.id = "other".into();
-        other.id = Some(agent_protocol::session::SessionRef {
-            provider: agent_protocol::session::ProviderKind::Codex,
-            id: "other".into(),
-        });
-        Arc::make_mut(&mut snapshot.conversations)
-            .insert(other.id.clone().unwrap(), Arc::new(other));
-        let before = snapshot.clone();
-        let rendered = Some(
-            agent_core::presentation::conversation::project_conversation(
-                &snapshot,
-                source.clone(),
-                &None,
-            ),
-        );
-        let rows = conversation_rows(&rendered);
-        let repeated = conversation_rows(&rendered);
-        assert_eq!(rows.len(), 3);
-        for (index, turn) in source.turns.as_ref().unwrap().iter().enumerate() {
-            let ConversationRow::Turn(row) = &rows[index] else {
-                panic!("missing turn")
-            };
-            assert!(Arc::ptr_eq(&row.source, turn));
-        }
-        assert!(
-            matches!(&rows[2], ConversationRow::Request(request) if request.id.as_str() == "global")
-        );
-        assert!(rows.iter().zip(&repeated).all(|(a, b)| a.unchanged(b)));
-        assert_eq!(snapshot, before);
     }
 }

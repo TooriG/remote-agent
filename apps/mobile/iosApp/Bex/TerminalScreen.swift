@@ -3,11 +3,9 @@ import SwiftTerm
 import SwiftUI
 
 struct TerminalScreen: View {
-    @ObservedObject var model: BexAppViewModel
+    @ObservedObject var model: AppViewModel
     let cwd: String
-    private var handle: String {
-        terminalHandle(cwd: cwd)
-    }
+    let handle: String
 
     var body: some View {
         VStack(spacing: 0) {
@@ -15,21 +13,21 @@ struct TerminalScreen: View {
             if terminal?.loading ?? true {
                 ProgressView().accessibilityIdentifier("terminal.loading")
             } else if let status = terminal?.status {
-                Text(status).font(.caption).foregroundStyle(.secondary)
+                AppText(status).font(.caption).foregroundStyle(.secondary)
             }
-            NativeTerminalView(model: model, handle: handle, cwd: cwd, terminal: terminal)
+            NativeTerminalView(session: model.session, handle: handle, cwd: cwd, terminal: terminal)
         }
     }
 }
 
 private struct NativeTerminalView: UIViewRepresentable {
-    @ObservedObject var model: BexAppViewModel
+    let session: ClientSession?
     let handle: String
     let cwd: String
     let terminal: AgentCore.TerminalView?
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(model: model, handle: handle, cwd: cwd)
+        Coordinator(session: session, handle: handle, cwd: cwd)
     }
 
     func makeUIView(context: Context) -> SwiftTerm.TerminalView {
@@ -44,7 +42,7 @@ private struct NativeTerminalView: UIViewRepresentable {
         view.terminalDelegate = nil
         coordinator.dismantled = true
         if coordinator.started {
-            coordinator.model.perform(.detachTerminal(DetachTerminal(handle: coordinator.handle)))
+            coordinator.dispatch(.detachTerminal(DetachTerminal(handle: coordinator.handle)))
         }
     }
 
@@ -63,26 +61,35 @@ private struct NativeTerminalView: UIViewRepresentable {
             coordinator.sequence = chunk.sequence
         }
         if coordinator.sequence > previousSequence {
-            let sequence = coordinator.sequence
-            Task { @MainActor in model.perform(.acknowledgeTerminal(handle: handle, sequence: sequence)) }
+            coordinator.dispatch(.acknowledgeTerminal(handle: handle, sequence: coordinator.sequence))
         }
     }
 
     @MainActor final class Coordinator: NSObject, TerminalViewDelegate {
-        let model: BexAppViewModel
+        // The session owns this terminal; its observer publishes UI changes after
+        // UIKit updates. Profile changes must not retarget existing callbacks.
+        let session: ClientSession?
         let handle: String
         var sequence: UInt64 = 0
         var restoring = false
         var started = false
         var dismantled = false
         let cwd: String
-        init(model: BexAppViewModel, handle: String, cwd: String) {
-            self.model = model; self.handle = handle; self.cwd = cwd
+        init(session: ClientSession?, handle: String, cwd: String) {
+            self.session = session; self.handle = handle; self.cwd = cwd
+        }
+
+        func dispatch(_ intent: Intent) {
+            guard let session, let receipt = try? session.dispatch(intent: intent) else { return }
+            // Preserve input order and drain tracked receipts without publishing
+            // an AppViewModel snapshot from a UIKit lifecycle callback.
+            Task { _ = try? await receipt.wait() }
         }
 
         func send(source _: SwiftTerm.TerminalView, data: ArraySlice<UInt8>) {
-            guard !dismantled, model.snapshot.terminalView(handle: handle)?.acceptsInput == true else { return }
-            model.perform(.writeTerminal(WriteTerminal(handle: handle, data: Data(data))))
+            guard !dismantled, let session,
+                  session.snapshot().terminalView(handle: handle)?.acceptsInput == true else { return }
+            dispatch(.writeTerminal(WriteTerminal(handle: handle, data: Data(data))))
         }
 
         func sizeChanged(source _: SwiftTerm.TerminalView, newCols: Int, newRows: Int) {
@@ -92,12 +99,12 @@ private struct NativeTerminalView: UIViewRepresentable {
                 rows: UInt16(clamping: min(newRows, 250))
             )
             Task { @MainActor in
-                guard !dismantled else { return }
+                guard !dismantled, let session else { return }
                 if !started {
                     started = true
-                    model.perform(.startTerminal(StartTerminal(handle: handle, cwd: cwd, size: size)))
-                } else if model.snapshot.terminalView(handle: handle)?.acceptsInput == true {
-                    model.perform(.resizeTerminal(ResizeTerminal(handle: handle, size: size)))
+                    dispatch(.startTerminal(StartTerminal(handle: handle, cwd: cwd, size: size)))
+                } else if session.snapshot().terminalView(handle: handle)?.acceptsInput == true {
+                    dispatch(.resizeTerminal(ResizeTerminal(handle: handle, size: size)))
                 }
             }
         }

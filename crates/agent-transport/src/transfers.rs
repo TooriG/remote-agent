@@ -1,6 +1,7 @@
 use std::{future::Future, path::Path};
 
 use crate::models::TransferGrant;
+use agent_protocol::paths::is_absolute_host_path;
 use ring::digest::{Context, SHA256};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
 
@@ -14,6 +15,16 @@ pub enum TransferError {
     Peer(#[from] PeerError),
     #[error("transfer protocol violation: {0}")]
     Protocol(String),
+}
+
+impl From<TransferError> for PeerError {
+    fn from(error: TransferError) -> Self {
+        match error {
+            TransferError::Peer(error) => error,
+            TransferError::Io(error) => Self::Transfer(error.to_string()),
+            TransferError::Protocol(reason) => Self::Transfer(reason),
+        }
+    }
 }
 
 const LIMIT: u64 = 512 * 1024 * 1024;
@@ -116,31 +127,6 @@ fn validate_upload_acknowledgement(
     Ok(())
 }
 
-// This path belongs to the Host, which may run a different OS from the client.
-// In particular, Android's Path::is_absolute rejects Windows drive/UNC paths.
-fn is_absolute_host_path(path: &str) -> bool {
-    if path.is_empty() || path.contains('\0') {
-        return false;
-    }
-    if path.starts_with('/') {
-        return true;
-    }
-    let bytes = path.as_bytes();
-    if bytes.len() >= 3
-        && bytes[0].is_ascii_alphabetic()
-        && bytes[1] == b':'
-        && matches!(bytes[2], b'/' | b'\\')
-    {
-        return true;
-    }
-    if let Some(unc) = path.strip_prefix(r"\\") {
-        let mut components = unc.split(['\\', '/']);
-        return components.next().is_some_and(|server| !server.is_empty())
-            && components.next().is_some_and(|share| !share.is_empty());
-    }
-    false
-}
-
 /// Writes only a fully received, digest-checked download. A failed transfer
 /// drops its temporary file; an existing destination is never overwritten.
 pub async fn download_file<S, F, Fut>(
@@ -235,7 +221,7 @@ pub async fn resolve_item(
             session.open_stream().await.map_err(std::io::Error::other)
         })
         .await
-        .map_err(|error| PeerError::InvalidMessage(error.to_string()))?;
+        .map_err(PeerError::from)?;
         let item: crate::models::Item = crate::protocol::decode(&bytes)
             .map_err(|error| PeerError::InvalidMessage(error.to_string()))?;
         if item.id != response.item.id {
@@ -251,6 +237,37 @@ pub async fn resolve_item(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transfer_conversion_preserves_remote_failure_evidence() {
+        let remote = PeerError::Remote {
+            error: r#"{"code":"file_not_found","message":"missing file"}"#.into(),
+            delivery: agent_protocol::error::Delivery::NotSent,
+            sequence: Some(42),
+        };
+        let converted = PeerError::from(TransferError::from(remote.clone()));
+        assert_eq!(converted.to_string(), remote.to_string());
+        assert!(matches!(
+            converted,
+            PeerError::Remote {
+                delivery: agent_protocol::error::Delivery::NotSent,
+                sequence: Some(42),
+                ..
+            }
+        ));
+        for (error, reason) in [
+            (
+                TransferError::Io(std::io::Error::other("disk full")),
+                "disk full",
+            ),
+            (
+                TransferError::Protocol("digest mismatch".into()),
+                "digest mismatch",
+            ),
+        ] {
+            assert_eq!(PeerError::from(error).to_string(), reason);
+        }
+    }
 
     #[test]
     fn upload_acknowledgement_accepts_host_paths_across_client_platforms() {

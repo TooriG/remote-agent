@@ -8,6 +8,7 @@ pub const THREAD_IN_USE_MESSAGE: &str = "この会話はPCのCodexで使用中�
 pub enum Delivery {
     NotSent,
     #[default]
+    #[serde(other)]
     Unknown,
 }
 impl Delivery {
@@ -57,6 +58,8 @@ mod delivery_tests {
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum PeerError {
+    #[error("{0}")]
+    Transfer(String),
     #[error("invalid RPC message: {0}")]
     InvalidMessage(String),
     #[error("Invalid {method} response: {reason}")]

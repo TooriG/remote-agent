@@ -1,3 +1,7 @@
+//! Bounded proofs of the production Git quoted-path decoder. These cover UTF-8
+//! inputs up to four bytes, all three-digit octal escapes, and all named escapes.
+//! The unwind bounds below are part of each proof's scope; they do not establish
+//! arbitrary-length path safety or correctness of the whole diff parser.
 use super::quoted_path;
 
 #[kani::proof]

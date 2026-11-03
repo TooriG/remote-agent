@@ -10,8 +10,10 @@ impl Operation for ListAccounts {
     fn key(&self) -> Option<OperationKey> {
         Some(OperationKey::Accounts)
     }
+    fn scheduling(&self) -> Scheduling {
+        Scheduling::LatestHostState(OperationKey::Accounts)
+    }
     rpc_operation!();
-    const STALE_POLICY: StalePolicy = StalePolicy::Retry;
     fn apply(self, snapshot: &mut Snapshot, mut output: Self::Output) -> Vec<Effect> {
         let effects = output
             .accounts
@@ -102,7 +104,9 @@ fn apply_selection(snapshot: &mut Snapshot, output: rpc::AccountSelection) {
         let accounts = Arc::make_mut(accounts);
         accounts.selected.insert(provider, selected_id);
     }
-    snapshot.error = persistence_error;
+    if let Some(error) = persistence_error {
+        snapshot.error = Some(error);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

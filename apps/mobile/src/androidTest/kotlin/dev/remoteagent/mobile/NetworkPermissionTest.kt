@@ -2,6 +2,7 @@ package dev.remoteagent.mobile
 
 import android.Manifest
 import android.content.pm.PackageManager
+import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -14,7 +15,6 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -37,17 +37,22 @@ class NetworkPermissionTest {
             assertTrue(device.takeScreenshot(File(context.getExternalFilesDir(null), "network-permission.png")))
             assertTrue(permissionVisible)
             device.findObject(By.text("許可して接続")).click()
-            val deny = By.res("com.android.permissioncontroller", "permission_deny_button").enabled(true)
-            val denyVisible = device.wait(Until.hasObject(deny), 10_000)
-            if (!denyVisible) device.dumpWindowHierarchy(System.out)
-            assertTrue("Local-network permission denial dialog did not appear", denyVisible)
-            device.waitForIdle()
-            device.findObject(deny).click()
-            assertTrue(device.wait(Until.hasObject(By.text("アプリの設定を開く")), 10_000))
+            if (!dismissPermissionDialog(device, "permission_deny_button")) {
+                throw permissionFailure("Permission dialog did not close after denying access", activity.state, device)
+            }
+            if (!device.wait(Until.hasObject(By.text("アプリの設定を開く")), 10_000)) {
+                throw permissionFailure("App settings did not appear after permission denial", activity.state, device)
+            }
             assertFalse(device.hasObject(By.text("PCとペアリング")))
             assertThrows(IOException::class.java) { readLocalHost() }
             val settings = device.wait(Until.findObject(By.text("アプリの設定を開く")), 10_000)
-            assertNotNull("App settings must remain available after a denied network request", settings)
+            if (settings == null) {
+                throw permissionFailure(
+                    "App settings must remain available after a denied network request",
+                    activity.state,
+                    device,
+                )
+            }
             settings.click()
             assertTrue(device.wait(Until.hasObject(By.pkg("com.android.settings")), 10_000))
             device.pressBack()
@@ -61,26 +66,56 @@ class NetworkPermissionTest {
         ActivityScenario.launch(MainActivity::class.java).use { activity ->
             assertTrue(device.wait(Until.hasObject(By.text("許可して接続")), 10_000))
             device.findObject(By.text("許可して接続")).click()
-            val allow = By.res("com.android.permissioncontroller", "permission_allow_button").enabled(true)
-            assertTrue(device.wait(Until.hasObject(allow), 10_000))
-            device.waitForIdle()
-            device.findObject(allow).click()
-            assertTrue(
-                "Permission dialog must close after allowing access",
-                device.wait(Until.gone(By.pkg("com.android.permissioncontroller")), 10_000),
-            )
+            if (!dismissPermissionDialog(device, "permission_allow_button")) {
+                throw permissionFailure("Permission dialog did not close after allowing access", activity.state, device)
+            }
             assertTrue(device.wait(Until.hasObject(By.text("PCとペアリング")), 10_000))
             assertEquals(
                 PackageManager.PERMISSION_GRANTED,
                 context.checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK),
             )
-            assertEquals("bex-os-network-ok", readLocalHost())
+            assertEquals("agent-os-network-ok", readLocalHost())
             activity.recreate()
             assertTrue(device.wait(Until.hasObject(By.text("PCとペアリング")), 10_000))
             assertFalse(device.hasObject(By.text("許可して接続")))
-            assertEquals("bex-os-network-ok", readLocalHost())
+            assertEquals("agent-os-network-ok", readLocalHost())
             assertTrue(device.takeScreenshot(File(context.getExternalFilesDir(null), "network-permission-granted.png")))
         }
+    }
+
+    private fun dismissPermissionDialog(device: UiDevice, resource: String): Boolean {
+        val button = By.res("com.android.permissioncontroller", resource)
+        if (!device.wait(Until.hasObject(button), 10_000)) return false
+        repeat(3) {
+            device.waitForIdle()
+            // Re-find the same system button if an injected tap leaves its dialog visible.
+            val current = device.findObject(button)
+            if (current?.isEnabled == true) current.click()
+            if (device.wait(Until.gone(button), 3_000)) return true
+        }
+        return false
+    }
+
+    private fun permissionFailure(message: String, activityState: Lifecycle.State, device: UiDevice): AssertionError {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val state =
+            "permission=${context.checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK)}\n" +
+                "activityState=$activityState\n" +
+                "currentPackage=${device.currentPackageName}"
+        val failure = AssertionError("$message\n$state")
+        runCatching {
+            check(device.takeScreenshot(File(context.getExternalFilesDir(null), "network-permission-failure.png"))) {
+                "Could not capture the permission failure screenshot"
+            }
+        }
+            .onFailure { failure.addSuppressed(it) }
+        runCatching {
+            device.dumpWindowHierarchy(File(context.getExternalFilesDir(null), "network-permission-failure.xml"))
+        }
+            .onFailure { failure.addSuppressed(it) }
+        runCatching { File(context.getExternalFilesDir(null), "network-permission-failure.txt").writeText(state) }
+            .onFailure { failure.addSuppressed(it) }
+        return failure
     }
 
     private fun readLocalHost(): String? {

@@ -33,7 +33,7 @@ class ComposerKeyboardTest {
         }
         Snapshot.empty().use { snapshot ->
             compose.setContent {
-                BexTheme {
+                AppTheme {
                     Scaffold { padding ->
                         Column(Modifier.fillMaxSize().appContentInsets(padding)) {
                             Box(Modifier.weight(1f))

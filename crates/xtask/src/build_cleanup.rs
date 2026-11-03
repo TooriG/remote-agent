@@ -423,7 +423,7 @@ pub async fn run(dry_run: bool) -> Result<()> {
         .write(true)
         .create(true)
         .truncate(false)
-        .open(common.join("bex-build-cleanup.lock"))?;
+        .open(common.join("agent-build-cleanup.lock"))?;
     match lock.try_lock() {
         Ok(()) => {}
         Err(std::fs::TryLockError::WouldBlock) => {

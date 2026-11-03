@@ -3,11 +3,16 @@ import SwiftUI
 
 struct SettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject var model: BexAppViewModel
+    @ObservedObject var model: AppViewModel
 
     var body: some View {
         NavigationStack {
             List {
+                LanguageSettings()
+                Section("適用範囲") {
+                    SettingsScopeFields(profiles: model.profiles, selectedProfileId: model.selectedProfileId,
+                                        disabled: model.snapshot.accountLogin() != nil, select: model.selectProfile)
+                }
                 Section {
                     NavigationLink {
                         ModelSettingsScreen(model: model, scope: .global, close: { dismiss() })
@@ -37,11 +42,6 @@ struct SettingsSheet: View {
                         .disabled(!model.isConnected)
                 }
             }
-            .safeAreaInset(edge: .top, spacing: 0) {
-                SettingsScopeBar { Text("すべてのプロジェクト") } environment: {
-                    EnvironmentScopeMenu(model: model)
-                }
-            }
             .navigationTitle("設定")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -53,8 +53,22 @@ struct SettingsSheet: View {
     }
 }
 
+struct LanguageSettings: View {
+    @AppStorage("bex.language") private var language = "ja"
+
+    var body: some View {
+        Section("表示言語") {
+            Picker("言語", selection: $language) {
+                Text(verbatim: "English").tag("en")
+                Text(verbatim: "日本語").tag("ja")
+            }
+            .accessibilityIdentifier("settings.language")
+        }
+    }
+}
+
 struct WorktreeSettingsScreen: View {
-    @ObservedObject var model: BexAppViewModel
+    @ObservedObject var model: AppViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var createOnNewSession = false
     @State private var copyOnCreate = false
@@ -67,6 +81,10 @@ struct WorktreeSettingsScreen: View {
 
     var body: some View {
         Form {
+            Section("適用範囲") {
+                SettingsScopeFields(profiles: model.profiles, selectedProfileId: model.selectedProfileId,
+                                    disabled: busy || model.snapshot.accountLogin() != nil, select: model.selectProfile)
+            }
             Section {
                 Text("この環境に保存し、新しい会話に適用します。")
                     .font(.footnote).foregroundColor(.secondary)
@@ -106,26 +124,17 @@ struct WorktreeSettingsScreen: View {
             }
             if let error {
                 Section {
-                    Text(error).foregroundColor(.red).accessibilityIdentifier("worktree.error")
+                    AppText(error).foregroundColor(.red).accessibilityIdentifier("worktree.error")
                     if !loaded {
                         Button("再読み込み", action: load).disabled(busy || !model.isConnected)
                     }
                 }
             }
         }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            SettingsScopeBar { Text("すべてのプロジェクト") } environment: {
-                EnvironmentScopeMenu(model: model).disabled(busy)
-            }
-        }
         .navigationTitle("ワークツリー")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(true)
+        .navigationBarBackButtonHidden(busy)
         .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("キャンセル") { dismiss() }.disabled(busy)
-                    .accessibilityIdentifier("worktree.cancel")
-            }
             ToolbarItem(placement: .confirmationAction) {
                 Button("保存", action: save).disabled(!loaded || busy || !model.isConnected)
                     .accessibilityIdentifier("worktree.save")
@@ -177,45 +186,28 @@ struct WorktreeSettingsScreen: View {
     }
 }
 
-struct SettingsScopeBar<Projects: View, Environment: View>: View {
-    @ViewBuilder let projects: () -> Projects
-    @ViewBuilder let environment: () -> Environment
+struct SettingsScopeFields: View {
+    let profiles: [HostProfile]
+    let selectedProfileId: String?
+    let disabled: Bool
+    let select: (String) -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
-            Text("設定の適用先").foregroundStyle(.secondary)
-            environment()
-            Text("／").foregroundStyle(.secondary)
-            projects()
-        }
-        .font(.caption)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 20).padding(.vertical, 12)
-        .background(Color(UIColor.secondarySystemGroupedBackground))
-    }
-}
-
-struct EnvironmentScopeMenu: View {
-    @ObservedObject var model: BexAppViewModel
-
-    var body: some View {
-        Menu {
-            ForEach(model.profiles) { profile in
-                Button { model.selectProfile(profile.id) } label: {
-                    if profile.id == model.selectedProfileId {
-                        Label(profile.name, systemImage: "checkmark")
-                    } else {
-                        Text(profile.name)
-                    }
-                }
+        Picker("環境", selection: Binding<String?>(get: { selectedProfileId }, set: {
+            if let id = $0 {
+                select(id)
             }
-        } label: {
-            HStack(spacing: 4) {
-                Text(model.selectedProfileName ?? "環境を選択").lineLimit(1)
-                Image(systemName: "chevron.down")
+        })) {
+            if selectedProfileId == nil {
+                Text("環境を選択").tag(String?.none)
+            }
+            ForEach(profiles) { profile in
+                Text(profile.name).tag(Optional(profile.id))
             }
         }
+        .pickerStyle(.menu)
         .accessibilityIdentifier("settings.scope.environment")
-        .disabled(model.snapshot.accountLogin() != nil)
+        .disabled(disabled)
+        LabeledContent("プロジェクト", value: "すべてのプロジェクト")
     }
 }

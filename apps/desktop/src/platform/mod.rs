@@ -1,6 +1,6 @@
 use agent_core::{state::Snapshot, store::Store};
+use agent_local_host::{LocalHost, LocalHostRegistry, LocalHostState};
 use agent_transport::transport::{Endpoint, Relays, Ticket};
-use host_daemon::local_host::{LocalHost, LocalHostRegistry, LocalHostState};
 use std::{
     path::PathBuf,
     process::{Command, Stdio},
@@ -23,19 +23,35 @@ use macos as os;
 #[cfg(target_os = "windows")]
 use windows as os;
 
+pub(crate) mod downloads;
 mod microphone;
 #[cfg(target_os = "macos")]
 pub(crate) use microphone::prepare_microphone;
 pub(crate) use microphone::{Recording, RecordingEvent, start_recording};
 
 pub(crate) fn state_dir() -> Result<PathBuf, String> {
-    std::env::var_os("BEX_STATE_DIR")
+    std::env::var_os("AGENT_STATE_DIR")
         .map(PathBuf::from)
         .or_else(|| {
-            directories::ProjectDirs::from("app", "bex", "BEX")
-                .map(|project| project.data_local_dir().to_path_buf())
+            directories::ProjectDirs::from(
+                "app",
+                "bex",
+                if development_app() { "BEX-Dev" } else { "BEX" },
+            )
+            .map(|project| project.data_local_dir().to_path_buf())
         })
         .ok_or_else(|| "application data directory unavailable".into())
+}
+
+pub(crate) fn development_app() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        objc2_foundation::NSBundle::mainBundle()
+            .bundleIdentifier()
+            .is_some_and(|id| id.to_string() == "app.bex.dev.desktop")
+    }
+    #[cfg(not(target_os = "macos"))]
+    false
 }
 
 pub(crate) async fn ssh_invitation(
@@ -91,6 +107,7 @@ impl Connections {
         remote: Option<&str>,
         snapshot: Snapshot,
     ) -> anyhow::Result<Arc<Store>> {
+        let device_name = tokio::task::spawn_blocking(agent_local_host::machine_name).await?;
         let startup = self.startup.lock().await;
         if let Some(remote) = remote {
             let ticket = remote.parse::<Ticket>()?;
@@ -103,11 +120,11 @@ impl Connections {
             };
             drop(startup);
             return Ok(Arc::new(
-                Store::connect(endpoint, &ticket, snapshot, None).await?,
+                Store::connect(endpoint, &ticket, snapshot, None, &device_name).await?,
             ));
         }
-        let store = Arc::new(self.connect_local(snapshot).await?);
-        self.recover_local(store.clone());
+        let store = Arc::new(self.connect_local(snapshot, &device_name).await?);
+        self.recover_local(store.clone(), device_name);
         Ok(store)
     }
 
@@ -126,7 +143,7 @@ impl Connections {
             .get_or_try_init(|| async {
                 let identity_directory = directory.clone();
                 let identity = tokio::task::spawn_blocking(move || {
-                    host_daemon::load_local_identity(&identity_directory)
+                    agent_local_host::load_local_identity(&identity_directory)
                 })
                 .await??;
                 let endpoint = if local {
@@ -145,7 +162,7 @@ impl Connections {
         Ok(endpoint)
     }
 
-    async fn connect_local(&self, snapshot: Snapshot) -> anyhow::Result<Store> {
+    async fn connect_local(&self, snapshot: Snapshot, device_name: &str) -> anyhow::Result<Store> {
         let isolated = isolated_host()?;
         let mut child = None;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -158,7 +175,7 @@ impl Connections {
                         let endpoint = self.endpoint_for(&location.directory, true).await?;
                         let attempt = tokio::time::timeout(
                             Duration::from_secs(1),
-                            Store::connect(endpoint, ticket, snapshot.clone(), None),
+                            Store::connect(endpoint, ticket, snapshot.clone(), None, device_name),
                         )
                         .await;
                         match attempt {
@@ -195,7 +212,7 @@ impl Connections {
         ready
     }
 
-    fn recover_local(self: &Arc<Self>, store: Arc<Store>) {
+    fn recover_local(self: &Arc<Self>, store: Arc<Store>, device_name: String) {
         let connections = self.clone();
         tokio::spawn(async move {
             let mut snapshots = store.subscribe();
@@ -219,7 +236,7 @@ impl Connections {
                         return Err(anyhow::anyhow!("Local Host is not ready"));
                     };
                     let endpoint = connections.endpoint_for(&location.directory, true).await?;
-                    store.resume(endpoint, ticket).await?;
+                    store.resume(endpoint, ticket, &device_name).await?;
                     Ok::<_, anyhow::Error>(())
                 })
                 .await;
@@ -241,18 +258,36 @@ impl Connections {
     }
 }
 
-fn isolated_host() -> anyhow::Result<bool> {
-    match std::env::var("BEX_ISOLATED_HOST").as_deref() {
-        Err(std::env::VarError::NotPresent) | Ok("0") => Ok(false),
-        Ok("1") if std::env::var_os("BEX_STATE_DIR").is_some() => Ok(true),
-        Ok("1") => Err(anyhow::anyhow!(
-            "BEX_ISOLATED_HOST=1 requires BEX_STATE_DIR"
+pub(crate) fn isolated_host() -> anyhow::Result<bool> {
+    let value = match std::env::var("AGENT_ISOLATED_HOST") {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(_) => anyhow::bail!("AGENT_ISOLATED_HOST must be 0 or 1"),
+    };
+    isolation_setting(
+        value.as_deref(),
+        std::env::var_os("AGENT_STATE_DIR").is_some(),
+        development_app(),
+    )
+}
+
+fn isolation_setting(
+    value: Option<&str>,
+    has_directory: bool,
+    development: bool,
+) -> anyhow::Result<bool> {
+    match value {
+        None => Ok(development),
+        Some("0") => Ok(false),
+        Some("1") if has_directory || development => Ok(true),
+        Some("1") => Err(anyhow::anyhow!(
+            "AGENT_ISOLATED_HOST=1 requires AGENT_STATE_DIR"
         )),
-        _ => Err(anyhow::anyhow!("BEX_ISOLATED_HOST must be 0 or 1")),
+        _ => Err(anyhow::anyhow!("AGENT_ISOLATED_HOST must be 0 or 1")),
     }
 }
 
-async fn discover_local_host() -> anyhow::Result<LocalHost> {
+pub(crate) async fn discover_local_host() -> anyhow::Result<LocalHost> {
     let preferred = state_dir().map_err(anyhow::Error::msg)?;
     let isolated = isolated_host()?;
     tokio::task::spawn_blocking(move || {
@@ -266,30 +301,47 @@ async fn discover_local_host() -> anyhow::Result<LocalHost> {
     .await?
 }
 
+pub(crate) async fn host_is_local(remote: Option<&str>) -> bool {
+    let Some(remote) = remote else {
+        return true;
+    };
+    let Ok(remote) = remote.parse::<Ticket>() else {
+        return false;
+    };
+    matches!(
+        discover_local_host().await,
+        Ok(LocalHost { state: LocalHostState::Ready(local), .. })
+            if local.node_id() == remote.node_id()
+    )
+}
+
 fn start_host(directory: &std::path::Path, isolated: bool) -> anyhow::Result<std::process::Child> {
-    let executable = std::env::var_os("BEX_HOST_DAEMON")
+    let executable = std::env::var_os("AGENT_HOST_DAEMON")
         .map(PathBuf::from)
         .map(Ok)
-        .unwrap_or_else(|| {
-            std::env::current_exe().map(|path| {
-                path.with_file_name(format!("host-daemon{}", std::env::consts::EXE_SUFFIX))
-            })
-        })?;
+        .unwrap_or_else(|| std::env::current_exe().map(agent_local_host::bundled_host_path))?;
     let mut command = Command::new(executable);
     command
         .arg("--state-dir")
         .arg(directory)
         .arg("--codex")
-        .arg(std::env::var_os("BEX_CODEX").unwrap_or_else(|| "codex".into()))
+        .arg(std::env::var_os("AGENT_CODEX").unwrap_or_else(|| "codex".into()))
         .arg("--claude")
-        .arg(std::env::var_os("BEX_CLAUDE").unwrap_or_else(|| "claude".into()))
+        .arg(std::env::var_os("AGENT_CLAUDE").unwrap_or_else(|| "claude".into()))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     if isolated {
         command.arg("--isolated");
     }
-    if let Some(directory) = std::env::var_os("BEX_ACCOUNT_STATE_DIR") {
+    let accounts = std::env::var_os("AGENT_ACCOUNT_STATE_DIR").map(PathBuf::from);
+    let accounts = if accounts.is_none() && development_app() {
+        let registry = LocalHostRegistry::for_user()?;
+        Some(registry.resolve(registry.directory())?.directory)
+    } else {
+        accounts
+    };
+    if let Some(directory) = accounts {
         command.arg("--account-state-dir").arg(directory);
     }
     os::prepare_host(&mut command);
@@ -304,4 +356,35 @@ pub(crate) fn choose_folder() -> Option<PathBuf> {
 }
 pub(crate) fn choose_destination(name: &str) -> Option<PathBuf> {
     rfd::FileDialog::new().set_file_name(name).save_file()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::isolation_setting;
+
+    #[test]
+    fn dev_launch_is_isolated_without_environment_and_explicit_settings_are_validated() {
+        for (value, directory, development, expected) in [
+            (None, false, false, false),
+            (None, true, false, false),
+            (None, false, true, true),
+            (None, true, true, true),
+            (Some("0"), false, false, false),
+            (Some("0"), true, false, false),
+            (Some("0"), false, true, false),
+            (Some("0"), true, true, false),
+            (Some("1"), true, false, true),
+            (Some("1"), false, true, true),
+            (Some("1"), true, true, true),
+        ] {
+            assert_eq!(
+                isolation_setting(value, directory, development).unwrap(),
+                expected
+            );
+        }
+        assert!(isolation_setting(Some("1"), false, false).is_err());
+        for invalid in ["", "true", "2"] {
+            assert!(isolation_setting(Some(invalid), true, true).is_err());
+        }
+    }
 }

@@ -216,8 +216,9 @@ mod tests {
         );
         assert_eq!(
             snapshot.permission_control(&key).provider,
-            Some(ProviderKind::Claude)
+            Some(ProviderKind::Codex)
         );
+        assert_eq!(snapshot.permission_control(&key).label, "フルアクセス");
         let bytes = crate::persistence::encode(&snapshot).unwrap();
         assert!(!String::from_utf8_lossy(&bytes).contains("native-version"));
         let restored = crate::persistence::decode(&bytes).unwrap();

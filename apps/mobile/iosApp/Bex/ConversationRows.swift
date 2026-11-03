@@ -3,18 +3,40 @@ import SwiftUI
 import UIKit
 
 struct ThreadActivityHeader: View {
-    let turn: ActivityPresentation
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    let summary: String
+    let canCollapse: Bool
+    let isInProgress: Bool
     let expanded: Bool
+
     var body: some View {
+        let label = AppText(summary)
+            .font(.system(size: 16)).foregroundStyle(.secondary)
+            .lineLimit(1).truncationMode(.tail)
         HStack(spacing: 5) {
-            Text(turn.activitySummary)
-                .font(.system(size: 16)).foregroundColor(.secondary)
-                .lineLimit(1).truncationMode(.tail)
-            if turn.activityCanCollapse {
+            label.overlay {
+                if isInProgress, !reduceMotion, scenePhase == .active {
+                    TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
+                        // Share a clock across summary updates without restarting the sweep.
+                        let phase = context.date.timeIntervalSinceReferenceDate
+                            .truncatingRemainder(dividingBy: 2.8) / 2.8
+                        LinearGradient(
+                            colors: [.clear, .primary.opacity(0.55), .clear],
+                            startPoint: UnitPoint(x: phase * 2 - 0.7, y: 0.5),
+                            endPoint: UnitPoint(x: phase * 2, y: 0.5)
+                        )
+                    }
+                    .mask(label)
+                    .accessibilityHidden(true)
+                    .allowsHitTesting(false)
+                }
+            }
+            if canCollapse {
                 Image(systemName: expanded ? "chevron.down" : "chevron.right")
                     .font(.caption2.weight(.semibold)).foregroundColor(.secondary)
             }
-            if turn.isInProgress {
+            if isInProgress {
                 ProgressView().controlSize(.small)
             }
             Spacer(minLength: 0)
@@ -27,31 +49,37 @@ struct ThreadErrorRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
+            Text("この応答").font(.caption).foregroundStyle(.secondary)
             HStack(spacing: 6) {
                 if error.isReconnecting {
                     ProgressView().controlSize(.small)
                 }
-                Text(error.title).font(.subheadline.weight(.semibold))
+                AppText(error.title).font(.subheadline.weight(.semibold))
             }
-            Text(error.message).textSelection(.enabled)
+            AppText(error.message).textSelection(.enabled)
             if let details = error.details, !details.isEmpty {
-                Text(details).font(.caption).foregroundColor(.secondary).textSelection(.enabled)
+                DisclosureGroup("詳細を表示") {
+                    Text(details).font(.caption).foregroundColor(.secondary).textSelection(.enabled)
+                }.font(.caption)
             }
         }
-        .foregroundColor(error.isReconnecting ? .primary : .red)
+        .foregroundColor(error.isReconnecting ? .primary : error.isUsageLimit ? .orange : .red)
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.red.opacity(error.isReconnecting ? 0.06 : 0.12))
+        .background(Color(UIColor.secondarySystemBackground))
+        .overlay(RoundedRectangle(cornerRadius: 10)
+            .stroke((error.isUsageLimit ? Color.orange : .red).opacity(error.isReconnecting ? 0 : 0.2)))
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .accessibilityIdentifier("turn.error")
     }
 }
 
-struct ThreadMessageRow: View {
+struct ThreadMessageRow: View, Equatable {
     let item: ConversationItem
     let isUser: Bool
     let media: ConversationMediaAccess
     let selection: ConversationSelectionActions
+    var showActions = false
     var timestampMs: UInt64?
     var fork: (() -> Void)?
     var forking = false
@@ -59,7 +87,17 @@ struct ThreadMessageRow: View {
     var restoreUnknown: ((String) -> Void)?
     var discardUnknown: ((String) -> Void)?
     @State private var copied = false
-    @State private var selectingText = false
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.item === rhs.item && lhs.isUser == rhs.isUser
+            && lhs.showActions == rhs.showActions
+            && lhs.media.host == rhs.media.host && lhs.media.cwd == rhs.media.cwd && lhs.media.draft == rhs.media.draft
+            && lhs.timestampMs == rhs.timestampMs && lhs.forking == rhs.forking && lhs.forkError == rhs.forkError
+            && (lhs.fork == nil) == (rhs.fork == nil)
+            && (lhs.selection.askInSideChat == nil) == (rhs.selection.askInSideChat == nil)
+            && (lhs.restoreUnknown == nil) == (rhs.restoreUnknown == nil)
+            && (lhs.discardUnknown == nil) == (rhs.discardUnknown == nil)
+    }
 
     @ViewBuilder private var images: some View {
         let sources = item.data.imageSources
@@ -103,23 +141,8 @@ struct ThreadMessageRow: View {
             .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("item.\(item.data.id)")
-            .contextMenu {
-                if isUser, let text = item.data.body, !text.isEmpty {
-                    Button {
-                        UIPasteboard.general.string = text
-                    } label: {
-                        Label("コピー", systemImage: "doc.on.doc")
-                    }
-                    Button {
-                        selectingText = true
-                    } label: {
-                        Label("テキストを選択", systemImage: "text.cursor")
-                    }
-                }
-            }
-            if isUser, let timestampMs {
-                Text(Date(timeIntervalSince1970: Double(timestampMs) / 1000), style: .time)
-                    .font(.caption).foregroundStyle(.secondary)
+            if isUser || showActions {
+                actions
             }
             if isUser, item.data.nativeId == nil {
                 if let title = item.data.title {
@@ -141,49 +164,50 @@ struct ThreadMessageRow: View {
                     .buttonStyle(.plain)
                 }
             }
-            if item.data.kind == "agent", let text = item.data.body {
-                HStack(spacing: 20) {
-                    Button { UIPasteboard.general.string = text; copied = true } label: {
-                        Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    }.accessibilityLabel(copied ? "コピーしました" : "回答をコピー")
-                    if let timestampMs {
-                        Text(Date(timeIntervalSince1970: Double(timestampMs) / 1000), style: .time).font(.caption)
-                    }
-                    if let fork {
-                        Button(action: fork) {
-                            Image(systemName: "arrow.triangle.branch")
-                        }
-                        .disabled(forking)
-                        .accessibilityLabel("ここから会話を分岐")
-                        .accessibilityIdentifier("response.fork." + item.data.id)
-                    }
-                }
-                .font(.system(size: 19)).foregroundColor(.secondary).buttonStyle(.plain)
-                .padding(.vertical, 4)
-                if let forkError {
-                    Text(forkError).font(.caption).foregroundColor(.red)
-                }
+            if let forkError {
+                AppText(forkError).font(.caption).foregroundColor(.red)
             }
         }
         .padding(.bottom, isUser ? 12 : 8)
-        .sheet(isPresented: $selectingText) {
-            NavigationStack {
-                if let text = item.data.body {
-                    MessageTextSelection(text: text)
-                        .navigationTitle("テキストを選択")
-                        .navigationBarTitleDisplayMode(.inline)
-                        .toolbar {
-                            ToolbarItem(placement: .confirmationAction) {
-                                Button("完了") { selectingText = false }
-                            }
-                        }
-                }
+    }
+
+    /// Both speakers share copy and time; the user's row mirrors toward its bubble and cannot fork.
+    private var actions: some View {
+        let text = item.data.body ?? ""
+        return HStack(spacing: 20) {
+            if isUser {
+                time
             }
+            if !text.isEmpty {
+                Button { UIPasteboard.general.string = text; copied = true } label: {
+                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                }
+                .accessibilityLabel(LocalizedStringKey(copied ? "コピーしました" : isUser ? "発言をコピー" : "回答をコピー"))
+            }
+            if let fork {
+                Button(action: fork) {
+                    Image(systemName: "arrow.triangle.branch")
+                }
+                .disabled(forking)
+                .accessibilityLabel("ここから会話を分岐")
+                .accessibilityIdentifier("response.fork." + item.data.id)
+            }
+            if !isUser {
+                time
+            }
+        }
+        .font(.system(size: 19)).foregroundColor(.secondary).buttonStyle(.plain)
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder private var time: some View {
+        if let timestampMs {
+            Text(Date(timeIntervalSince1970: Double(timestampMs) / 1000), style: .time).font(.caption)
         }
     }
 }
 
-struct ThreadItemRow: View {
+struct ThreadItemRow: View, Equatable {
     let item: ConversationItem
     let media: ConversationMediaAccess
     let selection: ConversationSelectionActions
@@ -192,6 +216,12 @@ struct ThreadItemRow: View {
     let loadDetails: () async -> String?
     @State private var detailError: String?
     @State private var retry = 0
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.item === rhs.item && lhs.isExpanded == rhs.isExpanded
+            && lhs.media.host == rhs.media.host && lhs.media.cwd == rhs.media.cwd && lhs.media.draft == rhs.media.draft
+            && (lhs.selection.askInSideChat == nil) == (rhs.selection.askInSideChat == nil)
+    }
 
     private var icon: String {
         switch item.data.kind {
@@ -218,7 +248,7 @@ struct ThreadItemRow: View {
                         if item.data.deferred {
                             VStack(alignment: .leading, spacing: 10) {
                                 if let detailError {
-                                    Text(detailError).font(.caption).foregroundColor(.red)
+                                    AppText(detailError).font(.caption).foregroundColor(.red)
                                     Button("再読み込み") { retry += 1 }
                                 } else {
                                     ProgressView("詳細を読み込み中…")
@@ -256,28 +286,5 @@ struct ThreadItemRow: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
-    }
-}
-
-/// UIKit supplies selection handles and copies only the selected range.
-private struct MessageTextSelection: UIViewRepresentable {
-    let text: String
-
-    func makeUIView(context _: Context) -> UITextView {
-        let view = UITextView()
-        view.scrollsToTop = false
-        view.isEditable = false
-        view.isSelectable = true
-        view.font = .systemFont(ofSize: 18)
-        view.textContainerInset = UIEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
-        view.backgroundColor = .clear
-        view.accessibilityIdentifier = "message.text-selection"
-        return view
-    }
-
-    func updateUIView(_ view: UITextView, context _: Context) {
-        if view.text != text {
-            view.text = text
-        }
     }
 }

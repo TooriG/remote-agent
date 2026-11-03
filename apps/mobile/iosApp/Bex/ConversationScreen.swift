@@ -1,13 +1,15 @@
 import AgentCore
 import PhotosUI
 import SwiftUI
+import SwiftUIIntrospect
 import UniformTypeIdentifiers
 
 struct ThreadScreen: View {
-    @ObservedObject var model: BexAppViewModel
+    @Environment(\.locale) private var locale
+    @ObservedObject var model: AppViewModel
     let conversation: ConversationPresentation?
     var isSideChat = false
-    var openTools: ((WorkspaceTab?, Bool) -> Void)?
+    var openTools: ((PanelKind?) -> Void)?
     @StateObject var dictation = DictationRecorder()
     @State var sendRecordedText = false
     @State var importing = false
@@ -16,9 +18,11 @@ struct ThreadScreen: View {
     @State var showingCamera = false
     @State var preparingMedia = false
     @State var showingModelSettings = false
-    @State var isVisible = false
+    @State var openedDirectory: WorkspaceDestination?
     @State var isFollowingLatest = true
-    @State var visibleHistoryBoundaries = Set<HistoryBoundary>()
+    @State var scrollController = ConversationScrollObserver()
+    @State var scrollPosition = ScrollPosition(idType: String.self, edge: .bottom)
+    @State var visibleLatest: LatestBoundary?
     @State var expandedItemIds = Set<String>()
     @State var activityExpansionOverrides = [String: ActivityExpansion]()
     @FocusState var composerFocused: Bool
@@ -26,16 +30,27 @@ struct ThreadScreen: View {
     var body: some View {
         chatContent
             .onDisappear {
-                isVisible = false
-                visibleHistoryBoundaries.removeAll()
+                scrollController.onScrollToTop = {}
+                scrollController.cancelHistoryRestoration()
+                scrollController.detach()
+                visibleLatest = nil
                 dictation.cancel()
+            }
+            .onChange(of: conversation?.id) {
+                expandedItemIds.removeAll()
+                activityExpansionOverrides.removeAll()
+                visibleLatest = nil
+                scrollController.cancelHistoryRestoration()
+                isFollowingLatest = true
+                scrollPosition.scrollTo(edge: .bottom)
             }
             .onChange(of: model.composerFocusRequest) { _ in
                 if model.isShowingSideChat == isSideChat {
                     composerFocused = true
                 }
             }
-            .onChange(of: model.draftKey) { _ in dictation.cancel() }
+            .onChange(of: model.draftKey) { dictation.cancel(); openedDirectory = nil }
+            .onChange(of: model.selectedProfileId) { openedDirectory = nil }
             .onChange(of: model.isConnected) {
                 if !$0 {
                     dictation.cancel()
@@ -72,31 +87,45 @@ struct ThreadScreen: View {
                 }.ignoresSafeArea()
             }
             .sheet(isPresented: $showingModelSettings) { ModelSettingsSheet(model: model) }
+            .sheet(item: $openedDirectory, content: conversationDirectorySheet)
             .onAppear {
-                isVisible = true
                 if model.isNewThread {
                     composerFocused = true
                 }
-                loadVisibleHistory()
             }
             .onChange(of: model.isNewThread) {
                 if $0 {
                     composerFocused = true
                 }
             }
+            .navigationTitle(isSideChat ? Text("サイドチャット") : conversationTitleText(
+                conversation?.title, fallback: model.isNewThread ? "新しいタスク" : "タスク"
+            ))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    if !isSideChat {
-                        HStack(spacing: 0) {
-                            Button { composerFocused = false; openTools?(nil, false) } label: {
-                                Image(systemName: "square.grid.2x2").frame(width: 44, height: 44)
+                if !isSideChat {
+                    if !model.isNewThread {
+                        ToolbarItem(placement: .principal) {
+                            Button {
+                                scrollController.cancelHistoryRestoration()
+                                isFollowingLatest = false
+                                withAnimation { scrollPosition.scrollTo(edge: .top) }
+                            } label: {
+                                conversationTitle
                             }
-                            .accessibilityLabel("ツールを開く")
-                            .accessibilityIdentifier("task.tools")
-                            if !model.isNewThread {
-                                conversationActions
-                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("会話の先頭へ")
+                            .accessibilityIdentifier("task.top")
+                        }
+                    }
+                    ToolbarItemGroup(placement: .navigationBarTrailing) {
+                        Button { composerFocused = false; openTools?(nil) } label: {
+                            Image(systemName: "square.grid.2x2")
+                        }
+                        .accessibilityLabel("ツールを開く")
+                        .accessibilityIdentifier("task.tools")
+                        if !model.isNewThread {
+                            conversationActions
                         }
                     }
                 }
@@ -104,147 +133,142 @@ struct ThreadScreen: View {
     }
 
     private var chatContent: some View {
-        ScrollViewReader { proxy in
-            VStack(spacing: 0) {
-                if let notice = model.notice {
-                    BexNotice(text: notice).padding(.horizontal).padding(.top, 8)
-                }
-                if let thread = conversation {
-                    let rows = conversationRows(thread.rows, expansion: activityExpansionOverrides)
-                    let lastRowId = rows.last?.id
-                    let threadId = thread.id
-                    let firstRowId = thread.rows.first?.id
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 12) {
-                            ForEach(rows) { row in
-                                conversationRow(row)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .id(row.id)
-                                    .overlay(alignment: .top) {
-                                        if row.id == rows.first?.id, let firstRowId {
-                                            historyBoundaryMarker(
-                                                .oldest(threadId: threadId, rowId: firstRowId),
-                                                height: 1
-                                            )
-                                        }
-                                    }
-                                    .overlay(alignment: .bottom) {
-                                        if row.id == lastRowId {
-                                            historyBoundaryMarker(
-                                                .latest(threadId: threadId, rowId: row.id),
-                                                height: 80
-                                            )
-                                        }
-                                    }
-                            }
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 6)
-                        .background(ConversationScrollToTop {
-                            isFollowingLatest = false
-                        })
-                    }
-                    .defaultScrollAnchor(.bottom, for: .initialOffset)
-                    .defaultScrollAnchor(.bottom, for: .alignment)
-                    .defaultScrollAnchor(isFollowingLatest ? .bottom : nil, for: .sizeChanges)
-                    // Tail updates preserve a detached reader; prepends retain native offset correction.
-                    .transaction(value: lastRowId) { transaction in
-                        if !isFollowingLatest {
-                            transaction.scrollContentOffsetAdjustmentBehavior = .disabled
-                        }
-                    }
-                    .accessibilityIdentifier("task.detail")
-                    .accessibilityValue(threadAccessibilityValue(thread))
-                    .buttonStyle(.plain)
-                    .simultaneousGesture(DragGesture(minimumDistance: 1).onChanged { gesture in
-                        guard abs(gesture.translation.height) > abs(gesture.translation.width) else { return }
-                        if isFollowingLatest {
-                            isFollowingLatest = false
-                        }
-                        loadVisibleHistory()
-                    }.onEnded { gesture in
-                        if gesture.translation.height < -abs(gesture.translation.width),
-                           historyBoundaryVisibility.latest {
-                            isFollowingLatest = true
-                            followLatest(to: lastRowId, using: proxy)
-                        }
-                    })
-                    .onScrollPhaseChange { _, phase in
-                        if phase == .interacting {
-                            isFollowingLatest = false
-                        }
-                    }
-                    .onChange(of: threadId, initial: true) {
-                        expandedItemIds.removeAll()
-                        activityExpansionOverrides.removeAll()
-                        isFollowingLatest = true
-                        followLatest(to: lastRowId, using: proxy)
-                    }
-                    .onChange(of: lastRowId) { followLatest(to: lastRowId, using: proxy) }
-                    .overlay(alignment: .bottom) {
-                        if !historyBoundaryVisibility.latest {
-                            Button {
-                                isFollowingLatest = true
-                                withAnimation { followLatest(to: lastRowId, using: proxy) }
-                            } label: {
-                                Image(systemName: "arrow.down").font(.title3.weight(.medium))
-                                    .foregroundStyle(.white)
-                                    .frame(width: 44, height: 44)
-                                    .background(Color(white: 0.19), in: Circle())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("最新のメッセージへ")
-                            .accessibilityIdentifier("task.latest")
-                            .padding(.bottom, 6)
-                        }
-                    }
-                    .onChange(of: model.loadingHistory) {
-                        if !$0 {
-                            loadVisibleHistory()
-                        }
-                    }
-                } else if model.isNewThread {
-                    ScrollView {
-                        newThreadContext
-                            .padding(.horizontal, 24)
-                            .frame(maxWidth: .infinity)
-                    }
-                    .defaultScrollAnchor(.center, for: .alignment)
-                    .padding(.vertical, 24)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .accessibilityIdentifier("task.empty")
-                } else if let id = model.selectedThreadId, model.notice != nil {
-                    Button("再試行") { model.openThread(id) }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .accessibilityIdentifier("task.retry")
-                } else {
-                    ProgressView("タスクを読み込み中…")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .accessibilityIdentifier("task.loading")
-                }
+        let history = model.selectedThreadId.flatMap { model.snapshot.historyControl(session: $0) }
+        let followLatest = $isFollowingLatest
+        return VStack(spacing: 0) {
+            ErrorNotices(model: model, scope: .conversation(draftKey: model.coreDraftKey))
+                .padding(.horizontal)
+            if let notice = model.notice, notice != history?.error {
+                AppNotice(text: notice).padding(.horizontal).padding(.top, 8)
             }
-            .background(Color(UIColor.systemBackground))
-            .safeAreaInset(edge: .bottom, spacing: 0) { composer }
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    if !isSideChat, !model.isNewThread {
-                        Button {
-                            if let thread = conversation,
-                               let first = conversationRows(thread.rows, expansion: activityExpansionOverrides).first {
-                                isFollowingLatest = false
-                                withAnimation { proxy.scrollTo(first.id, anchor: .top) }
-                            }
-                        } label: {
-                            conversationTitle
+            if let thread = conversation {
+                let rows = conversationRows(thread.rows, expansion: activityExpansionOverrides)
+                let lastRowId = rows.last?.id
+                let latestBoundary = lastRowId.map { LatestBoundary(threadId: thread.id, rowId: $0) }
+                let turnCount = thread.source.turnCount()
+                let hasMoreHistory = history?.hasMore ?? false
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if let session = thread.id, let history {
+                            historyControl(history, session: session)
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("会話の先頭へ")
-                        .accessibilityIdentifier("task.top")
+                        ForEach(rows) { row in
+                            conversationRow(row)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .id(row.id)
+                                .overlay(alignment: .bottom) {
+                                    if row.id == lastRowId, let latestBoundary {
+                                        latestBoundaryMarker(latestBoundary)
+                                    }
+                                }
+                        }
+                    }
+                    .scrollTargetLayout()
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 6)
+                }
+                // Keep the scroll view's identity off introspection's marker views.
+                .accessibilityIdentifier("task.detail")
+                .accessibilityValue(threadAccessibilityValue(thread))
+                .introspect(.scrollView, on: .iOS(.v26...)) { scroll in
+                    scrollController.onScrollToTop = { followLatest.wrappedValue = false }
+                    scrollController.attach(to: scroll)
+                }
+                // Measure loaded rows; native text views draw only within the viewport.
+                .scrollPosition($scrollPosition, anchor: .bottom)
+                .onScrollGeometryChange(for: ConversationScrollLayout.self) { geometry in
+                    ConversationScrollLayout(contentHeight: geometry.contentSize.height,
+                                             containerHeight: geometry.containerSize.height,
+                                             insets: geometry.contentInsets,
+                                             offset: geometry.contentOffset,
+                                             turnCount: turnCount,
+                                             hasMoreHistory: hasMoreHistory)
+                } action: { previous, layout in
+                    if let point = scrollController.historyDidLayout(turnCount: layout.turnCount,
+                                                                     hasMoreHistory: layout.hasMoreHistory,
+                                                                     contentHeight: layout.contentHeight,
+                                                                     contentOffset: layout.offset,
+                                                                     scrollOrigin: CGPoint(x: layout.insets.leading,
+                                                                                           y: layout.insets.top)) {
+                        scrollPosition.scrollTo(point: point)
+                    }
+                    if isFollowingLatest,
+                       previous.contentHeight != layout.contentHeight ||
+                       previous.containerHeight != layout.containerHeight || previous.insets != layout.insets {
+                        scrollPosition.scrollTo(edge: .bottom)
                     }
                 }
+                .defaultScrollAnchor(.bottom, for: .alignment)
+                // Tail updates preserve a detached reader.
+                .transaction(value: lastRowId) { transaction in
+                    if !isFollowingLatest {
+                        transaction.scrollContentOffsetAdjustmentBehavior = .disabled
+                    }
+                }
+                .buttonStyle(.plain)
+                .simultaneousGesture(DragGesture(minimumDistance: 1).onChanged { gesture in
+                    guard isFollowingLatest,
+                          abs(gesture.translation.height) > abs(gesture.translation.width) else { return }
+                    isFollowingLatest = false
+                }.onEnded { gesture in
+                    if gesture.translation.height < -abs(gesture.translation.width),
+                       visibleLatest == latestBoundary {
+                        scrollController.cancelHistoryRestoration()
+                        isFollowingLatest = true
+                        scrollPosition.scrollTo(edge: .bottom)
+                    }
+                })
+                .overlay(alignment: .bottom) {
+                    if visibleLatest != latestBoundary, !rows.isEmpty {
+                        Button {
+                            scrollController.cancelHistoryRestoration()
+                            isFollowingLatest = true
+                            withAnimation { scrollPosition.scrollTo(edge: .bottom) }
+                        } label: {
+                            Image(systemName: "arrow.down").font(.title3.weight(.medium))
+                                .frame(width: 44, height: 44)
+                        }
+                        .buttonStyle(.glass)
+                        .buttonBorderShape(.circle)
+                        .accessibilityLabel("最新のメッセージへ")
+                        .accessibilityIdentifier("task.latest")
+                        .padding(.bottom, 6)
+                    }
+                }
+            } else if model.isNewThread {
+                ScrollView {
+                    newThreadContext
+                        .padding(.horizontal, 24)
+                        .frame(maxWidth: .infinity)
+                }
+                .defaultScrollAnchor(.center, for: .alignment)
+                .padding(.vertical, 24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityIdentifier("task.empty")
+            } else if let id = model.selectedThreadId, let error = history?.error {
+                AppNotice(text: error).padding(.horizontal)
+                Button("再試行") { model.openThread(id) }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityIdentifier("task.retry")
+            } else {
+                ProgressView("タスクを読み込み中…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityIdentifier("task.loading")
             }
         }
+        .background(Color(UIColor.systemBackground))
+        .safeAreaInset(edge: .bottom, spacing: 0) { composer }
     }
+}
+
+/// Observe position without publishing it as view state; follow the tail only when layout changes.
+private struct ConversationScrollLayout: Equatable {
+    let contentHeight: CGFloat
+    let containerHeight: CGFloat
+    let insets: EdgeInsets
+    let offset: CGPoint
+    let turnCount: UInt64
+    let hasMoreHistory: Bool
 }
 
 /// Conversation navigation
@@ -256,9 +280,9 @@ extension ThreadScreen {
 
     var conversationTitle: some View {
         let directory = model.selectedDirectory
-        return VStack(alignment: .leading, spacing: 3) {
+        return VStack(spacing: 2) {
             HStack(spacing: 6) {
-                Text(conversation?.title ?? (model.isNewThread ? "チャット" : "タスク"))
+                conversationTitleText(conversation?.title, fallback: model.isNewThread ? "チャット" : "タスク")
                     .font(.headline).lineLimit(1)
                 if model.isConnecting {
                     ProgressView().controlSize(.small)
@@ -271,18 +295,18 @@ extension ThreadScreen {
                 project?.name ?? (directory.isEmpty ? "" : URL(fileURLWithPath: directory).lastPathComponent),
                 model.selectedProfileName ?? "Mac"
             ].filter { !$0.isEmpty }.joined(separator: " · "))
-                .font(.subheadline).foregroundColor(.secondary).lineLimit(1)
+                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity)
     }
 
     var conversationActions: some View {
-        HStack(spacing: 0) {
+        Group {
             Button { model.openNewThread(cwd: model.selectedDirectory) } label: {
-                Image(systemName: "square.and.pencil").font(.title2).frame(width: 44, height: 44)
+                Image(systemName: "square.and.pencil")
             }.accessibilityLabel("新しい会話").accessibilityIdentifier("task.new")
             Menu {
-                Button { openTools?(.files, true) } label: {
+                Button { openTools?(.diff) } label: {
                     Label("変更を表示", systemImage: "plus.forwardslash.minus")
                 }
                 Button {
@@ -291,7 +315,7 @@ extension ThreadScreen {
                     }
                 } label: { Label("更新", systemImage: "arrow.clockwise") }
             } label: {
-                Image(systemName: "ellipsis").font(.title2.weight(.semibold)).frame(width: 44, height: 44)
+                Image(systemName: "ellipsis")
             }
             .accessibilityLabel("その他")
             .accessibilityIdentifier("task.more")
@@ -301,6 +325,7 @@ extension ThreadScreen {
 
     private var newThreadContext: some View {
         let directory = model.selectedDirectory
+        let emptyFolderLabel = localizedUiText(language: locale.appLanguage, source: "チャット")
         return VStack(spacing: 24) {
             VStack(spacing: 8) {
                 Text("何を作りましょうか？")
@@ -322,16 +347,18 @@ extension ThreadScreen {
                     }
                 } label: {
                     Text(project?
-                        .name ?? (directory.isEmpty ? "チャット" : URL(fileURLWithPath: directory).lastPathComponent))
-                        .underline()
+                        .name ??
+                        (directory.isEmpty ? emptyFolderLabel : URL(fileURLWithPath: directory).lastPathComponent))
                         .lineLimit(2)
                         .truncationMode(.middle)
                         .frame(minWidth: 44, minHeight: 44)
                 }
-                .accessibilityLabel("フォルダ: \(project?.name ?? (directory.isEmpty ? "チャット" : directory))")
+                .accessibilityLabel(
+                    "フォルダ: \(project?.name ?? (directory.isEmpty ? emptyFolderLabel : directory))"
+                )
                 .accessibilityIdentifier("task.folder")
             }
-            .font(.largeTitle.weight(.medium))
+            .font(.title2)
             Menu {
                 ForEach(model.profiles, id: \.id) { profile in
                     Button { model.openNewThread(on: profile.id) } label: {
@@ -345,7 +372,7 @@ extension ThreadScreen {
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "laptopcomputer")
-                    Text(model.selectedProfileName ?? "環境を選択")
+                    Text(model.selectedProfileName ?? localizedUiText(language: locale.appLanguage, source: "環境を選択"))
                         .lineLimit(1).truncationMode(.middle)
                     if model.isConnecting {
                         ProgressView().controlSize(.small).tint(.red)
@@ -355,7 +382,9 @@ extension ThreadScreen {
             }
             .font(.subheadline)
             .foregroundColor(.secondary)
-            .accessibilityLabel("環境: \(model.selectedProfileName ?? "未選択")")
+            .accessibilityLabel(
+                "環境: \(model.selectedProfileName ?? localizedUiText(language: locale.appLanguage, source: "未選択"))"
+            )
             .accessibilityIdentifier("task.environment")
         }
         .multilineTextAlignment(.center)
@@ -364,4 +393,8 @@ extension ThreadScreen {
         .disabled(model.transferring || preparingMedia || model.sending || dictation.isRecording || dictation
             .requestingPermission || model.transcribing)
     }
+}
+
+private func conversationTitleText(_ title: String?, fallback: LocalizedStringKey) -> Text {
+    title.map { Text(verbatim: $0) } ?? Text(fallback)
 }

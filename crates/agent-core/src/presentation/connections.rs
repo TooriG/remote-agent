@@ -19,6 +19,7 @@ pub struct ConnectionAgent {
     pub name: String,
     pub availability: AgentAvailability,
     pub label: String,
+    pub detail: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -61,6 +62,15 @@ fn availability(
 #[cfg_attr(feature = "bindings", uniffi::export)]
 impl Snapshot {
     pub fn connection_setup(&self) -> ConnectionSetup {
+        use crate::state::operations::{OperationKey, OperationPhase};
+        let checks_failed = self.connected
+            && [OperationKey::Models, OperationKey::Accounts]
+                .iter()
+                .any(|key| {
+                    self.operations
+                        .get(key)
+                        .is_some_and(|state| matches!(state.phase, OperationPhase::Failed { .. }))
+                });
         let agents: Vec<_> = [
             (ProviderKind::Codex, "Codex"),
             (ProviderKind::Claude, "Claude Code"),
@@ -75,9 +85,24 @@ impl Snapshot {
                 self.account.accounts.as_deref(),
                 &self.model_errors,
             );
+            let availability = match availability {
+                AgentAvailability::Checking if checks_failed => AgentAvailability::Unavailable,
+                availability => availability,
+            };
             ConnectionAgent {
                 provider,
                 name: name.into(),
+                detail: (availability == AgentAvailability::Unavailable)
+                    .then(|| {
+                        self.model_errors
+                            .get(provider.key())
+                            .and_then(|error| error.get("message"))
+                            .and_then(Value::as_str)
+                            .map(str::to_owned)
+                            .or_else(|| self.operation_error(OperationKey::Models))
+                            .or_else(|| self.operation_error(OperationKey::Accounts))
+                    })
+                    .flatten(),
                 availability,
                 label: match availability {
                     AgentAvailability::Checking => "確認中…",
@@ -115,6 +140,110 @@ pub fn validate_ssh_destination(destination: &str) -> Result<&str, &'static str>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn setup_retains_the_failed_providers_reason_without_blaming_other_agents() {
+        let mut snapshot = Snapshot {
+            connected: true,
+            ..Default::default()
+        };
+        snapshot.model_errors = std::sync::Arc::new(
+            serde_json::from_value(serde_json::json!({
+                "codex": {"code":"provider_timeout", "message":"Codex model discovery timed out"}
+            }))
+            .unwrap(),
+        );
+        let agents = snapshot.connection_setup().agents;
+        assert_eq!(
+            agents[0].detail.as_deref(),
+            Some("Codex model discovery timed out")
+        );
+        assert!(agents[1].detail.is_none());
+        assert!(agents[2].detail.is_none());
+        snapshot.connected = false;
+        assert!(
+            snapshot
+                .connection_setup()
+                .agents
+                .iter()
+                .all(|agent| agent.detail.is_none())
+        );
+    }
+
+    #[test]
+    fn failed_checks_stop_spinning_and_retries_keep_cached_ready_agents() {
+        use crate::state::operations::{OperationKey, OperationPhase, OperationState};
+        use std::sync::Arc;
+        for key in [OperationKey::Models, OperationKey::Accounts] {
+            let mut snapshot = Snapshot {
+                connected: true,
+                ..Default::default()
+            };
+            Arc::make_mut(&mut snapshot.operations).insert(
+                key.clone(),
+                OperationState {
+                    generation: 1,
+                    phase: OperationPhase::Failed {
+                        message: "request timed out".into(),
+                    },
+                },
+            );
+            let setup = snapshot.connection_setup();
+            assert!(!setup.can_start);
+            assert!(
+                setup
+                    .agents
+                    .iter()
+                    .all(|agent| agent.availability == AgentAvailability::Unavailable)
+            );
+            Arc::make_mut(&mut snapshot.account).accounts = Some(Arc::new(
+                serde_json::from_value(serde_json::json!({
+                    "accounts":[{"id":"native","provider":"codex"}],
+                    "selected":{"codex":"native"}
+                }))
+                .unwrap(),
+            ));
+            assert_eq!(
+                snapshot.connection_setup().agents[0].availability,
+                AgentAvailability::Unavailable
+            );
+            Arc::make_mut(&mut snapshot.operations)
+                .get_mut(&key)
+                .unwrap()
+                .phase = OperationPhase::Running;
+            assert_eq!(
+                snapshot.connection_setup().agents[0].availability,
+                AgentAvailability::Checking
+            );
+            snapshot.models = Arc::new(
+                serde_json::from_value(serde_json::json!([{
+                    "id":"gpt","model":{"provider":"codex","id":"gpt"},"displayName":"GPT",
+                    "settings":{"defaultReasoningEffort":"","supportedReasoningEfforts":[]}
+                }]))
+                .unwrap(),
+            );
+            assert!(snapshot.connection_setup().can_start);
+            Arc::make_mut(&mut snapshot.operations)
+                .get_mut(&key)
+                .unwrap()
+                .phase = OperationPhase::Failed {
+                message: "refresh failed".into(),
+            };
+            assert!(
+                snapshot.connection_setup().can_start,
+                "cached ready providers survive a failed refresh"
+            );
+            snapshot.connected = false;
+            let setup = snapshot.connection_setup();
+            assert!(!setup.can_start);
+            assert!(
+                setup
+                    .agents
+                    .iter()
+                    .all(|agent| agent.availability == AgentAvailability::Checking)
+            );
+        }
+    }
 
     proptest::proptest! {
         #[test]

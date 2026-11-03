@@ -50,6 +50,7 @@
               "x86_64-linux-android"
             ];
           };
+          cccc = pkgs.callPackage ./tools/cccc/package.nix { };
           kache = pkgs.callPackage ./tools/kache/package.nix { };
           nodeRuntime = pkgs.callPackage ./tools/node-runtime/package.nix { };
           kacheHook = ''
@@ -57,18 +58,18 @@
             if [ -z "''${CI:-}" ]; then
               export RUSTC_WRAPPER="${kache}/bin/kache"
               if [ -z "''${KACHE_CACHE_DIR:-}" ]; then
-                bex_kache_build_root=$(git config --path --get bex.buildRoot 2>/dev/null || true)
-                if [ -n "$bex_kache_build_root" ]; then
-                  if [ "''${bex_kache_build_root#/}" = "$bex_kache_build_root" ] || [ ! -d "$bex_kache_build_root" ]; then
-                    printf 'Build storage is unavailable: %s\n' "$bex_kache_build_root" >&2
+                agent_kache_build_root=$(git config --path --get bex.buildRoot 2>/dev/null || true)
+                if [ -n "$agent_kache_build_root" ]; then
+                  if [ "''${agent_kache_build_root#/}" = "$agent_kache_build_root" ] || [ ! -d "$agent_kache_build_root" ]; then
+                    printf 'Build storage is unavailable: %s\n' "$agent_kache_build_root" >&2
                     exit 1
                   fi
                   # Keep the shared compiler cache on the build volume for CoW restores.
-                  export KACHE_CACHE_DIR="$bex_kache_build_root/.kache"
+                  export KACHE_CACHE_DIR="$agent_kache_build_root/.kache"
                 else
                   export KACHE_CACHE_DIR="$HOME/${if pkgs.stdenv.hostPlatform.isDarwin then "Library/Caches/kache" else ".cache/kache"}"
                 fi
-                unset bex_kache_build_root
+                unset agent_kache_build_root
               fi
             fi
           '';
@@ -87,39 +88,51 @@
             systemImageTypes = [ "google_apis" ];
             abiVersions = [ (if pkgs.stdenv.hostPlatform.isAarch64 then "arm64-v8a" else "x86_64") ];
           }).androidsdk;
+          nativeBuildTools = with pkgs; [ pkg-config cmake clang ];
+          # The desktop, Host and their tests link these on Linux.
+          linuxDesktopLibraries = with pkgs; [
+            lsof
+            alsa-lib fontconfig freetype libxkbcommon wayland libGL vulkan-loader
+            libxcb libX11 libXcursor libXi libXrandr
+            openssl procps
+          ];
+          linuxDesktopLibraryPath = pkgs.lib.makeLibraryPath [ pkgs.vulkan-loader pkgs.libGL pkgs.libxkbcommon pkgs.wayland ];
+          mkDevShell = attrs: pkgs.mkShell (attrs // {
+            packages = [ pkgs.zsh ] ++ (attrs.packages or [ ]);
+            shellHook = (attrs.shellHook or "") + ''
+              # Nix initializes its build environment with Bash. Child processes
+              # and interactive development sessions should use the pinned Zsh.
+              export SHELL="${pkgs.zsh}/bin/zsh"
+              case $- in *i*) exec "$SHELL" ;; esac
+            '';
+          });
         in
         {
-          kani = pkgs.mkShell {
+          kani = mkDevShell {
             packages = with pkgs; [
               (callPackage ./tools/kani/package.nix { })
               rustToolchain just git clang pkg-config
             ];
           };
-          native = pkgs.mkShell {
-            BEX_NODE_RUNTIME = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "${nodeRuntime}";
+          native = mkDevShell {
+            AGENT_NODE_RUNTIME = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "${nodeRuntime}";
             RUST_TOOLCHAIN_VERSION = rustToolchain.version;
             NEXTEST_VERSION = pkgs.cargo-nextest.version;
-            packages = with pkgs; [ rustToolchain kache cargo-mutants cargo-nextest just jq git pkg-config cmake clang workflowLinter nodejs powershell ]
-              ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
-                lsof
-                alsa-lib fontconfig freetype libxkbcommon wayland libGL vulkan-loader
-                libxcb libX11 libXcursor libXi libXrandr
-                openssl gtk3 webkitgtk_4_1 procps
-              ];
-            LD_LIBRARY_PATH = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux
-              (pkgs.lib.makeLibraryPath [ pkgs.vulkan-loader pkgs.libGL pkgs.libxkbcommon pkgs.wayland ]);
+            packages = with pkgs; [ rustToolchain kache cccc cargo-mutants cargo-nextest just jq git ] ++ nativeBuildTools
+              ++ [ workflowLinter nodejs powershell ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux linuxDesktopLibraries;
+            LD_LIBRARY_PATH = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux linuxDesktopLibraryPath;
             shellHook = kacheHook + pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
               export PATH="/usr/sbin:$PATH"
             '';
           };
-          android-test = pkgs.mkShell {
+          android-test = mkDevShell {
             packages = [ androidTestSdk pkgs.jdk21 rustToolchain pkgs.coreutils ];
             JAVA_HOME = pkgs.jdk21.home;
             ANDROID_HOME = "${androidTestSdk}/libexec/android-sdk";
             ANDROID_SDK_ROOT = "${androidTestSdk}/libexec/android-sdk";
           };
-          default = pkgs.mkShell ({
-            BEX_NODE_RUNTIME = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "${nodeRuntime}";
+          default = mkDevShell ({
+            AGENT_NODE_RUNTIME = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "${nodeRuntime}";
             packages = with pkgs; [
               just
               jq
@@ -129,16 +142,18 @@
               powershell
               rustToolchain
               kache
+              cccc
               cargo-mutants
               cargo-nextest
-            ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
-              lsof
+            ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux (nativeBuildTools ++ linuxDesktopLibraries ++ [
+              # Host worktree management needs a newer Git than many distributions ship.
+              git
               gradle
               jdk21
               cargo-ndk
               kotlin-language-server
               androidSdk
-            ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
+            ]) ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
               pkgs.swiftlint
               pkgs.swiftformat
             ];
@@ -148,8 +163,8 @@
               # build scans this host much more slowly under Simulator load.
               export PATH="/usr/sbin:$PATH"
               # The Nix compiler setup overwrites DEVELOPER_DIR with its own SDK.
-              if [ -d "''${BEX_XCODE_DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}" ]; then
-                export DEVELOPER_DIR="''${BEX_XCODE_DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
+              if [ -d "''${AGENT_XCODE_DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}" ]; then
+                export DEVELOPER_DIR="''${AGENT_XCODE_DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
                 unset SDKROOT
                 # Xcode expects to drive clang itself. Nix's LD override makes
                 # xcodebuild invoke ld directly with clang-only -Xlinker flags.
@@ -157,6 +172,7 @@
               fi
             '';
           } // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+            LD_LIBRARY_PATH = linuxDesktopLibraryPath;
             JAVA_HOME = pkgs.jdk21.home;
             ANDROID_HOME = "${androidSdk}/libexec/android-sdk";
             ANDROID_SDK_ROOT = "${androidSdk}/libexec/android-sdk";

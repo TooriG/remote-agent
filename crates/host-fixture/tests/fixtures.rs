@@ -25,17 +25,17 @@ async fn codex_fixture_uses_its_own_directory_instead_of_inherited_user_configur
             stream_delay_ms: 0,
             ..Default::default()
         }
-        .install(Path::new(env!("CARGO_BIN_EXE_bex-codex-fixture")), &root)
+        .install(Path::new(env!("CARGO_BIN_EXE_agent-codex-fixture")), &root)
         .unwrap();
         let mut child = Command::new(program)
             .arg("app-server")
             .current_dir(ambient.path())
             .env("CODEX_HOME", ambient.path())
             .env(
-                "BEX_FAKE_CODEX_TRACE",
+                "AGENT_FAKE_CODEX_TRACE",
                 ambient.path().join("unwanted-trace"),
             )
-            .env("BEX_FAKE_CODEX_EXPECTED_CWD", ambient.path())
+            .env("AGENT_FAKE_CODEX_EXPECTED_CWD", ambient.path())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .kill_on_drop(true)

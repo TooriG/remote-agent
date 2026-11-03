@@ -10,10 +10,11 @@ impl Desktop {
         clickable: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let language = crate::localization::language(cx);
         let key = self.image_key(source, encoded);
-        if !self.images.contains_key(&key) {
+        if !self.media.images.contains_key(&key) {
             let source = Arc::new(source.to_owned());
-            self.images.insert(
+            self.media.images.insert(
                 key.clone(),
                 ImageState {
                     source: source.clone(),
@@ -25,9 +26,10 @@ impl Desktop {
             let remote = self.remote.is_some();
             let store = self.session.as_ref().map(|session| session.store.clone());
             let destination = self
+                .media
                 .image_dir
                 .path()
-                .join(format!("image-{}", self.images.len()));
+                .join(format!("image-{}", self.media.images.len()));
             let returned = key.clone();
             self.effect(
                 async move {
@@ -35,10 +37,11 @@ impl Desktop {
                         let data = if encoded {
                             source.as_str()
                         } else {
-                            let (header, data) =
-                                source.split_once(',').ok_or("画像データが不正です")?;
+                            let (header, data) = source
+                                .split_once(',')
+                                .ok_or(language.text("画像データが不正です"))?;
                             if !header.ends_with(";base64") {
-                                return Err("未対応の画像データです".into());
+                                return Err(language.text("未対応の画像データです").into());
                             }
                             data
                         };
@@ -54,23 +57,30 @@ impl Desktop {
                         return Ok(source.as_ref().clone());
                     }
                     let path = conversation_file_path(&source, &cwd)?;
-                    if !remote {
+                    if !remote && path.is_absolute() {
                         return Ok(path.to_string_lossy().into_owned());
                     }
-                    store
-                        .ok_or("Host に接続していません")?
-                        .dispatch(Intent::DownloadFile(op::DownloadFile {
-                            source: path
-                                .into_os_string()
-                                .into_string()
-                                .map_err(|_| "download source is not UTF-8")?,
-                            destination: destination
-                                .to_str()
-                                .ok_or("download destination is not UTF-8")?
-                                .into(),
-                        }))
-                        .await
-                        .map_err(|error| error.to_string())?;
+                    let store = store.ok_or(language.text("Host に接続していません"))?;
+                    if !remote {
+                        let result = store
+                            .dispatch(Intent::ResolveFile(op::ResolveFile {
+                                path: path.to_string_lossy().into_owned(),
+                            }))
+                            .await
+                            .map_err(|error| error.to_string())?;
+                        let Outcome::ResolvedFile { entry } = result else {
+                            unreachable!("resolved file outcome")
+                        };
+                        return Ok(entry.path);
+                    }
+                    files::download_to(
+                        &store,
+                        path.into_os_string()
+                            .into_string()
+                            .map_err(|_| "download source is not UTF-8")?,
+                        destination.clone(),
+                    )
+                    .await?;
                     Ok(destination.to_string_lossy().into_owned())
                 },
                 move |result| Update::Image {
@@ -79,7 +89,7 @@ impl Desktop {
                 },
             );
         }
-        let state = &self.images[&key];
+        let state = &self.media.images[&key];
         if let Some(path) = &state.path {
             let background = cx.theme().secondary;
             let id = SharedString::from(key.clone());
@@ -93,18 +103,19 @@ impl Desktop {
                 .object_fit(ObjectFit::Contain)
                 .debug_selector(|| "chat-image".into())
                 .with_loading(move || image_skeleton(height, background).into_any_element())
-                .with_fallback(|| {
+                .with_fallback(move || {
                     div()
                         .text_sm()
                         .text_color(rgb(appearance::MUTED))
-                        .child("画像を表示できません")
+                        .child(language.text("画像を表示できません"))
                         .into_any_element()
                 });
             let source = state.source.clone();
             let menu_source = source.clone();
             let owner = cx.entity().downgrade();
             let saving = self
-                .image_gallery
+                .media
+                .gallery
                 .as_ref()
                 .is_some_and(|gallery| gallery.saving);
             let image_menu = div()
@@ -127,8 +138,8 @@ impl Desktop {
                     let owner = owner.clone();
                     let source = menu_source.clone();
                     menu.item(
-                        PopupMenuItem::new("画像を名前を付けて保存…")
-                            .icon(Icon::default().path("bex/download.svg"))
+                        PopupMenuItem::new(language.text("画像を名前を付けて保存…"))
+                            .icon(Icon::default().path("icons/download.svg"))
                             .disabled(saving)
                             .on_click(move |_, _, cx| {
                                 let _ = owner.update(cx, |view, cx| {
@@ -157,237 +168,14 @@ impl Desktop {
         }
     }
 
-    pub(super) fn markdown(
-        &mut self,
-        id: String,
-        source: &str,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        if self
-            .markdown_cache
-            .get(&id)
-            .is_none_or(|cached| cached.source != source)
-        {
-            let (rendered, images) =
-                agent_core::presentation::markdown::markdown_without_images(source);
-            let source: SharedString = source.to_owned().into();
-            let rendered: SharedString =
-                agent_core::presentation::markdown::markdown_display_source(&rendered).into();
-            let code_headers = Arc::new(agent_core::presentation::markdown::markdown_code_headers(
-                &rendered,
-            ));
-            let (wrap_code, compact_tables) = self
-                .markdown_cache
-                .get(&id)
-                .map_or((false, false), |cached| {
-                    (cached.wrap_code, cached.compact_tables)
-                });
-            self.markdown_cache.insert(
-                id.clone(),
-                MarkdownContent {
-                    source,
-                    rendered,
-                    images: images.into(),
-                    code_headers,
-                    diagrams: HashMap::new(),
-                    wrap_code,
-                    compact_tables,
-                },
-            );
-        }
-        let cached = &self.markdown_cache[&id];
-        let images = cached.images.clone();
-        let view = cx.entity().downgrade();
-        let wrap_code = cached.wrap_code;
-        let compact_tables = cached.compact_tables;
-        let headers = cached.code_headers.clone();
-        let wrap_view = view.clone();
-        let table_view = view.clone();
-        let code_key = id.clone();
-        let table_key = id.clone();
-        let diagram_key = id.clone();
-        let diagram_view = view.clone();
-        let mut code_style = gpui_kit::StyleRefinement::default()
-            .pt(px(44.))
-            .border_1()
-            .border_color(cx.theme().border);
-        code_style.overflow.x = Some(gpui_kit::Overflow::Scroll);
-        code_style.text.white_space = Some(if wrap_code {
-            gpui_kit::WhiteSpace::Normal
-        } else {
-            gpui_kit::WhiteSpace::Nowrap
-        });
-        let mut table_cell = gpui_kit::StyleRefinement::default();
-        table_cell.text.white_space = Some(if compact_tables {
-            gpui_kit::WhiteSpace::Nowrap
-        } else {
-            gpui_kit::WhiteSpace::Normal
-        });
-        let mut table_style = gpui_kit::StyleRefinement::default();
-        table_style.overflow.x = Some(gpui_kit::Overflow::Scroll);
-        let style = gpui_kit::component::text::TextViewStyle::default()
-            .code_block(code_style)
-            .table(table_style)
-            .table_cell(table_cell);
-        let mut body = v_flex().gap_3().w_full().child(
-            TextView::markdown(SharedString::from(id), cached.rendered.clone())
-                .selectable(true)
-                .markdown_block_parser(|node, context| {
-                    let original = context.node_source(node)?;
-                    let diagram = agent_core::presentation::markdown::markdown_diagram(original)?;
-                    Some(
-                        gpui_kit::base::text::MarkdownNode::new("mermaid", diagram.clone())
-                            .text(diagram.source)
-                            .markdown(original.to_owned()),
-                    )
-                })
-                .markdown_block_renderer("mermaid", move |node, _, cx| {
-                    diagram_view
-                        .update(cx, |view, cx| view.markdown_diagram(&diagram_key, node, cx))
-                        .unwrap_or_else(|_| div().into_any_element())
-                })
-                .style(style)
-                .selection_format(gpui_kit::component::text::SelectionFormat::Source)
-                .code_block_actions(move |block, _, _| {
-                    let text = block.code().to_string();
-                    let label = block
-                        .span
-                        .and_then(|span| headers.get(&span.start))
-                        .cloned()
-                        .unwrap_or_else(|| {
-                            block.lang().unwrap_or_else(|| "CODE".into()).to_string()
-                        });
-                    let wrap_view = wrap_view.clone();
-                    let code_key = code_key.clone();
-                    h_flex()
-                        .gap_2()
-                        .items_center()
-                        .child(
-                            div()
-                                .min_w_0()
-                                .max_w(px(220.))
-                                .text_ellipsis()
-                                .text_xs()
-                                .child(label),
-                        )
-                        .child(
-                            Button::new("wrap-code")
-                                .label(if wrap_code {
-                                    "折り返し解除"
-                                } else {
-                                    "折り返し"
-                                })
-                                .small()
-                                .ghost()
-                                .on_click(move |_, _, cx| {
-                                    let _ = wrap_view.update(cx, |view, cx| {
-                                        if let Some(cached) = view.markdown_cache.get_mut(&code_key)
-                                        {
-                                            cached.wrap_code = !cached.wrap_code;
-                                        }
-                                        view.remeasure_item(&code_key);
-                                        cx.notify();
-                                    });
-                                }),
-                        )
-                        .child(
-                            Button::new("copy-code")
-                                .icon(IconName::Copy)
-                                .small()
-                                .ghost()
-                                .tooltip("コードをコピー")
-                                .on_click(move |_, _, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
-                                }),
-                        )
-                })
-                .table_actions(move |table, _, _| {
-                    let table_view = table_view.clone();
-                    let table_key = table_key.clone();
-                    let markdown = table.markdown.clone();
-                    let mut rows = vec![table.headers.clone()];
-                    rows.extend(table.rows.clone());
-                    let csv = agent_core::presentation::markdown::markdown_table_csv(rows);
-                    h_flex()
-                        .gap_2()
-                        .justify_end()
-                        .child(
-                            Button::new("wrap-table")
-                                .label(if compact_tables {
-                                    "セルを折り返す"
-                                } else {
-                                    "セルをコンパクトに表示"
-                                })
-                                .small()
-                                .ghost()
-                                .on_click(move |_, _, cx| {
-                                    let _ = table_view.update(cx, |view, cx| {
-                                        if let Some(cached) =
-                                            view.markdown_cache.get_mut(&table_key)
-                                        {
-                                            cached.compact_tables = !cached.compact_tables;
-                                        }
-                                        view.remeasure_item(&table_key);
-                                        cx.notify();
-                                    });
-                                }),
-                        )
-                        .child(
-                            Button::new("copy-markdown")
-                                .label("Markdownをコピー")
-                                .small()
-                                .ghost()
-                                .on_click(move |_, _, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(
-                                        markdown.clone(),
-                                    ))
-                                }),
-                        )
-                        .child(
-                            Button::new("copy-csv")
-                                .label("CSVをコピー")
-                                .small()
-                                .ghost()
-                                .on_click(move |_, _, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(csv.clone()))
-                                }),
-                        )
-                })
-                .on_link_click(move |url, event, window, cx| {
-                    if let gpui_kit::ClickEvent::Mouse(click) = event
-                        && click.up.button == MouseButton::Right
-                    {
-                        let _ = view.update(cx, |view, cx| {
-                            view.selection.update(cx, |selection, cx| {
-                                selection.show_context_menu(
-                                    Some(url.to_string()),
-                                    click.up.position,
-                                    window,
-                                    cx,
-                                );
-                            });
-                        });
-                        return;
-                    }
-                    let _ = view.update(cx, |s, cx| {
-                        s.click_conversation_link(url, event.modifiers().control, window, cx)
-                    });
-                }),
-        );
-        for source in images.iter() {
-            body = body.child(self.image(source, false, 320., true, cx));
-        }
-        body.into_any_element()
-    }
     pub(super) fn click_conversation_link(
         &mut self,
         source: &str,
         control: bool,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if control && (source.starts_with("https://") || source.starts_with("http://")) {
-            self.open_browser_url(source, window, cx);
+            self.open_browser(self.panel_scope(), source, cx);
         } else {
             self.open_conversation_link(source, cx);
         }
@@ -405,14 +193,33 @@ impl Desktop {
                 return;
             }
         };
-        self.open_file(path, cx);
-    }
-
-    pub(super) fn open_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        if agent_core::presentation::markdown::file_requires_download(&path.to_string_lossy()) {
-            self.download(path.to_string_lossy().into_owned());
+        if self.session.is_none() {
+            self.set_error("Host に接続していません".into());
             cx.notify();
             return;
+        }
+        self.perform(
+            Intent::ResolveFile(op::ResolveFile {
+                path: path.to_string_lossy().into_owned(),
+            }),
+            OperationCompletion::OpenFile(self.snapshot.epoch),
+        );
+    }
+
+    pub(in crate::app) fn open_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        use agent_core::presentation::files::{FileOpenAction, file_open_action};
+        match file_open_action(&path.to_string_lossy()) {
+            FileOpenAction::OpenWithSystem => {
+                self.open_file_with_system(path.to_string_lossy().into_owned());
+                cx.notify();
+                return;
+            }
+            FileOpenAction::Save => {
+                self.download(path.to_string_lossy().into_owned());
+                cx.notify();
+                return;
+            }
+            FileOpenAction::InApp => {}
         }
         if path
             .extension()
@@ -424,7 +231,7 @@ impl Desktop {
             return;
         }
         if let Some(parent) = path.parent() {
-            self.browse(parent.to_string_lossy().into_owned());
+            self.browse(parent.to_string_lossy().into_owned(), cx);
         }
         self.edit(path.to_string_lossy().into_owned(), false);
         cx.notify();
@@ -437,7 +244,7 @@ impl Desktop {
         cx: &mut Context<Self>,
     ) {
         let id = uuid::Uuid::new_v4();
-        self.image_gallery = Some(ImageGallery {
+        self.media.gallery = Some(ImageGallery {
             zoom: 1.,
             id,
             entries: Vec::new(),
@@ -461,7 +268,8 @@ impl Desktop {
     }
 
     pub(super) fn gallery_thumbnail(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
-        let Some(gallery) = &self.image_gallery else {
+        let language = crate::localization::language(cx);
+        let Some(gallery) = &self.media.gallery else {
             return div().into_any_element();
         };
         let Some((source, encoded)) = gallery.entries.get(index).cloned() else {
@@ -470,7 +278,11 @@ impl Desktop {
         let selected = gallery.selected == Some(index);
         let image = self.image(&source, encoded, 64., false, cx);
         Button::new(format!("gallery-thumbnail-{index}"))
-            .accessibility_label(format!("生成画像 {}", index + 1))
+            .accessibility_label(agent_core::localization::localized_ui_format(
+                language,
+                "生成画像 {0}".into(),
+                vec![(index + 1).to_string()],
+            ))
             .ghost()
             .child(image)
             .w(px(80.))
@@ -478,7 +290,7 @@ impl Desktop {
             .p_2()
             .selected(selected)
             .on_click(cx.listener(move |s, _, _, cx| {
-                if let Some(gallery) = s.image_gallery.as_mut().filter(|gallery| !gallery.saving) {
+                if let Some(gallery) = s.media.gallery.as_mut().filter(|gallery| !gallery.saving) {
                     gallery.selected = Some(index);
                     gallery.zoom = 1.;
                     gallery.saved = false;
@@ -494,7 +306,8 @@ impl Desktop {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let gallery = self.image_gallery.as_ref().unwrap();
+        let language = crate::localization::language(cx);
+        let gallery = self.media.gallery.as_ref().unwrap();
         let (source, encoded) = gallery.current_image().clone();
         let list_state = gallery.list.clone();
         let zoom = gallery.zoom;
@@ -504,7 +317,7 @@ impl Desktop {
         let label = gallery
             .selected
             .map(|index| format!("{} / {}", index + 1, gallery.entries.len()))
-            .unwrap_or_else(|| "画像".into());
+            .unwrap_or_else(|| language.text("画像").into());
         let error = gallery.error.clone();
         let image = self.image(
             &source,
@@ -515,6 +328,7 @@ impl Desktop {
         );
         let key = self.image_key(&source, encoded);
         let ready = self
+            .media
             .images
             .get(&key)
             .is_some_and(|image| image.path.is_some());
@@ -535,28 +349,34 @@ impl Desktop {
                     .justify_end()
                     .gap_3()
                     .child(div().flex_1().child(label))
-                    .when(loading, |row| row.child("画像一覧を読み込み中…"))
+                    .when(loading, |row| {
+                        row.child(language.text("画像一覧を読み込み中…"))
+                    })
                     .child(
-                        Self::icon_button(
+                        icon_button(
                             "gallery-save",
                             if saved {
                                 Icon::new(IconName::Check)
                             } else {
-                                Icon::default().path("bex/download.svg")
+                                Icon::default().path("icons/download.svg")
                             },
-                            if saved { "保存済み" } else { "保存" },
+                            if saved {
+                                language.text("保存済み")
+                            } else {
+                                language.text("保存")
+                            },
                             cx,
                             |s, _, cx| s.save_gallery_image(cx),
                         )
                         .disabled(!ready || saving || saved),
                     )
                     .child(
-                        Self::icon_button(
+                        icon_button(
                             "gallery-close",
                             IconName::Close,
-                            "閉じる",
+                            language.text("閉じる"),
                             cx,
-                            |s, _, _| s.image_gallery = None,
+                            |s, _, _| s.media.gallery = None,
                         )
                         .disabled(saving),
                     ),
@@ -591,34 +411,34 @@ impl Desktop {
                     .justify_center()
                     .gap_3()
                     .child(
-                        self.button("gallery-zoom-out", "−", cx, |s, _, _| {
-                            if let Some(gallery) = &mut s.image_gallery {
+                        button("gallery-zoom-out", "−", cx, |s, _, _| {
+                            if let Some(gallery) = &mut s.media.gallery {
                                 gallery.zoom = (gallery.zoom - 0.25).max(0.25);
                             }
                         })
-                        .accessibility_label("縮小")
+                        .accessibility_label(language.text("縮小"))
                         .disabled(zoom <= 0.25),
                     )
                     .child(
-                        self.button(
+                        button(
                             "gallery-zoom-reset",
                             format!("{:.0}%", zoom * 100.),
                             cx,
                             |s, _, _| {
-                                if let Some(gallery) = &mut s.image_gallery {
+                                if let Some(gallery) = &mut s.media.gallery {
                                     gallery.zoom = 1.;
                                 }
                             },
                         )
-                        .accessibility_label("倍率をリセット"),
+                        .accessibility_label(language.text("倍率をリセット")),
                     )
                     .child(
-                        self.button("gallery-zoom-in", "+", cx, |s, _, _| {
-                            if let Some(gallery) = &mut s.image_gallery {
+                        button("gallery-zoom-in", "+", cx, |s, _, _| {
+                            if let Some(gallery) = &mut s.media.gallery {
                                 gallery.zoom = (gallery.zoom + 0.25).min(4.);
                             }
                         })
-                        .accessibility_label("拡大")
+                        .accessibility_label(language.text("拡大"))
                         .disabled(zoom >= 4.),
                     ),
             )
@@ -627,7 +447,8 @@ impl Desktop {
 
     pub(super) fn save_gallery_image(&mut self, cx: &mut Context<Self>) {
         let Some((source, encoded)) = self
-            .image_gallery
+            .media
+            .gallery
             .as_ref()
             .filter(|gallery| !gallery.saving)
             .map(|gallery| gallery.current_image().clone())
@@ -638,13 +459,17 @@ impl Desktop {
     }
 
     fn save_image(&mut self, source: &str, encoded: bool, cx: &mut Context<Self>) {
+        let language = crate::localization::language(cx);
         let key = self.image_key(source, encoded);
-        let Some(ImageSource::Resource(resource)) =
-            self.images.get(&key).and_then(|image| image.path.clone())
+        let Some(ImageSource::Resource(resource)) = self
+            .media
+            .images
+            .get(&key)
+            .and_then(|image| image.path.clone())
         else {
             return;
         };
-        let id = if let Some(gallery) = self.image_gallery.as_mut().filter(|gallery| {
+        let id = if let Some(gallery) = self.media.gallery.as_mut().filter(|gallery| {
             let current = gallery.current_image();
             current.0.as_str() == source && current.1 == encoded
         }) {
@@ -677,7 +502,7 @@ impl Desktop {
                             .await
                             .map_err(|error| error.to_string())?;
                         if !response.status().is_success() {
-                            return Err(format!("画像の取得に失敗しました: {}", response.status()));
+                            return Err(agent_core::localization::localized_ui_format(language, "画像の取得に失敗しました: {0}".into(), vec![response.status().to_string()]));
                         }
                         let mut bytes = Vec::new();
                         response
@@ -687,7 +512,7 @@ impl Desktop {
                             .map_err(|error| error.to_string())?;
                         Original::Bytes(bytes)
                     }
-                    _ => return Err("保存できない画像です".into()),
+                    _ => return Err(language.text("保存できない画像です").into()),
                 };
                 cx.background_executor()
                     .spawn(async move {
@@ -696,7 +521,7 @@ impl Desktop {
                                 .and_then(|reader| reader.with_guessed_format())
                                 .map_err(|error| error.to_string())?
                                 .format()
-                                .ok_or("画像形式が不明です")?,
+                                .ok_or(language.text("画像形式が不明です"))?,
                             Original::Bytes(bytes) => {
                                 image::guess_format(bytes).map_err(|error| error.to_string())?
                             }
@@ -725,17 +550,17 @@ impl Desktop {
             }
             .await;
             let _ = view.update(cx, |s, cx| {
-                if let Some(gallery) = s.image_gallery.as_mut().filter(|gallery| Some(gallery.id) == id) {
+                if let Some(gallery) = s.media.gallery.as_mut().filter(|gallery| Some(gallery.id) == id) {
                     gallery.saving = false;
                     match result {
                         Ok(saved) => gallery.saved = saved,
                         Err(error) => {
-                            tracing::error!(target: "bex", operation = "gallery.save", message = %error);
+                            tracing::error!(target: "agent", operation = "gallery.save", message = %error);
                             gallery.error = error;
                         }
                     }
                 } else if let Err(error) = result {
-                    tracing::error!(target: "bex", operation = "image.save", message = %error);
+                    tracing::error!(target: "agent", operation = "image.save", message = %error);
                     s.set_error(error);
                 }
                 cx.notify();
@@ -750,6 +575,21 @@ impl Desktop {
 mod file_panel_tests {
     use super::*;
     use core::prelude::v1::test;
+
+    fn resolved(path: &str, directory: bool) -> Outcome {
+        Outcome::ResolvedFile {
+            entry: agent_protocol::models::FileEntry {
+                name: Path::new(path)
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+                path: path.into(),
+                directory,
+                size: 0,
+            },
+        }
+    }
 
     #[gpui::test]
     fn file_panel_opens_large_images_in_gallery_and_preserves_text_draft(cx: &mut TestAppContext) {
@@ -805,7 +645,7 @@ mod file_panel_tests {
             desktop.update(cx, |view, cx| {
                 let snapshot = Arc::make_mut(&mut view.snapshot);
                 Arc::make_mut(&mut snapshot.navigation).cwd = cwd.clone();
-                Arc::make_mut(&mut snapshot.workspace).directory = Some(Arc::new(FileList {
+                let listing = FileList {
                     path: cwd.clone(),
                     entries: vec![FileEntry {
                         name: "large.PNG".into(),
@@ -814,12 +654,19 @@ mod file_panel_tests {
                         size,
                     }],
                     truncated: false,
-                }));
-                view.composer.update(cx, |input, cx| {
+                };
+                view.composer.input.update(cx, |input, cx| {
                     input.set_value("Keep this draft", window, cx)
                 });
-                view.panel = Panel::Files;
-                view.panel_open = true;
+                let id = view.panels.open(view.panel_scope(), Panel::Files, None);
+                view.surface_resources.insert(
+                    id,
+                    SurfaceResource::Files {
+                        request: uuid::Uuid::new_v4(),
+                        listing: Some(Arc::new(listing)),
+                    },
+                );
+                view.panels.set_open(view.panel_scope(), true);
                 cx.notify();
             });
         });
@@ -829,42 +676,98 @@ mod file_panel_tests {
             .expect("image file entry");
         window.simulate_click(entry.center(), Modifiers::default());
         window.run_until_parked();
-        window.update(|_, cx| {
+        window.update(|window, cx| {
             desktop.update(cx, |view, cx| {
                 let gallery = view
-                    .image_gallery
+                    .media
+                    .gallery
                     .as_ref()
                     .expect("file click must open the image gallery");
                 assert_eq!(gallery.current_image().0.as_str(), source);
-                assert_eq!(view.composer.read(cx).value().as_ref(), "Keep this draft");
+                assert_eq!(
+                    view.composer.input.read(cx).value().as_ref(),
+                    "Keep this draft"
+                );
                 assert!(
                     view.snapshot.workspace.file.is_none(),
                     "images must bypass the text editor"
                 );
-                view.image_gallery = None;
-                view.open_conversation_link(&source, cx);
-                assert!(
-                    view.image_gallery.is_some(),
-                    "Markdown links use the same image viewer"
-                );
-                view.image_gallery = None;
-                view.panel_open = false;
-                view.open_conversation_link(
-                    &directory
-                        .path()
-                        .join("ImoutoTank-Multiplayer.EXE")
-                        .to_string_lossy(),
+                view.media.gallery = None;
+                for link in [source.as_str(), "~/large.PNG"] {
+                    view.open_conversation_link(link, cx);
+                    // This view fixture has no connection; deliver the Host's
+                    // metadata result through the production completion path.
+                    view.operation_completed(
+                        OperationCompletion::OpenFile(view.snapshot.epoch),
+                        Ok(resolved(&source, false)),
+                        window,
+                        cx,
+                    );
+                    assert!(
+                        view.media.gallery.is_some(),
+                        "Markdown links use the same image viewer"
+                    );
+                    assert_eq!(
+                        view.media
+                            .gallery
+                            .as_ref()
+                            .unwrap()
+                            .current_image()
+                            .0
+                            .as_str(),
+                        source
+                    );
+                    view.media.gallery = None;
+                }
+                view.panels.set_open(view.panel_scope(), false);
+                let installer = directory
+                    .path()
+                    .join("ImoutoTank-Multiplayer.EXE")
+                    .to_string_lossy()
+                    .into_owned();
+                view.open_conversation_link(&installer, cx);
+                view.operation_completed(
+                    OperationCompletion::OpenFile(view.snapshot.epoch),
+                    Ok(resolved(&installer, false)),
+                    window,
                     cx,
                 );
-                assert!(!view.panel_open, "installers must bypass the editor panel");
-                assert!(view.image_gallery.is_none());
-                assert_eq!(view.composer.read(cx).value().as_ref(), "Keep this draft");
+                assert!(
+                    !view.panels.get(view.panel_scope()).open,
+                    "installers must bypass the editor panel"
+                );
+                assert!(view.media.gallery.is_none());
+                assert_eq!(
+                    view.composer.input.read(cx).value().as_ref(),
+                    "Keep this draft"
+                );
                 view.open_file(directory.path().join("readme.txt"), cx);
                 assert!(
-                    view.image_gallery.is_none(),
+                    view.media.gallery.is_none(),
                     "text files must retain the editor route"
                 );
-                assert!(view.panel_open && view.panel == Panel::Files);
+                assert!(
+                    view.panels.get(view.panel_scope()).open
+                        && view.panels.get(view.panel_scope()).kind() == Panel::File
+                );
+                view.open_conversation_link("~/Documents", cx);
+                view.operation_completed(
+                    OperationCompletion::OpenFile(view.snapshot.epoch),
+                    Ok(resolved(&cwd, true)),
+                    window,
+                    cx,
+                );
+                assert_eq!(view.panels.get(view.panel_scope()).kind(), Panel::Files);
+                view.operation_completed(
+                    OperationCompletion::OpenFile(view.snapshot.epoch + 1),
+                    Ok(resolved(&source, false)),
+                    window,
+                    cx,
+                );
+                assert!(
+                    view.media.gallery.is_none(),
+                    "a stale Host response must not open a file"
+                );
             });
         });
     }
@@ -910,37 +813,56 @@ mod file_panel_tests {
             desktop.update(cx, |view, cx| {
                 Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).navigation).cwd =
                     "/fixture".into();
-                view.composer.update(cx, |input, cx| {
+                view.composer.input.update(cx, |input, cx| {
                     input.set_value("Keep this side draft", window, cx)
                 });
                 view.open_conversation_link("readme.txt:1", cx);
-                assert!(view.panel_open && view.panel == Panel::Files);
+                view.operation_completed(
+                    OperationCompletion::OpenFile(view.snapshot.epoch),
+                    Ok(resolved("/fixture/readme.txt", false)),
+                    window,
+                    cx,
+                );
+                assert!(
+                    view.panels.get(view.panel_scope()).open
+                        && view.panels.get(view.panel_scope()).kind() == Panel::File
+                );
                 #[cfg(target_os = "windows")]
                 {
-                    // Hold initialization pending to exercise clicks arriving before WebView2 is ready.
-                    view.browser_initialization = Some(cx.spawn(async |_, _| {
-                        std::future::pending::<()>().await;
-                    }));
-                    view.click_conversation_link("https://example.com/first", true, window, cx);
-                    assert!(view.panel_open && view.panel == Panel::Browser);
+                    view.click_conversation_link("https://example.com/first", true, cx);
+                    assert!(
+                        view.panels.get(view.panel_scope()).open
+                            && view.panels.get(view.panel_scope()).kind() == Panel::Browser
+                    );
                     assert_eq!(
-                        view.pending_browser_url.as_deref(),
+                        view.panels.get(view.panel_scope()).active.and_then(|id| {
+                            match view.surface_resources.get(&id) {
+                                Some(SurfaceResource::Pending { url }) => url.as_deref(),
+                                _ => None,
+                            }
+                        }),
                         Some("https://example.com/first")
                     );
-                    view.click_conversation_link(
-                        "http://localhost:3000/next?q=1#detail",
-                        true,
+                    view.click_conversation_link("http://localhost:3000/next?q=1#detail", true, cx);
+                    assert_eq!(
+                        view.panels.get(view.panel_scope()).active.and_then(|id| {
+                            match view.surface_resources.get(&id) {
+                                Some(SurfaceResource::Pending { url }) => url.as_deref(),
+                                _ => None,
+                            }
+                        }),
+                        Some("http://localhost:3000/next?q=1#detail")
+                    );
+                    view.click_conversation_link("readme.txt:1", true, cx);
+                    view.operation_completed(
+                        OperationCompletion::OpenFile(view.snapshot.epoch),
+                        Ok(resolved("/fixture/readme.txt", false)),
                         window,
                         cx,
                     );
+                    assert!(view.panels.get(view.panel_scope()).kind() == Panel::File);
                     assert_eq!(
-                        view.pending_browser_url.as_deref(),
-                        Some("http://localhost:3000/next?q=1#detail")
-                    );
-                    view.click_conversation_link("readme.txt:1", true, window, cx);
-                    assert!(view.panel == Panel::Files);
-                    assert_eq!(
-                        view.composer.read(cx).value().as_ref(),
+                        view.composer.input.read(cx).value().as_ref(),
                         "Keep this side draft"
                     );
                 }
@@ -949,7 +871,7 @@ mod file_panel_tests {
         });
         window.run_until_parked();
         assert!(
-            window.debug_bounds("conversation-files").is_some(),
+            window.debug_bounds("conversation-file").is_some(),
             "file links must show the file panel"
         );
         let back = window
@@ -959,10 +881,10 @@ mod file_panel_tests {
         window.update(|_, cx| {
             desktop.update(cx, |view, cx| {
                 assert_eq!(
-                    view.composer.read(cx).value().as_ref(),
+                    view.composer.input.read(cx).value().as_ref(),
                     "Keep this side draft"
                 );
-                assert!(!view.panel_open);
+                assert!(!view.panels.get(view.panel_scope()).open);
                 view.open_review(None, cx);
                 cx.notify();
             })
@@ -977,10 +899,10 @@ mod file_panel_tests {
         window.update(|_, cx| {
             desktop.update(cx, |view, cx| {
                 assert_eq!(
-                    view.composer.read(cx).value().as_ref(),
+                    view.composer.input.read(cx).value().as_ref(),
                     "Keep this side draft"
                 );
-                assert!(!view.panel_open);
+                assert!(!view.panels.get(view.panel_scope()).open);
             })
         });
     }

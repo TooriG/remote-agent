@@ -14,6 +14,17 @@ pub struct TaskActivityState {
     pub revision: u64,
     pub display: TaskActivityDisplay,
     pub statuses: Vec<(crate::session::SessionRef, crate::models::SessionStatus)>,
+    /// Root conversations awaiting a response, including requests from descendants.
+    pub waiting: Vec<crate::session::SessionRef>,
+    pub unread: Vec<(crate::session::SessionRef, crate::ids::TurnId)>,
+}
+
+/// A receipt covers only the completion the client actually observed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarkSessionRead {
+    pub session: crate::session::SessionRef,
+    pub turn_id: crate::ids::TurnId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,11 +78,13 @@ pub struct LiveActivityRegistration {
 }
 
 /// Counts keep the system surface bounded even with hundreds of active tasks.
+/// Finished tasks keep their mark until their result is read, but never keep the activity alive.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TaskActivitySummary {
     pub running: u32,
     pub waiting: u32,
     pub unknown: u32,
+    pub finished: u32,
 }
 impl TaskActivitySummary {
     pub fn from_statuses<'a>(statuses: impl IntoIterator<Item = &'a str>) -> Self {
@@ -87,23 +100,20 @@ impl TaskActivitySummary {
         summary
     }
     pub fn display(self) -> TaskActivityDisplay {
-        let total = self.running + self.waiting + self.unknown;
+        let active = self.running + self.waiting + self.unknown;
+        let total = active + self.finished;
         let mut parts = Vec::new();
-        if self.waiting > 0 {
-            parts.push(format!("確認待ち {}件", self.waiting));
-        }
-        if self.running > 0 {
-            parts.push(format!("実行中 {}件", self.running));
-        }
-        if self.unknown > 0 {
-            parts.push(format!("状態確認中 {}件", self.unknown));
-        }
         let mut icons = Vec::new();
+        // Ongoing work takes the bounded icon slots before finished marks.
         for (count, kind, label) in [
             (self.waiting, TaskActivityIconKind::Waiting, "確認待ち"),
             (self.running, TaskActivityIconKind::Running, "実行中"),
             (self.unknown, TaskActivityIconKind::Unknown, "状態確認中"),
+            (self.finished, TaskActivityIconKind::Finished, "完了"),
         ] {
+            if count > 0 {
+                parts.push(format!("{label} {count}件"));
+            }
             for _ in 0..count.min(12 - icons.len() as u32) {
                 icons.push(TaskActivityIcon {
                     kind,
@@ -112,27 +122,27 @@ impl TaskActivitySummary {
             }
         }
         let overflow = total.saturating_sub(icons.len() as u32);
+        let label = if active == 0 {
+            "すべてのタスクが終了".to_owned()
+        } else {
+            parts.join(" · ")
+        };
         if total == 0 {
             icons.push(TaskActivityIcon {
                 kind: TaskActivityIconKind::Finished,
-                label: "すべてのタスクが終了".into(),
+                label: label.clone(),
             });
         }
-        let current = TaskActivityView {
-            total,
-            label: if total == 0 {
-                "すべてのタスクが終了".into()
-            } else {
-                parts.join(" · ")
-            },
-            icons,
-            overflow,
-        };
         TaskActivityDisplay {
-            current,
+            current: TaskActivityView {
+                total,
+                label,
+                icons,
+                overflow,
+            },
             can_start: self.running + self.waiting > 0,
-            ongoing: total > 0,
-            urgent: total == 0 || self.waiting > 0,
+            ongoing: active > 0,
+            urgent: active == 0 || self.waiting > 0,
         }
     }
 }
@@ -201,7 +211,7 @@ impl TaskState {
         ) {
             return ("unknown", false);
         }
-        if self.status == SessionStatus::Running {
+        if crate::models::task_active(None, self.status) {
             return ("running", true);
         }
         match self.latest {
@@ -218,11 +228,22 @@ impl TaskState {
 mod tests {
     use super::*;
     #[test]
+    fn preparing_tasks_count_as_active_without_a_provider_turn() {
+        let task = TaskState {
+            status: crate::models::SessionStatus::Preparing,
+            ..Default::default()
+        };
+        assert_eq!(task.phase(), ("running", true));
+        assert_eq!(task.session_status(), crate::models::SessionStatus::Running);
+        assert!(crate::models::task_active(None, task.status));
+    }
+    #[test]
     fn fresh_unknown_tasks_do_not_hide_running_or_waiting_tasks() {
         let display = TaskActivitySummary {
             running: 2,
             waiting: 1,
             unknown: 1,
+            ..Default::default()
         }
         .display();
         assert!(display.ongoing && display.can_start && display.urgent);
@@ -263,6 +284,47 @@ mod tests {
             TaskActivityIconKind::Finished
         );
         assert_eq!(display.current.icons[0].label, display.current.label);
+    }
+    #[test]
+    fn each_finished_task_keeps_a_mark_without_keeping_the_activity_alive() {
+        let display = TaskActivitySummary {
+            running: 2,
+            finished: 1,
+            ..Default::default()
+        }
+        .display();
+        assert!(display.ongoing && display.can_start && !display.urgent);
+        assert_eq!(display.current.label, "実行中 2件 · 完了 1件");
+        assert_eq!(display.current.total, 3);
+        assert_eq!(
+            display
+                .current
+                .icons
+                .iter()
+                .map(|icon| icon.kind)
+                .collect::<Vec<_>>(),
+            [
+                TaskActivityIconKind::Running,
+                TaskActivityIconKind::Running,
+                TaskActivityIconKind::Finished
+            ]
+        );
+        let finished = TaskActivitySummary {
+            finished: 2,
+            ..Default::default()
+        }
+        .display();
+        assert!(!finished.ongoing && !finished.can_start && finished.urgent);
+        assert_eq!(finished.current.label, "すべてのタスクが終了");
+        assert_eq!(
+            finished
+                .current
+                .icons
+                .iter()
+                .map(|icon| (icon.kind, icon.label.as_str()))
+                .collect::<Vec<_>>(),
+            [(TaskActivityIconKind::Finished, "完了"); 2]
+        );
     }
     #[test]
     fn a_single_waiting_or_uncertain_task_keeps_the_activity_alive() {
@@ -357,17 +419,20 @@ mod tests {
     }
     proptest::proptest! {
         #[test]
-        fn display_is_bounded_and_accounts_for_every_task(running in 0u32..500, waiting in 0u32..500, unknown in 0u32..500) {
-            let display = TaskActivitySummary { running, waiting, unknown }.display();
-            let total = running + waiting + unknown;
+        fn display_is_bounded_and_accounts_for_every_task(running in 0u32..500, waiting in 0u32..500, unknown in 0u32..500, finished in 0u32..500) {
+            let display = TaskActivitySummary { running, waiting, unknown, finished }.display();
+            let active = running + waiting + unknown;
+            let total = active + finished;
             proptest::prop_assert_eq!(display.current.total, total);
-            proptest::prop_assert_eq!(display.ongoing, total > 0);
+            proptest::prop_assert_eq!(display.ongoing, active > 0);
             proptest::prop_assert_eq!(display.can_start, running > 0 || waiting > 0);
-            proptest::prop_assert_eq!(display.urgent, waiting > 0 || total == 0);
+            proptest::prop_assert_eq!(display.urgent, waiting > 0 || active == 0);
             proptest::prop_assert!(display.current.icons.len() <= 12);
             proptest::prop_assert_eq!(display.current.overflow, total.saturating_sub(12));
             if total > 0 {
                 proptest::prop_assert_eq!(display.current.icons.len() as u32 + display.current.overflow, total);
+                let marks = display.current.icons.iter().filter(|icon| icon.kind == TaskActivityIconKind::Finished).count() as u32;
+                proptest::prop_assert_eq!(marks, finished.min(12u32.saturating_sub(active)));
             } else {
                 proptest::prop_assert_eq!(display.current.icons.len(), 1);
             }

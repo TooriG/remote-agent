@@ -10,9 +10,8 @@ struct ConversationMarkdown: View {
     let selection: ConversationSelectionActions
     @ScaledMetric(relativeTo: .body) private var tableColumnWidth = 160.0
     var textIdentifier: String = "message.assistant-text"
-    @State private var linkTarget: URL?
+    @State private var linkTarget: String?
     @State private var previewURL: URL?
-    @State private var previewDirectory: URL?
     @State private var linkError: String?
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -35,7 +34,7 @@ struct ConversationMarkdown: View {
                 }
             }
             if let linkError {
-                Text(linkError).font(.caption).foregroundColor(.red)
+                AppText(linkError).font(.caption).foregroundColor(.red)
             }
         }
         .font(.system(size: 18))
@@ -46,12 +45,13 @@ struct ConversationMarkdown: View {
             }
             do {
                 linkError = nil
-                linkTarget = try conversationFileURL(url.absoluteString, cwd: media.cwd)
+                linkTarget = try conversationFilePath(url.absoluteString, cwd: media.cwd)
             } catch { linkError = "リンクを開けません: \(error.localizedDescription)" }
             return .handled
         })
         .sheet(isPresented: Binding(get: { previewURL != nil }, set: {
             if !$0 {
+                linkTarget = nil
                 previewURL = nil
             }
         })) {
@@ -64,28 +64,37 @@ struct ConversationMarkdown: View {
                 }
             }
         }
-        .onChange(of: previewURL) { value in
-            if value == nil, let directory = previewDirectory {
-                try? FileManager.default.removeItem(at: directory)
-                previewDirectory = nil
+        .onChange(of: previewURL) { previous, current in
+            if let previous, previous != current {
+                try? FileManager.default.removeItem(at: previous.deletingLastPathComponent())
             }
         }
         .task(id: linkTarget) {
             guard let target = linkTarget else { return }
+            defer {
+                if !Task.isCancelled, linkTarget == target {
+                    linkTarget = nil
+                }
+            }
             do {
-                let downloaded = try await media.download(target.path)
+                linkError = nil
+                let entry = try await media.resolve(target)
+                try Task.checkCancellation()
+                if entry.directory {
+                    media.openDirectory(entry.path)
+                    return
+                }
+                let downloaded = try await media.download(entry.path)
                 guard !Task.isCancelled else {
                     try? FileManager.default.removeItem(at: downloaded.deletingLastPathComponent())
                     return
                 }
-                previewDirectory = downloaded.deletingLastPathComponent()
                 previewURL = downloaded
             } catch {
                 if !Task.isCancelled {
                     linkError = error.localizedDescription
                 }
             }
-            linkTarget = nil
         }
     }
 
@@ -122,7 +131,7 @@ struct ConversationMarkdown: View {
                                                 blocks: [block],
                                                 actions: selection,
                                                 cwd: media.cwd,
-                                                identifier: textIdentifier
+                                                identifier: "markdown.cell.\(part.id).\(row).\(column)"
                                             )
                                         }
                                     }
@@ -167,7 +176,7 @@ private struct ConversationMarkdownCodeBlock: View {
                 Button { wrapped.toggle() } label: {
                     Image(systemName: wrapped ? "text.alignleft" : "arrow.right.to.line")
                 }
-                .accessibilityLabel(wrapped ? "コードの折り返しを解除" : "コードを折り返す")
+                .accessibilityLabel(LocalizedStringKey(wrapped ? "コードの折り返しを解除" : "コードを折り返す"))
                 Button {
                     UIPasteboard.general.string = text
                     copied = true
@@ -177,7 +186,7 @@ private struct ConversationMarkdownCodeBlock: View {
                 .font(.system(size: 16))
                 .foregroundColor(.secondary)
                 .buttonStyle(.plain)
-                .accessibilityLabel(copied ? "コピーしました" : "コードをコピー")
+                .accessibilityLabel(LocalizedStringKey(copied ? "コピーしました" : "コードをコピー"))
                 .accessibilityIdentifier("markdown.code.copy.\(part.id)")
             }
             .font(.caption.weight(.medium))

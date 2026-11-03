@@ -3,6 +3,8 @@ use agent_protocol::{models, protocol};
 pub mod client;
 pub mod diagnostics;
 pub mod framing;
+#[cfg(unix)]
+pub mod native_browser;
 pub mod peer;
 pub mod transfers;
 pub mod transport;

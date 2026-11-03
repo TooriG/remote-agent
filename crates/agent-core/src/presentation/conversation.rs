@@ -36,7 +36,7 @@ pub struct RenderedConversation {
     pending: PendingItems,
     pub turns: Vec<Arc<RenderedTurn>>,
     pub queued: Vec<Arc<RenderedItem>>,
-    pub request_rows: Vec<ConversationRow>,
+    pub session_rows: Vec<ConversationRow>,
 }
 
 #[cfg_attr(feature = "bindings", derive(uniffi::Object))]
@@ -57,6 +57,12 @@ pub struct ConversationRow {
 #[derive(Clone)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
 pub enum ConversationRowContent {
+    Preparation {
+        preparation: PreparationPresentation,
+    },
+    ProviderHandoff {
+        text: String,
+    },
     User {
         item: Arc<RenderedItem>,
     },
@@ -75,13 +81,22 @@ pub enum ConversationRowContent {
     },
     Response {
         item: Arc<RenderedItem>,
+        show_actions: bool,
         fork_turn_id: Option<agent_protocol::ids::TurnId>,
     },
     InProgress {
         turn_id: agent_protocol::ids::TurnId,
     },
 }
-#[derive(Clone)]
+
+#[derive(Clone, PartialEq)]
+#[cfg_attr(feature = "bindings", derive(uniffi::Record))]
+pub struct PreparationPresentation {
+    pub text: String,
+    pub retry: Option<agent_protocol::operations::RetryPreparation>,
+    pub interrupt: Option<agent_protocol::operations::Interrupt>,
+}
+#[derive(Clone, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ActivityPresentation {
     pub id: String,
@@ -98,6 +113,8 @@ pub struct ActivityExpansion {
     pub status: String,
     pub expanded: bool,
 }
+/// A manual choice belongs to this group's current status; a transition restores
+/// the core default rather than expanding neighboring or newly hydrated work.
 #[cfg_attr(feature = "bindings", uniffi::export)]
 pub fn activity_is_expanded(
     activity: &ActivityPresentation,
@@ -130,17 +147,48 @@ impl RenderedTurn {
     }
 
     pub fn progress_label(&self, include_action: bool, now_seconds: f64) -> String {
-        let action = self.rows.iter().rev().find_map(|row| match &row.content {
-            ConversationRowContent::Activity { item, .. } if include_action => {
-                item.data.title.as_deref()
-            }
-            _ => None,
-        });
-        progress_label(&self.source, action, now_seconds)
+        self.work_progress(include_action).label(now_seconds)
+    }
+}
+
+#[derive(Clone, PartialEq)]
+pub struct WorkProgress {
+    started_at: Option<f64>,
+    action: Option<String>,
+}
+
+impl WorkProgress {
+    pub fn label(&self, now_seconds: f64) -> String {
+        let elapsed = self
+            .started_at
+            .map(|started| format!("{}秒 ", (now_seconds - started).max(0.) as u64))
+            .unwrap_or_default();
+        match self.action.as_deref().filter(|action| !action.is_empty()) {
+            Some(action) => format!("{elapsed}作業中 · {action}"),
+            None => format!("{elapsed}作業中…"),
+        }
     }
 }
 
 impl RenderedTurn {
+    pub fn work_progress(&self, include_action: bool) -> WorkProgress {
+        let action = if include_action {
+            self.rows.iter().rev().find_map(|row| match &row.content {
+                ConversationRowContent::Activity { item, .. } => item.data.title.as_deref(),
+                _ => None,
+            })
+        } else {
+            None
+        };
+        WorkProgress {
+            started_at: self.source.started_at.or_else(|| {
+                self.source
+                    .started_at_ms
+                    .map(|milliseconds| milliseconds as f64 / 1000.)
+            }),
+            action: action.map(str::to_owned),
+        }
+    }
     fn items(&self) -> impl Iterator<Item = &Arc<RenderedItem>> {
         self.rows.iter().filter_map(|row| match &row.content {
             ConversationRowContent::User { item }
@@ -151,7 +199,7 @@ impl RenderedTurn {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct TurnErrorPresentation {
     pub title: String,
@@ -199,10 +247,12 @@ impl RenderedItem {
         item: &Arc<models::Item>,
         provider: Option<crate::session::ProviderKind>,
         deferred: bool,
+        timestamp_ms: Option<u64>,
         previous: Option<&Arc<Self>>,
     ) -> Arc<Self> {
         if let Some(previous) = previous
             && previous.data.deferred == deferred
+            && previous.data.timestamp_ms == timestamp_ms
         {
             return previous.clone();
         }
@@ -220,6 +270,7 @@ impl RenderedItem {
                     .unwrap_or(item.id.as_str())
                     .to_owned(),
                 native_id: Some(item.id.clone()),
+                timestamp_ms,
                 kind: presentation.kind.into(),
                 title: presentation.title,
                 collapsible: presentation.collapsible,
@@ -244,8 +295,11 @@ impl RenderedItem {
             data: ItemPresentation {
                 id: id.into(),
                 native_id: None,
+                timestamp_ms: pending.submitted_at_ms,
                 kind: "user".into(),
-                title: Some(pending.delivery_label().into()),
+                title: pending
+                    .delivery_unknown
+                    .then(|| "送信結果不明（自動再送しません）".into()),
                 collapsible: false,
                 body: body.text,
                 image_sources: body.images,
@@ -267,10 +321,26 @@ pub fn project_conversation(
         .as_ref()
         .map(crate::state::DraftKey::from)
         .unwrap_or_else(|| snapshot.navigation.draft_key.clone());
+    let preparation = source.preparation.as_ref();
+    let preparation_echoed = preparation.is_some_and(|preparation| {
+        source
+            .turns
+            .iter()
+            .flatten()
+            .flat_map(|turn| turn.items.iter().flatten())
+            .any(|item| {
+                item.client_input_id.as_ref()
+                    == Some(&preparation.submission.client_user_message_id)
+            })
+    });
     let mut pending: PendingItems = snapshot
         .pending_submissions
         .iter()
         .filter(|(_, pending)| pending.draft_key == draft_key)
+        .filter(|(id, _)| {
+            preparation
+                .is_none_or(|preparation| &preparation.submission.client_user_message_id != *id)
+        })
         .map(|(id, pending)| (id.clone(), pending.clone()))
         .collect();
     pending.sort_by_key(|(_, pending)| pending.sequence);
@@ -305,6 +375,8 @@ pub fn project_conversation(
         .iter()
         .enumerate()
         .map(|(index, turn)| {
+            let handoff = index.checked_sub(1).and_then(|previous| native[previous].provider).zip(turn.provider)
+                .filter(|(from, to)| from != to).map(|(from, to)| format!("{from:?} → {to:?} に切り替えました"));
             let pending = pending
                 .iter()
                 .filter(|(_, p)| pending_turn(p) == Some(index));
@@ -312,6 +384,7 @@ pub fn project_conversation(
             let old = cached.get(turn.id.as_str()).copied();
             if let Some(old) = old
                 && Arc::ptr_eq(turn, &old.source)
+                && old.rows.iter().find_map(|row| match &row.content { ConversationRowContent::ProviderHandoff { text } => Some(text), _ => None }) == handoff.as_ref()
                 && pending
                     .clone()
                     .map(|(id, p)| (id, Arc::as_ptr(p)))
@@ -326,6 +399,7 @@ pub fn project_conversation(
             render_turn(
                 source.id.as_ref(),
                 source.capabilities.unwrap_or_default().fork,
+                handoff,
                 turn.clone(),
                 pending.cloned().collect(),
                 requests.cloned().collect(),
@@ -338,7 +412,7 @@ pub fn project_conversation(
         .flat_map(|old| &old.queued)
         .map(|item| (item.key(), item))
         .collect();
-    let queued = pending
+    let mut queued: Vec<_> = pending
         .iter()
         .filter(|(_, p)| pending_turn(p).is_none())
         .map(|(id, p)| {
@@ -351,7 +425,41 @@ pub fn project_conversation(
             )
         })
         .collect();
-    let request_rows = requests
+    if let Some(preparation) = preparation {
+        let id = &preparation.submission.client_user_message_id;
+        if !preparation_echoed {
+            let item = Arc::new(models::Item::new(
+                id.to_string().into(),
+                models::ItemStatus::Completed,
+                models::ItemBody::UserMessage {
+                    text: None,
+                    content: agent_protocol::operations::Input::message_parts(
+                        &preparation.submission.input,
+                    ),
+                },
+            ));
+            queued.insert(
+                0,
+                RenderedItem::native(
+                    &item,
+                    source.active_provider,
+                    false,
+                    snapshot
+                        .pending_submissions
+                        .get(id)
+                        .and_then(|pending| pending.submitted_at_ms),
+                    previous
+                        .into_iter()
+                        .flat_map(|old| &old.queued)
+                        .find(|old| {
+                            matches!(&old.source, ItemSource::Native(_))
+                                && old.data.id == id.as_str()
+                        }),
+                ),
+            );
+        }
+    }
+    let mut session_rows: Vec<_> = requests
         .values()
         .filter(|request| match &request.target {
             agent_protocol::requests::RequestTarget::Session => true,
@@ -367,24 +475,191 @@ pub fn project_conversation(
             },
         })
         .collect();
+    if let Some(preparation) = preparation.filter(|preparation| {
+        !(preparation_echoed
+            && preparation.status == agent_protocol::session::PreparationStatus::Unknown)
+    }) {
+        session_rows.push(ConversationRow {
+            id: "preparation".into(),
+            timestamp_ms: None,
+            content: ConversationRowContent::Preparation {
+                preparation: preparation_presentation(preparation),
+            },
+        });
+    }
     Arc::new(RenderedConversation {
         source,
         pending,
         turns,
         queued,
-        request_rows,
+        session_rows,
     })
+}
+
+fn preparation_presentation(
+    preparation: &agent_protocol::session::SessionPreparation,
+) -> PreparationPresentation {
+    use agent_protocol::{
+        operations::{Interrupt, RetryPreparation},
+        session::PreparationStatus,
+    };
+    let input = &preparation.submission;
+    let (text, retry, interrupt) = match &preparation.status {
+        PreparationStatus::Preparing => ("タスクを準備中…".into(), false, true),
+        PreparationStatus::Sending => ("AIに送信中…".into(), false, false),
+        PreparationStatus::Failed { error } => (
+            format!("準備に失敗しました: {}", error.message),
+            true,
+            false,
+        ),
+        PreparationStatus::Interrupted => ("準備を停止しました。".into(), true, false),
+        PreparationStatus::Unknown => (
+            "送信結果を確認できません。二重実行を避けるため再送していません。".into(),
+            false,
+            false,
+        ),
+    };
+    PreparationPresentation {
+        text,
+        retry: retry.then(|| RetryPreparation {
+            thread_id: input.thread_id.clone(),
+        }),
+        interrupt: interrupt.then(|| Interrupt {
+            thread_id: input.thread_id.clone(),
+            turn_id: input.client_user_message_id.to_string().into(),
+        }),
+    }
+}
+
+#[cfg(test)]
+mod preparation_tests {
+    use super::*;
+    use agent_protocol::{
+        operations::{Input, Submission},
+        session::{PreparationStatus, ProviderKind, SessionPreparation, SessionRef},
+    };
+
+    #[test]
+    fn admitted_input_is_visible_once_through_failure_retry_and_native_echo() {
+        let id = SessionRef::new(ProviderKind::Codex, "admitted".into()).unwrap();
+        let mut thread = models::Thread {
+            id: Some(id.clone()),
+            preparation: Some(SessionPreparation {
+                submission: Submission {
+                    thread_id: id.clone(),
+                    client_user_message_id: "input".into(),
+                    input: vec![Input::Text {
+                        text: "accepted text".into(),
+                    }],
+                    model: None,
+                    effort: None,
+                    service_tier: None,
+                },
+                status: PreparationStatus::Preparing,
+            }),
+            ..Default::default()
+        };
+        let mut snapshot = Snapshot::default();
+        Arc::make_mut(&mut snapshot.pending_submissions).insert(
+            "input".into(),
+            Arc::new(PendingSubmission {
+                sequence: 0,
+                submitted_at_ms: Some(12_000),
+                draft_key: id.clone().into(),
+                draft: Arc::new(crate::state::Draft {
+                    text: "accepted text".into(),
+                    ..Default::default()
+                }),
+                turn_id: None,
+                after_item_id: None,
+                accepted: false,
+                delivery_unknown: false,
+            }),
+        );
+        let prepared = project_conversation(&snapshot, Arc::new(thread.clone()), &None);
+        assert_eq!(prepared.queued.len(), 1);
+        assert_eq!(prepared.queued[0].data.timestamp_ms, Some(12_000));
+        assert_eq!(
+            prepared.queued[0].data.body.as_deref(),
+            Some("accepted text")
+        );
+        let ConversationRowContent::Preparation { preparation } = &prepared.session_rows[0].content
+        else {
+            panic!("missing preparation")
+        };
+        assert!(preparation.interrupt.is_some() && preparation.retry.is_none());
+        thread.preparation.as_mut().unwrap().status = PreparationStatus::Sending;
+        thread.turns = Some(vec![Arc::new(models::Turn {
+            id: "starting".into(),
+            status: models::TurnStatus::Running,
+            ..Default::default()
+        })]);
+        let starting =
+            project_conversation(&snapshot, Arc::new(thread.clone()), &Some(prepared.clone()));
+        assert_eq!(starting.queued.len(), 1);
+        assert!(
+            !starting.turns[0]
+                .rows
+                .iter()
+                .any(|row| matches!(row.content, ConversationRowContent::User { .. }))
+        );
+        thread.turns = None;
+        thread.preparation.as_mut().unwrap().status = PreparationStatus::Failed {
+            error: Default::default(),
+        };
+        let failed =
+            project_conversation(&snapshot, Arc::new(thread.clone()), &Some(prepared.clone()));
+        assert!(Arc::ptr_eq(&prepared.queued[0], &failed.queued[0]));
+        let ConversationRowContent::Preparation { preparation } = &failed.session_rows[0].content
+        else {
+            panic!("missing failure")
+        };
+        assert!(preparation.retry.is_some() && preparation.interrupt.is_none());
+        let mut user = models::Item::new(
+            "native-input".into(),
+            models::ItemStatus::Completed,
+            models::ItemBody::UserMessage {
+                text: Some("accepted text".into()),
+                content: Vec::new(),
+            },
+        );
+        user.client_input_id = Some("input".into());
+        thread.preparation.as_mut().unwrap().status = PreparationStatus::Unknown;
+        thread.turns = Some(vec![Arc::new(models::Turn {
+            id: "native-turn".into(),
+            items: Some(vec![Arc::new(user)]),
+            ..Default::default()
+        })]);
+        let echoed = project_conversation(&snapshot, Arc::new(thread.clone()), &Some(failed));
+        assert!(echoed.queued.is_empty());
+        assert!(echoed.session_rows.is_empty());
+        thread.preparation = None;
+        let complete = project_conversation(&snapshot, Arc::new(thread), &Some(echoed));
+        assert!(complete.session_rows.is_empty());
+        assert_eq!(
+            complete.turns[0]
+                .rows
+                .iter()
+                .filter(|row| matches!(row.content, ConversationRowContent::User { .. }))
+                .count(),
+            1
+        );
+    }
 }
 
 fn render_turn(
     session: Option<&crate::session::SessionRef>,
     supports_fork: bool,
+    handoff: Option<String>,
     source: Arc<models::Turn>,
     pending: PendingItems,
     requests: Vec<Arc<WireRequest>>,
     previous: Option<&Arc<RenderedTurn>>,
 ) -> Arc<RenderedTurn> {
-    let provider = session.map(|session| session.provider);
+    let provider = source
+        .provider
+        .or_else(|| session.map(|session| session.provider));
+    let supports_fork = source.supports_fork.unwrap_or(supports_fork);
     let cached: HashMap<_, _> = previous
         .into_iter()
         .flat_map(|turn| turn.items())
@@ -426,6 +701,7 @@ fn render_turn(
             item,
             provider,
             item.is_deferred(),
+            None,
             cached.get(&(None, Arc::as_ptr(item).cast())).copied(),
         )
     };
@@ -449,6 +725,7 @@ fn render_turn(
     let mut occurrences = HashMap::new();
     let mut push = |content: ConversationRowContent| {
         let id = match &content {
+            ProviderHandoff { .. } => format!("history-handoff:{}", source.id),
             User { item } | Activity { item, .. } | Response { item, .. } => {
                 format!("history-item:{}:{}", source.id, item.data.id)
             }
@@ -456,6 +733,7 @@ fn render_turn(
             PendingRequest { request } => format!("history-request:{}", request.id),
             Error { .. } => format!("history-error:{}", source.id),
             InProgress { turn_id } => format!("in-progress:{turn_id}"),
+            Preparation { .. } => "preparation".into(),
         };
         let occurrence = occurrences.entry(id.clone()).or_insert(0usize);
         let id = format!("{id}:occurrence:{occurrence}");
@@ -469,14 +747,17 @@ fn render_turn(
                 .map(|seconds| (seconds * 1000.) as u64)
         });
         let timestamp_ms = match &content {
-            User { item } if item.data.native_id.is_some() => started,
-            Response { .. } if source.status != models::TurnStatus::Running => {
-                source.completed_at_ms.or_else(|| {
-                    started
-                        .zip(source.duration_ms)
-                        .and_then(|(start, duration)| start.checked_add(duration))
-                })
-            }
+            User { item } => item
+                .data
+                .timestamp_ms
+                .or(item.data.native_id.as_ref().and(started)),
+            Response {
+                show_actions: true, ..
+            } => source.completed_at_ms.or_else(|| {
+                started
+                    .zip(source.duration_ms)
+                    .and_then(|(start, duration)| start.checked_add(duration))
+            }),
             _ => None,
         };
         rows.push(ConversationRow {
@@ -485,6 +766,9 @@ fn render_turn(
             timestamp_ms,
         });
     };
+    if let Some(text) = handoff {
+        push(ProviderHandoff { text });
+    }
     for segment in project_items(&source, order.len(), metadata) {
         let segment = &segment;
         let group = |role| {
@@ -547,8 +831,11 @@ fn render_turn(
         }
         let mut responses = group(Role::Response).peekable();
         while let Some(item) = responses.next() {
+            // A provider message can end while the response is still running.
+            let show_actions =
+                source.status != models::TurnStatus::Running && item.data.kind == "agent";
             let can_fork =
-                supports_fork && !in_progress && segment.last && responses.peek().is_none();
+                supports_fork && show_actions && segment.last && responses.peek().is_none();
             if item.data.deferred {
                 push(Activity {
                     item,
@@ -557,6 +844,7 @@ fn render_turn(
             } else {
                 push(Response {
                     item,
+                    show_actions,
                     fork_turn_id: can_fork.then(|| source.id.clone()),
                 });
             }
@@ -632,6 +920,53 @@ pub fn request(source: &WireRequest) -> Request {
         details,
         can_respond: source.delivery == crate::session::RequestDelivery::Awaiting,
         request_body: source.body.clone(),
+    }
+}
+
+/// How prominently a request action is shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
+pub enum ActionTone {
+    Primary,
+    Secondary,
+    Danger,
+}
+
+/// T3 Code leads with a one-time grant and marks denial; broader grants stay
+/// secondary.
+#[cfg_attr(feature = "bindings", uniffi::export)]
+pub fn choice_tone(effect: agent_protocol::requests::ChoiceEffect) -> ActionTone {
+    use agent_protocol::requests::ChoiceEffect;
+    match effect {
+        ChoiceEffect::Allow => ActionTone::Primary,
+        ChoiceEffect::Deny => ActionTone::Danger,
+        ChoiceEffect::AllowLasting => ActionTone::Secondary,
+    }
+}
+
+/// The composer answers one question and one other request at a time, as in
+/// T3 Code; later ones follow once these resolve.
+pub(crate) fn docked_request(thread: &models::Thread, question: bool) -> Option<&WireRequest> {
+    thread.requests.values().map(Arc::as_ref).find(|request| {
+        matches!(
+            request.body,
+            agent_protocol::requests::RequestBody::Question { .. }
+        ) == question
+    })
+}
+
+#[cfg_attr(feature = "bindings", uniffi::export)]
+impl Snapshot {
+    /// The requests shown above the composer: the other request, then the question.
+    pub fn docked_requests(&self, session: crate::session::SessionRef) -> Vec<Request> {
+        let Some(thread) = self.conversations.get(&session) else {
+            return Vec::new();
+        };
+        [false, true]
+            .into_iter()
+            .filter_map(|question| docked_request(thread, question))
+            .map(request)
+            .collect()
     }
 }
 
@@ -762,6 +1097,7 @@ pub type PendingItems = Vec<(agent_protocol::ids::ClientInputId, Arc<PendingSubm
 pub struct ItemPresentation {
     pub id: String,
     pub native_id: Option<agent_protocol::ids::ItemId>,
+    pub timestamp_ms: Option<u64>,
     pub body: Option<String>,
     pub image_sources: Vec<String>,
     pub image_placeholder: bool,
@@ -832,6 +1168,39 @@ mod tests {
             ..Default::default()
         }
     }
+    #[test]
+    fn older_history_reveals_a_provider_boundary_without_stale_cached_rows() {
+        let mut snapshot = fixture();
+        let session = snapshot.conversations.keys().next().unwrap().clone();
+        let thread = Arc::make_mut(
+            Arc::make_mut(&mut snapshot.conversations)
+                .get_mut(&session)
+                .unwrap(),
+        );
+        let turns = thread.turns.as_mut().unwrap();
+        Arc::make_mut(&mut turns[0]).provider = Some(crate::session::ProviderKind::Codex);
+        Arc::make_mut(&mut turns[1]).provider = Some(crate::session::ProviderKind::Claude);
+        let old = turns.remove(0);
+        let initial = project_snapshot(snapshot.clone(), None);
+        assert!(
+            !initial.turns[0]
+                .conversation_rows()
+                .iter()
+                .any(|row| matches!(row.content, ConversationRowContent::ProviderHandoff { .. }))
+        );
+        let thread = Arc::make_mut(
+            Arc::make_mut(&mut snapshot.conversations)
+                .get_mut(&session)
+                .unwrap(),
+        );
+        thread.turns.as_mut().unwrap().insert(0, old);
+        let loaded = project_snapshot(snapshot, Some(&initial));
+        assert!(
+            matches!(&loaded.turns[1].conversation_rows()[0].content, ConversationRowContent::ProviderHandoff { text } if text == "Codex → Claude に切り替えました")
+        );
+        assert!(!Arc::ptr_eq(&initial.turns[0], &loaded.turns[1]));
+    }
+
     #[test]
     fn completed_edits_stay_in_collapsed_activity_when_details_load() {
         let mut snapshot = fixture();
@@ -916,6 +1285,80 @@ mod tests {
     }
 
     #[test]
+    fn request_choices_rank_as_t3_ranks_approval_decisions() {
+        use agent_protocol::requests::ChoiceEffect;
+        for (effect, tone) in [
+            (ChoiceEffect::Allow, ActionTone::Primary),
+            (ChoiceEffect::AllowLasting, ActionTone::Secondary),
+            (ChoiceEffect::Deny, ActionTone::Danger),
+        ] {
+            assert_eq!(choice_tone(effect), tone);
+        }
+    }
+
+    #[test]
+    fn composer_docks_one_other_request_before_one_question_in_request_order() {
+        use agent_protocol::{
+            requests::{Question, RequestBody, RequestTarget},
+            session::{ProviderKind, RequestDelivery, SessionRef},
+        };
+        let question = || RequestBody::Question {
+            questions: vec![Question {
+                id: "q".into(),
+                header: String::new(),
+                prompt: "which?".into(),
+                secret: false,
+                allow_free_text: true,
+                multiple: false,
+                choices: vec![],
+            }],
+        };
+        let tool = || RequestBody::ToolExecution {
+            tool: "tool".into(),
+            namespace: None,
+            arguments: json!({}),
+        };
+        let session = SessionRef::new(ProviderKind::Codex, "thread".into()).unwrap();
+        let mut snapshot = Snapshot::default();
+        assert!(snapshot.docked_requests(session.clone()).is_empty());
+        let thread = models::Thread {
+            requests: [
+                ("1-question", question()),
+                ("2-tool", tool()),
+                ("3-question", question()),
+                ("4-tool", tool()),
+            ]
+            .into_iter()
+            .map(|(id, body)| {
+                let request = WireRequest {
+                    id: id.into(),
+                    target: RequestTarget::Session,
+                    delivery: RequestDelivery::Awaiting,
+                    body,
+                };
+                (request.id.clone(), Arc::new(request))
+            })
+            .collect(),
+            ..Default::default()
+        };
+        Arc::make_mut(&mut snapshot.conversations).insert(session.clone(), Arc::new(thread));
+        let docked: Vec<_> = snapshot
+            .docked_requests(session.clone())
+            .into_iter()
+            .map(|request| request.id.as_str().to_owned())
+            .collect();
+        assert_eq!(docked, ["2-tool", "1-question"]);
+        assert_eq!(
+            snapshot
+                .question_prompt(session)
+                .unwrap()
+                .request_id
+                .as_str(),
+            "1-question"
+        );
+    }
+
+    #[test]
     fn session_requests_render_without_history_and_sent_requests_disable_answers() {
         use agent_protocol::{
             requests::{ElicitationInput, RequestBody, RequestTarget},
@@ -942,8 +1385,8 @@ mod tests {
         let awaiting =
             project_conversation(&Snapshot::default(), make(RequestDelivery::Awaiting), &None);
         assert!(awaiting.turns.is_empty());
-        assert_eq!(awaiting.request_rows.len(), 1);
-        let ConversationRowContent::PendingRequest { request } = &awaiting.request_rows[0].content
+        assert_eq!(awaiting.session_rows.len(), 1);
+        let ConversationRowContent::PendingRequest { request } = &awaiting.session_rows[0].content
         else {
             panic!("request row")
         };
@@ -953,14 +1396,14 @@ mod tests {
             make(RequestDelivery::Sent),
             &Some(awaiting.clone()),
         );
-        let ConversationRowContent::PendingRequest { request } = &sent.request_rows[0].content
+        let ConversationRowContent::PendingRequest { request } = &sent.session_rows[0].content
         else {
             panic!("request row")
         };
         assert!(!request.can_respond);
         assert_ne!(
             &request.title,
-            match &awaiting.request_rows[0].content {
+            match &awaiting.session_rows[0].content {
                 ConversationRowContent::PendingRequest { request } => &request.title,
                 _ => unreachable!(),
             }
@@ -1012,6 +1455,7 @@ mod tests {
             let projected = render_turn(
                 Some(&crate::session::SessionRef::new(crate::session::ProviderKind::Codex, "session".into()).unwrap()),
                 false,
+                None,
                 Arc::new(models::Turn {
                     id: "turn".into(),
                     status: models::TurnStatus::Completed,
@@ -1080,7 +1524,7 @@ mod tests {
         let completed = project_snapshot(snapshot, Some(&rendered));
         let rows = completed.turns[1].conversation_rows();
         assert!(
-            matches!(&rows.last().unwrap().content, ConversationRowContent::Response { item, fork_turn_id: Some(id) } if id.as_str() == "live" && item.data.native_id.as_deref() == Some("stream"))
+            matches!(&rows.last().unwrap().content, ConversationRowContent::Response { item, fork_turn_id: Some(id), .. } if id.as_str() == "live" && item.data.native_id.as_deref() == Some("stream"))
         );
         assert!(rows.iter().any(|row| row.id == accepted_id));
         for row in rows {
@@ -1102,6 +1546,88 @@ mod tests {
                 ));
             }
         }
+    }
+
+    #[rstest::rstest]
+    #[case::codex("codex", "commentary", "final")]
+    #[case::claude("claude", "commentary", "final")]
+    #[case::deepseek("deepseek", "unknown", "unknown")]
+    fn response_actions_wait_for_turn_completion_and_only_belong_to_the_answer(
+        #[case] provider: &str,
+        #[case] progress_phase: &str,
+        #[case] answer_phase: &str,
+        #[values(false, true)] supports_fork: bool,
+    ) {
+        let snapshot = Snapshot::default();
+        let mut thread: Arc<models::Thread> = Arc::new(serde_json::from_value(json!({
+            "id": {"provider": provider, "id": "thread"},
+            "capabilities": {"fork": supports_fork},
+            "turns": [{"id": "turn", "status": "running", "items": [
+                {"id": "progress", "status": "completed", "body": {"inline": {"body": {"assistantText": {"text": "Working", "phase": progress_phase}}}}},
+                {"id": "tool", "status": "completed", "body": {"inline": {"body": {"commandExecution": {"command": "pwd", "output": "/work"}}}}},
+                {"id": "update", "status": "completed", "body": {"inline": {"body": {"assistantText": {"text": "Waiting", "phase": progress_phase}}}}},
+                {"id": "answer", "status": "completed", "body": {"inline": {"body": {"assistantText": {"text": "Done", "phase": answer_phase}}}}}
+            ]}]
+        })).unwrap());
+        let live = project_conversation(&snapshot, thread.clone(), &None);
+        let responses: Vec<_> = live.turns[0]
+            .rows
+            .iter()
+            .filter_map(|row| match &row.content {
+                ConversationRowContent::Response {
+                    item,
+                    show_actions,
+                    fork_turn_id,
+                } => {
+                    assert!(
+                        !show_actions,
+                        "live messages must not expose answer actions"
+                    );
+                    assert!(fork_turn_id.is_none());
+                    Some(item)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(responses.len(), 3);
+        let live_answer = responses.last().unwrap();
+
+        Arc::make_mut(&mut Arc::make_mut(&mut thread).turns.as_mut().unwrap()[0]).status =
+            models::TurnStatus::Completed;
+        let completed = project_conversation(&snapshot, thread, &Some(live.clone()));
+        let actions: Vec<_> = completed.turns[0]
+            .rows
+            .iter()
+            .filter_map(|row| match &row.content {
+                ConversationRowContent::Response {
+                    item,
+                    show_actions: true,
+                    fork_turn_id,
+                } => {
+                    assert_eq!(fork_turn_id.is_some(), supports_fork);
+                    Some(item)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].data.native_id.as_deref(), Some("answer"));
+        assert!(Arc::ptr_eq(live_answer, actions[0]));
+        let reopened = project_conversation(&snapshot, completed.source.clone(), &None);
+        assert_eq!(
+            reopened.turns[0]
+                .rows
+                .iter()
+                .filter(|row| matches!(
+                    row.content,
+                    ConversationRowContent::Response {
+                        show_actions: true,
+                        ..
+                    }
+                ))
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -1341,6 +1867,7 @@ mod tests {
                 id.into(),
                 Arc::new(PendingSubmission {
                     sequence: sequence as u64,
+                    submitted_at_ms: None,
                     draft_key: agent_protocol::session::SessionRef {
                         provider: agent_protocol::session::ProviderKind::Codex,
                         id: "thread".into(),
@@ -1377,13 +1904,70 @@ mod tests {
         ));
     }
 
+    #[rstest::rstest]
+    #[case::sending(false, false, None)]
+    #[case::accepted(true, false, None)]
+    #[case::unknown(false, true, Some("送信結果不明（自動再送しません）"))]
+    #[case::accepted_then_unknown(true, true, Some("送信結果不明（自動再送しません）"))]
+    fn pending_input_delivery_status_is_shared_in_history_and_queue(
+        #[case] accepted: bool,
+        #[case] delivery_unknown: bool,
+        #[case] title: Option<&str>,
+        #[values(false, true)] history_loaded: bool,
+    ) {
+        let mut snapshot = fixture();
+        let session = snapshot.conversations.keys().next().unwrap().clone();
+        if !history_loaded {
+            Arc::make_mut(
+                Arc::make_mut(&mut snapshot.conversations)
+                    .get_mut(&session)
+                    .unwrap(),
+            )
+            .turns = None;
+        }
+        Arc::make_mut(&mut snapshot.pending_submissions).insert(
+            "pending".into(),
+            Arc::new(PendingSubmission {
+                sequence: 0,
+                submitted_at_ms: Some(12_000),
+                draft_key: session.into(),
+                draft: Arc::new(Draft {
+                    text: "waiting for echo".into(),
+                    ..Default::default()
+                }),
+                turn_id: Some("live".into()),
+                after_item_id: None,
+                accepted,
+                delivery_unknown,
+            }),
+        );
+        let rendered = project_snapshot(snapshot, None);
+        let item = rendered
+            .queued
+            .iter()
+            .chain(rendered.turns.iter().flat_map(|turn| turn.items()))
+            .find(|item| item.data.id == "pending")
+            .unwrap();
+        assert_eq!(item.data.title.as_deref(), title);
+        assert_eq!(item.data.body.as_deref(), Some("waiting for echo"));
+        assert_eq!(item.data.timestamp_ms, Some(12_000));
+        assert!(item.data.native_id.is_none());
+        if history_loaded {
+            let row = rendered.turns.iter().flat_map(|turn| &turn.rows)
+                .find(|row| matches!(&row.content, ConversationRowContent::User { item } if item.data.id == "pending"))
+                .unwrap();
+            assert_eq!(row.timestamp_ms, Some(12_000));
+        }
+    }
+
     #[test]
-    fn pending_input_remains_visible_until_its_turn_is_loaded() {
+    fn local_input_keeps_its_footer_while_acceptance_and_history_are_pending() {
         let mut snapshot = fixture();
         Arc::make_mut(&mut snapshot.pending_submissions).insert(
             "pending".into(),
             Arc::new(PendingSubmission {
                 sequence: 0,
+                submitted_at_ms: Some(12_000),
                 draft_key: agent_protocol::session::SessionRef {
                     provider: agent_protocol::session::ProviderKind::Codex,
                     id: "thread".into(),
@@ -1395,12 +1979,23 @@ mod tests {
                 }),
                 turn_id: Some("unloaded".into()),
                 after_item_id: None,
-                accepted: true,
+                accepted: false,
                 delivery_unknown: false,
             }),
         );
-        let first = project_snapshot(snapshot.clone(), None);
+        let sending = project_snapshot(snapshot.clone(), None);
+        assert!(sending.queued[0].data.title.is_none());
+        assert_eq!(sending.queued[0].data.timestamp_ms, Some(12_000));
+        Arc::make_mut(
+            Arc::make_mut(&mut snapshot.pending_submissions)
+                .get_mut("pending")
+                .unwrap(),
+        )
+        .accepted = true;
+        let first = project_snapshot(snapshot.clone(), Some(&sending));
         assert_eq!(first.queued.len(), 1);
+        assert!(first.queued[0].data.title.is_none());
+        assert_eq!(first.queued[0].data.timestamp_ms, Some(12_000));
         assert_eq!(
             first.queued[0].data.body.as_deref(),
             Some("waiting for history")
@@ -1497,9 +2092,9 @@ mod tests {
     fn requests_and_pending_submissions_have_one_shared_native_projection() {
         let mut snapshot = fixture();
         for value in [
-            json!({"id": "1", "target": {"turn": {"turnId": "done", "itemId": null}}, "delivery": "awaiting", "body": {"approval": {"kind": "command", "description": "run command", "details": "", "choices": [{"id": "choice-0", "label": "承認", "description": ""}, {"id": "choice-1", "label": "このセッションで承認", "description": ""}, {"id": "choice-2", "label": "拒否", "description": ""}, {"id": "choice-3", "label": "キャンセル", "description": ""}]}}}),
+            json!({"id": "1", "target": {"turn": {"turnId": "done", "itemId": null}}, "delivery": "awaiting", "body": {"approval": {"kind": "command", "description": "run command", "details": "", "choices": [{"id": "choice-0", "label": "承認", "description": "", "effect": "allow"}, {"id": "choice-1", "label": "このセッションで承認", "description": "", "effect": "allowLasting"}, {"id": "choice-2", "label": "拒否", "description": "", "effect": "deny"}]}}}),
             json!({"id": "question", "target": {"turn":{"turnId":"live","itemId":null}}, "delivery": "awaiting", "body": {"question": {"questions": [{"id": "question-0", "header": "", "prompt": "which?", "secret": false, "allowFreeText": true, "multiple": false, "choices": []}]}}}),
-            json!({"id": "3", "target": "session", "delivery": "awaiting", "body": {"approval": {"kind": "fileChange", "description": "", "details": "", "choices": [{"id": "choice-0", "label": "承認", "description": ""}, {"id": "choice-1", "label": "このセッションで承認", "description": ""}, {"id": "choice-2", "label": "拒否", "description": ""}, {"id": "choice-3", "label": "キャンセル", "description": ""}]}}}),
+            json!({"id": "3", "target": "session", "delivery": "awaiting", "body": {"approval": {"kind": "fileChange", "description": "", "details": "", "choices": [{"id": "choice-0", "label": "承認", "description": "", "effect": "allow"}, {"id": "choice-1", "label": "このセッションで承認", "description": "", "effect": "allowLasting"}, {"id": "choice-2", "label": "拒否", "description": "", "effect": "deny"}]}}}),
         ] {
             let request: WireRequest = serde_json::from_value(value).unwrap();
             let request = Arc::new(request);
@@ -1527,6 +2122,7 @@ mod tests {
         let pending = |turn_id| {
             Arc::new(PendingSubmission {
                 sequence: 0,
+                submitted_at_ms: None,
                 draft_key: agent_protocol::session::SessionRef {
                     provider: agent_protocol::session::ProviderKind::Codex,
                     id: "thread".into(),
@@ -1565,7 +2161,7 @@ mod tests {
                 .iter()
                 .map(|choice| choice.label.as_str())
                 .collect::<Vec<_>>(),
-            ["承認", "このセッションで承認", "拒否", "キャンセル"]
+            ["承認", "このセッションで承認", "拒否"]
         );
         let live: Vec<_> = rendered.turns[1]
             .rows
@@ -1632,20 +2228,6 @@ mod tests {
     }
 }
 
-fn progress_label(turn: &models::Turn, action: Option<&str>, now_seconds: f64) -> String {
-    let started = turn.started_at.as_ref().copied().or_else(|| {
-        turn.started_at_ms
-            .map(|milliseconds| milliseconds as f64 / 1000.)
-    });
-    let elapsed = started
-        .map(|started| format!("{}秒 ", (now_seconds - started).max(0.) as u64))
-        .unwrap_or_default();
-    match action.filter(|action| !action.is_empty()) {
-        Some(action) => format!("{elapsed}作業中 · {action}"),
-        None => format!("{elapsed}作業中…"),
-    }
-}
-
 #[cfg(test)]
 mod progress_tests {
     use super::*;
@@ -1654,18 +2236,196 @@ mod progress_tests {
         for value in [
             serde_json::json!({"id":"t","startedAt":100.5}),
             serde_json::json!({"id":"t","startedAtMs":100500}),
+            serde_json::json!({"id":"t","startedAt":100.5,"startedAtMs":0}),
         ] {
-            let turn = serde_json::from_value(value).unwrap();
-            assert_eq!(
-                progress_label(&turn, Some("cargo test"), 108.5),
-                "8秒 作業中 · cargo test"
-            );
-            assert_eq!(progress_label(&turn, None, 110.5), "10秒 作業中…");
-            assert_eq!(progress_label(&turn, None, 99.), "0秒 作業中…");
+            let source = Arc::new(serde_json::from_value(value).unwrap());
+            let turn = RenderedTurn {
+                source,
+                pending: Default::default(),
+                requests: vec![],
+                rows: vec![],
+            };
+            let mut progress = turn.work_progress(false);
+            progress.action = Some("cargo test".into());
+            assert_eq!(progress.label(108.5), "8秒 作業中 · cargo test");
+            assert_eq!(turn.progress_label(false, 110.5), "10秒 作業中…");
+            assert_eq!(turn.progress_label(false, 99.), "0秒 作業中…");
         }
         assert_eq!(
-            progress_label(&models::Turn::default(), None, 100.),
+            WorkProgress {
+                started_at: None,
+                action: None
+            }
+            .label(100.),
             "作業中…"
+        );
+        assert_eq!(
+            WorkProgress {
+                started_at: None,
+                action: Some(String::new())
+            }
+            .label(100.),
+            "作業中…"
+        );
+    }
+
+    #[test]
+    fn progress_retains_only_the_latest_action_and_start_time() {
+        let source = Arc::new(serde_json::from_value(serde_json::json!({
+            "id":{"provider":"codex", "id":"fixture"},
+            "turns":[{"id":"turn", "status":"running", "startedAt":100.5, "items":[
+                {"id":"first", "body":{"inline":{"body":{"commandExecution":{"command":"first", "output":"", "exitCode":0}}}}},
+                {"id":"second", "status":"running", "body":{"inline":{"body":{"webSearch":{"query":"latest action"}}}}}
+            ]}]
+        })).unwrap());
+        let conversation = project_conversation(&Snapshot::default(), source, &None);
+        let turn = &conversation.turns[0];
+        assert_eq!(
+            turn.progress_label(true, 108.5),
+            "8秒 作業中 · Webを検索: latest action"
+        );
+        assert_eq!(turn.progress_label(false, 108.5), "8秒 作業中…");
+        let progress = turn.work_progress(true);
+        drop(conversation);
+        assert_eq!(
+            progress.label(110.5),
+            "10秒 作業中 · Webを検索: latest action"
+        );
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "bindings", derive(uniffi::Record))]
+pub struct HistoryControl {
+    pub has_more: bool,
+    pub loading: bool,
+    pub load_label: String,
+    pub error: Option<String>,
+}
+
+#[cfg_attr(feature = "bindings", uniffi::export)]
+impl Snapshot {
+    pub fn history_control(&self, session: crate::session::SessionRef) -> Option<HistoryControl> {
+        let has_more = self
+            .conversations
+            .get(&session)
+            .is_some_and(|thread| thread.history_has_more == Some(true));
+        let key = crate::state::operations::OperationKey::History { session };
+        let error = self.operation_error(key.clone());
+        if !has_more && error.is_none() {
+            return None;
+        }
+        let loading = self.operation_running(key);
+        Some(HistoryControl {
+            has_more,
+            loading,
+            load_label: if loading {
+                "以前のターンを読み込み中…"
+            } else {
+                "以前のターンを読み込む"
+            }
+            .into(),
+            error,
+        })
+    }
+}
+
+#[cfg(test)]
+mod history_control_tests {
+    use super::*;
+    use crate::{
+        session::{ProviderKind, SessionRef},
+        state::operations::{OperationKey, OperationPhase, OperationState},
+    };
+
+    #[test]
+    fn history_control_tracks_its_own_page_request_and_retry() {
+        let session = SessionRef::new(ProviderKind::Codex, "history".into()).unwrap();
+        let other = SessionRef::new(ProviderKind::Codex, "other".into()).unwrap();
+        let mut snapshot = Snapshot::default();
+        assert_eq!(snapshot.history_control(session.clone()), None);
+        Arc::make_mut(&mut snapshot.conversations).insert(
+            session.clone(),
+            Arc::new(models::Thread {
+                history_has_more: Some(true),
+                ..Default::default()
+            }),
+        );
+        let idle = HistoryControl {
+            has_more: true,
+            loading: false,
+            load_label: "以前のターンを読み込む".into(),
+            error: None,
+        };
+        assert_eq!(
+            snapshot.history_control(session.clone()),
+            Some(idle.clone())
+        );
+        let key = OperationKey::History {
+            session: session.clone(),
+        };
+        for (phase, expected) in [
+            (OperationPhase::Running, HistoryControl {
+                loading: true,
+                load_label: "以前のターンを読み込み中…".into(),
+                ..idle.clone()
+            }),
+            (OperationPhase::Failed {
+                message: r#"remote RPC error: {"code":"provider_failed","message":"Older page unavailable"}"#.into(),
+            }, HistoryControl {
+                error: Some("Older page unavailable".into()),
+                ..idle.clone()
+            }),
+            (OperationPhase::Running, HistoryControl {
+                loading: true,
+                load_label: "以前のターンを読み込み中…".into(),
+                ..idle.clone()
+            }),
+        ] {
+            Arc::make_mut(&mut snapshot.operations).insert(key.clone(), OperationState {
+                generation: 1,
+                phase,
+            });
+            assert_eq!(snapshot.history_control(session.clone()), Some(expected));
+            assert_eq!(snapshot.history_control(other.clone()), None);
+        }
+        Arc::make_mut(&mut snapshot.operations).clear();
+        assert_eq!(snapshot.history_control(session), Some(idle));
+    }
+
+    #[rstest::rstest]
+    #[case(None)]
+    #[case(Some(false))]
+    fn no_continuation_hides_the_button_but_preserves_a_read_failure(#[case] more: Option<bool>) {
+        let session = SessionRef::new(ProviderKind::Codex, "history".into()).unwrap();
+        let mut snapshot = Snapshot::default();
+        Arc::make_mut(&mut snapshot.conversations).insert(
+            session.clone(),
+            Arc::new(models::Thread {
+                history_has_more: more,
+                ..Default::default()
+            }),
+        );
+        assert_eq!(snapshot.history_control(session.clone()), None);
+        Arc::make_mut(&mut snapshot.operations).insert(
+            OperationKey::History {
+                session: session.clone(),
+            },
+            OperationState {
+                generation: 1,
+                phase: OperationPhase::Failed {
+                    message: "History unavailable".into(),
+                },
+            },
+        );
+        assert_eq!(
+            snapshot.history_control(session),
+            Some(HistoryControl {
+                has_more: false,
+                loading: false,
+                load_label: "以前のターンを読み込む".into(),
+                error: Some("History unavailable".into()),
+            })
         );
     }
 }
@@ -1675,6 +2435,18 @@ pub fn history_notice(thread: &models::Thread) -> Option<String> {
     use crate::session::HistoryReadKind;
     let state = thread.history_read_state.as_ref()?;
     let heading = match state.kind {
+        // Older pages are loaded on demand. A usable continuation is normal,
+        // while missing history or reported read issues still need a notice.
+        HistoryReadKind::Partial
+            if state.issues.is_empty()
+                && thread.history_has_more == Some(true)
+                && thread
+                    .history_cursor
+                    .as_ref()
+                    .is_some_and(|cursor| !cursor.is_empty()) =>
+        {
+            return None;
+        }
         HistoryReadKind::Partial => "履歴の一部を表示しています。",
         HistoryReadKind::Incomplete => "履歴の一部を読み取れませんでした。",
         HistoryReadKind::Unavailable => {
@@ -1694,4 +2466,102 @@ pub fn history_notice(thread: &models::Thread) -> Option<String> {
     } else {
         format!("{heading}\n{issues}")
     })
+}
+
+#[cfg(test)]
+mod history_notice_tests {
+    use super::*;
+    use crate::session::{HistoryPage, HistoryReadKind, HistoryReadState};
+
+    #[test]
+    fn history_pages_keep_source_errors_visible_and_can_clear_them_after_recovery() {
+        let mut thread = models::Thread::default();
+        HistoryPage {
+            turns: Vec::new(),
+            next_cursor: None,
+            history_read_state: Some(HistoryReadState::new(
+                HistoryReadKind::Incomplete,
+                vec!["claude: Claude failed to start".into()],
+            )),
+        }
+        .prepend_to(&mut thread);
+        assert_eq!(
+            history_notice(&thread).as_deref(),
+            Some("履歴の一部を読み取れませんでした。\nclaude: Claude failed to start")
+        );
+        HistoryPage {
+            turns: Vec::new(),
+            next_cursor: None,
+            history_read_state: Some(HistoryReadState::new(HistoryReadKind::Complete, Vec::new())),
+        }
+        .prepend_to(&mut thread);
+        assert_eq!(history_notice(&thread), None);
+    }
+
+    #[test]
+    fn normal_pagination_has_no_warning_before_or_after_loading_the_remaining_history() {
+        let mut thread = models::Thread::default();
+        HistoryPage {
+            history_read_state: None,
+            turns: Vec::new(),
+            next_cursor: Some("older-page".into()),
+        }
+        .prepend_to(&mut thread);
+        assert_eq!(history_notice(&thread), None);
+        HistoryPage {
+            history_read_state: None,
+            turns: Vec::new(),
+            next_cursor: None,
+        }
+        .prepend_to(&mut thread);
+        assert_eq!(history_notice(&thread), None);
+    }
+
+    #[rstest::rstest]
+    #[case(None, None)]
+    #[case(None, Some(""))]
+    #[case(None, Some("older-page"))]
+    #[case(Some(false), None)]
+    #[case(Some(false), Some(""))]
+    #[case(Some(false), Some("older-page"))]
+    #[case(Some(true), None)]
+    #[case(Some(true), Some(""))]
+    fn a_partial_read_without_a_usable_continuation_keeps_its_notice(
+        #[case] more: Option<bool>,
+        #[case] cursor: Option<&str>,
+    ) {
+        let thread = models::Thread {
+            history_has_more: more,
+            history_cursor: cursor.map(str::to_owned),
+            history_read_state: Some(HistoryReadState::new(HistoryReadKind::Partial, Vec::new())),
+            ..Default::default()
+        };
+        assert_eq!(
+            history_notice(&thread).as_deref(),
+            Some("履歴の一部を表示しています。")
+        );
+    }
+
+    #[rstest::rstest]
+    #[case(HistoryReadKind::Partial, "履歴の一部を表示しています。")]
+    #[case(HistoryReadKind::Incomplete, "履歴の一部を読み取れませんでした。")]
+    #[case(
+        HistoryReadKind::Unavailable,
+        "履歴を取得できません。保存済みの表示は最新とは限りません。"
+    )]
+    fn read_failures_remain_visible_even_when_older_pages_exist(
+        #[case] kind: HistoryReadKind,
+        #[case] heading: &str,
+    ) {
+        let thread = models::Thread {
+            history_has_more: Some(true),
+            history_cursor: Some("older-page".into()),
+            history_read_state: Some(HistoryReadState::new(kind, vec!["read issue".into()])),
+            ..Default::default()
+        };
+        assert_eq!(
+            history_notice(&thread),
+            Some(format!("{heading}\nread issue"))
+        );
+    }
 }

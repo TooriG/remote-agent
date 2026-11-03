@@ -102,7 +102,7 @@ async fn account_switch_keeps_shared_history_and_restores_selection_without_expo
         std::fs::write(home.join("account-fixture.json"), r#"{"type":"chatgpt","email":"desktop@example.invalid","planType":"plus","accountId":"desktop"}"#).unwrap();
         let config = AppServerConfig { codex_home: Some(home.clone()), ..codex_fixture::config(&home) };
         let server = Arc::new(CodexAppServer::spawn(config.clone()).await.unwrap());
-        let adapter = host_daemon::adapters::codex::Codex::new(Ok(server.clone()));
+        let adapter = host_daemon::providers::codex::Codex::new(Ok(server.clone()));
         let accounts_dir = directory.path().join("accounts");
         adapter.enable_accounts(accounts_dir.clone(), config.clone()).await.unwrap();
         let service = HostRpcService::new([adapter.into()], ProjectStore::new(home.join("bex-worktrees.json")));
@@ -182,7 +182,7 @@ async fn account_switch_keeps_shared_history_and_restores_selection_without_expo
         drop(session); drop(service);
         server.shutdown().await.unwrap();
         let server = Arc::new(CodexAppServer::spawn(config.clone()).await.unwrap());
-        let adapter = host_daemon::adapters::codex::Codex::new(Ok(server.clone()));
+        let adapter = host_daemon::providers::codex::Codex::new(Ok(server.clone()));
         adapter.enable_accounts(accounts_dir.clone(), config.clone()).await.unwrap();
         let service = HostRpcService::new([adapter.into()], ProjectStore::new(home.join("bex-worktrees.json")));
         let mut session = service.open_session();
@@ -199,7 +199,7 @@ async fn account_switch_keeps_shared_history_and_restores_selection_without_expo
         server.shutdown().await.unwrap();
         std::fs::remove_file(home.join("account-fixture.json")).unwrap();
         let server = Arc::new(CodexAppServer::spawn(config.clone()).await.unwrap());
-        let adapter = host_daemon::adapters::codex::Codex::new(Ok(server.clone()));
+        let adapter = host_daemon::providers::codex::Codex::new(Ok(server.clone()));
         adapter.enable_accounts(accounts_dir, config).await.unwrap();
         let service = HostRpcService::new([adapter.into()], ProjectStore::new(home.join("bex-worktrees.json")));
         let mut session = service.open_session();
@@ -231,7 +231,7 @@ async fn helper_initialization_does_not_block_completed_turns() {
         let home = directory.path();
         let config = codex_fixture::config(home);
         let server = Arc::new(CodexAppServer::spawn(config.clone()).await.unwrap());
-        let adapter = host_daemon::adapters::codex::Codex::new(Ok(server.clone()));
+        let adapter = host_daemon::providers::codex::Codex::new(Ok(server.clone()));
         adapter
             .enable_accounts(home.join("accounts"), config)
             .await
@@ -317,7 +317,7 @@ async fn native_accounts_restore_selection_and_remain_signed_out_after_logout() 
         let config = AppServerConfig { codex_home: Some(home.clone()), ..codex_fixture::config(&home) };
         let accounts_dir = directory.path().join("accounts");
         let server = Arc::new(CodexAppServer::spawn(config.clone()).await.unwrap());
-        let adapter = host_daemon::adapters::codex::Codex::new(Ok(server.clone()));
+        let adapter = host_daemon::providers::codex::Codex::new(Ok(server.clone()));
         adapter.enable_accounts(accounts_dir.clone(), config.clone()).await.unwrap();
         let service = HostRpcService::new([adapter.into()], ProjectStore::new(home.join("bex-worktrees.json")));
         let mut session = service.open_session();
@@ -336,7 +336,7 @@ async fn native_accounts_restore_selection_and_remain_signed_out_after_logout() 
         drop(session); drop(service);
         server.shutdown().await.unwrap();
         let server = Arc::new(CodexAppServer::spawn(config.clone()).await.unwrap());
-        let adapter = host_daemon::adapters::codex::Codex::new(Ok(server.clone()));
+        let adapter = host_daemon::providers::codex::Codex::new(Ok(server.clone()));
         adapter.enable_accounts(accounts_dir.clone(), config.clone()).await.unwrap();
         let service = HostRpcService::new([adapter.into()], ProjectStore::new(home.join("bex-worktrees.json")));
         let mut session = service.open_session();
@@ -364,7 +364,7 @@ async fn native_accounts_restore_selection_and_remain_signed_out_after_logout() 
         drop(session); drop(service);
         server.shutdown().await.unwrap();
         let server = Arc::new(CodexAppServer::spawn(config.clone()).await.unwrap());
-        let adapter = host_daemon::adapters::codex::Codex::new(Ok(server.clone()));
+        let adapter = host_daemon::providers::codex::Codex::new(Ok(server.clone()));
         adapter.enable_accounts(accounts_dir.clone(), config).await.unwrap();
         let service = HostRpcService::new([adapter.into()], ProjectStore::new(home.join("bex-worktrees.json")));
         let mut session = service.open_session();

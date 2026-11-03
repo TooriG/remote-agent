@@ -49,7 +49,6 @@ pub enum RequestBody {
     ToolExecution {
         tool: String,
         namespace: Option<String>,
-        #[serde(with = "crate::protocol::json")]
         arguments: Value,
     },
 }
@@ -68,6 +67,18 @@ pub struct Choice {
     pub id: String,
     pub label: String,
     pub description: String,
+    pub effect: ChoiceEffect,
+}
+
+/// What answering with a choice does, so clients can rank the choices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChoiceEffect {
+    /// Grants this request only.
+    Allow,
+    /// Grants this request and matching later ones, for a scope or by a rule.
+    AllowLasting,
+    Deny,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -165,6 +176,7 @@ pub enum Answer {
     Questions {
         answers: BTreeMap<String, QuestionAnswer>,
     },
+    SkipQuestions,
     Elicitation {
         action: ElicitationAnswer,
     },
@@ -185,10 +197,7 @@ pub enum QuestionAnswer {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ElicitationAnswer {
-    Accept {
-        #[serde(with = "crate::protocol::json")]
-        values: Value,
-    },
+    Accept { values: Value },
     Decline,
     Cancel,
 }
@@ -209,6 +218,22 @@ impl RequestBody {
     }
 }
 
+impl Question {
+    pub fn accepts(&self, answer: &QuestionAnswer) -> bool {
+        let valid_choice = |id: &str| self.choices.iter().any(|choice| choice.id == id);
+        match answer {
+            QuestionAnswer::FreeText { text } => self.allow_free_text && !text.trim().is_empty(),
+            QuestionAnswer::SingleChoice { choice_id } => !self.multiple && valid_choice(choice_id),
+            QuestionAnswer::MultipleChoices { choice_ids } => {
+                self.multiple
+                    && !choice_ids.is_empty()
+                    && choice_ids.iter().all(|id| valid_choice(id))
+                    && choice_ids.iter().collect::<BTreeSet<_>>().len() == choice_ids.len()
+            }
+        }
+    }
+}
+
 /// Runs on both clients and the Host, before claiming a request or sending bytes.
 pub fn validate_answer(body: &RequestBody, answer: &Answer) -> Result<(), String> {
     match (body, answer) {
@@ -222,19 +247,15 @@ pub fn validate_answer(body: &RequestBody, answer: &Answer) -> Result<(), String
             if questions.len() != answers.len() {
                 return Err("every question requires one answer".into());
             }
-            for question in questions {
-                let valid_choice = |id: &str| question.choices.iter().any(|choice| choice.id == id);
-                match answers.get(&question.id) {
-                    Some(QuestionAnswer::FreeText { text }) if question.allow_free_text && !text.trim().is_empty() => {}
-                    Some(QuestionAnswer::SingleChoice { choice_id }) if !question.multiple && valid_choice(choice_id) => {}
-                    Some(QuestionAnswer::MultipleChoices { choice_ids }) if question.multiple
-                        && !choice_ids.is_empty()
-                        && choice_ids.iter().all(|id| valid_choice(id))
-                        && choice_ids.iter().collect::<BTreeSet<_>>().len() == choice_ids.len() => {}
-                    _ => return Err("invalid question answer".into()),
-                }
+            if !questions.iter().all(|question| {
+                answers
+                    .get(&question.id)
+                    .is_some_and(|answer| question.accepts(answer))
+            }) {
+                return Err("invalid question answer".into());
             }
         }
+        (RequestBody::Question { .. }, Answer::SkipQuestions) => {}
         (RequestBody::Elicitation { input, .. }, Answer::Elicitation { action }) => {
             if let ElicitationAnswer::Accept { values } = action {
                 match input {
@@ -346,5 +367,156 @@ impl StringFormat {
             }
             Self::DateTime => chrono::DateTime::parse_from_rfc3339(value).is_ok(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn every_question_needs_its_own_text_or_offered_choices() {
+        let question = |id: &str, multiple| Question {
+            id: id.into(),
+            header: String::new(),
+            prompt: "Choose".into(),
+            secret: false,
+            allow_free_text: true,
+            multiple,
+            choices: ["a", "b"]
+                .map(|choice| QuestionChoice {
+                    id: choice.into(),
+                    label: choice.into(),
+                    description: String::new(),
+                })
+                .into(),
+        };
+        let text = |text: &str| QuestionAnswer::FreeText { text: text.into() };
+        let single = |id: &str| QuestionAnswer::SingleChoice {
+            choice_id: id.into(),
+        };
+        let multiple = |ids: &[&str]| QuestionAnswer::MultipleChoices {
+            choice_ids: ids.iter().map(|id| (*id).into()).collect(),
+        };
+        for (multiple_choice, answer, accepted) in [
+            (false, text("Custom answer"), true),
+            (false, text(" "), false),
+            (false, single("a"), true),
+            (false, single("unknown"), false),
+            (false, multiple(&["a"]), false),
+            (true, multiple(&["a", "b"]), true),
+            (true, multiple(&[]), false),
+            (true, multiple(&["a", "a"]), false),
+            (true, single("a"), false),
+        ] {
+            let first = question("first", multiple_choice);
+            assert_eq!(first.accepts(&answer), accepted, "{answer:?}");
+            let answers = Answer::Questions {
+                answers: [("first".into(), answer)].into(),
+            };
+            assert_eq!(
+                validate_answer(
+                    &RequestBody::Question {
+                        questions: vec![first.clone()]
+                    },
+                    &answers
+                )
+                .is_ok(),
+                accepted
+            );
+            assert!(
+                validate_answer(
+                    &RequestBody::Question {
+                        questions: vec![first, question("second", false)]
+                    },
+                    &answers
+                )
+                .is_err(),
+                "an unanswered question rejects the answers"
+            );
+        }
+        let mut choice_only = question("first", false);
+        choice_only.allow_free_text = false;
+        assert!(!choice_only.accepts(&text("Custom answer")));
+    }
+
+    #[test]
+    fn skipping_questions_is_explicit_and_cannot_answer_an_approval() {
+        let question = RequestBody::Question {
+            questions: vec![Question {
+                id: "question".into(),
+                header: String::new(),
+                prompt: "Choose one".into(),
+                secret: false,
+                allow_free_text: false,
+                multiple: false,
+                choices: vec![QuestionChoice {
+                    id: "choice".into(),
+                    label: "Continue".into(),
+                    description: String::new(),
+                }],
+            }],
+        };
+        assert!(validate_answer(&question, &Answer::SkipQuestions).is_ok());
+        assert!(
+            validate_answer(
+                &question,
+                &Answer::Questions {
+                    answers: BTreeMap::new()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            validate_answer(
+                &question,
+                &Answer::Questions {
+                    answers: [(
+                        "question".into(),
+                        QuestionAnswer::SingleChoice {
+                            choice_id: String::new()
+                        }
+                    )]
+                    .into(),
+                }
+            )
+            .is_err()
+        );
+        for body in [
+            RequestBody::Approval {
+                kind: ApprovalKind::Command,
+                description: String::new(),
+                details: String::new(),
+                choices: vec![],
+            },
+            RequestBody::Permission {
+                description: String::new(),
+                details: String::new(),
+                choices: vec![],
+            },
+            RequestBody::Elicitation {
+                server: "server".into(),
+                message: String::new(),
+                input: ElicitationInput::Url {
+                    url: "https://example.com".into(),
+                },
+            },
+            RequestBody::ToolExecution {
+                tool: "tool".into(),
+                namespace: None,
+                arguments: Value::Null,
+            },
+        ] {
+            assert!(validate_answer(&body, &Answer::SkipQuestions).is_err());
+        }
+        assert_eq!(
+            serde_json::to_value(Answer::SkipQuestions).unwrap(),
+            json!("skipQuestions")
+        );
+        assert_eq!(
+            serde_json::from_value::<Answer>(json!("skipQuestions")).unwrap(),
+            Answer::SkipQuestions
+        );
     }
 }

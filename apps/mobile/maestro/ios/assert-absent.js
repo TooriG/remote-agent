@@ -1,6 +1,6 @@
 // The complete driver snapshot includes offscreen elements. Preserve XCTest's
 // existence assertions rather than substituting a viewport visibility check.
-const response = http.post(BEX_IOS_DRIVER_URL + "/viewHierarchy", {
+const response = http.post(AGENT_IOS_DRIVER_URL + "/viewHierarchy", {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ appIds: ["dev.remoteagent.mobile.ios"], excludeKeyboardElements: false })
 });

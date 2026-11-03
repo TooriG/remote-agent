@@ -33,10 +33,15 @@ pub struct RemoteHost {
 pub struct HostStatus {
     pub node_id: String,
     pub name: String,
-    pub devices: Vec<String>,
+    pub devices: Vec<HostDevice>,
     #[serde(default)]
-    #[serde(with = "crate::protocol::json")]
     pub provider_errors: Option<Map<String, Value>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HostDevice {
+    pub id: String,
+    pub name: Option<String>,
 }
 
 /// Provider membership before Host enrichment; null alone does not rule out cwd membership.
@@ -92,7 +97,10 @@ pub struct Thread {
     pub requests: BTreeMap<crate::ids::RequestId, Arc<crate::requests::Request>>,
     #[serde(default)]
     pub submissions: BTreeMap<crate::ids::ClientInputId, crate::session::SubmissionDelivery>,
+    pub preparation: Option<crate::session::SessionPreparation>,
     pub id: Option<crate::session::SessionRef>,
+    /// The public identity remains stable across provider handoffs.
+    pub active_provider: Option<crate::session::ProviderKind>,
     pub parent_id: Option<crate::session::SessionRef>,
     pub can_accept_direct_input: Option<bool>,
     pub name: Option<String>,
@@ -116,6 +124,8 @@ pub struct Thread {
 #[serde(rename_all = "camelCase")]
 pub struct Turn {
     pub id: crate::ids::TurnId,
+    pub provider: Option<crate::session::ProviderKind>,
+    pub supports_fork: Option<bool>,
     #[serde(default)]
     pub status: TurnStatus,
     pub items: Option<Vec<Arc<Item>>>,
@@ -177,17 +187,28 @@ pub fn defer_items(items: &mut [Arc<Item>], max_inline_bytes: usize) {
 }
 
 fn fits_inline(value: &impl Serialize, limit: usize) -> bool {
-    postcard::serialize_with_flavor::<_, postcard::ser_flavors::Size, usize>(
-        value,
-        Default::default(),
-    )
-    .is_ok_and(|size| size <= limit)
+    struct Budget(usize);
+    impl std::io::Write for Budget {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self
+                .0
+                .checked_sub(bytes.len())
+                .ok_or_else(|| std::io::Error::other("inline item exceeds its byte budget"))?;
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    crate::protocol::encode_into(Budget(limit), value).is_ok()
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ThreadResponse {
     pub thread: Thread,
     pub model: Option<ModelRef>,
+    pub effort: Option<String>,
+    pub service_tier: Option<String>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -209,7 +230,6 @@ pub struct ThreadList {
     /// Project pages included in this response, with their own lookahead result.
     pub project_pages: BTreeMap<String, ListPage>,
     #[serde(default)]
-    #[serde(with = "crate::protocol::json")]
     pub provider_errors: Option<Map<String, Value>>,
 }
 
@@ -318,14 +338,14 @@ impl ListQuery {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileList {
     pub path: String,
     pub entries: Vec<FileEntry>,
     pub truncated: bool,
 }
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileEntry {
     pub name: String,
     pub path: String,
@@ -365,7 +385,7 @@ pub struct WorktreeThread {
     pub name: String,
     pub active: bool,
 }
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceReview {
     pub branch: String,
     pub additions: u64,
@@ -373,7 +393,7 @@ pub struct WorkspaceReview {
     pub files: Vec<ChangedFile>,
     pub diff: String,
 }
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChangedFile {
     pub path: String,
     pub status: String,
@@ -386,6 +406,17 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
     use serde_json::json;
+
+    #[test]
+    fn inline_budget_matches_the_actual_named_frame_at_the_boundary() {
+        let item: Item = serde_json::from_value(json!({
+                "id":"item", "body":{"inline":{"body":{"assistantText":{"text":"名前と本文","phase":"final"}}}}
+            })).unwrap();
+        let bytes = crate::protocol::encode(&item).unwrap();
+        assert!(fits_inline(&item, bytes.len()));
+        assert!(!fits_inline(&item, bytes.len() - 1));
+        assert!(!fits_inline(&item, 0));
+    }
 
     proptest! {
         #[test]
@@ -482,7 +513,10 @@ pub fn compact_title(value: &str) -> String {
 }
 
 pub fn task_active(observed: Option<bool>, status: SessionStatus) -> bool {
-    observed.unwrap_or(status == SessionStatus::Running)
+    observed.unwrap_or(matches!(
+        status,
+        SessionStatus::Preparing | SessionStatus::Running
+    ))
 }
 pub fn task_title<'a>(name: Option<&'a str>, preview: Option<&'a str>) -> &'a str {
     name.filter(|name| !name.is_empty())

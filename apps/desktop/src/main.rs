@@ -1,10 +1,15 @@
+mod activity;
 mod app;
 mod appearance;
 mod browser;
+mod composition;
 mod diff;
+mod frame_diagnostics;
+mod localization;
 mod platform;
 mod store_session;
 mod terminal;
+mod updates;
 use futures_util::FutureExt;
 use gpui_kit::{component::Root, *};
 const WINDOW_HEADER_HEIGHT: f32 = 44.;
@@ -20,46 +25,56 @@ struct DesktopAssets;
 impl DesktopAssets {
     const FILES: &[(&str, &[u8])] = &[
         (
-            "bex/openai.svg",
+            "icons/openai.svg",
             include_bytes!("../../mobile/iosApp/Bex/Assets.xcassets/openai.imageset/openai.svg"),
         ),
         (
-            "bex/anthropic.svg",
+            "icons/anthropic.svg",
             include_bytes!(
                 "../../mobile/iosApp/Bex/Assets.xcassets/anthropic.imageset/anthropic.svg"
             ),
         ),
-        ("bex/deepseek.svg", include_bytes!("../assets/deepseek.svg")),
         (
-            "bex/claude.svg",
+            "icons/deepseek.svg",
+            include_bytes!("../assets/deepseek.svg"),
+        ),
+        (
+            "icons/claude.svg",
             include_bytes!("../../mobile/iosApp/Bex/Assets.xcassets/claude.imageset/claude.svg"),
         ),
-        ("bex/shield.svg", include_bytes!("../assets/shield.svg")),
-        ("bex/bolt.svg", include_bytes!("../assets/bolt.svg")),
+        ("icons/shield.svg", include_bytes!("../assets/shield.svg")),
+        ("icons/bolt.svg", include_bytes!("../assets/bolt.svg")),
         (
-            "bex/bolt-fill.svg",
+            "icons/bolt-fill.svg",
             include_bytes!("../assets/bolt-fill.svg"),
         ),
         (
-            "bex/microphone.svg",
+            "icons/microphone.svg",
             include_bytes!("../assets/microphone.svg"),
         ),
-        ("bex/stop.svg", include_bytes!("../assets/stop.svg")),
-        ("bex/pencil.svg", include_bytes!("../assets/pencil.svg")),
-        ("bex/download.svg", include_bytes!("../assets/download.svg")),
+        ("icons/stop.svg", include_bytes!("../assets/stop.svg")),
+        ("icons/pencil.svg", include_bytes!("../assets/pencil.svg")),
         (
-            "bex/square-pen.svg",
+            "icons/download.svg",
+            include_bytes!("../assets/download.svg"),
+        ),
+        (
+            "icons/square-pen.svg",
             include_bytes!("../assets/square-pen.svg"),
         ),
         (
-            "bex/folder-plus.svg",
+            "icons/folder-plus.svg",
             include_bytes!("../assets/folder-plus.svg"),
         ),
-        ("bex/branch.svg", include_bytes!("../assets/branch.svg")),
-        ("bex/merge.svg", include_bytes!("../assets/merge.svg")),
-        ("bex/diff.svg", include_bytes!("../assets/diff.svg")),
-        ("bex/monitor.svg", include_bytes!("../assets/monitor.svg")),
-        ("bex/qr-code.svg", include_bytes!("../assets/qr-code.svg")),
+        ("icons/branch.svg", include_bytes!("../assets/branch.svg")),
+        ("icons/merge.svg", include_bytes!("../assets/merge.svg")),
+        ("icons/diff.svg", include_bytes!("../assets/diff.svg")),
+        ("icons/monitor.svg", include_bytes!("../assets/monitor.svg")),
+        (
+            "icons/message-circle-question.svg",
+            include_bytes!("../assets/message-circle-question.svg"),
+        ),
+        ("icons/qr-code.svg", include_bytes!("../assets/qr-code.svg")),
     ];
 }
 impl AssetSource for DesktopAssets {
@@ -111,10 +126,13 @@ fn open_main_window(cx: &mut App) {
                 ..Default::default()
             },
             |window, cx| {
+                #[cfg(target_os = "macos")]
+                browser::native::init(window, cx);
                 #[cfg(target_os = "windows")]
                 appearance::style_native_titlebar(window);
                 let desktop = cx.new(|cx| app::Desktop::new(app::Mode::Main, window, cx));
-                cx.new(|cx| Root::new(desktop, window, cx))
+                let content = cx.new(|cx| activity::ActivityWindow::new(desktop, window, cx));
+                cx.new(|cx| Root::new(content, window, cx))
             },
         )
         .expect("open Bex window");
@@ -123,12 +141,8 @@ fn open_main_window(cx: &mut App) {
 }
 
 fn main() {
-    // GPUI's DirectComposition target is above child HWNDs, hiding WebView2
-    // behind the app surface. Use its HWND swap-chain renderer for embedding.
-    // Set this before any runtime or platform threads can read the environment.
-    #[cfg(target_os = "windows")]
-    unsafe {
-        std::env::set_var("GPUI_DISABLE_DIRECT_COMPOSITION", "1");
+    if updates::run_command() {
+        return;
     }
     #[cfg(target_os = "macos")]
     let _ = std::thread::Builder::new()
@@ -150,6 +164,15 @@ fn main() {
         .build()
         .expect("start async runtime");
     let handle = runtime.handle().clone();
+    runtime.spawn_blocking(|| {
+        let result = platform::downloads::cache_directory().and_then(|directory| {
+            platform::downloads::cleanup(&directory, std::time::SystemTime::now())
+                .map_err(|error| error.to_string())
+        });
+        if let Err(error) = result {
+            tracing::warn!(target: "agent", operation = "downloads.cleanup", message = %error);
+        }
+    });
     let closing = tokio_util::task::TaskTracker::new();
     let shutdown = closing.clone();
     let application = gpui_kit::application()
@@ -164,7 +187,9 @@ fn main() {
             connections: std::sync::Arc::new(platform::Connections::default()),
         });
         cx.on_app_quit(|cx| {
-            tracing::info!(target: "bex", operation = "shutdown", "Bex shutting down");
+            #[cfg(target_os = "macos")]
+            browser::native::shutdown(cx);
+            tracing::info!(target: "agent", operation = "shutdown", "Bex shutting down");
             let runtime = cx.global::<Runtime>().clone();
             async move {
                 runtime.closing.close();
@@ -180,6 +205,8 @@ fn main() {
         })
         .detach();
         appearance::init(cx);
+        localization::init(cx);
+        frame_diagnostics::init(cx);
         cx.bind_keys([KeyBinding::new(
             "ctrl-v",
             gpui_kit::component::input::Paste,

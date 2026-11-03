@@ -24,7 +24,7 @@ fn conversation(body: ItemBody) -> Thread {
 }
 
 #[test]
-fn provider_error_payload_survives_the_bex_binary_contract() {
+fn provider_error_payload_survives_the_host_binary_contract() {
     use agent_protocol::protocol::{decode, encode};
     let error = ExecutionError {
         category: ErrorCategory::Provider(serde_json::json!({

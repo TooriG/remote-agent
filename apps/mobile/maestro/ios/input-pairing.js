@@ -1,7 +1,7 @@
 // Keep invitations out of Maestro's evaluated inputText commands and reports.
 // The pinned iOS driver receives the text directly over its loopback API.
 if (REFRESH_PAIRING === "true") {
-    const response = http.get(BEX_PAIRING_URL);
+    const response = http.get(AGENT_PAIRING_URL);
     if (response.status !== 200 || !response.body) {
         throw new Error("The isolated Host did not return a pairing invitation");
     }
@@ -12,7 +12,7 @@ if (REFRESH_PAIRING === "true") {
 if (!output.pairingInvitation) {
     throw new Error("A pairing invitation must be fetched before reuse");
 }
-const input = http.post(BEX_IOS_DRIVER_URL + "/inputText", {
+const input = http.post(AGENT_IOS_DRIVER_URL + "/inputText", {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text: output.pairingInvitation, appIds: ["dev.remoteagent.mobile.ios"] })
 });

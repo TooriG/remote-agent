@@ -1,12 +1,45 @@
-# Project rules
+# プロジェクトのルール
 
-- Keep unit tests close to the implementation they verify.
+## 責務と配置
 
-- The product is unreleased. Keep only the current format and behavior; do not add backward-compatibility paths, old-format migrations or retired implementations.
+- `crates/agent-protocol`: Host・クライアント共通の型、RPC 契約、純粋な検証・モデル操作。
+- `crates/agent-transport`: 共通の通信・転送処理。protocol に依存する。
+- `crates/agent-local-host`: 同じマシンの Host とクライアントが共有するファイル（状態ファイル、ローカル識別子、Host の探索、バンドル構成）。クライアントは host-daemon に依存せず、これと transport を使う。
+- `crates/agent-core`: クライアント共通の状態管理・操作フロー・表示判断・保存形式。
+- `crates/host-daemon`: Host 側の実行・認可・リソース操作とプロバイダー連携。
+- `apps/`: 各 OS の UI・入力・OS 連携。共通の判断は core の結果を使い、必要なら core を拡張する。
+- bindings と `agent-ffi` に独立した業務ロジックを持たせない。
+- Host・transport・protocol の本番コードから core に依存しない。protocol は通信・非同期ランタイム・ネイティブバインディングに依存しない。
 
-- Before adding client logic (desktop, iOS, Android), reuse `agent-core` results or extend core instead of re-deriving them.
-- Reuse the current task worktree. Serialize updates to `main` and the running Host: worktrees do not isolate either. Preserve other sessions' uncommitted work.
-- Build the Host and affected clients from the same revision. Before restarting, identify the running executable and active tasks. Verify changed operations against that process; rebuilding does not update a running Host.
-- Preserve approved interactions in `docs/DESKTOP_CONVERSATION_DISPLAY_CONTRACT.md`. Change acceptance assertions only when the product requirement changes.
-- Follow `docs/TEST_MAINTENANCE.md`: run proptest in normal tests, use cargo-mutants for focused audits of changed logic, and reserve Kani for small, important pure functions with explicit verification bounds.
-- Run all local unit tests with `scripts/dev-env.sh just unit-tests`, then integrate directly into main without requiring a PR or waiting for CI. Native clients runs on pushes to main, optional PRs and manual dispatch. Each run verifies Linux and Windows, plus every client whose files changed since the last successful main run; unknown paths and manual dispatch verify all clients. Main pushes queue instead of cancelling. Fix CI failures on main. Optional PRs use merge commits to preserve worktree ancestry; squash and rebase merging are disabled. Main forbids force pushes and deletion, with no bypass actors. Before reporting full verification, require successful CI for the current commit and a clean working tree. Do not queue local background QA or automatically run local E2E; heavy local checks are for explicitly requested debugging.
+## 変更とドキュメント
+
+- 未リリースのため、形式や動作を変更するときは呼び出し元も更新し、旧形式の互換処理・移行処理・廃止済み実装を残さない。
+- 製品要件が変わらない限り、既存の操作・表示と受け入れ条件を維持する。実装に合わせるためだけにテストやスナップショットの期待値を変更しない。
+- 実装固有の契約と判断理由は所有するコードやテストの近くに置く。コードから分かる仕様・用語・構成を別文書に重複させない。文書は利用・配布など独立した用途がある場合だけ残し、完了済みの計画・作業記録は残さない。
+
+## 開発と稼働環境
+
+- 開発・検証コマンドは `scripts/dev-env.sh` 経由で実行する。利用可能なコマンドは `justfile` を参照する。
+- `bex.remoteBuilder` を設定した Mac では、Linux で検証できる Rust のチェックとテストはビルダーで実行される。ビルダーに接続できないときは、設定を外して Mac で実行せずに報告する。macOS 専用の分岐は CI の Mac ジョブで検証し、Mac で実行する必要があるときだけ `--target aarch64-apple-darwin` を付ける。
+- 現在のタスク用ワークツリーを使い、他セッションの未コミット変更を保持する。
+- main と稼働中 Host への更新は直列に行う。ワークツリーを分けても、この2つは隔離されない。
+- 稼働環境を更新するときは、再起動前に実行ファイルと実行中タスクを確認する。
+- 更新・復旧のための再起動では、実行中タスクの終了を待たず、再確認も求めない。
+- 再起動前に、実行中セッションごとの ID・プロバイダー・進捗・未完了作業を記録し、会話と設定を保持する。起動後は中断した各セッションへ継続指示を一度送り、同じ会話で再開したことを確認する。元の依頼を再送したり、代替の会話を作成したりしない。
+- 現在の作業も中断される場合は、再起動・検証・中断したセッションの継続を、Host から独立したワーカーへ引き継ぐ。
+- Host と影響するクライアントは同じリビジョンからビルドする。再ビルドだけでは稼働中 Host は更新されないため、更新したプロセスで変更した操作を検証する。
+
+## テストと検証
+
+- 変更後は `scripts/dev-env.sh just complexity` の成功を確認する。上限を超えた場合は閾値・除外・抑制で回避せず、設計を見直して収める。
+- ユニットテストは検証対象の実装の近くに置き、実装を通して観測できる挙動と失敗からの復旧を検証する。プロトコル・保存・認可・並行処理など、独立した境界の検証を保持する。
+- proptest は通常のテストで実行する。期待値は仕様から導き、実装の複製にしない。回帰シードは本番実装の失敗だけを保存し、意図的に壊した mutant のものは保存しない。
+- 分岐・境界判断・状態遷移の変更や、テストの確かさに疑いがある場合は、対象を絞って cargo-mutants で検査する。全体の毎回実行やスコアの追求はしない。
+- Kani は入力範囲と不変条件を明示できる、小さく重要な純粋関数に限定する。実装・ハーネス変更時に既存の証明を再実行し、新規の証明は代表的な壊れた実装を検出できることも確認する。
+- ローカルのバックグラウンド QA を予約したり、E2E を自動実行したりしない。重いローカル検証は、明示的に依頼されたデバッグに限る。
+
+## 統合と完了
+
+- `scripts/dev-env.sh just unit-tests` ですべてのローカルユニットテストを実行し、成功後は PR や CI 待ちを必須にせず main へ直接統合する。
+- main への push 後は対象コミットの Native clients CI を確認し、失敗は main 上で修正する。CI の対象選択と実行設定は `.github/workflows/native.yml` で管理する。
+- 完全に検証済みと報告するには、対象コミットの CI 成功と、未コミット変更のない作業ツリーを確認する。他セッションの変更を削除して clean にしない。

@@ -58,7 +58,7 @@ pub async fn network_permission(
             let (mut connection, _) = listener.accept().await?;
             tokio::time::timeout(
                 Duration::from_secs(5),
-                connection.write_all(b"bex-os-network-ok\n"),
+                connection.write_all(b"agent-os-network-ok\n"),
             )
             .await??;
         }
@@ -136,7 +136,7 @@ mod tests {
             let result = network_permission(program.as_os_str(), "fixture", &log, mode).await;
             assert_eq!(result.is_ok(), mode == "pass");
             let output = fs::read_to_string(&log).unwrap();
-            assert!(output.contains("bex-os-network-ok"));
+            assert!(output.contains("agent-os-network-ok"));
         }
     }
 }

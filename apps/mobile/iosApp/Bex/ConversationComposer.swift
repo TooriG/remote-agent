@@ -1,16 +1,22 @@
 import AgentCore
-import AVFoundation
 import SwiftUI
 import UIKit
-import UniformTypeIdentifiers
 
 /// Composer and dictation
 extension ThreadScreen {
     var composer: some View {
         let attachments = model.snapshot.draft(key: model.coreDraftKey).attachments
+        let question = model.questionPrompt
+        let runningTurnId = model.selectedThreadId.flatMap { model.snapshot.conversation(id: $0)?.activeTurnId() }
+        // Dictation in progress finishes into the draft before the composer answers.
+        let answering = dictation.isRecording || dictation.requestingPermission || model.transcribing ? nil : question
+        // An idle reply collapses to one row; focus expands it without recreating the field.
+        let collapsed = !model.isNewThread && !composerFocused && model.draft.isEmpty && attachments.isEmpty
+            && answering == nil && !dictation.isRecording && !dictation.requestingPermission && !model.transcribing
+            && !model.transferring && !preparingMedia
         return VStack(spacing: 12) {
             if !isSideChat, !model.isNewThread, let review = model.snapshot.review(), review.fileCount() > 0 {
-                Button { openTools?(.files, true) } label: {
+                Button { openTools?(.diff) } label: {
                     HStack(spacing: 10) {
                         Text("\(review.fileCount())件のファイル")
                         Text("+\(review.additions())").foregroundColor(.green)
@@ -23,10 +29,30 @@ extension ThreadScreen {
                 .accessibilityIdentifier("task.diff")
             }
             if let error = model.transferError {
-                BexNotice(text: error)
+                AppNotice(text: error)
+            }
+            if let request = model.dockedRequest {
+                RequestPanel(
+                    request: request,
+                    busy: model.snapshot.operationRunning(key: .request(id: request.id)),
+                    error: model.snapshot.operationError(key: .request(id: request.id)),
+                    respond: { model.respond(request.id, $0) }
+                )
+                // Typed responses belong to one request.
+                .id(request.id)
+            }
+            if let question {
+                QuestionPanel(
+                    prompt: question,
+                    busy: model.snapshot.operationRunning(key: .request(id: question.requestId)),
+                    error: model.snapshot.operationError(key: .request(id: question.requestId)),
+                    choose: { model.answerQuestion(question.requestId, .choose(choiceId: $0)) },
+                    skip: { model.respond(question.requestId, .skipQuestions) }
+                )
             }
             VStack(alignment: .leading, spacing: 4) {
-                if !attachments.isEmpty {
+                // A question's answer has no attachments; the draft keeps them.
+                if answering == nil, !attachments.isEmpty {
                     ScrollView(.horizontal) {
                         HStack(spacing: 12) {
                             ForEach(Array(attachments.enumerated()), id: \.element.path) { index, attachment in
@@ -35,7 +61,7 @@ extension ThreadScreen {
                                         ConversationImage(source: SessionImage(reference: attachment.path),
                                                           label: attachment.name,
                                                           identifier: "composer.attachment.\(index)",
-                                                          media: model.mediaAccess,
+                                                          media: mediaAccess,
                                                           contentMode: .fill)
                                             .frame(width: 120, height: 120)
                                     } else {
@@ -47,11 +73,10 @@ extension ThreadScreen {
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
                                 .overlay(alignment: .topTrailing) {
                                     Button { model.removeAttachment(index) } label: {
-                                        Image(systemName: "xmark")
-                                            .font(.system(size: 9, weight: .semibold))
-                                            .foregroundStyle(.black)
-                                            .frame(width: 18, height: 18)
-                                            .background(.white, in: Circle())
+                                        Image(systemName: "xmark.circle.fill")
+                                            .font(.title3)
+                                            .symbolRenderingMode(.hierarchical)
+                                            .foregroundStyle(.secondary)
                                             .frame(width: 44, height: 44, alignment: .topTrailing)
                                             .contentShape(Rectangle())
                                     }
@@ -64,178 +89,52 @@ extension ThreadScreen {
                     }
                     .frame(height: attachments.contains(where: \.isImage) ? 136 : 60)
                 }
-                Group {
-                    if dictation.isRecording {
-                        Canvas { context, size in
-                            let spacing = size.width / CGFloat(dictation.levels.count)
-                            for (index, level) in dictation.levels.enumerated() {
-                                let height = 3 + CGFloat(level.squareRoot()) * (size.height - 3)
-                                let bar = CGRect(x: CGFloat(index) * spacing, y: (size.height - height) / 2,
-                                                 width: 3, height: height)
-                                context.fill(Path(roundedRect: bar, cornerRadius: 1.5), with: .foreground)
+                HStack(spacing: 0) {
+                    if collapsed {
+                        attachMenu
+                    }
+                    Group {
+                        if dictation.isRecording {
+                            Canvas { context, size in
+                                let spacing = size.width / CGFloat(dictation.levels.count)
+                                for (index, level) in dictation.levels.enumerated() {
+                                    let height = 3 + CGFloat(level.squareRoot()) * (size.height - 3)
+                                    let bar = CGRect(x: CGFloat(index) * spacing, y: (size.height - height) / 2,
+                                                     width: 3, height: height)
+                                    context.fill(Path(roundedRect: bar, cornerRadius: 1.5), with: .foreground)
+                                }
                             }
+                            .frame(height: 48)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel("録音中")
+                            .accessibilityIdentifier("dictation.recording")
+                        } else if dictation.requestingPermission {
+                            ProgressView("マイクの許可を確認中…")
+                        } else if model.transcribing {
+                            ProgressView(sendRecordedText ? "文字起こしして送信中…" : "文字起こし中…")
+                                .accessibilityIdentifier("dictation.processing")
+                        } else if let answering {
+                            answerField(answering)
+                                .font(.body)
+                        } else {
+                            messageField
+                                .font(.body)
                         }
-                        .frame(height: 48)
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("録音中")
-                        .accessibilityIdentifier("dictation.recording")
-                    } else if dictation.requestingPermission {
-                        ProgressView("マイクの許可を確認中…")
-                    } else if model.transcribing {
-                        ProgressView(sendRecordedText ? "文字起こしして送信中…" : "文字起こし中…")
-                            .accessibilityIdentifier("dictation.processing")
-                    } else {
-                        messageField
-                            .font(.system(size: 18))
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.top, collapsed ? 0 : 6)
+                    if collapsed {
+                        trailingActions(answering: nil, runningTurnId: runningTurnId, hasAttachments: false)
                     }
                 }
-                .padding(.horizontal, 8)
-                .padding(.top, 6)
-                .padding(.bottom, 0)
-                HStack(spacing: 0) {
-                    if dictation.isRecording || dictation.requestingPermission {
-                        Button { dictation.cancel() } label: {
-                            Image(systemName: "xmark").frame(width: 40, height: 40)
-                        }
-                        .accessibilityLabel("録音を取り消す")
-                        .accessibilityIdentifier("dictation.cancel")
-                    } else {
-                        Menu {
-                            Button { composerFocused = false; showingPhotos = true } label: {
-                                Label("写真・動画", systemImage: "photo.on.rectangle")
-                            }.accessibilityIdentifier("task.attach.photos")
-                            Button { openCamera() } label: {
-                                Label("カメラ", systemImage: "camera")
-                            }.accessibilityIdentifier("task.attach.camera")
-                            Button { composerFocused = false; importing = true } label: {
-                                Label("ファイル", systemImage: "doc")
-                            }.accessibilityIdentifier("task.attach.file")
-                        } label: {
-                            Image(systemName: "plus").font(.title2.weight(.regular)).frame(width: 40, height: 40)
-                        }
-                        .disabled((!model.isNewThread && conversation == nil) || model
-                            .transferring || preparingMedia || model.sending || model.transcribing)
-                        .accessibilityLabel("添付").accessibilityIdentifier("task.attach")
-                    }
-                    if model.transferring || preparingMedia {
-                        ProgressView().frame(height: 40)
-                    }
-                    Spacer(minLength: 0)
-                    let controls = model.snapshot.modelQuickControls(threadId: model.coreDraftKey)
-                    if let next = controls.toggleFastTo {
-                        Button { model.chooseServiceTier(next) } label: {
-                            Image(systemName: controls.fast ? "bolt.fill" : "bolt")
-                                .foregroundStyle(controls.fast ? Color.primary : .secondary)
-                                .frame(width: 44, height: 44)
-                        }
-                        .accessibilityLabel("Fast")
-                        .accessibilityValue(controls.fast ? "オン" : "オフ")
-                        .accessibilityIdentifier("model.fast")
-                        .disabled(!model.isConnected || model.sending)
-                    }
-                    let modelName = model.currentModel?.displayName ?? "モデル"
-                    Button { composerFocused = false; showingModelSettings = true } label: {
-                        Text(modelName)
-                            .foregroundStyle(.primary)
-                            .font(.subheadline).lineLimit(1).truncationMode(.middle)
-                            .frame(minWidth: 44, minHeight: 44)
-                            .contentShape(Rectangle())
-                    }
-                    .layoutPriority(1)
-                    .accessibilityLabel("モデル設定")
-                    .accessibilityValue(modelName)
-                    .accessibilityIdentifier("model.settings")
-                    if !controls.efforts.isEmpty {
-                        Menu {
-                            ForEach(controls.efforts, id: \.self) { effort in
-                                Button { model.chooseEffort(effort) } label: {
-                                    if effort == controls.effort {
-                                        Label(effort, systemImage: "checkmark")
-                                    } else {
-                                        Text(effort)
-                                    }
-                                }
-                                .accessibilityIdentifier("model.effort." + effort)
-                            }
-                        } label: {
-                            ReasoningStrengthIcon(level: controls.effortLevel, count: controls.efforts.count)
-                                .frame(width: 44, height: 44)
-                        }
-                        .accessibilityLabel("推論の強度")
-                        .accessibilityValue(controls.effort)
-                        .accessibilityIdentifier("model.effort")
-                        .disabled(!model.isConnected || model.sending)
-                    }
-                    Button {
-                        if dictation.isRecording {
-                            dictation.finish()
-                        } else {
-                            startDictation()
-                        }
-                    } label: {
-                        if dictation.requestingPermission {
-                            ProgressView().frame(width: 40, height: 40)
-                        } else {
-                            Image(systemName: dictation.isRecording ? "stop.fill" : "mic")
-                                .font(.system(size: dictation.isRecording ? 13 : 23))
-                                .foregroundColor(dictation.isRecording ? .white : .primary)
-                                .frame(width: 34, height: 34)
-                                .background(dictation.isRecording ? Color(white: 0.2) : .clear, in: Circle())
-                                .frame(width: 44, height: 44)
-                        }
-                    }
-                    .disabled(!model.isConnected || (!model.isNewThread && conversation == nil) || model
-                        .transcribing || dictation.requestingPermission || model.sending || model
-                        .transferring || preparingMedia)
-                    .accessibilityLabel(dictation.isRecording ? "録音を終了して文字起こし" : "音声をCodexで文字起こし")
-                    .accessibilityIdentifier("dictation.toggle")
-                    if let threadId = model.selectedThreadId,
-                       let runningTurnId = model.snapshot.conversation(id: threadId)?.activeTurnId(),
-                       !dictation.isRecording, !dictation.requestingPermission, !model.transcribing,
-                       model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, attachments
-                       .isEmpty {
-                        Button { model.interrupt(runningTurnId) } label: {
-                            Image(systemName: "stop.fill").font(.system(size: 15))
-                        }
-                        .buttonStyle(ComposerSendButtonStyle())
-                        .disabled(model.interruptingTurnId == runningTurnId)
-                        .accessibilityLabel(model.interruptingTurnId == runningTurnId ? "停止中" : "停止")
-                        .accessibilityIdentifier("turn.interrupt.\(runningTurnId)")
-                    } else {
-                        Button {
-                            // Commit native text before Store can clear the accepted draft.
-                            UIApplication.shared.sendAction(
-                                #selector(UIResponder.resignFirstResponder),
-                                to: nil,
-                                from: nil,
-                                for: nil
-                            )
-                            composerFocused = false
-                            if dictation.isRecording {
-                                sendRecordedText = true
-                                dictation.finish()
-                            } else {
-                                model.send()
-                            }
-                        } label: {
-                            Image(systemName: "arrow.up").font(.system(size: 20, weight: .semibold))
-                        }
-                        .buttonStyle(ComposerSendButtonStyle())
-                        .accessibilityLabel(dictation.isRecording ? "文字起こしして送信" : "送信")
-                        .disabled(!model.isConnected || (!model.isNewThread && conversation == nil) || model
-                            .snapshot.modelProviderForDraft(threadId: model.coreDraftKey) == nil || model
-                            .sending || model.transferring || preparingMedia || dictation.requestingPermission || model
-                            .transcribing ||
-                            (!dictation.isRecording && model.draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                                .isEmpty && attachments.isEmpty))
-                        .accessibilityIdentifier("task.send")
-                    }
+                if !collapsed {
+                    controlRow(answering: answering, runningTurnId: runningTurnId,
+                               hasAttachments: !attachments.isEmpty)
                 }
             }
             .buttonStyle(.plain)
             .padding(7)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 30))
-            .overlay(RoundedRectangle(cornerRadius: 30).stroke(Color.white.opacity(0.12)))
+            .glassEffect(.regular, in: .rect(cornerRadius: 26))
         }
         .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 8)
         .background(LinearGradient(
@@ -243,6 +142,163 @@ extension ThreadScreen {
             startPoint: .top,
             endPoint: .bottom
         ))
+    }
+
+    /// The expanded composer's attachment, model, and primary actions.
+    func controlRow(answering: QuestionPrompt?, runningTurnId: String?, hasAttachments: Bool) -> some View {
+        HStack(spacing: 0) {
+            if dictation.isRecording || dictation.requestingPermission {
+                Button { dictation.cancel() } label: {
+                    Image(systemName: "xmark").frame(width: 40, height: 40)
+                }
+                .accessibilityLabel("録音を取り消す")
+                .accessibilityIdentifier("dictation.cancel")
+            } else if answering == nil {
+                attachMenu
+            }
+            if model.transferring || preparingMedia {
+                ProgressView().frame(height: 40)
+            }
+            Spacer(minLength: 0)
+            modelControls
+            trailingActions(answering: answering, runningTurnId: runningTurnId, hasAttachments: hasAttachments)
+        }
+    }
+
+    @ViewBuilder
+    var modelControls: some View {
+        let controls = model.snapshot.modelQuickControls(threadId: model.coreDraftKey)
+        if let next = controls.toggleFastTo {
+            Button { model.chooseServiceTier(next) } label: {
+                Image(systemName: controls.fast ? "bolt.fill" : "bolt")
+                    .foregroundStyle(controls.fast ? Color.primary : .secondary)
+                    .frame(width: 44, height: 44)
+            }
+            .accessibilityLabel("Fast")
+            .accessibilityValue(controls.fast ? "オン" : "オフ")
+            .accessibilityIdentifier("model.fast")
+            .disabled(!model.isConnected || model.sending)
+        }
+        let modelName = model.currentModel?.displayName ?? "モデル"
+        Button { composerFocused = false; showingModelSettings = true } label: {
+            Text(modelName)
+                .foregroundStyle(.primary)
+                .font(.subheadline).lineLimit(1).truncationMode(.middle)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .layoutPriority(1)
+        .accessibilityLabel("モデル設定")
+        .accessibilityValue(modelName)
+        .accessibilityIdentifier("model.settings")
+        if !controls.efforts.isEmpty {
+            Menu {
+                ForEach(controls.efforts, id: \.self) { effort in
+                    Button { model.chooseEffort(effort) } label: {
+                        if effort == controls.effort {
+                            Label(effort, systemImage: "checkmark")
+                        } else {
+                            Text(effort)
+                        }
+                    }
+                    .accessibilityIdentifier("model.effort." + effort)
+                }
+            } label: {
+                ReasoningStrengthIcon(level: controls.effortLevel, count: controls.efforts.count)
+                    .frame(width: 44, height: 44)
+            }
+            .accessibilityLabel("推論の強度")
+            .accessibilityValue(controls.effort)
+            .accessibilityIdentifier("model.effort")
+            .disabled(!model.isConnected || model.sending)
+        }
+    }
+
+    var attachMenu: some View {
+        Menu {
+            Button { composerFocused = false; showingPhotos = true } label: {
+                Label("写真・動画", systemImage: "photo.on.rectangle")
+            }.accessibilityIdentifier("task.attach.photos")
+            Button { openCamera() } label: {
+                Label("カメラ", systemImage: "camera")
+            }.accessibilityIdentifier("task.attach.camera")
+            Button { composerFocused = false; importing = true } label: {
+                Label("ファイル", systemImage: "doc")
+            }.accessibilityIdentifier("task.attach.file")
+        } label: {
+            Image(systemName: "plus").font(.title2.weight(.regular)).frame(width: 40, height: 40)
+        }
+        .disabled((!model.isNewThread && conversation == nil) || model
+            .transferring || preparingMedia || model.sending || model.transcribing)
+        .accessibilityLabel("添付").accessibilityIdentifier("task.attach")
+    }
+
+    /// Dictation and the primary action, which answers an awaiting question.
+    @ViewBuilder
+    func trailingActions(answering: QuestionPrompt?, runningTurnId: String?, hasAttachments: Bool) -> some View {
+        if let answering {
+            questionActions(answering, runningTurnId: runningTurnId)
+        } else {
+            dictationButton
+            if let runningTurnId,
+               !dictation.isRecording, !dictation.requestingPermission, !model.transcribing,
+               model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !hasAttachments {
+                stopButton(runningTurnId)
+            } else {
+                sendButton(hasAttachments: hasAttachments)
+            }
+        }
+    }
+
+    var dictationButton: some View {
+        Button {
+            if dictation.isRecording {
+                dictation.finish()
+            } else {
+                startDictation()
+            }
+        } label: {
+            if dictation.requestingPermission {
+                ProgressView().frame(width: 40, height: 40)
+            } else {
+                Image(systemName: dictation.isRecording ? "stop.fill" : "mic")
+                    .font(dictation.isRecording ? .body : .title2)
+                    .foregroundStyle(dictation.isRecording ? .red : .primary)
+                    .frame(width: 34, height: 34)
+                    .background(dictation.isRecording ? Color.red.opacity(0.12) : .clear, in: Circle())
+                    .frame(width: 44, height: 44)
+            }
+        }
+        .disabled(!model.isConnected || (!model.isNewThread && conversation == nil) || model
+            .transcribing || dictation.requestingPermission || model.sending || model
+            .transferring || preparingMedia)
+        .accessibilityLabel(LocalizedStringKey(dictation.isRecording ? "録音を終了して文字起こし" : "音声をCodexで文字起こし"))
+        .accessibilityIdentifier("dictation.toggle")
+    }
+
+    func sendButton(hasAttachments: Bool) -> some View {
+        Button {
+            // Commit native text before Store can clear the accepted draft.
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            composerFocused = false
+            if dictation.isRecording {
+                sendRecordedText = true
+                dictation.finish()
+            } else {
+                model.send()
+            }
+        } label: {
+            Image(systemName: "arrow.up")
+        }
+        .buttonStyle(ComposerActionButtonStyle())
+        .accessibilityLabel(LocalizedStringKey(dictation.isRecording ? "文字起こしして送信" : "送信"))
+        .disabled(!model.isConnected || (!model.isNewThread && conversation == nil) || model
+            .snapshot.modelProviderForDraft(threadId: model.coreDraftKey) == nil || model
+            .sending || model.transferring || preparingMedia || dictation.requestingPermission || model
+            .transcribing ||
+            (!dictation.isRecording && model.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty && !hasAttachments))
+        .accessibilityIdentifier("task.send")
     }
 
     func startDictation() {
@@ -265,6 +321,17 @@ extension ThreadScreen {
         })
     }
 
+    /// Red, like T3 Code, so it never reads as the send button it replaces.
+    func stopButton(_ turnId: String) -> some View {
+        Button { model.interrupt(turnId) } label: {
+            Image(systemName: "stop.fill").font(.system(size: 15))
+        }
+        .buttonStyle(ComposerActionButtonStyle(tint: .red))
+        .disabled(model.interruptingTurnId == turnId)
+        .accessibilityLabel(LocalizedStringKey(model.interruptingTurnId == turnId ? "停止中" : "停止"))
+        .accessibilityIdentifier("turn.interrupt.\(turnId)")
+    }
+
     var messageField: some View {
         BufferedTextInput(value: Binding(get: { model.draft }, set: {
             model.perform(.editComposer(threadId: model.coreDraftKey, text: $0, cursor: UInt32($0.utf8.count)))
@@ -275,7 +342,7 @@ extension ThreadScreen {
                 )
                 let candidates = suggestions?.candidates ?? []
                 if let status = suggestions?.status {
-                    Text(status).font(.caption).foregroundStyle(.secondary)
+                    AppText(status).font(.caption).foregroundStyle(.secondary)
                 }
                 if !candidates.isEmpty {
                     ScrollView {
@@ -316,23 +383,18 @@ extension ThreadScreen {
     }
 }
 
-private struct ComposerSendButtonStyle: ButtonStyle {
+private struct ComposerActionButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
+    var tint: Color = .accentColor
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .foregroundColor(.primary)
-            .opacity(isEnabled ? (configuration.isPressed ? 0.7 : 1) : 0.3)
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(isEnabled ? Color.white : Color.primary)
+            .frame(width: 32, height: 32)
+            .background(isEnabled ? tint : Color(UIColor.systemGray4), in: Circle())
+            .opacity(configuration.isPressed ? 0.7 : 1)
             .frame(width: 44, height: 44)
             .contentShape(Rectangle())
-    }
-}
-
-struct ThreadConversationRow: Identifiable, Sendable {
-    let id: String
-    let content: Content
-    enum Content: Sendable {
-        case historyNotice(String)
-        case native(ConversationRow, ConversationItem?), queued(ConversationItem)
     }
 }

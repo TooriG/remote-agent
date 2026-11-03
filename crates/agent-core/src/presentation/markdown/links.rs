@@ -1,87 +1,6 @@
-use super::{MarkdownBlock, MarkdownRun, definitions, parse};
+use super::{MarkdownBlock, MarkdownRun, definitions};
 use markdown::mdast::Node;
 use percent_encoding::percent_decode_str;
-
-/// Files that must be saved rather than decoded by the text editor.
-pub fn file_requires_download(path: &str) -> bool {
-    let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
-    let extension = name
-        .rsplit_once('.')
-        .map(|(_, extension)| extension.to_ascii_lowercase());
-    matches!(
-        extension.as_deref(),
-        Some(
-            "exe"
-                | "msi"
-                | "msix"
-                | "msixbundle"
-                | "appx"
-                | "dll"
-                | "apk"
-                | "aab"
-                | "zip"
-                | "7z"
-                | "rar"
-                | "tar"
-                | "gz"
-                | "bz2"
-                | "xz"
-                | "zst"
-                | "dmg"
-                | "pkg"
-                | "deb"
-                | "rpm"
-                | "iso"
-                | "wasm"
-                | "bin"
-                | "pdf"
-                | "doc"
-                | "docx"
-                | "xls"
-                | "xlsx"
-                | "ppt"
-                | "pptx"
-                | "mp4"
-                | "mov"
-                | "webm"
-                | "mkv"
-                | "mp3"
-                | "wav"
-                | "ogg"
-                | "flac"
-                | "ttf"
-                | "otf"
-                | "woff"
-                | "woff2"
-        )
-    )
-}
-
-#[cfg(test)]
-mod download_tests {
-    #[test]
-    fn artifacts_bypass_the_text_editor_but_source_and_images_do_not() {
-        for path in [
-            "C:\\build\\ImoutoTank-Multiplayer.EXE",
-            "/tmp/app.apk",
-            "bundle.tar.gz",
-            "report.pdf",
-            "video.mp4",
-        ] {
-            assert!(super::file_requires_download(path), "{path}");
-        }
-        for path in [
-            "main.rs",
-            "readme.txt",
-            "README",
-            "large.PNG",
-            "installer.exe.md",
-            "/exe/main.ts",
-        ] {
-            assert!(!super::file_requires_download(path), "{path}");
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
@@ -92,6 +11,33 @@ pub enum MarkdownFileKind {
     Document,
     Folder,
     File,
+}
+
+/// Classify a Host filename without interpreting or resolving a link.
+#[cfg_attr(feature = "bindings", uniffi::export)]
+pub fn markdown_file_kind(path: &str) -> MarkdownFileKind {
+    let basename = path
+        .trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or_default();
+    let extension = basename
+        .rsplit_once('.')
+        .map(|(_, extension)| extension.to_ascii_lowercase());
+    match extension.as_deref() {
+        Some("md" | "mdx" | "markdown") => MarkdownFileKind::Markdown,
+        Some(
+            "rs" | "swift" | "kt" | "kts" | "ts" | "tsx" | "js" | "jsx" | "py" | "go" | "c" | "h"
+            | "cpp" | "hpp" | "cs" | "java" | "rb" | "sh" | "bash" | "zsh" | "nix" | "json"
+            | "toml" | "yaml" | "yml" | "xml" | "html" | "css" | "sql" | "vue" | "svelte" | "lock",
+        ) => MarkdownFileKind::Code,
+        Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "heic" | "avif") => {
+            MarkdownFileKind::Image
+        }
+        Some("pdf" | "txt" | "csv" | "tsv" | "docx" | "xlsx") => MarkdownFileKind::Document,
+        _ if path.ends_with(['/', '\\']) => MarkdownFileKind::Folder,
+        _ => MarkdownFileKind::File,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -172,32 +118,13 @@ pub(super) fn file_reference(source: &str, implicit: bool) -> Option<MarkdownFil
         return None;
     }
     let basename = path.trim_end_matches('/').rsplit('/').next()?;
-    let extension = basename
-        .rsplit_once('.')
-        .map(|(_, extension)| extension.to_ascii_lowercase());
-    let kind = match extension.as_deref() {
-        Some("md" | "mdx" | "markdown") => MarkdownFileKind::Markdown,
-        Some(
-            "rs" | "swift" | "kt" | "kts" | "ts" | "tsx" | "js" | "jsx" | "py" | "go" | "c" | "h"
-            | "cpp" | "hpp" | "cs" | "java" | "rb" | "sh" | "bash" | "zsh" | "nix" | "json"
-            | "toml" | "yaml" | "yml" | "xml" | "html" | "css" | "sql" | "vue" | "svelte" | "lock",
-        ) => MarkdownFileKind::Code,
-        Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "heic" | "avif") => {
-            MarkdownFileKind::Image
-        }
-        Some("pdf" | "txt" | "csv" | "tsv" | "docx" | "xlsx") => MarkdownFileKind::Document,
-        _ if path.ends_with('/') => MarkdownFileKind::Folder,
-        _ => MarkdownFileKind::File,
-    };
+    let kind = markdown_file_kind(&path);
     let explicit = path.contains('/') || line.is_some() || source.starts_with("file:");
     let known_name = matches!(
         basename,
         "Makefile" | "Dockerfile" | "LICENSE" | "AGENTS.md" | "README" | "justfile" | ".gitignore"
     );
     if !explicit && (implicit || (kind == MarkdownFileKind::File && !known_name)) {
-        return None;
-    }
-    if !explicit && matches!(extension.as_deref(), Some("com" | "org" | "net" | "io")) {
         return None;
     }
     if implicit && !path.contains('/') && kind == MarkdownFileKind::File && !known_name {
@@ -235,10 +162,13 @@ pub(super) fn is_file_label(label: &str, file: &MarkdownFileReference) -> bool {
             .is_some_and(|candidate| candidate.path == file.path || candidate.label == file.label)
 }
 
-/// Resolve against the Host workspace, independent of the client's operating system.
+/// Resolve workspace-relative links without interpreting Host-owned home paths.
 #[cfg_attr(feature = "bindings", uniffi::export)]
 pub fn markdown_file_target(source: String, cwd: String) -> Option<MarkdownFileReference> {
     let mut file = file_reference(&source, false)?;
+    if file.path.starts_with("~/") {
+        return Some(file);
+    }
     let cwd = cwd
         .replace('\\', "/")
         .replace('%', "%25")
@@ -283,8 +213,10 @@ fn chip_markdown(file: &MarkdownFileReference, target: &str) -> String {
     format!("[{fence}{}{fence}](<{target}>)", file.label)
 }
 
-/// Keep GPUI's retained selectable renderer; rewrite only file references.
-pub fn markdown_display_source(source: &str) -> String {
+pub(super) fn file_reference_edits(
+    source: &str,
+    root: &Node,
+) -> Vec<(std::ops::Range<usize>, String)> {
     fn visit(
         node: &Node,
         definitions: &std::collections::HashMap<&str, &str>,
@@ -329,16 +261,16 @@ pub fn markdown_display_source(source: &str) -> String {
             visit(child, definitions, source, edits);
         }
     }
-    let root = parse(source);
     let mut edits = Vec::new();
-    visit(&root, &definitions(&root), source, &mut edits);
-    let mut result = source.to_owned();
+    visit(root, &definitions(root), source, &mut edits);
     let labels = file_labels(edits.iter().map(|(_, _, file, _)| file.clone()));
-    for (range, prefix, mut file, target) in edits.into_iter().rev() {
-        relabel(&mut file, &labels);
-        result.replace_range(range, &format!("{prefix}{}", chip_markdown(&file, &target)));
-    }
-    result
+    edits
+        .into_iter()
+        .map(|(range, prefix, mut file, target)| {
+            relabel(&mut file, &labels);
+            (range, format!("{prefix}{}", chip_markdown(&file, &target)))
+        })
+        .collect()
 }
 
 fn file_labels(
@@ -458,6 +390,9 @@ mod tests {
     #[case("../docs/概要.md#L7-L10", "/docs/概要.md", Some(7), None)]
     #[case("file:///tmp/hello%20world.md", "/tmp/hello world.md", None, None)]
     #[case("/tmp/a%23b.rs", "/tmp/a#b.rs", None, None)]
+    #[case("~/Movies/bex-promo-ja.mp4", "~/Movies/bex-promo-ja.mp4", None, None)]
+    #[case("~/Documents/", "~/Documents/", None, None)]
+    #[case("~/概要%20a.md:12:3", "~/概要 a.md", Some(12), Some(3))]
     fn host_targets(
         #[case] source: &str,
         #[case] path: &str,
@@ -479,6 +414,67 @@ mod tests {
                 .path,
             "D:/docs/a.md"
         );
+    }
+    #[test]
+    fn home_paths_do_not_need_a_workspace_or_use_the_client_home() {
+        for cwd in ["", "/workspace", "C:\\workspace"] {
+            for path in ["~/", "~/Movies/video.mp4", "~/docs/../notes.md"] {
+                let file = markdown_file_target(path.into(), cwd.into()).unwrap();
+                assert_eq!(file.path, path);
+            }
+        }
+        let blocks = super::super::markdown_blocks("`~/Movies/bex-promo-ja.mp4`".into());
+        let MarkdownBlock::Paragraph { runs, .. } = &blocks[0] else {
+            panic!()
+        };
+        assert_eq!(
+            runs[0].file.as_ref().unwrap().path,
+            "~/Movies/bex-promo-ja.mp4"
+        );
+        assert_eq!(
+            markdown_file_target("./~/notes.md".into(), "/workspace".into())
+                .unwrap()
+                .path,
+            "/workspace/~/notes.md"
+        );
+    }
+    #[test]
+    fn tilde_operators_and_versions_stay_inline_code() {
+        let source = "`~` 演算子と semver `~1.2`、ホームは `~/Documents/`";
+        let blocks = super::super::markdown_blocks(source.into());
+        let MarkdownBlock::Paragraph { runs, .. } = &blocks[0] else {
+            panic!()
+        };
+        let files: Vec<_> = runs.iter().filter_map(|run| run.file.as_ref()).collect();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "~/Documents/");
+        for text in ["~", "~1.2"] {
+            assert!(
+                runs.iter()
+                    .any(|run| run.text == text && run.code && run.file.is_none())
+            );
+        }
+        assert!(markdown_file_target("~".into(), "/workspace".into()).is_none());
+        assert!(
+            super::super::markdown_presentation(source)
+                .source
+                .contains("`~` 演算子と semver `~1.2`")
+        );
+    }
+
+    #[rstest::rstest]
+    #[case("/workspace/readme.MD", MarkdownFileKind::Markdown)]
+    #[case(r"C:\host\src\main.RS", MarkdownFileKind::Code)]
+    #[case("~/Pictures/photo.PNG", MarkdownFileKind::Image)]
+    #[case("notes.txt", MarkdownFileKind::Document)]
+    #[case("~/Documents/", MarkdownFileKind::Folder)]
+    #[case("~", MarkdownFileKind::File)]
+    #[case("notes%2Emd", MarkdownFileKind::File)]
+    fn kinds_classify_filenames_without_link_resolution(
+        #[case] path: &str,
+        #[case] kind: MarkdownFileKind,
+    ) {
+        assert_eq!(markdown_file_kind(path), kind);
     }
     #[rstest::rstest]
     #[case("https://example.com/a.rs")]
@@ -507,7 +503,7 @@ mod tests {
         assert!(
             matches!(&blocks[1], MarkdownBlock::Paragraph { runs, .. } if runs.iter().all(|run| run.file.is_none()))
         );
-        let displayed = markdown_display_source(source);
+        let displayed = super::super::markdown_presentation(source).source;
         assert!(
             displayed.contains("[設計資料](docs/overview.md) [`overview.md`](<docs/overview.md>)")
         );
@@ -535,7 +531,7 @@ mod tests {
             let file = markdown_file_target(source.clone(), "/workspace".into()).unwrap();
             proptest::prop_assert_eq!(file.path, format!("/workspace/src/{name}.rs"));
             proptest::prop_assert_eq!((file.line, file.column), (Some(line), Some(column)));
-            let markdown = markdown_display_source(&format!("`{source}`"));
+            let markdown = super::super::markdown_presentation(&format!("`{source}`")).source;
             proptest::prop_assert!(markdown.contains(&source));
         }
     }

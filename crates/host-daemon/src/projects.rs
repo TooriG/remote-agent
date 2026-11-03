@@ -84,12 +84,18 @@ impl ProjectStore {
         Ok(path.into())
     }
     pub(crate) async fn load(&self) -> anyhow::Result<state::Snapshot> {
+        // Admission reserves the configured path before preparation creates it.
+        // Keep it alongside the physical path when its parent is a symlink.
+        let mut chat_directories = std::collections::BTreeSet::from([self.chat_directory()]);
+        match tokio::fs::canonicalize(self.chat_directory()).await {
+            Ok(path) => {
+                chat_directories.insert(dunce::simplified(&path).to_owned());
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
         let mut snapshot = state::Snapshot {
-            chat_directory: match tokio::fs::canonicalize(self.chat_directory()).await {
-                Ok(path) => Some(dunce::simplified(&path).to_owned()),
-                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-                Err(error) => return Err(error.into()),
-            },
+            chat_directories,
             ..Default::default()
         };
         for mut project in self.read_projects().await? {
@@ -98,7 +104,7 @@ impl ProjectStore {
                     match tokio::fs::canonicalize(&root.path).await {
                         Ok(path) => {
                             let path = dunce::simplified(&path);
-                            if snapshot.chat_directory.as_deref() == Some(path) {
+                            if snapshot.chat_directories.contains(path) {
                                 continue;
                             }
                             snapshot
@@ -127,6 +133,45 @@ impl ProjectStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn reserved_chat_directory_is_unassigned_before_and_after_creation() {
+        use agent_protocol::models::ProjectMembership;
+        let directory = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(directory.path()).unwrap();
+        #[cfg(unix)]
+        let configured = {
+            let alias = root.join("alias");
+            std::os::unix::fs::symlink(&root, &alias).unwrap();
+            alias
+        };
+        #[cfg(not(unix))]
+        let configured = root.clone();
+        let store = ProjectStore::new(configured.join("bex-worktrees.json"));
+        store.register(&root).await.unwrap();
+        let chats = store.chat_directory();
+        assert!(!chats.exists());
+        for created in [false, true] {
+            if created {
+                std::fs::create_dir(&chats).unwrap();
+            }
+            let snapshot = store.load().await.unwrap();
+            assert_eq!(
+                snapshot.project_membership(chats.to_str()),
+                ProjectMembership::Unassigned {}
+            );
+            assert_eq!(
+                snapshot.project_membership(root.to_str()),
+                ProjectMembership::Assigned(snapshot.projects[0].id.clone())
+            );
+            if created {
+                assert_eq!(
+                    snapshot.project_membership(dunce::canonicalize(&chats).unwrap().to_str()),
+                    ProjectMembership::Unassigned {}
+                );
+            }
+        }
+    }
 
     #[tokio::test]
     async fn standalone_chat_directory_does_not_become_a_project() {

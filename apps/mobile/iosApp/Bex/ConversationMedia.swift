@@ -8,11 +8,11 @@ import UIKit
 import UniformTypeIdentifiers
 
 /// Host paths always use the authenticated transfer; never read a Host path from the phone's filesystem.
-func conversationFileURL(_ source: String, cwd: String) throws -> URL {
+func conversationFilePath(_ source: String, cwd: String) throws -> String {
     guard let target = markdownFileTarget(source: source, cwd: cwd) else {
         throw URLError(.unsupportedURL)
     }
-    return URL(fileURLWithPath: target.path)
+    return target.path
 }
 
 extension SessionImage {
@@ -30,8 +30,11 @@ extension SessionImage {
 struct ConversationMediaAccess {
     let host: String?
     let cwd: String
+    let draft: DraftKey
     let download: @MainActor (String) async throws -> URL
     let visualization: @MainActor (String) async throws -> String
+    let resolve: @MainActor (String) async throws -> FileEntry
+    let openDirectory: @MainActor (String) -> Void
 }
 
 struct ConversationImageSkeleton: View {
@@ -74,7 +77,7 @@ struct ConversationImage: View {
                 Image(uiImage: image).resizable().aspectRatio(contentMode: contentMode)
                     .frame(maxWidth: .infinity, maxHeight: 420)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .accessibilityLabel(label.isEmpty ? "画像" : label)
+                    .accessibilityLabel(label.isEmpty ? Text("画像") : Text(verbatim: label))
                     .accessibilityIdentifier(identifier)
                     .onTapGesture {
                         guard !preparingPreview, let original else { return }
@@ -103,7 +106,7 @@ struct ConversationImage: View {
             })
         ) {
             Button("OK") { error = nil }
-        } message: { Text(error ?? "") }
+        } message: { AppText(error ?? "") }
         .fullScreenCover(isPresented: Binding(get: { previewURL != nil }, set: {
             if !$0 {
                 dismissPreview()
@@ -154,7 +157,7 @@ struct ConversationImage: View {
         }
         data = downloaded
     } else {
-        let path = try conversationFileURL(source, cwd: media.cwd).path
+        let path = try conversationFilePath(source, cwd: media.cwd)
         let url = try await media.download(path)
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         data = try await Task.detached(priority: .userInitiated) { try Data(contentsOf: url) }.value
@@ -226,7 +229,7 @@ struct ConversationPreview: View {
                                 Image(systemName: saved ? "checkmark" : "arrow.down.to.line")
                             }
                             .disabled(saving || saved)
-                            .accessibilityLabel(saved ? "保存済み" : "保存")
+                            .accessibilityLabel(LocalizedStringKey(saved ? "保存済み" : "保存"))
                             .accessibilityIdentifier("conversation.preview.save")
                         }
                         Button(action: close) { Image(systemName: "xmark") }
@@ -242,7 +245,7 @@ struct ConversationPreview: View {
                 }
             })) {
                 Button("OK") { saveError = nil }
-            } message: { Text(saveError ?? "") }
+            } message: { AppText(saveError ?? "") }
         }
         .interactiveDismissDisabled(isImage || saving)
     }

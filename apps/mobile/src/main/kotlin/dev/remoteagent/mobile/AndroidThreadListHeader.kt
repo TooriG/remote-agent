@@ -28,6 +28,7 @@ internal fun ThreadListHeader(
     refresh: () -> Unit,
     title: @Composable RowScope.() -> Unit,
 ) {
+    val language = LocalUiLanguage.current
     Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         if (search != null) {
             val focusRequester = remember { FocusRequester() }
@@ -36,16 +37,20 @@ internal fun ThreadListHeader(
                 value = search,
                 onValueChange = changeSearch,
                 modifier = Modifier.weight(1f).focusRequester(focusRequester),
-                placeholder = { Text("チャットを検索", fontSize = 14.sp) },
+                placeholder = { Text(language.text("チャットを検索"), fontSize = 14.sp) },
                 singleLine = true,
                 shape = RoundedCornerShape(28.dp),
             )
-            IconButton(onClick = { changeSearch(null) }) { Icon(painterResource(R.drawable.ic_close), "検索を閉じる") }
+            IconButton(onClick = { changeSearch(null) }) {
+                Icon(painterResource(R.drawable.ic_close), language.text("検索を閉じる"))
+            }
         } else {
             title()
-            IconButton(onClick = { changeSearch("") }) { Icon(painterResource(R.drawable.ic_search), "検索") }
+            IconButton(onClick = { changeSearch("") }) {
+                Icon(painterResource(R.drawable.ic_search), language.text("検索"))
+            }
             IconButton(onClick = refresh, enabled = !loadingThreads) {
-                Icon(painterResource(R.drawable.ic_refresh), "更新")
+                Icon(painterResource(R.drawable.ic_refresh), language.text("更新"))
             }
         }
     }

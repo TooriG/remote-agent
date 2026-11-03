@@ -96,7 +96,8 @@ async fn headless_invitation_pairs_once_and_status_uses_the_running_host() {
             status["devices"]
                 .as_array()
                 .unwrap()
-                .contains(&Value::String(phone.node_id().to_string()))
+                .iter()
+                .any(|device| device["id"] == phone.node_id().to_string())
         );
         assert_eq!(
             std::fs::read(state.join("identity.keys")).unwrap(),

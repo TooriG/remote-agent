@@ -2,7 +2,7 @@ import AgentCore
 import SwiftUI
 
 struct ThreadsScreen: View {
-    @ObservedObject var model: BexAppViewModel
+    @ObservedObject var model: AppViewModel
     @State private var search = ""
     @State private var showingSettings = false
 
@@ -10,15 +10,12 @@ struct ThreadsScreen: View {
         let projects = model.list?.projects ?? []
         let chats = model.list?.threads ?? []
         List {
+            ErrorNotices(model: model, scope: .projects).taskListRowStyle()
             if let notice = model.list?.notice {
-                BexNotice(text: notice).taskListRowStyle()
+                AppNotice(text: notice).taskListRowStyle()
             }
             if model.threadLoadState == .failed {
                 Section {
-                    if let error = model.notice {
-                        BexNotice(text: error)
-                            .taskListRowStyle()
-                    }
                     Button("再試行") { model.refreshTaskList() }
                         .accessibilityIdentifier("tasks.retry")
                         .taskListRowStyle()
@@ -27,7 +24,7 @@ struct ThreadsScreen: View {
             }
             if let notice = model.notice {
                 Section {
-                    BexNotice(text: notice)
+                    AppNotice(text: notice)
                         .taskListRowStyle()
                 }
                 .listSectionSeparator(.hidden)
@@ -78,13 +75,12 @@ struct ThreadsScreen: View {
                             ProgressView().taskListRowStyle()
                         }
                         if let error = project.error {
-                            BexNotice(text: error).taskListRowStyle()
+                            AppNotice(text: error).taskListRowStyle()
                             Button("再試行") {
                                 model.perform(.refreshProject(projectId: project.id))
                             }.taskListRowStyle()
                         }
-                        let threads = project.threads
-                        ForEach(threads, id: \.id) { thread in
+                        ForEach(project.threads, id: \.id) { thread in
                             ThreadListRow(thread: thread, indented: true) { model.openThread(thread.id) }
                         }
                         if project.hasMore {
@@ -191,7 +187,6 @@ struct ThreadsScreen: View {
             do { try await Task.sleep(nanoseconds: 200_000_000) } catch { return }
             model.searchTaskList(search)
         }
-        .navigationBarBackButtonHidden(true)
         .navigationTitle("リモート")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -204,7 +199,7 @@ struct ThreadsScreen: View {
                         if model.isConnecting || model.threadLoadState == .loading {
                             ProgressView().controlSize(.mini)
                                 .tint(model.isConnecting ? .red : .green)
-                                .accessibilityLabel(model.isConnecting ? "接続中" : "読み込み中")
+                                .accessibilityLabel(LocalizedStringKey(model.isConnecting ? "接続中" : "読み込み中"))
                                 .accessibilityIdentifier("connection.progress")
                         } else {
                             Circle().fill(model.isConnected ? Color.blue : Color.red).frame(width: 6, height: 6)
@@ -228,11 +223,6 @@ struct ThreadsScreen: View {
                 .tint(.primary)
                 .accessibilityLabel("プロジェクトなしで新しいタスク")
                 .accessibilityIdentifier("tasks.new.chat")
-            }
-            ToolbarItem(placement: .navigationBarLeading) {
-                Button { model.showProfiles() } label: { Image(systemName: "line.3.horizontal") }
-                    .accessibilityLabel("PC一覧")
-                    .accessibilityIdentifier("tasks.hosts")
             }
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
@@ -278,7 +268,7 @@ private struct ProjectIcon: View {
     }
 }
 
-extension View {
+private extension View {
     func taskListRowStyle() -> some View {
         listRowSeparator(.hidden)
             .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
@@ -300,11 +290,16 @@ private struct ThreadListRow: View {
             HStack(spacing: 10) {
                 Text(thread.title).font(.title3).foregroundColor(.primary).lineLimit(1)
                 Spacer()
-                if thread.active {
-                    ProgressView().controlSize(.small)
+                if thread.waiting {
+                    Image(systemName: TaskActivityAttributes.IconKind.waiting.symbol)
+                        .foregroundStyle(.orange)
+                        .accessibilityLabel("確認待ち")
+                        .accessibilityIdentifier("tasks.waiting.\(accessibilityID)")
+                } else if thread.active {
+                    RunningIndicator().controlSize(.small)
                         .accessibilityIdentifier("tasks.running.\(accessibilityID)")
                 } else if thread.unread {
-                    Circle().fill(Color.white).frame(width: 8, height: 8)
+                    Circle().fill(Color.primary).frame(width: 8, height: 8)
                         .accessibilityLabel("完了・未確認")
                         .accessibilityIdentifier("tasks.completed.\(accessibilityID)")
                 }
@@ -314,7 +309,7 @@ private struct ThreadListRow: View {
                         .resizable()
                         .frame(width: 18, height: 18)
                         .foregroundStyle(unmerged ? .orange : .purple)
-                        .accessibilityLabel(unmerged ? "main に未反映の変更あり" : "main にマージ済み")
+                        .accessibilityLabel(LocalizedStringKey(unmerged ? "main に未反映の変更あり" : "main にマージ済み"))
                         .accessibilityIdentifier(
                             "tasks.\(unmerged ? "unmerged" : "merged").\(accessibilityID)"
                         )
@@ -324,7 +319,28 @@ private struct ThreadListRow: View {
             .contentShape(Rectangle())
         }
         .accessibilityIdentifier("tasks.row.\(accessibilityID)")
-        .accessibilityValue(thread.active ? "実行中" : thread.unread ? "完了・未確認" : "")
+        .accessibilityValue(LocalizedStringKey(
+            thread.waiting ? "確認待ち" : thread.active ? "実行中" : thread.unread ? "完了・未確認" : ""
+        ))
         .taskListRowStyle()
+    }
+}
+
+/// On iOS 26.6 devices a running row kept the indicator's layout space while the
+/// indicator stayed stopped and invisible, and refreshing the unchanged row did not
+/// restart it. A new indicator on each appearance and foreground return starts animating.
+private struct RunningIndicator: View {
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var generation = 0
+
+    var body: some View {
+        ProgressView()
+            .id(generation)
+            .onAppear { generation += 1 }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active {
+                    generation += 1
+                }
+            }
     }
 }

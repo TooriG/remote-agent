@@ -9,6 +9,9 @@ use tracing_subscriber::{Layer, layer::SubscriberExt, registry::LookupSpan};
 
 pub(crate) const CAPACITY: usize = 768;
 pub(crate) const WINDOW: Duration = Duration::from_secs(30);
+const PULSE: Duration = Duration::from_millis(250);
+/// A pulse this late means the runtime stalled for at least 100 ms.
+const STALLED_PULSE_US: u64 = 350_000;
 static TRACES: LazyLock<Mutex<HashMap<u64, Weak<Trace>>>> = LazyLock::new(Default::default);
 
 pub use agent_protocol::diagnostics::{ConnectionEvent, ConnectionPhase, ConnectionTimeline};
@@ -34,7 +37,7 @@ pub fn identifier() -> u64 {
 
 impl Trace {
     pub fn new() -> Arc<Self> {
-        Self::with_enabled(std::env::var("BEX_CONNECTION_DIAGNOSTICS").as_deref() != Ok("off"))
+        Self::with_enabled(std::env::var("AGENT_CONNECTION_DIAGNOSTICS").as_deref() != Ok("off"))
     }
     fn with_enabled(enabled: bool) -> Arc<Self> {
         let trace = Arc::new(Self {
@@ -114,7 +117,7 @@ impl Trace {
         *sampler = Some(tokio_util::task::AbortOnDropHandle::new(runtime.spawn(
             async move {
                 loop {
-                    tokio::time::sleep(Duration::from_millis(250)).await;
+                    tokio::time::sleep(PULSE).await;
                     let Some(trace) = weak.upgrade() else {
                         break;
                     };
@@ -126,6 +129,7 @@ impl Trace {
                         now.duration_since(previous).as_micros() as u64,
                     );
                     if !trace.active() {
+                        trace.checkpoint();
                         break;
                     }
                     previous = now;
@@ -169,19 +173,22 @@ impl Trace {
             value,
         });
         drop(state);
-        if matches!(
-            phase,
-            ConnectionPhase::RuntimePulse
-                | ConnectionPhase::ResumeStart
-                | ConnectionPhase::ResumeReady
-                | ConnectionPhase::ResumeConnection
-                | ConnectionPhase::UiConnectReady
-                | ConnectionPhase::ResumeFailed
-                | ConnectionPhase::ResumeCancelled
-                | ConnectionPhase::UiConnectFailed
-                | ConnectionPhase::UiConnectCancelled
-                | ConnectionPhase::AppScene
-        ) {
+        // Milestones and stalls persist at once; the sampler saves the rest
+        // when the window ends instead of rewriting the journal every pulse.
+        if phase == ConnectionPhase::RuntimePulse && value >= STALLED_PULSE_US
+            || matches!(
+                phase,
+                ConnectionPhase::ResumeStart
+                    | ConnectionPhase::ResumeReady
+                    | ConnectionPhase::ResumeConnection
+                    | ConnectionPhase::UiConnectReady
+                    | ConnectionPhase::ResumeFailed
+                    | ConnectionPhase::ResumeCancelled
+                    | ConnectionPhase::UiConnectFailed
+                    | ConnectionPhase::UiConnectCancelled
+                    | ConnectionPhase::AppScene
+            )
+        {
             self.checkpoint();
         }
     }
@@ -210,7 +217,7 @@ impl Trace {
             attempt_id,
             connection_id,
             platform: super::ClientPlatform::current(),
-            client_revision: option_env!("BEX_BUILD_REVISION")
+            client_revision: option_env!("AGENT_BUILD_REVISION")
                 .unwrap_or("development")
                 .into(),
             timeline,
@@ -252,7 +259,7 @@ where
     NetworkLayer.with_filter(tracing_subscriber::filter::filter_fn(|metadata| {
         matches!(
             metadata.target(),
-            "bex.net"
+            "agent.net"
                 | "iroh::net_report"
                 | "iroh_relay::client"
                 | "iroh_relay::client::tls"
@@ -346,7 +353,7 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for NetworkLayer {
         let mut inherited = span
             .parent()
             .and_then(|p| p.extensions().get::<Context>().cloned());
-        if attrs.metadata().target() == "bex.net" {
+        if attrs.metadata().target() == "agent.net" {
             let mut fields = Fields::default();
             attrs.record(&mut fields);
             inherited = TRACES
@@ -365,7 +372,7 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for NetworkLayer {
                 attrs.record(&mut fields);
                 inherited.region = fields.region;
             }
-            if attrs.metadata().target() == "bex.net"
+            if attrs.metadata().target() == "agent.net"
                 && let Some(trace) = inherited.trace.upgrade()
             {
                 trace.record(ConnectionPhase::NetworkCapture, 0, 0, 1);
@@ -462,12 +469,9 @@ mod tests {
         trace.activate();
         std::thread::sleep(Duration::from_millis(350));
         tokio::time::timeout(Duration::from_secs(2), async {
-            while !trace
-                .snapshot()
-                .events
-                .iter()
-                .any(|event| event.phase == ConnectionPhase::RuntimePulse && event.value >= 350_000)
-            {
+            while !trace.snapshot().events.iter().any(|event| {
+                event.phase == ConnectionPhase::RuntimePulse && event.value >= STALLED_PULSE_US
+            }) {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
@@ -529,7 +533,7 @@ mod tests {
         tracing::subscriber::with_default(
             tracing_subscriber::registry().with(network_layer()),
             || {
-                let root = tracing::info_span!(target: "bex.net", "network", trace_id = trace.id);
+                let root = tracing::info_span!(target: "agent.net", "network", trace_id = trace.id);
                 let _root = root.enter();
                 let dial =
                     tracing::info_span!(target: "iroh::relay", "dialing", url = "private-address");

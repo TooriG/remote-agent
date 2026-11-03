@@ -14,20 +14,24 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
+import dev.remoteagent.core.localizedUiFormat
 
 /** Launch external links on Android instead of silently swallowing URI-handler failures. */
 @Composable
 internal fun rememberExternalLinkOpener(): (String) -> Unit {
+    val language = LocalUiLanguage.current
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     var failed by remember { mutableStateOf<String?>(null) }
     failed?.let { url ->
         AlertDialog(
             onDismissRequest = { failed = null },
-            title = { Text("リンクを開けません") },
-            text = { Text("対応するブラウザーやアプリを確認してください。\n$url") },
-            confirmButton = { TextButton(onClick = { failed = null }) { Text("閉じる") } },
-            dismissButton = { TextButton(onClick = { clipboard.setText(AnnotatedString(url)) }) { Text("リンクをコピー") } },
+            title = { Text(language.text("リンクを開けません")) },
+            text = { Text(localizedUiFormat(language, "対応するブラウザーやアプリを確認してください。\n{0}", listOf(url))) },
+            confirmButton = { TextButton(onClick = { failed = null }) { Text(language.text("閉じる")) } },
+            dismissButton = {
+                TextButton(onClick = { clipboard.setText(AnnotatedString(url)) }) { Text(language.text("リンクをコピー")) }
+            },
         )
     }
     return { url ->

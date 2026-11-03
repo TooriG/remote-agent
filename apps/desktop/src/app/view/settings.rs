@@ -6,28 +6,48 @@ impl Desktop {
         self.tab = Tab::Settings;
         self.settings_page = SettingsPage::Agents;
         if self.snapshot.account.login.is_none() {
-            self.model_provider = None;
+            self.model_controls.provider = None;
         }
-        self.account_sign_out = None;
+        self.account.sign_out = None;
         self.refresh_accounts_and_models();
         self.dispatch(Intent::ManageCodexCli(op::ManageCodexCli { update: false }));
-        self.worktree_removal = None;
+        self.worktrees.removal = None;
         self.dispatch(Intent::ReadWorktreeSettings(op::ReadWorktreeSettings {}));
         self.dispatch(Intent::ListWorktrees(op::ListWorktrees {}));
     }
 
-    pub(super) fn settings_sidebar(&self, cx: &Context<Self>) -> Sidebar<SidebarSection> {
+    pub(super) fn settings_sidebar(
+        current: SettingsPage,
+        cx: &Context<Self>,
+    ) -> Sidebar<SidebarSection> {
+        let language = crate::localization::language(cx);
         let mut navigation = Vec::new();
         for (label, icon, page) in [
-            ("モデル", IconName::Settings, SettingsPage::Models),
-            ("エージェント", IconName::User, SettingsPage::Agents),
-            ("端末と接続", IconName::Network, SettingsPage::Connections),
-            ("ワークツリー", IconName::Folder, SettingsPage::Worktrees),
+            (
+                language.text("モデル"),
+                IconName::Settings,
+                SettingsPage::Models,
+            ),
+            (
+                language.text("エージェント"),
+                IconName::User,
+                SettingsPage::Agents,
+            ),
+            (
+                language.text("端末と接続"),
+                IconName::Network,
+                SettingsPage::Connections,
+            ),
+            (
+                language.text("ワークツリー"),
+                IconName::Folder,
+                SettingsPage::Worktrees,
+            ),
         ] {
             navigation.push(
                 SidebarMenuItem::new(label)
                     .icon(icon)
-                    .active(self.settings_page == page)
+                    .active(current == page)
                     .on_click(cx.listener(move |s, _, _, cx| {
                         s.settings_page = page;
                         cx.notify();
@@ -37,15 +57,18 @@ impl Desktop {
         }
         Sidebar::new("settings-sidebar")
             .child(SidebarSection {
-                label: "設定",
+                label: language.text("設定"),
                 menu: navigation,
                 collapsed: false,
                 add_project: None,
             })
             .footer(
-                self.button("settings-back", "会話に戻る", cx, |s, _, _| {
-                    s.tab = Tab::Chat
-                })
+                button(
+                    "settings-back",
+                    language.text("会話に戻る"),
+                    cx,
+                    |s, _, _| s.tab = Tab::Chat,
+                )
                 .icon(IconName::ArrowLeft)
                 .debug_selector(|| "settings-back".into())
                 .w_full()
@@ -54,25 +77,29 @@ impl Desktop {
     }
 
     pub(super) fn settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        let language = crate::localization::language(cx);
         let (projects, environment) = match self.settings_page {
             SettingsPage::Models => (
                 self.model_scope_menu(
                     "settings-scope-projects",
                     self.snapshot
-                        .model_project_scope_choices(self.settings_model_scope.clone()),
+                        .model_project_scope_choices(self.model_controls.settings_scope.clone()),
                     cx,
                 ),
                 self.model_scope_menu(
                     "settings-scope-environment",
-                    self.snapshot
-                        .model_environment_scope_choices(self.settings_model_scope.clone()),
+                    self.snapshot.model_environment_scope_choices(
+                        self.model_controls.settings_scope.clone(),
+                    ),
                     cx,
                 ),
             ),
             page => (
-                div().child("すべてのプロジェクト").into_any_element(),
+                div()
+                    .child(language.text("すべてのプロジェクト"))
+                    .into_any_element(),
                 if page == SettingsPage::Connections {
-                    div().child("このPC").into_any_element()
+                    div().child(language.text("このPC")).into_any_element()
                 } else if let Some(hosts) = &self.hosts {
                     Hosts::menu(
                         hosts,
@@ -82,33 +109,33 @@ impl Desktop {
                             .as_ref()
                             .map_or("Local", |host| host.name.as_str()),
                         self.busy > 0
-                            || self.worktree_dirty
-                            || self.worktree_saving
+                            || self.worktrees.dirty
+                            || self.worktrees.saving
                             || self.snapshot.account.login.is_some(),
                         cx,
                     )
                     .into_any_element()
                 } else {
-                    div().child("このPC").into_any_element()
+                    div().child(language.text("このPC")).into_any_element()
                 },
             ),
         };
         let (title, subtitle) = match self.settings_page {
             SettingsPage::Models => (
-                "モデル",
-                "プロバイダごとの初期値と、新規チャットのモデルを設定します。",
+                language.text("モデル"),
+                language.text("プロバイダごとの初期値と、新規チャットのモデルを設定します。"),
             ),
             SettingsPage::Agents => (
-                "エージェント",
-                "選択した環境のAIアカウントと使用量を管理します。",
+                language.text("エージェント"),
+                language.text("選択した環境のAIアカウントと使用量を管理します。"),
             ),
             SettingsPage::Connections => (
-                "端末と接続",
-                "作業する環境と、このPCへ接続する端末を管理します。",
+                language.text("端末と接続"),
+                language.text("作業する環境と、このPCへ接続する端末を管理します。"),
             ),
             SettingsPage::Worktrees => (
-                "ワークツリー",
-                "新しい会話の作業場所と、作成済みのワークツリーを管理します。",
+                language.text("ワークツリー"),
+                language.text("新しい会話の作業場所と、作成済みのワークツリーを管理します。"),
             ),
         };
         let heading = v_flex()
@@ -127,25 +154,8 @@ impl Desktop {
                 .border_b_1()
                 .border_color(rgb(appearance::BORDER)),
         );
-        if !self.error.is_empty() {
-            body = body.child(
-                h_flex()
-                    .gap_3()
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_color(rgb(0xff8e86))
-                            .child(error_message(&self.error)),
-                    )
-                    .child(Self::icon_button(
-                        "settings-dismiss-error",
-                        IconName::Close,
-                        "エラーを閉じる",
-                        cx,
-                        |s, _, _| s.error.clear(),
-                    )),
-            );
-        }
+        body = body.child(self.error_notices(ErrorScope::Settings, cx));
+        body = body.child(self.language_settings(cx));
         body =
             match self.settings_page {
                 SettingsPage::Models => body.child(self.default_model_settings(cx)),
@@ -154,8 +164,18 @@ impl Desktop {
                     let setup = self.snapshot.connection_setup();
                     let agent_controls = self.connection_agent_controls(&setup.agents, cx);
                     let header = section_heading(
-                        "作業するコンピューター",
-                        "このPCや、自分のクラウドVMを選びます。",
+                        language.text("作業するコンピューター"),
+                        language.text("このPCや、自分のクラウドVMを選びます。"),
+                    );
+                    body = body.child(
+                        button(
+                            "settings-import-projects",
+                            language.text("既存のプロジェクトを取り込む"),
+                            cx,
+                            |view, _, _| view.open_project_import(),
+                        )
+                        .debug_selector(|| "settings-import-projects".into())
+                        .disabled(!self.snapshot.connected),
                     );
                     body.children(self.hosts.as_ref().map(|hosts| {
                         hosts.update(cx, |view, cx| {
@@ -201,7 +221,7 @@ impl Desktop {
                     .child(
                         div()
                             .text_color(rgb(appearance::MUTED))
-                            .child("設定の適用先"),
+                            .child(language.text("設定の適用先")),
                     )
                     .child(environment)
                     .child(div().text_color(rgb(appearance::MUTED)).child("／"))
@@ -225,17 +245,56 @@ impl Desktop {
             .into_any_element()
     }
 
+    pub(super) fn language_settings(&self, cx: &Context<Self>) -> Div {
+        use agent_core::localization::UiLanguage;
+        let language = crate::localization::language(cx);
+        h_flex()
+            .gap_4()
+            .items_center()
+            .child(
+                v_flex().flex_1().child(language.text("表示言語")).child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(appearance::MUTED))
+                        .child(language.text("この端末")),
+                ),
+            )
+            .children(
+                [
+                    (UiLanguage::English, "English"),
+                    (UiLanguage::Japanese, language.text("日本語")),
+                ]
+                .into_iter()
+                .enumerate()
+                .map(|(index, (value, label))| {
+                    button(
+                        format!("settings-language-{index}"),
+                        label,
+                        cx,
+                        move |view, _, cx| {
+                            if let Err(error) = crate::localization::select(value, cx) {
+                                view.local_errors.insert(ErrorScope::Settings, error);
+                            }
+                            cx.notify();
+                        },
+                    )
+                    .selected(value == language)
+                }),
+            )
+    }
+
     fn model_scope_menu(
         &self,
         id: &'static str,
         choices: Vec<agent_core::presentation::model_settings::ModelScopeChoice>,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let selected = self.settings_model_scope.clone();
+        let language = crate::localization::language(cx);
+        let selected = self.model_controls.settings_scope.clone();
         let label = choices
             .iter()
             .find(|choice| choice.scope == selected)
-            .map_or("すべてのプロジェクト", |choice| {
+            .map_or(language.text("すべてのプロジェクト"), |choice| {
                 choice.label.as_str()
             })
             .to_owned();
@@ -255,7 +314,7 @@ impl Desktop {
                             .checked(scope == selected)
                             .on_click(move |_, _, cx| {
                                 let _ = owner.update(cx, |view, cx| {
-                                    view.settings_model_scope = scope.clone();
+                                    view.model_controls.settings_scope = scope.clone();
                                     cx.notify();
                                 });
                             }),
@@ -267,68 +326,70 @@ impl Desktop {
     }
 
     fn worktree_settings(&self, cx: &Context<Self>) -> AnyElement {
+        let language = crate::localization::language(cx);
         let disabled =
             !self.snapshot.connected || self.snapshot.workspace.settings.is_none() || self.busy > 0;
         let settings = self.snapshot.workspace.settings.as_ref();
         v_flex().gap_7()
             .child(v_flex().gap_5()
-                .child(div().text_lg().font_semibold().child("新しい会話の作業場所"))
+                .child(div().text_lg().font_semibold().child(language.text("新しい会話の作業場所")))
                 .child(h_flex().gap_5().items_center()
                     .child(v_flex().flex_1().min_w_0().gap_1()
-                        .child("ワークツリーで開始")
-                        .child(div().text_sm().text_color(rgb(appearance::MUTED)).child("元の作業フォルダと分けて、新しい会話を進めます。")))
+                        .child(language.text("ワークツリーで開始"))
+                        .child(div().text_sm().text_color(rgb(appearance::MUTED)).child(language.text("元の作業フォルダと分けて、新しい会話を進めます。"))))
                     .child(switch::Switch::new("worktree-create")
-                        .accessibility_label("新規セッションをワークツリーで開始")
+                        .accessibility_label(language.text("新規セッションをワークツリーで開始"))
                         .checked(settings.is_some_and(|settings| settings.create_on_new_session))
-                        .disabled(disabled || self.worktree_saving)
+                        .disabled(disabled || self.worktrees.saving)
                         .on_click(cx.listener(|s, checked, _, cx| {
                             s.save_worktree_settings(Some(WorktreeToggle::Create(*checked)), cx);
                             cx.notify();
                         }))))
                 .child(v_flex().gap_2()
-                    .child(div().text_sm().child("保存先"))
-                    .child(Input::new(&self.worktree_directory).aria_label("ワークツリーの保存先").disabled(disabled))
-                    .child(div().text_xs().text_color(rgb(appearance::MUTED)).child("空欄の場合は、元のリポジトリ内の .worktree に保存します。指定先には「セッション名/リポジトリ名」の構成で作ります。"))))
+                    .child(div().text_sm().child(language.text("保存先")))
+                    .child(Input::new(&self.worktrees.directory).aria_label(language.text("ワークツリーの保存先")).disabled(disabled))
+                    .child(div().text_xs().text_color(rgb(appearance::MUTED)).child(language.text("空欄の場合は、元のリポジトリ内の .worktree に保存します。指定先には「セッション名/リポジトリ名」の構成で作ります。")))))
             .child(v_flex().gap_5().pt_6().border_t_1().border_color(rgb(appearance::BORDER))
                 .child(h_flex().gap_5().items_center()
-                    .child(section_heading("ファイルの引き継ぎ", "作成時に、指定したファイルを元のリポジトリからコピーします。")
+                    .child(section_heading(language.text("ファイルの引き継ぎ"), language.text("作成時に、指定したファイルを元のリポジトリからコピーします。"))
                         .flex_1().min_w_0())
                     .child(switch::Switch::new("worktree-copy")
-                        .accessibility_label("ワークツリー作成時にファイルをコピー")
+                        .accessibility_label(language.text("ワークツリー作成時にファイルをコピー"))
                         .checked(settings.is_some_and(|settings| settings.copy_on_create))
-                        .disabled(disabled || self.worktree_saving)
+                        .disabled(disabled || self.worktrees.saving)
                         .on_click(cx.listener(|s, checked, _, cx| {
                             s.save_worktree_settings(Some(WorktreeToggle::Copy(*checked)), cx);
                             cx.notify();
                         }))))
                 .child(v_flex().gap_2()
-                    .child(div().text_sm().child("コピーするファイル"))
-                    .child(Textarea::new(&self.worktree_copy_paths).aria_label("コピー対象").readonly(disabled))
-                    .child(div().text_xs().text_color(rgb(appearance::MUTED)).child("リポジトリからの相対パスを1行に1つ入力します。例: .env.local、config/local。存在しないパスはスキップし、シンボリックリンクはコピーしません。")))
-                .child(div().text_xs().text_color(rgb(appearance::MUTED)).child("最初のメッセージ送信時に作成・コピーします。指定ファイルはコピー元の内容で置き換え、既存セッションでは再実行しません。")))
+                    .child(div().text_sm().child(language.text("コピーするファイル")))
+                    .child(Textarea::new(&self.worktrees.copy_paths).aria_label(language.text("コピー対象")).readonly(disabled))
+                    .child(div().text_xs().text_color(rgb(appearance::MUTED)).child(language.text("リポジトリからの相対パスを1行に1つ入力します。例: .env.local、config/local。存在しないパスはスキップし、シンボリックリンクはコピーしません。"))))
+                .child(div().text_xs().text_color(rgb(appearance::MUTED)).child(language.text("最初のメッセージ送信時に作成・コピーします。指定ファイルはコピー元の内容で置き換え、既存セッションでは再実行しません。"))))
             .child(h_flex().gap_5().items_center().pt_6().border_t_1().border_color(rgb(appearance::BORDER))
-                .child(section_heading("マージ済みを自動削除", "main に取り込まれた作業場所を毎分確認します。実行中・回答待ち・ターミナル使用中・ローカル変更ありの場合は保留し、後で再確認します。ブランチと会話履歴は残ります。")
+                .child(section_heading(language.text("マージ済みを自動削除"), language.text("main に取り込まれた作業場所を毎分確認します。実行中・回答待ち・ターミナル使用中・ローカル変更ありの場合は保留し、後で再確認します。ブランチと会話履歴は残ります。"))
                     .flex_1().min_w_0())
                 .child(switch::Switch::new("worktree-delete-merged")
-                    .accessibility_label("マージ済みワークツリーを自動削除")
+                    .accessibility_label(language.text("マージ済みワークツリーを自動削除"))
                     .checked(settings.is_some_and(|settings| settings.delete_merged))
-                    .disabled(disabled || self.worktree_saving)
+                    .disabled(disabled || self.worktrees.saving)
                     .on_click(cx.listener(|s, checked, _, cx| {
                         s.save_worktree_settings(Some(WorktreeToggle::DeleteMerged(*checked)), cx);
                         cx.notify();
                     }))))
-            .child(div().text_xs().text_color(rgb(appearance::MUTED)).child(if self.worktree_saved { "保存しました" } else { "変更は自動で保存されます。既存のワークツリーは移動しません。" }))
+            .child(div().text_xs().text_color(rgb(appearance::MUTED)).child(if self.worktrees.saved { language.text("保存しました") } else { language.text("変更は自動で保存されます。既存のワークツリーは移動しません。") }))
             .child(div().pt_6().border_t_1().border_color(rgb(appearance::BORDER)).child(self.managed_worktrees(cx)))
             .into_any_element()
     }
     pub(super) fn workspace_card(&self, cx: &Context<Self>) -> AnyElement {
+        let language = crate::localization::language(cx);
         let enabled = self.snapshot.connected && !self.snapshot.navigation.cwd.is_empty();
         let review_enabled = enabled && !self.snapshot.selected_directory().is_empty();
         let mut sources = v_flex().gap_1();
         for (i, path) in self.source_paths.iter().enumerate() {
             let path = path.clone();
             sources = sources.child(
-                self.button(
+                button(
                     format!("source-{i}"),
                     file_name(&path),
                     cx,
@@ -344,11 +405,12 @@ impl Desktop {
                     .text_sm()
                     .text_color(rgb(appearance::MUTED))
                     .py_2()
-                    .child("添付ファイルがここに表示されます"),
+                    .child(language.text("添付ファイルがここに表示されます")),
             );
         }
         v_flex()
             .id("workspace-card")
+            .child(self.error_notices(ErrorScope::Workspace, cx))
             .w_full()
             .h_full()
             .p_4()
@@ -367,13 +429,13 @@ impl Desktop {
                                     .flex_1()
                                     .text_sm()
                                     .text_color(rgb(appearance::MUTED))
-                                    .child("ワークスペース"),
+                                    .child(language.text("ワークスペース")),
                             )
                             .child(
-                                Self::icon_button(
+                                icon_button(
                                     "refresh-context",
                                     IconName::RotateCw,
-                                    "変更を更新",
+                                    language.text("変更を更新"),
                                     cx,
                                     |s, _, _| s.refresh_review(),
                                 )
@@ -381,21 +443,21 @@ impl Desktop {
                             ),
                     )
                     .child(
-                        self.button(
+                        button(
                             "context-files",
                             if self.snapshot.navigation.cwd.is_empty() {
-                                "フォルダを選択".into()
+                                language.text("フォルダを選択").into()
                             } else if self.snapshot.selected_directory().is_empty() {
-                                "チャット".into()
+                                language.text("チャット").into()
                             } else {
                                 file_name(&self.snapshot.navigation.cwd)
                             },
                             cx,
-                            |s, _, _| {
+                            |s, _, cx| {
                                 if s.snapshot.navigation.cwd.is_empty() {
                                     s.pick_folder();
                                 } else {
-                                    s.browse(s.snapshot.navigation.cwd.clone());
+                                    s.browse(s.snapshot.navigation.cwd.clone(), cx);
                                 }
                             },
                         )
@@ -426,20 +488,29 @@ impl Desktop {
                         },
                     )
                     .child(
-                        self.button(
+                        button(
                             "context-changes",
-                            format!(
-                                "変更  +{}  −{}",
-                                self.snapshot
-                                    .workspace
-                                    .review
-                                    .as_ref()
-                                    .map_or(0, |review| review.additions),
-                                self.snapshot
-                                    .workspace
-                                    .review
-                                    .as_ref()
-                                    .map_or(0, |review| review.deletions)
+                            agent_core::localization::localized_ui_format(
+                                language,
+                                "変更  +{0}  −{1}".into(),
+                                vec![
+                                    format!(
+                                        "{}",
+                                        self.snapshot
+                                            .workspace
+                                            .review
+                                            .as_ref()
+                                            .map_or(0, |review| review.additions)
+                                    ),
+                                    format!(
+                                        "{}",
+                                        self.snapshot
+                                            .workspace
+                                            .review
+                                            .as_ref()
+                                            .map_or(0, |review| review.deletions)
+                                    ),
+                                ],
                             ),
                             cx,
                             |s, _, cx| s.open_review(None, cx),
@@ -456,13 +527,13 @@ impl Desktop {
                                     .flex_1()
                                     .text_sm()
                                     .text_color(rgb(appearance::MUTED))
-                                    .child("ソース"),
+                                    .child(language.text("ソース")),
                             )
                             .child(
-                                Self::icon_button(
+                                icon_button(
                                     "context-attach",
                                     IconName::Plus,
-                                    "ソースを追加",
+                                    language.text("ソースを追加"),
                                     cx,
                                     |s, _, _| s.attach(),
                                 )
@@ -471,9 +542,12 @@ impl Desktop {
                     )
                     .child(sources)
                     .child(
-                        self.button("all-files", "すべてのファイル", cx, |s, _, _| {
-                            s.browse(s.snapshot.navigation.cwd.clone())
-                        })
+                        button(
+                            "all-files",
+                            language.text("すべてのファイル"),
+                            cx,
+                            |s, _, cx| s.browse(s.snapshot.navigation.cwd.clone(), cx),
+                        )
                         .icon(IconName::Folder)
                         .w_full()
                         .disabled(!enabled),
@@ -485,6 +559,7 @@ impl Desktop {
 
 impl Desktop {
     fn managed_worktrees(&self, cx: &Context<Self>) -> AnyElement {
+        let language = crate::localization::language(cx);
         let mut body = v_flex().gap_3().child(
             h_flex()
                 .justify_between()
@@ -492,23 +567,25 @@ impl Desktop {
                     div()
                         .text_lg()
                         .font_semibold()
-                        .child("作成済みのワークツリー"),
+                        .child(language.text("作成済みのワークツリー")),
                 )
                 .child(
-                    Self::icon_button(
+                    icon_button(
                         "refresh-worktrees",
                         IconName::RotateCw,
-                        "ワークツリー一覧を更新",
+                        language.text("ワークツリー一覧を更新"),
                         cx,
                         |s, _, _| {
                             s.dispatch(Intent::ListWorktrees(op::ListWorktrees {}));
                         },
                     )
-                    .disabled(!self.snapshot.connected || self.worktree_busy),
+                    .disabled(!self.snapshot.connected || self.worktrees.removing),
                 ),
         );
         let Some(worktrees) = &self.snapshot.workspace.worktrees else {
-            return body.child("一覧を読み込み中…").into_any_element();
+            return body
+                .child(language.text("一覧を読み込み中…"))
+                .into_any_element();
         };
         if worktrees.is_empty() {
             body = body.child(
@@ -519,16 +596,19 @@ impl Desktop {
                     .border_color(rgb(appearance::BORDER))
                     .text_sm()
                     .text_color(rgb(appearance::MUTED))
-                    .child("Bexで作成したワークツリーはありません。"),
+                    .child(language.text("Bexで作成したワークツリーはありません。")),
             );
         }
         for (index, worktree) in worktrees.iter().enumerate() {
             let path = worktree.path.clone();
             let current = Path::new(&self.snapshot.navigation.cwd).starts_with(&worktree.path);
-            let reason = worktree.blocked_reason.as_deref().or(current.then_some(
-                "現在開いている会話の作業場所です。別の会話に移動してから削除してください。",
-            ));
-            let confirming = self.worktree_removal.as_deref() == Some(path.as_str());
+            let reason = worktree
+                .blocked_reason
+                .as_deref()
+                .or(current.then_some(language.text(
+                    "現在開いている会話の作業場所です。別の会話に移動してから削除してください。",
+                )));
+            let confirming = self.worktrees.removal.as_deref() == Some(path.as_str());
             let mut entry = v_flex()
                 .p_4()
                 .gap_2()
@@ -545,16 +625,18 @@ impl Desktop {
                             worktree.branch
                         )))
                         .child(
-                            self.button(
+                            button(
                                 format!("remove-worktree-{index}"),
-                                "削除…",
+                                language.text("削除…"),
                                 cx,
                                 move |s, _, _| {
-                                    s.worktree_removal = Some(path.clone());
+                                    s.worktrees.removal = Some(path.clone());
                                 },
                             )
                             .disabled(
-                                reason.is_some() || !self.snapshot.connected || self.worktree_busy,
+                                reason.is_some()
+                                    || !self.snapshot.connected
+                                    || self.worktrees.removing,
                             ),
                         ),
                 )
@@ -567,18 +649,22 @@ impl Desktop {
             for (thread_index, thread) in worktree.threads.iter().enumerate() {
                 let id = thread.id.clone();
                 entry = entry.child(
-                    self.button(
+                    button(
                         format!("worktree-thread-{index}-{thread_index}"),
                         format!(
                             "{}{}",
-                            if thread.active { "実行中 · " } else { "" },
+                            if thread.active {
+                                language.text("実行中 · ")
+                            } else {
+                                ""
+                            },
                             thread.name
                         ),
                         cx,
                         move |s, window, cx| s.open_chat(id.clone(), window, cx),
                     )
                     .icon(IconName::FileText)
-                    .disabled(!self.snapshot.connected || self.worktree_busy),
+                    .disabled(!self.snapshot.connected || self.worktrees.removing),
                 );
             }
             if let Some(reason) = reason {
@@ -591,11 +677,11 @@ impl Desktop {
             }
             if confirming {
                 let path = worktree.path.clone();
-                entry = entry.child(div().text_sm().child("この作業ディレクトリを削除します。ブランチと会話履歴は残ります。次のメッセージ送信時に、元プロジェクトの main から同じ場所に作り直します。"))
+                entry = entry.child(div().text_sm().child(language.text("この作業ディレクトリを削除します。ブランチと会話履歴は残ります。次のメッセージ送信時に、元プロジェクトの main から同じ場所に作り直します。")))
                     .child(h_flex().gap_2()
-                        .child(self.button(format!("cancel-remove-worktree-{index}"), "取消", cx, |s, _, _| s.worktree_removal = None).disabled(self.worktree_busy))
-                        .child(self.button(format!("confirm-remove-worktree-{index}"), "ワークツリーを削除", cx, move |s, _, _| s.remove_worktree(path.clone()))
-                            .disabled(reason.is_some() || !self.snapshot.connected || self.worktree_busy)));
+                        .child(button(format!("cancel-remove-worktree-{index}"), language.text("取消"), cx, |s, _, _| s.worktrees.removal = None).disabled(self.worktrees.removing))
+                        .child(button(format!("confirm-remove-worktree-{index}"), language.text("ワークツリーを削除"), cx, move |s, _, _| s.remove_worktree(path.clone()))
+                            .disabled(reason.is_some() || !self.snapshot.connected || self.worktrees.removing)));
             }
             body = body.child(entry);
         }
@@ -603,10 +689,10 @@ impl Desktop {
     }
 
     fn remove_worktree(&mut self, path: String) {
-        if self.worktree_busy || !self.snapshot.connected {
+        if self.worktrees.removing || !self.snapshot.connected {
             return;
         }
-        self.worktree_busy = true;
+        self.worktrees.removing = true;
         self.perform(
             Intent::RemoveWorktree(op::RemoveWorktree { path }),
             OperationCompletion::RemoveWorktree,

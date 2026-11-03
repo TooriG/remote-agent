@@ -8,12 +8,17 @@ rust-version.workspace = true
 [dependencies]
 serde = { workspace = true, features = ["rc"] }
 serde_json = { workspace = true, features = ["raw_value"] }
-postcard = { version = "1.1.3", default-features = false, features = ["alloc"] }
+rmp-serde = "1.3.1"
 base64.workspace = true
 uuid = { version = "1", features = ["serde"] }
 thiserror.workspace = true
 url.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["std"] }
+zeroize = { workspace = true, features = ["serde"] }
+
+[features]
+# JSON conversions for recorded fixtures and tests; production uses MessagePack records.
+test-support = []
 
 [dev-dependencies]
-proptest = "1.11"
+proptest = "1.12"

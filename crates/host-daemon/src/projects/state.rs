@@ -1,6 +1,6 @@
 use agent_protocol::models::{Project, ProjectMembership};
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     path::{Path, PathBuf},
 };
 
@@ -9,18 +9,14 @@ pub(crate) struct Snapshot {
     pub(crate) projects: Vec<Project>,
     pub(super) resolved_roots: HashMap<String, PathBuf>,
     pub(super) worktree_roots: HashMap<String, String>,
-    pub(super) chat_directory: Option<PathBuf>,
+    pub(super) chat_directories: BTreeSet<PathBuf>,
 }
 impl Snapshot {
     pub(crate) fn project_membership(&self, cwd: Option<&str>) -> ProjectMembership {
         let Some(cwd) = cwd else {
             return ProjectMembership::Unknown {};
         };
-        if self
-            .chat_directory
-            .as_deref()
-            .is_some_and(|directory| Path::new(cwd) == directory)
-        {
+        if self.chat_directories.contains(Path::new(cwd)) {
             ProjectMembership::Unassigned {}
         } else {
             self.project_for_workspace(cwd)
@@ -140,7 +136,9 @@ mod tests {
         snapshot
             .worktree_roots
             .insert(fixture_path("/checkout"), fixture_path("/work/a"));
-        snapshot.chat_directory = Some(fixture_path("/work/a/chats").into());
+        snapshot
+            .chat_directories
+            .insert(fixture_path("/work/a/chats").into());
         for (cwd, expected) in [
             ("/work/a/src", ProjectMembership::Assigned("a".into())),
             (

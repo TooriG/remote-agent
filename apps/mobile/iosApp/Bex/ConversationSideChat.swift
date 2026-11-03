@@ -24,7 +24,7 @@ final class SideChatRequest: ObservableObject {
         self.cwd = cwd
     }
 
-    func activate(_ active: Bool, model: BexAppViewModel) {
+    func activate(_ active: Bool, model: AppViewModel) {
         if active {
             preparing = true
         }
@@ -42,7 +42,7 @@ final class SideChatRequest: ObservableObject {
         }
     }
 
-    private func prepare(_ model: BexAppViewModel) async {
+    private func prepare(_ model: AppViewModel) async {
         if model.notice == error {
             model.notice = nil
         }
@@ -61,7 +61,8 @@ final class SideChatRequest: ObservableObject {
                 let result = try await model.outcome(for: .createSession(CreateSession(
                     provider: provider,
                     cwd: cwd,
-                    model: nil
+                    model: nil,
+                    initialInput: nil
                 )))
                 guard case let .startedThread(id) = result else { throw CocoaError(.coderInvalidValue) }
                 threadId = id
@@ -70,7 +71,7 @@ final class SideChatRequest: ObservableObject {
             if !draftInitialized {
                 if !text.isEmpty {
                     _ = try await model.outcome(for: .setDraftText(
-                        threadId: .session(session: threadId), text: BexAppViewModel.selectionQuote(text)
+                        threadId: .session(session: threadId), text: AppViewModel.selectionQuote(text)
                     ))
                 }
                 draftInitialized = true
@@ -85,7 +86,7 @@ final class SideChatRequest: ObservableObject {
         preparing = false
     }
 
-    private func restoreOriginal(_ model: BexAppViewModel) async {
+    private func restoreOriginal(_ model: AppViewModel) async {
         guard model.screen == .thread, model.selectedProfileId == host,
               model.sideChatRequest?.id == id, model.selectedThreadId == threadId else { return }
         do {
@@ -95,7 +96,7 @@ final class SideChatRequest: ObservableObject {
     }
 }
 
-extension BexAppViewModel {
+extension AppViewModel {
     var isShowingSideChat: Bool {
         guard let request = sideChatRequest else { return false }
         return selectedProfileId == request.host && selectedThreadId == request.threadId
@@ -122,14 +123,14 @@ extension ThreadScreen {
     var selectionActions: ConversationSelectionActions {
         let ask: ((String) -> Void)? = isSideChat ? nil : { text in
             model.askSelectionInSideChat(text)
-            openTools?(.sideChat, false)
+            openTools?(.sideChat)
         }
         return ConversationSelectionActions(addToChat: model.addSelectionToChat, askInSideChat: ask)
     }
 }
 
 struct ConversationSideChat: View {
-    @ObservedObject var model: BexAppViewModel
+    @ObservedObject var model: AppViewModel
     @ObservedObject var request: SideChatRequest
 
     var body: some View {
@@ -138,7 +139,7 @@ struct ConversationSideChat: View {
                 ProgressView("サイドチャットを準備中…")
             } else if let error = request.error {
                 VStack(spacing: 16) {
-                    Text(error).foregroundStyle(.red)
+                    AppText(error).foregroundStyle(.red)
                     Button("再試行") { request.activate(true, model: model) }
                 }.padding()
             } else {
@@ -146,7 +147,7 @@ struct ConversationSideChat: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear { request.activate(true, model: model) }
+        .onAppear { model.sideChatRequest = request; request.activate(true, model: model) }
         .onDisappear { request.activate(false, model: model) }
     }
 }

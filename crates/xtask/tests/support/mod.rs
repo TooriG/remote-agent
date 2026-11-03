@@ -61,7 +61,7 @@ fn main() {
   Some("-P") => {
    let port=args[args.iter().position(|arg| arg=="networkPort").unwrap()+1].parse::<u16>().unwrap();
    let mut response=String::new(); std::net::TcpStream::connect(("127.0.0.1", port)).unwrap().read_to_string(&mut response).unwrap();
-   assert_eq!(response, "bex-os-network-ok\n"); print!("{response}");
+   assert_eq!(response, "agent-os-network-ok\n"); print!("{response}");
    if args[2]!="missing" { println!("OK (1 test)"); }
    if args[2]=="failed" { std::process::exit(1); }
   }

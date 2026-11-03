@@ -62,9 +62,36 @@ pub struct Pair {
     pub invitation: uuid::Uuid,
 }
 
+/// The first request of every connection: the device names itself and learns
+/// what it needs before trusting cached state from an earlier connection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IdentifyDevice {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostIdentity {
+    /// Identifies the native storage the Host's providers read.
+    pub storage_scope: String,
+    /// The Host's currently reachable addresses for the next cold connection.
+    pub ticket: String,
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct ReadHostStatus {}
 rpc_method!(ReadHostStatus, HostStatus, |self| crate::models::Empty {});
+
+/// Local updater only: persist interrupted work before shutting down this Host.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrepareHostUpdate {}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostUpdate {
+    pub executable: String,
+    pub arguments: Vec<String>,
+    pub working_directory: String,
+}
 
 #[derive(Debug, Serialize, Clone)]
 pub struct ListRemoteHosts {}
@@ -158,7 +185,6 @@ pub struct ModelPage {
     pub data: Vec<crate::models::Model>,
     pub next_cursor: Option<String>,
     #[serde(default)]
-    #[serde(with = "crate::protocol::json")]
     pub provider_errors: Option<Map<String, Value>>,
 }
 
@@ -503,10 +529,28 @@ impl ForkSession {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateSession {
     pub provider: crate::session::ProviderKind,
     pub cwd: Option<String>,
     pub model: Option<crate::models::ModelRef>,
+    pub initial_input: Option<InitialInput>,
+}
+
+/// Creating a task admits its first input before workspace/provider preparation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitialInput {
+    pub client_user_message_id: crate::ids::ClientInputId,
+    pub input: Vec<Input>,
+    pub effort: Option<String>,
+    pub service_tier: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetryPreparation {
+    pub thread_id: crate::session::SessionRef,
 }
 
 impl RpcMethod for CreateSession {
@@ -525,7 +569,7 @@ impl RpcMethod for CreateSession {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Interrupt {
     pub thread_id: crate::session::SessionRef,
@@ -534,6 +578,13 @@ pub struct Interrupt {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListFiles {
+    pub path: String,
+}
+
+/// Resolve a filesystem path and inspect its kind on the authenticated Host.
+/// File operations accept absolute paths or `~` / `~/...` for the Host user's home.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolveFile {
     pub path: String,
 }
 
@@ -590,7 +641,7 @@ impl ReadItem {
 }
 
 /// Input intent. The Host chooses start, steer or queue from its current execution.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Submission {
     pub thread_id: crate::session::SessionRef,

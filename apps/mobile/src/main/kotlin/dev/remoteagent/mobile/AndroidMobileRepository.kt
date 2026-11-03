@@ -2,11 +2,17 @@ package dev.remoteagent.mobile
 
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 import android.provider.OpenableColumns
+import android.provider.Settings
 import android.util.AtomicFile
+import dev.remoteagent.core.AgentException
 import dev.remoteagent.core.Attachment
+import dev.remoteagent.core.ClientStorage
+import dev.remoteagent.core.generateIdentity
 import java.io.File
 import java.io.IOException
+import java.security.GeneralSecurityException
 import java.util.Base64
 import java.util.UUID
 import kotlinx.serialization.Serializable
@@ -16,9 +22,14 @@ import kotlinx.serialization.json.Json
 @Serializable internal data class HostProfile(val id: String, val name: String, val ticket: String)
 
 /** Platform persistence owns profile metadata and opaque core snapshots. */
-internal class AndroidMobileRepository(context: Context) {
+internal class AndroidMobileRepository(private val context: Context) {
     private val directory = context.filesDir
     private val preferences = context.getSharedPreferences("agent-hosts", Context.MODE_PRIVATE)
+    val deviceName: String
+        get() =
+            Settings.Global.getString(context.contentResolver, Settings.Global.DEVICE_NAME)?.takeIf { it.isNotBlank() }
+                ?: Build.MODEL
+
     var selected: String?
         get() = preferences.getString("selected", null)
         set(value) {
@@ -45,6 +56,36 @@ internal class AndroidMobileRepository(context: Context) {
     }
 
     fun save(id: String, bytes: ByteArray) = snapshotFile(id).writeSynced(bytes)
+
+    fun sessionStorage(id: String): ClientStorage =
+        object : ClientStorage {
+            private fun <T> access(body: () -> T): T =
+                try {
+                    body()
+                } catch (error: IOException) {
+                    throw AgentException.Failed(error.message ?: error.toString()).apply { initCause(error) }
+                } catch (error: GeneralSecurityException) {
+                    throw AgentException.Failed(error.message ?: error.toString()).apply { initCause(error) }
+                } catch (error: IllegalArgumentException) {
+                    throw AgentException.Failed(error.message ?: error.toString()).apply { initCause(error) }
+                }
+
+            override fun load(newPairing: Boolean): ByteArray = access {
+                if (newPairing) byteArrayOf() else this@AndroidMobileRepository.load(id)
+            }
+
+            override fun save(localState: ByteArray, modelPreferences: ByteArray) = access {
+                this@AndroidMobileRepository.save(id, localState)
+            }
+
+            override fun identity(): ByteArray = access {
+                AndroidCredentialStore(context, id).loadOrCreate(::generateIdentity)
+            }
+
+            override fun diagnosticsDirectory(): String? = access {
+                this@AndroidMobileRepository.diagnosticsDirectory(id)
+            }
+        }
 
     private fun snapshotFile(id: String) = AtomicFile(File(directory, "agent-snapshot-${encodedId(id)}.json"))
 

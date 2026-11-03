@@ -2,8 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>BexTaskURLScheme</key>
-    <string>$(BEX_TASK_URL_SCHEME)</string>
+    <key>TaskURLScheme</key>
+    <string>$(AGENT_TASK_URL_SCHEME)</string>
     <key>NSExtension</key>
     <dict>
         <key>NSExtensionPointIdentifier</key>

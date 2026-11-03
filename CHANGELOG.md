@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Switch Codex, Claude and DSH within one conversation and workspace. Reuse each provider's native session when returning and deliver only missing history, with bounded portable context and an authenticated Host history reader. Preserve native history, conversation identity, drafts and approvals; retain delivery evidence across Host restarts and refuse automatic replay of uncertain inputs. Expose switching on desktop, iPhone and Android.
+- Allow compatible Host and client releases to update independently using named MessagePack RPC records. Keep connections alive after unsupported operations or unreadable request parameters, ignore new event kinds, and retain binary attachments. Updating from the positional protocol requires updating both Host and clients once.
+
+- Add first-run selection and import of existing Codex and Claude Code projects, with skipping, retry, partial results and a Settings entry for later imports. Register folders without copying native history or changing session IDs. Show provider-specific setup errors and retry controls; disable user hooks and automatic MCP/IDE connections during Claude capability probes.
+
 - Fix Windows desktop startup stack overflow and restore the native draggable title bar. Removing an image attachment no longer opens its gallery.
 - Include the configured Codex model in the picker when absent from the recommended catalog, support explicit Codex model IDs, and preserve their selection across catalog refreshes.
 - Read Codex projects through the native project API, retain their names, roots and explicit conversation membership, and combine them with BEX-only projects without rewriting Codex desktop state.
@@ -159,7 +164,7 @@
 
 - Keep command activity collapsed by default while running and after reopening; preserve explicit expansion.
 
-- Keep chats without a selected project unassigned after sending, reopening, and restarting the Host. Use a dedicated `bex-chats` working directory beside the Codex project state instead of inheriting the App Server's checkout, while retaining the real directory for attachments and file operations. Preserve unsent drafts when that directory cannot be prepared, and skip automatic Git reviews for unassigned chats so a parent repository’s changes do not appear.
+- Keep chats without a selected project unassigned after sending, reopening, and restarting the Host. Use a dedicated `agent-chats` working directory beside the Codex project state instead of inheriting the App Server's checkout, while retaining the real directory for attachments and file operations. Preserve unsent drafts when that directory cannot be prepared, and skip automatic Git reviews for unassigned chats so a parent repository’s changes do not appear.
 
 - Render desktop approval labels, queued requests, images and thread summaries from core presentation. Share Store session subscription, shutdown and snapshot persistence across desktop windows; split desktop views and core operations by responsibility, and remove the Swift presentation mirror.
 
@@ -181,7 +186,7 @@
 
 - Apply automatic worktree creation only when a new session has an explicitly selected checkout. Global chats can send with the setting enabled. Cover saved settings on/off, global/project scope, text/photo input, first/follow-up turns, and reopened history through the real Store and isolated Host; exercise native photo/video submission after saving and reloading the enabled setting.
 
-- Store uploads from chats without a project in the Host's private `$CODEX_HOME/bex-attachments` directory. Preserve explicit absolute destinations and reject other relative paths. Return an empty review for folders without a Git worktree while preserving real Git errors. Verify complete photo/video submission without an error notice; keep unscoped fixture threads inside their isolated directory instead of inheriting the developer's checkout.
+- Store uploads from chats without a project in the Host's private `$CODEX_HOME/agent-attachments` directory. Preserve explicit absolute destinations and reject other relative paths. Return an empty review for folders without a Git worktree while preserving real Git errors. Verify complete photo/video submission without an error notice; keep unscoped fixture threads inside their isolated directory instead of inheriting the developer's checkout.
 
 - Initialize the Host's Rustls provider before the first dictation WebSocket handshake. Prevent voice submission from closing the iPhone's JSONL session when desktop builds enable both TLS backends; cover cold-process TLS failure followed by recording-upload recovery.
 

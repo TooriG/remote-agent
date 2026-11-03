@@ -1,13 +1,13 @@
 import AgentCore
 import Foundation
 
-extension BexAppViewModel {
+extension AppViewModel {
     var accounts: [Account] {
         snapshot.accounts()?.accounts ?? []
     }
 
     var accountError: String? {
-        snapshot.accounts()?.error ?? snapshot.error()
+        snapshot.accounts()?.error
     }
 
     var selectedModel: ModelRef? {

@@ -462,6 +462,7 @@ fn local_storage_keeps_user_work_without_host_caches() {
                 "send-id".into(),
                 Arc::new(PendingSubmission {
                     sequence: 0,
+                    submitted_at_ms: None,
                     draft_key: SessionRef {
                         provider: ProviderKind::Codex,
                         id: "native".into(),
@@ -526,7 +527,6 @@ fn local_storage_keeps_user_work_without_host_caches() {
     assert_eq!(
         keys,
         [
-            "activity",
             "archived_scopes",
             "drafts",
             "file_drafts",
@@ -538,16 +538,12 @@ fn local_storage_keeps_user_work_without_host_caches() {
             "storage_scope"
         ]
     );
-    assert_eq!(
-        saved["activity"],
-        json!({"unread":[{"provider":"codex","id":"native"}]})
-    );
     let restored = agent_core::persistence::decode(&bytes).unwrap();
     assert_eq!(restored.drafts, original.drafts);
     assert_eq!(restored.pending_submissions, original.pending_submissions);
     assert_eq!(restored.file_drafts, original.file_drafts);
     assert_eq!(restored.navigation, original.navigation);
-    assert_eq!(restored.activity.unread, original.activity.unread);
+    assert!(restored.activity.unread.is_empty());
     assert!(restored.activity.active.is_empty());
     assert!(restored.conversations.is_empty());
     assert!(restored.threads.is_none());

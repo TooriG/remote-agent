@@ -1,6 +1,6 @@
 included:
   - apps/mobile/iosApp/Bex
-  - apps/mobile/iosApp/BexUITests
+  - apps/mobile/iosApp/UITests
   - apps/mobile/iosApp/TaskActivity
 
 strict: true

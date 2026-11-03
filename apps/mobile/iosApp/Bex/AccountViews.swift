@@ -9,8 +9,11 @@ struct AccountUsageView: View {
         VStack(alignment: .leading, spacing: 12) {
             if let usage {
                 if let error = usage.error {
-                    Label(accountErrorMessage(message: error), systemImage: "exclamationmark.circle")
-                        .font(.caption).foregroundStyle(.orange)
+                    Label(
+                        LocalizedStringKey(accountErrorMessage(message: error)),
+                        systemImage: "exclamationmark.circle"
+                    )
+                    .font(.caption).foregroundStyle(.orange)
                 }
                 ForEach(Array(usage.windows.enumerated()), id: \.offset) { _, window in
                     UsageWindowView(window: window)
@@ -51,14 +54,17 @@ struct WeeklyUsageView: View {
 }
 
 struct ReasoningStrengthIcon: View {
+    @Environment(\.colorScheme) private var colorScheme
     let level: UInt32
     let count: Int
 
     var body: some View {
+        let color = colorScheme == .dark ? Color.white : .black
         HStack(alignment: .bottom, spacing: 2) {
             ForEach(0 ..< count, id: \.self) { index in
                 RoundedRectangle(cornerRadius: 1)
-                    .fill(index < Int(level) ? Color.primary : Color.secondary.opacity(0.35))
+                    .foregroundStyle(color)
+                    .opacity(index < Int(level) ? 1 : 0.15)
                     .frame(width: 3, height: 6 + 10 * CGFloat(index + 1) / CGFloat(count))
             }
         }
@@ -73,7 +79,7 @@ private struct UsageWindowView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
-                Text(window.label)
+                AppText(window.label)
                 Spacer()
                 Text("残り \(window.remainingPercent)%").monospacedDigit()
             }.font(.caption)
@@ -150,10 +156,10 @@ struct AccountLoginSection: View {
                 ProgressView("ブラウザでの認証を待っています…")
             }
             if let progressMessage {
-                ProgressView(progressMessage)
+                ProgressView(LocalizedStringKey(progressMessage))
             }
             if let error = loginError {
-                Text(accountErrorMessage(message: error)).font(.caption).foregroundStyle(.red)
+                AppText(accountErrorMessage(message: error)).font(.caption).foregroundStyle(.red)
                 Button("認証状態を再確認", action: retry)
             }
         }

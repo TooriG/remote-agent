@@ -8,103 +8,41 @@ extension FileEntry: @retroactive Identifiable {
     }
 }
 
-/// Own directory navigation independently of the conversation's navigation stack.
-private struct WorkspaceNavigation: UIViewControllerRepresentable {
-    let root: String
-    let content: (String, @escaping (String) -> Void) -> WorkspaceDirectoryScreen
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(content: content)
-    }
-
-    func makeUIViewController(context: Context) -> UINavigationController {
-        context.coordinator.open(root)
-        return context.coordinator.navigation
-    }
-
-    func updateUIViewController(_ controller: UINavigationController, context: Context) {
-        let coordinator = context.coordinator
-        coordinator.content = content
-        for case let page as UIHostingController<WorkspaceDirectoryScreen> in controller.viewControllers {
-            page.rootView = coordinator.screen(page.rootView.directory)
-        }
-    }
-
-    final class Coordinator: NSObject, UINavigationControllerDelegate {
-        let navigation = UINavigationController()
-        var content: (String, @escaping (String) -> Void) -> WorkspaceDirectoryScreen
-
-        init(content: @escaping (String, @escaping (String) -> Void) -> WorkspaceDirectoryScreen) {
-            self.content = content
-            super.init()
-            navigation.delegate = self
-        }
-
-        func navigationController(_ navigationController: UINavigationController,
-                                  willShow viewController: UIViewController, animated: Bool) {
-            navigationController.setNavigationBarHidden(
-                viewController === navigationController.viewControllers.first, animated: animated
-            )
-        }
-
-        func screen(_ directory: String) -> WorkspaceDirectoryScreen {
-            content(directory) { [weak self] in self?.open($0) }
-        }
-
-        func open(_ directory: String) {
-            let page = UIHostingController(rootView: screen(directory))
-            page.edgesForExtendedLayout = []
-            page.title = URL(fileURLWithPath: directory).lastPathComponent
-            page.navigationItem.largeTitleDisplayMode = .never
-            navigation.pushViewController(page, animated: !navigation.viewControllers.isEmpty)
+extension ThreadScreen {
+    func conversationDirectorySheet(_ destination: WorkspaceDestination) -> some View {
+        NavigationStack {
+            WorkspaceScreen(model: model, root: destination.directory, draft: destination.scope.draft) {
+                openedDirectory = nil
+            }
+            .onDisappear {
+                guard model.selectedProfileId == destination.scope.host,
+                      model.coreDraftKey == destination.scope.draft else { return }
+                model.perform(.reviewWorkspace(ReviewWorkspace(cwd: model.cwd)))
+            }
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("閉じる") { openedDirectory = nil }
+                }
+            }
         }
     }
 }
 
 struct WorkspaceScreen: View {
-    @ObservedObject var model: BexAppViewModel
+    @ObservedObject var model: AppViewModel
     let root: String
-    @Binding var showingDiff: Bool
+    let draft: DraftKey
     let close: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            Picker("表示", selection: $showingDiff) {
-                Text("変更済み").tag(true).accessibilityIdentifier("files.diff")
-                Text("すべてのファイル").tag(false).accessibilityIdentifier("files.all")
-            }
-            .pickerStyle(.segmented).padding(.horizontal).padding(.bottom)
-            Divider()
-            if showingDiff {
-                WorkspaceDiffScreen { complete in
-                    request(.reviewWorkspace(ReviewWorkspace(cwd: root))) { snapshot, result in
-                        if case let .failure(failure) = result {
-                            complete(.failure(failure))
-                        } else if let review = snapshot.review() {
-                            Task {
-                                let files = await Task.detached(priority: .userInitiated) { review.diffFiles() }.value
-                                complete(.success(files))
-                            }
-                        } else {
-                            complete(.failure(NSError(domain: "BexWorkspace", code: 1,
-                                                      userInfo: [
-                                                          NSLocalizedDescriptionKey: "差分を取得できませんでした。再試行してください。"
-                                                      ])))
-                        }
-                    }
-                }
-            } else {
-                WorkspaceNavigation(root: root) { directory, openDirectory in
-                    WorkspaceDirectoryScreen(snapshot: model.snapshot, directory: directory,
-                                             perform: request, fileDraft: fileDraft,
-                                             downloadFile: model.download,
-                                             aiEdit: { model.draft = "このファイルを編集してください: \($0)\n変更内容: " },
-                                             close: close, openDirectory: openDirectory)
-                }
-            }
-        }
-        .background(Color(uiColor: .systemGroupedBackground))
-        .onDisappear { model.perform(.reviewWorkspace(ReviewWorkspace(cwd: root))) }
+        WorkspaceDirectoryScreen(snapshot: model.snapshot, directory: root, title: "ファイル",
+                                 perform: request, fileDraft: fileDraft,
+                                 downloadFile: model.download,
+                                 aiEdit: { model.perform(.setDraftText(
+                                     threadId: draft,
+                                     text: "このファイルを編集してください: \($0)\n変更内容: "
+                                 )) }, close: close)
+            .background(Color(uiColor: .systemGroupedBackground))
     }
 
     private func request(_ intent: Intent, completion: @escaping (AgentCore.Snapshot, Result<Outcome, Error>) -> Void) {
@@ -125,12 +63,13 @@ struct WorkspaceScreen: View {
 private struct WorkspaceDirectoryScreen: View {
     let snapshot: AgentCore.Snapshot
     let directory: String
+    let title: String
     let perform: SnapshotRequest
     let fileDraft: (String) -> Binding<String>
     let downloadFile: @MainActor (String) async throws -> URL
     let aiEdit: (String) -> Void
     let close: () -> Void
-    let openDirectory: (String) -> Void
+    @State private var openedDirectory: String?
     @State private var path = ""
     @State private var entries: [FileEntry] = []
     @State private var error: String?
@@ -139,28 +78,37 @@ private struct WorkspaceDirectoryScreen: View {
     @State private var sharedFile: SharedFile?
 
     var body: some View {
-        VStack(spacing: 0) {
+        List {
             if let error {
-                BexNotice(text: error).padding()
+                AppNotice(text: error)
             }
             if busy {
-                ProgressView().padding()
+                ProgressView()
             }
-            HStack {
-                TextField("絶対パス", text: $path)
-                    .textInputAutocapitalization(.never).disableAutocorrection(true)
-                    .textFieldStyle(.roundedBorder)
-                Button("開く") { openDirectory(path) }
-                    .accessibilityIdentifier("files.open-path")
-            }.padding(.horizontal).padding(.vertical, 8)
-            List {
-                Button("親ディレクトリ") { openDirectory((directory as NSString).deletingLastPathComponent) }
-                    .disabled(directory == "/")
+            Section {
+                HStack {
+                    TextField("絶対パス", text: $path)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .submitLabel(.go).onSubmit { openedDirectory = path }
+                    Button("開く") { openedDirectory = path }
+                        .accessibilityIdentifier("files.open-path")
+                }
+                Button { openedDirectory = (directory as NSString).deletingLastPathComponent } label: {
+                    Label("親ディレクトリ", systemImage: "arrow.up")
+                }
+                .disabled(directory == "/")
+            }
+            Section {
                 ForEach(entries) { entry in
                     HStack {
                         if entry.directory {
-                            Button { openDirectory(entry.path) } label: {
-                                Label(entry.name, systemImage: "folder")
+                            Button { openedDirectory = entry.path } label: {
+                                HStack {
+                                    Label(entry.name, systemImage: "folder")
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                                }
                             }
                             .accessibilityIdentifier("file.\(entry.name)")
                         } else {
@@ -176,7 +124,15 @@ private struct WorkspaceDirectoryScreen: View {
                     }
                 }
             }
-            .listStyle(.plain)
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(item: $openedDirectory) { directory in
+            WorkspaceDirectoryScreen(snapshot: snapshot, directory: directory,
+                                     title: URL(fileURLWithPath: directory).lastPathComponent,
+                                     perform: perform, fileDraft: fileDraft, downloadFile: downloadFile,
+                                     aiEdit: aiEdit, close: close)
         }
         .onAppear {
             if path.isEmpty {
@@ -209,13 +165,14 @@ private struct WorkspaceDirectoryScreen: View {
             if case let .failure(failure) = result {
                 error = failure.localizedDescription; return
             }
-            guard let result = snapshot.directory(), result.path == directory else {
-                error = snapshot.error()
+            // Path validation fails before any request and records its reason on the operation.
+            guard case let .success(.directory(listing)) = result else {
+                error = snapshot.operationError(key: .directory)
                 return
             }
-            path = result.path
-            entries = result.entries
-            if result.truncated {
+            path = listing.path
+            entries = listing.entries
+            if listing.truncated {
                 error = "先頭 2,000 件を表示しています。パスを指定して開けます。"
             }
         }
@@ -241,8 +198,9 @@ private struct WorkspaceDirectoryScreen: View {
     }
 }
 
-private struct WorkspaceDiffScreen: View {
-    let load: (@escaping (Result<[WorkspaceDiffFile], Error>) -> Void) -> Void
+struct WorkspaceDiffScreen: View {
+    @ObservedObject var model: AppViewModel
+    let root: String
     @State private var files: [WorkspaceDiffFile] = []
     @State private var error: String?
     @State private var busy = true
@@ -253,7 +211,7 @@ private struct WorkspaceDiffScreen: View {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let error {
                 VStack {
-                    BexNotice(text: error).padding()
+                    AppNotice(text: error).padding()
                     Button("再試行", action: loadDiff).accessibilityIdentifier("files.diff.retry")
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if files.isEmpty {
@@ -274,11 +232,19 @@ private struct WorkspaceDiffScreen: View {
 
     private func loadDiff() {
         busy = true; error = nil
-        load { result in
-            busy = false
-            switch result {
-            case let .success(result): files = result
-            case let .failure(failure): error = failure.localizedDescription
+        model.requestSnapshot(.reviewWorkspace(ReviewWorkspace(cwd: root))) { snapshot, result in
+            model.notice = nil
+            if case let .failure(failure) = result {
+                busy = false
+                error = failure.localizedDescription
+            } else if let review = snapshot.review() {
+                Task {
+                    files = await Task.detached(priority: .userInitiated) { review.diffFiles() }.value
+                    busy = false
+                }
+            } else {
+                busy = false
+                error = "差分を取得できませんでした。再試行してください。"
             }
         }
     }
@@ -334,5 +300,40 @@ struct WorkspaceDiffCard: View {
         }
         .background(Color(uiColor: .systemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+struct WorkspaceAgentsScreen: View {
+    let agents: [AgentSummary]
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                if agents.isEmpty {
+                    Text("サブエージェントが起動するとここに表示されます。")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(agents, id: \.key) { agent in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            if agent.active {
+                                ProgressView().controlSize(.small)
+                            }
+                            Text(agent.title)
+                            Spacer()
+                            AppText(agent.status).foregroundStyle(.secondary)
+                        }
+                        if let detail = agent.detail {
+                            Text(detail).foregroundStyle(.secondary)
+                        }
+                        if let model = agent.model {
+                            Text(model).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(12).background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                    .padding(.leading, CGFloat(agent.depth) * 16)
+                }
+            }.font(.subheadline).padding(16).frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }

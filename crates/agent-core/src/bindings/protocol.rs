@@ -3,6 +3,7 @@
 use crate::{models::*, session::*};
 use agent_protocol::live_activity::*;
 use agent_protocol::permissions::*;
+use agent_protocol::project_import::ScanProjects;
 use agent_protocol::{browser::*, composer::*, diagnostics::*, operations::*, requests::*};
 use serde_json::Value;
 #[uniffi::remote(Enum)]
@@ -181,17 +182,68 @@ struct BrowserRequest {
     pub thread_id: SessionRef,
     pub tab_id: String,
     pub image_id: String,
+    pub generation: u64,
     pub action: BrowserAction,
+    pub renderer_id: String,
 }
 #[uniffi::remote(Enum)]
 enum BrowserAction {
     Read,
+    Credentials,
+    ImportCookies {
+        profile: String,
+    },
+    ImportPasswords {
+        profile: String,
+    },
+    FillPassword {
+        origin: String,
+        username: String,
+    },
+    DeletePasswords {
+        origin: String,
+    },
+    OpenTab {
+        url: String,
+    },
+    CloseTab {
+        id: String,
+    },
+    Resize {
+        width: u32,
+        height: u32,
+    },
     Navigate {
         url: String,
     },
     Click {
         x: f64,
         y: f64,
+    },
+    Hover {
+        x: f64,
+        y: f64,
+    },
+    Drag {
+        x: f64,
+        y: f64,
+        to_x: f64,
+        to_y: f64,
+    },
+    Snapshot,
+    Evaluate {
+        expression: String,
+    },
+    ClickElement {
+        selector: String,
+    },
+    Fill {
+        selector: String,
+        text: String,
+    },
+    SelectOption {
+        selector: String,
+        value: String,
     },
     Scroll {
         x: f64,
@@ -227,6 +279,11 @@ enum BrowserKey {
     ArrowLeft,
     ArrowRight,
     SelectAll,
+    Delete,
+    Home,
+    End,
+    PageUp,
+    PageDown,
 }
 #[uniffi::remote(Record)]
 struct BrowserTab {
@@ -239,16 +296,42 @@ struct BrowserDialog {
     pub message: String,
     pub prompt: bool,
 }
+
+#[uniffi::remote(Record)]
+struct BrowserImportProfile {
+    pub id: String,
+    pub label: String,
+}
+#[uniffi::remote(Record)]
+struct BrowserCredentials {
+    pub profiles: Vec<BrowserImportProfile>,
+    pub origin: Option<String>,
+    pub accounts: Vec<String>,
+    pub password_error: Option<String>,
+}
 #[uniffi::remote(Record)]
 struct BrowserFrame {
     pub tabs: Vec<BrowserTab>,
     pub tab_id: String,
     pub width: u32,
     pub height: u32,
-
     pub image: Vec<u8>,
     pub image_id: String,
     pub dialog: Option<BrowserDialog>,
+    pub input_kind: Option<BrowserInputKind>,
+    pub generation: u64,
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
+    pub loading: bool,
+    pub page_text: String,
+    pub value: String,
+    pub credentials: Option<BrowserCredentials>,
+    pub renderer_id: String,
+}
+#[uniffi::remote(Enum)]
+enum BrowserInputKind {
+    Text,
+    Password,
 }
 #[uniffi::remote(Enum)]
 enum InvocationKind {
@@ -317,9 +400,6 @@ enum ConnectionPhase {
     RequestEncoded,
     RequestSent,
     ReplyAdopted,
-    ReadPolled,
-    ReadPending,
-    ReadWake,
     ResponseFirstRead,
     ResponseReceived,
     ResponseDecoded,
@@ -425,6 +505,14 @@ struct Choice {
     pub id: String,
     pub label: String,
     pub description: String,
+    pub effect: ChoiceEffect,
+}
+
+#[uniffi::remote(Enum)]
+enum ChoiceEffect {
+    Allow,
+    AllowLasting,
+    Deny,
 }
 
 #[uniffi::remote(Record)]
@@ -514,6 +602,7 @@ enum Answer {
     Questions {
         answers: std::collections::BTreeMap<String, QuestionAnswer>,
     },
+    SkipQuestions,
     Elicitation {
         action: ElicitationAnswer,
     },
@@ -551,6 +640,8 @@ struct TerminalSize {
 struct AddProject {
     pub cwd: String,
 }
+#[uniffi::remote(Record)]
+struct ScanProjects {}
 #[uniffi::remote(Record)]
 struct ListSessions {
     pub query: crate::models::ListQuery,
@@ -619,6 +710,25 @@ struct CreateSession {
     pub provider: ProviderKind,
     pub cwd: Option<String>,
     pub model: Option<crate::models::ModelRef>,
+    pub initial_input: Option<InitialInput>,
+}
+#[uniffi::remote(Record)]
+struct InitialInput {
+    pub client_user_message_id: agent_protocol::ids::ClientInputId,
+    pub input: Vec<Input>,
+    pub effort: Option<String>,
+    pub service_tier: Option<String>,
+}
+#[uniffi::remote(Enum)]
+enum Input {
+    Text { text: String },
+    Skill { name: String, path: String },
+    LocalImage { path: String },
+    Mention { path: String, name: String },
+}
+#[uniffi::remote(Record)]
+struct RetryPreparation {
+    pub thread_id: SessionRef,
 }
 #[uniffi::remote(Record)]
 struct Interrupt {
@@ -627,6 +737,11 @@ struct Interrupt {
 }
 #[uniffi::remote(Record)]
 struct ListFiles {
+    pub path: String,
+}
+
+#[uniffi::remote(Record)]
+struct ResolveFile {
     pub path: String,
 }
 #[uniffi::remote(Record)]

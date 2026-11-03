@@ -127,6 +127,12 @@ fn route(
     if method != &Method::Post {
         return Ok((404, Vec::new()));
     }
+    if let Some(native) = path.strip_prefix("/session-identity/") {
+        return Ok((
+            200,
+            serde_json::to_vec(&json!({"threadId":session_identity(root, native)?}))?,
+        ));
+    }
     match path {
         "/auth-token/unavailable" => fs::write(root.join("auth-token-unavailable"), [])?,
         "/auth-token/reset" => {
@@ -187,7 +193,7 @@ fn route(
                 runtime,
                 ticket,
                 identity,
-                &agent_core::state::operations::CreateSession {provider: agent_protocol::session::ProviderKind::Codex, cwd: Some(root.join("project").to_string_lossy().into_owned()), model: None},
+                &agent_core::state::operations::CreateSession { initial_input: None,provider: agent_protocol::session::ProviderKind::Codex, cwd: Some(root.join("project").to_string_lossy().into_owned()), model: None},
             )?;
             return Ok((
                 200,
@@ -225,6 +231,9 @@ fn route(
         "/fail-next-history-read" => {
             fs::write(root.join("fail-next-history-read"), "")?;
         }
+        "/fail-next-history-page" => {
+            fs::write(root.join("fail-next-history-page"), "")?;
+        }
         "/hold-history-reads" => {
             fs::write(root.join("hold-history-reads"), [])?;
         }
@@ -240,6 +249,28 @@ fn route(
         _ => return Ok((404, Vec::new())),
     }
     Ok((204, Vec::new()))
+}
+
+// Native fixture item IDs locate a backing session, while UI assertions must
+// use its persisted public address. Unmanaged fixture sessions own their ID.
+fn session_identity(root: &Path, native: &str) -> Result<serde_json::Value> {
+    let rows: Vec<serde_json::Value> = match fs::read(root.join("bex-conversations.json")) {
+        Ok(bytes) => serde_json::from_slice(&bytes)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => return Err(error.into()),
+    };
+    let native = json!({"provider":"codex", "id":native});
+    Ok(rows
+        .iter()
+        .find(|row| {
+            row["bindings"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|binding| binding["session"] == native)
+        })
+        .map(|row| row["id"].clone())
+        .unwrap_or(native))
 }
 
 fn merge_worktree(root: &Path, path: &str) -> Result<()> {

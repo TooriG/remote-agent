@@ -1,5 +1,14 @@
 import AgentCore
 
+struct ThreadConversationRow: Identifiable, Sendable {
+    let id: String
+    let content: Content
+    enum Content: Sendable {
+        case historyNotice(String)
+        case native(ConversationRow, ConversationItem?), queued(ConversationItem)
+    }
+}
+
 /// Immutable native render values; Rust owns projection policy.
 struct ConversationPresentation: Sendable {
     let source: AgentCore.Thread
@@ -16,8 +25,7 @@ struct ConversationPresentation: Sendable {
     private let projection: RenderedConversation
     private let queued: [String: ConversationItem]
 
-    static func project(_ source: AgentCore.Thread?, snapshot: AgentCore.Snapshot, previous: Self?) -> Self? {
-        guard let source else { return nil }
+    static func project(_ source: AgentCore.Thread, snapshot: AgentCore.Snapshot, previous: Self?) -> Self {
         let rendered = AgentCore.projectConversation(snapshot: snapshot, source: source, previous: previous?.projection)
         if let previous, rendered.unchanged(other: previous.projection) {
             return previous
@@ -40,7 +48,7 @@ struct ConversationPresentation: Sendable {
             var items: [String: ConversationItem] = [:]
             let projected = turn.conversationRows().map { row in
                 let item: ConversationItem? = switch row.content {
-                case let .user(source), let .response(source, _), let .activity(source, _):
+                case let .user(source), let .response(source, _, _), let .activity(source, _):
                     Self.item(source, id: row.id, previous: cached, next: &items)
                 default: nil
                 }
@@ -54,7 +62,7 @@ struct ConversationPresentation: Sendable {
             let item = Self.item($0, id: $0.id(), previous: previous?.queued ?? [:], next: &nextQueued)
             return ThreadConversationRow(id: item.data.id, content: .queued(item))
         }
-        rows += rendered.unplacedRequests().map { row in
+        rows += rendered.sessionRows().map { row in
             ThreadConversationRow(id: row.id, content: .native(row, nil))
         }
         return Self(

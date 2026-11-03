@@ -16,35 +16,69 @@ fn fixture_change(previous: &Snapshot, params: Value) -> (Snapshot, Vec<Effect>)
     let id: SessionRef = serde_json::from_value(params["session"].clone()).unwrap();
     let change: agent_protocol::session::SessionChange =
         serde_json::from_value(params["change"].clone()).unwrap();
-    if !previous.conversations.contains_key(&id) {
-        let active = match &change {
-            agent_protocol::session::SessionChange::Status { status } => {
-                *status == agent_protocol::models::SessionStatus::Running
-            }
-            agent_protocol::session::SessionChange::Turn { completed, .. } => !completed,
-            _ => return (previous.clone(), Vec::new()),
-        };
-        return agent_core::state::reduce(
-            previous,
-            Event::Notification(agent_protocol::protocol::Notification::Activity {
-                session: id.clone(),
-                active,
-                finished: matches!(&change, agent_protocol::session::SessionChange::Turn {completed:true, turn} if turn.status == agent_protocol::execution::TurnStatus::Completed),
-            }),
+    let mut next = previous.clone();
+    let mut effects = Vec::new();
+    if previous.conversations.contains_key(&id) {
+        let subscription = uuid::Uuid::nil();
+        Arc::make_mut(&mut next.subscriptions).insert(id.clone(), subscription);
+        (next, effects) = reduce(
+            &next,
+            Event::SessionUpdate(Box::new(agent_protocol::session::SessionUpdate {
+                subscription_id: subscription,
+                change: change.clone(),
+            })),
         );
+        next.subscriptions = previous.subscriptions.clone();
     }
-    let mut source = previous.clone();
-    let subscription = uuid::Uuid::nil();
-    Arc::make_mut(&mut source.subscriptions).insert(id.clone(), subscription);
-    let (mut next, effects) = agent_core::state::reduce(
-        &source,
-        Event::SessionUpdate(Box::new(agent_protocol::session::SessionUpdate {
-            subscription_id: subscription,
-            change,
-        })),
+    let active = match &change {
+        agent_protocol::session::SessionChange::Status { status } => {
+            *status == agent_protocol::models::SessionStatus::Running
+        }
+        agent_protocol::session::SessionChange::Turn { completed, .. } => !completed,
+        _ => return (next, effects),
+    };
+    let mut unread = previous
+        .task_activity
+        .as_ref()
+        .map(|state| state.unread.clone())
+        .unwrap_or_default();
+    if active {
+        unread.retain(|(session, _)| session != &id);
+    }
+    if let agent_protocol::session::SessionChange::Turn {
+        completed: true,
+        turn,
+    } = &change
+        && turn.status == TurnStatus::Completed
+    {
+        unread.retain(|(session, _)| session != &id);
+        unread.push((id.clone(), turn.id.clone()));
+    }
+    let (updated, changes) = reduce(
+        &next,
+        Event::Notification(agent_protocol::protocol::Notification::Activity {
+            session: id,
+            active,
+        }),
     );
-    next.subscriptions = previous.subscriptions.clone();
-    (next, effects)
+    effects.extend(changes);
+    let (updated, changes) = reduce(
+        &updated,
+        Event::Notification(agent_protocol::protocol::Notification::TaskActivity {
+            state: agent_protocol::live_activity::TaskActivityState {
+                waiting: Vec::new(),
+                revision: previous
+                    .task_activity
+                    .as_ref()
+                    .map_or(1, |state| state.revision + 1),
+                statuses: Vec::new(),
+                display: agent_protocol::live_activity::TaskActivitySummary::default().display(),
+                unread,
+            },
+        }),
+    );
+    effects.extend(changes);
+    (updated, effects)
 }
 
 fn initial(thread: Thread) -> Snapshot {
@@ -72,7 +106,7 @@ fn reply(thread: Thread) -> agent_protocol::session::OpenedSession {
         subscription_id: uuid::Uuid::nil(),
         response: ThreadResponse {
             thread,
-            model: None,
+            ..Default::default()
         },
     }
 }
@@ -113,6 +147,7 @@ fn snapshot_preserves_history_drafts_and_navigation() {
         "sent".into(),
         Arc::new(agent_core::state::PendingSubmission {
             sequence: 0,
+            submitted_at_ms: None,
             draft_key: SessionRef {
                 provider: ProviderKind::Codex,
                 id: "thread".into(),
@@ -203,7 +238,7 @@ fn pending_submission_reconciles_both_reply_and_echo_orders() {
         let mut finished = pending.clone();
         for (index, echo) in [echo_first, !echo_first].into_iter().enumerate() {
             if echo {
-                finished = fixture_change(&finished, json!({"session":{"provider":"codex","id":"thread"},"change":{"item":{"turnId":"turn","item":{"id":"native","status":"unknown","clientInputId":"client","body":{"inline":{"body":{"userMessage":{"text":null,"content":[]}}}}}}}})).0;
+                finished = fixture_change(&finished, json!({"session":{"provider":"codex","id":"thread"},"change":{"type":"item","turnId":"turn","item":{"id":"native","status":"unknown","clientInputId":"client","body":{"inline":{"body":{"userMessage":{"text":null,"content":[]}}}}}}})).0;
             } else {
                 op::SendSubmission {
                     thread_id: SessionRef {
@@ -336,7 +371,10 @@ fn model_settings_corpus() {
             )
         };
         assert!(effects.is_empty());
-        let expected: Draft = serde_json::from_value(case["expected"].clone()).unwrap();
+        let mut expected: Draft = serde_json::from_value(case["expected"].clone()).unwrap();
+        // Only an explicit selection reserves a local override for the next
+        // submission; catalog refreshes retain the visible fixture settings.
+        expected.model_settings_changed = case["select"].is_object();
         assert_eq!(
             *next.drafts[&DraftKey::from(SessionRef {
                 provider: ProviderKind::Codex,
@@ -421,7 +459,7 @@ fn delta_copies_only_the_changed_path_and_snapshot_round_trips() {
     );
     let (next, _) = fixture_change(
         &state,
-        json!({"session":{"provider":"codex","id":"thread"},"change":{"text":{"turnId":"live","itemId":"changed","delta":" after","field":"assistantText"}}}),
+        json!({"session":{"provider":"codex","id":"thread"},"change":{"type":"text","turnId":"live","itemId":"changed","delta":" after","field":"assistantText"}}),
     );
     assert!(Arc::ptr_eq(
         &state.conversations[&SessionRef {
@@ -572,12 +610,6 @@ fn changing_workspace_clears_content_and_preserves_file_drafts() {
         }))
         .unwrap(),
     );
-    let directory: Arc<agent_protocol::models::FileList> = Arc::new(
-        serde_json::from_value(json!({
-            "path":"/old", "entries":[], "truncated":false
-        }))
-        .unwrap(),
-    );
     let review: Arc<agent_protocol::models::WorkspaceReview> = Arc::new(
         serde_json::from_value(json!({
             "branch":"main", "additions":1, "deletions":0, "files":[], "diff":"old"
@@ -591,7 +623,6 @@ fn changing_workspace_clears_content_and_preserves_file_drafts() {
         }),
         workspace: Arc::new(Workspace {
             file: Some(file.clone()),
-            directory: Some(directory.clone()),
             review: Some(review.clone()),
             review_cwd: Some("/old".into()),
             settings: Some(Arc::default()),
@@ -633,15 +664,11 @@ fn changing_workspace_clears_content_and_preserves_file_drafts() {
             };
             assert!(Arc::ptr_eq(&previous.file_drafts, &next.file_drafts));
             assert!(next.workspace.settings.is_some());
-            if cwd == "/old" {
-                assert!(Arc::ptr_eq(&previous.workspace, &next.workspace));
-                continue;
-            }
+            // A different conversation owns its selections even in the same directory.
             assert!(
                 next.workspace.file.is_none(),
                 "old file remains after navigation"
             );
-            assert!(next.workspace.directory.is_none());
             assert!(next.workspace.review.is_none());
             assert!(next.workspace.review_cwd.is_none());
         }
@@ -680,7 +707,7 @@ fn file_change_delta_appends_to_output_without_inventing_a_diff() {
         let previous = initial(serde_json::from_value(json!({"id":{"provider":"codex","id":"thread"},"turns":[{"id":"turn","items":[{"id":"file","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"fileChange":{"changes":[],"output":output}}}}}],"status":"unknown"}]})).unwrap());
         let (next, _) = fixture_change(
             &previous,
-            json!({"session":{"provider":"codex","id":"thread"},"change":{"text":{"turnId":"turn","itemId":"file","delta":"tail","field":"fileOutput"}}}),
+            json!({"session":{"provider":"codex","id":"thread"},"change":{"type":"text","turnId":"turn","itemId":"file","delta":"tail","field":"fileOutput"}}),
         );
         assert_eq!(next.error, None);
         let item = &next.conversations[&SessionRef {
@@ -736,7 +763,7 @@ fn leaving_conversation_retains_draft_and_marks_later_completion_unread() {
     assert!(effects.is_empty());
     let (completed, _) = fixture_change(
         &listed,
-        json!({"session":{"provider":"codex","id":"thread"},"change":{"turn":{"turn":{"id":"turn","status":"completed","items":[]},"completed":true}}}),
+        json!({"session":{"provider":"codex","id":"thread"},"change":{"type":"turn","turn":{"id":"turn","status":"completed","items":[]},"completed":true}}),
     );
     assert!(completed.activity.unread.contains(&SessionRef {
         provider: ProviderKind::Codex,
@@ -773,7 +800,7 @@ fn serialized_events_preserve_operation_inputs_and_replay_state() {
                 choice_id: "fixture-choice".into(),
             },
         })),
-        Event::Disconnected("fixture disconnect".into()),
+        Event::Disconnected,
     ];
     let encoded = serde_json::to_vec(&events).unwrap();
     let decoded: Vec<Event> = serde_json::from_slice(&encoded).unwrap();
@@ -1026,7 +1053,7 @@ fn terminal_disconnect_keeps_resumption_and_host_switch_drops_old_handles() {
         })),
     );
     assert!(starting.terminal_view("test".into()).unwrap().accepts_input);
-    let (disconnected, _) = reduce(&starting, Event::Disconnected("offline".into()));
+    let (disconnected, _) = reduce(&starting, Event::Disconnected);
     assert!(
         !disconnected
             .terminal_view("test".into())
@@ -1179,6 +1206,7 @@ fn unknown_submission_can_be_restored_or_discarded() {
     let pending = |text: &str| {
         Arc::new(agent_core::state::PendingSubmission {
             sequence: 0,
+            submitted_at_ms: None,
             draft_key: SessionRef {
                 provider: ProviderKind::Codex,
                 id: "thread".into(),
@@ -1277,6 +1305,7 @@ fn unresolved_submission_actions_ignore_known_delivery_states() {
             "sending".into(),
             Arc::new(agent_core::state::PendingSubmission {
                 sequence: 0,
+                submitted_at_ms: None,
                 draft_key: SessionRef {
                     provider: ProviderKind::Codex,
                     id: "thread".into(),
@@ -1311,7 +1340,7 @@ fn unresolved_submission_actions_ignore_known_delivery_states() {
 
 #[test]
 fn file_navigation_rejects_empty_and_relative_paths_before_rpc() {
-    for path in ["", "nested", "../", "~/project"] {
+    for path in ["", "nested", "../", "~other/project"] {
         let (snapshot, effects) = reduce(
             &Snapshot::default(),
             Event::Intent(agent_core::state::Intent::ListFiles(op::ListFiles {
@@ -1319,19 +1348,25 @@ fn file_navigation_rejects_empty_and_relative_paths_before_rpc() {
             })),
         );
         assert!(effects.is_empty(), "sent an invalid path: {path:?}");
+        assert!(snapshot.error.is_none());
         assert_eq!(
-            snapshot.error.as_deref(),
+            snapshot
+                .operation_error(op::OperationKey::Directory)
+                .as_deref(),
             Some("絶対パスを入力してください。")
         );
     }
-    let (snapshot, effects) = reduce(
-        &Snapshot::default(),
-        Event::Intent(agent_core::state::Intent::ListFiles(op::ListFiles {
-            path: std::env::temp_dir().to_string_lossy().into_owned(),
-        })),
-    );
-    assert!(snapshot.error.is_none());
-    assert_eq!(effects.len(), 1);
+    for path in [
+        "~/project".to_owned(),
+        std::env::temp_dir().to_string_lossy().into_owned(),
+    ] {
+        let (snapshot, effects) = reduce(
+            &Snapshot::default(),
+            Event::Intent(agent_core::state::Intent::ListFiles(op::ListFiles { path })),
+        );
+        assert!(snapshot.error.is_none());
+        assert_eq!(effects.len(), 1);
+    }
 }
 
 #[test]
@@ -1484,22 +1519,11 @@ fn item_text(item: &agent_protocol::items::Item) -> Option<&str> {
 
 #[test]
 fn empty_directory_chat_keeps_its_draft_separate_from_the_list() {
-    let previous = Snapshot {
-        workspace: Arc::new(agent_core::state::Workspace {
-            directory: Some(Arc::new(agent_protocol::models::FileList {
-                path: "/workspace".into(),
-                entries: vec![],
-                truncated: false,
-            })),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
+    let previous = Snapshot::default();
     let (opened, _) = reduce(
         &previous,
         Event::Intent(op::Intent::NewChat { cwd: String::new() }),
     );
-    assert_eq!(opened.workspace.directory, previous.workspace.directory);
     let key = opened.navigation.draft_key.clone();
     assert_ne!(key, Snapshot::default().navigation.draft_key);
     let (edited, _) = reduce(

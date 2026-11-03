@@ -4,36 +4,104 @@ import UIKit
 
 /// History and row presentation
 extension ThreadScreen {
-    func followLatest(to id: String?, using proxy: ScrollViewProxy) {
-        guard isFollowingLatest, let id else { return }
-        proxy.scrollTo(id, anchor: .bottom)
+    var mediaAccess: ConversationMediaAccess {
+        let host = model.selectedProfileId
+        let draft = model.coreDraftKey
+        let cwd = model.cwd
+        return ConversationMediaAccess(host: host, cwd: cwd, draft: draft, download: { [model] path in
+            guard model.selectedProfileId == host else { throw CancellationError() }
+            return try await model.download(path)
+        }, visualization: { [model] path in
+            guard model.selectedProfileId == host else { throw CancellationError() }
+            let result = try await model.outcome(for: .loadVisualization(LoadVisualization(path: path, cwd: cwd)))
+            guard model.selectedProfileId == host else { throw CancellationError() }
+            guard case let .visualization(html) = result else { throw URLError(.badServerResponse) }
+            return html
+        }, resolve: { [model] path in
+            guard model.selectedProfileId == host else { throw CancellationError() }
+            let result = try await model.outcome(for: .resolveFile(ResolveFile(path: path)))
+            guard model.selectedProfileId == host else { throw CancellationError() }
+            guard case let .resolvedFile(entry) = result else { throw URLError(.badServerResponse) }
+            return entry
+        }, openDirectory: { path in
+            guard model.selectedProfileId == host, model.coreDraftKey == draft else { return }
+            openedDirectory = WorkspaceDestination(
+                scope: model.snapshot.panelScope(host: host ?? "", draft: draft), directory: path
+            )
+        })
+    }
+
+    func historyControl(_ control: HistoryControl, session: SessionRef) -> some View {
+        VStack(spacing: 6) {
+            if control.hasMore {
+                Button {
+                    let controller = scrollController
+                    let request = controller.captureReadingPosition()
+                    isFollowingLatest = false
+                    model.loadOlderHistory(session) { succeeded, turns, hasMore in
+                        if let point = controller.historyLoaded(
+                            request,
+                            succeeded: succeeded,
+                            turnCount: turns,
+                            hasMoreHistory: hasMore
+                        ) {
+                            scrollPosition.scrollTo(point: point)
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 12) {
+                        Rectangle().frame(height: 1).foregroundStyle(Color(UIColor.separator))
+                        AppText(control.loadLabel).fixedSize()
+                        Rectangle().frame(height: 1).foregroundStyle(Color(UIColor.separator))
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 8)
+                    .contentShape(Rectangle())
+                }
+                .disabled(control.loading)
+                .accessibilityIdentifier("history.load")
+            }
+            if let error = control.error {
+                AppText(error).font(.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .multilineTextAlignment(.center)
+                    .accessibilityIdentifier("history.error")
+            }
+        }
+        .padding(.bottom, 8)
     }
 
     @ViewBuilder
     func conversationRow(_ row: ThreadConversationRow) -> some View {
         switch row.content {
-        case let .historyNotice(message): Text(message).font(.caption).foregroundStyle(.secondary)
+        case let .historyNotice(message): AppText(message).font(.caption).foregroundStyle(.secondary)
         case let .native(content, item): nativeConversationRow(content, item: item)
         case let .queued(item):
-            userMessageRow(item)
+            userMessageRow(item, timestampMs: item.data.timestampMs)
         }
     }
 
     @ViewBuilder
     func nativeConversationRow(_ row: ConversationRow, item: ConversationItem?) -> some View {
         switch (row.content, item) {
+        case let (.preparation(preparation), _):
+            ThreadPreparationRow(preparation: preparation) { model.perform($0) }
+        case let (.providerHandoff(text), _):
+            Text(text).font(.caption).foregroundStyle(.secondary).padding(.vertical, 8)
         case let (.user, item?):
             userMessageRow(item, timestampMs: row.timestampMs)
                 .padding(
                     .top,
                     16
                 )
-        case (let .response(_, turnId), let item?):
+        case (let .response(_, showActions, turnId), let item?):
             ThreadMessageRow(
                 item: item,
                 isUser: false,
-                media: model.mediaAccess,
+                media: mediaAccess,
                 selection: selectionActions,
+                showActions: showActions,
                 timestampMs: row.timestampMs,
                 fork: turnId
                     .map { id in { model.forkAndOpen(through: id) { _ in } } },
@@ -47,16 +115,11 @@ extension ThreadScreen {
                         session: $0,
                         turn: turn
                     )) } }
-            )
+            ).equatable()
         case let (.activityHeader(activity), _): activityHeader(activity)
         case (let .activity(_, turnId), let item?): activityItem(item, turnId: turnId)
-        case let (.pendingRequest(request), _): ThreadRequestRow(request: request) { answer, complete in model.respond(
-                request,
-                answer: answer,
-                completion: complete
-            ) }
         case let (.error(error), _): ThreadErrorRow(error: error)
-        case (.inProgress, _), (_, nil): EmptyView()
+        case (.inProgress, _), (.pendingRequest, _), (_, nil): EmptyView()
         }
     }
 
@@ -64,18 +127,18 @@ extension ThreadScreen {
         ThreadMessageRow(
             item: item,
             isUser: true,
-            media: model.mediaAccess,
+            media: mediaAccess,
             selection: selectionActions,
             timestampMs: timestampMs,
             restoreUnknown: { model.restoreUnknownSubmission($0) },
             discardUnknown: { model.discardUnknownSubmission($0) }
-        )
+        ).equatable()
     }
 
     func activityItem(_ item: ConversationItem, turnId: String) -> some View {
         ThreadItemRow(
             item: item,
-            media: model.mediaAccess,
+            media: mediaAccess,
             selection: selectionActions,
             isExpanded: expandedItemIds.contains(item.data.id),
             toggleExpanded: {
@@ -93,12 +156,14 @@ extension ThreadScreen {
                     itemId: item.data.nativeId ?? item.data.id
                 )
             }
-        )
+        ).equatable()
     }
 
     @ViewBuilder
     func activityHeader(_ turn: ActivityPresentation) -> some View {
         let expanded = AgentCore.activityIsExpanded(activity: turn, choice: activityExpansionOverrides[turn.id])
+        let header = ThreadActivityHeader(summary: turn.activitySummary, canCollapse: turn.activityCanCollapse,
+                                          isInProgress: turn.isInProgress, expanded: expanded)
         if turn.activityCanCollapse {
             Button {
                 isFollowingLatest = false
@@ -107,61 +172,32 @@ extension ThreadScreen {
                     model.perform(.loadTurnItems(params))
                 }
             } label: {
-                ThreadActivityHeader(turn: turn, expanded: expanded)
+                header
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("turn.activity." + turn.id)
         } else {
-            ThreadActivityHeader(turn: turn, expanded: expanded).accessibilityIdentifier("turn.activity." + turn.id)
+            header.accessibilityIdentifier("turn.activity." + turn.id)
         }
     }
 
-    func loadVisibleHistory() {
-        guard isVisible, let thread = conversation, thread.id == model.selectedThreadId,
-              model.notice == nil else { return }
-        let visibility = historyBoundaryVisibility
-        guard AgentCore.shouldLoadHistory(
-            hasMore: thread.source.hasMoreHistory(),
-            loading: model.loadingHistory,
-            oldestVisible: visibility.oldest,
-            latestVisible: visibility.latest,
-            followingLatest: isFollowingLatest
-        ) else { return }
-        model.loadOlderHistory()
-    }
-
-    var historyBoundaryVisibility: (oldest: Bool, latest: Bool) {
-        guard let thread = conversation else { return (false, false) }
-        guard let first = thread.rows.first,
-              let last = conversationRows(thread.rows, expansion: activityExpansionOverrides).last else {
-            // An empty rendered page fits every viewport and can request its next page.
-            return (true, true)
-        }
-        return (
-            visibleHistoryBoundaries.contains(.oldest(threadId: thread.id, rowId: first.id)),
-            visibleHistoryBoundaries.contains(.latest(threadId: thread.id, rowId: last.id))
-        )
-    }
-
-    func historyBoundaryMarker(_ boundary: HistoryBoundary, height: CGFloat) -> some View {
-        Color.clear.frame(height: height)
+    func latestBoundaryMarker(_ boundary: LatestBoundary) -> some View {
+        Color.clear.frame(height: 80)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
             .id(boundary)
             .onScrollVisibilityChange(threshold: 0.01) { visible in
-                updateHistoryBoundary(boundary, visible: visible)
+                if visible {
+                    visibleLatest = boundary
+                } else if visibleLatest == boundary {
+                    visibleLatest = nil
+                }
             }
-            .onDisappear { updateHistoryBoundary(boundary, visible: false) }
-    }
-
-    private func updateHistoryBoundary(_ boundary: HistoryBoundary, visible: Bool) {
-        guard visibleHistoryBoundaries.contains(boundary) != visible else { return }
-        if visible {
-            visibleHistoryBoundaries.insert(boundary)
-        } else {
-            visibleHistoryBoundaries.remove(boundary)
-        }
-        loadVisibleHistory()
+            .onDisappear {
+                if visibleLatest == boundary {
+                    visibleLatest = nil
+                }
+            }
     }
 
     func threadAccessibilityValue(_ thread: ConversationPresentation) -> String {
@@ -176,9 +212,26 @@ extension ThreadScreen {
     }
 }
 
-enum HistoryBoundary: Hashable {
-    case oldest(threadId: SessionRef?, rowId: String)
-    case latest(threadId: SessionRef?, rowId: String)
+private struct ThreadPreparationRow: View {
+    let preparation: PreparationPresentation
+    let perform: (Intent) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            AppText(preparation.text).font(.caption).foregroundStyle(.secondary)
+            if let retry = preparation.retry {
+                Button("再試行") { perform(.retryPreparation(retry)) }
+            }
+            if let interrupt = preparation.interrupt {
+                Button("停止") { perform(.interrupt(interrupt)) }
+            }
+        }.accessibilityIdentifier("task.preparation")
+    }
+}
+
+struct LatestBoundary: Hashable {
+    let threadId: SessionRef?
+    let rowId: String
 }
 
 func conversationRows(_ rows: [ThreadConversationRow],
@@ -191,92 +244,10 @@ func conversationRows(_ rows: [ThreadConversationRow],
             expanded = AgentCore.activityIsExpanded(activity: activity, choice: expansion[activity.id])
             return true
         case .activity: return expanded
-        case .inProgress: return false
+        // Only rendered rows can own the latest-boundary marker.
+        // Requests live in the composer's dock, rather than in the history.
+        case .inProgress, .pendingRequest: return false
         default: return true
-        }
-    }
-}
-
-/// Stop latest-message following before UIKit starts its status-bar scroll animation.
-struct ConversationScrollToTop: UIViewRepresentable {
-    let onScrollToTop: () -> Void
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onScrollToTop)
-    }
-
-    func makeUIView(context: Context) -> ObserverView {
-        let view = ObserverView()
-        view.isUserInteractionEnabled = false
-        view.attach = { [weak coordinator = context.coordinator] view in coordinator?.attach(to: view) }
-        return view
-    }
-
-    func updateUIView(_ view: ObserverView, context: Context) {
-        context.coordinator.onScrollToTop = onScrollToTop
-        context.coordinator.attach(to: view)
-    }
-
-    static func dismantleUIView(_: ObserverView, coordinator: Coordinator) {
-        coordinator.detach()
-    }
-
-    final class ObserverView: UIView {
-        var attach: ((UIView) -> Void)?
-        override func didMoveToWindow() {
-            super.didMoveToWindow()
-            if window != nil {
-                attach?(self)
-            }
-        }
-    }
-
-    final class Coordinator: NSObject, UIScrollViewDelegate {
-        var onScrollToTop: () -> Void
-        weak var scrollView: UIScrollView?
-        weak var original: UIScrollViewDelegate?
-
-        init(_ onScrollToTop: @escaping () -> Void) {
-            self.onScrollToTop = onScrollToTop
-        }
-
-        func attach(to view: UIView) {
-            var ancestor = view.superview
-            while let candidate = ancestor {
-                if let scroll = candidate as? UIScrollView {
-                    guard scroll.delegate !== self else { return }
-                    detach()
-                    scrollView = scroll
-                    original = scroll.delegate
-                    scroll.delegate = self
-                    return
-                }
-                ancestor = candidate.superview
-            }
-        }
-
-        func detach() {
-            if scrollView?.delegate === self {
-                scrollView?.delegate = original
-            }
-            scrollView = nil
-            original = nil
-        }
-
-        override func responds(to selector: Selector!) -> Bool {
-            super.responds(to: selector) || original?.responds(to: selector) == true
-        }
-
-        override func forwardingTarget(for _: Selector!) -> Any? {
-            original
-        }
-
-        func scrollViewShouldScrollToTop(_ scrollView: UIScrollView) -> Bool {
-            let shouldScroll = original?.scrollViewShouldScrollToTop?(scrollView) ?? true
-            if shouldScroll {
-                onScrollToTop()
-            }
-            return shouldScroll
         }
     }
 }

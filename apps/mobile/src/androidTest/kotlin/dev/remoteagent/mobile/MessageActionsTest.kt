@@ -74,15 +74,18 @@ class MessageActionsTest {
                     null,
                 )
             var calls = 0
-            val response = requireNotNull(projection).rows.single { it.content is ConversationRowContent.Response }
+            val response =
+                requireNotNull(projection).rows.single { it.content is ConversationRowContent.Response }.content
+                    as ConversationRowContent.Response
             var phase by mutableStateOf<OperationPhase?>(null)
             compose.setContent {
                 MaterialTheme {
                     ThreadMessageCard(
-                        (response.content as ConversationRowContent.Response).item,
+                        response.item,
                         false,
                         "/fixture",
                         { _, _ -> },
+                        showActions = response.showActions,
                         fork = {
                             calls++
                             phase = OperationPhase.Running

@@ -33,9 +33,8 @@ pub struct Client {
     _path_monitor: Option<tokio_util::task::AbortOnDropHandle<()>>,
 }
 struct PendingReply {
-    response: tokio_util::task::AbortOnDropHandle<
-        Result<(tokio_util::bytes::BytesMut, Updates), PeerError>,
-    >,
+    response:
+        tokio_util::task::AbortOnDropHandle<Result<(tokio_util::bytes::Bytes, Updates), PeerError>>,
     stream: u64,
     _permit: OwnedSemaphorePermit,
 }
@@ -234,7 +233,7 @@ impl Client {
     async fn call_stream(
         &self,
         call: &Call,
-    ) -> Result<(tokio_util::bytes::BytesMut, Updates), PeerError> {
+    ) -> Result<(tokio_util::bytes::Bytes, Updates), PeerError> {
         let mut reply = self.start_call(call).await?;
         let stream = reply.stream;
         let measured = self.trace.active() && !matches!(call, Call::ConnectionPerformance(_));
@@ -365,6 +364,125 @@ mod tests {
     use crate::transport::{Endpoint, Identity, IncomingRequest, Relays, Trust};
 
     #[tokio::test]
+    async fn unreadable_parameters_and_new_events_leave_the_connection_usable() {
+        tokio::time::timeout(Duration::from_secs(15), async {
+            let host = Endpoint::bind(Identity::generate(), Relays::Loopback)
+                .await
+                .unwrap();
+            let client = Endpoint::bind(Identity::generate(), Relays::Loopback)
+                .await
+                .unwrap();
+            let trust = Trust {
+                allowed: [client.node_id()].into(),
+                ..Default::default()
+            };
+            let ticket = host.ticket();
+            let (session, incoming) = tokio::join!(client.connect(&ticket), host.accept());
+            let session = session.unwrap();
+            let incoming = incoming.unwrap().unwrap().authorize(&trust).unwrap();
+            let (peer, events) = tokio::join!(
+                session.open_peer(Duration::from_secs(3), 4),
+                incoming.accept_peer()
+            );
+            let (peer, mut updates) = peer.unwrap();
+            let mut events = events.unwrap();
+            let serving = tokio::spawn(async move {
+                framing::write(
+                    &mut events,
+                    serde_json::json!({"method":"host/future/event","data":[1,true]}),
+                )
+                .await
+                .unwrap();
+                framing::write(
+                    &mut events,
+                    protocol::Notification::Exited {
+                        handle: "terminal".into(),
+                        code: 42,
+                    },
+                )
+                .await
+                .unwrap();
+                let IncomingRequest::Call(mut request) = incoming.accept_request().await.unwrap()
+                else {
+                    panic!("expected valid call after rejected parameters")
+                };
+                assert!(matches!(request.call, Call::HostName(_)));
+                framing::write(
+                    &mut request.send,
+                    Response::Success {
+                        result: "still connected",
+                    },
+                )
+                .await
+                .unwrap();
+                request.send.finish().unwrap();
+                assert!(matches!(
+                    incoming.accept_request().await.unwrap(),
+                    IncomingRequest::Close
+                ));
+            });
+            let mut invalid_parameters = vec![0]; // raw frame encoding
+            invalid_parameters.extend(
+                protocol::encode(serde_json::json!({"method":"host/model/list","limit":"invalid"}))
+                    .unwrap(),
+            );
+            for frame in [
+                None,
+                Some(vec![0, 0]), // raw payload with invalid parameters
+                Some(invalid_parameters),
+                Some(vec![]),     // missing encoding
+                Some(vec![1, 0]), // invalid Zstd payload
+                Some(vec![2]),    // unknown encoding
+            ] {
+                let (mut send, recv) = peer.connection.open_bi().await.unwrap();
+                send.write_all(&[CALL]).await.unwrap();
+                if let Some(frame) = frame {
+                    send.write_all(&(frame.len() as u32).to_be_bytes())
+                        .await
+                        .unwrap();
+                    send.write_all(&frame).await.unwrap();
+                }
+                send.finish().unwrap();
+                let reply: Response<()> = framing::Reader::new(recv).read().await.unwrap().unwrap();
+                let Response::Failure { error } = reply else {
+                    panic!("expected a parameter error")
+                };
+                assert_eq!(error.code, "invalid_params");
+                assert_eq!(error.delivery, agent_protocol::error::Delivery::NotSent);
+            }
+            assert_eq!(
+                peer.request::<String>(&Call::HostName(crate::models::Empty {}))
+                    .await
+                    .unwrap(),
+                "still connected"
+            );
+            assert!(matches!(
+                updates
+                    .read::<protocol::Notification>()
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                protocol::Notification::Unsupported
+            ));
+            assert!(matches!(
+                updates
+                    .read::<protocol::Notification>()
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                protocol::Notification::Exited { code: 42, .. }
+            ));
+            peer.close().await;
+            serving.await.unwrap();
+            session.close();
+            client.close().await;
+            host.close().await;
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
     async fn reconnect_uploads_previous_capture_and_only_then_removes_it() {
         use crate::diagnostics::{ConnectionPerformance, connection::Trace};
         tokio::time::timeout(Duration::from_secs(45), async {
@@ -478,7 +596,7 @@ mod tests {
             let (remote, events) = tokio::join!(session.open_peer(Duration::from_secs(2), 1), incoming.accept_peer());
             let (remote, _updates) = remote.unwrap();
             let _events = events.unwrap();
-            let call = Call::SessionScope(crate::models::Empty {});
+            let call = Call::HostName(crate::models::Empty {});
             let mut pending = remote.start_call(&call).await.unwrap();
             let crate::transport::IncomingRequest::Call(mut request) = incoming.accept_request().await.unwrap() else { panic!("call expected") };
             let stream = u64::from(request.send.id());
@@ -552,7 +670,13 @@ mod tests {
                                     return;
                                 }
                                 let body = if matches!(&request.call, crate::protocol::Call::ReadVisualization(params) if params.path == "large") {
-                                    "x".repeat(8 * 1024 * 1024)
+                                    // Keep the unread response large on the wire even with compression.
+                                    let mut bytes = vec![0; 8 * 1024 * 1024];
+                                    ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut bytes).unwrap();
+                                    for byte in &mut bytes { *byte = b' ' + *byte % 95; }
+                                    String::from_utf8(bytes).unwrap()
+                                } else if matches!(&request.call, crate::protocol::Call::ReadVisualization(params) if params.path == "compressed") {
+                                    "x".repeat(1024 * 1024)
                                 } else {
                                     "pong".into()
                                 };
@@ -588,6 +712,13 @@ mod tests {
                 "pong"
             );
             drop((send, recv));
+            assert_eq!(
+                remote
+                    .request::<String>(&crate::protocol::Call::ReadVisualization(agent_protocol::operations::LoadVisualization {path:"compressed".into(),cwd:"/fixture".into()}))
+                    .await
+                    .unwrap(),
+                "x".repeat(1024 * 1024)
+            );
             assert!(
                 remote
                     .request::<String>(&crate::protocol::Call::ReadVisualization(agent_protocol::operations::LoadVisualization {path:"malformed".into(),cwd:"/fixture".into()}))

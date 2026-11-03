@@ -24,8 +24,8 @@ impl ProviderKind {
     }
 }
 
-/// A native provider ID, scoped by provider. Paths and abbreviated IDs are not
-/// resolved here; only the provider adapter can resolve a native session.
+/// A conversation address, scoped by its originating provider. The Host may
+/// bind an admitted task to a native provider session after issuing its address.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "SessionIdentity")]
 pub struct SessionRef {
@@ -107,8 +107,18 @@ pub enum UpdateError {
 
 /// A small change to the current conversation, never a persistent event log.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum SessionChange {
+    Workspace {
+        cwd: String,
+    },
+    Preparation {
+        preparation: Option<SessionPreparation>,
+    },
     Submission {
         id: crate::ids::ClientInputId,
         delivery: SubmissionDelivery,
@@ -158,6 +168,8 @@ pub enum SessionChange {
         turn_id: crate::ids::TurnId,
         error: ExecutionError,
     },
+    #[serde(other)]
+    Unsupported,
 }
 
 /// Host delivery evidence for an input whose execution is still owned by the Host.
@@ -168,6 +180,30 @@ pub enum SubmissionDelivery {
     Accepted { turn_id: Option<crate::ids::TurnId> },
     Unknown,
     Rejected,
+}
+
+/// Durable Host admission, independent of the provider acknowledging execution.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionPreparation {
+    pub submission: crate::operations::Submission,
+    pub status: PreparationStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum PreparationStatus {
+    Preparing,
+    Sending,
+    Failed { error: ExecutionError },
+    Interrupted,
+    Unknown,
+}
+
+impl PreparationStatus {
+    pub fn is_active(&self) -> bool {
+        matches!(self, Self::Preparing | Self::Sending)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -182,27 +218,34 @@ pub enum RequestDelivery {
 /// Conversation content independent of list metadata, navigation and native history IO.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Timeline {
+    pub cwd: Option<String>,
     pub status: SessionStatus,
     pub turns: Option<Vec<Arc<Turn>>>,
     pub requests: std::collections::BTreeMap<crate::ids::RequestId, Arc<crate::requests::Request>>,
     pub submissions: std::collections::BTreeMap<crate::ids::ClientInputId, SubmissionDelivery>,
+    /// None means no observation; Some(None) explicitly clears preparation.
+    pub preparation: Option<Option<SessionPreparation>>,
 }
 
 impl SessionChange {
     pub fn apply(&self, previous: &Thread) -> Result<Thread, UpdateError> {
         let next = previous.clone();
         let (timeline, result) = self.apply_timeline(Timeline {
+            cwd: None,
             status: next.status,
             turns: next.turns,
             requests: next.requests,
             submissions: next.submissions,
+            preparation: Some(next.preparation),
         });
         result?;
         Ok(Thread {
+            cwd: timeline.cwd.or(next.cwd),
             status: timeline.status,
             turns: timeline.turns,
             requests: timeline.requests,
             submissions: timeline.submissions,
+            preparation: timeline.preparation.flatten(),
             ..next
         })
     }
@@ -213,6 +256,15 @@ impl SessionChange {
     pub fn apply_timeline(&self, mut next: Timeline) -> (Timeline, Result<(), UpdateError>) {
         let result = (|| {
             match self {
+                Self::Unsupported => return Ok(()),
+                Self::Workspace { cwd } => {
+                    next.cwd = Some(cwd.clone());
+                    return Ok(());
+                }
+                Self::Preparation { preparation } => {
+                    next.preparation = Some(preparation.clone());
+                    return Ok(());
+                }
                 Self::Submission { id, delivery } => {
                     next.submissions.insert(id.clone(), delivery.clone());
                     return Ok(());
@@ -249,10 +301,13 @@ impl SessionChange {
                 | Self::ReasoningPart { turn_id, .. }
                 | Self::Error { turn_id, .. } => turn_id,
                 Self::Status { .. }
+                | Self::Workspace { .. }
+                | Self::Preparation { .. }
                 | Self::Submission { .. }
                 | Self::Request { .. }
                 | Self::RequestDelivery { .. }
-                | Self::ResolveRequest { .. } => unreachable!(),
+                | Self::ResolveRequest { .. }
+                | Self::Unsupported => unreachable!(),
             };
             if turn_id.is_empty() {
                 return Err(UpdateError::InvalidTurnId);
@@ -265,46 +320,9 @@ impl SessionChange {
                 .rposition(|turn| &turn.id == turn_id);
             if let Self::Turn { turn, completed } = self {
                 let old = index.map(|index| &next.turns.as_ref().unwrap()[index]);
-                if !completed
-                    && old.is_some_and(|old| {
-                        old.status != TurnStatus::Running && old.status != TurnStatus::Unknown
-                    })
-                {
+                let Some(merged) = merge_turn(old.map(AsRef::as_ref), turn, *completed) else {
                     return Ok(());
-                }
-                let mut merged = old.map_or_else(|| turn.clone(), |old| merge_fields(old, turn));
-                merged.status = if *completed {
-                    if turn.status == TurnStatus::Unknown {
-                        TurnStatus::Completed
-                    } else {
-                        turn.status
-                    }
-                } else {
-                    TurnStatus::Running
                 };
-                if let Some(items) = &turn.items {
-                    // Turn lifecycle and item notifications are independent. Even
-                    // a native "full" turn can omit an item whose output is still
-                    // arriving. Only RemoveItem removes a streamed item; a new
-                    // history response replaces the conversation at its owner.
-                    merged.items = Some(append_items(
-                        old.and_then(|old| old.items.as_ref())
-                            .cloned()
-                            .unwrap_or_default(),
-                        items,
-                    ));
-                }
-                if turn.error.is_none()
-                    && (merged.status == TurnStatus::Completed
-                        || old.is_some_and(|old| {
-                            old.error.as_ref().is_some_and(|e| {
-                                e.retry.as_ref().is_some_and(|retry| retry.retrying)
-                            })
-                        }))
-                    && merged.status != TurnStatus::Running
-                {
-                    merged.error = None;
-                }
                 let turns = next.turns.get_or_insert_default();
                 if let Some(index) = index {
                     turns[index] = Arc::new(merged);
@@ -412,12 +430,15 @@ impl SessionChange {
                     }
                     turn.error = Some(error.clone());
                 }
-                Self::Submission { .. }
+                Self::Workspace { .. }
+                | Self::Preparation { .. }
+                | Self::Submission { .. }
                 | Self::Status { .. }
                 | Self::Turn { .. }
                 | Self::Request { .. }
                 | Self::RequestDelivery { .. }
-                | Self::ResolveRequest { .. } => unreachable!(),
+                | Self::ResolveRequest { .. }
+                | Self::Unsupported => unreachable!(),
             }
             Ok(())
         })();
@@ -425,8 +446,16 @@ impl SessionChange {
     }
 }
 
-fn merge_fields(previous: &Turn, incoming: &Turn) -> Turn {
-    let mut merged = previous.clone();
+/// Returns `None` when a running notification would reopen a terminal turn.
+fn merge_turn(previous: Option<&Turn>, incoming: &Turn, completed: bool) -> Option<Turn> {
+    if !completed
+        && previous.is_some_and(|old| {
+            old.status != TurnStatus::Running && old.status != TurnStatus::Unknown
+        })
+    {
+        return None;
+    }
+    let mut merged = previous.unwrap_or(incoming).clone();
     macro_rules! field { ($($field:ident),* $(,)?) => { $(if incoming.$field.is_some() { merged.$field = incoming.$field.clone(); })* }; }
     field!(
         started_at,
@@ -436,7 +465,135 @@ fn merge_fields(previous: &Turn, incoming: &Turn) -> Turn {
         completed_at_ms
     );
 
-    merged
+    merged.status = match (completed, incoming.status) {
+        (false, _) => TurnStatus::Running,
+        (true, TurnStatus::Unknown) => TurnStatus::Completed,
+        (true, status) => status,
+    };
+    if let Some(items) = &incoming.items {
+        // Turn lifecycle and item notifications are independent. Even
+        // a native "full" turn can omit an item whose output is still
+        // arriving. Only RemoveItem removes a streamed item; a new
+        // history response replaces the conversation at its owner.
+        merged.items = Some(append_items(
+            previous
+                .and_then(|old| old.items.clone())
+                .unwrap_or_default(),
+            items,
+        ));
+    }
+    if incoming.error.is_none()
+        && (merged.status == TurnStatus::Completed
+            || previous.is_some_and(|old| {
+                old.error
+                    .as_ref()
+                    .is_some_and(|e| e.retry.as_ref().is_some_and(|retry| retry.retrying))
+            }))
+        && merged.status != TurnStatus::Running
+    {
+        merged.error = None;
+    }
+    Some(merged)
+}
+
+#[cfg(test)]
+mod merge_turn_tests {
+    use super::*;
+    use crate::execution::{ExecutionError, RetryEvidence};
+
+    #[test]
+    fn running_notifications_do_not_reopen_terminal_turns() {
+        for status in [
+            TurnStatus::Completed,
+            TurnStatus::Failed,
+            TurnStatus::Interrupted,
+        ] {
+            let previous = Turn {
+                status,
+                ..Default::default()
+            };
+            assert!(merge_turn(Some(&previous), &Turn::default(), false).is_none());
+        }
+        for status in [TurnStatus::Unknown, TurnStatus::Running] {
+            let previous = Turn {
+                status,
+                ..Default::default()
+            };
+            assert_eq!(
+                merge_turn(Some(&previous), &Turn::default(), false)
+                    .unwrap()
+                    .status,
+                TurnStatus::Running
+            );
+        }
+    }
+
+    #[test]
+    fn completed_unknown_notifications_become_completed() {
+        assert_eq!(
+            merge_turn(None, &Turn::default(), true).unwrap().status,
+            TurnStatus::Completed
+        );
+        let previous = Turn {
+            status: TurnStatus::Running,
+            ..Default::default()
+        };
+        assert_eq!(
+            merge_turn(Some(&previous), &Turn::default(), true)
+                .unwrap()
+                .status,
+            TurnStatus::Completed
+        );
+    }
+
+    #[test]
+    fn terminal_notifications_clear_only_retrying_errors_unless_completed() {
+        for retrying in [false, true] {
+            let previous = Turn {
+                error: Some(ExecutionError {
+                    message: "retry failed".into(),
+                    retry: Some(RetryEvidence {
+                        retrying,
+                        overloaded: false,
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            for status in [TurnStatus::Failed, TurnStatus::Interrupted] {
+                let incoming = Turn {
+                    status,
+                    ..Default::default()
+                };
+                assert_eq!(
+                    merge_turn(Some(&previous), &incoming, true)
+                        .unwrap()
+                        .error
+                        .is_none(),
+                    retrying
+                );
+            }
+            assert!(
+                merge_turn(
+                    Some(&previous),
+                    &Turn {
+                        status: TurnStatus::Completed,
+                        ..Default::default()
+                    },
+                    true
+                )
+                .unwrap()
+                .error
+                .is_none()
+            );
+            assert!(
+                merge_turn(Some(&previous), &Turn::default(), false)
+                    .unwrap()
+                    .error
+                    .is_some()
+            );
+        }
+    }
 }
 
 pub fn append_items(mut previous: Vec<Arc<Item>>, incoming: &[Arc<Item>]) -> Vec<Arc<Item>> {
@@ -479,6 +636,8 @@ pub struct ReadTurnItems {
 #[serde(rename_all = "camelCase")]
 pub struct HistoryPage {
     pub turns: Vec<Arc<Turn>>,
+    /// Availability of the source ranges, independent of the continuation cursor.
+    pub history_read_state: Option<HistoryReadState>,
     pub next_cursor: Option<String>,
 }
 
@@ -491,14 +650,16 @@ impl HistoryPage {
         ));
         thread.history_cursor = self.next_cursor.clone();
         thread.history_has_more = Some(thread.history_cursor.is_some());
-        thread.history_read_state = Some(HistoryReadState::new(
-            if thread.history_cursor.is_some() {
-                HistoryReadKind::Partial
-            } else {
-                HistoryReadKind::Complete
-            },
-            Vec::new(),
-        ));
+        thread.history_read_state = self.history_read_state.clone().or_else(|| {
+            Some(HistoryReadState::new(
+                if thread.history_cursor.is_some() {
+                    HistoryReadKind::Partial
+                } else {
+                    HistoryReadKind::Complete
+                },
+                Vec::new(),
+            ))
+        });
     }
 }
 
@@ -594,7 +755,7 @@ pub struct SessionUpdate {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct Capabilities {
     pub additional_input: bool,
     pub fork: bool,

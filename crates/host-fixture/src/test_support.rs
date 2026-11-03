@@ -14,6 +14,17 @@ use std::{
 use tokio_util::sync::{CancellationToken, DropGuard};
 use zeroize::Zeroizing;
 
+/// Automatic checkouts live at `<worktrees>/<id>/<project name>`.
+#[track_caller]
+pub fn assert_project_directory(cwd: &Path, project: &Path, worktrees: Option<&Path>) {
+    if let Some(worktrees) = worktrees {
+        assert_eq!(cwd.file_name(), project.file_name());
+        assert_eq!(cwd.parent().unwrap().parent().unwrap(), worktrees);
+    } else {
+        assert_eq!(cwd, project);
+    }
+}
+
 #[derive(Default)]
 pub struct Memory {
     bytes: Mutex<Option<Zeroizing<Vec<u8>>>>,
@@ -70,7 +81,7 @@ impl HostFixture {
             .await
             .map(Arc::new)
             .map_err(|error| error.to_string());
-        let codex = host_daemon::adapters::codex::Codex::new(server.clone());
+        let codex = host_daemon::providers::codex::Codex::new(server.clone());
         if accounts && server.is_ok() {
             codex
                 .enable_accounts(directory.join("state/accounts"), config)
@@ -79,17 +90,18 @@ impl HostFixture {
         }
         let mut backends = vec![codex.into()];
         if let Some(program) = claude {
-            let backend = match host_daemon::adapters::Claude::load(
+            let backend = match host_daemon::providers::Claude::load(
                 program.to_owned(),
                 directory.join("claude"),
                 Some(directory.join("claude-native")),
             )
             .await
             {
-                Ok(adapter) => adapter.into(),
+                // Every read also refreshes, so tests observe catalog changes without waiting.
+                Ok(adapter) => adapter.refresh_discovery_after(Duration::ZERO).into(),
                 Err(error) => {
                     eprintln!("Claude fixture adapter unavailable: {error:#}");
-                    host_daemon::adapters::Backend::unavailable(
+                    host_daemon::providers::Backend::unavailable(
                         agent_protocol::session::ProviderKind::Claude,
                         error,
                     )
@@ -162,7 +174,9 @@ impl Connection {
         let endpoint = Endpoint::bind(identity, Relays::Disabled).await?;
         let opened: crate::Result<_> = async {
             let session = endpoint.connect(ticket).await?;
-            let (peer, events) = session.open_peer(Duration::from_secs(10), 128).await?;
+            // The fixture RPC budget includes cold provider startup on Windows;
+            // latency contracts impose their own shorter operation bounds.
+            let (peer, events) = session.open_peer(Duration::from_secs(30), 128).await?;
             Ok((session, peer, events))
         }
         .await;

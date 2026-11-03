@@ -34,7 +34,7 @@ async fn stdio_browser_tool_is_typed_and_does_not_expose_generic_execution() {
         (
             3,
             "tools/call",
-            json!({"name":"bex_browser","arguments":{"action":"evaluate","expression":"1+1"}}),
+            json!({"name":"execute_host_command","arguments":{"command":"echo forbidden"}}),
         ),
     ] {
         input
@@ -53,15 +53,22 @@ async fn stdio_browser_tool_is_typed_and_does_not_expose_generic_execution() {
         match id {
             1 => assert_eq!(response["result"]["protocolVersion"], "2025-06-18"),
             2 => {
-                assert_eq!(response["result"]["tools"].as_array().unwrap().len(), 1);
-                let tool = &response["result"]["tools"][0];
-                assert_eq!(tool["name"], "bex_browser");
+                let tools = response["result"]["tools"].as_array().unwrap();
+                for name in [
+                    "preview_snapshot",
+                    "preview_open",
+                    "preview_click",
+                    "preview_type",
+                    "preview_evaluate",
+                    "preview_resize",
+                    "preview_close",
+                ] {
+                    assert!(tools.iter().any(|tool| tool["name"] == name));
+                }
                 assert!(
-                    !tool["inputSchema"]["properties"]["action"]["enum"]
-                        .as_array()
-                        .unwrap()
+                    !tools
                         .iter()
-                        .any(|action| action == "wait_for_user")
+                        .any(|tool| tool["name"] == "execute_host_command")
                 );
             }
             _ => assert_eq!(response["result"]["isError"], true),
@@ -73,9 +80,36 @@ async fn stdio_browser_tool_is_typed_and_does_not_expose_generic_execution() {
 }
 
 #[tokio::test]
-#[ignore = "requires installed Codex, Chrome and the process supervisor; no model turn is submitted"]
+#[ignore = "requires installed Codex, native desktop (Mac) or Chromium (Linux), and the process supervisor; no model turn is submitted"]
 async fn installed_codex_exposes_the_same_browser_as_the_phone() {
     let root = tempfile::tempdir().unwrap();
+    #[cfg(target_os = "macos")]
+    let mut desktop = {
+        let target = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_owned();
+        let mut desktop = tokio::process::Command::new(target.join("agent-desktop"))
+            .env("AGENT_STATE_DIR", root.path())
+            .env("AGENT_ISOLATED_HOST", "1")
+            .env("AGENT_HOST_DAEMON", "/usr/bin/false")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        for _ in 0..100 {
+            if agent_local_host::browser::read_renderer(root.path()).is_ok() {
+                break;
+            }
+            assert!(desktop.try_wait().unwrap().is_none());
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        desktop
+    };
     let browser = host_daemon::browser::Browser::start(root.path().join("profile"))
         .await
         .unwrap();
@@ -83,7 +117,7 @@ async fn installed_codex_exposes_the_same_browser_as_the_phone() {
     mcp["command"] = env!("CARGO_BIN_EXE_host-daemon").into();
     std::fs::create_dir_all(root.path().join("codex")).unwrap();
     let server = codex_app_server::CodexAppServer::spawn(codex_app_server::AppServerConfig {
-        program: std::env::var_os("BEX_CODEX_TEST_PROGRAM")
+        program: std::env::var_os("AGENT_CODEX_TEST_PROGRAM")
             .map(PathBuf::from)
             .unwrap_or_else(|| codex_app_server::AppServerConfig::default().program),
         codex_home: Some(root.path().join("codex")),
@@ -94,7 +128,7 @@ async fn installed_codex_exposes_the_same_browser_as_the_phone() {
     let started = server
         .request::<_, Value>(
             "thread/start",
-            &json!({"cwd":root.path(),"config":{"mcp_servers.bex_browser":mcp}}),
+            &json!({"cwd":root.path(),"config":{"mcp_servers.agent_browser":mcp}}),
         )
         .await
         .unwrap()
@@ -117,9 +151,9 @@ async fn installed_codex_exposes_the_same_browser_as_the_phone() {
             .outcome
             .unwrap();
         found = status["data"].as_array().is_some_and(|servers| {
-            servers
-                .iter()
-                .any(|s| s["name"] == "bex_browser" && s["tools"].get("bex_browser").is_some())
+            servers.iter().any(|s| {
+                s["name"] == "agent_browser" && s["tools"].get("preview_snapshot").is_some()
+            })
         });
         if found {
             break;
@@ -130,7 +164,8 @@ async fn installed_codex_exposes_the_same_browser_as_the_phone() {
         found,
         "Codex must discover the conversation-scoped MCP tool"
     );
-    let result=server.request::<_,Value>("mcpServer/tool/call",&json!({"threadId":thread,"server":"bex_browser","tool":"bex_browser","arguments":{"action":"screenshot"}})).await.unwrap().outcome.unwrap();
+    server.request::<_,Value>("mcpServer/tool/call",&json!({"threadId":thread,"server":"agent_browser","tool":"preview_open","arguments":{"url":"about:blank"}})).await.unwrap().outcome.unwrap();
+    let result=server.request::<_,Value>("mcpServer/tool/call",&json!({"threadId":thread,"server":"agent_browser","tool":"preview_snapshot","arguments":{}})).await.unwrap().outcome.unwrap();
     assert!(
         result.to_string().contains("image/jpeg"),
         "Codex receives the Host screenshot"
@@ -140,6 +175,8 @@ async fn installed_codex_exposes_the_same_browser_as_the_phone() {
             thread_id: session,
             tab_id: String::new(),
             image_id: String::new(),
+            renderer_id: String::new(),
+            generation: 0,
             action: agent_protocol::browser::BrowserAction::Read,
         })
         .await
@@ -148,6 +185,8 @@ async fn installed_codex_exposes_the_same_browser_as_the_phone() {
     assert!(result.to_string().contains(&phone.tab_id));
     server.shutdown().await.unwrap();
     browser.shutdown().await;
+    #[cfg(target_os = "macos")]
+    desktop.kill().await.unwrap();
 }
 
 #[tokio::test]
@@ -155,7 +194,7 @@ async fn installed_codex_exposes_the_same_browser_as_the_phone() {
 async fn cancelled_mcp_call_keeps_the_bridge_responsive() {
     use agent_protocol::browser::BrowserFrame;
     let root = tempfile::Builder::new()
-        .prefix("bex-cancel-")
+        .prefix("agent-cancel-")
         .tempdir_in("/tmp")
         .unwrap();
     let socket = root.path().join("bridge.sock");
@@ -181,7 +220,7 @@ async fn cancelled_mcp_call_keeps_the_bridge_responsive() {
         .unwrap()
         .unwrap();
     assert!(serde_json::from_str::<Value>(&initialized).unwrap()["result"].is_object());
-    input.write_line(&json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"bex_browser","arguments":{"action":"screenshot"}}}).to_string()).await.unwrap();
+    input.write_line(&json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"preview_status","arguments":{}}}).to_string()).await.unwrap();
     let (connection, _) = tokio::time::timeout(Duration::from_secs(3), listener.accept())
         .await
         .unwrap()
@@ -213,7 +252,7 @@ async fn cancelled_mcp_call_keeps_the_bridge_responsive() {
             .is_none(),
         "cancellation must close the in-flight Host bridge connection"
     );
-    input.write_line(&json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"bex_browser","arguments":{"action":"screenshot"}}}).to_string()).await.unwrap();
+    input.write_line(&json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"preview_status","arguments":{}}}).to_string()).await.unwrap();
     let (connection, _) = tokio::time::timeout(Duration::from_secs(3), listener.accept())
         .await
         .unwrap()

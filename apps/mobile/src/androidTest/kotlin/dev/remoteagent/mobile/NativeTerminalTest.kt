@@ -92,13 +92,13 @@ class NativeTerminalTest {
                 device.pressKeyCode(android.view.KeyEvent.KEYCODE_ENTER)
             }
             awaitTerminalReady()
-            type("BEX_NATIVE=17")
+            type("AGENT_NATIVE=17")
             assertTrue(device.takeScreenshot(File(base.getExternalFilesDir(null), "terminal-input.png")))
             device.findObject(By.text("閉じる")).click()
             compose.waitUntil(10_000) { !visible.value }
             compose.runOnIdle { visible.value = true }
             awaitTerminalReady()
-            type("exit \$BEX_NATIVE")
+            type("exit \$AGENT_NATIVE")
             compose.waitUntil(10_000) { device.hasObject(By.text("終了 · 17")) }
             assertTrue(device.takeScreenshot(File(base.getExternalFilesDir(null), "terminal-retained.png")))
         } catch (error: Throwable) {

@@ -6,22 +6,23 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-async-trait = "0.1.89"
+async-trait = "0.1.92"
 tracing.workspace = true
-bex-process = { path = "../bex-process" }
+agent-process = { path = "../agent-process" }
+agent-local-host = { path = "../agent-local-host" }
 agent-protocol = { path = "../agent-protocol" }
 agent-transport = { path = "../agent-transport" }
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 directories = "6"
 uuid = { version = "1", features = ["v4", "serde"] }
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.6", features = ["derive"] }
 base64.workspace = true
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "ico", "webp"] }
-resvg = { version = "0.45.1", default-features = false }
+resvg = { version = "0.49.0", default-features = false }
 regex = "1"
 codex-app-server = { path = "../codex-app-server" }
 ring.workspace = true
-reqwest = { version = "0.13.4", default-features = false, features = ["rustls-no-provider", "multipart", "json", "http2", "system-proxy"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "multipart", "json", "http2", "system-proxy"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 futures-util.workspace = true
 serde.workspace = true
@@ -31,7 +32,8 @@ tokio = { workspace = true, features = ["fs", "io-std", "net"] }
 async-tungstenite = { version = "0.35", default-features = false, features = ["handshake", "futures-03-sink", "tokio-rustls-platform-verifier"] }
 futures-io = "0.3"
 tokio-util.workspace = true
-zeroize.workspace = true
+zeroize = { workspace = true, features = ["serde"] }
+url.workspace = true
 tempfile = "3"
 scopeguard = "1.2"
 atomicwrites = "0.4.4"
@@ -40,11 +42,22 @@ dunce.workspace = true
 alacritty_terminal = "=0.26.0"
 
 [dev-dependencies]
+agent-protocol = { path = "../agent-protocol", features = ["test-support"] }
 tracing-subscriber = { workspace = true, features = ["fmt"] }
-proptest = "1.11"
+proptest = "1.12"
 tokio = { workspace = true, features = ["test-util"] }
 # Exercise the real client Store and rendering against Host behavior.
 agent-core = { path = "../agent-core" }
 # Match desktop builds even when CI tests only the headless packages. With both
 # backends enabled, cold dictation must select a provider before starting TLS.
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+aes = "0.9"
+cbc = { version = "0.2", features = ["alloc"] }
+pbkdf2 = "0.13"
+sha1 = "0.11"
+sha2 = "0.11"
+rusqlite = { version = "0.41", features = ["bundled"] }
+security-framework = "3"

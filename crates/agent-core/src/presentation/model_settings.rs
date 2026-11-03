@@ -6,13 +6,20 @@ use crate::{
 };
 use agent_protocol::operations::UsageWindow;
 
-pub(crate) fn draft_provider(
-    key: &crate::state::DraftKey,
-    model: Option<&ModelRef>,
-) -> Option<ProviderKind> {
-    match key {
-        crate::state::DraftKey::Session { session } => Some(session.provider),
-        crate::state::DraftKey::Local { .. } => model.map(|model| model.provider),
+impl Snapshot {
+    pub(crate) fn draft_provider(
+        &self,
+        key: &crate::state::DraftKey,
+        model: Option<&ModelRef>,
+    ) -> Option<ProviderKind> {
+        model.map(|model| model.provider).or_else(|| match key {
+            crate::state::DraftKey::Session { session } => Some(
+                self.thread_metadata(session)
+                    .and_then(|thread| thread.active_provider)
+                    .unwrap_or(session.provider),
+            ),
+            crate::state::DraftKey::Local { .. } => None,
+        })
     }
 }
 
@@ -33,7 +40,7 @@ pub(crate) fn automatic_provider(
         .map(|model| model.model.provider)
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ModelQuickControls {
     pub efforts: Vec<String>,
@@ -44,7 +51,7 @@ pub struct ModelQuickControls {
     pub fast_service_tier: Option<String>,
     pub speed_choices: Vec<ModelSpeedChoice>,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ModelSpeedChoice {
     pub id: String,
@@ -183,7 +190,7 @@ impl Snapshot {
         &self,
         thread_id: crate::state::DraftKey,
     ) -> Option<ProviderKind> {
-        draft_provider(
+        self.draft_provider(
             &thread_id,
             self.drafts
                 .get(&thread_id)
@@ -534,7 +541,13 @@ mod tests {
             assert!(effects.is_empty());
             assert!(next.pending_submissions.is_empty());
             assert_eq!(next.drafts[&key].text, "keep this input");
-            assert!(next.error.is_some());
+            assert!(next.error.is_none());
+            assert!(
+                next.operation_error(crate::state::operations::OperationKey::Submission {
+                    draft_key: key
+                })
+                .is_some()
+            );
         }
     }
 

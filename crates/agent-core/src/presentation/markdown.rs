@@ -11,8 +11,7 @@ mod diagram;
 pub use diagram::{MarkdownDiagram, markdown_diagram};
 mod links;
 pub use links::{
-    MarkdownFileKind, MarkdownFileReference, file_requires_download, markdown_display_source,
-    markdown_file_target,
+    MarkdownFileKind, MarkdownFileReference, markdown_file_kind, markdown_file_target,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -81,6 +80,74 @@ fn parse(source: &str) -> Node {
     ::markdown::to_mdast(source, &ParseOptions::gfm()).expect("GFM is infallible")
 }
 
+fn is_disclosure_tag(source: &str) -> bool {
+    let Some(name) = source.strip_prefix('<') else {
+        return false;
+    };
+    let name = name.strip_prefix('/').unwrap_or(name);
+    let name = name
+        .split(|c: char| c.is_ascii_whitespace() || c == '/' || c == '>')
+        .next()
+        .unwrap_or_default();
+    name.eq_ignore_ascii_case("details") || name.eq_ignore_ascii_case("summary")
+}
+
+/// Show disclosure captions and contents on every client without exposing HTML wrappers.
+/// Use parsed HTML positions so escaped text and code examples keep their literal tags.
+fn without_disclosure_tags(source: &str) -> Cow<'_, str> {
+    if !source
+        .match_indices('<')
+        .any(|(offset, _)| is_disclosure_tag(&source[offset..]))
+    {
+        return Cow::Borrowed(source);
+    }
+    fn tags(node: &Node, base: usize, ranges: &mut Vec<std::ops::Range<usize>>) {
+        if let Node::Html(html) = node
+            && is_disclosure_tag(&html.value)
+        {
+            let position = node.position().expect("parsed HTML has a source position");
+            ranges.push(base + position.start.offset..base + position.end.offset);
+        }
+        for child in node.children().into_iter().flatten() {
+            tags(child, base, ranges);
+        }
+    }
+    fn visit(node: &Node, source: &str, ranges: &mut Vec<std::ops::Range<usize>>) {
+        if let Node::Html(html) = node {
+            if is_disclosure_tag(html.value.trim_start()) {
+                let position = node.position().expect("parsed HTML has a source position");
+                // A flow HTML node can swallow the entire disclosure, including images.
+                // Read its tags as inline HTML while retaining Markdown code boundaries.
+                let mut options = ParseOptions::gfm();
+                options.constructs.html_flow = false;
+                let fragment = ::markdown::to_mdast(
+                    &source[position.start.offset..position.end.offset],
+                    &options,
+                )
+                .expect("GFM is infallible");
+                tags(&fragment, position.start.offset, ranges);
+            }
+            return;
+        }
+        for child in node.children().into_iter().flatten() {
+            visit(child, source, ranges);
+        }
+    }
+    let mut ranges = Vec::new();
+    visit(&parse(source), source, &mut ranges);
+    if ranges.is_empty() {
+        return Cow::Borrowed(source);
+    }
+    let mut text = String::new();
+    let mut previous = 0;
+    for range in ranges {
+        text.push_str(&source[previous..range.start]);
+        previous = range.end;
+    }
+    text.push_str(&source[previous..]);
+    Cow::Owned(text)
+}
+
 fn definitions(node: &Node) -> HashMap<&str, &str> {
     fn collect<'a>(node: &'a Node, result: &mut HashMap<&'a str, &'a str>) {
         if let Node::Definition(def) = node {
@@ -107,6 +174,12 @@ fn image<'a>(node: &'a Node, definitions: &HashMap<&str, &'a str>) -> Option<(&'
 
 /// Separate images for Host-backed desktop loading without interpreting Markdown again in the client.
 pub fn markdown_without_images(source: &str) -> (Cow<'_, str>, Vec<String>) {
+    let source = without_disclosure_tags(source);
+    // Inline and reference images both start with `![`. Most streamed text has
+    // no image opener, so leave parsing to the desktop renderer in that case.
+    if !source.contains("![") {
+        return (source, Vec::new());
+    }
     fn visit(
         node: &Node,
         definitions: &HashMap<&str, &str>,
@@ -126,20 +199,20 @@ pub fn markdown_without_images(source: &str) -> (Cow<'_, str>, Vec<String>) {
             }
         }
     }
-    let root = parse(source);
+    let root = parse(&source);
     let mut text = String::new();
     let mut images = Vec::new();
     let mut previous = 0;
     visit(
         &root,
         &definitions(&root),
-        source,
+        &source,
         &mut previous,
         &mut text,
         &mut images,
     );
     if images.is_empty() {
-        (Cow::Borrowed(source), images)
+        (source, images)
     } else {
         text.push_str(&source[previous..]);
         (Cow::Owned(text), images)
@@ -148,6 +221,7 @@ pub fn markdown_without_images(source: &str) -> (Cow<'_, str>, Vec<String>) {
 
 #[cfg_attr(feature = "bindings", uniffi::export)]
 pub fn markdown_blocks(source: String) -> Vec<MarkdownBlock> {
+    let source = without_disclosure_tags(&source);
     let root = parse(&source);
     let mut blocks = Vec::new();
     block(
@@ -175,9 +249,55 @@ pub fn markdown_table_csv(rows: Vec<Vec<String>>) -> String {
         .join("\r\n")
 }
 
-/// Header labels keyed by source offset for renderers that retain the original Markdown AST.
-pub fn markdown_code_headers(source: &str) -> HashMap<usize, String> {
-    fn visit(node: &Node, headers: &mut HashMap<usize, String>) {
+/// Desktop Markdown and its code labels share a parse. Image removal can change
+/// block boundaries, so it precedes parsing; file chips only replace inline nodes.
+pub struct MarkdownPresentation {
+    pub source: String,
+    pub images: Vec<String>,
+    pub code_headers: HashMap<usize, String>,
+}
+
+pub fn markdown_presentation(source: &str) -> MarkdownPresentation {
+    let (source, images) = markdown_without_images(source);
+    // File chips need a link or inline-code opener. Fenced labels need a fence;
+    // ordinary prose and indented code can go straight to the retained renderer.
+    if !source.contains(['[', '<', '`', '~']) {
+        return MarkdownPresentation {
+            source: source.into_owned(),
+            images,
+            code_headers: HashMap::new(),
+        };
+    }
+    let root = parse(&source);
+    let edits = links::file_reference_edits(&source, &root);
+    let mut headers = code_headers(&root).into_iter().peekable();
+    let mut code_headers = HashMap::new();
+    let mut rendered = String::with_capacity(source.len());
+    let mut previous = 0;
+    for (range, replacement) in &edits {
+        while let Some((offset, _)) = headers.peek()
+            && *offset < range.start
+        {
+            let (offset, label) = headers.next().unwrap();
+            code_headers.insert(rendered.len() + offset - previous, label);
+        }
+        rendered.push_str(&source[previous..range.start]);
+        rendered.push_str(replacement);
+        previous = range.end;
+    }
+    for (offset, label) in headers {
+        code_headers.insert(rendered.len() + offset - previous, label);
+    }
+    rendered.push_str(&source[previous..]);
+    MarkdownPresentation {
+        source: rendered,
+        images,
+        code_headers,
+    }
+}
+
+fn code_headers(root: &Node) -> Vec<(usize, String)> {
+    fn visit(node: &Node, headers: &mut Vec<(usize, String)>) {
         if let Node::Code(code) = node
             && let Some(position) = node.position()
         {
@@ -185,14 +305,14 @@ pub fn markdown_code_headers(source: &str) -> HashMap<usize, String> {
                 .or_else(|| code::fence_filename(code.lang.as_deref()))
                 .or_else(|| code.lang.clone())
                 .unwrap_or_else(|| "CODE".into());
-            headers.insert(position.start.offset, label);
+            headers.push((position.start.offset, label));
         }
         for child in node.children().into_iter().flatten() {
             visit(child, headers);
         }
     }
-    let mut headers = HashMap::new();
-    visit(&parse(source), &mut headers);
+    let mut headers = Vec::new();
+    visit(root, &mut headers);
     headers
 }
 
@@ -645,6 +765,250 @@ mod tests {
                     .iter()
                     .any(|run| run.link.as_deref() == Some("https://example.com/reference"))
             );
+        }
+    }
+
+    #[test]
+    fn desktop_image_extraction_borrows_image_free_markdown() {
+        for source in [
+            "",
+            "Hello! **日本語** [link](target)",
+            r"!\[escaped](image.png)",
+            "# Heading\n\n> quoted\n\n- list\n\n`code`",
+            "[picture]: image.png\n\n[picture]",
+            "&#33;[alt](image.png)",
+            "!&#91;alt](image.png)",
+            TABLE,
+        ] {
+            let (rendered, images) = markdown_without_images(source);
+            assert!(matches!(rendered, Cow::Borrowed(_)));
+            assert_eq!(rendered, source);
+            assert!(images.is_empty());
+        }
+    }
+
+    #[test]
+    fn disclosure_captions_and_images_are_visible_without_html_wrappers() {
+        for separator in ["", "\n", "\n\n", "\r\n"] {
+            for (open, summary, close_summary, close) in [
+                ("<details>", "<summary>", "</summary>", "</details>"),
+                (
+                    "<DETAILS open data-note='a>b'>",
+                    "<SUMMARY class='caption'>",
+                    "</SUMMARY>",
+                    "</DETAILS>",
+                ),
+            ] {
+                let source = format!(
+                    "Before\n\n{open}{separator}{summary}**東映の解約完了画面**{close_summary}{separator}![証拠][receipt]{separator}{close}\n\nAfter\n\n[receipt]: images/receipt.png"
+                );
+                let blocks = markdown_blocks(source.clone());
+                let runs: Vec<_> = blocks
+                    .iter()
+                    .flat_map(|block| match block {
+                        MarkdownBlock::Paragraph { runs, .. } => runs.as_slice(),
+                        _ => panic!("unexpected block"),
+                    })
+                    .collect();
+                assert_eq!(
+                    runs.iter()
+                        .filter_map(|run| run.image.as_deref())
+                        .collect::<Vec<_>>(),
+                    ["images/receipt.png"]
+                );
+                assert!(
+                    runs.iter()
+                        .any(|run| run.text == "東映の解約完了画面" && run.strong)
+                );
+                let text: String = runs.iter().map(|run| run.text.as_str()).collect();
+                assert_eq!(
+                    text.replace(['\r', '\n'], ""),
+                    "Before東映の解約完了画面証拠After"
+                );
+                let (rendered, images) = markdown_without_images(&source);
+                assert_eq!(images, ["images/receipt.png"]);
+                assert_eq!(
+                    rendered,
+                    format!(
+                        "Before\n\n{separator}**東映の解約完了画面**{separator}{separator}\n\nAfter\n\n[receipt]: images/receipt.png"
+                    )
+                );
+            }
+        }
+        let source = "<details><summary>説明だけ</summary>本文</details>";
+        assert_eq!(markdown_without_images(source).0, "説明だけ本文");
+        assert_eq!(
+            paragraph_text(&markdown_blocks(source.into())[0]),
+            "説明だけ本文"
+        );
+        assert_eq!(
+            markdown_without_images("<details/>本文<summary/>").0,
+            "本文"
+        );
+    }
+
+    #[test]
+    fn disclosure_wrappers_preserve_code_and_nested_contents() {
+        let source = "<details>\n<summary>外側</summary>\n```html\n<summary>![literal](code.png)</summary>\n```\n<details>\n<summary>内側</summary>\n\n![画像](nested.png)\n</details>\n</details>";
+        let blocks = markdown_blocks(source.into());
+        let code = blocks
+            .iter()
+            .find(|block| {
+                matches!(block,
+                    MarkdownBlock::Paragraph { style, .. } if style.code
+                )
+            })
+            .expect("code remains code inside a disclosure");
+        assert_eq!(
+            paragraph_text(code),
+            "<summary>![literal](code.png)</summary>"
+        );
+        assert!(blocks.iter().any(|block| paragraph_text(block) == "外側"));
+        assert!(
+            blocks
+                .iter()
+                .any(|block| paragraph_text(block).trim() == "内側")
+        );
+        let (rendered, images) = markdown_without_images(source);
+        assert_eq!(images, ["nested.png"]);
+        assert_eq!(
+            rendered,
+            "\n外側\n```html\n<summary>![literal](code.png)</summary>\n```\n\n内側\n\n\n\n"
+        );
+    }
+
+    #[test]
+    fn disclosure_tags_in_literals_and_unrelated_html_are_unchanged() {
+        for source in [
+            "`<details>`",
+            "`<summary>`",
+            "```html\n<details><summary>![literal](image.png)</summary></details>\n```",
+            r"\<details>\<summary>literal\</summary>\</details>",
+            "<details-extra>literal</details-extra>",
+            "<summary-note>literal</summary-note>",
+            "<script>const example = '<details>![literal](image.png)</details>';</script>",
+            "<details unfinished='attribute",
+            "<summary unfinished='attribute",
+            "<div>![literal](image.png)</div>",
+        ] {
+            let (rendered, images) = markdown_without_images(source);
+            assert!(matches!(rendered, Cow::Borrowed(_)), "{source}");
+            assert_eq!(rendered, source);
+            assert!(images.is_empty());
+            assert_eq!(
+                paragraph_text(&markdown_blocks(source.into())[0]),
+                match source {
+                    source if source.starts_with("```") => source
+                        .strip_prefix("```html\n")
+                        .unwrap()
+                        .strip_suffix("\n```")
+                        .unwrap(),
+                    source if source.starts_with('`') => source.trim_matches('`'),
+                    source if source.starts_with('\\') =>
+                        "<details><summary>literal</summary></details>",
+                    source => source,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn presentation_preserves_plain_text_and_converts_file_autolinks() {
+        let source = "日本語の文章🌸\n\n    plain code";
+        let presentation = markdown_presentation(source);
+        assert_eq!(presentation.source, source);
+        assert!(presentation.images.is_empty());
+        assert!(presentation.code_headers.is_empty());
+        assert_eq!(
+            markdown_presentation("<file:///tmp/main.rs>").source,
+            "[`main.rs`](<file:///tmp/main.rs>)"
+        );
+    }
+
+    #[test]
+    fn presentation_keeps_code_labels_at_displayed_offsets() {
+        let source = "[長い説明](src/first.rs)\n\n```rust filename=src/一.rs\nfn first() {}\n```\n\n![証拠](image.png)\n\n`src/a/index.ts` and `src/b/index.ts`\n\n~~~ts title=src/second.ts\nconst second = 2;\n~~~\n\n`src/last.rs`";
+        let presentation = markdown_presentation(source);
+        assert_eq!(presentation.images, ["image.png"]);
+        assert!(!presentation.source.contains("![証拠]"));
+        assert!(
+            presentation
+                .source
+                .contains("[`a/index.ts`](<src/a/index.ts>)")
+        );
+        assert!(
+            presentation
+                .source
+                .contains("[`b/index.ts`](<src/b/index.ts>)")
+        );
+        assert_eq!(presentation.code_headers.len(), 2);
+        assert_eq!(
+            presentation.code_headers[&presentation.source.find("```rust").unwrap()],
+            "src/一.rs"
+        );
+        assert_eq!(
+            presentation.code_headers[&presentation.source.find("~~~ts").unwrap()],
+            "src/second.ts"
+        );
+        for end in source
+            .char_indices()
+            .map(|(end, _)| end)
+            .chain([source.len()])
+        {
+            let partial = markdown_presentation(&source[..end]);
+            for offset in partial.code_headers.keys() {
+                assert!(partial.source.is_char_boundary(*offset));
+                assert!(partial.source[*offset..].starts_with(['`', '~']));
+            }
+        }
+    }
+
+    #[test]
+    fn disclosure_images_remain_valid_at_every_stream_boundary() {
+        let source = "[receipt]: images/receipt.png\n\n<details>\n<summary>日本語の説明🌸</summary>\n\n![証拠][receipt]\n\n</details>";
+        for end in source
+            .char_indices()
+            .map(|(end, _)| end)
+            .chain([source.len()])
+        {
+            let partial = &source[..end];
+            let (rendered, images) = markdown_without_images(partial);
+            assert!(images.len() <= 1);
+            assert!(images.iter().all(|url| url == "images/receipt.png"));
+            markdown_blocks(partial.into());
+            markdown_presentation(&rendered);
+        }
+        assert_eq!(markdown_without_images(source).1, ["images/receipt.png"]);
+    }
+
+    #[test]
+    fn desktop_image_extraction_preserves_literal_image_openers() {
+        for source in [
+            r"\![escaped](image.png)",
+            "`![inline code](image.png)`",
+            "```markdown\n![fenced code](image.png)\n```",
+            "![unfinished](",
+            "![undefined reference]",
+        ] {
+            let (rendered, images) = markdown_without_images(source);
+            assert!(matches!(rendered, Cow::Borrowed(_)));
+            assert_eq!(rendered, source);
+            assert!(images.is_empty());
+        }
+    }
+
+    #[test]
+    fn desktop_image_extraction_handles_every_reference_form() {
+        for image in [
+            "![alt](image.png)",
+            "![alt][picture]",
+            "![picture][]",
+            "![picture]",
+        ] {
+            let source = format!("前 {image} 後\n\n[picture]: image.png");
+            let (rendered, images) = markdown_without_images(&source);
+            assert_eq!(rendered, "前  後\n\n[picture]: image.png");
+            assert_eq!(images, ["image.png"]);
         }
     }
 

@@ -2,6 +2,8 @@
 module_name = "AgentCore"
 ffi_module_name = "AgentCoreFFI"
 generate_module_map = true
+# The iOS client presents AgentError.reason through its LocalizedError conformance.
+omit_localized_error_conformance = true
 
 [bindings.kotlin]
 package_name = "dev.remoteagent.core"

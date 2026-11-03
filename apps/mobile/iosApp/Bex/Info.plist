@@ -2,8 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>BexTaskURLScheme</key>
-    <string>$(BEX_TASK_URL_SCHEME)</string>
+    <key>ITSAppUsesNonExemptEncryption</key>
+    <false/>
+    <key>TaskURLScheme</key>
+    <string>$(AGENT_TASK_URL_SCHEME)</string>
     <key>CFBundleDevelopmentRegion</key>
     <string>$(DEVELOPMENT_LANGUAGE)</string>
     <key>CFBundleDisplayName</key>
@@ -28,15 +30,13 @@
     <true/>
     <key>NSSupportsLiveActivities</key>
     <true/>
-    <key>BexAPNSEnvironment</key>
-    <string>$(APNS_ENVIRONMENT)</string>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>
             <key>CFBundleURLName</key>
             <string>$(PRODUCT_BUNDLE_IDENTIFIER).task</string>
             <key>CFBundleURLSchemes</key>
-            <array><string>$(BEX_TASK_URL_SCHEME)</string></array>
+            <array><string>$(AGENT_TASK_URL_SCHEME)</string></array>
         </dict>
     </array>
     <key>NSAppTransportSecurity</key>
@@ -58,13 +58,6 @@
     <true/>
     <key>UILaunchScreen</key>
     <dict/>
-    <key>UISupportedInterfaceOrientations~ipad</key>
-    <array>
-        <string>UIInterfaceOrientationPortrait</string>
-        <string>UIInterfaceOrientationPortraitUpsideDown</string>
-        <string>UIInterfaceOrientationLandscapeLeft</string>
-        <string>UIInterfaceOrientationLandscapeRight</string>
-    </array>
     <key>UISupportedInterfaceOrientations</key>
     <array>
         <string>UIInterfaceOrientationPortrait</string>

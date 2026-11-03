@@ -3,13 +3,13 @@ import SwiftUI
 import WidgetKit
 
 @main
-struct BexTaskWidgets: WidgetBundle {
+struct TaskWidgets: WidgetBundle {
     var body: some Widget {
-        BexTaskActivity()
+        TaskActivityExtension()
     }
 }
 
-private struct BexTaskActivity: Widget {
+private struct TaskActivityExtension: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: TaskActivityAttributes.self) { context in
             let view = context.state.display.current
@@ -75,17 +75,6 @@ private struct TaskIconRow: View {
                     .accessibilityLabel(icons[index].label)
                     .frame(maxWidth: 22)
             }
-        }
-    }
-}
-
-private extension TaskActivityAttributes.IconKind {
-    var symbol: String {
-        switch self {
-        case .running: "circle.dotted"
-        case .waiting: "person.crop.circle.badge.questionmark"
-        case .unknown: "arrow.clockwise.circle"
-        case .finished: "checkmark.circle.fill"
         }
     }
 }

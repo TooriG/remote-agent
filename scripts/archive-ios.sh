@@ -11,4 +11,4 @@ exec xcodebuild -project apps/mobile/iosApp/Bex.xcodeproj -scheme Bex \
     -configuration Release -destination 'generic/platform=iOS' \
     -archivePath "$archive" -derivedDataPath "$derived_data" \
     -onlyUsePackageVersionsFromResolvedFile -skipPackagePluginValidation \
-    -allowProvisioningUpdates "BEX_CARGO_TARGET_DIR=$target" "$@" archive
+    -allowProvisioningUpdates "AGENT_CARGO_TARGET_DIR=$target" "$@" archive

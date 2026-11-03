@@ -34,6 +34,7 @@ internal fun VoiceInputButton(
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
     enabled: Boolean,
 ) {
+    val language = LocalUiLanguage.current
     val currentSnapshot by rememberUpdatedState(snapshot)
     val currentPerform by rememberUpdatedState(perform)
     var selection by
@@ -58,9 +59,9 @@ internal fun VoiceInputButton(
                     currentPerform(
                         Intent.EditComposer(selection, text, text.toByteArray(Charsets.UTF_8).size.toUInt())
                     ) {}
-                } else error = "音声を認識できませんでした。もう一度お試しください。"
+                } else error = language.text("音声を認識できませんでした。もう一度お試しください。")
             } else if (requested && result.resultCode != Activity.RESULT_CANCELED) {
-                error = "音声入力に失敗しました。端末の音声認識の設定や接続を確認してください。"
+                error = language.text("音声入力に失敗しました。端末の音声認識の設定や接続を確認してください。")
             }
         }
     IconButton(
@@ -68,34 +69,34 @@ internal fun VoiceInputButton(
             selection = snapshot.navigation().draftKey
             pending = true
             try {
-                recognition.launch(voiceRecognitionIntent())
+                recognition.launch(voiceRecognitionIntent(language.text("AIへの依頼を話してください")))
             } catch (_: ActivityNotFoundException) {
                 pending = false
-                error = "音声認識アプリが見つかりません。端末の音声入力を設定してください。"
+                error = language.text("音声認識アプリが見つかりません。端末の音声入力を設定してください。")
             } catch (_: SecurityException) {
                 pending = false
-                error = "音声入力を開始できません。端末の音声認識アプリの権限を確認してください。"
+                error = language.text("音声入力を開始できません。端末の音声認識アプリの権限を確認してください。")
             }
         },
         enabled = enabled && !pending,
     ) {
-        Icon(painterResource(R.drawable.ic_microphone), contentDescription = "音声入力")
+        Icon(painterResource(R.drawable.ic_microphone), contentDescription = language.text("音声入力"))
     }
     error?.let { message ->
         AlertDialog(
             onDismissRequest = { error = null },
-            confirmButton = { TextButton(onClick = { error = null }) { Text("閉じる") } },
-            title = { Text("音声入力") },
+            confirmButton = { TextButton(onClick = { error = null }) { Text(language.text("閉じる")) } },
+            title = { Text(language.text("音声入力")) },
             text = { Text(message) },
         )
     }
 }
 
-private fun voiceRecognitionIntent() =
+private fun voiceRecognitionIntent(prompt: String) =
     AndroidIntent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
         .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
         .putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
-        .putExtra(RecognizerIntent.EXTRA_PROMPT, "AIへの依頼を話してください")
+        .putExtra(RecognizerIntent.EXTRA_PROMPT, prompt)
         .putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
 
 private val voiceDraftKeySaver =

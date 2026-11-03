@@ -9,6 +9,7 @@ pub(super) enum Phase {
     Recording,
     Transcribing,
 }
+
 pub(super) struct Dictation {
     pub(super) id: uuid::Uuid,
     key: DraftKey,
@@ -20,24 +21,30 @@ pub(super) struct Dictation {
     pub(super) levels: std::collections::VecDeque<f32>,
 }
 impl Desktop {
-    pub(super) fn dictation_bar(&self, cx: &Context<Self>) -> AnyElement {
-        let Some(state) = &self.dictation else {
+    pub(super) fn dictation_bar(
+        phase: Option<Phase>,
+        levels: &std::collections::VecDeque<f32>,
+        connected: bool,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let language = crate::localization::language(cx);
+        let Some(phase) = phase else {
             return div().into_any_element();
         };
-        let recording = state.phase == Phase::Recording;
+        let recording = phase == Phase::Recording;
         h_flex()
             .h(px(88.))
             .px_2()
             .gap_3()
             .child(
-                Self::icon_button(
+                icon_button(
                     "cancel-dictation",
                     IconName::Close,
-                    "録音を取り消す (Esc)",
+                    language.text("録音を取り消す (Esc)"),
                     cx,
                     |s, _, _| s.cancel_recording(),
                 )
-                .disabled(state.phase == Phase::Transcribing),
+                .disabled(phase == Phase::Transcribing),
             )
             .child(if recording {
                 h_flex()
@@ -49,7 +56,7 @@ impl Desktop {
                     .justify_center()
                     .gap(px(3.))
                     .overflow_hidden()
-                    .children(state.levels.iter().map(|level| {
+                    .children(levels.iter().map(|level| {
                         div()
                             .w(px(3.))
                             .flex_shrink_0()
@@ -62,30 +69,30 @@ impl Desktop {
                 h_flex()
                     .flex_1()
                     .gap_2()
-                    .child(spinner::Spinner::new().small())
-                    .child(match state.phase {
-                        Phase::Preparing => "録音を準備中…",
+                    .child(crate::activity::indicator())
+                    .child(match phase {
+                        Phase::Preparing => language.text("録音を準備中…"),
                         #[cfg(target_os = "macos")]
-                        Phase::Permission => "マイクの許可を確認中…",
-                        _ => "文字起こし中…",
+                        Phase::Permission => language.text("マイクの許可を確認中…"),
+                        _ => language.text("文字起こし中…"),
                     })
                     .into_any_element()
             })
             .child(
-                Self::icon_button(
+                icon_button(
                     "stop-dictation",
-                    Icon::default().path("bex/stop.svg"),
-                    "録音を終了して文字起こし",
+                    Icon::default().path("icons/stop.svg"),
+                    language.text("録音を終了して文字起こし"),
                     cx,
                     |s, _, _| s.finish_dictation(false),
                 )
                 .disabled(!recording),
             )
             .child(
-                Self::icon_button(
+                icon_button(
                     "send-dictation",
                     IconName::ArrowUp,
-                    "文字起こしして送信",
+                    language.text("文字起こしして送信"),
                     cx,
                     |s, _, cx| s.send(cx),
                 )
@@ -94,7 +101,7 @@ impl Desktop {
                 .rounded_full()
                 .w(px(44.))
                 .h(px(44.))
-                .disabled(!recording || !self.snapshot.connected),
+                .disabled(!recording || !connected),
             )
             .into_any_element()
     }
@@ -129,7 +136,7 @@ impl Desktop {
                     preparation: None,
                     levels: std::collections::VecDeque::from([0.; 40]),
                 });
-                self.error.clear();
+                self.local_errors.remove(&self.local_error_scope());
             }
             Err(error) => self.set_error(error),
         }
@@ -200,5 +207,104 @@ impl Desktop {
                 self.perform(intent, OperationCompletion::Dictation(id));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::prelude::v1::test;
+    use std::{cell::Cell, rc::Rc};
+
+    #[gpui::test]
+    fn recording_levels_only_redraw_the_composer_and_failures_restore_the_normal_ui(
+        cx: &mut TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        cx.update(|cx| {
+            crate::appearance::init(cx);
+            cx.set_global(Runtime {
+                handle: runtime.handle().clone(),
+                connections: Arc::default(),
+                closing: tokio_util::task::TaskTracker::new(),
+                logging_error: None,
+            });
+        });
+        let id = uuid::Uuid::new_v4();
+        let (view, window) = cx.add_window_view(|window, cx| {
+            let mut view = Desktop::new(Mode::Main, window, cx);
+            view.onboarding = false;
+            Arc::make_mut(&mut view.snapshot).connected = true;
+            view.panels.open(view.panel_scope(), Panel::Files, None);
+            view.dictation = Some(Dictation {
+                id,
+                key: view.draft_key().clone(),
+                generation: view.snapshot.epoch,
+                phase: Phase::Recording,
+                send: false,
+                control: None,
+                preparation: None,
+                levels: std::collections::VecDeque::from([0.; 40]),
+            });
+            view
+        });
+        window.simulate_resize(size(px(1600.), px(900.)));
+        window.run_until_parked();
+        let counts = |view: &Desktop, cx: &App| {
+            [
+                view.sidebar_view.as_ref().unwrap().read(cx).renders,
+                view.conversation.read(cx).renders,
+                view.workbench_view.read(cx).renders,
+                view.composer_view.read(cx).content.read(cx).renders,
+            ]
+        };
+        let before = view.read_with(window, counts);
+        let notifications = Rc::new(Cell::new(0));
+        let _observation = window.update(|_, cx| {
+            let count = notifications.clone();
+            cx.observe(&view, move |_, _| count.set(count.get() + 1))
+        });
+        let receive = |event, window: &mut VisualTestContext| {
+            window.update(|window, cx| {
+                view.update(cx, |view, cx| {
+                    view.receive((view.epoch, Update::Recording(id, event)), window, cx);
+                })
+            });
+            window.run_until_parked();
+        };
+        receive(platform::RecordingEvent::Level(0.25), window);
+        let after = view.read_with(window, counts);
+        assert_eq!(
+            &after[..3],
+            &before[..3],
+            "audio samples must reuse the conversation and panels"
+        );
+        assert!(after[3] > before[3], "the visible waveform must update");
+        assert_eq!(
+            notifications.get(),
+            0,
+            "audio samples must not broadcast Desktop notifications"
+        );
+        view.read_with(window, |view, _| {
+            assert_eq!(view.dictation.as_ref().unwrap().levels.back(), Some(&0.25))
+        });
+        receive(platform::RecordingEvent::Level(f32::NAN), window);
+        assert_eq!(
+            view.read_with(window, counts),
+            after,
+            "invalid samples must not change the waveform"
+        );
+        receive(
+            platform::RecordingEvent::Finished(Err("recording failed".into())),
+            window,
+        );
+        assert!(
+            notifications.get() > 0,
+            "recording failures must update the surrounding UI"
+        );
+        view.read_with(window, |view, _| assert!(view.dictation.is_none()));
     }
 }

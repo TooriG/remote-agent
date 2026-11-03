@@ -1,15 +1,63 @@
 use super::*;
 use crate::client::ClientExt;
 
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    #[test]
+    fn folder_navigation_accepts_home_paths_and_rejects_workspace_relative_paths() {
+        let mut snapshot = Snapshot::default();
+        for path in [
+            "~",
+            "~/Documents",
+            "/workspace",
+            "C:/Users/host",
+            r"\\server\share",
+        ] {
+            assert!(
+                ListFiles { path: path.into() }
+                    .prepare(&mut snapshot)
+                    .is_ok()
+            );
+        }
+        for path in ["", "documents", "~someone/documents"] {
+            assert!(
+                ListFiles { path: path.into() }
+                    .prepare(&mut snapshot)
+                    .is_err()
+            );
+        }
+    }
+}
+
 pub use agent_protocol::operations::ListFiles;
+pub use agent_protocol::operations::ResolveFile;
+
+impl Operation for ResolveFile {
+    rpc_operation!();
+    fn outcome(output: &mut Self::Output) -> Outcome {
+        Outcome::ResolvedFile {
+            entry: output.clone(),
+        }
+    }
+}
 
 impl Operation for ListFiles {
     fn key(&self) -> Option<OperationKey> {
         Some(OperationKey::Directory)
     }
-    rpc_operation!(workspace.directory);
+    rpc_operation!();
+    fn outcome(output: &mut Self::Output) -> Outcome {
+        Outcome::Directory {
+            listing: output.clone(),
+        }
+    }
     fn prepare(&mut self, _: &mut Snapshot) -> Result<(), String> {
-        if !std::path::Path::new(&self.path).is_absolute() {
+        if !agent_protocol::paths::is_absolute_host_path(&self.path)
+            && self.path != "~"
+            && !self.path.starts_with("~/")
+        {
             return Err("絶対パスを入力してください。".into());
         }
         Ok(())
@@ -213,7 +261,7 @@ impl Operation for DownloadFile {
             std::path::Path::new(&self.destination),
         )
         .await
-        .map_err(|error| PeerError::InvalidMessage(error.to_string()))
+        .map_err(PeerError::from)
     }
 }
 

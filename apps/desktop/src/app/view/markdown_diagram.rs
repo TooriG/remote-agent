@@ -2,20 +2,23 @@ use super::*;
 use agent_core::presentation::markdown::MarkdownDiagram;
 use gpui_kit::base::text::MarkdownNode;
 
-impl Desktop {
+use super::conversation::ConversationView;
+
+impl ConversationView {
     pub(super) fn markdown_diagram(
         &mut self,
         message: &str,
         node: &MarkdownNode,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let language = crate::localization::language(cx);
         let Some(diagram) = node.data::<MarkdownDiagram>() else {
             return div().into_any_element();
         };
         let source_key = format!("mermaid-source-{message}-{}", diagram.source);
         let large_key = format!("mermaid-large-{message}-{}", diagram.source);
-        let source_visible = self.expanded_items.contains(&source_key);
-        let large = self.expanded_items.contains(&large_key);
+        let source_visible = self.timeline.expanded_items.contains(&source_key);
+        let large = self.timeline.expanded_items.contains(&large_key);
         let message = message.to_owned();
         let source_message = message.clone();
         let large_message = message.clone();
@@ -27,30 +30,34 @@ impl Desktop {
             .child(
                 Button::new("diagram-source")
                     .label(if source_visible {
-                        "図を表示"
+                        language.text("図を表示")
                     } else {
-                        "ソース"
+                        language.text("ソース")
                     })
                     .small()
                     .ghost()
                     .on_click(cx.listener(move |view, _, _, cx| {
-                        if !view.expanded_items.remove(&source_key) {
-                            view.expanded_items.insert(source_key.clone());
+                        if !view.timeline.expanded_items.remove(&source_key) {
+                            view.timeline.expanded_items.insert(source_key.clone());
                         }
-                        view.remeasure_item(&source_message);
+                        view.timeline.remeasure_item(&source_message);
                         cx.notify();
                     })),
             )
             .child(
                 Button::new("diagram-size")
-                    .label(if large { "縮小" } else { "拡大" })
+                    .label(if large {
+                        language.text("縮小")
+                    } else {
+                        language.text("拡大")
+                    })
                     .small()
                     .ghost()
                     .on_click(cx.listener(move |view, _, _, cx| {
-                        if !view.expanded_items.remove(&large_key) {
-                            view.expanded_items.insert(large_key.clone());
+                        if !view.timeline.expanded_items.remove(&large_key) {
+                            view.timeline.expanded_items.insert(large_key.clone());
                         }
-                        view.remeasure_item(&large_message);
+                        view.timeline.remeasure_item(&large_message);
                         cx.notify();
                     })),
             )
@@ -59,7 +66,7 @@ impl Desktop {
                     .icon(IconName::Copy)
                     .small()
                     .ghost()
-                    .tooltip("Mermaidをコピー")
+                    .tooltip(language.text("Mermaidをコピー"))
                     .on_click(move |_, _, cx| {
                         cx.write_to_clipboard(ClipboardItem::new_string(source.clone()))
                     }),
@@ -84,7 +91,7 @@ impl Desktop {
                 )
                 .into_any_element();
         }
-        let Some(cached) = self.markdown_cache.get_mut(&message) else {
+        let Some(cached) = self.timeline.markdown.get_mut(&message) else {
             return body.into_any_element();
         };
         if !cached.diagrams.contains_key(&diagram.source) {

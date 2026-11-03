@@ -57,7 +57,7 @@ updates:
         patterns: ["*"]
         update-types: [minor, patch]
   - package-ecosystem: npm
-    directory: "/crates/host-daemon/src/claude/sdk"
+    directory: "/crates/host-daemon/src/providers/claude/sdk"
     schedule:
       interval: weekly
       day: thursday

@@ -1,11 +1,11 @@
 use crate::command_line::Mode;
+use agent_local_host::{LocalHostRegistry, LocalHostState};
 use agent_protocol::{
     operations::{ReadHostStatus, RevokeDevice},
     protocol::Call,
 };
 use agent_transport::transport::{Endpoint, Relays};
 use anyhow::{Context, Result, bail};
-use host_daemon::local_host::{LocalHostRegistry, LocalHostState};
 use std::{path::PathBuf, time::Duration};
 
 pub(crate) async fn run(mode: Mode, state_dir: Option<PathBuf>, isolated: bool) -> Result<()> {
@@ -21,7 +21,7 @@ pub(crate) async fn run(mode: Mode, state_dir: Option<PathBuf>, isolated: bool) 
             LocalHostState::Stopped => bail!("Host is not running"),
             LocalHostState::Starting => bail!("Host is still starting; try again shortly"),
         };
-        let identity = host_daemon::load_local_identity(&host.directory)?;
+        let identity = agent_local_host::load_local_identity(&host.directory)?;
         Ok::<_, anyhow::Error>((identity, ticket))
     })
     .await??;
@@ -31,6 +31,20 @@ pub(crate) async fn run(mode: Mode, state_dir: Option<PathBuf>, isolated: bool) 
         let session = endpoint.connect(&ticket).await?;
         let (client, _events) = session.open_peer(Duration::from_secs(15), 8).await?;
         let result = match mode {
+            Mode::History {
+                session,
+                offset,
+                limit,
+                text_offset,
+            } => client
+                .call(&agent_protocol::handoff::ReadHistory {
+                    session,
+                    offset,
+                    limit,
+                    text_offset,
+                })
+                .await
+                .map(|value| serde_json::to_value(value).expect("history serializes")),
             Mode::Invite => client
                 .request::<agent_protocol::models::Invitation>(&Call::Invite(
                     agent_protocol::models::Empty {},

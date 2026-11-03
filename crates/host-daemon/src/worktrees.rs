@@ -517,7 +517,7 @@ fn save(path: &Path, state: &State) -> Result<()> {
                 serde_json::to_writer(&mut *file, state).map_err(std::io::Error::other)?;
                 file.write_all(b"\n")
             },
-            crate::platform::private_file_options(),
+            agent_local_host::private_file_options(),
         )
         .map_err(Into::into)
 }
@@ -533,9 +533,9 @@ fn create_checkout(
 ) -> Result<PathBuf> {
     let destination_text = destination.to_str().context("worktree path is not UTF-8")?;
     if let Some(parent) = destination.parent() {
-        crate::platform::create_state_directory(parent)?;
+        agent_local_host::create_state_directory(parent)?;
     }
-    crate::platform::create_state_directory(destination)?;
+    agent_local_host::create_state_directory(destination)?;
     if let Err(error) = crate::git::text(source, &["branch", branch, base]) {
         let _ = fs::remove_dir(destination);
         return Err(error);
@@ -1302,7 +1302,7 @@ mod tests {
             let root = dunce::canonicalize(repository.path()).unwrap();
             let state_directory = tempfile::tempdir().unwrap();
             let projects = state_directory.path().join("projects.json");
-            let legacy = root.join(".git/bex-worktrees/session-legacy");
+            let legacy = root.join(".git/agent-worktrees/session-legacy");
             crate::git::text(
                 &root,
                 &["worktree", "add", "-b", "legacy", legacy.to_str().unwrap()],
@@ -1404,7 +1404,7 @@ mod tests {
                     .await
                     .unwrap();
                 assert!(!legacy.exists());
-                assert!(root.join(".git/bex-worktrees").is_dir());
+                assert!(root.join(".git/agent-worktrees").is_dir());
             }
             assert!(first.join("source.txt").is_file());
         }

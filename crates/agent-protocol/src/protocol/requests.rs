@@ -23,27 +23,39 @@ macro_rules! contracts {
         }
         $($(contracts!(@$clone $params, $variant $(, $validate)?);)?)*
         #[derive(Debug, Clone, Serialize, Deserialize)]
-        pub enum Call { $($variant($params)),* }
+        #[serde(tag = "method")]
+        pub enum Call {
+            $(#[serde(rename = $method)] $variant($params)),*,
+            #[serde(other)]
+            Unsupported,
+        }
         impl Call {
             pub fn method(&self) -> &str {
-                match self { $(Self::$variant(_) => $method),* }
+                match self { $(Self::$variant(_) => $method),*, Self::Unsupported => "unsupported" }
             }
+            #[cfg(any(test, feature = "test-support"))]
             pub fn params_json(&self) -> Result<Value, serde_json::Error> {
-                match self { $(Self::$variant(params) => serde_json::to_value(params)),* }
+                match self {
+                    $(Self::$variant(params) => serde_json::to_value(params)),*,
+                    Self::Unsupported => Ok(Value::Null),
+                }
             }
         }
+        #[cfg(any(test, feature = "test-support"))]
         pub fn from_json(method: &str, params: Value) -> io::Result<Call> {
             Ok(match method {
                 $($method => Call::$variant(serde_json::from_value(params).map_err(io::Error::other)?)),*,
                 _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("unregistered method: {method}"))),
             })
         }
+        #[cfg(any(test, feature = "test-support"))]
         pub fn provider_response(method: &str, line: &str) -> Result<Response, crate::message::RpcMessageError> {
             match method {
                 $($method => super::json_boundary::typed_response::<$result>(line)),*,
-                _ => Err(crate::message::RpcMessageError::InvalidCombination {reason:"unregistered BEX response"}),
+                _ => Err(crate::message::RpcMessageError::InvalidCombination {reason:"unregistered response"}),
             }
         }
+        #[cfg(any(test, feature = "test-support"))]
         pub fn fixture_reply(method: &str, bytes: &[u8]) -> io::Result<Value> {
             match method {
                 $($method => Ok(decode::<Response<$result>>(bytes)?.into_value())),*,
@@ -62,7 +74,9 @@ macro_rules! contracts {
     };
 }
 contracts! {
+    ReadHandoffHistory, "host/session/context/read" => (crate::handoff::ReadHistory, crate::handoff::Page) [clone],
     ReadTaskActivity, "host/taskActivity/read" => (crate::live_activity::ReadTaskActivity, crate::live_activity::TaskActivityState) [clone],
+    MarkSessionRead, "host/session/markRead" => (crate::live_activity::MarkSessionRead, m::Empty) [clone],
     RegisterLiveActivity, "host/liveActivity/register" => (crate::live_activity::RegisterLiveActivity, crate::live_activity::LiveActivityRegistration) [clone],
     UnregisterLiveActivity, "host/liveActivity/unregister" => (crate::live_activity::UnregisterLiveActivity, m::Empty) [clone],
     OpenSession, "host/session/open" => (s::OpenSession, s::OpenedSession),
@@ -70,14 +84,16 @@ contracts! {
     ReadTurnItems, "host/session/turn/items" => (s::ReadTurnItems, m::Empty) [clone],
     AnswerSession, "host/session/answer" => (op::SessionAnswer, m::Empty),
     RequestSession, "host/session/request" => (op::OpenRequest, s::SessionRef) [clone],
-    SessionScope, "host/session/scope" => (m::Empty, String),
     ReadItem, "host/session/item/read" => (op::ReadItem, op::ItemResponse) [clone, op::ReadItem::validate],
     AddProject, "host/project/add" => (op::AddProject, String) [clone],
+    ScanProjects, "host/project/scan" => (crate::project_import::ScanProjects, crate::project_import::ProjectScan) [clone],
+    ImportProjects, "host/project/import" => (crate::project_import::ImportProjects, crate::project_import::ProjectImportResult) [clone],
     ListSessions, "host/session/list" => (op::ListSessions, m::ThreadList) [clone],
     ListProjectSessions, "host/project/sessions" => (op::ListProjectSessions, m::ThreadList) [clone],
     ReadListDecorations, "host/session/decorations/read" => (op::ReadListDecorations, op::ListDecorations) [clone],
     ListAgents, "host/session/agents" => (op::ListAgents, Vec<m::AgentObservation>) [clone],
     CreateSession, "host/session/create" => (op::CreateSession, s::OpenedSession),
+    RetryPreparation, "host/session/preparation/retry" => (op::RetryPreparation, m::Empty) [clone],
     ForkSession, "host/session/fork" => (op::ForkSession, m::ThreadResponse) [clone, op::ForkSession::validate],
     Submit, "host/session/submit" => (op::Submission, op::SubmissionReceipt) [clone],
     Interrupt, "host/session/interrupt" => (op::Interrupt, m::Empty) [clone],
@@ -92,6 +108,7 @@ contracts! {
     PrepareDictation, "host/dictation/prepare" => (op::DictationPreparation, m::Empty),
     CancelDictation, "host/dictation/cancel" => (op::DictationPreparation, m::Empty),
     ListFiles, "host/file/list" => (op::ListFiles, m::FileList) [clone],
+    ResolveFile, "host/file/resolve" => (op::ResolveFile, m::FileEntry) [clone],
     ReadFile, "host/file/read" => (op::ListFiles, m::FileContent),
     WriteFile, "host/file/write" => (op::WriteFile, m::FileContent) [clone],
     Upload, "host/blob/upload" => (op::Upload, m::TransferGrant),
@@ -116,8 +133,10 @@ contracts! {
     DetachTerminal, "host/terminal/detach" => (op::DetachTerminal, m::Empty) [clone],
     KillTerminal, "host/terminal/kill" => (op::TerminalKill, m::Empty),
     Pair, "host/pair" => (op::Pair, m::Empty) [clone],
+    IdentifyDevice, "host/device/identify" => (op::IdentifyDevice, op::HostIdentity) [clone],
     HostName, "host/name" => (m::Empty, String),
     HostStatus, "host/status" => (m::Empty, m::HostStatus),
+    PrepareHostUpdate, "host/update/prepare" => (op::PrepareHostUpdate, op::HostUpdate) [clone],
     Invite, "host/invite" => (m::Empty, m::Invitation),
     ListRemotes, "host/listRemotes" => (m::Empty, Vec<m::RemoteHost>),
     RegisterRemote, "host/registerRemote" => (op::RegisterRemoteHost, m::RemoteHost) [clone],

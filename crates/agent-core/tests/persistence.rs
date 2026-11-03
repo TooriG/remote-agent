@@ -105,6 +105,7 @@ fn runtime_fields_cannot_override_restored_user_work() {
     saved["connected"] = json!(true);
     saved["epoch"] = json!(99);
     saved["requests"] = json!({"untrusted": "approval"});
+    saved["activity"] = json!(17);
     let restored = persistence::decode(&serde_json::to_vec(&saved).unwrap()).unwrap();
     assert_eq!(restored, snapshot);
 }
@@ -122,7 +123,6 @@ fn missing_or_invalid_user_work_is_not_silently_discarded() {
         "pending_submissions",
         "file_drafts",
         "navigation",
-        "activity",
     ] {
         let mut missing = saved.clone();
         missing.as_object_mut().unwrap().remove(field);

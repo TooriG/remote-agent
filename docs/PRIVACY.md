@@ -1,12 +1,12 @@
 **BEX プライバシーポリシー / Privacy Policy**
 
-更新日 / Updated: 2026-09-21
+更新日 / Updated: 2026-10-31
 
 **送信先と利用目的 / Recipients and purpose**
 
-BEXは、あなたがペアリングしたHostに接続する開発クライアントです。メッセージ、選択した写真・動画・ファイル、音声入力、開いたプロジェクトのコードやツールの実行結果は、操作に応じてHostへ送信されます。Hostは、選択したCodexではOpenAI、ClaudeではAnthropicへ、回答・コード編集に必要な内容を送信します。音声入力の録音は文字起こしのためOpenAIへ送信します。信頼するHostだけに接続し、送信する権限のある情報だけを扱ってください。
+BEXは、あなたがペアリングしたHostに接続する開発クライアントです。メッセージ、選択した写真・動画・ファイル、音声入力、開いたプロジェクトのコードやツールの実行結果は、操作に応じてHostへ送信されます。Hostは、選択したCodexではOpenAI、ClaudeではAnthropicへ、回答・コード編集に必要な内容を送信します。DeepSeek Harnessでは、モデルで選択したAPI事業者（DeepSeek、OpenRouter、NanoGPT、OpenAI、Google、Anthropic、Groq、Mistral AI、xAI）へ送信します。OpenRouterなどの中継事業者を選ぶと、選択したモデルを実行する提供元にも内容が送られます。音声入力の録音は文字起こしのためOpenAIへ送信します。信頼するHostだけに接続し、送信する権限のある情報だけを扱ってください。
 
-BEX connects to a Host you explicitly pair. Your messages, selected photos, videos and files, dictation recordings, project code and tool results are sent to that Host as needed for your actions. The Host sends relevant content to OpenAI when you use Codex, or Anthropic when you use Claude, to generate responses and edit code. Dictation recordings are sent to OpenAI for transcription. Connect only to Hosts you trust and use information you are authorized to share.
+BEX connects to a Host you explicitly pair. Your messages, selected photos, videos and files, dictation recordings, project code and tool results are sent to that Host as needed for your actions. The Host sends relevant content to OpenAI when you use Codex, or Anthropic when you use Claude, to generate responses and edit code. With DeepSeek Harness, content is sent to the API service selected for the model: DeepSeek, OpenRouter, NanoGPT, OpenAI, Google, Anthropic, Groq, Mistral AI or xAI. When you select a gateway such as OpenRouter, content is also sent to the provider running your chosen model. Dictation recordings are sent to OpenAI for transcription. Connect only to Hosts you trust and use information you are authorized to share.
 
 **接続・端末の権限 / Connections and device permissions**
 
@@ -18,7 +18,7 @@ Connections to the Host are authenticated and encrypted. When a direct connectio
 
 端末には接続先、認証鍵、下書き、表示用データ、一時添付ファイル、障害調査用ログを保存します。HostとAIサービスには会話や作業データが保存されます。共有Hostでは、その管理者や同じ環境へのアクセス権を持つ利用者がデータを読めます。AIサービス側の保存期間・学習利用・削除方法は、利用する契約と設定によって異なります。
 
-The device stores paired Hosts, authentication keys, drafts, display data, temporary attachments and diagnostic logs. The Host and AI provider store conversation and work data. Administrators and other users with access to a shared Host may read that data. Provider retention, training use and deletion depend on the account's plan and settings. See the [OpenAI privacy policy](https://openai.com/policies/privacy-policy/) and [Anthropic privacy policy](https://www.anthropic.com/legal/privacy).
+The device stores paired Hosts, authentication keys, drafts, display data, temporary attachments and diagnostic logs. The Host and AI provider store conversation and work data. Administrators and other users with access to a shared Host may read that data. Provider retention, training use and deletion depend on the account's plan and settings. Review the privacy policies and data settings of your selected API service and, when using a gateway, its downstream model provider. Policies: [OpenAI](https://openai.com/policies/privacy-policy/), [Anthropic](https://www.anthropic.com/legal/privacy), [DeepSeek](https://cdn.deepseek.com/policies/en-US/deepseek-privacy-policy.html), [OpenRouter](https://openrouter.ai/privacy), [NanoGPT](https://nano-gpt.com/privacy), [Google](https://policies.google.com/privacy), [Groq](https://groq.com/privacy-policy), [Mistral AI](https://legal.mistral.ai/terms/privacy-policy), [xAI](https://x.ai/legal/privacy-policy).
 
 BEXには広告・広告トラッキング機能はありません。接続の診断情報はHostへ送信されることがあります。TestFlightで共有するクラッシュ情報やフィードバックはAppleの仕組みで開発者に届きます。サポートへ送った情報は問題の調査と返信に使用します。
 

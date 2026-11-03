@@ -21,7 +21,7 @@ if ($latest -eq $pin.version) {
     return
 }
 
-$temporary = Join-Path ([IO.Path]::GetTempPath()) ("bex-sdk-update-" + [guid]::NewGuid())
+$temporary = Join-Path ([IO.Path]::GetTempPath()) ("agent-sdk-update-" + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $temporary | Out-Null
 try {
     $archive = Join-Path $temporary "sdk.nupkg"

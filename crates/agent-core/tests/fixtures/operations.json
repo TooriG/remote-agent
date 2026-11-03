@@ -1880,22 +1880,20 @@
               {
                 "id": "choice-0",
                 "label": "承認",
-                "description": ""
+                "description": "",
+                "effect": "allow"
               },
               {
                 "id": "choice-1",
                 "label": "このセッションで承認",
-                "description": ""
+                "description": "",
+                "effect": "allowLasting"
               },
               {
                 "id": "choice-2",
                 "label": "拒否",
-                "description": ""
-              },
-              {
-                "id": "choice-3",
-                "label": "キャンセル",
-                "description": ""
+                "description": "",
+                "effect": "deny"
               }
             ]
           }
@@ -1942,12 +1940,8 @@
               {
                 "id": "choice-0",
                 "label": "実行ルールを追加して承認",
-                "description": ""
-              },
-              {
-                "id": "choice-1",
-                "label": "キャンセル",
-                "description": ""
+                "description": "",
+                "effect": "allowLasting"
               }
             ]
           }
@@ -1994,12 +1988,8 @@
               {
                 "id": "choice-0",
                 "label": "実行ルールを追加して承認",
-                "description": ""
-              },
-              {
-                "id": "choice-1",
-                "label": "キャンセル",
-                "description": ""
+                "description": "",
+                "effect": "allowLasting"
               }
             ]
           }
@@ -2031,12 +2021,14 @@
               {
                 "id": "choice-allow",
                 "label": "このターンで許可",
-                "description": ""
+                "description": "",
+                "effect": "allow"
               },
               {
                 "id": "choice-deny",
                 "label": "拒否",
-                "description": ""
+                "description": "",
+                "effect": "deny"
               }
             ]
           }
@@ -2082,12 +2074,14 @@
               {
                 "id": "choice-allow",
                 "label": "このターンで許可",
-                "description": ""
+                "description": "",
+                "effect": "allow"
               },
               {
                 "id": "choice-deny",
                 "label": "拒否",
-                "description": ""
+                "description": "",
+                "effect": "deny"
               }
             ]
           }

@@ -9,7 +9,7 @@ struct DraftIdentity: Hashable {
 
 typealias SnapshotRequest = (Intent, @escaping (AgentCore.Snapshot, Result<Outcome, Error>) -> Void) -> Void
 
-extension BexAppViewModel {
+extension AppViewModel {
     var sending: Bool {
         snapshot.operationRunning(key: .submission(draftKey: coreDraftKey))
     }
@@ -20,10 +20,6 @@ extension BexAppViewModel {
 
     var loadingThreads: Bool {
         snapshot.operationRunning(key: .sessionList)
-    }
-
-    var loadingHistory: Bool {
-        selectedThreadId.map { snapshot.operationRunning(key: .history(session: $0)) } ?? false
     }
 
     var interruptingTurnId: String? {
@@ -39,14 +35,6 @@ extension BexAppViewModel {
 
     func recordListViewUpdate() {
         store?.recordConnectionEvent(phase: .listViewUpdated, value: isConnected ? 1 : 0)
-    }
-
-    func browser(_ request: BrowserRequest) async throws -> BrowserFrame {
-        guard let owner = store else { throw URLError(.notConnectedToInternet) }
-        let host = selectedProfileId
-        let frame = try await owner.browser(request: request)
-        guard host == selectedProfileId else { throw CancellationError() }
-        return frame
     }
 
     func requestSnapshot(_ intent: Intent, completion: @escaping (AgentCore.Snapshot, Result<Outcome, Error>) -> Void) {
@@ -149,9 +137,17 @@ extension BexAppViewModel {
         showThreadList()
     }
 
-    func loadOlderHistory() {
-        guard !loadingHistory, let id = selectedThreadId else { return }
-        perform(.readOlder(threadId: id))
+    func loadOlderHistory(
+        _ id: SessionRef,
+        completion: @escaping (_ succeeded: Bool, _ turnCount: UInt64, _ hasMore: Bool) -> Void
+    ) {
+        guard selectedThreadId == id else { return }
+        notice = nil
+        perform(.readOlder(threadId: id)) { [weak self] result in
+            guard let self else { return }
+            completion((try? result.get()) != nil, snapshot.conversation(id: id)?.turnCount() ?? 0,
+                       snapshot.historyControl(session: id)?.hasMore ?? false)
+        }
     }
 
     func send() {
@@ -197,7 +193,7 @@ extension BexAppViewModel {
     }
 }
 
-extension BexAppViewModel {
+extension AppViewModel {
     func attach(_ url: URL, temporaryDirectory: URL? = nil) async throws {
         let access = url.startAccessingSecurityScopedResource()
         transferring = true
@@ -221,14 +217,27 @@ extension BexAppViewModel {
         )))
     }
 
-    func respond(_ request: Request, answer: Answer, completion: @escaping (String?) -> Void) {
-        perform(.respond(Respond(requestId: request.id, answer: answer))) { result in
-            if case let .failure(error) = result {
-                completion(error.localizedDescription)
-            } else {
-                completion(nil)
+    func respond(_ requestId: String, _ answer: Answer) {
+        perform(.respond(Respond(requestId: requestId, answer: answer)))
+    }
+
+    /// The question the open conversation's composer answers.
+    var questionPrompt: QuestionPrompt? {
+        selectedThreadId.flatMap { snapshot.questionPrompt(threadId: $0) }
+    }
+
+    /// The other request the composer answers; the question panel owns questions.
+    var dockedRequest: Request? {
+        selectedThreadId.flatMap { snapshot.dockedRequests(session: $0) }?.first { request in
+            if case .question = request.requestBody {
+                return false
             }
+            return true
         }
+    }
+
+    func answerQuestion(_ requestId: String, _ action: QuestionAction) {
+        perform(.answerQuestion(requestId: requestId, action: action))
     }
 
     func readItemDetails(threadId: SessionRef, turnId: String, itemId: String) async -> String? {
@@ -253,20 +262,6 @@ extension BexAppViewModel {
         try await withCheckedThrowingContinuation { continuation in
             perform(intent) { continuation.resume(with: $0) }
         }
-    }
-
-    var mediaAccess: ConversationMediaAccess {
-        let host = selectedProfileId
-        return ConversationMediaAccess(host: host, cwd: cwd, download: { [self] path in
-            guard selectedProfileId == host else { throw CancellationError() }
-            return try await download(path)
-        }, visualization: { [self, cwd] path in
-            guard selectedProfileId == host else { throw CancellationError() }
-            let result = try await outcome(for: .loadVisualization(LoadVisualization(path: path, cwd: cwd)))
-            guard selectedProfileId == host else { throw CancellationError() }
-            guard case let .visualization(html) = result else { throw URLError(.badServerResponse) }
-            return html
-        })
     }
 
     func forkAndOpen(through turnId: String, completion: @escaping (String?) -> Void) {

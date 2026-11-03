@@ -1,7 +1,7 @@
 //! Host-owned Live Activity push updates, independent of connected phone sessions.
 mod client;
 mod registry;
-use agent_protocol::live_activity::{PushEnvironment, RegisterLiveActivity, TaskActivityDisplay};
+use agent_protocol::live_activity::{RegisterLiveActivity, TaskActivityDisplay};
 use client::{Client, ResultKind};
 use futures_util::{StreamExt, stream};
 use registry::Registry;
@@ -71,10 +71,7 @@ impl Apns {
         let Some(client) = Client::load(path).await? else {
             return Ok(None);
         };
-        let registry_path = path.with_file_name(match client.environment() {
-            PushEnvironment::Sandbox => "bex-live-activities-sandbox.json",
-            PushEnvironment::Production => "bex-live-activities-production.json",
-        });
+        let registry_path = path.with_file_name("bex-live-activities.json");
         let mut registry: Registry = match tokio::fs::read(&registry_path).await {
             Ok(bytes) => serde_json::from_slice(&Zeroizing::new(bytes))?,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Registry::default(),
@@ -132,7 +129,13 @@ impl Apns {
                         let result = if delivery.payload.len() <= 4096 {
                             service
                                 .client
-                                .send(&delivery.token, &delivery.payload, delivery.urgent, now())
+                                .send(
+                                    delivery.environment,
+                                    &delivery.token,
+                                    &delivery.payload,
+                                    delivery.urgent,
+                                    now(),
+                                )
                                 .await
                         } else {
                             ResultKind::Expired
@@ -151,13 +154,13 @@ impl Apns {
     }
     fn save(&self, registry: &Registry) -> anyhow::Result<()> {
         if let Some(path) = &self.path {
-            crate::platform::save_private_json(path, registry)?;
+            agent_local_host::save_private_json(path, registry)?;
         }
         Ok(())
     }
     fn persist(&self, registry: &Registry) {
         if self.save(registry).is_err() {
-            tracing::error!(target: "bex", operation = "host.live_activity.persist", message = "cannot persist Live Activity registrations");
+            tracing::error!(target: "agent", operation = "host.live_activity.persist", message = "cannot persist Live Activity registrations");
         }
     }
     pub fn is_ready(&self) -> bool {
@@ -175,9 +178,6 @@ impl Apns {
         }
         self.ready.store(true, Ordering::Release);
     }
-    pub fn environment(&self) -> PushEnvironment {
-        self.client.environment()
-    }
     pub fn register(
         &self,
         owner: &str,
@@ -186,6 +186,12 @@ impl Apns {
     ) -> Result<(), String> {
         if !self.is_ready() {
             return Err("Host task state is still initializing".into());
+        }
+        if !self.client.credential_available(params.environment) {
+            return Err(format!(
+                "APNs {:?} credentials are not configured",
+                params.environment
+            ));
         }
         let mut registry = self
             .registry
@@ -233,7 +239,50 @@ impl Apns {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_protocol::live_activity::TaskActivitySummary;
+    use agent_protocol::live_activity::{PushEnvironment, TaskActivitySummary};
+    #[tokio::test]
+    async fn unsupported_signature_environment_is_rejected_before_registration() {
+        use base64::Engine;
+        use ring::{
+            rand::SystemRandom,
+            signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair},
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let key =
+            EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &SystemRandom::new())
+                .unwrap();
+        let pem = format!(
+            "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
+            base64::engine::general_purpose::STANDARD.encode(key.as_ref())
+        );
+        tokio::fs::write(directory.path().join("sandbox.p8"), pem)
+            .await
+            .unwrap();
+        let path = directory.path().join("bex-apns.json");
+        tokio::fs::write(&path, br#"{"team_id":"TESTTEAM01","bundle_id":"dev.remoteagent.mobile.ios.dev","sandbox":{"key_id":"TESTKEY001","key_file":"sandbox.p8"}}"#).await.unwrap();
+        let mut service = Apns::testing();
+        Arc::get_mut(&mut service).unwrap().client = Client::load(&path).await.unwrap().unwrap();
+        let mut params = RegisterLiveActivity {
+            activity_id: Some("dev-activity".into()),
+            allow_start: false,
+            token: vec![1; 32],
+            environment: PushEnvironment::Production,
+        };
+        let display = TaskActivitySummary {
+            running: 1,
+            ..Default::default()
+        }
+        .display();
+        let error = service
+            .register("phone", &params, display.clone())
+            .unwrap_err();
+        assert!(error.contains("Production"));
+        assert!(service.test_payloads(now()).is_empty());
+        params.environment = PushEnvironment::Sandbox;
+        service.register("phone", &params, display).unwrap();
+        assert_eq!(service.test_payloads(now()).len(), 1);
+    }
+
     #[test]
     fn persisted_registrations_wait_for_fresh_host_state_and_retain_private_permissions() {
         let directory = tempfile::tempdir().unwrap();

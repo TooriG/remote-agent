@@ -35,7 +35,9 @@ async fn exercise(command: &[&str], expected: Value) {
         // Connected owns initial reads; the command consumes that same state.
         while let Ok(Some(request)) = reader.read_request().await {
             let result = match request["method"].as_str() {
-                Some("host/session/scope") => json!("fixture-storage"),
+                Some("host/device/identify") => {
+                    json!({"storageScope":"fixture-storage","ticket":""})
+                }
                 Some("host/session/request") => {
                     assert_eq!(request["params"]["requestId"], *approval.as_ref().unwrap());
                     json!({"provider":"codex","id":"fixture-thread"})
@@ -52,7 +54,7 @@ async fn exercise(command: &[&str], expected: Value) {
                 Some("host/model/list") => json!({"data":[],"nextCursor":null}),
                 Some("host/account/list") => json!({"accounts":[], "selected":{}}),
                 Some("host/taskActivity/read") => {
-                    json!({"revision":0,"statuses":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()})
+                    json!({"revision":0,"statuses":[],"waiting":[],"unread":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()})
                 }
                 Some("host/session/list") => {
                     lists += 1;
@@ -79,7 +81,7 @@ async fn exercise(command: &[&str], expected: Value) {
                     );
                     let mut thread = json!({"id":{"provider":"codex","id":"fixture-thread"},"cwd":"/fixture","status":"idle","turns":[]});
                     if let Some(id) = &approval {
-                        thread["requests"] = json!({id.as_str().unwrap():{"id":id,"target":"session","delivery":"awaiting","body":{"approval":{"kind":"command","description":"fixture","details":"","choices":[{"id":"accept-choice","label":"承認","description":""},{"id":"session-choice","label":"セッション中","description":""},{"id":"decline-choice","label":"拒否","description":""}]}}}});
+                        thread["requests"] = json!({id.as_str().unwrap():{"id":id,"target":"session","delivery":"awaiting","body":{"approval":{"kind":"command","description":"fixture","details":"","choices":[{"id":"accept-choice","label":"承認","description":"","effect":"allow"},{"id":"session-choice","label":"セッション中","description":"","effect":"allowLasting"},{"id":"decline-choice","label":"拒否","description":"","effect":"deny"}]}}}});
                     }
                     json!({"session":request["params"]["session"],"subscriptionId":"00000000-0000-0000-0000-000000000001","revision":0,"response":{"thread":thread}})
                 }

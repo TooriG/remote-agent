@@ -1,7 +1,7 @@
 //! The same observable conversation contract against both native subprocess fixtures.
 use agent_protocol::{
     execution::{ErrorCategory, TurnStatus},
-    ids::ClientInputId,
+    ids::{ClientInputId, TurnId},
     items::ItemBody,
     models::{Empty, Turn, WorktreeSettings},
     operations as op,
@@ -41,6 +41,33 @@ async fn finished(events: &mut Reader) -> Turn {
         }
     }
 }
+// Native completion and a deferred input echo may arrive independently.
+// Both must be observed before checking the persisted conversation.
+async fn finished_with_input(events: &mut Reader, input: &ClientInputId) -> TurnId {
+    let mut completed = None;
+    let mut echoed = false;
+    while completed.is_none() || !echoed {
+        let items = match change(events).await {
+            SessionChange::Turn {
+                turn,
+                completed: done,
+            } => {
+                if done {
+                    assert_eq!(turn.status, TurnStatus::Completed);
+                    completed = Some(turn.id);
+                }
+                turn.items.unwrap_or_default()
+            }
+            SessionChange::Item { item, .. } => vec![item],
+            _ => Vec::new(),
+        };
+        echoed |= items
+            .iter()
+            .any(|item| item.client_input_id.as_ref() == Some(input));
+    }
+    completed.unwrap()
+}
+
 fn submission(session: &SessionRef, text: &str) -> op::Submission {
     op::Submission {
         thread_id: session.clone(),
@@ -64,6 +91,7 @@ fn prompt(provider: ProviderKind, scenario: &str) -> &str {
 async fn create(client: &Client, provider: ProviderKind, root: &Path) -> SessionRef {
     client
         .call(&op::CreateSession {
+            initial_input: None,
             provider,
             cwd: Some(root.to_string_lossy().into_owned()),
             model: None,
@@ -77,7 +105,7 @@ async fn create(client: &Client, provider: ProviderKind, root: &Path) -> Session
 }
 
 async fn start(root: &Path, memory: Arc<Memory>) -> HostFixture {
-    let claude = Path::new(env!("CARGO_BIN_EXE_bex-claude-fixture"));
+    let claude = Path::new(env!("CARGO_BIN_EXE_agent-claude-fixture"));
     #[cfg(windows)]
     let executable = claude.with_extension("");
     #[cfg(windows)]
@@ -87,7 +115,7 @@ async fn start(root: &Path, memory: Arc<Memory>) -> HostFixture {
         stream_delay_ms: 5,
         ..Default::default()
     }
-    .install(Path::new(env!("CARGO_BIN_EXE_bex-codex-fixture")), root)
+    .install(Path::new(env!("CARGO_BIN_EXE_agent-codex-fixture")), root)
     .unwrap();
     HostFixture::start(
         root,
@@ -102,6 +130,338 @@ async fn start(root: &Path, memory: Arc<Memory>) -> HostFixture {
     )
     .await
     .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn initial_import_discovers_native_projects_and_continues_the_original_session() {
+    use agent_core::{
+        state::{Intent, Snapshot, operations as core_op},
+        store::Store,
+    };
+    use agent_transport::transport::{Endpoint, Relays};
+    let directory = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(directory.path()).unwrap();
+    let original_directory = tempfile::tempdir().unwrap();
+    let original_rollout = original_directory.path().join("original-session.jsonl");
+    std::fs::write(&original_rollout, "original session history\n").unwrap();
+    let repository = root.join("existing-project");
+    let other = root.join("unselected-project");
+    for path in [&repository, &other] {
+        std::fs::create_dir_all(path).unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "--quiet"])
+                .arg(path)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let threads: Vec<_> = (0..106).map(|index| serde_json::json!({
+        "id":format!("external-{index}"), "cwd":if index == 105 { &other } else { &repository },
+        "path":original_rollout,
+        "name":format!("Existing conversation {index}"), "updatedAt":now, "model":"fixture-model",
+        "historyMode":"paginated", "status":{"type":"notLoaded"},
+        "turns":[{"id":"original-turn","status":"completed","items":[
+            {"id":"original-user","type":"userMessage","content":[{"type":"text","text":"original input"}]},
+            {"id":"original-answer","type":"agentMessage","text":"original answer","phase":"final_answer"}
+        ]}]
+    })).collect();
+    std::fs::write(
+        root.join("list-fixture.json"),
+        serde_json::to_vec(&threads).unwrap(),
+    )
+    .unwrap();
+    let host = start(&root, Arc::new(Memory::default())).await;
+    let endpoint = Endpoint::bind(host.credentials.local_identity().await, Relays::Disabled)
+        .await
+        .unwrap();
+    let store = Store::connect(
+        &endpoint,
+        &host.ticket,
+        Snapshot::default(),
+        None,
+        "Fixture device",
+    )
+    .await
+    .unwrap();
+    store
+        .dispatch(Intent::ScanProjects(core_op::ScanProjects {}))
+        .await
+        .unwrap();
+    let scan = store.snapshot();
+    let candidates = &scan.project_import.scan.as_ref().unwrap().projects;
+    assert_eq!(candidates.len(), 2);
+    assert_eq!(
+        candidates
+            .iter()
+            .find(|candidate| candidate.name == "existing-project")
+            .unwrap()
+            .conversation_count,
+        105,
+        "scan must follow native pagination"
+    );
+    let selected = dunce::simplified(&repository).to_str().unwrap().to_owned();
+    assert_eq!(
+        scan.project_import.selected.iter().collect::<Vec<_>>(),
+        [&selected]
+    );
+    assert!(
+        !root.join("bex-projects.json").exists(),
+        "scanning and skipping cannot register anything"
+    );
+    store
+        .dispatch(Intent::ImportProjects(core_op::ImportProjects {}))
+        .await
+        .unwrap();
+    let result = store.snapshot();
+    assert_eq!(
+        result
+            .project_import
+            .result
+            .as_ref()
+            .unwrap()
+            .imported
+            .as_slice(),
+        std::slice::from_ref(&selected)
+    );
+    assert!(
+        result
+            .project_import
+            .result
+            .as_ref()
+            .unwrap()
+            .errors
+            .is_empty()
+    );
+    let registered: Vec<agent_protocol::models::Project> =
+        serde_json::from_slice(&std::fs::read(root.join("bex-projects.json")).unwrap()).unwrap();
+    assert_eq!(registered.len(), 1);
+    assert_eq!(registered[0].roots[0].path, selected);
+    let local = host.local().await.unwrap();
+    let id = SessionRef::new(ProviderKind::Codex, "external-0".into()).unwrap();
+    let (opened, mut events) = open(&local.peer, &id).await;
+    assert_eq!(opened.response.thread.id.as_ref(), Some(&id));
+    assert_eq!(
+        opened.response.thread.project_id,
+        agent_protocol::models::ProjectMembership::Assigned(registered[0].id.clone())
+    );
+    assert!(
+        opened
+            .response
+            .thread
+            .turns
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|turn| turn.id.as_str() == "original-turn")
+    );
+    local
+        .peer
+        .call(&submission(&id, "continue imported conversation"))
+        .await
+        .unwrap();
+    assert_eq!(finished(&mut events).await.status, TurnStatus::Completed);
+    assert_eq!(
+        std::fs::read_to_string(&original_rollout).unwrap(),
+        "original session history\n",
+        "continuing an imported fixture must preserve the original native rollout"
+    );
+    drop(events);
+    local.close().await;
+    store.close().await.unwrap();
+    endpoint.close().await;
+    host.close().await.unwrap();
+}
+
+#[rstest::rstest]
+#[case::codex_stalls(true, false)]
+#[case::claude_stalls(false, true)]
+#[case::both_stall(true, true)]
+#[tokio::test]
+async fn setup_catalog_isolates_stalled_native_providers(
+    #[case] codex_stalls: bool,
+    #[case] claude_stalls: bool,
+) {
+    use agent_core::{presentation::connections::AgentAvailability, state::operations::Operation};
+    use agent_protocol::protocol::Response;
+    use host_daemon::{HostRpcService, ProjectStore};
+    use serde_json::json;
+
+    let directory = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(directory.path()).unwrap();
+    let codex_home = root.join("codex");
+    let claude_home = root.join("claude-native");
+    std::fs::create_dir_all(&claude_home).unwrap();
+    let program = host_fixture::fixture::Config::default()
+        .install(
+            Path::new(env!("CARGO_BIN_EXE_agent-codex-fixture")),
+            &codex_home,
+        )
+        .unwrap();
+    std::fs::write(
+        codex_home.join("account-fixture.json"),
+        r#"{"type":"apiKey"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        claude_home.join("fixture-auth.json"),
+        json!({"tokenSource":"oauth","apiKeySource":"none","email":"claude@example.invalid","subscriptionType":"max"}).to_string(),
+    ).unwrap();
+    let config = codex_app_server::AppServerConfig {
+        program,
+        ..Default::default()
+    };
+    let server = Arc::new(
+        codex_app_server::CodexAppServer::spawn(config.clone())
+            .await
+            .unwrap(),
+    );
+    let codex = host_daemon::providers::codex::Codex::new(Ok(server.clone()));
+    codex
+        .enable_accounts(root.join("accounts"), config)
+        .await
+        .unwrap();
+    let claude = host_daemon::providers::Claude::load(
+        Path::new(env!("CARGO_BIN_EXE_agent-claude-fixture")).to_owned(),
+        root.join("claude"),
+        Some(claude_home.clone()),
+    )
+    .await
+    .unwrap();
+    let service = HostRpcService::new(
+        [codex.into(), claude.into()],
+        ProjectStore::new(root.join("worktrees.json")),
+    );
+    let session = service.open_session();
+    let accounts = service
+        .dispatch(session.id(), &Call::ListAccounts(Empty {}))
+        .await
+        .unwrap();
+    let Response::Success { result: accounts } =
+        agent_protocol::protocol::decode::<Response<op::Accounts>>(&accounts.initial).unwrap()
+    else {
+        panic!("native accounts must remain readable before discovery");
+    };
+    let mut snapshot = agent_core::state::Snapshot {
+        connected: true,
+        ..Default::default()
+    };
+    agent_core::state::operations::ListAccounts {}.apply(&mut snapshot, accounts);
+    // Account checks also use SDK initialization. Stall only the model discovery
+    // phase whose timeout and recovery this contract verifies.
+    for (home, stalls) in [(&codex_home, codex_stalls), (&claude_home, claude_stalls)] {
+        std::fs::write(
+            home.join("model-list-mode"),
+            if stalls { "silent" } else { "ready" },
+        )
+        .unwrap();
+    }
+    let discovery_service = service.clone();
+    let session_id = session.id();
+    let discovery = tokio::spawn(async move {
+        discovery_service
+            .dispatch(
+                session_id,
+                &Call::ListModels(op::ListModels {
+                    limit: 100,
+                    cursor: None,
+                }),
+            )
+            .await
+            .unwrap()
+    });
+    let response = tokio::time::timeout(Duration::from_secs(25), async {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !codex_home.join("model-list-requested").exists()
+                || !claude_home.join("model-list-requested").exists()
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("Codex and Claude discovery must start independently");
+        discovery.await.unwrap()
+    })
+    .await
+    .expect("discovery must finish before the native client's 30-second deadline");
+    let Response::Success { result: catalog } =
+        agent_protocol::protocol::decode::<Response<op::ModelPage>>(&response.initial).unwrap()
+    else {
+        panic!("a stalled provider must not discard the catalog");
+    };
+    agent_core::state::operations::LoadModels {}.apply(&mut snapshot, catalog);
+    let setup = snapshot.connection_setup();
+    assert_eq!(setup.can_start, !codex_stalls || !claude_stalls);
+    for (provider, stalls) in [
+        (ProviderKind::Codex, codex_stalls),
+        (ProviderKind::Claude, claude_stalls),
+    ] {
+        assert_eq!(
+            snapshot
+                .models
+                .iter()
+                .any(|model| model.model.provider == provider),
+            !stalls
+        );
+        let error = snapshot.model_errors.get(provider.key());
+        if stalls {
+            assert_eq!(error.unwrap()["code"], "provider_timeout");
+        } else {
+            assert!(error.is_none());
+        }
+        let agent = setup
+            .agents
+            .iter()
+            .find(|agent| agent.provider == provider)
+            .unwrap();
+        assert_eq!(
+            agent.availability,
+            if stalls {
+                AgentAvailability::Unavailable
+            } else {
+                AgentAvailability::Ready
+            }
+        );
+    }
+    for home in [&codex_home, &claude_home] {
+        std::fs::write(home.join("model-list-mode"), "ready").unwrap();
+    }
+    let retried = tokio::time::timeout(
+        Duration::from_secs(10),
+        service.dispatch(
+            session.id(),
+            &Call::ListModels(op::ListModels {
+                limit: 100,
+                cursor: None,
+            }),
+        ),
+    )
+    .await
+    .expect("discovery must recover after the native provider responds again")
+    .unwrap();
+    let Response::Success { result: catalog } =
+        agent_protocol::protocol::decode::<Response<op::ModelPage>>(&retried.initial).unwrap()
+    else {
+        panic!("retry must return the recovered catalog");
+    };
+    agent_core::state::operations::LoadModels {}.apply(&mut snapshot, catalog);
+    assert!(snapshot.model_errors.is_empty());
+    let setup = snapshot.connection_setup();
+    assert!(setup.can_start);
+    assert!(
+        setup
+            .agents
+            .iter()
+            .filter(|agent| agent.provider != ProviderKind::DeepSeek)
+            .all(|agent| agent.availability == AgentAvailability::Ready)
+    );
+    drop(session);
+    server.shutdown().await.unwrap();
 }
 
 async fn scenarios(provider: ProviderKind) {
@@ -297,30 +657,8 @@ async fn scenarios(provider: ProviderKind) {
             if provider == ProviderKind::Codex {
                 std::fs::write(root.join("release-inputs"), "").unwrap();
             }
-            // Native completion and a deferred input echo may arrive independently.
-            // Both must be observed before checking the persisted conversation.
-            let mut completed = None;
-            let mut echoed = false;
-            while completed.is_none() || !echoed {
-                let items = match change(&mut events).await {
-                    SessionChange::Turn {
-                        turn,
-                        completed: done,
-                    } => {
-                        if done {
-                            assert_eq!(turn.status, TurnStatus::Completed);
-                            completed = Some(turn.id);
-                        }
-                        turn.items.unwrap_or_default()
-                    }
-                    SessionChange::Item { item, .. } => vec![item],
-                    _ => Vec::new(),
-                };
-                echoed |= items.iter().any(|item| {
-                    item.client_input_id.as_ref() == Some(&additional.client_user_message_id)
-                });
-            }
-            let turn_id = completed.unwrap();
+            let turn_id =
+                finished_with_input(&mut events, &additional.client_user_message_id).await;
             let (history, _) = open(&local.peer, &session).await;
             let turn = history
                 .response
@@ -450,11 +788,11 @@ fn session_inputs(path: impl AsRef<Path>) -> serde_json::Value {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn codex_conforms_to_bex_conversations() {
+async fn codex_conforms_to_host_conversations() {
     scenarios(ProviderKind::Codex).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn claude_conforms_to_bex_conversations() {
+async fn claude_conforms_to_host_conversations() {
     scenarios(ProviderKind::Claude).await;
 }
 
@@ -1021,7 +1359,7 @@ async fn codex_queues_when_the_native_turn_is_not_observed() {
         stream_delay_ms: 5,
         ..Default::default()
     }
-    .install(Path::new(env!("CARGO_BIN_EXE_bex-codex-fixture")), &root)
+    .install(Path::new(env!("CARGO_BIN_EXE_agent-codex-fixture")), &root)
     .unwrap();
     let host = HostFixture::start(
         &root,
@@ -1161,6 +1499,7 @@ async fn adapter_initialization_failure_preserves_the_other_provider_and_host() 
         local
             .peer
             .call(&op::CreateSession {
+                initial_input: None,
                 provider: ProviderKind::Claude,
                 cwd: Some(root.to_string_lossy().into_owned()),
                 model: None

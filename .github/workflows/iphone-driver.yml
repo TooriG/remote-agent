@@ -19,8 +19,8 @@ jobs:
     env:
       CARGO_BUILD_JOBS: 2
       CARGO_INCREMENTAL: 0
-      BEX_XCODE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
-      BEX_IOS_TEST_WORKERS: 1
+      AGENT_XCODE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      AGENT_IOS_TEST_WORKERS: 1
       MAESTRO_CLI_NO_ANALYTICS: 1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -28,7 +28,7 @@ jobs:
           persist-credentials: false
       - name: Use the pinned preinstalled Xcode
         run: |
-          export DEVELOPER_DIR="$BEX_XCODE_DEVELOPER_DIR"
+          export DEVELOPER_DIR="$AGENT_XCODE_DEVELOPER_DIR"
           test -d "$DEVELOPER_DIR"
           xcodebuild -version
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31

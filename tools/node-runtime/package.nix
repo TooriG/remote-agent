@@ -3,7 +3,7 @@ let
   version = "24.21.0";
 in
 stdenvNoCC.mkDerivation {
-  pname = "bex-node-runtime";
+  pname = "agent-node-runtime";
   inherit version;
   src = fetchurl {
     url = "https://nodejs.org/dist/v${version}/node-v${version}-darwin-arm64.tar.xz";

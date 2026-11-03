@@ -6,31 +6,66 @@ default:
     @just --list
 
 # Check Rust without generating executables; use -p to select changed crates.
+[group('portable')]
 check *args:
     cargo check --locked "$@"
+
+# Check handwritten functions against the configured complexity limits.
+complexity:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    failed=0
+    # Two rankings; each invocation enforces the limits in cccc.toml.
+    cccc --table --top-cognitive 20 . || failed=1
+    cccc --table --top-cyclomatic 20 . || failed=1
+    exit "$failed"
 
 # Run all unit tests; CI can add explicit integration targets to the same build.
 unit-tests *targets:
     #!/usr/bin/env bash
     set -uo pipefail
     failed=0
+    if [[ -n ${AGENT_REMOTE_BUILDER-} ]]; then
+        scripts/remote-run.sh "$AGENT_REMOTE_BUILDER" just portable-unit-tests "$@" &
+    else
+        just portable-unit-tests "$@" &
+    fi
+    portable_pid=$!
+    if [[ $(uname -s) == Darwin ]]; then
+        cargo test --locked -p agent-desktop --test native_focus || failed=1
+        cargo xtask ios-markdown || failed=1
+        bash scripts/test-ios-scroll.sh || failed=1
+    fi
+    wait "$portable_pid" || failed=1
+    exit "$failed"
+
+# Run the unit tests that do not need macOS.
+[group('portable')]
+portable-unit-tests *targets:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    failed=0
+    node --test scripts/*.test.mjs || failed=1
+    node --test crates/agent-protocol/src/browser_input.test.cjs crates/host-daemon/src/browser/password-fill.test.cjs apps/desktop/src/browser/native/snapshot.test.cjs || failed=1
     pwsh -NoLogo -NoProfile -NonInteractive -File tools/windows-fxc/update.test.ps1 || failed=1
-    npm --prefix crates/host-daemon/src/claude/sdk ci --ignore-scripts --no-audit --no-fund || failed=1
-    npm --prefix crates/host-daemon/src/claude/sdk test || failed=1
+    npm --prefix crates/host-daemon/src/providers/claude/sdk ci --ignore-scripts --no-audit --no-fund || failed=1
+    npm --prefix crates/host-daemon/src/providers/claude/sdk test || failed=1
     node scripts/install-claude-sdk.mjs "${CARGO_TARGET_DIR:-target}/debug" || failed=1
-    cargo build --locked -p bex-process --bin bex-provider-supervisor || failed=1
+    cargo build --locked -p agent-process --bin agent-provider-supervisor || failed=1
     cargo nextest run --locked --no-fail-fast --workspace --lib --bins --features agent-core/bindings "$@" &
     rust_pid=$!
     CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$PWD/target}" cargo test --locked --no-fail-fast --manifest-path tools/agent-peer/Cargo.toml || failed=1
-    if [[ $(uname -s) == Darwin ]]; then
-        cargo xtask ios-markdown || failed=1
-    fi
     wait "$rust_pid" || failed=1
     exit "$failed"
 
-# Prune inactive Cargo outputs older than 3 days or over the 32 GiB idle budget.
+# Prune inactive Cargo outputs older than 3 days or over the 32 GiB idle budget, here and on the remote builder.
 clean-builds *args:
-    cargo xtask clean-builds {{args}}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo xtask clean-builds "$@"
+    if [[ -n ${AGENT_REMOTE_BUILDER-} ]]; then
+        scripts/remote-run.sh "$AGENT_REMOTE_BUILDER" cargo xtask clean-builds "$@"
+    fi
 
 # Build and verify the certificate-signed Host executable (dev or release).
 build-host-macos profile="release":
@@ -44,14 +79,8 @@ build-desktop-macos profile="release":
 dev: (build-desktop-macos "dev")
     #!/usr/bin/env bash
     set -euo pipefail
-    accounts="$HOME/Library/Application Support/app.bex.BEX"
-    if [[ -f "$accounts/host-instance.json" ]]; then
-        accounts=$(/usr/bin/plutil -extract directory raw -o - "$accounts/host-instance.json")
-    fi
     target=$(cargo metadata --no-deps --format-version 1 | jq -er .target_directory)
-    open -n "$target/debug/bex.app" --env BEX_ISOLATED_HOST=1 \
-        --env "BEX_STATE_DIR=$HOME/Library/Application Support/app.bex.BEX-Dev" \
-        --env "BEX_ACCOUNT_STATE_DIR=$accounts"
+    open -n "$target/debug/bex.app"
 
 # Run isolated iOS Simulator tests; reject skipped and missing results.
 ios-e2e *tests:
@@ -69,13 +98,14 @@ ios-archive archive-path derived-data-path *args:
 ios-markdown:
     cargo xtask ios-markdown
 
-# Exercise the production Mac Browser view and WebKit persistence in fresh processes.
+# Exercise native pages through the Host using an isolated desktop window.
 macos-e2e:
-    cargo test --locked --features agent-core/bindings -p bex-desktop --test chrome_cookie_webview
+    cargo build --locked -p agent-desktop
+    cargo nextest run --locked -p host-daemon --test browser_native --run-ignored only -E 'test(=shared_browser_live)'
 
 # Build and test Store recovery, Markdown and network permission on a fresh Android 17 emulator.
 android-e2e:
-    cargo build --locked -p host-fixture -p codex-app-server -p bex-process --bins
+    cargo build --locked -p host-fixture -p codex-app-server -p agent-process --bins
     ./gradlew :apps:mobile:assembleDebug :apps:mobile:assembleDebugAndroidTest --console=plain
     nix develop .#android-test --command bash scripts/android-e2e.sh
 
@@ -87,7 +117,7 @@ conversation-ui:
         testSimulatorMarksMergedWorktreesToTheRightOfRunningStatus \
         testSimulatorNativeTerminalRetainsShellAfterReopening \
         testSimulatorKeepsDraftDuringLongMarkdownStreamAndReopensFinalText \
-        testSimulatorCopiesOnlySelectedMessageText \
+        testSimulatorCopiesSelectedOrWholeUserMessageText \
         testSimulatorOpensLongInterruptedHistoryAtLatestMessage \
         testSimulatorKeepsLatestVisibleAcrossRepeatedLongHistorySubmissions \
         testSimulatorRepeatedlyReopensTasksAndNewDraftsAfterBackNavigation \
@@ -108,17 +138,24 @@ conversation-ui:
         testSimulatorCanStartAConversationInAProject \
         testSimulatorOpensTasksBeforeHistoryReadFinishes \
         testSimulatorGroupsLiveCommandsBetweenCommentaryAndExpandsOnTap \
-        testSimulatorModelPickerUsesAgentRailAndCompactControls \
+        testSimulatorModelPickerUsesNativeFormAndAgentPicker \
         testSimulatorKeepsResponsesFromRepeatedTurnIDsWhenReopeningHistory \
         testSimulatorNativeTerminalDoesNotDuplicateQueryResponses \
         testSimulatorShowsAcceptedAdditionalInputBeforeCodexProcessesIt \
         testSimulatorKeepsFailedWorkCollapsedWithVisibleTerminalError \
+        testSimulatorKeepsInputRequestVisibleUntilResolved \
+        testSimulatorQuestionChoiceReturnsTypedAnswerToDraft \
+        testSimulatorSendsQuestionChoiceOnTap \
+        testSimulatorCanSkipQuestion \
         testSimulatorRetriesAFailedTaskOpenWithoutLosingItsDraft \
-        testSimulatorFillsInitialHistoryViewportWithoutScrolling
+        testSimulatorLoadsEarlierHistoryOnTapAndRetriesFailedPage \
+        testSimulatorWorkbenchStartsEmptyAndOwnsOnlyOpenedTabs \
+        testSimulatorBrowserUsesOneSharedImportMenu
 
 # Exercise the real iroh Host through the headless client.
+[group('portable')]
 iroh-e2e:
-    cargo build --locked --package bex-process --bin bex-provider-supervisor
+    cargo build --locked --package agent-process --bin agent-provider-supervisor
     cargo test --locked --package host-fixture --test iroh_host
 
 # Check the local Mac Host/desktop and iPhone client, or one selected language.
@@ -126,11 +163,15 @@ quality language="apple":
     scripts/quality.sh "$1"
 
 # Audit diff presentation tests in an isolated copy; extra arguments go to cargo-mutants.
+# Inspect missed.txt and logs; distinguish equivalent mutations from missing assertions.
+# Report timeouts and unbuildable mutants separately from assertion-based catches.
+[group('portable')]
 mutants-diff *args:
     mkdir -p target/mutation-diff
     env -u CARGO_TARGET_DIR PROPTEST_RNG_SEED=20260925 cargo mutants --copy-target=false --package agent-core --file crates/agent-core/src/presentation/diff.rs --output target/mutation-diff --jobs 2 --build-timeout 900 --timeout 60 --cargo-arg=--locked --cargo-arg=--lib "$@" -- presentation::diff::tests
 
 # Verify bounded Git path decoding with the dedicated `nix develop .#kani` environment.
+# Keep unwinding assertions enabled; a timeout is a failure, not a proof.
 kani-diff *args:
     mkdir -p target/kani-diff
     cargo kani --package agent-core --lib --harness presentation::diff::proofs --output-format terse -Z unstable-options --harness-timeout 120 --export-json target/kani-diff/results.json "$@"
