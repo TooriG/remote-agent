@@ -360,7 +360,13 @@ jobs:
         id: ios-cache
         with:
           path: ${{ env.AGENT_IOS_SWIFT_CACHE_PATHS }}
-          key: ios-swift-xcode-26.6-${{ hashFiles('flake.lock', 'Cargo.lock', 'crates/agent-core/src/**', 'crates/agent-protocol/src/**', 'crates/xtask/src/ios_markdown.rs', 'scripts/build-agent*.sh', 'apps/mobile/iosApp/**') }}
+          key: >-
+            ios-swift-xcode-26.6-${{ hashFiles(
+              'flake.lock', 'Cargo.toml', 'Cargo.lock', '.cargo/config.toml',
+              'crates/agent-bindgen/**', 'crates/agent-core/Cargo.toml', 'crates/agent-core/uniffi.toml',
+              'crates/agent-core/src/**', 'crates/agent-ffi/**',
+              'crates/agent-protocol/Cargo.toml', 'crates/agent-protocol/src/**',
+              'crates/xtask/src/ios_*.rs', 'scripts/build-agent*.sh', 'apps/mobile/iosApp/**') }}
           restore-keys: ios-swift-xcode-26.6-
       - name: iPhone contracts and shared test build
         env:
