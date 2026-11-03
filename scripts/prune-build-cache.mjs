@@ -2,12 +2,13 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 function cachePrefix(key) {
-  const prefix = key?.match(/^(bex-gradle-v1-.+-)[0-9a-f]{40}$/)?.[1];
-  if (!prefix) throw new Error('Invalid Gradle snapshot key');
+  const prefix = key?.match(/^(bex-gradle-v1-.+-)[0-9a-f]{40}$/)?.[1] ??
+    key?.match(/^(ios-swift-xcode-[0-9]+\.[0-9]+-)[0-9a-f]{64}$/)?.[1];
+  if (!prefix) throw new Error('Invalid build snapshot key');
   return prefix;
 }
 
-export function replacedGradleCaches(entries, currentKey) {
+export function replacedBuildCaches(entries, currentKey) {
   const prefix = cachePrefix(currentKey);
   const owned = entries.filter(entry => entry.ref === 'refs/heads/main' && entry.key.startsWith(prefix));
   // A successful action step can still report an unsuccessful cache upload.
@@ -21,7 +22,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const entries = JSON.parse(execFileSync('gh', [
     'cache', 'list', '--key', prefix, '--ref', 'refs/heads/main', '--limit', '100', '--json', 'id,key,ref',
   ], {encoding: 'utf8'}));
-  for (const id of replacedGradleCaches(entries, key)) {
+  for (const id of replacedBuildCaches(entries, key)) {
     execFileSync('gh', ['cache', 'delete', String(id)], {stdio: 'inherit'});
   }
 }

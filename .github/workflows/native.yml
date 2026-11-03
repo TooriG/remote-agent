@@ -254,7 +254,7 @@ jobs:
           --no-daemon --parallel --max-workers=4 --build-cache --console=plain
       - name: Save Gradle dependencies and completed native outputs
         id: save-gradle-cache
-        if: ${{ github.ref == 'refs/heads/main' && steps.gradle-cache.outputs.cache-hit != 'true' }}
+        if: ${{ github.ref == 'refs/heads/main' && steps.gradle-cache.outputs.cache-primary-key != '' && steps.gradle-cache.outputs.cache-hit != 'true' }}
         continue-on-error: true
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
@@ -266,7 +266,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GRADLE_CACHE_KEY: ${{ steps.gradle-cache.outputs.cache-primary-key }}
-        run: nix develop .#android-build --command node scripts/prune-gradle-cache.mjs "$GRADLE_CACHE_KEY"
+        run: nix develop .#android-build --command node scripts/prune-build-cache.mjs "$GRADLE_CACHE_KEY"
       - name: Enable emulator hardware acceleration
         run: sudo chmod a+rw /dev/kvm
       - name: Build isolated Android Host fixtures
@@ -391,6 +391,9 @@ jobs:
   iphone:
     name: iPhone build
     needs: [changes, repository]
+    permissions:
+      actions: write # Retire the preceding Swift snapshot after saving its replacement.
+      contents: read
     # Focused manual runs keep their existing acceptance-only scope.
     if: ${{ !cancelled() && needs.changes.outputs.iphone == 'true' && (inputs.ios-tests || needs.repository.result == 'success') }}
     concurrency:
@@ -429,6 +432,7 @@ jobs:
       - *restore-local-rust-cache
       - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         id: ios-cache
+        continue-on-error: true
         with:
           path: ${{ env.AGENT_IOS_SWIFT_CACHE_PATHS }}
           key: >-
@@ -463,11 +467,20 @@ jobs:
           compression-level: 0
           retention-days: 1
       - name: Save iPhone Swift builds
+        id: save-ios-cache
         if: ${{ !cancelled() && github.event_name != 'pull_request' && !inputs.ios-tests && steps.ios-cache.outputs.cache-primary-key != '' && steps.ios-cache.outputs.cache-hit != 'true' }}
+        continue-on-error: true
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ${{ env.AGENT_IOS_SWIFT_CACHE_PATHS }}
           key: ${{ steps.ios-cache.outputs.cache-primary-key }}
+      - name: Retire replaced iPhone Swift snapshots
+        if: ${{ !cancelled() && steps.save-ios-cache.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SWIFT_CACHE_KEY: ${{ steps.ios-cache.outputs.cache-primary-key }}
+        run: nix develop .#ios-build --command node scripts/prune-build-cache.mjs "$SWIFT_CACHE_KEY"
       - *finish-local-rust-cache
       - *save-local-rust-cache
       - name: Retain Apple acceptance logs and result bundles
