@@ -314,6 +314,8 @@ impl Desktop {
         let enabled = self.snapshot.connected && !self.snapshot.navigation.cwd.is_empty();
         let review_enabled = enabled && !self.snapshot.selected_directory().is_empty();
         let review = self.snapshot.workspace.review.as_ref();
+        let (additions, deletions) =
+            review.map_or((0, 0), |review| (review.additions, review.deletions));
         let mut sources = v_flex().gap_1();
         for (i, path) in self.source_paths.iter().enumerate() {
             let path = path.clone();
@@ -409,14 +411,18 @@ impl Desktop {
                         },
                     )
                     .child(
-                        button("context-changes", language.text("変更"), cx, |s, _, cx| {
-                            s.open_review(None, cx)
-                        })
-                        .child(review_counts(
-                            Some(review.map_or(0, |review| review.additions)),
-                            Some(review.map_or(0, |review| review.deletions)),
+                        button(
+                            "context-changes",
+                            language.text("変更"),
+                            cx,
+                            |s, _, cx| s.open_review(None, cx),
+                        )
+                        .accessibility_label(agent_core::localization::localized_ui_format(
                             language,
+                            "変更  +{0}  −{1}".into(),
+                            vec![additions.to_string(), deletions.to_string()],
                         ))
+                        .child(review_counts(Some(additions), Some(deletions), language))
                         .icon(IconName::Replace)
                         .w_full()
                         .disabled(!enabled),

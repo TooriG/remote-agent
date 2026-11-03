@@ -61,7 +61,7 @@ fn file_name(path: &str) -> String {
 const CHAT_WIDTH: f32 = 780.;
 
 // Like T3, thread details dock beside the chat when the window is wide enough and
-// the right panel is closed; otherwise the header toggle opens them as a popover.
+// the right panel is closed; otherwise the details toggle opens them as a popover.
 fn details_inline(panel_open: bool, width: Pixels) -> bool {
     !panel_open && width >= px(1280.)
 }
@@ -242,6 +242,69 @@ impl Desktop {
         )
         .debug_selector(|| "panel-toggle".into())
         .selected(open)
+    }
+
+    /// T3's thread details toggle: it shows or hides the docked card, or opens
+    /// the same card as a popover when the card cannot dock.
+    fn details_toggle(
+        inline: bool,
+        open: bool,
+        render_owner: EntityId,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let label = crate::localization::language(cx).text("スレッド詳細を切り替え");
+        let icon = Icon::default().path("icons/square-menu.svg");
+        if inline {
+            return icon_button(
+                "thread-details-toggle",
+                icon,
+                label,
+                cx,
+                move |view, _, _| {
+                    view.details = !open;
+                },
+            )
+            .debug_selector(|| "thread-details-toggle".into())
+            .selected(open)
+            .into_any_element();
+        }
+        let entity = cx.entity().downgrade();
+        let owner = entity.clone();
+        popover::Popover::new("thread-details")
+            .bg(rgb(appearance::SURFACE))
+            .rounded(px(18.))
+            .border_color(rgb(appearance::BORDER))
+            .anchor(Anchor::TopRight)
+            .open(open)
+            .on_open_change(move |open, _, cx| {
+                let _ = owner.update(cx, |view, cx| {
+                    view.details_popover = *open;
+                    cx.notify();
+                });
+            })
+            .trigger(
+                Button::new("thread-details-toggle")
+                    .debug_selector(|| "thread-details-toggle".into())
+                    .icon(icon)
+                    .small()
+                    .ghost()
+                    .selected(open)
+                    .tooltip(label)
+                    .accessibility_label(label),
+            )
+            .content(move |_, window, cx| {
+                observe_popup_desktop(&entity, render_owner, window, cx);
+                entity
+                    .update(cx, |s, cx| {
+                        v_flex()
+                            .debug_selector(|| "thread-details-popover".into())
+                            .w(px(300.))
+                            .child(s.workspace_card(cx))
+                            .into_any_element()
+                    })
+                    .unwrap_or_else(|_| div().into_any_element())
+            })
+            .into_any_element()
     }
 
     fn conversation_main(&mut self, show_workspace: bool, cx: &mut Context<Self>) -> AnyElement {
@@ -834,6 +897,58 @@ mod cache_tests {
             desktop.read_with(window, renders),
             before,
             "closed browser tabs must release their workbench observation"
+        );
+    }
+
+    #[gpui::test]
+    fn thread_details_open_as_a_popover_wherever_the_card_cannot_dock(cx: &mut TestAppContext) {
+        let (_runtime, _) = init(cx);
+        let mut owner = None;
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let desktop = cx.new(|cx| {
+                let mut desktop = Desktop::new(Mode::Main, window, cx);
+                desktop.onboarding = false;
+                desktop
+            });
+            owner = Some(desktop.clone());
+            crate::activity::ActivityWindow::new(desktop, window, cx)
+        });
+        let desktop = owner.unwrap();
+        let open_details = |window: &mut VisualTestContext| {
+            let toggle = window.debug_bounds("thread-details-toggle").unwrap();
+            window.simulate_click(toggle.center(), Modifiers::default());
+            window.run_until_parked();
+            window.debug_bounds("thread-details-popover").is_some()
+        };
+
+        window.simulate_resize(size(px(1000.), px(700.)));
+        window.run_until_parked();
+        assert!(
+            open_details(window),
+            "a narrow window opens details from the header"
+        );
+        assert!(desktop.read_with(window, |desktop, _| desktop.details_popover));
+
+        window.simulate_resize(size(px(1400.), px(700.)));
+        window.run_until_parked();
+        assert!(
+            window.debug_bounds("thread-details-popover").is_none()
+                && !desktop.read_with(window, |desktop, _| desktop.details_popover),
+            "the popover closes once the card docks again"
+        );
+
+        window.simulate_resize(size(px(1000.), px(700.)));
+        desktop.update(window, |desktop, cx| {
+            let key = desktop.panel_scope();
+            desktop.panels.set_open(key.clone(), true);
+            desktop.panels.set_layout(key, PanelLayout::Expanded);
+            cx.notify();
+        });
+        window.run_until_parked();
+        assert!(window.debug_bounds("conversation-header").is_none());
+        assert!(
+            open_details(window),
+            "a panel covering the conversation keeps details reachable"
         );
     }
 

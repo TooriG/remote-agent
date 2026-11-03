@@ -6,6 +6,7 @@ struct HeaderModel {
     sidebar: bool,
     panel_open: bool,
     details: bool,
+    details_popover: bool,
 }
 
 pub(in crate::app) struct HeaderView {
@@ -83,6 +84,7 @@ impl Desktop {
             sidebar: self.sidebar,
             panel_open,
             details: self.details,
+            details_popover: self.details_popover,
         }
     }
     pub(super) fn conversation_header(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -126,57 +128,17 @@ impl Desktop {
                     .text_ellipsis()
                     .child(model.title.clone()),
             )
-            .child(Self::details_toggle(
-                model.details,
-                details_inline(model.panel_open, width),
-                render_owner,
-                cx,
-            ))
+            .child({
+                let inline = details_inline(model.panel_open, width);
+                let open = if inline {
+                    model.details
+                } else {
+                    model.details_popover
+                };
+                Self::details_toggle(inline, open, render_owner, cx)
+            })
             .when(!model.panel_open, |header| {
                 header.child(Self::panel_toggle(false, cx))
             })
-    }
-
-    fn details_toggle(
-        open: bool,
-        inline: bool,
-        render_owner: EntityId,
-        cx: &Context<Self>,
-    ) -> AnyElement {
-        let label = crate::localization::language(cx).text("スレッド詳細を切り替え");
-        let icon = Icon::default().path("icons/square-menu.svg");
-        if inline {
-            return icon_button("thread-details-toggle", icon, label, cx, move |view, _, _| {
-                view.details = !open;
-            })
-            .selected(open)
-            .into_any_element();
-        }
-        let entity = cx.entity().downgrade();
-        popover::Popover::new("thread-details")
-            .bg(rgb(appearance::SURFACE))
-            .rounded(px(18.))
-            .border_color(rgb(appearance::BORDER))
-            .anchor(Anchor::TopRight)
-            .trigger(
-                Button::new("thread-details-toggle")
-                    .icon(icon)
-                    .small()
-                    .ghost()
-                    .tooltip(label)
-                    .accessibility_label(label),
-            )
-            .content(move |_, window, cx| {
-                observe_popup_desktop(&entity, render_owner, window, cx);
-                entity
-                    .update(cx, |s, cx| {
-                        v_flex()
-                            .w(px(300.))
-                            .child(s.workspace_card(cx))
-                            .into_any_element()
-                    })
-                    .unwrap_or_else(|_| div().into_any_element())
-            })
-            .into_any_element()
     }
 }

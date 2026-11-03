@@ -7,6 +7,7 @@ use errors::ErrorRow;
 #[derive(PartialEq)]
 struct WorkbenchModel {
     standalone: bool,
+    details_popover: bool,
     panel: PanelState,
     titles: Vec<String>,
     browsers: Vec<(u64, Entity<crate::browser::Browser>)>,
@@ -100,11 +101,12 @@ impl Render for WorkbenchView {
         {
             self.renders += 1;
         }
+        let render_owner = cx.entity_id();
         self.desktop
             .update(cx, |_, cx| {
                 self.model
                     .as_ref()
-                    .map(|model| Desktop::render_workbench(model, cx))
+                    .map(|model| Desktop::render_workbench(model, render_owner, cx))
                     .unwrap_or_else(|| div().into_any_element())
             })
             .unwrap_or_else(|_| div().into_any_element())
@@ -193,6 +195,12 @@ impl Desktop {
             window,
             cx,
         );
+        // Like T3, a details popover closes once the card can dock again, so
+        // it does not reopen unasked when the window narrows later.
+        if self.details_popover && details_inline(panel_open, window.viewport_size().width) {
+            self.details_popover = false;
+            cx.notify();
+        }
         let model = self.workbench_model(window.viewport_size().width, cx);
         self.workbench_view
             .update(cx, |view, cx| view.set_model(model, cx));
@@ -259,6 +267,7 @@ impl Desktop {
             standalone: !self.side_chat_mode
                 && (panel.layout == PanelLayout::Expanded
                     || (panel.layout == PanelLayout::Right && width < px(1080.))),
+            details_popover: self.details_popover,
             panel,
             titles,
             browsers,
@@ -595,7 +604,11 @@ impl Desktop {
         }
         editor.p_4().into_any_element()
     }
-    fn render_workbench(model: &WorkbenchModel, cx: &mut Context<Self>) -> AnyElement {
+    fn render_workbench(
+        model: &WorkbenchModel,
+        render_owner: EntityId,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let language = crate::localization::language(cx);
         let panel = &model.panel;
         let layout = panel.layout;
@@ -730,6 +743,15 @@ impl Desktop {
                     .debug_selector(|| "panel-bottom".into())
                     .selected(layout == PanelLayout::Bottom),
                 )
+                // The panel covers the conversation header, so it carries the toggle.
+                .when(model.standalone, |bar| {
+                    bar.child(Self::details_toggle(
+                        false,
+                        model.details_popover,
+                        render_owner,
+                        cx,
+                    ))
+                })
                 .child(Self::panel_toggle(true, cx))
             })
             .when(model.side_chat_mode, |bar| {

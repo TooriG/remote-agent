@@ -172,6 +172,8 @@ pub(crate) struct Desktop {
     sidebar: bool,
     /// Whether thread details stay docked beside the chat when they fit.
     details: bool,
+    /// Whether thread details are open as a popover while they cannot dock.
+    details_popover: bool,
     panels: Panels,
     surface_resources: HashMap<u64, SurfaceResource>,
     panel_focus: FocusHandle,
@@ -550,6 +552,7 @@ impl Desktop {
             settings_page: SettingsPage::Agents,
             sidebar: true,
             details: true,
+            details_popover: false,
             panels: Panels::default(),
             surface_resources: HashMap::new(),
             panel_focus: cx.focus_handle(),
