@@ -119,8 +119,18 @@ class StorePersistenceTest {
             repository.sessionStorage("host-a").save(StorageKey.LOCAL_STATE, store.snapshot().serializeLocalState())
             store.dispatch(Intent.SetDraftText(key, "別の Host の下書き")).wait()
             repository.sessionStorage("host-b").save(StorageKey.LOCAL_STATE, store.snapshot().serializeLocalState())
-            val restoredA = AgentStore.offline(repository.sessionStorage("host-a").load(StorageKey.LOCAL_STATE), null, "test-revision")
-            val restoredB = AgentStore.offline(repository.sessionStorage("host-b").load(StorageKey.LOCAL_STATE), null, "test-revision")
+            val restoredA =
+                AgentStore.offline(
+                    repository.sessionStorage("host-a").load(StorageKey.LOCAL_STATE),
+                    null,
+                    "test-revision",
+                )
+            val restoredB =
+                AgentStore.offline(
+                    repository.sessionStorage("host-b").load(StorageKey.LOCAL_STATE),
+                    null,
+                    "test-revision",
+                )
             try {
                 assertEquals("日本語の下書き", restoredA.snapshot().draft(key).text)
                 assertEquals("別の Host の下書き", restoredB.snapshot().draft(key).text)
