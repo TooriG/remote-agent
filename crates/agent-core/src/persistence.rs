@@ -111,10 +111,12 @@ pub(crate) fn merge_model_preferences(
     before: &ModelPreferences,
     after: &ModelPreferences,
 ) -> ModelPreferences {
-    let mut merged = current.clone();
-    if before.provider != after.provider {
-        merged.provider = after.provider;
+    if before == after {
+        return current.clone();
     }
+    let mut merged = current.clone();
+    // Effort/tier picks also select their provider for the next new chat.
+    merged.provider = after.provider;
     for provider in before
         .selections
         .keys()

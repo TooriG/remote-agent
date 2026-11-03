@@ -300,6 +300,55 @@ async fn retrying_a_failed_local_save_does_not_reapply_obsolete_device_edits() {
 }
 
 #[tokio::test]
+async fn an_option_edit_reselects_its_provider_without_erasing_the_other_windows_choice() {
+    let disk = Arc::new(DeviceDisk::default());
+    let device = Arc::new(DevicePreferences::default());
+    let mut initial = Snapshot::default();
+    remember(
+        &mut initial,
+        selection(ProviderKind::Codex, "chosen", None, None),
+    );
+    *disk.models.lock().unwrap() = serde_json::to_vec(&initial.model_preferences).unwrap();
+    let main = session(with_disk(disk.clone()), device.clone());
+    let side = session(with_disk(disk.clone()), device);
+    let mut first = main.restore(false, None).await.unwrap();
+    let mut second = side.restore(false, None).await.unwrap();
+    main.start(&first);
+    side.start(&second);
+    remember(
+        &mut second,
+        selection(ProviderKind::Claude, "other", None, None),
+    );
+    side.enqueue(Arc::new(second.clone()))
+        .unwrap()
+        .await
+        .unwrap();
+    first
+        .model_preferences
+        .selections
+        .get_mut(&ProviderKind::Codex)
+        .unwrap()
+        .effort = Some("high".into());
+    main.finish(Arc::new(first)).unwrap().await.unwrap();
+    side.finish(Arc::new(second)).unwrap().await.unwrap();
+    let restored = session(with_disk(disk), Arc::default())
+        .restore(false, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        restored.model_preferences.provider,
+        Some(ProviderKind::Codex)
+    );
+    assert_eq!(selected(&restored).effort.as_deref(), Some("high"));
+    assert_eq!(
+        restored.model_preferences.selections[&ProviderKind::Claude]
+            .model
+            .id,
+        "other"
+    );
+}
+
+#[tokio::test]
 async fn corrupted_state_or_preferences_are_rejected_without_writing() {
     for key in [
         StorageKey::LocalState,
@@ -427,12 +476,7 @@ fn model_replacement_and_removal_keep_other_providers_choices() {
     );
     remember(
         &mut before,
-        selection(
-            ProviderKind::Codex,
-            "old",
-            Some("high".into()),
-            Some("priority".into()),
-        ),
+        selection(ProviderKind::Codex, "old", Some("high".into()), None),
     );
     let mut current = before.model_preferences.clone();
     current
@@ -453,6 +497,17 @@ fn model_replacement_and_removal_keep_other_providers_choices() {
     assert_eq!(
         merged.selections[&ProviderKind::Claude],
         current.selections[&ProviderKind::Claude]
+    );
+    let mut simultaneous = merged.clone();
+    simultaneous
+        .selections
+        .get_mut(&ProviderKind::Codex)
+        .unwrap()
+        .service_tier = Some("priority".into());
+    let replaced = merge_model_preferences(&simultaneous, &before.model_preferences, &after);
+    assert_eq!(
+        replaced.selections[&ProviderKind::Codex],
+        after.selections[&ProviderKind::Codex]
     );
     let before = after.clone();
     after.selections.remove(&ProviderKind::Codex);
