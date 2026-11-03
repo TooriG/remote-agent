@@ -10,7 +10,7 @@ extension LaunchUITests {
         expandSimulatorProject(app)
         let row = app.descendants(matching: .any)["tasks.row.codex:fixture-long-history"]
         XCTAssertTrue(row.waitForExistence(timeout: 30)); row.tap()
-        let latest = app.descendants(matching: .any)["item.long-9-0"]
+        let latest = app.descendants(matching: .any)["item.long-14-0"]
         XCTAssertTrue(latest.waitForExistence(timeout: 20))
         let message = app.descendants(matching: .any)["task.message"]
         message.tap(); message.typeText("[approval] Reopen while this turn is running")
@@ -40,7 +40,7 @@ extension LaunchUITests {
         XCTAssertTrue(row.waitForExistence(timeout: 30)); row.tap()
         let detail = app.descendants(matching: .any)["task.detail"]
         XCTAssertTrue(detail.waitForExistence(timeout: 30))
-        XCTAssertTrue(app.descendants(matching: .any)["item.long-9-0"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.descendants(matching: .any)["item.long-14-0"].waitForExistence(timeout: 20))
         let message = app.descendants(matching: .any)["task.message"]
         XCTAssertTrue(message.waitForExistence(timeout: 10))
         message.tap(); message.typeText("[delayed-input] Keep the reading position")
@@ -60,7 +60,7 @@ extension LaunchUITests {
         }
         let atBottom = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: latestButton)
         wait(for: [atBottom], timeout: 5)
-        let anchor = app.descendants(matching: .any)["item.long-9-0"]
+        let anchor = app.descendants(matching: .any)["item.long-14-0"]
         let beforeDrag = anchor.frame.minY
         // Start in the horizontal padding so the press cannot begin text selection.
         let start = detail.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.55))

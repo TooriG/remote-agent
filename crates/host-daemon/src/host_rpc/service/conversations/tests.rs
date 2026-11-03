@@ -2700,16 +2700,36 @@ async fn unreadable_native_bodies_stay_deferred_without_blocking_their_import() 
         .thread
         .id
         .unwrap();
-    send(
-        &host,
-        client.id(),
-        &root,
-        ProviderKind::Codex,
-        "first",
-        "hello",
-    )
-    .await
-    .unwrap();
+    // Native history the Host never ran; its unreadable answer stays deferred.
+    let item = |id: &str, body| Arc::new(Item::new(id.into(), ItemStatus::Completed, body));
+    codex
+        .records
+        .lock()
+        .unwrap()
+        .get_mut(&root.id)
+        .unwrap()
+        .thread
+        .turns = Some(vec![Arc::new(Turn {
+        id: "turn-0".into(),
+        status: TurnStatus::Completed,
+        items: Some(vec![
+            item(
+                "user-0",
+                ItemBody::UserMessage {
+                    text: Some("hello".into()),
+                    content: vec![],
+                },
+            ),
+            item(
+                "answer-0",
+                ItemBody::AssistantText {
+                    text: "answer".into(),
+                    phase: AssistantPhase::Final,
+                },
+            ),
+        ]),
+        ..Default::default()
+    })]);
     codex.unreadable.lock().unwrap().insert("answer-0".into());
     history(&host, client.id(), &root).await;
     imported_turns(&host, &root, &["turn-0"]).await;

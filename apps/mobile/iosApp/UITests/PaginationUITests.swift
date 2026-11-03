@@ -15,7 +15,7 @@ extension LaunchUITests {
         XCTAssertTrue(row.waitForExistence(timeout: 30)); row.tap()
         let detail = app.descendants(matching: .any)["task.detail"]
         XCTAssertTrue(detail.waitForExistence(timeout: 30))
-        let latest = app.descendants(matching: .any)["item.long-9-0"]
+        let latest = app.descendants(matching: .any)["item.long-14-0"]
         XCTAssertTrue(latest.waitForExistence(timeout: 20))
         let visible = expectation(for: NSPredicate(format: "isHittable == true"), evaluatedWith: latest)
         wait(for: [visible], timeout: 5)
@@ -75,7 +75,7 @@ extension LaunchUITests {
         }
     }
 
-    func testSimulatorLoadsEarlierHistoryOnTapAndRetriesFailedPage() throws {
+    func testSimulatorLoadsEarlierHistoryOnTapAtTheReadingPosition() throws {
         let app = try connectedSimulatorApp()
         try useSimulatorListFixture("viewport-conversation")
         app.terminate(); app.launch()
@@ -92,28 +92,20 @@ extension LaunchUITests {
         let initialItems = loadedItems(in: detail)
         XCTAssertGreaterThan(initialItems, 0)
         XCTAssertTrue(latest.isHittable)
-        try simulatorFixture("fail-next-history-page")
-        loadEarlier.tap()
-        let error = app.staticTexts["history.error"]
-        XCTAssertTrue(error.waitForExistence(timeout: 20))
-        XCTAssertTrue(error.label.contains("fixture older history page failed"))
-        XCTAssertFalse(app.staticTexts["notice"].exists, "A page failure belongs beside the retry control")
-        XCTAssertEqual(loadedItems(in: detail), initialItems, "A failed page must keep all loaded messages")
-        XCTAssertTrue(loadEarlier.isEnabled, "The failed page can be retried")
-        XCTAssertTrue(latest.isHittable)
+        // Older pages come from the Host transcript, not a native read that can
+        // fail; page failure presentation is covered by the shared core tests.
         waitForStableFrame(latest)
         let readingPosition = latest.frame.minY
-        captureScreen(app, named: "Earlier history page failed with inline retry")
         loadEarlier.tap()
         let loaded = expectation(for: NSPredicate { _, _ in self.loadedItems(in: detail) > initialItems },
                                  evaluatedWith: detail)
         wait(for: [loaded], timeout: 20)
-        XCTAssertFalse(error.exists)
+        XCTAssertFalse(app.staticTexts["history.error"].exists)
         XCTAssertFalse(loadEarlier.exists)
         waitForStableFrame(latest)
         XCTAssertEqual(latest.frame.minY, readingPosition, accuracy: 3)
-        XCTAssertTrue(latest.isHittable, "Retrying a page must preserve the current reading position")
-        captureScreen(app, named: "Earlier history retry preserved the latest message position")
+        XCTAssertTrue(latest.isHittable, "Loading a page must preserve the current reading position")
+        captureScreen(app, named: "Earlier history preserved the latest message position")
     }
 
     private func loadedItems(in detail: XCUIElement) -> Int {
