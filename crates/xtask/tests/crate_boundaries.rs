@@ -90,3 +90,19 @@ fn clients_reach_the_host_only_through_the_transport() {
         );
     }
 }
+
+#[test]
+fn binding_generator_stays_independent_of_the_application() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let names = reachable(
+        &root.join("crates/agent-bindgen/Cargo.toml"),
+        &mut BTreeSet::new(),
+    );
+    assert!(names.contains("uniffi"));
+    for dependency in ["agent-core", "agent-ffi", "agent-transport", "host-daemon"] {
+        assert!(
+            !names.contains(dependency),
+            "bindgen depends on {dependency}"
+        );
+    }
+}

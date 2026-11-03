@@ -255,8 +255,7 @@ Use `scripts/dev-env.sh just --list` to discover focused checks and
 `AGENT_IOS_TEST_WORKERS=1`–`10` to select native iOS acceptance concurrency.
 The acceptance runner serializes batches across worktrees and retains its
 results under `target/qa`. Build-cache implementation details live in
-[scripts/dev-env.sh](scripts/dev-env.sh) and the native runners. Enable the
-`agent-ffi/bindgen` feature only when generating bindings.
+[scripts/dev-env.sh](scripts/dev-env.sh) and the native runners.
 
 To place new worktrees' build outputs on an external disk, create a directory on
 the mounted disk and set `git config --local bex.buildRoot /absolute/path/to/builds`.

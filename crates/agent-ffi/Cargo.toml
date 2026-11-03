@@ -8,14 +8,6 @@ rust-version.workspace = true
 [lib]
 crate-type = ["lib", "staticlib", "cdylib"]
 
-[features]
-bindgen = ["uniffi/cli"]
-
-[[bin]]
-name = "agent-bindgen"
-path = "src/bin/bindgen.rs"
-required-features = ["bindgen"]
-
 [dependencies]
 agent-core = { path = "../agent-core", features = ["bindings"] }
-uniffi = { version = "=0.32.2" }
+uniffi.workspace = true
