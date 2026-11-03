@@ -6,7 +6,8 @@ snapshots, and default Keychain access group are separate. Its amber icon has a
 `DEV` label and is selected by
 `Dev.xcconfig`. Pair it with the development Host explicitly.
 
-Archive with the reproducible command and fresh archive/derived-data paths:
+Archive with the reproducible command, a fresh archive path, and the same
+derived-data directory across builds so package and compiler outputs can be reused:
 
 ```sh
 nix develop . --command just ios-archive \

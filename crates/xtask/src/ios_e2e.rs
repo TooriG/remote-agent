@@ -898,6 +898,8 @@ async fn build_test_bundle(
             "Debug",
             "ARCHS=arm64",
             "ONLY_ACTIVE_ARCH=YES",
+            "COMPILER_INDEX_STORE_ENABLE=NO",
+            "COMPILATION_CACHE_ENABLE_CACHING=YES",
             "-derivedDataPath",
             &build,
             "CODE_SIGNING_ALLOWED=YES",
