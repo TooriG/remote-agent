@@ -694,6 +694,9 @@ impl Agent for Codex {
     fn availability(&self) -> Result<(), Failure> {
         self.server().map(|_| ())
     }
+    fn requires_restart_snapshot(&self) -> bool {
+        self.process.is_ok()
+    }
     fn validate_create(&self) -> Result<(), Failure> {
         self.availability()
     }
@@ -1247,6 +1250,56 @@ async fn refresh_auth_tokens(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn restart_snapshot_checks_loaded_codex_even_after_connection_closes() {
+        use std::{os::unix::fs::PermissionsExt, sync::Arc};
+        let directory = tempfile::tempdir().unwrap();
+        let program = directory.path().join("codex-fixture");
+        std::fs::write(
+            &program,
+            r##"#!/usr/bin/env node
+const rl = require('node:readline').createInterface({ input: process.stdin });
+rl.on('line', line => {
+  const message = JSON.parse(line);
+  if (message.id === undefined) return;
+  const result = message.method === 'initialize'
+    ? { userAgent: 'restart-fixture', codexHome: process.env.CODEX_HOME }
+    : { data: [], nextCursor: null };
+  process.stdout.write(JSON.stringify({ id: message.id, result }) + '\n');
+});
+"##,
+        )
+        .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let server = Arc::new(
+            super::CodexAppServer::spawn(super::Config {
+                program,
+                codex_home: Some(directory.path().join("codex")),
+                ..Default::default()
+            })
+            .await
+            .unwrap(),
+        );
+        let agent = Arc::new(super::Codex::new(Ok(server.clone())));
+        let _events = super::Agent::event_stream(agent.as_ref()).unwrap();
+        let service = |name: &str| {
+            let service = crate::HostRpcService::new(
+                [crate::providers::Backend {
+                    provider: super::ProviderKind::Codex,
+                    agent: Ok(agent.clone()),
+                    dictation: None,
+                }],
+                crate::ProjectStore::new(directory.path().join(name)),
+            );
+            service.set_history_scope(directory.path().to_owned(), true);
+            service
+        };
+        service("healthy.json").prepare_update().await.unwrap();
+        server.shutdown().await.unwrap();
+        assert!(service("broken.json").prepare_update().await.is_err());
+    }
+
     #[test]
     fn native_rename_notices_carry_the_name_including_a_cleared_name() {
         for name in [Some("New name"), None] {

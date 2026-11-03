@@ -32,6 +32,10 @@ Nix. The current x86-64 Windows package supports x86-64 WSL distributions.
 After WSL restarts, BEX discovers its new address and reconnects. Startup errors
 appear in BEX; the Host log is `~/.cache/bex/wsl/host.log` inside the distribution
 (or beneath `$XDG_CACHE_HOME` when configured).
+When the bundled Host changes, BEX saves active work, restarts the WSL Host with
+its existing settings, and continues each interrupted conversation once in the
+same session. Keep other desktop instances updated too; an older connected
+instance will not replace a Host that another instance has just updated.
 
 WSL内のフォルダーをWindowsの選択画面で開くと、対応するWSLのHostを自動で起動して接続します。Git・エージェント・ターミナルはWSL内で動きます。Git、Node.js、エージェントのインストールとログインもWSL内で行ってください。Windows側のプロジェクトと接続先は引き続き利用できます。
 

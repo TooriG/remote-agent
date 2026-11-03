@@ -42,7 +42,13 @@ impl HostRpcService {
     ) -> Result<agent_protocol::live_activity::TaskActivityState, Failure> {
         self.inner.router.check_read_state()?;
         let revision = self.inner.router.task_activity_revision();
-        let agents = self.inner.providers.all();
+        let agents: Vec<_> = self
+            .inner
+            .providers
+            .all()
+            .into_iter()
+            .filter(|(_, agent)| !require_complete || agent.requires_restart_snapshot())
+            .collect();
         // An unavailable provider has no Host-owned process to interrupt. A
         // broken provider installation must not prevent updating the app.
         let has_sources = !agents.is_empty()

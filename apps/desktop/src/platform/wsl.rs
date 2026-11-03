@@ -84,7 +84,7 @@ async fn run(distro: Option<&str>, args: &[&str], input: Option<&[u8]>) -> anyho
     .map_err(|_| anyhow::anyhow!("WSL startup timed out"))?
 }
 
-async fn bootstrap(distro: &str) -> anyhow::Result<LocalClientAccess> {
+async fn bootstrap(distro: &str, allow_upgrade: bool) -> anyhow::Result<LocalClientAccess> {
     let bundle = std::env::current_exe()?.with_file_name("wsl-runtime");
     anyhow::ensure!(
         bundle.join("revision").is_file(),
@@ -110,6 +110,7 @@ async fn bootstrap(distro: &str) -> anyhow::Result<LocalClientAccess> {
         String::new()
     };
     let scope_env = format!("BEX_WSL_SCOPE={scope}");
+    let upgrade_env = format!("BEX_WSL_ALLOW_UPGRADE={}", u8::from(allow_upgrade));
     let bytes = run(
         Some(distro),
         &[
@@ -117,6 +118,7 @@ async fn bootstrap(distro: &str) -> anyhow::Result<LocalClientAccess> {
             "env",
             &bundle_env,
             &scope_env,
+            &upgrade_env,
             "sh",
             "-c",
             "exec \"${SHELL:-/bin/sh}\" -lc 'exec sh -s -- \"$BEX_WSL_BUNDLE\"'",
@@ -184,7 +186,9 @@ impl Connections {
                 .ok_or_else(|| anyhow::anyhow!("WSL distribution is not installed: {distro}"))?,
         };
         let distro = distro.as_str();
-        let access = bootstrap(distro).await?;
+        // Only a newly selected app instance may replace the old image. A
+        // still-running older app must not undo a newer app's Host update.
+        let access = bootstrap(distro, !hosts.contains_key(distro)).await?;
         let remote = RemoteHost {
             ticket: access.ticket.to_string(),
             ..choice(distro)

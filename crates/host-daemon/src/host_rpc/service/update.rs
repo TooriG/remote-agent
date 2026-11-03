@@ -176,4 +176,22 @@ mod tests {
         broken.set_history_scope(directory.path().to_owned(), true);
         broken.prepare_update().await.unwrap();
     }
+
+    #[tokio::test]
+    async fn restart_snapshot_skips_codex_that_never_started() {
+        let directory = tempfile::tempdir().unwrap();
+        // Codex retains an adapter after a failed spawn so its CLI can still
+        // be installed/updated. It has no process, unlike a broken live read.
+        let missing = HostRpcService::new(
+            [crate::providers::codex::Codex::new(Err("Codex is not installed".into())).into()],
+            ProjectStore::new(directory.path().join("missing-codex.json")),
+        );
+        missing.set_history_scope(directory.path().to_owned(), true);
+        assert!(missing.read_task_activity(false).await.is_err());
+        missing.prepare_update().await.unwrap();
+        let saved: Recovery =
+            serde_json::from_slice(&std::fs::read(directory.path().join(RECOVERY_FILE)).unwrap())
+                .unwrap();
+        assert!(saved.tasks.is_empty());
+    }
 }

@@ -51,11 +51,20 @@ pub(crate) enum Mode {
     /// Local updater: journal interrupted work and return the saved launch configuration.
     #[command(hide = true)]
     PrepareUpdate,
+    /// Local detached updater: restart this binary with the saved Host arguments.
+    #[command(hide = true)]
+    ResumeHost {
+        #[arg(long)]
+        launch_file: PathBuf,
+    },
     /// Private local desktop bootstrap. Credentials are written only to stdout.
     #[command(hide = true)]
     LocalClient {
         #[arg(long)]
         address: std::net::IpAddr,
+        /// Exit 42 when another executable owns the running Host.
+        #[arg(long)]
+        require_current_binary: bool,
     },
     /// Read conversation context without starting an agent. Positions and text
     /// offsets paginate the same history referenced by provider handoffs.

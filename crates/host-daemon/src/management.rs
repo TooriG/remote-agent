@@ -1,4 +1,4 @@
-use crate::command_line::Mode;
+use crate::command_line::{Mode, StartupConfig};
 use agent_local_host::{LocalHostRegistry, LocalHostState};
 use agent_protocol::{
     operations::{ReadHostStatus, RevokeDevice},
@@ -6,9 +6,85 @@ use agent_protocol::{
 };
 use agent_transport::transport::{Endpoint, Relays};
 use anyhow::{Context, Result, bail};
+use clap::Parser;
 use std::{path::PathBuf, time::Duration};
 
+#[derive(Debug)]
+pub(crate) struct DifferentHostBinary;
+impl std::fmt::Display for DifferentHostBinary {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("The running WSL Host needs the bundled revision")
+    }
+}
+impl std::error::Error for DifferentHostBinary {}
+
+async fn resume_host(path: &std::path::Path) -> Result<()> {
+    use std::process::{Command, Stdio};
+    let launch: agent_protocol::operations::HostUpdate =
+        serde_json::from_slice(&std::fs::read(path)?)?;
+    let config = StartupConfig::try_parse_from(&launch.arguments)?;
+    anyhow::ensure!(config.mode.is_none(), "Saved Host launch must start a Host");
+    let state_dir = config.state_dir.map(|directory| {
+        if directory.is_absolute() {
+            directory
+        } else {
+            std::path::Path::new(&launch.working_directory).join(directory)
+        }
+    });
+    let registry = if config.isolated {
+        LocalHostRegistry::new(
+            state_dir
+                .clone()
+                .context("isolated launch requires state directory")?,
+        )
+    } else {
+        LocalHostRegistry::for_user()?
+    };
+    let preferred = state_dir.unwrap_or_else(|| registry.directory().to_owned());
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        let registry = registry.clone();
+        let preferred = preferred.clone();
+        let host = tokio::task::spawn_blocking(move || registry.resolve(&preferred)).await??;
+        if matches!(host.state, LocalHostState::Stopped) {
+            break;
+        }
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "Previous Host did not stop"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let mut command = Command::new(std::env::current_exe()?);
+    command
+        .args(launch.arguments)
+        .current_dir(launch.working_directory)
+        .stdin(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000 | 0x00000200);
+    }
+    println!("{}", command.spawn()?.id());
+    Ok(())
+}
+
 pub(crate) async fn run(mode: Mode, state_dir: Option<PathBuf>, isolated: bool) -> Result<()> {
+    if let Mode::ResumeHost { launch_file } = &mode {
+        return resume_host(launch_file).await;
+    }
+    let require_current = matches!(
+        mode,
+        Mode::LocalClient {
+            require_current_binary: true,
+            ..
+        }
+    );
     let (identity, ticket) = tokio::task::spawn_blocking(move || {
         let registry = if isolated {
             LocalHostRegistry::new(state_dir.clone().context("--state-dir required")?)
@@ -21,11 +97,14 @@ pub(crate) async fn run(mode: Mode, state_dir: Option<PathBuf>, isolated: bool) 
             LocalHostState::Stopped => bail!("Host is not running"),
             LocalHostState::Starting => bail!("Host is still starting; try again shortly"),
         };
+        if require_current && !host.runs_executable(&std::env::current_exe()?)? {
+            return Err(DifferentHostBinary.into());
+        }
         let identity = agent_local_host::load_local_identity(&host.directory)?;
         Ok::<_, anyhow::Error>((identity, ticket))
     })
     .await??;
-    if let Mode::LocalClient { address } = mode {
+    if let Mode::LocalClient { address, .. } = mode {
         let access = agent_local_host::LocalClientAccess {
             ticket: ticket.with_ip(address),
             secret: identity.to_bytes(),

@@ -57,13 +57,18 @@ async fn run() {
         None => runtime::run(config).await,
     };
     if let Err(error) = result {
+        let exit_code = if error.is::<management::DifferentHostBinary>() {
+            42
+        } else {
+            1
+        };
         let error = format!("{error:#}");
         tracing::error!(target: "agent", operation = "host.runtime", message = %error);
         eprintln!(
             "host daemon failed: {}",
             agent_transport::diagnostics::sanitize(&error)
         );
-        std::process::exit(1);
+        std::process::exit(exit_code);
     }
     tracing::info!(target: "agent", operation = "shutdown", "Bex shutting down");
 }

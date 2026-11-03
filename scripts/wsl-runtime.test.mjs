@@ -26,9 +26,20 @@ original_args=$*
 if [ "$1" = --state-dir ]; then shift 2; [ "$1" = --isolated ]; shift; fi
 if [ "$1" = local-client ]; then
   [ -f "$TEST_ROOT/running" ] || exit 1
+  case "$*" in *--require-current-binary*) [ "$(cat "$TEST_ROOT/image" 2>/dev/null)" = "$0" ] || exit 42;; esac
   printf '{"ticket":"test-ticket","address":"%s"}\\n' "$3"
+elif [ "$1" = prepare-update ]; then
+  : > "$TEST_ROOT/prepared"
+  rm "$TEST_ROOT/running"
+  printf '%s\\n' '{"executable":"old-host","arguments":["--name","Preserved WSL"],"working_directory":"/existing/work"}'
+elif [ "$1" = resume-host ]; then
+  cp "$3" "$TEST_ROOT/resumed-launch"
+  printf '%s\\n' "$0" > "$TEST_ROOT/image"
+  : > "$TEST_ROOT/running"
+  printf '%s\\n' 'resumed' >> "$TEST_ROOT/starts"
 else
   printf '%s\\n' "$original_args" >> "$TEST_ROOT/starts"
+  printf '%s\\n' "$0" > "$TEST_ROOT/image"
   : > "$TEST_ROOT/running"
 fi`);
   writeFileSync(join(source, "revision"), "a".repeat(40));
@@ -51,15 +62,18 @@ test("WSL bootstrap installs into Linux, starts one Host and returns its interfa
   assert.ok(patches.every(line => line.includes(join(f.env.XDG_CACHE_HOME, "bex", "wsl", "a".repeat(40)))));
 });
 
-test("WSL bootstrap reuses a running Host and can restart after WSL stops", { skip: process.platform !== "linux" }, t => {
+test("WSL bootstrap hands over a different image and preserves its launch across WSL restarts", { skip: process.platform !== "linux" }, t => {
   const f = fixture(t);
   writeFileSync(join(f.root, "running"), "");
   assert.equal(f.run().status, 0);
-  assert.equal(existsSync(join(f.root, "starts")), false);
+  assert.equal(existsSync(join(f.root, "prepared")), true);
+  assert.deepEqual(JSON.parse(readFileSync(join(f.root, "resumed-launch"))), {
+    executable: "old-host", arguments: ["--name", "Preserved WSL"], working_directory: "/existing/work",
+  });
   rmSync(join(f.root, "running"));
   const result = f.run();
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(readFileSync(join(f.root, "starts"), "utf8"), "--name WSL (Ubuntu)\n");
+  assert.equal(readFileSync(join(f.root, "starts"), "utf8"), "resumed\nresumed\n");
 });
 
 test("WSL bootstrap rejects a corrupt revision before starting or copying a Host", { skip: process.platform !== "linux" }, t => {
@@ -69,6 +83,19 @@ test("WSL bootstrap rejects a corrupt revision before starting or copying a Host
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /Invalid bundled WSL revision/);
   assert.equal(existsSync(join(f.root, "starts")), false);
+});
+
+test("an older connected app cannot replace another app's new WSL Host", { skip: process.platform !== "linux" }, t => {
+  const f = fixture(t);
+  writeFileSync(join(f.root, "running"), "");
+  writeFileSync(join(f.root, "image"), "/newer/host-daemon");
+  f.env.BEX_WSL_ALLOW_UPGRADE = "0";
+  const result = f.run();
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /changed revision/);
+  assert.equal(existsSync(join(f.root, "prepared")), false);
+  assert.equal(existsSync(join(f.root, "starts")), false);
+  assert.equal(existsSync(join(f.root, "running")), true);
 });
 
 test("a failed runtime install can be retried without a stale lock or ready marker", { skip: process.platform !== "linux" }, t => {

@@ -308,6 +308,11 @@ pub(crate) trait Agent: Identity {
         None
     }
     fn availability(&self) -> Result<(), Failure>;
+    /// An adapter that never started its process cannot own interrupted work.
+    /// Read failures after startup still require a complete restart snapshot.
+    fn requires_restart_snapshot(&self) -> bool {
+        true
+    }
     /// Reject creation before the Host creates a workspace. Some adapters can
     /// create a conversation locally and defer starting an executable.
     fn validate_create(&self) -> Result<(), Failure>;

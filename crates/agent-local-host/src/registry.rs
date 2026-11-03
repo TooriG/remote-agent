@@ -35,6 +35,38 @@ struct Registration {
     ready: bool,
 }
 
+#[derive(Serialize, Deserialize)]
+struct HostProcess {
+    pid: u32,
+    executable: PathBuf,
+}
+
+impl LocalHost {
+    /// The WSL payload lives in an immutable revision directory. Check the
+    /// running image, not just its old discovery ticket, before reusing it.
+    pub fn runs_executable(&self, executable: &Path) -> Result<bool> {
+        if !matches!(self.state, LocalHostState::Ready(_)) {
+            return Ok(false);
+        }
+        let bytes = match fs::read(self.directory.join("host-process.json")) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error.into()),
+        };
+        let process: HostProcess = serde_json::from_slice(&bytes)?;
+        if process.executable != dunce::canonicalize(executable)? {
+            return Ok(false);
+        }
+        #[cfg(target_os = "linux")]
+        {
+            Ok(fs::read_link(format!("/proc/{}/exe", process.pid))
+                .is_ok_and(|path| path == process.executable))
+        }
+        #[cfg(not(target_os = "linux"))]
+        Ok(matches!(self.state, LocalHostState::Ready(_)))
+    }
+}
+
 /// Keep this lease until the providers and Host have stopped.
 pub struct HostLease {
     directory: PathBuf,
@@ -172,6 +204,13 @@ impl HostLease {
 
     pub fn publish(&self, ticket: &Ticket) -> Result<()> {
         let _coordination = self.registry.coordinate()?;
+        crate::save_private_json(
+            &self.directory.join("host-process.json"),
+            &HostProcess {
+                pid: std::process::id(),
+                executable: dunce::canonicalize(std::env::current_exe()?)?,
+            },
+        )?;
         // No credentials are written here: tickets contain only endpoint addresses.
         atomicwrites::AtomicFile::new(
             self.directory.join("host.ticket"),
@@ -214,6 +253,56 @@ fn running(directory: &Path) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn ready_host_identifies_its_image_and_rejects_unknown_or_stopped_processes() {
+        use agent_transport::transport::{Endpoint, Identity, Relays};
+        let fixture = tempfile::tempdir().unwrap();
+        let registry = LocalHostRegistry::new(fixture.path().join("registry"));
+        let directory = fixture.path().join("host");
+        let executable = std::env::current_exe().unwrap();
+        let endpoint = Endpoint::bind(Identity::generate(), Relays::Loopback)
+            .await
+            .unwrap();
+        let lease = registry.acquire(&directory).unwrap();
+        assert!(
+            !registry
+                .resolve(&directory)
+                .unwrap()
+                .runs_executable(&executable)
+                .unwrap()
+        );
+        lease.publish(&endpoint.local_ticket()).unwrap();
+        let host = registry.resolve(&directory).unwrap();
+        assert!(host.runs_executable(&executable).unwrap());
+        let other = fixture.path().join("other-executable");
+        fs::write(&other, b"other revision").unwrap();
+        assert!(!host.runs_executable(&other).unwrap());
+        #[cfg(target_os = "linux")]
+        {
+            crate::save_private_json(
+                &directory.join("host-process.json"),
+                &HostProcess {
+                    pid: u32::MAX,
+                    executable: dunce::canonicalize(&executable).unwrap(),
+                },
+            )
+            .unwrap();
+            assert!(!host.runs_executable(&executable).unwrap());
+        }
+        fs::remove_file(directory.join("host-process.json")).unwrap();
+        assert!(!host.runs_executable(&executable).unwrap());
+        lease.publish(&endpoint.local_ticket()).unwrap();
+        drop(lease);
+        assert!(
+            !registry
+                .resolve(&directory)
+                .unwrap()
+                .runs_executable(&executable)
+                .unwrap()
+        );
+        endpoint.close().await;
+    }
 
     #[cfg(unix)]
     #[test]
