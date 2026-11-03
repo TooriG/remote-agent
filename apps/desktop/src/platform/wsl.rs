@@ -53,7 +53,7 @@ async fn run(distro: Option<&str>, args: &[&str], input: Option<&[u8]>) -> anyho
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()?;
-    let result = tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(60), async {
         if let Some(input) = input {
             child.stdin.take().unwrap().write_all(input).await?;
         }
@@ -81,8 +81,7 @@ async fn run(distro: Option<&str>, args: &[&str], input: Option<&[u8]>) -> anyho
         Ok::<_, anyhow::Error>(stdout)
     })
     .await
-    .map_err(|_| anyhow::anyhow!("WSL startup timed out"))?;
-    result
+    .map_err(|_| anyhow::anyhow!("WSL startup timed out"))?
 }
 
 async fn bootstrap(distro: &str) -> anyhow::Result<LocalClientAccess> {
