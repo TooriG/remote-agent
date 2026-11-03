@@ -30,12 +30,15 @@ val buildRevision =
         .standardOutput
         .asText
 
+val nativeAbis = listOf("arm64-v8a", "x86_64")
+val rustBuildInputs = rootProject.files("Cargo.toml", "Cargo.lock", "flake.nix", "flake.lock", ".cargo/config.toml")
+
 val generateAgentBindings =
     tasks.register<Exec>("generateAgentBindings") {
         workingDir(rootProject.projectDir)
         commandLine("scripts/build-agent-bindings.sh")
         inputs.file(rootProject.file("scripts/build-agent-bindings.sh"))
-        inputs.files(rootProject.file("Cargo.toml"), rootProject.file("Cargo.lock"))
+        inputs.files(rustBuildInputs)
         inputs.dir(rootProject.file("crates/agent-bindgen"))
         inputs.dir(rootProject.file("crates/agent-core"))
         inputs.dir(rootProject.file("crates/agent-protocol"))
@@ -46,20 +49,15 @@ val buildAgentAndroid =
     tasks.register<Exec>("buildAgentAndroid") {
         workingDir(rootProject.projectDir)
         commandLine(
-            "cargo",
-            "ndk",
-            "--target",
-            "arm64-v8a",
-            "--target",
-            "x86_64",
-            "--output-dir",
-            layout.buildDirectory.dir("generated/jniLibs").get().asFile.absolutePath,
-            "build",
-            "--package",
-            "agent-ffi",
-            "--release",
+            listOf(
+                "node",
+                "scripts/build-agent-android.mjs",
+                layout.buildDirectory.dir("generated/jniLibs").get().asFile.absolutePath,
+            ) + nativeAbis
         )
-        inputs.files(rootProject.file("Cargo.toml"), rootProject.file("Cargo.lock"))
+        inputs.file(rootProject.file("scripts/build-agent-android.mjs"))
+        inputs.property("nativeAbis", nativeAbis)
+        inputs.files(rustBuildInputs)
         inputs.dir(rootProject.file("crates/agent-ffi"))
         inputs.dir(rootProject.file("crates/agent-core"))
         inputs.dir(rootProject.file("crates/agent-protocol"))
@@ -84,6 +82,7 @@ android {
         versionName = System.getenv("AGENT_ANDROID_VERSION_CODE")?.let { "0.1.0-preview.$it" } ?: "0.1.0"
         buildConfigField("String", "BUILD_REVISION", "\"${buildRevision.get().trim()}\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        ndk { abiFilters += nativeAbis }
     }
     signingConfigs {
         getByName("debug") {

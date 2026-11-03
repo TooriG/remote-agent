@@ -88,7 +88,8 @@ jobs:
                 apps/mobile/iosApp/UITests/Fixtures/scroll-tests.swift | apps/mobile/iosApp/UITests/Fixtures/text-view-tests.swift) area='iphone-mac' ;;
               scripts/test-ios-scroll.sh) area=mac ;;
               apps/mobile/src/* | apps/mobile/build.gradle.kts | build.gradle.kts | settings.gradle.kts | \
-                gradle.properties | gradle/* | gradlew | gradlew.bat | detekt.yml | scripts/android-e2e.sh) area=android ;;
+                gradle.properties | gradle/* | gradlew | gradlew.bat | detekt.yml | scripts/android-e2e.sh | \
+                scripts/build-agent-android.mjs) area=android ;;
               apps/mobile/iosApp/* | .swiftformat | .swiftlint.yml | scripts/ios-e2e.sh | \
                 scripts/build-agent-ios.sh | scripts/archive-ios.sh) area=iphone ;;
               apps/desktop/*) area=desktop ;;
