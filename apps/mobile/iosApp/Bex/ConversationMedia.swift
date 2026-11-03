@@ -28,13 +28,19 @@ extension SessionImage {
 
 /// Media views use authenticated Host operations.
 struct ConversationMediaAccess {
+    struct ResolvedFile {
+        let path: String
+        let isDirectory: Bool
+        let line: UInt32?
+    }
+
     let host: String?
     let cwd: String
     let home: String?
     let draft: DraftKey
     let download: @MainActor (String) async throws -> URL
     let visualization: @MainActor (String) async throws -> String
-    let resolve: @MainActor (String) async throws -> (path: String, directory: Bool, line: UInt32?)
+    let resolve: @MainActor (String) async throws -> ResolvedFile
     let openDirectory: @MainActor (String) -> Void
     let openFile: @MainActor (String, UInt32?) -> Void
 }

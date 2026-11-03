@@ -84,7 +84,7 @@ struct ConversationMarkdown: View {
                 linkError = nil
                 let entry = try await media.resolve(target)
                 try Task.checkCancellation()
-                if entry.directory {
+                if entry.isDirectory {
                     media.openDirectory(entry.path)
                     return
                 }

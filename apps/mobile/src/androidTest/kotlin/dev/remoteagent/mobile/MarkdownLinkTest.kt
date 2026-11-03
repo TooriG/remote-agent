@@ -11,8 +11,10 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
@@ -88,13 +90,12 @@ class MarkdownLinkTest {
                 }
             }
         }
-        // File chips are inline replacements, so click their displayed label.
-        val chip =
-            androidx.test.uiautomator.UiDevice.getInstance(
-                    androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
-                )
-                .wait(androidx.test.uiautomator.Until.findObject(androidx.test.uiautomator.By.text("notes.md")), 5_000)
-        checkNotNull(chip).click()
+        // Inline AndroidViews can be merged into the paragraph's accessibility
+        // node. Locate the chip's layout directly and dispatch a real touch.
+        compose
+            .onNodeWithTag("markdown.file./repo/notes.md", useUnmergedTree = true)
+            .assertIsDisplayed()
+            .performTouchInput { click() }
         compose.waitForIdle()
         compose.onNodeWithText("fixture read").assertExists()
         compose.runOnIdle {

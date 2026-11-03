@@ -393,7 +393,7 @@ private fun FileChip(
             context.assets.open("pierre_$token.png").use { android.graphics.BitmapFactory.decodeStream(it) }
         }
     androidx.compose.ui.viewinterop.AndroidView(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().testTag("markdown.file.${file.path}"),
         factory = {
             android.widget.TextView(it).apply {
                 maxLines = 1

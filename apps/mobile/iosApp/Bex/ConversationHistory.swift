@@ -38,9 +38,9 @@ extension ThreadScreen {
                 guard model.selectedProfileId == host else { throw CancellationError() }
                 guard case let .fileReferenceResolved(path, directory) = result
                 else { throw URLError(.badServerResponse) }
-                return (
+                return ConversationMediaAccess.ResolvedFile(
                     path: path,
-                    directory: directory,
+                    isDirectory: directory,
                     line: markdownFileTarget(source: source, cwd: cwd, surface: .mobile)?.line
                 )
             },
