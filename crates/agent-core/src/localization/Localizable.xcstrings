@@ -12385,22 +12385,6 @@
         }
       }
     },
-    "変更  +{0}  −{1}": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "変更  +{0}  −{1}"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Changes  +{0}  −{1}"
-          }
-        }
-      }
-    },
     "変更はありません": {
       "localizations": {
         "ja": {

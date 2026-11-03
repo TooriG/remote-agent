@@ -313,6 +313,7 @@ impl Desktop {
         let language = crate::localization::language(cx);
         let enabled = self.snapshot.connected && !self.snapshot.navigation.cwd.is_empty();
         let review_enabled = enabled && !self.snapshot.selected_directory().is_empty();
+        let review = self.snapshot.workspace.review.as_ref();
         let mut sources = v_flex().gap_1();
         for (i, path) in self.source_paths.iter().enumerate() {
             let path = path.clone();
@@ -392,57 +393,30 @@ impl Desktop {
                         .icon(IconName::FolderOpen)
                         .w_full(),
                     )
-                    .when(
-                        self.snapshot
-                            .workspace
-                            .review
-                            .as_ref()
-                            .is_some_and(|review| !review.branch.is_empty()),
-                        |body| {
+                    .when(self.local_shell && self.snapshot.connected, |body| {
+                        body.child(self.open_in_editor_row(cx))
+                    })
+                    .when_some(
+                        review.filter(|review| !review.branch.is_empty()),
+                        |body, review| {
                             body.child(
                                 div()
                                     .pl_2()
                                     .text_sm()
                                     .text_color(rgb(appearance::MUTED))
-                                    .child(
-                                        self.snapshot
-                                            .workspace
-                                            .review
-                                            .as_ref()
-                                            .map(|review| review.branch.clone())
-                                            .unwrap_or_default(),
-                                    ),
+                                    .child(review.branch.clone()),
                             )
                         },
                     )
                     .child(
-                        button(
-                            "context-changes",
-                            agent_core::localization::localized_ui_format(
-                                language,
-                                "変更  +{0}  −{1}".into(),
-                                vec![
-                                    format!(
-                                        "{}",
-                                        self.snapshot
-                                            .workspace
-                                            .review
-                                            .as_ref()
-                                            .map_or(0, |review| review.additions)
-                                    ),
-                                    format!(
-                                        "{}",
-                                        self.snapshot
-                                            .workspace
-                                            .review
-                                            .as_ref()
-                                            .map_or(0, |review| review.deletions)
-                                    ),
-                                ],
-                            ),
-                            cx,
-                            |s, _, cx| s.open_review(None, cx),
-                        )
+                        button("context-changes", language.text("変更"), cx, |s, _, cx| {
+                            s.open_review(None, cx)
+                        })
+                        .child(review_counts(
+                            Some(review.map_or(0, |review| review.additions)),
+                            Some(review.map_or(0, |review| review.deletions)),
+                            language,
+                        ))
                         .icon(IconName::Replace)
                         .w_full()
                         .disabled(!enabled),
@@ -482,6 +456,87 @@ impl Desktop {
                     ),
             )
             .into_any_element()
+    }
+
+    // Mirrors T3's thread details "Open in <editor>" split row: the primary half
+    // opens the preferred editor, and choosing a menu entry opens that editor and
+    // makes it preferred.
+    fn open_in_editor_row(&self, cx: &Context<Self>) -> AnyElement {
+        use agent_core::presentation::editors::{editor_label, preferred_editor};
+        use agent_protocol::editors::FileManagerRevealKind;
+        let file_manager = if cfg!(target_os = "macos") {
+            FileManagerRevealKind::Finder
+        } else if cfg!(target_os = "windows") {
+            FileManagerRevealKind::FileExplorer
+        } else {
+            FileManagerRevealKind::Files
+        };
+        let options = self
+            .snapshot
+            .file_open_capabilities
+            .as_ref()
+            .map(|capabilities| capabilities.editors.clone())
+            .unwrap_or_default();
+        let selected = preferred_editor(self.snapshot.preferred_editor, &options);
+        let no_cwd = self.snapshot.navigation.cwd.is_empty();
+        let label = format!(
+            "Open in {}",
+            selected.map_or("editor", |editor| editor_label(editor, file_manager))
+        );
+        let owner = cx.entity().downgrade();
+        h_flex()
+            .w_full()
+            .child(
+                button("open-in-editor", label, cx, move |view, _, cx| {
+                    if let Some(editor) = selected {
+                        view.open_workspace_in_editor(editor, cx);
+                    }
+                })
+                .icon(IconName::ExternalLink)
+                .flex_1()
+                .disabled(selected.is_none() || no_cwd),
+            )
+            .child(
+                Button::new("open-in-editor-picker")
+                    .icon(IconName::ChevronDown)
+                    .small()
+                    .ghost()
+                    .tooltip("Choose editor")
+                    .accessibility_label("Choose editor")
+                    .disabled(no_cwd)
+                    .dropdown_menu(move |mut menu, _, _| {
+                        if options.is_empty() {
+                            menu = menu.item(
+                                PopupMenuItem::new("No installed editors found").disabled(true),
+                            );
+                        }
+                        for editor in &options {
+                            let editor = *editor;
+                            let owner = owner.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(editor_label(editor, file_manager)).on_click(
+                                    move |_, _, cx| {
+                                        let _ = owner.update(cx, |view, cx| {
+                                            view.open_workspace_in_editor(editor, cx);
+                                        });
+                                    },
+                                ),
+                            );
+                        }
+                        menu
+                    }),
+            )
+            .into_any_element()
+    }
+
+    fn open_workspace_in_editor(
+        &mut self,
+        editor: agent_protocol::editors::EditorId,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch(Intent::SetPreferredEditor { editor });
+        let cwd = self.snapshot.navigation.cwd.clone();
+        self.open_in_editor(cwd, None, None, editor, false, cx);
     }
 }
 
