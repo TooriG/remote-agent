@@ -280,7 +280,8 @@ jobs:
     if: needs.changes.outputs.mac == 'true' && !inputs.ios-tests
     concurrency:
       # Optional PRs share one Apple slot; main and manual clients stay parallel.
-      group: native-apple-${{ github.event_name == 'pull_request' && 'pr' || format('{0}-{1}', github.run_id, github.job) }}
+      # github.job is unset before steps, so use explicit job names here.
+      group: native-apple-${{ github.event_name == 'pull_request' && 'pr' || format('{0}-mac', github.run_id) }}
       cancel-in-progress: false
       queue: max
     runs-on: macos-26
@@ -332,7 +333,7 @@ jobs:
     # Focused manual runs keep their existing acceptance-only scope.
     if: ${{ !cancelled() && needs.changes.outputs.iphone == 'true' && (inputs.ios-tests || needs.repository.result == 'success') }}
     concurrency:
-      group: native-apple-${{ github.event_name == 'pull_request' && 'pr' || format('{0}-{1}', github.run_id, github.job) }}
+      group: native-apple-${{ github.event_name == 'pull_request' && 'pr' || format('{0}-iphone', github.run_id) }}
       cancel-in-progress: false
       queue: max
     runs-on: macos-26
@@ -406,7 +407,7 @@ jobs:
     name: iPhone ${{ matrix.label }}
     needs: iphone
     concurrency:
-      group: native-apple-${{ github.event_name == 'pull_request' && 'pr' || format('{0}-{1}-{2}', github.run_id, github.job, matrix.label) }}
+      group: native-apple-${{ github.event_name == 'pull_request' && 'pr' || format('{0}-iphone-tests-{1}', github.run_id, matrix.label) }}
       cancel-in-progress: false
       queue: max
     strategy:
