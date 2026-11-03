@@ -439,10 +439,13 @@ async fn conversation_copies_are_saved_restored_and_cleared_on_pairing() {
     use agent_protocol::session::SessionRef;
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         let directory = tempfile::tempdir().unwrap();
-        let copies = Some(directory.path().join("copies"));
+        let copies = directory.path().join("copies");
         let storage = Arc::new(Storage::default());
         let persistence = Persistence::new(storage.clone(), Arc::default());
-        let mut snapshot = persistence.restore(false, copies.clone()).await.unwrap();
+        let mut snapshot = persistence
+            .restore(false, Some(copies.clone()))
+            .await
+            .unwrap();
         let id = SessionRef::new(ProviderKind::Codex, "cached".into()).unwrap();
         let thread = Thread {
             id: Some(id.clone()),
@@ -473,7 +476,7 @@ async fn conversation_copies_are_saved_restored_and_cleared_on_pairing() {
         persistence.finish(snapshot).unwrap().await.unwrap();
         let restored = loop {
             let restored = Persistence::new(storage.clone(), Arc::default())
-                .restore(false, copies.clone())
+                .restore(false, Some(copies.clone()))
                 .await
                 .unwrap();
             if restored.conversations.contains_key(&id) && restored.thread_list().is_some() {
@@ -496,14 +499,14 @@ async fn conversation_copies_are_saved_restored_and_cleared_on_pairing() {
         // A new pairing must ignore the old Host state, even if it is damaged.
         *storage.local.lock().unwrap() = b"damaged previous Host".to_vec();
         let paired = Persistence::new(storage, Arc::default())
-            .restore(true, copies.clone())
+            .restore(true, Some(copies.clone()))
             .await
             .unwrap();
         assert!(paired.conversations.is_empty());
         assert!(paired.thread_list().is_none());
         assert!(paired.drafts.is_empty());
         assert_eq!(selected(&paired).model.id, "chosen");
-        assert!(!copies.unwrap().exists());
+        assert!(!copies.exists());
     })
     .await
     .expect("conversation persistence stalled");
