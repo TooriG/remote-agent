@@ -7,7 +7,8 @@ import { execFileSync, spawn } from 'node:child_process';
 import { setTimeout } from 'node:timers/promises';
 
 async function until(predicate) {
-  const deadline = Date.now() + 5000;
+  // Bound fixture startup under parallel builds; explicit gates assert ordering.
+  const deadline = Date.now() + 30_000;
   while (!predicate()) {
     assert.ok(Date.now() < deadline, 'remote command did not reach the expected stage');
     await setTimeout(10);
