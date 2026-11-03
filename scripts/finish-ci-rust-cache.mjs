@@ -3,14 +3,32 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 
+const timeoutMs = 10_000;
+
 function kache(args) {
-  const result = spawnSync('kache', args, {stdio: 'inherit'});
+  const result = spawnSync('kache', args, {encoding: 'utf8', stdio: ['inherit', 'pipe', 'inherit']});
+  if (result.stdout) process.stdout.write(result.stdout);
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`kache ${args.join(' ')} failed (${result.status})`);
+  return result.stdout;
+}
+
+async function sweep() {
+  // Kache protects artifacts accessed in the preceding 120 seconds.
+  const deadline = Date.now() + 120_000 + timeoutMs;
+  for (;;) {
+    const {skipped, disk: {store_bytes: bytes, store_limit_bytes: limit}} = JSON.parse(kache(['gc', '--json']));
+    if (typeof skipped !== 'boolean' || !Number.isSafeInteger(bytes) || !Number.isSafeInteger(limit)) {
+      throw new Error('Compiler cache sweep did not report completion and capacity');
+    }
+    if (!skipped && bytes <= limit) return;
+    if (Date.now() >= deadline) throw new Error('Compiler cache sweep has not reached its capacity limit');
+    await setTimeout(skipped ? 100 : 1_000);
+  }
 }
 
 async function waitForExit(pid) {
-  const deadline = Date.now() + 10_000;
+  const deadline = Date.now() + timeoutMs;
   for (;;) {
     try {
       process.kill(pid, 0);
@@ -31,7 +49,7 @@ try {
   if (!Number.isSafeInteger(state.pid) || state.pid <= 1) throw new Error('Invalid compiler cache daemon PID');
   pid = state.pid;
   kache(['stats', '--last-build']);
-  kache(['gc']);
+  await sweep();
 } finally {
   kache(['daemon', 'stop']);
   // Ownership release can precede process exit and final SQLite file cleanup.

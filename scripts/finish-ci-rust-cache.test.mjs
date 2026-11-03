@@ -30,6 +30,17 @@ async function fixture(t, failCommand = '') {
 set -euo pipefail
 printf '%s\\n' "$*" >> "$COMMAND_LOG"
 [[ "$*" != "$FAIL_COMMAND" ]] || exit 23
+if [[ "$*" == 'gc --json' ]]; then
+  if [[ ! -f "$COMMAND_LOG.gc" ]]; then
+    touch "$COMMAND_LOG.gc"
+    echo '{"skipped":true,"disk":{"store_bytes":0,"store_limit_bytes":1}}'
+  elif [[ ! -f "$COMMAND_LOG.gc-budget" ]]; then
+    touch "$COMMAND_LOG.gc-budget"
+    echo '{"skipped":false,"disk":{"store_bytes":2,"store_limit_bytes":1}}'
+  else
+    echo '{"skipped":false,"disk":{"store_bytes":0,"store_limit_bytes":1}}'
+  fi
+fi
 if [[ "$*" == 'daemon stop' ]]; then kill -TERM "$TEST_DAEMON_PID"; fi
 `);
   chmodSync(join(root, 'kache'), 0o755);
@@ -46,19 +57,19 @@ if [[ "$*" == 'daemon stop' ]]; then kill -TERM "$TEST_DAEMON_PID"; fi
   };
 }
 
-test('a finished snapshot waits for the daemon to close its files', async t => {
+test('a bounded snapshot waits for a completed sweep and daemon exit', async t => {
   const f = await fixture(t);
   const result = await f.run();
   assert.equal(result.status, 0);
-  assert.deepEqual(result.commands, ['daemon start', 'stats --last-build', 'gc', 'daemon stop']);
+  assert.deepEqual(result.commands, ['daemon start', 'stats --last-build', 'gc --json', 'gc --json', 'gc --json', 'daemon stop']);
   assert.ok(existsSync(join(f.root, 'finished')));
 });
 
 test('a failed sweep still stops and waits for the daemon', async t => {
-  const f = await fixture(t, 'gc');
+  const f = await fixture(t, 'gc --json');
   const result = await f.run();
   assert.notEqual(result.status, 0);
-  assert.deepEqual(result.commands, ['daemon start', 'stats --last-build', 'gc', 'daemon stop']);
+  assert.deepEqual(result.commands, ['daemon start', 'stats --last-build', 'gc --json', 'daemon stop']);
   assert.ok(existsSync(join(f.root, 'finished')));
 });
 

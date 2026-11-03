@@ -348,7 +348,8 @@ jobs:
         env:
           AGENT_LOCAL_RUST_CACHE_PREFIX: local-rust-${{ runner.os }}-${{ runner.arch }}-xcode-26.6-${{ hashFiles('flake.lock', '.kache.toml', 'tools/kache/package.nix', 'scripts/ci-rust-cache.sh') }}-${{ github.job }}
         with:
-          path: ${{ runner.temp }}/kache-store
+          # Parent-directory metadata can still be updated by macOS housekeeping.
+          path: &local-rust-cache-paths ${{ runner.temp }}/kache-store/*
           # Publish changed workspace sources too; preserve only the newest snapshot.
           key: ${{ env.AGENT_LOCAL_RUST_CACHE_PREFIX }}-${{ github.sha }}
           restore-keys: ${{ env.AGENT_LOCAL_RUST_CACHE_PREFIX }}-
@@ -386,7 +387,7 @@ jobs:
         continue-on-error: true
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
-          path: ${{ runner.temp }}/kache-store
+          path: *local-rust-cache-paths
           key: ${{ steps.local-rust-cache.outputs.cache-primary-key }}
       - &prune-local-rust-cache
         name: Retire replaced repository compiler snapshots
