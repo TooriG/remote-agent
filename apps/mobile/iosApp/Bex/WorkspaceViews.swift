@@ -11,7 +11,18 @@ extension FileEntry: @retroactive Identifiable {
 extension ThreadScreen {
     func conversationDirectorySheet(_ destination: WorkspaceDestination) -> some View {
         NavigationStack {
-            WorkspaceScreen(model: model, root: destination.directory, draft: destination.scope.draft) {
+            WorkspaceScreen(
+                model: model,
+                root: destination.directory,
+                draft: destination.scope.draft,
+                initialFile: destination.filePath.map { FileEntry(
+                    name: ($0 as NSString).lastPathComponent,
+                    path: $0,
+                    directory: false,
+                    size: 0
+                ) },
+                initialLine: destination.fileLine
+            ) {
                 openedDirectory = nil
             }
             .onDisappear {
@@ -32,17 +43,26 @@ struct WorkspaceScreen: View {
     @ObservedObject var model: AppViewModel
     let root: String
     let draft: DraftKey
+    var initialFile: FileEntry?
+    var initialLine: UInt32?
     let close: () -> Void
 
     var body: some View {
-        WorkspaceDirectoryScreen(snapshot: model.snapshot, directory: root, title: "ファイル",
-                                 perform: request, fileDraft: fileDraft,
-                                 downloadFile: model.download,
-                                 aiEdit: { model.perform(.setDraftText(
-                                     threadId: draft,
-                                     text: "このファイルを編集してください: \($0)\n変更内容: "
-                                 )) }, close: close)
-            .background(Color(uiColor: .systemGroupedBackground))
+        WorkspaceDirectoryScreen(
+            snapshot: model.snapshot,
+            directory: root,
+            initialFile: initialFile,
+            initialLine: initialLine,
+            perform: request,
+            fileDraft: fileDraft,
+            downloadFile: model.download,
+            aiEdit: { model.perform(.setDraftText(
+                threadId: draft,
+                text: "このファイルを編集してください: \($0)\n変更内容: "
+            )) },
+            close: close
+        )
+        .background(Color(uiColor: .systemGroupedBackground))
     }
 
     private func request(_ intent: Intent, completion: @escaping (AgentCore.Snapshot, Result<Outcome, Error>) -> Void) {
@@ -63,122 +83,169 @@ struct WorkspaceScreen: View {
 private struct WorkspaceDirectoryScreen: View {
     let snapshot: AgentCore.Snapshot
     let directory: String
-    let title: String
+    let initialFile: FileEntry?
+    let initialLine: UInt32?
     let perform: SnapshotRequest
     let fileDraft: (String) -> Binding<String>
     let downloadFile: @MainActor (String) async throws -> URL
     let aiEdit: (String) -> Void
     let close: () -> Void
-    @State private var openedDirectory: String?
-    @State private var path = ""
-    @State private var entries: [FileEntry] = []
+    @State private var owner = UUID().uuidString
+    @State private var refreshCompletion: CheckedContinuation<Void, Never>?
+    @State private var selected: FileEntry?
+    @State private var selectedLine: UInt32?
+    @State private var sharedFile: SharedFile?
     @State private var error: String?
     @State private var busy = false
-    @State private var selected: FileEntry?
-    @State private var sharedFile: SharedFile?
+
+    private var root: String {
+        fileHostPath(path: directory, home: snapshot.hostHomeDirectory())
+    }
+
+    private var key: FileTreeKey {
+        FileTreeKey(owner: owner, root: root)
+    }
+
+    private var tree: FileTreeView {
+        snapshot.fileTree(key: key)
+    }
 
     var body: some View {
-        List {
-            if let error {
-                AppNotice(text: error)
-            }
-            if busy {
-                ProgressView()
-            }
-            Section {
-                HStack {
-                    TextField("絶対パス", text: $path)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .submitLabel(.go).onSubmit { openedDirectory = path }
-                    Button("開く") { openedDirectory = path }
-                        .accessibilityIdentifier("files.open-path")
-                }
-                Button { openedDirectory = (directory as NSString).deletingLastPathComponent } label: {
-                    Label("親ディレクトリ", systemImage: "arrow.up")
-                }
-                .disabled(directory == "/")
-            }
-            Section {
-                ForEach(entries) { entry in
-                    HStack {
-                        if entry.directory {
-                            Button { openedDirectory = entry.path } label: {
-                                HStack {
-                                    Label(entry.name, systemImage: "folder")
-                                    Spacer()
-                                    Image(systemName: "chevron.right")
-                                        .font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
-                                }
-                            }
-                            .accessibilityIdentifier("file.\(entry.name)")
-                        } else {
-                            Button { selected = entry } label: { Label(entry.name, systemImage: "doc") }
-                                .buttonStyle(.borderless)
-                                .accessibilityIdentifier("file.\(entry.name)")
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    if let error = error ?? tree.error {
+                        AppNotice(text: error).padding(.horizontal, 16).padding(.vertical, 8)
+                    }
+                    if tree.truncated {
+                        Text("More search results available. Refine your search to see them.")
+                            .font(.caption).foregroundStyle(.secondary).padding(16)
+                    }
+                    if tree.rows.isEmpty {
+                        emptyState
+                    }
+                    ForEach(tree.rows, id: \.path) { row in
+                        Button { send(.click(path: row.path, additive: false, range: false)) } label: {
+                            fileRow(row)
                         }
-                        Spacer()
-                        if !entry.directory {
-                            Button { download(entry.path) } label: { Image(systemName: "square.and.arrow.down") }
-                                .buttonStyle(.borderless).accessibilityLabel("\(entry.name)をダウンロード")
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(row.path)
+                        .accessibilityIdentifier("file.\(row.label)")
+                        .accessibilityAddTraits(row.selected ? .isSelected : [])
+                        .id(row.path)
+                    }
+                }.padding(.vertical, 8)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .refreshable {
+                await withCheckedContinuation { continuation in
+                    refreshCompletion?.resume()
+                    refreshCompletion = continuation
+                    perform(.fileTree(key: key, action: .refresh)) { next, _ in
+                        if !next.fileTree(key: key).refreshing {
+                            finishRefresh()
                         }
                     }
                 }
             }
-        }
-        .listStyle(.insetGrouped)
-        .navigationTitle(title)
-        .navigationBarTitleDisplayMode(.inline)
-        .navigationDestination(item: $openedDirectory) { directory in
-            WorkspaceDirectoryScreen(snapshot: snapshot, directory: directory,
-                                     title: URL(fileURLWithPath: directory).lastPathComponent,
-                                     perform: perform, fileDraft: fileDraft, downloadFile: downloadFile,
-                                     aiEdit: aiEdit, close: close)
-        }
-        .onAppear {
-            if path.isEmpty {
-                load(directory)
+            .onChange(of: tree.refreshing) {
+                if !tree.refreshing {
+                    finishRefresh()
+                }
+            }
+            .onChange(of: tree.revealId) {
+                if let path = tree.focusedPath {
+                    proxy.scrollTo(path)
+                }
             }
         }
+        .navigationTitle("Files")
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: Binding(get: { tree.query }, set: { send(.query(text: $0)) }), prompt: "Search files")
+        .onAppear {
+            send(.open(surface: .mobile, locale: Locale.current.identifier, workspaceRoot: root))
+            if let initialFile {
+                selectedLine = initialLine
+                selected = initialFile
+            }
+        }
+        .onDisappear { send(.close); finishRefresh() }
+        .onChange(of: tree.openFile) { _, request in
+            guard let request else { return }
+            selectedLine = nil
+            let path = fileTreePath(root: root, relative: request.path)
+            selected = FileEntry(name: request.path.components(separatedBy: "/").last ?? request.path,
+                                 path: path, directory: false, size: 0)
+        }
         .sheet(item: $selected) { entry in
-            FileEditorSheet(
-                snapshot: snapshot,
-                text: fileDraft(entry.path),
-                perform: perform,
-                entry: entry,
-                download: download
-            ) { path in
+            FileEditorSheet(snapshot: snapshot, text: fileDraft(entry.path), perform: perform,
+                            entry: entry, line: selectedLine, download: download) { path in
                 aiEdit(path)
                 selected = nil
                 close()
             }
         }
-        .sheet(item: $sharedFile, onDismiss: cleanupDownload) { item in
-            FileShareSheet(url: item.url)
+        .sheet(item: $sharedFile) { item in FileShareSheet(url: item.url) }
+    }
+
+    @ViewBuilder private var emptyState: some View {
+        if tree.pending {
+            ProgressView().frame(maxWidth: .infinity).padding(20)
+        } else {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(tree.error == nil ? "No files found" : "Files unavailable").fontWeight(.bold)
+                if tree.error != nil {
+                    Button("Try again") { send(.refresh) }
+                } else {
+                    Text(tree.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? "The workspace is empty." : "Try a different search.").font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }.padding(16)
         }
     }
 
-    private func load(_ directory: String) {
-        path = directory
-        busy = true; error = nil
-        perform(.listFiles(ListFiles(path: directory))) { snapshot, result in
-            busy = false
-            if case let .failure(failure) = result {
-                error = failure.localizedDescription; return
+    private func fileRow(_ row: FileTreeRow) -> some View {
+        HStack(spacing: 8) {
+            Group {
+                if row.kind == .directory {
+                    Image(systemName: row.expanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                } else {
+                    Color.clear
+                }
+            }.frame(width: 12)
+            if row.kind == .directory {
+                Image(systemName: "folder").font(.system(size: 17)).foregroundStyle(.secondary)
+                    .frame(width: 17, height: 17)
+            } else {
+                Image(uiImage: mobileFileImage(row.path)).resizable().scaledToFit().frame(width: 17, height: 17)
             }
-            // Path validation fails before any request and records its reason on the operation.
-            guard case let .success(.directory(listing)) = result else {
-                error = snapshot.operationError(key: .directory)
-                return
-            }
-            path = listing.path
-            entries = listing.entries
-            if listing.truncated {
-                error = "先頭 2,000 件を表示しています。パスを指定して開けます。"
+            Text(row.label).font(.system(size: 14, weight: row.selected ? .bold : .medium))
+                .foregroundStyle(row.selected ? Color.primary : row
+                    .ignored ? Color(uiColor: .tertiaryLabel) : .secondary)
+                .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+            if row.kind == .directory, row.expanded, row.loading {
+                ProgressView().controlSize(.small)
             }
         }
+        .padding(.leading, 8 + CGFloat(row.depth) * 18).padding(.trailing, 8)
+        .frame(minHeight: 42)
+        .background(row.selected ? Color.primary.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 12))
+        .contentShape(Rectangle()).padding(.horizontal, 8)
+    }
+
+    private func finishRefresh() {
+        refreshCompletion?.resume()
+        refreshCompletion = nil
+    }
+
+    private func send(_ action: FileTreeAction) {
+        perform(.fileTree(key: key, action: action)) { _, _ in }
     }
 
     private func download(_ path: String) {
+        guard !busy else { return }
         busy = true; error = nil
         Task {
             defer { busy = false }
@@ -187,14 +254,6 @@ private struct WorkspaceDirectoryScreen: View {
                 selected = nil; sharedFile = SharedFile(url: url)
             } catch { self.error = error.localizedDescription }
         }
-    }
-
-    private func cleanupDownload() {
-        if let directory = sharedFile?.url
-            .deletingLastPathComponent() {
-            try? FileManager.default.removeItem(at: directory)
-        }
-        sharedFile = nil
     }
 }
 

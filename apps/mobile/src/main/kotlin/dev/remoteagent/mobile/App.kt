@@ -407,7 +407,7 @@ internal fun RemoteAgentApp(
     BackHandler(model.screen != Screen.Hosts) {
         if (model.screen == Screen.Conversation) model.showThreads() else model.showHosts()
     }
-    CompositionLocalProvider(LocalUiLanguage provides model.language) {
+    CompositionLocalProvider(LocalUiLanguage provides model.language, LocalHostSnapshot provides model.snapshot) {
         AppTheme {
             Scaffold(
                 topBar = { if (screen in listOf(Screen.Pairing, Screen.Hosts)) HostAppBar { showingSettings = true } }
@@ -513,6 +513,7 @@ private fun androidx.compose.foundation.layout.ColumnScope.ConversationPane(mode
             scrollToTopRequest += 1
         }
         androidx.compose.foundation.layout.Row {
+            FilesLauncher(model.snapshot, model::perform)
             TerminalLauncher(model.snapshot, model::perform)
             BrowserLauncher(model.snapshot.navigation().threadId, model.profileId, model::browser)
         }

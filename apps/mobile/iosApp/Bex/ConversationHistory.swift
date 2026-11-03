@@ -8,27 +8,56 @@ extension ThreadScreen {
         let host = model.selectedProfileId
         let draft = model.coreDraftKey
         let cwd = model.cwd
-        return ConversationMediaAccess(host: host, cwd: cwd, draft: draft, download: { [model] path in
-            guard model.selectedProfileId == host else { throw CancellationError() }
-            return try await model.download(path)
-        }, visualization: { [model] path in
-            guard model.selectedProfileId == host else { throw CancellationError() }
-            let result = try await model.outcome(for: .loadVisualization(LoadVisualization(path: path, cwd: cwd)))
-            guard model.selectedProfileId == host else { throw CancellationError() }
-            guard case let .visualization(html) = result else { throw URLError(.badServerResponse) }
-            return html
-        }, resolve: { [model] path in
-            guard model.selectedProfileId == host else { throw CancellationError() }
-            let result = try await model.outcome(for: .resolveFile(ResolveFile(path: path)))
-            guard model.selectedProfileId == host else { throw CancellationError() }
-            guard case let .resolvedFile(entry) = result else { throw URLError(.badServerResponse) }
-            return entry
-        }, openDirectory: { path in
-            guard model.selectedProfileId == host, model.coreDraftKey == draft else { return }
-            openedDirectory = WorkspaceDestination(
-                scope: model.snapshot.panelScope(host: host ?? "", draft: draft), directory: path
-            )
-        })
+        return ConversationMediaAccess(
+            host: host,
+            cwd: cwd,
+            home: model.snapshot.hostHomeDirectory(),
+            draft: draft,
+            download: { [model] path in
+                guard model.selectedProfileId == host else { throw CancellationError() }
+                return try await model.download(path)
+            },
+            visualization: { [model] path in
+                guard model.selectedProfileId == host else { throw CancellationError() }
+                let result = try await model.outcome(for: .loadVisualization(LoadVisualization(path: path, cwd: cwd)))
+                guard model.selectedProfileId == host else { throw CancellationError() }
+                guard case let .visualization(html) = result else { throw URLError(.badServerResponse) }
+                return html
+            },
+            resolve: { [model] source in
+                guard model.selectedProfileId == host else { throw CancellationError() }
+                guard let request = mobileFileOpenRequest(
+                    source: source,
+                    cwd: cwd,
+                    home: model.snapshot.hostHomeDirectory()
+                )
+                else {
+                    throw URLError(.unsupportedURL)
+                }
+                let result = try await model.outcome(for: .resolveFileReference(request))
+                guard model.selectedProfileId == host else { throw CancellationError() }
+                guard case let .fileReferenceResolved(path, directory) = result
+                else { throw URLError(.badServerResponse) }
+                return (
+                    path: path,
+                    directory: directory,
+                    line: markdownFileTarget(source: source, cwd: cwd, surface: .mobile)?.line
+                )
+            },
+            openDirectory: { path in
+                guard model.selectedProfileId == host, model.coreDraftKey == draft else { return }
+                openedDirectory = WorkspaceDestination(
+                    scope: model.snapshot.panelScope(host: host ?? "", draft: draft), directory: path
+                )
+            },
+            openFile: { path, line in
+                guard model.selectedProfileId == host, model.coreDraftKey == draft else { return }
+                openedDirectory = WorkspaceDestination(
+                    scope: model.snapshot.panelScope(host: host ?? "", draft: draft), directory: cwd, filePath: path,
+                    fileLine: line
+                )
+            }
+        )
     }
 
     func historyControl(_ control: HistoryControl, session: SessionRef) -> some View {

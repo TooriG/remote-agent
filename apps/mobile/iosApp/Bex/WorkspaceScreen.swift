@@ -4,6 +4,8 @@ import SwiftUI
 struct WorkspaceDestination: Hashable, Identifiable {
     let scope: PanelScope
     let directory: String
+    var filePath: String?
+    var fileLine: UInt32?
     var id: Self {
         self
     }

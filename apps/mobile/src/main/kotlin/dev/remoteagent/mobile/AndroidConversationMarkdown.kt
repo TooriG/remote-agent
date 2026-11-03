@@ -8,11 +8,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.appendInlineContent
@@ -32,6 +29,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
@@ -54,17 +52,10 @@ import dev.remoteagent.core.MarkdownRun
 import dev.remoteagent.core.Outcome
 import dev.remoteagent.core.markdownBlocks
 
-private const val FILE_CHIP_COLOR = 0xFF0096AF
+private const val RGB_MASK = 0xFFFFFFu
 private const val OPAQUE_ALPHA_MASK = 0xFF000000L
 private const val DARK_SURFACE_LUMINANCE = 0.5f
 private const val COPY_FEEDBACK_MILLIS = 1200L
-private const val CHIP_DEFAULT_FONT_SP = 18f
-private const val CHIP_MAX_CHARACTERS = 28
-private const val CHIP_CHARACTER_WIDTH_EM = 0.56f
-private const val CHIP_PADDING_EM = 2.1f
-private const val CHIP_HEIGHT_EM = 1.42
-private const val CHIP_BORDER_ALPHA = 0.35f
-private const val CHIP_FONT_SCALE = 0.86f
 private const val LIST_INDENT_DP = 22
 
 @Composable
@@ -83,9 +74,18 @@ internal fun ConversationBlocks(
     cwd: String,
     perform: ((Intent, (Result<Outcome>) -> Unit) -> Unit)?,
 ) {
-    var file by remember { mutableStateOf<dev.remoteagent.core.MarkdownFileReference?>(null) }
-    val openFile: (String) -> Unit = { source ->
-        file = dev.remoteagent.core.markdownFileTarget(source, cwd, dev.remoteagent.core.MarkdownFileSurface.MOBILE)
+    var file by remember { mutableStateOf<String?>(null) }
+    var shareError by remember { mutableStateOf<String?>(null) }
+    val shareFile = rememberFileSharer(perform) { shareError = it }
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    val openFile: (String, dev.remoteagent.core.MobileFileMenuItem?) -> Unit = { source, item ->
+        when (item?.action) {
+            dev.remoteagent.core.MobileFileAction.COPY_FULL_PATH,
+            dev.remoteagent.core.MobileFileAction.COPY_RELATIVE_PATH ->
+                clipboard.setText(androidx.compose.ui.text.AnnotatedString(item.path))
+            dev.remoteagent.core.MobileFileAction.SAVE_OR_SHARE -> item.mimeType?.let { shareFile(item.path, it) }
+            else -> file = source
+        }
     }
     SelectionContainer {
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -95,48 +95,50 @@ internal fun ConversationBlocks(
                         when {
                             block.style.rule -> HorizontalDivider(Modifier.padding(vertical = 8.dp))
                             block.style.code -> MarkdownCode(block, index)
-                            else -> {
-                                val style =
-                                    when (block.style.header?.toInt()) {
-                                        1 -> MaterialTheme.typography.headlineSmall
-                                        2 -> MaterialTheme.typography.titleLarge
-                                        null -> MaterialTheme.typography.bodyLarge
-                                        else -> MaterialTheme.typography.titleMedium
-                                    }
-                                val quoteColor = MaterialTheme.colorScheme.outline
-                                Box(
-                                    Modifier.padding(
-                                            start =
-                                                (block.style.listDepth.toInt() - 1)
-                                                    .coerceAtLeast(0)
-                                                    .times(LIST_INDENT_DP)
-                                                    .dp
-                                        )
-                                        .then(
-                                            if (block.style.quoted) {
-                                                Modifier.drawBehind {
-                                                        drawLine(
-                                                            quoteColor,
-                                                            Offset(1.dp.toPx(), 0f),
-                                                            Offset(1.dp.toPx(), size.height),
-                                                            2.dp.toPx(),
-                                                        )
-                                                    }
-                                                    .padding(start = 12.dp)
-                                            } else Modifier
-                                        )
-                                ) {
-                                    MarkdownText(block.runs, style, block.style.marker, openFile)
-                                }
-                            }
+                            else -> MarkdownParagraph(block, cwd, openFile)
                         }
                     is MarkdownBlock.Visualization -> ConversationVisualization(block.path, cwd, perform)
-                    is MarkdownBlock.Table -> MarkdownTable(block, index, openFile)
+                    is MarkdownBlock.Table -> MarkdownTable(block, index, openFile, cwd)
                 }
             }
         }
     }
-    file?.let { target -> ConversationFilePreview(target, perform, resolveLink = true) { file = null } }
+    shareError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+    file?.let { source ->
+        dev.remoteagent.core.markdownFileTarget(source, cwd, dev.remoteagent.core.MarkdownFileSurface.MOBILE)?.let {
+            target ->
+            ConversationFileViewer(target, perform, source = source, workspaceRoot = cwd) { file = null }
+        }
+    }
+}
+
+@Composable
+private fun MarkdownParagraph(
+    block: MarkdownBlock.Paragraph,
+    cwd: String,
+    openFile: (String, dev.remoteagent.core.MobileFileMenuItem?) -> Unit,
+) {
+    val style =
+        when (block.style.header?.toInt()) {
+            1 -> MaterialTheme.typography.headlineSmall
+            2 -> MaterialTheme.typography.titleLarge
+            null -> MaterialTheme.typography.bodyLarge
+            else -> MaterialTheme.typography.titleMedium
+        }
+    val quoteColor = MaterialTheme.colorScheme.outline
+    Box(
+        Modifier.padding(start = (block.style.listDepth.toInt() - 1).coerceAtLeast(0).times(LIST_INDENT_DP).dp)
+            .then(
+                if (block.style.quoted)
+                    Modifier.drawBehind {
+                            drawLine(quoteColor, Offset(1.dp.toPx(), 0f), Offset(1.dp.toPx(), size.height), 2.dp.toPx())
+                        }
+                        .padding(start = 12.dp)
+                else Modifier
+            )
+    ) {
+        MarkdownText(block.runs, style, block.style.marker, openFile, cwd)
+    }
 }
 
 @Composable
@@ -199,7 +201,12 @@ private fun MarkdownCode(block: MarkdownBlock.Paragraph, index: Int) {
 }
 
 @Composable
-private fun MarkdownTable(table: MarkdownBlock.Table, index: Int, openFile: (String) -> Unit) {
+private fun MarkdownTable(
+    table: MarkdownBlock.Table,
+    index: Int,
+    openFile: (String, dev.remoteagent.core.MobileFileMenuItem?) -> Unit,
+    cwd: String,
+) {
     val width = 160.dp * LocalDensity.current.fontScale
     Column {
         Box(Modifier.align(Alignment.End)) { TableCopyMenu(table) }
@@ -224,14 +231,17 @@ private fun MarkdownTable(table: MarkdownBlock.Table, index: Int, openFile: (Str
                         ) {
                             MarkdownText(
                                 cell.runs,
-                                MaterialTheme.typography.bodyLarge,
+                                MaterialTheme.typography.bodyLarge.copy(
+                                    textAlign =
+                                        when (table.columns[column]) {
+                                            MarkdownAlignment.LEFT -> TextAlign.Left
+                                            MarkdownAlignment.CENTER -> TextAlign.Center
+                                            MarkdownAlignment.RIGHT -> TextAlign.Right
+                                        }
+                                ),
                                 null,
                                 openFile,
-                                when (table.columns[column]) {
-                                    MarkdownAlignment.LEFT -> TextAlign.Left
-                                    MarkdownAlignment.CENTER -> TextAlign.Center
-                                    MarkdownAlignment.RIGHT -> TextAlign.Right
-                                },
+                                cwd,
                             )
                         }
                     }
@@ -279,8 +289,8 @@ private fun MarkdownText(
     runs: List<MarkdownRun>,
     style: androidx.compose.ui.text.TextStyle,
     marker: String?,
-    openFile: (String) -> Unit,
-    alignment: TextAlign = TextAlign.Left,
+    openFile: (String, dev.remoteagent.core.MobileFileMenuItem?) -> Unit,
+    cwd: String,
 ) {
     val chips = runs.mapIndexedNotNull { index, run -> run.file?.let { index.toString() to it } }.toMap()
     val linkColor = MaterialTheme.colorScheme.primary
@@ -291,7 +301,7 @@ private fun MarkdownText(
         runs.forEachIndexed { index, run ->
             val link = run.link
             if (run.file != null && link != null) {
-                withLink(LinkAnnotation.Clickable(index.toString()) { openFile(link) }) {
+                withLink(LinkAnnotation.Clickable(index.toString()) { openFile(link, null) }) {
                     appendInlineContent(index.toString(), "[${run.file!!.label}](<$link>)")
                 }
             } else if (link != null) {
@@ -302,29 +312,16 @@ private fun MarkdownText(
         }
     }
     if (chips.isEmpty()) {
-        Text(text, style = style, textAlign = alignment)
+        Text(text, style = style, textAlign = style.textAlign)
     } else {
         BoxWithConstraints {
-            val density = LocalDensity.current
-            val fontWidth = style.fontSize.value.takeIf { it.isFinite() && it > 0 } ?: CHIP_DEFAULT_FONT_SP
-            val maxChipEm = maxWidth.value / (fontWidth * density.fontScale)
-            val inline = chips.mapValues { (_, file) ->
-                androidx.compose.foundation.text.InlineTextContent(
-                    androidx.compose.ui.text.Placeholder(
-                        minOf(
-                                file.label.codePointCount(0, file.label.length).coerceAtMost(CHIP_MAX_CHARACTERS) *
-                                    CHIP_CHARACTER_WIDTH_EM + CHIP_PADDING_EM,
-                                maxChipEm,
-                            )
-                            .em,
-                        CHIP_HEIGHT_EM.em,
-                        androidx.compose.ui.text.PlaceholderVerticalAlign.TextCenter,
-                    )
-                ) {
-                    FileChip(file.label, file.kind, style.fontSize)
-                }
+            val home = LocalHostSnapshot.current.hostHomeDirectory()
+            val inline = chips.mapValues { (index, file) ->
+                val link = runs[index.toInt()].link!!
+                val menu = dev.remoteagent.core.mobileFileMenu(link, cwd, home)
+                fileChipContent(file, style, maxWidth, menu) { item -> openFile(link, item) }
             }
-            Text(text, style = style, textAlign = alignment, inlineContent = inline)
+            Text(text, style = style, textAlign = style.textAlign, inlineContent = inline)
         }
     }
 }
@@ -354,41 +351,83 @@ private fun markdownText(runs: List<MarkdownRun>): androidx.compose.ui.text.Anno
 }
 
 @Composable
-private fun FileChip(
-    label: String,
-    kind: dev.remoteagent.core.MarkdownFileKind,
-    fontSize: androidx.compose.ui.unit.TextUnit,
-) {
-    Row(
-        Modifier.fillMaxSize()
-            .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
-            .border(
-                1.dp,
-                Color(FILE_CHIP_COLOR).copy(alpha = CHIP_BORDER_ALPHA),
-                androidx.compose.foundation.shape.RoundedCornerShape(6.dp),
-            )
-            .background(Color(FILE_CHIP_COLOR).copy(alpha = 0.1f))
-            .padding(horizontal = 5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+private fun fileChipContent(
+    file: dev.remoteagent.core.MarkdownFileReference,
+    style: androidx.compose.ui.text.TextStyle,
+    maxWidth: androidx.compose.ui.unit.Dp,
+    menu: List<dev.remoteagent.core.MobileFileMenuItem>,
+    action: (dev.remoteagent.core.MobileFileMenuItem?) -> Unit,
+): androidx.compose.foundation.text.InlineTextContent {
+    val density = LocalDensity.current
+    val measure = androidx.compose.ui.text.rememberTextMeasurer()
+    val label = measure.measure(file.label, style.copy(fontWeight = FontWeight.Medium), maxLines = 1)
+    val fontPixels = with(density) { style.fontSize.toPx() }
+    val width = with(density) { minOf(label.size.width + fontPixels + 14.dp.toPx(), maxWidth.toPx()) }
+    val height = label.size.height + with(density) { 4.dp.toPx() }
+    return androidx.compose.foundation.text.InlineTextContent(
+        androidx.compose.ui.text.Placeholder(
+            (width / fontPixels).em,
+            (height / fontPixels).em,
+            androidx.compose.ui.text.PlaceholderVerticalAlign.TextCenter,
+        )
     ) {
-        Text(
-            when (kind) {
-                dev.remoteagent.core.MarkdownFileKind.MARKDOWN -> "M↓"
-                dev.remoteagent.core.MarkdownFileKind.CODE -> "‹›"
-                dev.remoteagent.core.MarkdownFileKind.FOLDER -> "▱"
-                else -> "▤"
-            },
-            color = Color(FILE_CHIP_COLOR),
-            style = MaterialTheme.typography.labelSmall,
-        )
-        Text(
-            label,
-            color = Color(FILE_CHIP_COLOR),
-            fontSize = fontSize * CHIP_FONT_SCALE,
-            fontWeight = FontWeight.Medium,
-            maxLines = 1,
-            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-        )
+        FileChip(file, style.fontSize, menu, action)
     }
+}
+
+@Composable
+private fun FileChip(
+    file: dev.remoteagent.core.MarkdownFileReference,
+    fontSize: androidx.compose.ui.unit.TextUnit,
+    menu: List<dev.remoteagent.core.MobileFileMenuItem>,
+    action: (dev.remoteagent.core.MobileFileMenuItem?) -> Unit,
+) {
+    val surfaces = listOf(MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surfaceContainer)
+    val color = dev.remoteagent.core.mobileFileChipColor(surfaces.map { it.toArgb().toUInt() and RGB_MASK })
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val density = LocalDensity.current
+    val fontPixels = with(density) { fontSize.toPx() }
+    val token = dev.remoteagent.core.mobileFileIcon(file.path)
+    val bitmap =
+        remember(token) {
+            context.assets.open("pierre_$token.png").use { android.graphics.BitmapFactory.decodeStream(it) }
+        }
+    androidx.compose.ui.viewinterop.AndroidView(
+        modifier = Modifier.fillMaxWidth(),
+        factory = {
+            android.widget.TextView(it).apply {
+                maxLines = 1
+                includeFontPadding = false
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
+                setPadding(
+                    with(density) { 5.dp.roundToPx() },
+                    with(density) { 2.dp.roundToPx() },
+                    with(density) { 5.dp.roundToPx() },
+                    with(density) { 2.dp.roundToPx() },
+                )
+                compoundDrawablePadding = with(density) { 4.dp.roundToPx() }
+            }
+        },
+        update = { view ->
+            view.text = file.label
+            view.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, fontPixels)
+            view.setTextColor((OPAQUE_ALPHA_MASK or color.toLong()).toInt())
+            val icon = android.graphics.drawable.BitmapDrawable(context.resources, bitmap)
+            icon.setBounds(0, 0, fontPixels.toInt(), fontPixels.toInt())
+            view.setCompoundDrawables(icon, null, null, null)
+            view.setOnClickListener { action(null) }
+            view.setOnCreateContextMenuListener { native, _, _ ->
+                native.setHeaderTitle(menu.firstOrNull()?.path ?: file.path)
+                menu.forEachIndexed { index, item ->
+                    native.add(0, index, index, item.label).setOnMenuItemClickListener {
+                        action(item)
+                        true
+                    }
+                }
+            }
+            view.setOnLongClickListener { if (menu.isEmpty()) false else view.showContextMenu() }
+        },
+    )
 }

@@ -94,6 +94,7 @@ android {
     sourceSets.getByName("androidTest").assets.directories +=
         rootProject.file("crates/agent-core/tests/fixtures/markdown").path
     sourceSets.getByName("main") {
+        assets.directories += project.file("file-icons").path
         kotlin.directories += rootProject.file("target/agent-bindings/dev").path
         jniLibs.directories += layout.buildDirectory.dir("generated/jniLibs").get().asFile.path
     }

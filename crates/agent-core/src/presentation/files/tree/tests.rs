@@ -1009,3 +1009,33 @@ fn independent_browsers_do_not_share_requests_selection_or_mount_lifetimes() {
         "mobile cache eviction belongs to its own browser"
     );
 }
+
+#[test]
+fn pull_refresh_indicator_tracks_the_loaded_root_and_not_child_or_search_requests() {
+    let mut trees = FileTrees::default();
+    let work = open(&mut trees, ROOT, FileTreeSurface::Mobile);
+    assert!(!trees.view(&key(ROOT)).refreshing);
+    complete(
+        &mut trees,
+        &work[0],
+        vec![entry("src", EntryKind::Directory)],
+    );
+    let child = toggle(&mut trees, "src");
+    assert!(trees.view(&key(ROOT)).pending);
+    assert!(!trees.view(&key(ROOT)).refreshing);
+    complete(&mut trees, &child[0], vec![]);
+    let refresh = action(&mut trees, FileTreeAction::Refresh);
+    assert!(trees.view(&key(ROOT)).refreshing);
+    for work in refresh {
+        complete(&mut trees, &work, vec![]);
+    }
+    assert!(!trees.view(&key(ROOT)).refreshing);
+    action(
+        &mut trees,
+        FileTreeAction::Query {
+            text: "main".into(),
+        },
+    );
+    assert!(trees.view(&key(ROOT)).pending);
+    assert!(!trees.view(&key(ROOT)).refreshing);
+}

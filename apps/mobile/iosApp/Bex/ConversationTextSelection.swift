@@ -12,6 +12,8 @@ struct AssistantSelectableText: UIViewRepresentable {
     let blocks: [ConversationMarkdownContent.Block]
     let actions: ConversationSelectionActions
     var cwd: String = ""
+    var home: String?
+    var saveFile: ((String) -> Void)?
     var identifier: String = "message.assistant-text"
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.openURL) private var openURL
@@ -80,16 +82,20 @@ struct AssistantSelectableText: UIViewRepresentable {
 
         func textView(_: UITextView, menuConfigurationFor textItem: UITextItem,
                       defaultMenu _: UIMenu) -> UITextItem.MenuConfiguration? {
-            guard case let .link(url) = textItem.content,
-                  let file = markdownFileTarget(source: url.absoluteString, cwd: parent.cwd, surface: .mobile)
-            else { return nil }
-            let open = UIAction(title: "ファイルを開く", image: UIImage(systemName: "doc")) { [weak self] _ in
-                self?.parent.openURL(url)
+            guard case let .link(url) = textItem.content else { return nil }
+            let items = mobileFileMenu(source: url.absoluteString, cwd: parent.cwd, home: parent.home)
+            guard !items.isEmpty else { return nil }
+            let actions = items.map { item in
+                UIAction(title: item.label) { [weak self] _ in
+                    switch item.action {
+                    case .copyFullPath, .copyRelativePath:
+                        UIPasteboard.general.string = item.path
+                    case .open: self?.parent.openURL(url)
+                    case .saveOrShare: self?.parent.saveFile?(item.path)
+                    }
+                }
             }
-            let copy = UIAction(title: "パスをコピー", image: UIImage(systemName: "doc.on.doc")) { _ in
-                UIPasteboard.general.string = file.path
-            }
-            return UITextItem.MenuConfiguration(menu: UIMenu(title: file.path, children: [open, copy]))
+            return UITextItem.MenuConfiguration(menu: UIMenu(title: items[0].path, children: actions))
         }
 
         func textView(_: UITextView, primaryActionFor textItem: UITextItem, defaultAction: UIAction) -> UIAction? {
@@ -115,7 +121,7 @@ enum ConversationAttributedText {
             }
             for run in block.runs {
                 if let file = run.file, let link = run.link {
-                    text.append(fileChip(file, link: link, font: font, maxWidth: attachmentWidth))
+                    text.append(fileChip(file, link: link, font: font, dark: dark, maxWidth: attachmentWidth))
                 } else {
                     text.append(NSAttributedString(
                         string: run.text,
@@ -196,35 +202,22 @@ enum ConversationAttributedText {
 
     private static let copySource = NSAttributedString.Key("agent.markdown-copy")
 
-    private static func fileChip(_ file: MarkdownFileReference, link: String, font: UIFont,
+    private static func fileChip(_ file: MarkdownFileReference, link: String, font: UIFont, dark: Bool,
                                  maxWidth: CGFloat) -> NSAttributedString {
-        let labelFont = UIFont.systemFont(ofSize: font.pointSize * 0.86, weight: .medium)
+        let labelFont = UIFont.systemFont(ofSize: font.pointSize, weight: .medium)
         let label = file.label as NSString
-        let labelWidth = min(label.size(withAttributes: [.font: labelFont]).width, font.pointSize * 16)
-        let height = ceil(font.pointSize * 1.42)
-        let iconSize = font.pointSize * 0.9
-        let width = max(iconSize + 18, min(ceil(labelWidth + iconSize + 17), maxWidth))
-        let color = UIColor.systemTeal
+        let labelWidth = label.size(withAttributes: [.font: labelFont]).width
+        let height = ceil(labelFont.lineHeight + 4)
+        let iconSize = font.pointSize
+        let width = max(iconSize + 10, min(ceil(labelWidth + iconSize + 14), maxWidth))
+        let color = mobileFileAccent(dark: dark)
         let image = UIGraphicsImageRenderer(size: CGSize(width: width, height: height)).image { _ in
-            let rect = CGRect(x: 0.5, y: 0.5, width: width - 1, height: height - 1)
-            let outline = UIBezierPath(roundedRect: rect, cornerRadius: font.pointSize * 0.5)
-            color.withAlphaComponent(0.10).setFill(); outline.fill()
-            color.withAlphaComponent(0.35).setStroke(); outline.lineWidth = 1; outline.stroke()
-            let symbol = switch file.kind {
-            case .markdown: "doc.richtext"
-            case .code: "chevron.left.forwardslash.chevron.right"
-            case .image: "photo"
-            case .document: "doc.text"
-            case .folder: "folder"
-            case .file: "doc"
-            }
-            UIImage(systemName: symbol)?.withTintColor(color).draw(
-                in: CGRect(x: 6, y: (height - iconSize) / 2, width: iconSize, height: iconSize)
-            )
+            mobileFileImage(file.path).draw(in: CGRect(x: 5, y: (height - iconSize) / 2,
+                                                       width: iconSize, height: iconSize))
             let paragraph = NSMutableParagraphStyle()
-            paragraph.lineBreakMode = .byTruncatingMiddle
-            label.draw(in: CGRect(x: iconSize + 10, y: (height - labelFont.lineHeight) / 2,
-                                  width: width - iconSize - 17, height: labelFont.lineHeight),
+            paragraph.lineBreakMode = .byTruncatingTail
+            label.draw(in: CGRect(x: iconSize + 9, y: (height - labelFont.lineHeight) / 2,
+                                  width: width - iconSize - 14, height: labelFont.lineHeight),
                        withAttributes: [.font: labelFont, .foregroundColor: color, .paragraphStyle: paragraph])
         }
         let attachment = NSTextAttachment()

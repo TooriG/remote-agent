@@ -1,9 +1,20 @@
 mod actions;
 mod chip_color;
-pub use chip_color::desktop_file_chip_color;
+pub use chip_color::{desktop_file_chip_color, mobile_file_chip_color};
 mod explorer;
 mod icons;
 mod metadata;
+mod mobile;
+mod mobile_icons;
+pub use mobile::{
+    MobileFileAction, MobileFileMenuItem, mobile_file_menu, mobile_file_open_request,
+};
+
+#[cfg_attr(feature = "bindings", uniffi::export)]
+pub fn mobile_file_icon(path: String) -> String {
+    mobile_icons::icon(&path).into()
+}
+
 pub use explorer::{
     EXPLORER_CONTENT_MIN_WIDTH, EXPLORER_DEFAULT_WIDTH, EXPLORER_MIN_WIDTH, explorer_key_width,
     explorer_max_width, explorer_width,

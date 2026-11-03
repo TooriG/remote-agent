@@ -6,6 +6,7 @@ struct FileEditorSheet: View {
     @Binding var text: String
     let perform: SnapshotRequest
     let entry: FileEntry
+    let line: UInt32?
     let download: (String) -> Void
     let aiEdit: (String) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -13,6 +14,7 @@ struct FileEditorSheet: View {
     @State private var busy = false
     @State private var initialized = false
     @State private var confirmReload = false
+    @State private var selection: TextSelection?
     private var file: FileContent? {
         snapshot.file().flatMap { $0.path == entry.path ? $0 : nil }
     }
@@ -35,7 +37,7 @@ struct FileEditorSheet: View {
                 if busy {
                     ProgressView().padding()
                 }
-                BufferedTextInput(value: $text) { TextEditor(text: $0) }.font(.body.monospaced())
+                BufferedTextInput(value: $text) { TextEditor(text: $0, selection: $selection) }.font(.body.monospaced())
                     .textInputAutocapitalization(.never).disableAutocorrection(true)
                     .accessibilityIdentifier("file.editor")
                     .disabled(revision.isEmpty)
@@ -68,6 +70,7 @@ struct FileEditorSheet: View {
                     }.disabled(busy || revision.isEmpty || text == savedText).accessibilityIdentifier("file.save")
                 }
             }
+            .onChange(of: file?.revision) { moveToLine() }
             .onAppear {
                 if !initialized {
                     load(restoreDraft: true)
@@ -79,6 +82,13 @@ struct FileEditorSheet: View {
                 }
             }
         }
+    }
+
+    private func moveToLine() {
+        guard let line else { return }
+        let starts = [text.startIndex] + text.indices.filter { text[$0] == "\n" }.map { text.index(after: $0) }
+        let start = starts[min(max(0, Int(line) - 1), starts.count - 1)]
+        selection = TextSelection(range: start ..< start)
     }
 
     private func load(restoreDraft: Bool) {

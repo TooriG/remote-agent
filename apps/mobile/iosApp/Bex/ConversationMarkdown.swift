@@ -1,7 +1,6 @@
 import AgentCore
 import SwiftUI
 import UIKit
-import UniformTypeIdentifiers
 
 /// Shared Markdown semantics render as native selectable content.
 struct ConversationMarkdown: View {
@@ -11,8 +10,9 @@ struct ConversationMarkdown: View {
     @ScaledMetric(relativeTo: .body) private var tableColumnWidth = 160.0
     var textIdentifier: String = "message.assistant-text"
     @State private var linkTarget: String?
-    @State private var previewURL: URL?
     @State private var linkError: String?
+    @State private var sharedFile: SharedFile?
+    @State private var shareTarget: String?
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             ForEach(blocks) { part in
@@ -29,6 +29,8 @@ struct ConversationMarkdown: View {
                         blocks: part.blocks,
                         actions: selection,
                         cwd: media.cwd,
+                        home: media.home,
+                        saveFile: shareFile,
                         identifier: textIdentifier
                     )
                 }
@@ -43,30 +45,26 @@ struct ConversationMarkdown: View {
             if url.scheme == "https" || url.scheme == "http" {
                 return .systemAction
             }
-            do {
-                linkError = nil
-                linkTarget = try conversationFilePath(url.absoluteString, cwd: media.cwd)
-            } catch { linkError = "リンクを開けません: \(error.localizedDescription)" }
+            guard markdownFileTarget(source: url.absoluteString, cwd: media.cwd, surface: .mobile) != nil else {
+                return .systemAction
+            }
+            linkError = nil
+            linkTarget = url.absoluteString
             return .handled
         })
-        .sheet(isPresented: Binding(get: { previewURL != nil }, set: {
-            if !$0 {
-                linkTarget = nil
-                previewURL = nil
-            }
-        })) {
-            if let url = previewURL {
-                ConversationPreview(
-                    url: url,
-                    isImage: UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true
-                ) {
-                    previewURL = nil
+        .sheet(item: $sharedFile) { item in FileShareSheet(url: item.url) }
+        .task(id: shareTarget) {
+            guard let path = shareTarget else { return }
+            defer { if !Task.isCancelled { shareTarget = nil } }
+            do {
+                let url = try await media.download(path)
+                if Task.isCancelled {
+                    try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+                    return
                 }
-            }
-        }
-        .onChange(of: previewURL) { previous, current in
-            if let previous, previous != current {
-                try? FileManager.default.removeItem(at: previous.deletingLastPathComponent())
+                sharedFile = SharedFile(url: url)
+            } catch {
+                if !Task.isCancelled { linkError = error.localizedDescription }
             }
         }
         .task(id: linkTarget) {
@@ -84,12 +82,7 @@ struct ConversationMarkdown: View {
                     media.openDirectory(entry.path)
                     return
                 }
-                let downloaded = try await media.download(entry.path)
-                guard !Task.isCancelled else {
-                    try? FileManager.default.removeItem(at: downloaded.deletingLastPathComponent())
-                    return
-                }
-                previewURL = downloaded
+                media.openFile(entry.path, entry.line)
             } catch {
                 if !Task.isCancelled {
                     linkError = error.localizedDescription
@@ -97,6 +90,8 @@ struct ConversationMarkdown: View {
             }
         }
     }
+
+    private func shareFile(_ path: String) { shareTarget = path }
 
     private func image(_ block: ConversationMarkdownContent.Block, url: URL) -> some View {
         ConversationImage(
@@ -131,6 +126,8 @@ struct ConversationMarkdown: View {
                                                 blocks: [block],
                                                 actions: selection,
                                                 cwd: media.cwd,
+                                                home: media.home,
+                                                saveFile: shareFile,
                                                 identifier: "markdown.cell.\(part.id).\(row).\(column)"
                                             )
                                         }

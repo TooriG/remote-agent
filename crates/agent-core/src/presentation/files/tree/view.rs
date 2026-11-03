@@ -30,6 +30,7 @@ pub struct FileTreeView {
     pub query: String,
     pub ready: bool,
     pub pending: bool,
+    pub refreshing: bool,
     pub all_expanded: bool,
     pub toggle_all_label: String,
     pub can_expand_all: bool,
@@ -163,6 +164,11 @@ impl Tree {
             pending: !self.running.is_empty()
                 || !self.queue.is_empty()
                 || (searching && !self.search_query().trim().is_empty() && self.search.is_none()),
+            refreshing: self
+                .directories
+                .get("")
+                .is_some_and(|directory| directory.entries.is_some())
+                && (self.running.contains("") || self.queue.iter().any(|path| path.is_empty())),
             all_expanded,
             toggle_all_label: if self.expand_all || all_expanded {
                 "Collapse all folders"
