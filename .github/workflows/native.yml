@@ -339,6 +339,8 @@ jobs:
         continue-on-error: true
         env: *local-rust-cache-env
         run: |
+          # Local-only compiles need no daemon; start one before verified shutdown.
+          nix run .#kache -- daemon start
           nix run .#kache -- stats --last-build
           nix run .#kache -- daemon stop
       - &save-local-rust-cache
