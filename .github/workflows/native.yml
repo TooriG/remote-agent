@@ -303,15 +303,46 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           cmd-format: nix develop . --command {0}
-          # Mac contracts also compile GPUI; keep that cache off iPhone runners.
-          key: macos-rust-xcode-26.6-${{ hashFiles('flake.lock') }}
+          # Publish native dependencies for both Apple builders.
+          shared-key: &apple-native-cargo-key macos-rust-xcode-26.6-${{ hashFiles('flake.lock') }}-mac
           save-if: ${{ github.event_name != 'pull_request' }}
           cache-on-failure: true
+      - &restore-local-rust-cache
+        name: Restore compiled vendored Rust dependencies
+        id: local-rust-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        env:
+          AGENT_LOCAL_RUST_CACHE_PREFIX: local-rust-${{ runner.os }}-${{ runner.arch }}-xcode-26.6-${{ hashFiles('flake.lock', '.kache.toml', 'tools/kache/package.nix', 'scripts/ci-rust-cache.sh') }}
+        with:
+          path: ${{ runner.temp }}/kache-store
+          key: ${{ env.AGENT_LOCAL_RUST_CACHE_PREFIX }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/config.toml', 'crates/*/Cargo.toml', 'apps/desktop/Cargo.toml', 'apps/desktop/native-focus/Cargo.toml', 'vendor/**', '.github/workflows/native.yml') }}-${{ github.job }}
+          restore-keys: ${{ env.AGENT_LOCAL_RUST_CACHE_PREFIX }}-
       - name: Mac contracts and acceptance
+        env: &local-rust-cache-env
+          RUSTC_WRAPPER: ${{ github.workspace }}/scripts/ci-rust-cache.sh
+          KACHE_CACHE_DIR: ${{ runner.temp }}/kache-store
+          KACHE_RUNTIME_DIR: ${{ runner.temp }}/kache-runtime
         run: |
           set -o pipefail
           mkdir -p target/qa
           nix develop . --command just quality rust 2>&1 | tee target/qa/quality.log
+      - &finish-local-rust-cache
+        name: Finish the local Rust compiler cache
+        id: finish-local-rust-cache
+        if: ${{ !cancelled() }}
+        env: *local-rust-cache-env
+        run: |
+          nix develop . --command bash -euo pipefail <<'CACHE'
+          kache stats --last-build
+          kache daemon stop
+          CACHE
+      - &save-local-rust-cache
+        name: Save compiled vendored Rust dependencies
+        if: ${{ !cancelled() && github.event_name != 'pull_request' && steps.finish-local-rust-cache.outcome == 'success' && steps.local-rust-cache.outputs.cache-primary-key != '' && steps.local-rust-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ runner.temp }}/kache-store
+          key: ${{ steps.local-rust-cache.outputs.cache-primary-key }}
       - name: Retain Apple acceptance logs and result bundles
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -336,6 +367,16 @@ jobs:
       CARGO_BUILD_JOBS: 2
       AGENT_XCODE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       NEXTEST_TEST_THREADS: 6
+      AGENT_IOS_TESTS: ${{ inputs.ios-tests }}
+      # Native Mac dependencies come from the Mac job's cache. Keep only the
+      # cross-compiled profile and its host build dependencies in this cache.
+      AGENT_IOS_RUST_CACHE_PATHS: |
+        target/aarch64-apple-ios-sim/release/.fingerprint
+        target/aarch64-apple-ios-sim/release/build
+        target/aarch64-apple-ios-sim/release/deps
+        target/release/.fingerprint
+        target/release/build
+        target/release/deps
       # The builders validate Swift content/toolchain hashes before reuse.
       AGENT_IOS_SWIFT_CACHE_PATHS: |
         target/qa/ios-derived-data
@@ -353,9 +394,17 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           cmd-format: nix develop . --command {0}
-          key: macos-swift-xcode-26.6-${{ hashFiles('flake.lock') }}
-          save-if: ${{ github.event_name != 'pull_request' }}
-          cache-on-failure: true
+          shared-key: *apple-native-cargo-key
+          save-if: false
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        id: ios-rust-cache
+        env:
+          AGENT_IOS_RUST_CACHE_PREFIX: ios-rust-xcode-26.6-${{ hashFiles('flake.lock') }}
+        with:
+          path: ${{ env.AGENT_IOS_RUST_CACHE_PATHS }}
+          key: ${{ env.AGENT_IOS_RUST_CACHE_PREFIX }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/config.toml', 'crates/*/Cargo.toml', 'scripts/build-agent-ios.sh') }}
+          restore-keys: ${{ env.AGENT_IOS_RUST_CACHE_PREFIX }}-
+      - *restore-local-rust-cache
       - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         id: ios-cache
         with:
@@ -369,8 +418,7 @@ jobs:
               'crates/xtask/src/ios_*.rs', 'scripts/build-agent*.sh', 'apps/mobile/iosApp/**') }}
           restore-keys: ios-swift-xcode-26.6-
       - name: iPhone contracts and shared test build
-        env:
-          AGENT_IOS_TESTS: ${{ inputs.ios-tests }}
+        env: *local-rust-cache-env
         run: |
           set -o pipefail
           mkdir -p target/qa
@@ -394,6 +442,14 @@ jobs:
         with:
           path: ${{ env.AGENT_IOS_SWIFT_CACHE_PATHS }}
           key: ${{ steps.ios-cache.outputs.cache-primary-key }}
+      - name: Save cross-compiled iPhone Rust dependencies
+        if: ${{ !cancelled() && github.event_name != 'pull_request' && steps.ios-rust-cache.outputs.cache-primary-key != '' && steps.ios-rust-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ env.AGENT_IOS_RUST_CACHE_PATHS }}
+          key: ${{ steps.ios-rust-cache.outputs.cache-primary-key }}
+      - *finish-local-rust-cache
+      - *save-local-rust-cache
       - name: Retain Apple acceptance logs and result bundles
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

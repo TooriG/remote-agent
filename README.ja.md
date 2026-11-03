@@ -204,7 +204,7 @@ Claudeの契約テストは`scripts/dev-env.sh cargo test --locked -p host-fixtu
 
 開発・テストビルドは、全変数のデバッグ情報を含めず、ファイル名・行番号付きバックトレースを保持します。デバッガーで変数が必要なら`CARGO_PROFILE_DEV_DEBUG=full`を指定してください。品質チェックではRustのインクリメンタルコンパイルを無効にし、通常のローカルビルドのインクリメンタル状態はKacheが管理します。
 
-Nixシェルは固定したKacheでワークツリー間のビルド結果を再利用します。`KACHE_CACHE_DIR`でキャッシュ先を指定でき、`bex.buildRoot`設定時の既定値は`<buildRoot>/.kache`です。`scripts/dev-env.sh kache stats --last-build`で再利用、`scripts/dev-env.sh kache explain`でミスの原因を確認できます。キャッシュの方針は[.kache.toml](.kache.toml)で管理し、CIは独自のCargoキャッシュを使います。
+Nixシェルは固定したKacheでワークツリー間のビルド結果を再利用します。`KACHE_CACHE_DIR`でキャッシュ先を指定でき、`bex.buildRoot`設定時の既定値は`<buildRoot>/.kache`です。`scripts/dev-env.sh kache stats --last-build`で再利用、`scripts/dev-env.sh kache explain`でミスの原因を確認できます。キャッシュの方針は[.kache.toml](.kache.toml)で管理します。AppleのCIでは、Cargoの依存キャッシュに加え、同梱したRust依存のビルド結果をKacheで再利用します。
 
 接続時間は`scripts/dev-env.sh cargo xtask connection-diagnostics`で解析できます。対象を絞った検証コマンドは`scripts/dev-env.sh just --list`で確認できます。iOSの受け入れ検証は`AGENT_IOS_TEST_WORKERS=1`〜`10`で並列数を指定できます。ランナーはワークツリー間で実行を直列化し、結果を`target/qa`へ残します。ビルドキャッシュの詳細は[scripts/dev-env.sh](scripts/dev-env.sh)と各ネイティブランナーで管理します。
 
