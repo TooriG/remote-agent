@@ -86,9 +86,9 @@ ios-markdown:
 
 # Exercise native pages through the Host using an isolated desktop window.
 macos-e2e:
-    # Match the workspace test feature graph instead of rebuilding GPUI and core without test support.
-    cargo build --locked --workspace --bins --tests --features agent-core/bindings
-    cargo nextest run --locked --workspace --lib --bins --test browser_native --features agent-core/bindings --run-ignored only -E 'binary(browser_native) & test(=shared_browser_live)'
+    # Use workspace dependency features for the app and native browser test.
+    cargo build --locked --workspace --bin agent-desktop --test browser_native --features agent-core/bindings
+    cargo nextest run --locked --workspace --test browser_native --features agent-core/bindings --run-ignored only -E 'test(=shared_browser_live)'
 
 # Build and test Store recovery, Markdown and network permission on a fresh Android 17 emulator.
 android-e2e:
