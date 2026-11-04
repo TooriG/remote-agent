@@ -1,3 +1,5 @@
+mod qr_text;
+
 use super::view::section_heading;
 use crate::{Runtime, appearance, store_session::StoreSession};
 use agent_core::{
@@ -264,6 +266,7 @@ impl Hosts {
                                 let result = (|| -> Result<_, String> {
                                     let text = serde_json::to_string(invitation)
                                         .map_err(|error| error.to_string())?;
+                                    let text = qr_text::ascii_json(&text);
                                     let code = qrcode::QrCode::with_error_correction_level(
                                         text.as_bytes(),
                                         qrcode::EcLevel::M,
