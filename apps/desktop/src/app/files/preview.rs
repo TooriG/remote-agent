@@ -133,16 +133,22 @@ mod tests {
                 logging_error: None,
             });
         });
-        let (desktop, cx) = cx.add_window_view(|window, cx| {
-            Desktop::new(
-                Mode::SideChat {
-                    remote: None,
-                    cwd: root.path().to_str().unwrap().into(),
-                },
-                window,
-                cx,
-            )
+        let mut desktop = None;
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| {
+                Desktop::new(
+                    Mode::SideChat {
+                        remote: None,
+                        cwd: root.path().to_str().unwrap().into(),
+                    },
+                    window,
+                    cx,
+                )
+            });
+            desktop = Some(view.clone());
+            Root::new(view, window, cx)
         });
+        let desktop = desktop.unwrap();
         for (generation, stale_scope, accepted) in
             [(1, false, false), (2, true, false), (2, false, true)]
         {
