@@ -90,6 +90,8 @@ extension LaunchUITests {
         let terminal = app.descendants(matching: .any)["terminal.screen"]
         XCTAssertTrue(terminal.waitForExistence(timeout: 5))
         terminal.tap()
+        // The keyboard resizes the terminal; locate the long-press target after it appears.
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         UIPasteboard.general.string = "AGENT_PASTE='日本語\nsecond line'"
         terminal.press(forDuration: 1.2)
         let paste = app.menuItems.matching(NSPredicate(format: "label IN %@", ["Paste", "ペースト"])).firstMatch
