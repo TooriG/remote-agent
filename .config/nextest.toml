@@ -27,3 +27,9 @@ threads-required = "num-test-threads"
 [[profile.default.overrides]]
 filter = 'test(=disconnected_store_keeps_editing_and_persisting_drafts)'
 threads-required = "num-test-threads"
+
+# Each corpus case opens a QUIC connection with a one-second RPC deadline and
+# a three-second operation bound. Keep competing process fixtures out of that budget.
+[[profile.default.overrides]]
+filter = 'test(=operation_corpus)'
+threads-required = "num-test-threads"
