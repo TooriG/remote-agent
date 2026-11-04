@@ -145,15 +145,12 @@ fn route(
             _ => return Err("unknown worktree fixture state".into()),
         };
         // A deleted worktree is recreated for input; unreadable directories make review fail.
-        set_directory_access(&root.join(format!("{name}-worktree")), readable)?;
+        set_worktree_access(&root.join(format!("{name}-worktree")), readable)?;
         return Ok((204, Vec::new()));
     }
     match path {
         "/uploads/unavailable" | "/uploads/restore" => {
-            // Host attachments live beside the project config, outside every checkout.
-            let directory = root.join("bex-attachments");
-            fs::create_dir_all(&directory)?;
-            set_directory_access(&directory, path == "/uploads/restore")?;
+            set_upload_storage_available(root, path == "/uploads/restore")?;
         }
         "/auth-token/unavailable" => fs::write(root.join("auth-token-unavailable"), [])?,
         "/auth-token/reset" => {
@@ -408,7 +405,7 @@ fn worktree_conversation(root: &Path, name: &str) -> Result<()> {
 }
 
 #[cfg(unix)]
-fn set_directory_access(directory: &Path, readable: bool) -> Result<()> {
+fn set_worktree_access(directory: &Path, readable: bool) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let mode = if readable { 0o755 } else { 0o000 };
     fs::set_permissions(directory, fs::Permissions::from_mode(mode))?;
@@ -416,8 +413,26 @@ fn set_directory_access(directory: &Path, readable: bool) -> Result<()> {
 }
 
 #[cfg(not(unix))]
-fn set_directory_access(_: &Path, _: bool) -> Result<()> {
+fn set_worktree_access(_: &Path, _: bool) -> Result<()> {
     Err("directory access fixtures require Unix permissions".into())
+}
+
+fn set_upload_storage_available(root: &Path, available: bool) -> Result<()> {
+    // Host repairs directory permissions before uploads. A regular file blocks
+    // directory creation instead; keep earlier attachments intact for recovery.
+    let directory = root.join("bex-attachments");
+    let backup = root.join("bex-attachments-unavailable");
+    if available {
+        if backup.exists() {
+            fs::remove_file(&directory)?;
+            fs::rename(backup, directory)?;
+        }
+    } else if !backup.exists() {
+        fs::create_dir_all(&directory)?;
+        fs::rename(&directory, backup)?;
+        fs::write(directory, [])?;
+    }
+    Ok(())
 }
 
 fn list_fixture(root: &Path, path: &str) -> Result<()> {
@@ -473,18 +488,12 @@ fn write_json(path: PathBuf, value: &impl serde::Serialize) -> Result<()> {
     Ok(())
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn upload_storage_controls_fail_and_recover_without_touching_the_checkout() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let root = tempfile::tempdir().unwrap();
-        let directory = root.path().join("bex-attachments");
-        let checkout = root.path().join("project.txt");
-        fs::write(&checkout, "draft stays available").unwrap();
         // File controls must work without connecting to the fixture's RPC peer.
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
@@ -497,38 +506,52 @@ mod tests {
                 .parse()
                 .unwrap();
 
-        let unavailable = route(
-            root.path(),
-            &runtime,
-            &ticket,
-            &identity,
-            &Method::Post,
-            "/uploads/unavailable",
-        );
-        let blocked = fs::write(directory.join("selected.mov"), b"media");
-        let draft = fs::read_to_string(&checkout);
-        let restored = route(
-            root.path(),
-            &runtime,
-            &ticket,
-            &identity,
-            &Method::Post,
-            "/uploads/restore",
-        );
-        let uploaded = fs::write(directory.join("selected.mov"), b"media");
-        // Restore permissions before assertions so even a failed check remains removable.
-        if directory.exists() {
-            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+        for existing in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let directory = root.path().join("bex-attachments");
+            let checkout = root.path().join("project.txt");
+            fs::write(&checkout, "draft stays available").unwrap();
+            if existing {
+                agent_local_host::create_state_directory(&directory).unwrap();
+                fs::write(directory.join("earlier.png"), b"earlier photo").unwrap();
+            }
+            let control = |path| {
+                assert_eq!(
+                    route(
+                        root.path(),
+                        &runtime,
+                        &ticket,
+                        &identity,
+                        &Method::Post,
+                        path
+                    )
+                    .unwrap()
+                    .0,
+                    204
+                );
+            };
+            control("/uploads/restore");
+            control("/uploads/unavailable");
+            control("/uploads/unavailable");
+            // Use the production upload preparation, including permission repair.
+            assert!(agent_local_host::create_state_directory(&directory).is_err());
+            assert!(fs::write(directory.join("selected.mov"), b"media").is_err());
+            assert_eq!(
+                fs::read_to_string(&checkout).unwrap(),
+                "draft stays available"
+            );
+            control("/uploads/restore");
+            control("/uploads/restore");
+            agent_local_host::create_state_directory(&directory).unwrap();
+            fs::write(directory.join("selected.mov"), b"media").unwrap();
+            assert_eq!(fs::read(directory.join("selected.mov")).unwrap(), b"media");
+            if existing {
+                assert_eq!(
+                    fs::read(directory.join("earlier.png")).unwrap(),
+                    b"earlier photo"
+                );
+            }
+            assert!(!root.path().join("bex-attachments-unavailable").exists());
         }
-
-        assert_eq!(unavailable.unwrap().0, 204);
-        assert!(
-            blocked.is_err(),
-            "The fixture must cause a real upload write failure"
-        );
-        assert_eq!(draft.unwrap(), "draft stays available");
-        assert_eq!(restored.unwrap().0, 204);
-        uploaded.unwrap();
-        assert_eq!(fs::read(directory.join("selected.mov")).unwrap(), b"media");
     }
 }

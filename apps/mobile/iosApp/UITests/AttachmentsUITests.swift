@@ -185,11 +185,13 @@ extension LaunchUITests {
         // The picker restores the app's Documents directory asynchronously.
         // Wait for that destination before navigating a transient Browse page.
         if !attachment.waitForExistence(timeout: 10) {
-            let browse = app.buttons["ブラウズ"]
+            let browse = app.buttons.matching(NSPredicate(format: "label IN %@", ["ブラウズ", "Browse"])).firstMatch
             if browse.waitForExistence(timeout: 3) {
                 browse.tap()
             }
-            let onPhone = app.staticTexts["このiPhone内"]
+            let onPhone = app.staticTexts.matching(
+                NSPredicate(format: "label IN %@", ["このiPhone内", "On My iPhone"])
+            ).firstMatch
             if onPhone.waitForExistence(timeout: 3) {
                 onPhone.tap()
             }
