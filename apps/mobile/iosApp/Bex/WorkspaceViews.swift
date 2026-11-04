@@ -106,11 +106,8 @@ private struct WorkspaceDirectoryScreen: View {
         FileTreeKey(owner: owner, root: root)
     }
 
-    private var tree: FileTreeView {
-        snapshot.fileTree(key: key)
-    }
-
     var body: some View {
+        let tree = snapshot.fileTree(key: key)
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
@@ -122,7 +119,7 @@ private struct WorkspaceDirectoryScreen: View {
                             .font(.caption).foregroundStyle(.secondary).padding(16)
                     }
                     if tree.rows.isEmpty {
-                        emptyState
+                        emptyState(pending: tree.pending, error: tree.error, query: tree.query)
                     }
                     ForEach(tree.rows, id: \.path) { row in
                         Button { send(.click(path: row.path, additive: false, range: false)) } label: {
@@ -188,16 +185,16 @@ private struct WorkspaceDirectoryScreen: View {
         .sheet(item: $sharedFile) { item in FileShareSheet(url: item.url) }
     }
 
-    @ViewBuilder private var emptyState: some View {
-        if tree.pending {
+    @ViewBuilder private func emptyState(pending: Bool, error: ErrorText?, query: String) -> some View {
+        if pending {
             ProgressView().frame(maxWidth: .infinity).padding(20)
         } else {
             VStack(alignment: .leading, spacing: 4) {
-                AppText(tree.error == nil ? "ファイルが見つかりません" : "ファイルを表示できません").fontWeight(.bold)
-                if tree.error != nil {
+                AppText(error == nil ? "ファイルが見つかりません" : "ファイルを表示できません").fontWeight(.bold)
+                if error != nil {
                     Button("再試行") { send(.refresh) }
                 } else {
-                    AppText(tree.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    AppText(query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         ? "作業スペースは空です。" : "別の語句で検索してください。").font(.caption)
                         .foregroundStyle(.secondary)
                 }
