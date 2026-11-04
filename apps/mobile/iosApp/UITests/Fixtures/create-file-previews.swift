@@ -62,7 +62,7 @@ let label = NSAttributedString(string: "PDF preview fixture", attributes: [
     NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName("Helvetica" as CFString, 24, nil)
 ])
 pdf.textPosition = CGPoint(x: 32, y: 400)
-CTLineDraw(CTLineCreateWithAttributedString(label), pdf)
+CTLineDraw(CTLineCreateWithAttributedString(label as CFAttributedString), pdf)
 pdf.endPDFPage()
 pdf.closePDF()
 
