@@ -21,13 +21,14 @@ function fixture(t) {
   const workspace = join(root, 'workspace');
   return {
     workspace,
-    run(manifest, status = 0) {
+    run(manifest, status = 0, dependenciesRestored = '') {
       const result = spawnSync('bash', [script, compiler, '--crate-name', 'example', 'source with spaces.rs', ''], {
         encoding: 'utf8',
         env: {
           ...process.env, PATH: `${bin}:${process.env.PATH}`,
           GITHUB_WORKSPACE: workspace, CARGO_MANIFEST_DIR: manifest,
           CI_WRAPPER_COMPILER_STATUS: String(status),
+          AGENT_CI_DEPENDENCIES_RESTORED: dependenciesRestored,
         },
       });
       assert.ifError(result.error);
@@ -58,6 +59,19 @@ test('registry, git, workspace siblings and compiler probes execute directly', a
       const result = run(manifest);
       assert.equal(result.status, 0, result.stderr);
       assert.equal(result.stdout, '--crate-name\0example\0source with spaces.rs\0\0');
+    });
+  }
+});
+
+test('dependents of vendored crates use the compiler cache after an exact dependency restore', async (t) => {
+  for (const [crate, cached] of [
+    ['registry/src/example', true], ['git/checkouts/example', true], ['', false],
+  ]) {
+    await t.test(crate || 'compiler probe', (t) => {
+      const { workspace, run } = fixture(t);
+      const result = run(crate ? join(workspace, '..', crate) : '', 0, 'true');
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, `${cached ? 'cached\0' : ''}--crate-name\0example\0source with spaces.rs\0\0`);
     });
   }
 });
