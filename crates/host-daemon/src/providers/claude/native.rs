@@ -507,7 +507,6 @@ fn structured_patch(value: &Value) -> Option<String> {
 mod structured_patch_tests;
 
 pub(super) fn tool_result_body(body: &ItemBody, content: &Value, metadata: &Value) -> ItemBody {
-    let mut body = body.clone();
     let output = || {
         content.as_str().map(str::to_owned).unwrap_or_else(|| {
             content
@@ -519,50 +518,96 @@ pub(super) fn tool_result_body(body: &ItemBody, content: &Value, metadata: &Valu
                 .join("\n")
         })
     };
-    match &mut body {
+    match body {
         ItemBody::CommandExecution {
-            output: result,
+            command,
+            cwd,
             exit_code,
             ..
-        } => {
-            *result = output();
-            if let Some(code) = metadata["exitCode"]
+        } => ItemBody::CommandExecution {
+            command: command.clone(),
+            cwd: cwd.clone(),
+            output: output(),
+            exit_code: metadata["exitCode"]
                 .as_i64()
                 .and_then(|code| code.try_into().ok())
-            {
-                *exit_code = Some(code);
-            }
-        }
-        ItemBody::FileChange {
-            changes,
-            output: result,
-        } => {
-            *result = output();
-            if changes.len() == 1 {
-                let change = &mut changes[0];
-                if let Some(diff) = structured_patch(&metadata["structuredPatch"]) {
-                    change.diff = Some(diff);
-                }
-                match metadata["type"].as_str() {
-                    Some("create") => change.kind = FileChangeKind::Add,
-                    Some("update") => change.kind = FileChangeKind::Update { move_path: None },
-                    _ => {}
-                }
-            }
-        }
+                .or(*exit_code),
+        },
+        ItemBody::FileChange { changes, .. } => ItemBody::FileChange {
+            changes: if let [change] = changes.as_slice() {
+                vec![FileChange {
+                    path: change.path.clone(),
+                    kind: match metadata["type"].as_str() {
+                        Some("create") => FileChangeKind::Add,
+                        Some("update") => FileChangeKind::Update { move_path: None },
+                        _ => change.kind.clone(),
+                    },
+                    diff: structured_patch(&metadata["structuredPatch"])
+                        .or_else(|| change.diff.clone()),
+                    proposal: change.proposal.clone(),
+                }]
+            } else {
+                changes.clone()
+            },
+            output: output(),
+        },
         ItemBody::Subagent {
-            agent_id, result, ..
-        } => {
-            if let Some(id) = metadata["agentId"].as_str() {
-                *agent_id = Some(id.into());
-            }
-            *result = Some(content.clone());
-        }
-        ItemBody::ToolCall { result, .. } => *result = Some(content.clone()),
-        _ => {}
+            tool,
+            prompt,
+            model,
+            effort,
+            sender,
+            receivers,
+            states,
+            agent_id,
+            ..
+        } => ItemBody::Subagent {
+            tool: tool.clone(),
+            prompt: prompt.clone(),
+            model: model.clone(),
+            effort: effort.clone(),
+            sender: sender.clone(),
+            receivers: receivers.clone(),
+            states: states.clone(),
+            agent_id: metadata["agentId"]
+                .as_str()
+                .map(str::to_owned)
+                .or_else(|| agent_id.clone()),
+            result: Some(content.clone()),
+        },
+        ItemBody::ToolCall {
+            kind,
+            tool,
+            server,
+            namespace,
+            resource_uri,
+            plugin_id,
+            arguments,
+            error,
+            content: blocks,
+            success,
+            duration_ms,
+            ..
+        } => ItemBody::ToolCall {
+            kind: *kind,
+            tool: tool.clone(),
+            server: server.clone(),
+            namespace: namespace.clone(),
+            resource_uri: resource_uri.clone(),
+            plugin_id: plugin_id.clone(),
+            arguments: arguments.clone(),
+            result: Some(content.clone()),
+            error: error.clone(),
+            content: blocks.clone(),
+            success: *success,
+            duration_ms: *duration_ms,
+        },
+        _ => body.clone(),
     }
-    body
 }
+
+#[cfg(test)]
+mod tool_result_tests;
 
 #[cfg(test)]
 mod tests {
