@@ -873,7 +873,14 @@ async fn build_test_bundle(
         "--bin",
         "agent-claude-fixture"
     ];
-    if browser {
+    // Full-suite CI caches include the desktop's unified dependency features.
+    // Match that graph for focused tests when both caches were restored.
+    if browser
+        || matches!(
+            std::env::var("AGENT_IOS_USE_CACHED_HOST_GRAPH").as_deref(),
+            Ok("true")
+        )
+    {
         host_build.extend(args![
             "--package",
             "agent-desktop",
@@ -1384,6 +1391,10 @@ esac
             .env("AGENT_IOS_TEST_WORKERS", "1")
             .env("AGENT_IOS_TEST_ROUNDS", "1")
             .env(
+                "AGENT_IOS_USE_CACHED_HOST_GRAPH",
+                if mode == "cached" { "true" } else { "false" },
+            )
+            .env(
                 "PATH",
                 std::env::join_paths(
                     std::iter::once(root.join("bin"))
@@ -1418,7 +1429,7 @@ esac
             }
             return;
         }
-        for mode in ["host", "browser", "failure"] {
+        for mode in ["host", "browser", "cached", "failure"] {
             let temporary = build_fixture();
             let root = temporary.path().canonicalize().unwrap();
             let output = build_command(
@@ -1443,16 +1454,14 @@ esac
                     .count(),
                 1
             );
-            assert_eq!(commands.contains("--bin agent-desktop"), mode == "browser");
+            let desktop = matches!(mode, "browser" | "cached");
+            assert_eq!(commands.contains("--bin agent-desktop"), desktop);
             assert_eq!(commands.contains("xcodebuild "), mode != "failure");
             assert_eq!(
                 commands.contains("AGENT_BUILD_REVISION=fixture-revision"),
                 mode != "failure"
             );
-            assert_eq!(
-                root.join("target/debug/agent-desktop").is_file(),
-                mode == "browser"
-            );
+            assert_eq!(root.join("target/debug/agent-desktop").is_file(), desktop);
         }
     }
 

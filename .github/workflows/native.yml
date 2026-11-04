@@ -470,6 +470,7 @@ jobs:
         env: *local-rust-cache-env
         run: |
           set -o pipefail
+          export AGENT_IOS_USE_CACHED_HOST_GRAPH="${{ steps.dependency-cache.outputs.cache-hit == 'true' && steps.local-rust-cache.outputs.cache-matched-key != '' }}"
           mkdir -p target/qa
           if [[ -n "$AGENT_IOS_TESTS" ]]; then
             read -r -a ios_tests <<< "$AGENT_IOS_TESTS"

@@ -478,25 +478,57 @@ mod tests {
     use super::*;
 
     #[test]
-    fn directory_outages_block_writes_and_recover_without_touching_the_checkout() {
+    fn upload_storage_controls_fail_and_recover_without_touching_the_checkout() {
+        use std::os::unix::fs::PermissionsExt;
+
         let root = tempfile::tempdir().unwrap();
         let directory = root.path().join("bex-attachments");
-        fs::create_dir(&directory).unwrap();
         let checkout = root.path().join("project.txt");
         fs::write(&checkout, "draft stays available").unwrap();
+        // File controls must work without connecting to the fixture's RPC peer.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let identity = Identity::generate();
+        let node: iroh::EndpointId = identity.node_id().to_string().parse().unwrap();
+        let ticket =
+            iroh_tickets::endpoint::EndpointTicket::new(iroh::EndpointAddr::from_parts(node, []))
+                .to_string()
+                .parse()
+                .unwrap();
 
-        set_directory_access(&directory, false).unwrap();
+        let unavailable = route(
+            root.path(),
+            &runtime,
+            &ticket,
+            &identity,
+            &Method::Post,
+            "/uploads/unavailable",
+        );
         let blocked = fs::write(directory.join("selected.mov"), b"media");
         let draft = fs::read_to_string(&checkout);
+        let restored = route(
+            root.path(),
+            &runtime,
+            &ticket,
+            &identity,
+            &Method::Post,
+            "/uploads/restore",
+        );
+        let uploaded = fs::write(directory.join("selected.mov"), b"media");
         // Restore permissions before assertions so even a failed check remains removable.
-        set_directory_access(&directory, true).unwrap();
+        if directory.exists() {
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+        }
 
+        assert_eq!(unavailable.unwrap().0, 204);
         assert!(
             blocked.is_err(),
             "The fixture must cause a real upload write failure"
         );
         assert_eq!(draft.unwrap(), "draft stays available");
-        fs::write(directory.join("selected.mov"), b"media").unwrap();
+        assert_eq!(restored.unwrap().0, 204);
+        uploaded.unwrap();
         assert_eq!(fs::read(directory.join("selected.mov")).unwrap(), b"media");
     }
 }
