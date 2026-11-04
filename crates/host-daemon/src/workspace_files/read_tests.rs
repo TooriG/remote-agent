@@ -33,7 +33,13 @@ fn folder_listings_follow_symlinks_without_losing_broken_links() {
     assert!(folder.directory, "a linked folder must remain navigable");
     assert_eq!(
         folder.path,
-        directory.path().join("linked-folder").to_str().unwrap()
+        directory
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("linked-folder")
+            .to_str()
+            .unwrap()
     );
     let file = listing
         .entries

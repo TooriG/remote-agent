@@ -67,7 +67,7 @@ private struct WorkspaceFilePreview: View {
         if let playback = file.playback {
             switch playback {
             case let .success(player):
-                VideoPlayer(player: player).accessibilityIdentifier("file.preview.media")
+                FileMediaPreview(player: player)
             case let .failure(error):
                 AppNotice(text: error.localizedDescription).padding()
             }
@@ -91,27 +91,33 @@ private struct WorkspaceFilePreview: View {
         let playback: Result<AVPlayer, Error>?
         private let audioConfiguration: AudioSessionConfiguration?
 
-        init(url: URL, mimeType: String) {
+        init(url: URL, mimeType: String) async {
             self.url = url
             if mimeType.hasPrefix("video/") || mimeType.hasPrefix("audio/") {
-                let session = AVAudioSession.sharedInstance()
-                // An active dictation session already supports playback and
-                // retains ownership of the microphone's audio configuration.
-                let previous = [AVAudioSession.Category.record, .playAndRecord].contains(session.category)
-                    ? nil : AudioSessionConfiguration(
-                        category: session.category, mode: session.mode, options: session.categoryOptions
-                    )
-                let result = Result {
+                do {
+                    let asset = AVURLAsset(url: url)
+                    guard try await asset.load(.isPlayable) else {
+                        throw CocoaError(.fileReadCorruptFile)
+                    }
+                    try Task.checkCancellation()
+                    let session = AVAudioSession.sharedInstance()
+                    // Leave an active recording session in charge of its audio configuration.
+                    let previous = [AVAudioSession.Category.record, .playAndRecord].contains(session.category)
+                        ? nil : AudioSessionConfiguration(
+                            category: session.category, mode: session.mode, options: session.categoryOptions
+                        )
                     if previous != nil {
                         try session.setCategory(
                             .playback,
                             mode: mimeType.hasPrefix("video/") ? .moviePlayback : .default
                         )
                     }
-                    return AVPlayer(url: url)
+                    playback = .success(AVPlayer(playerItem: AVPlayerItem(asset: asset)))
+                    audioConfiguration = previous
+                } catch {
+                    playback = .failure(error)
+                    audioConfiguration = nil
                 }
-                playback = result
-                audioConfiguration = (try? result.get()) == nil ? nil : previous
             } else {
                 playback = nil
                 audioConfiguration = nil
@@ -248,6 +254,23 @@ struct WorkspaceFileSheet: View {
                (snapshot.fileDraft(path: entry.path)?.revision ?? file.revision) != file.revision {
                 error = "ホストのファイルが変更されています。下書きは保持しました。再読込すると下書きを破棄します。"
             }
+        }
+    }
+}
+
+private struct FileMediaPreview: UIViewControllerRepresentable {
+    let player: AVPlayer
+
+    func makeUIViewController(context _: Context) -> AVPlayerViewController {
+        let controller = AVPlayerViewController()
+        controller.showsPlaybackControls = true
+        controller.view.accessibilityIdentifier = "file.preview.media"
+        return controller
+    }
+
+    func updateUIViewController(_ controller: AVPlayerViewController, context _: Context) {
+        if controller.player !== player {
+            controller.player = player
         }
     }
 }

@@ -108,9 +108,10 @@ extension LaunchUITests {
             XCTAssertTrue(preview.waitForExistence(timeout: 15))
             XCTAssertTrue(preview.isHittable)
         case .media:
-            // AVKit hides its controls until the user taps the video surface.
-            app.otherElements["file.preview.media"].tap()
             let play = app.buttons.matching(NSPredicate(format: "label IN %@", ["Play", "再生"])).firstMatch
+            if !play.exists {
+                app.otherElements["file.preview.media"].tap()
+            }
             XCTAssertTrue(play.waitForExistence(timeout: 15), "The native player must load real media controls")
             XCTAssertTrue(play.isHittable)
             XCTAssertTrue(play.isEnabled)
