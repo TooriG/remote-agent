@@ -67,7 +67,7 @@ private struct WorkspaceFilePreview: View {
         if let playback = file.playback {
             switch playback {
             case let .success(player):
-                FileMediaPreview(player: player)
+                VideoPlayer(player: player).accessibilityIdentifier("file.preview.media")
             case let .failure(error):
                 AppNotice(text: error.localizedDescription).padding()
             }
@@ -254,23 +254,6 @@ struct WorkspaceFileSheet: View {
                (snapshot.fileDraft(path: entry.path)?.revision ?? file.revision) != file.revision {
                 error = "ホストのファイルが変更されています。下書きは保持しました。再読込すると下書きを破棄します。"
             }
-        }
-    }
-}
-
-private struct FileMediaPreview: UIViewControllerRepresentable {
-    let player: AVPlayer
-
-    func makeUIViewController(context _: Context) -> AVPlayerViewController {
-        let controller = AVPlayerViewController()
-        controller.showsPlaybackControls = true
-        controller.view.accessibilityIdentifier = "file.preview.media"
-        return controller
-    }
-
-    func updateUIViewController(_ controller: AVPlayerViewController, context _: Context) {
-        if controller.player !== player {
-            controller.player = player
         }
     }
 }

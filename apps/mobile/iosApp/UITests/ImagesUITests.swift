@@ -109,13 +109,16 @@ extension LaunchUITests {
             XCTAssertTrue(preview.isHittable)
         case .media:
             let play = app.buttons.matching(NSPredicate(format: "label IN %@", ["Play", "再生"])).firstMatch
-            if !play.exists {
+            if play.exists {
+                play.tap()
+            } else {
                 app.otherElements["file.preview.media"].tap()
             }
-            XCTAssertTrue(play.waitForExistence(timeout: 15), "The native player must load real media controls")
-            XCTAssertTrue(play.isHittable)
-            XCTAssertTrue(play.isEnabled)
-            play.tap()
+            let pause = app.buttons.matching(NSPredicate(format: "label IN %@", ["Pause", "一時停止"])).firstMatch
+            XCTAssertTrue(pause.waitForExistence(timeout: 15), "The native player must start playback")
+            XCTAssertTrue(pause.isHittable)
+            XCTAssertTrue(pause.isEnabled)
+            pause.tap()
         case .web:
             let content = app.webViews.firstMatch
             XCTAssertTrue(content.waitForExistence(timeout: 15))
@@ -201,13 +204,14 @@ extension LaunchUITests {
     }
 
     func showConversationElement(_ element: XCUIElement, in app: XCUIApplication, upward: Bool) {
+        let composer = app.buttons["task.diff"].exists ? app.buttons["task.diff"] : app.textFields["task.message"]
+        let visible = (app.navigationBars.firstMatch.frame.maxY + 8) ..< (composer.frame.minY - 16)
         for _ in 0 ..< 15 {
             if element.exists, element.isHittable,
-               element.frame.midY > app.frame.height * 0.2,
-               element.frame.midY < app.frame.height * 0.65 {
+               visible.contains(element.frame.midY) {
                 return
             }
-            let below = element.exists ? element.frame.midY > app.frame.height * 0.65 : upward
+            let below = element.exists ? element.frame.midY >= visible.upperBound : upward
             app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: below ? 0.55 : 0.35))
                 .press(forDuration: 0.05, thenDragTo: app.coordinate(
                     withNormalizedOffset: CGVector(dx: 0.5, dy: below ? 0.35 : 0.55)
@@ -215,7 +219,7 @@ extension LaunchUITests {
         }
         XCTAssertTrue(element.waitForExistence(timeout: 10))
         XCTAssertTrue(element.isHittable)
-        XCTAssertGreaterThan(element.frame.midY, app.frame.height * 0.2)
-        XCTAssertLessThan(element.frame.midY, app.frame.height * 0.65)
+        XCTAssertGreaterThanOrEqual(element.frame.midY, visible.lowerBound)
+        XCTAssertLessThan(element.frame.midY, visible.upperBound)
     }
 }
