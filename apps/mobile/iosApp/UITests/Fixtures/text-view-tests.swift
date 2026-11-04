@@ -92,6 +92,18 @@ struct ConversationTextViewTests {
         check(view.text.hasSuffix("Streamed line"), "Streaming must show the new text")
         check(view.contentOffset == .zero, "Streaming text must not scroll inside the message")
         check(view.selectedRange == selection, "Streaming must keep the reader's selection")
+
+        // Reopened conversations share measurements, keyed by what the view shows.
+        let reopened = ConversationTextView()
+        reopened.update(blocks: blocks + ["Streamed line"], dark: false, sizeCategory: .large)
+        check(reopened.measure(width: 320) == view.frame.size, "The same message must measure the same when reopened")
+        check(reopened.measure(width: 160).height > view.frame.height, "A narrower width must be measured again")
+        let short = Array(blocks.prefix(10))
+        reopened.update(blocks: short, dark: false, sizeCategory: .large)
+        reopened.frame.size = reopened.measure(width: 320)
+        check(reopened.frame.height < view.frame.height / 10, "Changed text must not reuse an old size")
+        reopened.layoutIfNeeded()
+        check(reopened.text == short.joined(separator: "\n"), "Changed text must not show an old layout")
         print("Conversation text view tests passed")
     }
 }

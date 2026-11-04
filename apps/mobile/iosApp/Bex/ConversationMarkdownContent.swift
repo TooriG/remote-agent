@@ -2,7 +2,7 @@ import AgentCore
 import Foundation
 
 enum ConversationMarkdownContent {
-    struct Block: Identifiable, Sendable, Equatable {
+    struct Block: Identifiable, Sendable, Hashable {
         let id: Int
         let runs: [MarkdownRun]
         let style: MarkdownStyle
