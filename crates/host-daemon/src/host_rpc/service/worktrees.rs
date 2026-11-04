@@ -226,25 +226,37 @@ impl HostRpcService {
             {
                 continue;
             }
-            let response = if let Some(row) = self.inner.conversations.get(&target)? {
-                self.conversation_history(&row, conversations::HistoryUse::Read)
-                    .await?
-            } else {
-                match self.inner.providers.get(target.provider) {
-                    Ok(agent) => agent.state(&target.id).await?.response,
-                    Err(error) => {
-                        warnings.insert(target.provider, error.to_string());
-                        continue;
-                    }
+            let row = self.inner.conversations.get(&target)?;
+            if let Some(row) = &row
+                && row.startup.is_some()
+            {
+                threads.push((self.preparation_history(row).await?.thread, false));
+                continue;
+            }
+            let native = row.as_ref().map_or(&target, |row| &row.active);
+            let agent = match self.inner.providers.get(native.provider) {
+                Ok(agent) => agent,
+                Err(error) => {
+                    warnings.insert(native.provider, error.to_string());
+                    continue;
                 }
             };
-            if response.thread.id.as_ref() != Some(&target) {
+            // Occupancy depends on the active provider's state, not on readable
+            // historical segments or a successful full transcript import.
+            let mut thread = agent.state(&native.id).await?.response.thread;
+            if thread.id.as_ref() != Some(native) {
                 return Err(Failure::new(
                     "invalid_thread",
                     "native session identity changed",
                 ));
             }
-            threads.push((response.thread, false));
+            if let Some(row) = &row {
+                for turn in thread.turns.iter_mut().flatten() {
+                    Arc::make_mut(turn).id = row.identity(native, &turn.id).into();
+                }
+                row.describe(&mut thread);
+            }
+            threads.push((thread, false));
         }
         for thread in saved.values() {
             if let Some(provider) = thread.active_provider
@@ -426,6 +438,102 @@ pub(super) mod tests {
                 host.remove_worktree(entries[0].path.clone()).await.unwrap();
                 assert!(!checkout.exists());
                 assert!(host.inner.conversations.get(&public).unwrap().is_some());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn worktree_occupancy_uses_live_state_when_source_history_is_incomplete() {
+        use super::*;
+        use crate::host_rpc::{
+            conversations::{Binding, Conversation},
+            service::conversations::tests::NativeAgent,
+        };
+        use agent_protocol::{
+            execution::TurnStatus,
+            session::{HistoryReadKind, HistoryReadState, SessionRef, SubmissionDelivery},
+        };
+        for history in [HistoryReadKind::Incomplete, HistoryReadKind::Unavailable] {
+            for status in [TurnStatus::Completed, TurnStatus::Running] {
+                let directory = tempfile::tempdir().unwrap();
+                let repository = repository(directory.path());
+                let agent = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));
+                let host = HostRpcService::new(
+                    [agent.backend()],
+                    ProjectStore::new(directory.path().join("worktrees.json")),
+                );
+                host.inner
+                    .worktrees
+                    .settings(Some(agent_protocol::models::WorktreeSettings {
+                        create_on_new_session: true,
+                        ..Default::default()
+                    }))
+                    .await
+                    .unwrap();
+                let checkout = host
+                    .inner
+                    .worktrees
+                    .prepare(repository.to_str())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let mut response = agent
+                    .create(checkout.to_str().unwrap(), None, None)
+                    .await
+                    .unwrap();
+                response.thread.history_read_state =
+                    Some(HistoryReadState::new(history.clone(), vec![]));
+                response.thread.turns = Some(vec![Arc::new(agent_protocol::models::Turn {
+                    id: "turn".into(),
+                    status,
+                    ..Default::default()
+                })]);
+                let native = response.thread.id.clone().unwrap();
+                agent
+                    .records
+                    .lock()
+                    .unwrap()
+                    .insert(native.id.clone(), response.clone());
+                let mut previous = response.thread.clone();
+                previous.id = Some(SessionRef::new(ProviderKind::Claude, "past".into()).unwrap());
+                let mut row = Conversation::new(&previous).unwrap();
+                row.id = SessionRef::new(ProviderKind::Claude, "bex-task:managed".into()).unwrap();
+                row.seal(0).unwrap();
+                row.bindings.push(Binding {
+                    session: native.clone(),
+                    seen: 0,
+                });
+                row.activate(native.clone(), 0);
+                let public = row.id.clone();
+                let turn = row.identity(&native, "turn").into();
+                host.inner.conversations.save(row).unwrap();
+                let _execution = host.inner.router.retain_execution(public.clone()).unwrap();
+                host.inner
+                    .router
+                    .begin_submission(&public, "message")
+                    .unwrap();
+                host.inner.router.finish_submission(
+                    &public,
+                    "message",
+                    SubmissionDelivery::Accepted {
+                        turn_id: Some(turn),
+                    },
+                );
+
+                let entries = host.worktree_list().await.unwrap();
+                assert_eq!(entries.len(), 1);
+                assert_eq!(entries[0].threads.len(), 1);
+                assert_eq!(entries[0].threads[0].id, public);
+                assert_eq!(entries[0].threads[0].active, status == TurnStatus::Running);
+                assert_eq!(
+                    entries[0].blocked_reason.is_some(),
+                    status == TurnStatus::Running
+                );
+                assert_eq!(
+                    host.remove_worktree(entries[0].path.clone()).await.is_err(),
+                    status == TurnStatus::Running
+                );
+                assert_eq!(checkout.exists(), status == TurnStatus::Running);
             }
         }
     }
