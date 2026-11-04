@@ -1153,11 +1153,13 @@ mod tests {
         browser.update(window, |browser, cx| browser.set_frame(frame.clone(), cx));
         frame.tabs[0].url = "about:blank".into();
         browser.update(window, |browser, cx| browser.set_frame(frame.clone(), cx));
+        window.run_until_parked();
+        assert_eq!(*titles.borrow(), ["Page", "Background", "ブラウザ"]);
         browser.update(window, |browser, cx| {
             browser.set_frame(BrowserFrame::default(), cx)
         });
         window.run_until_parked();
-        assert_eq!(*titles.borrow(), ["Page", "Background", "ブラウザ"]);
+        assert_eq!(titles.borrow().len(), 3);
         window.update(|_, cx| cx.set_global(crate::localization::Language(UiLanguage::English)));
         window.run_until_parked();
         assert_eq!(titles.borrow().last().map(String::as_str), Some("Browser"));
