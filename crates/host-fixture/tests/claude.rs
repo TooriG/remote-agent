@@ -446,7 +446,7 @@ async fn claude_submission_preserves_inputs_settings_workspaces_and_history_acro
                     std::fs::write(&path, include_bytes!("../../../apps/mobile/iosApp/Bex/Assets.xcassets/AppIcon.appiconset/AppIcon.png")).unwrap();
                 } else { std::fs::write(&path, "attachment content").unwrap(); }
                 store.dispatch(Intent::UploadAttachment(op::UploadAttachment {
-                    draft_key: key, directory: store.snapshot().navigation.cwd.clone(),
+                    draft_key: key,
                     attachment: Attachment { path: path.to_str().unwrap().into(), name: path.file_name().unwrap().to_str().unwrap().into(), is_image: attachment == "image" },
                 })).await.unwrap();
             }

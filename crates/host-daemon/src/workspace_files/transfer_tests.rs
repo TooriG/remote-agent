@@ -216,6 +216,145 @@ impl Fixture {
 }
 
 #[tokio::test]
+async fn attachments_outlive_worktrees_while_linked_images_fail_only_their_download() {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let mut fixture = Fixture::start(0, false).await;
+        fixture.open().await;
+        let workspace = tempfile::tempdir().unwrap();
+        let source = workspace.path().join("screenshot.png");
+        let bytes = b"captured image";
+        std::fs::write(&source, bytes).unwrap();
+        let draft_key = fixture.store.snapshot().navigation.draft_key.clone();
+        let upload = fixture
+            .store
+            .dispatch(Intent::UploadAttachment(op::UploadAttachment {
+                draft_key: draft_key.clone(),
+                attachment: agent_core::state::Attachment {
+                    path: source.to_str().unwrap().into(),
+                    name: "screenshot.png".into(),
+                    is_image: true,
+                },
+            }));
+        let request = fixture.requests.recv().await.unwrap();
+        assert_eq!(request["method"], "host/blob/upload");
+        let grant = fixture
+            .files
+            .dispatch(
+                OWNER,
+                agent_protocol::protocol::Call::Upload(
+                    serde_json::from_value(request["params"].clone()).unwrap(),
+                ),
+            )
+            .unwrap();
+        // A transfer completion must append to the current draft, preserving
+        // edits made while its bytes were in flight.
+        fixture
+            .store
+            .dispatch(Intent::SetDraftText {
+                thread_id: draft_key.clone(),
+                text: "edited during upload".into(),
+            })
+            .await
+            .unwrap();
+        fixture
+            .output
+            .lock()
+            .await
+            .reply(&request, json!({"result":grant}))
+            .await
+            .unwrap();
+        fixture
+            .files
+            .transfer(OWNER, fixture.session.accept_stream().await.unwrap())
+            .await
+            .unwrap();
+        upload.await.unwrap();
+        let attached = fixture.store.snapshot().drafts[&draft_key].attachments[0].clone();
+        assert!(
+            std::path::Path::new(&attached.path)
+                .starts_with(dunce::canonicalize(fixture.files.upload_directory.as_ref()).unwrap())
+        );
+        workspace.close().unwrap();
+        let before = fixture.store.snapshot();
+        let destination = fixture._directory.path().join("download.png");
+        let download = fixture
+            .store
+            .dispatch(Intent::DownloadFile(op::DownloadFile {
+                source: attached.path.clone(),
+                destination: destination.to_str().unwrap().into(),
+            }));
+        let request = fixture.requests.recv().await.unwrap();
+        let grant = fixture
+            .files
+            .dispatch(
+                OWNER,
+                agent_protocol::protocol::Call::Download(
+                    serde_json::from_value(request["params"].clone()).unwrap(),
+                ),
+            )
+            .unwrap();
+        fixture
+            .output
+            .lock()
+            .await
+            .reply(&request, json!({"result":grant}))
+            .await
+            .unwrap();
+        fixture
+            .files
+            .transfer(OWNER, fixture.session.accept_stream().await.unwrap())
+            .await
+            .unwrap();
+        download.await.unwrap();
+        assert_eq!(std::fs::read(&destination).unwrap(), bytes);
+        assert_eq!(before.drafts[&draft_key].text, "edited during upload");
+        assert!(!source.exists());
+        let download = fixture
+            .store
+            .dispatch(Intent::DownloadFile(op::DownloadFile {
+                source: source.to_str().unwrap().into(),
+                destination: destination.to_str().unwrap().into(),
+            }));
+        let request = fixture.requests.recv().await.unwrap();
+        let failure = fixture
+            .files
+            .dispatch(
+                OWNER,
+                agent_protocol::protocol::Call::Download(
+                    serde_json::from_value(request["params"].clone()).unwrap(),
+                ),
+            )
+            .unwrap_err();
+        assert_eq!(failure.code, "file_not_found");
+        fixture
+            .output
+            .lock()
+            .await
+            .reply(&request, json!({"error":failure}))
+            .await
+            .unwrap();
+        let error = download.await.unwrap_err();
+        assert_eq!(
+            agent_core::presentation::error::error_message(&error.to_string()),
+            "ファイルまたはフォルダが見つかりません。"
+        );
+        let after = fixture.store.snapshot();
+        assert!(after.error.is_none());
+        assert!(after.connected);
+        assert_eq!(after.conversations, before.conversations);
+        assert_eq!(after.drafts, before.drafts);
+        assert_eq!(
+            std::fs::read(&destination).unwrap(),
+            bytes,
+            "a failed linked image read must preserve the downloaded attachment"
+        );
+        fixture.close().await;
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
 async fn file_operations_preserve_remote_reasons_and_download_can_retry_after_failure() {
     tokio::time::timeout(Duration::from_secs(15), async {
         let mut fixture = Fixture::start(0, false).await;
@@ -235,7 +374,6 @@ async fn file_operations_preserve_remote_reasons_and_download_can_retry_after_fa
                     path: source.to_str().unwrap().into(),
                     name: "source.txt".into(), is_image: false,
                 },
-                directory: "~/Documents".into(),
             }), "host/blob/upload"),
             (Intent::ResolveFile(op::ResolveFile { path: "~/missing".into() }), "host/file/resolve"),
             (Intent::ListFiles(op::ListFiles { path: "~/missing".into() }), "host/file/list"),

@@ -86,6 +86,8 @@ jobs:
               tools/windows-fxc/* | scripts/package-windows.ps1 | scripts/windows-installer.iss) area=windows ;;
               apps/mobile/iosApp/Bex/ConversationScrollObserver.swift | apps/mobile/iosApp/Bex/ConversationTextLayout.swift | \
                 apps/mobile/iosApp/UITests/Fixtures/scroll-tests.swift | apps/mobile/iosApp/UITests/Fixtures/text-view-tests.swift) area='iphone-mac' ;;
+              # Mac runs the runner's unit tests; iPhone exercises its Simulator lifecycle.
+              crates/xtask/src/ios_e2e.rs) area='iphone-mac' ;;
               scripts/test-ios-scroll.sh) area=mac ;;
               apps/mobile/src/* | apps/mobile/build.gradle.kts | build.gradle.kts | settings.gradle.kts | \
                 gradle.properties | gradle/* | gradlew | gradlew.bat | detekt.yml | scripts/android-e2e.sh | \
@@ -334,7 +336,8 @@ jobs:
       - &apple-nix
         uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
       - *prepare-zsh
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - id: dependency-cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           cmd-format: nix develop .#native --command {0}
           key: macos-rust-xcode-26.6-${{ hashFiles('flake.lock') }}
@@ -356,6 +359,7 @@ jobs:
       - name: Mac contracts and acceptance
         env: &local-rust-cache-env
           RUSTC_WRAPPER: ${{ github.workspace }}/scripts/ci-rust-cache.sh
+          AGENT_CI_DEPENDENCIES_RESTORED: ${{ steps.dependency-cache.outputs.cache-hit }}
           KACHE_CACHE_DIR: ${{ runner.temp }}/kache-store
           KACHE_RUNTIME_DIR: ${{ runner.temp }}/kache-runtime
           KACHE_MAX_SIZE: 2GiB
@@ -439,7 +443,8 @@ jobs:
       - *apple-xcode
       - *apple-nix
       - *prepare-zsh
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - id: dependency-cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           cmd-format: nix develop .#ios-build --command {0}
           # Either Apple job may be unavailable; each must publish its own cache.
@@ -623,6 +628,8 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
           version: 0.16.0
+          # Cargo's dependency cache retains FFF's build outputs; per-run Zig caches only evict them.
+          use-cache: false
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
           toolchain: ${{ needs.toolchain.outputs.rust-version }}

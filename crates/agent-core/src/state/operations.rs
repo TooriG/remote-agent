@@ -165,10 +165,6 @@ pub enum Intent {
         handle: String,
         sequence: u64,
     },
-    AddAttachment {
-        draft_key: DraftKey,
-        attachment: Attachment,
-    },
     RemoveAttachment {
         draft_key: DraftKey,
         index: u32,
@@ -404,6 +400,9 @@ pub trait Operation: Send + Sync + std::fmt::Debug + Sized + 'static {
     type Output: Send + std::fmt::Debug + 'static;
     /// Metadata refreshes publish later without holding the initiating receipt.
     const BACKGROUND: bool = false;
+    /// Untracked failures become application notices unless the caller owns
+    /// their presentation, such as an individual file preview or save control.
+    const REPORT_ERROR: bool = true;
     const STALE_POLICY: StalePolicy = StalePolicy::Discard;
     /// Identifies a submission step whose completion and failure belong to the same dispatch.
     fn submission_id(&self) -> Option<&str> {
@@ -486,16 +485,6 @@ mod project_import;
 pub use project_import::*;
 mod submission;
 pub use submission::*;
-
-pub(super) fn add_attachment(next: &mut Snapshot, draft_key: DraftKey, attachment: Attachment) {
-    Arc::make_mut(
-        Arc::make_mut(&mut next.drafts)
-            .entry(draft_key)
-            .or_default(),
-    )
-    .attachments
-    .push(attachment);
-}
 
 pub(super) fn page_rows(
     mut rows: Vec<crate::models::Thread>,

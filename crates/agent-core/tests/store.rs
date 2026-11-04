@@ -627,22 +627,21 @@ async fn draft_field_edits_preserve_interleaved_attachments_and_settings() {
             }}])).unwrap()),
             drafts: Arc::new(BTreeMap::from([(SessionRef {provider: ProviderKind::Codex, id: "thread".into()}.into(), Arc::new(Draft {
                 text: "old".into(), model: Some(agent_protocol::models::ModelRef { provider: agent_protocol::session::ProviderKind::Codex, id: "model".into() }), effort: Some("medium".into()),
+                attachments: ["removed.png", "image.png"].map(|name| Attachment {
+                    path: format!("/fixture/{name}"), name: name.into(), is_image: true,
+                }).into(),
                 service_tier: Some("priority".into()), ..Default::default()
             }))])),
             ..Default::default()
         };
         let (store, _reader, _writer) = setup(previous.clone()).await;
-        let attachment = Intent::AddAttachment {
+        let attachment = Intent::RemoveAttachment {
             draft_key: SessionRef {
                 provider: ProviderKind::Codex,
                 id: "thread".into(),
             }
             .into(),
-            attachment: Attachment {
-                path: "/fixture/image.png".into(),
-                name: "image.png".into(),
-                is_image: true,
-            },
+            index: 0,
         };
         let text = Intent::SetDraftText {
             thread_id: SessionRef {
@@ -705,13 +704,14 @@ async fn draft_field_edits_preserve_interleaved_attachments_and_settings() {
                 .text,
             "old"
         );
-        assert!(
+        assert_eq!(
             previous.drafts[&DraftKey::from(SessionRef {
                 provider: ProviderKind::Codex,
                 id: "thread".into()
             })]
                 .attachments
-                .is_empty()
+                .len(),
+            2
         );
         store
             .dispatch(Intent::SelectEffort {

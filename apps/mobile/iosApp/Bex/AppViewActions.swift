@@ -212,8 +212,7 @@ extension AppViewModel {
                                     isImage: UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true)
         _ = try await outcome(for: .uploadAttachment(UploadAttachment(
             draftKey: coreDraftKey,
-            attachment: attachment,
-            directory: cwd
+            attachment: attachment
         )))
     }
 
