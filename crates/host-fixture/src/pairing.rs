@@ -144,10 +144,17 @@ fn route(
             "restore" => true,
             _ => return Err("unknown worktree fixture state".into()),
         };
-        set_worktree_access(&root.join(format!("{name}-worktree")), readable)?;
+        // A deleted worktree is recreated for input; unreadable directories make review fail.
+        set_directory_access(&root.join(format!("{name}-worktree")), readable)?;
         return Ok((204, Vec::new()));
     }
     match path {
+        "/uploads/unavailable" | "/uploads/restore" => {
+            // Host attachments live beside the project config, outside every checkout.
+            let directory = root.join("bex-attachments");
+            fs::create_dir_all(&directory)?;
+            set_directory_access(&directory, path == "/uploads/restore")?;
+        }
         "/auth-token/unavailable" => fs::write(root.join("auth-token-unavailable"), [])?,
         "/auth-token/reset" => {
             if root.join("auth-token-unavailable").exists() {
@@ -400,19 +407,17 @@ fn worktree_conversation(root: &Path, name: &str) -> Result<()> {
     )
 }
 
-// The Host shows a deleted worktree as unchanged because input recreates it,
-// so an unreadable checkout is what makes its review fail.
 #[cfg(unix)]
-fn set_worktree_access(worktree: &Path, readable: bool) -> Result<()> {
+fn set_directory_access(directory: &Path, readable: bool) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let mode = if readable { 0o755 } else { 0o000 };
-    fs::set_permissions(worktree, fs::Permissions::from_mode(mode))?;
+    fs::set_permissions(directory, fs::Permissions::from_mode(mode))?;
     Ok(())
 }
 
 #[cfg(not(unix))]
-fn set_worktree_access(_: &Path, _: bool) -> Result<()> {
-    Err("worktree access fixtures require Unix permissions".into())
+fn set_directory_access(_: &Path, _: bool) -> Result<()> {
+    Err("directory access fixtures require Unix permissions".into())
 }
 
 fn list_fixture(root: &Path, path: &str) -> Result<()> {
@@ -466,4 +471,32 @@ fn write_json(path: PathBuf, value: &impl serde::Serialize) -> Result<()> {
     serde_json::to_writer(&mut file, value)?;
     file.flush()?;
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn directory_outages_block_writes_and_recover_without_touching_the_checkout() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("bex-attachments");
+        fs::create_dir(&directory).unwrap();
+        let checkout = root.path().join("project.txt");
+        fs::write(&checkout, "draft stays available").unwrap();
+
+        set_directory_access(&directory, false).unwrap();
+        let blocked = fs::write(directory.join("selected.mov"), b"media");
+        let draft = fs::read_to_string(&checkout);
+        // Restore permissions before assertions so even a failed check remains removable.
+        set_directory_access(&directory, true).unwrap();
+
+        assert!(
+            blocked.is_err(),
+            "The fixture must cause a real upload write failure"
+        );
+        assert_eq!(draft.unwrap(), "draft stays available");
+        fs::write(directory.join("selected.mov"), b"media").unwrap();
+        assert_eq!(fs::read(directory.join("selected.mov")).unwrap(), b"media");
+    }
 }
