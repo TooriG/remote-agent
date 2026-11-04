@@ -110,7 +110,7 @@ impl Desktop {
         };
         let body = match self.settings_page {
             SettingsPage::General => self.general_settings(cx),
-            SettingsPage::Agents => self.account_controls(true, cx),
+            SettingsPage::Agents => self.account_controls(cx),
             SettingsPage::Connections => self.connection_settings(cx),
             SettingsPage::Worktrees => self.worktree_settings(cx),
         };

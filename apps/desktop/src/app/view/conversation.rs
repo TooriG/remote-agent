@@ -208,7 +208,6 @@ impl Desktop {
             ConversationAction::Usage(provider) => {
                 self.open_settings(SettingsPage::Agents);
                 self.model_controls.provider = *provider;
-                self.model_controls.panel = ModelPanel::Manage;
             }
             ConversationAction::OpenUsage => {
                 self.open_browser(self.panel_scope(), "https://chatgpt.com/settings/usage", cx)

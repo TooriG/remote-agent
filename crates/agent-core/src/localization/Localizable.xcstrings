@@ -6017,22 +6017,6 @@
         }
       }
     },
-    "アカウントを管理": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "アカウントを管理"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Manage accounts"
-          }
-        }
-      }
-    },
     "アカウントを読み込み中…": {
       "localizations": {
         "ja": {
