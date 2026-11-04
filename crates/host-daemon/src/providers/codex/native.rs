@@ -495,9 +495,18 @@ pub(crate) fn parse_turn(mut value: Value) -> Result<Turn, serde_json::Error> {
     if value["itemsView"] == "notLoaded" {
         turn.items = None;
     }
-    if let Some(ids) = value["deferredItemIds"].as_array() {
-        for item in turn.items.iter_mut().flatten() {
-            if ids.iter().any(|id| id.as_str() == Some(&item.id)) {
+    if let (Some(ids), Some(items)) = (value["deferredItemIds"].as_array(), &mut turn.items) {
+        let indexed = (ids.len() >= 64 && items.len() >= 64).then(|| {
+            ids.iter()
+                .filter_map(Value::as_str)
+                .collect::<std::collections::HashSet<_>>()
+        });
+        for item in items {
+            let deferred = match &indexed {
+                Some(ids) => ids.contains(item.id.as_str()),
+                None => ids.iter().any(|id| id.as_str() == Some(item.id.as_str())),
+            };
+            if deferred {
                 Arc::make_mut(item).defer();
             }
         }
@@ -618,6 +627,67 @@ pub(super) fn encode_input(input: &[agent_protocol::operations::Input]) -> Vec<V
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn deferred_turn_ids_preserve_order_and_ignore_non_string_ids() {
+        for count in [1, 63, 64, 65, 512] {
+            let mut items: Vec<_> = (0..count)
+                .map(|i| json!({"id":format!("item{i}"),"type":"agentMessage","text":"本文".repeat(200)}))
+                .collect();
+            items[0]["id"] = json!("0");
+            let requested = items.last().unwrap()["id"].clone();
+            let mut input = json!({"id":"turn","items":items});
+            let original = parse_turn(input.clone()).unwrap();
+            let mut ids = vec![
+                Value::Null,
+                json!(0),
+                json!({"id":"item1"}),
+                json!("item0suffix"),
+            ];
+            ids.extend((0..count).map(|_| requested.clone()));
+            input["deferredItemIds"] = ids.into();
+            let parsed = parse_turn(input).unwrap();
+            for (index, (source, item)) in original
+                .items
+                .unwrap()
+                .iter()
+                .zip(parsed.items.unwrap())
+                .enumerate()
+            {
+                assert_eq!(source.id, item.id);
+                assert_eq!(source.status, item.status);
+                assert_eq!(item.is_deferred(), index == count - 1);
+                if index != count - 1 {
+                    assert_eq!(source, &item);
+                }
+            }
+        }
+        for input in [
+            json!({"id":"turn","deferredItemIds":["item"]}),
+            json!({"id":"turn","itemsView":"notLoaded","items":[{"id":"item","type":"agentMessage","text":"body"}],"deferredItemIds":["item"]}),
+        ] {
+            assert!(parse_turn(input).unwrap().items.is_none());
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn deferred_turn_ids_match_only_the_requested_items(
+            requested in proptest::collection::vec(proptest::prelude::any::<bool>(), 0..128),
+        ) {
+            let items: Vec<_> = requested.iter().enumerate().map(|(i, _)| json!({"id":format!("項目{i}"),"type":"agentMessage","text":"body"})).collect();
+            let ids: Vec<_> = requested.iter().enumerate().map(|(i, requested)| {
+                if *requested { json!(format!("項目{i}")) } else { json!(format!("missing{i}")) }
+            }).collect();
+            let parsed = parse_turn(json!({"id":"turn","items":items,"deferredItemIds":ids})).unwrap();
+            let items = parsed.items.unwrap();
+            proptest::prop_assert_eq!(items.len(), requested.len());
+            for (index, (item, requested)) in items.iter().zip(requested).enumerate() {
+                proptest::prop_assert_eq!(item.id.as_str(), format!("項目{index}"));
+                proptest::prop_assert_eq!(item.is_deferred(), requested);
+            }
+        }
+    }
 
     #[test]
     fn thread_reads_restore_the_model_from_native_thread_metadata() {
