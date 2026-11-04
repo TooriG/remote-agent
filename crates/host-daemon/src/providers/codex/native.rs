@@ -24,9 +24,13 @@ fn optional_array(value: Value) -> Result<Option<Vec<Value>>, serde_json::Error>
         value => serde_json::from_value(value),
     }
 }
+/// Move a field without allocating a map entry when it is absent.
+fn take_value(value: &mut Value, key: &str) -> Value {
+    value.get_mut(key).map(Value::take).unwrap_or(Value::Null)
+}
 fn take_string(value: &mut Value, key: &str) -> String {
-    match value.get_mut(key).map(Value::take) {
-        Some(Value::String(text)) => text,
+    match take_value(value, key) {
+        Value::String(text) => text,
         _ => String::new(),
     }
 }
@@ -175,33 +179,39 @@ pub(crate) fn execution_error(value: &Value, retrying: bool) -> ExecutionError {
     }
 }
 
-fn parts(value: &Value) -> Vec<String> {
+fn parts(value: Value) -> Vec<String> {
     match value {
-        Value::String(text) => vec![text.clone()],
+        Value::String(text) => vec![text],
         Value::Array(parts) => parts
-            .iter()
-            .filter_map(|v| v.as_str().or_else(|| v["text"].as_str()))
-            .map(str::to_owned)
+            .into_iter()
+            .filter_map(|mut part| match part {
+                Value::String(text) => Some(text),
+                _ => match take_value(&mut part, "text") {
+                    Value::String(text) => Some(text),
+                    _ => None,
+                },
+            })
             .collect(),
         _ => vec![],
     }
 }
-pub(crate) fn message_parts(value: &Value) -> Vec<MessagePart> {
-    value
-        .as_array()
+fn message_parts(value: Value) -> Vec<MessagePart> {
+    let Value::Array(parts) = value else {
+        return Vec::new();
+    };
+    parts
         .into_iter()
-        .flatten()
-        .filter_map(|part| {
+        .filter_map(|mut part| {
             Some(match part["type"].as_str() {
                 Some("localImage") => MessagePart::Image {
-                    source: string(part, "path"),
+                    source: take_string(&mut part, "path"),
                 },
                 Some("image") => MessagePart::Image {
-                    source: string(part, "url"),
+                    source: take_string(&mut part, "url"),
                 },
                 Some("skill") => MessagePart::Invocation {
-                    name: string(part, "name"),
-                    path: string(part, "path"),
+                    name: take_string(&mut part, "name"),
+                    path: take_string(&mut part, "path"),
                 },
                 Some("mention")
                     if part["path"].as_str().is_some_and(|path| {
@@ -209,16 +219,16 @@ pub(crate) fn message_parts(value: &Value) -> Vec<MessagePart> {
                     }) =>
                 {
                     MessagePart::Invocation {
-                        name: string(part, "name"),
-                        path: string(part, "path"),
+                        name: take_string(&mut part, "name"),
+                        path: take_string(&mut part, "path"),
                     }
                 }
                 Some("mention") => MessagePart::Attachment {
-                    name: string(part, "name"),
-                    path: string(part, "path"),
+                    name: take_string(&mut part, "name"),
+                    path: take_string(&mut part, "path"),
                 },
                 _ if part["text"].is_string() => MessagePart::Text {
-                    text: string(part, "text"),
+                    text: take_string(&mut part, "text"),
                 },
                 _ => return None,
             })
@@ -226,14 +236,17 @@ pub(crate) fn message_parts(value: &Value) -> Vec<MessagePart> {
         .collect()
 }
 
+#[cfg(test)]
+mod owned_parts_tests;
+
 pub(crate) fn parse_item(mut value: Value) -> Result<Item, serde_json::Error> {
     let id = field(&value, "id")?;
     let status = item_status(value["status"].as_str());
     let client_input_id = field(&value, "clientId")?;
     let body = match value["type"].as_str().unwrap_or_default() {
         "userMessage" => ItemBody::UserMessage {
-            text: field(&value, "text")?,
-            content: message_parts(&value["content"]),
+            text: serde_json::from_value(take_value(&mut value, "text"))?,
+            content: message_parts(take_value(&mut value, "content")),
         },
         "agentMessage" => ItemBody::AssistantText {
             text: take_string(&mut value, "text"),
@@ -245,11 +258,11 @@ pub(crate) fn parse_item(mut value: Value) -> Result<Item, serde_json::Error> {
         },
         "reasoning" => ItemBody::Reasoning {
             content: if value["content"].is_null() {
-                parts(&value["text"])
+                parts(take_value(&mut value, "text"))
             } else {
-                parts(&value["content"])
+                parts(take_value(&mut value, "content"))
             },
-            summary: parts(&value["summary"]),
+            summary: parts(take_value(&mut value, "summary")),
         },
         "commandExecution" => ItemBody::CommandExecution {
             command: take_string(&mut value, "command"),
@@ -292,10 +305,7 @@ pub(crate) fn parse_item(mut value: Value) -> Result<Item, serde_json::Error> {
             tool: string(&value, "tool"),
             server: field(&value, "server")?,
             namespace: field(&value, "namespace")?,
-            arguments: value
-                .get_mut("arguments")
-                .map(Value::take)
-                .unwrap_or(Value::Null),
+            arguments: take_value(&mut value, "arguments"),
             result: value
                 .get_mut("result")
                 .filter(|v| !v.is_null())
@@ -358,12 +368,7 @@ pub(crate) fn parse_item(mut value: Value) -> Result<Item, serde_json::Error> {
         },
         "imageGeneration" => ItemBody::ImageGeneration {
             saved_path: field(&value, "savedPath")?,
-            data: serde_json::from_value(
-                value
-                    .get_mut("result")
-                    .map(Value::take)
-                    .unwrap_or(Value::Null),
-            )?,
+            data: serde_json::from_value(take_value(&mut value, "result"))?,
             revised_prompt: field(&value, "revisedPrompt")?,
         },
         "imageView" => ItemBody::ImageView {
@@ -483,20 +488,15 @@ pub(crate) fn parse_turn(mut value: Value) -> Result<Turn, serde_json::Error> {
         provider: None,
         supports_fork: None,
         status: turn_status(value["status"].as_str()),
-        items: optional_array(
-            value
-                .get_mut("items")
-                .map(Value::take)
-                .unwrap_or(Value::Null),
-        )?
-        .map(|items| {
-            items
-                .into_iter()
-                .map(parse_item)
-                .map(|v| v.map(Arc::new))
-                .collect()
-        })
-        .transpose()?,
+        items: optional_array(take_value(&mut value, "items"))?
+            .map(|items| {
+                items
+                    .into_iter()
+                    .map(parse_item)
+                    .map(|v| v.map(Arc::new))
+                    .collect()
+            })
+            .transpose()?,
         items_summary: value["itemsView"] == "summary",
         started_at: field(&value, "startedAt")?,
         duration_ms: field(&value, "durationMs")?,
@@ -581,20 +581,15 @@ pub(crate) fn parse_thread(mut value: Value) -> Result<Thread, serde_json::Error
         name,
         cwd: field(&value, "cwd")?,
         status: session_status(&value["status"]),
-        turns: optional_array(
-            value
-                .get_mut("turns")
-                .map(Value::take)
-                .unwrap_or(Value::Null),
-        )?
-        .map(|turns| {
-            turns
-                .into_iter()
-                .map(parse_turn)
-                .map(|v| v.map(Arc::new))
-                .collect()
-        })
-        .transpose()?,
+        turns: optional_array(take_value(&mut value, "turns"))?
+            .map(|turns| {
+                turns
+                    .into_iter()
+                    .map(parse_turn)
+                    .map(|v| v.map(Arc::new))
+                    .collect()
+            })
+            .transpose()?,
         preview: field(&value, "preview")?,
         updated_at: field(&value, "updatedAt")?,
         history_has_more: field(&value, "historyHasMore")?,
