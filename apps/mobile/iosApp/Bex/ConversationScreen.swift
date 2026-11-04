@@ -138,7 +138,7 @@ struct ThreadScreen: View {
         return VStack(spacing: 0) {
             ErrorNotices(model: model, scope: .conversation(draftKey: model.coreDraftKey))
                 .padding(.horizontal)
-            if let notice = model.notice, notice != history?.error {
+            if let notice = model.notice, notice != history?.error?.plainText {
                 AppNotice(text: notice).padding(.horizontal).padding(.top, 8)
             }
             if let thread = conversation {

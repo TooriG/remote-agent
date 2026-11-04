@@ -1,12 +1,65 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, verify } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { appForBundleId, ascClient, deliveryId, distributeBuild, listAll, nextBuildNumber, parseBuildStatus } from './apple-release.mjs';
+
+test('release waits for pending checks and requires both workflows to pass for the exact revision', (t) => {
+  const workflow = readFileSync(new URL('../.github/workflows/apple-release.yml', import.meta.url), 'utf8');
+  const block = workflow.match(/      - name: Require both workflows[\s\S]*?        run: \|\n([\s\S]*?)(?=^  release:)/m);
+  assert.ok(block);
+  const script = block[1].split('\n').map(line => line.replace(/^          /, '')).join('\n');
+  const root = mkdtempSync(join(tmpdir(), 'release-checks-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const gh = join(root, 'gh');
+  writeFileSync(gh, `#!/usr/bin/env bash
+set -euo pipefail
+[[ $BEX_TEST_QUERY_FAILURE == 0 ]] || exit 1
+if [[ $2 == watch ]]; then
+  [[ "$*" == *--exit-status* ]] || exit 3
+  printf '%s\\n' "$3" >> "$BEX_TEST_WATCH_LOG"
+  [[ $3 != "$BEX_TEST_FAILED_RUN" ]]
+  exit
+fi
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --workflow) workflow=$2; shift ;;
+    --commit) [[ $2 == "$AGENT_RELEASE_SHA" ]] || exit 2; shift ;;
+  esac
+  shift
+done
+case "$workflow" in
+  portable.yml) printf '%s\\n' "$BEX_TEST_PORTABLE_RUN" ;;
+  native.yml) printf '%s\\n' "$BEX_TEST_NATIVE_RUN" ;;
+  *) exit 3 ;;
+esac
+`);
+  chmodSync(gh, 0o755);
+  const log = join(root, 'watched');
+  for (const [portable, native, failed, queryFailure, watched, status] of [
+    ['portable', 'native', '', false, 'portable\nnative\n', 0],
+    ['portable', 'native', 'portable', false, 'portable\n', 1],
+    ['portable', 'native', 'native', false, 'portable\nnative\n', 1],
+    ['', 'native', '', false, '', 1], ['portable', '', '', false, 'portable\n', 1],
+    ['portable', 'native', '', true, '', 1],
+  ]) {
+    writeFileSync(log, '');
+    const result = spawnSync('bash', ['-euo', 'pipefail', '-c', script], {
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${root}:${process.env.PATH}`,
+        AGENT_RELEASE_SHA: 'revision', GITHUB_REPOSITORY: 'fixture/repository', BEX_TEST_WATCH_LOG: log,
+        BEX_TEST_PORTABLE_RUN: portable, BEX_TEST_NATIVE_RUN: native,
+        BEX_TEST_FAILED_RUN: failed, BEX_TEST_QUERY_FAILURE: queryFailure ? '1' : '0' },
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status, status, result.stderr);
+    assert.equal(readFileSync(log, 'utf8'), watched);
+  }
+});
 
 test('production planning selects the exact bundle even when ASC returns Dev first', async () => {
   const bundleId = 'dev.remoteagent.mobile.ios';

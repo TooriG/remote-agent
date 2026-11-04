@@ -13,16 +13,16 @@ pub fn preferred_editor(saved: Option<EditorId>, available: &[EditorId]) -> Opti
 
 pub fn open_editor_label(editor: Option<EditorId>) -> String {
     match editor {
-        None | Some(EditorId::FileManager) => "Open in editor".into(),
-        Some(editor) => format!("Open in {}", editor.label()),
+        None | Some(EditorId::FileManager) => "エディターで開く".into(),
+        Some(editor) => format!("{}で開く", editor.label()),
     }
 }
 
 pub fn reveal_label(kind: FileManagerRevealKind) -> &'static str {
     match kind {
-        FileManagerRevealKind::Finder => "Reveal in Finder",
-        FileManagerRevealKind::FileExplorer => "Reveal in File Explorer",
-        FileManagerRevealKind::Files => "Reveal in Files",
+        FileManagerRevealKind::Finder => "Finderで表示",
+        FileManagerRevealKind::FileExplorer => "エクスプローラーで表示",
+        FileManagerRevealKind::Files => "ファイルマネージャーで表示",
     }
 }
 
@@ -32,8 +32,8 @@ pub fn editor_label(editor: EditorId, file_manager: FileManagerRevealKind) -> &'
     }
     match file_manager {
         FileManagerRevealKind::Finder => "Finder",
-        FileManagerRevealKind::FileExplorer => "File Explorer",
-        FileManagerRevealKind::Files => "Files",
+        FileManagerRevealKind::FileExplorer => "エクスプローラー",
+        FileManagerRevealKind::Files => "ファイルマネージャー",
     }
 }
 
@@ -61,14 +61,14 @@ mod tests {
 
     #[test]
     fn shell_menu_labels_follow_the_actual_host_capability() {
-        assert_eq!(open_editor_label(Some(EditorId::VsCode)), "Open in VS Code");
+        assert_eq!(open_editor_label(Some(EditorId::VsCode)), "VS Codeで開く");
         assert_eq!(
             open_editor_label(Some(EditorId::FileManager)),
-            "Open in editor"
+            "エディターで開く"
         );
         assert_eq!(
             reveal_label(FileManagerRevealKind::FileExplorer),
-            "Reveal in File Explorer"
+            "エクスプローラーで表示"
         );
     }
 }

@@ -275,6 +275,7 @@ struct Scheduled {
 struct Scope {
     navigation: u64,
     operation: Option<(op::OperationKey, u64)>,
+    report_error: bool,
 }
 fn generation_current(
     operation: Option<&(op::OperationKey, u64)>,
@@ -365,11 +366,12 @@ impl Scheduled {
         });
         effect.operation.capture(snapshot);
         Self {
-            effect,
             scope: Scope {
                 navigation: snapshot.epoch,
                 operation,
+                report_error: effect.operation.report_error(),
             },
+            effect,
             complete: None,
         }
     }
@@ -985,6 +987,7 @@ fn finish(updates: &watch::Sender<Arc<Snapshot>>, completed: Completed) -> Vec<S
                 .current(snapshot.epoch, &snapshot.operations),
         };
         let global_error = current
+            && completed.scope.report_error
             && completed.scope.operation.is_none()
             && !matches!(
                 &completed.scheduling,
@@ -1404,7 +1407,7 @@ async fn run(
                 } else {
                     // Work started against the cached storage must not reach the Host's new one.
                     for scheduled in held.drain(..) {
-                        let error = PeerError::InvalidMessage("Hostの保存先が変わったため、操作を取り消しました。".into());
+                        let error = PeerError::InvalidMessage("ホストの保存先が変わったため、操作を取り消しました。".into());
                         effects.extend(finish(&updates, rejected(scheduled, error)));
                     }
                     apply(&updates, Event::StorageScope(introduced.storage_scope));
@@ -1478,7 +1481,7 @@ async fn run_offline(
             Command::Dispatch(command) => command,
             Command::Browser { complete, .. } => {
                 let _ = complete.send(Err(PeerError::ConnectionClosed(
-                    "Hostに接続してください。".into(),
+                    "ホストに接続してください。".into(),
                 )));
                 continue;
             }
@@ -1659,6 +1662,7 @@ impl Effect {
 }
 trait Pending: Application {
     fn key(&self) -> Option<op::OperationKey>;
+    fn report_error(&self) -> bool;
     fn capture(&mut self, snapshot: &Snapshot);
     fn submission_id(&self) -> Option<&str>;
     fn rejected_output(self: Box<Self>) -> Option<Box<dyn Application>>;
@@ -1670,6 +1674,9 @@ trait Pending: Application {
 impl<O: op::Operation> Pending for Completion<O> {
     fn key(&self) -> Option<op::OperationKey> {
         self.operation.key()
+    }
+    fn report_error(&self) -> bool {
+        O::REPORT_ERROR
     }
     fn capture(&mut self, snapshot: &Snapshot) {
         self.input = Some(self.operation.capture(snapshot));
@@ -1725,6 +1732,53 @@ impl Execution<'_> {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn rejected_downloads_return_errors_without_overwriting_application_notices() {
+        let mut snapshot = Snapshot {
+            error: Some("unrelated failure".into()),
+            ..Default::default()
+        };
+        let mut download = Scheduled::new(
+            Effect::execute(op::DownloadFile {
+                source: "/missing.png".into(),
+                destination: "/preview.png".into(),
+            }),
+            &mut snapshot,
+            None,
+        );
+        let (sender, receipt) = oneshot::channel();
+        download.complete = Some(Receipt::new(sender));
+        let (updates, _) = watch::channel(Arc::new(snapshot.clone()));
+        assert!(finish(&updates, rejected(download, busy_error())).is_empty());
+        assert_eq!(
+            receipt.await.unwrap().unwrap_err().to_string(),
+            busy_error().to_string()
+        );
+        assert_eq!(updates.borrow().as_ref(), &snapshot);
+        let store = Store::offline(Snapshot::default());
+        assert!(
+            store
+                .dispatch(Intent::DownloadFile(op::DownloadFile {
+                    source: "/missing.png".into(),
+                    destination: "/preview.png".into(),
+                }))
+                .await
+                .is_err()
+        );
+        assert!(store.snapshot().error.is_none());
+        let error = store
+            .dispatch(Intent::RemoveWorktree(op::RemoveWorktree {
+                path: "/worktree".into(),
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            store.snapshot().error.as_deref(),
+            Some(error.to_string().as_str())
+        );
+        store.close().await.unwrap();
+    }
+
     fn queued(scheduling: op::Scheduling) -> Scheduled {
         let mut effect = Effect::execute(op::ReadTaskActivity {});
         effect.scheduling = scheduling;
@@ -1733,6 +1787,7 @@ mod tests {
             scope: Scope {
                 navigation: 0,
                 operation: None,
+                report_error: true,
             },
             complete: None,
         }
@@ -2177,9 +2232,9 @@ mod tests {
                     assert!(recovering.await.unwrap().is_err());
                     let notices = notices();
                     assert_eq!(notices.len(), 1, "{notices:?}");
-                    assert_eq!(notices[0].title, "Hostに接続できません");
+                    assert_eq!(notices[0].title, "ホストに接続できません");
                     assert!(
-                        notices[0].message.contains("Host unavailable"),
+                        notices[0].text.to_string().contains("Host unavailable"),
                         "{notices:?}"
                     );
                 }
@@ -2198,9 +2253,9 @@ mod tests {
                         .unwrap();
                     let notices = notices();
                     assert_eq!(notices.len(), 1, "{notices:?}");
-                    assert_eq!(notices[0].title, "Hostに接続できません");
+                    assert_eq!(notices[0].title, "ホストに接続できません");
                     assert!(
-                        notices[0].message.contains("Host unavailable"),
+                        notices[0].text.to_string().contains("Host unavailable"),
                         "{notices:?}"
                     );
                 }

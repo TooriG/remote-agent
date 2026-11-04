@@ -816,7 +816,7 @@ impl NativeBrowser {
                         | BrowserAction::ImportPasswords { .. }
                         | BrowserAction::FillPassword { .. }
                         | BrowserAction::DeletePasswords { .. } => {
-                            return Err("ログイン情報はHost経由で操作してください。".into());
+                            return Err("ログイン情報はホスト経由で操作してください。".into());
                         }
                         _ => {}
                     }

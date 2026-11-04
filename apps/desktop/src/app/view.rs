@@ -17,10 +17,11 @@ mod settings;
 mod sidebar;
 mod workbench;
 use super::*;
-use agent_core::{presentation::error::error_message, state::operations as op};
+use agent_core::{presentation::error::error_text, state::operations as op};
 use base64::Engine;
 pub(super) use composer::ComposerView;
 pub(super) use conversation::ConversationView;
+pub(super) use errors::error_view;
 use gpui_kit::component::{
     resizable::{h_resizable, resizable_panel, v_resizable},
     sidebar::{Sidebar, SidebarItem, SidebarMenuItem},
@@ -80,6 +81,15 @@ pub(super) fn section_heading(title: &'static str, description: &'static str) ->
                 .text_color(rgb(appearance::MUTED))
                 .child(description),
         )
+}
+
+pub(super) fn settings_group() -> Div {
+    v_flex()
+        .w_full()
+        .rounded(px(8.))
+        .border_1()
+        .border_color(rgb(appearance::BORDER))
+        .bg(rgb(appearance::SURFACE))
 }
 
 fn sidebar_header(expanded: bool, cx: &Context<Desktop>) -> Div {
@@ -1002,9 +1012,13 @@ mod cache_tests {
         window.simulate_click(summary.center(), Modifiers::default());
         window.run_until_parked();
         assert!(
-            window.debug_bounds("model-accounts-manage").is_some(),
-            "account details must replace the model catalog inside the open popup"
+            window.debug_bounds("account-start-login").is_some(),
+            "account management must open directly inside the model popup"
         );
+        let back = window.debug_bounds("model-panel-back").unwrap();
+        window.simulate_click(back.center(), Modifiers::default());
+        window.run_until_parked();
+        assert!(window.debug_bounds("model-choice-extra").is_some());
     }
 
     #[gpui::test]

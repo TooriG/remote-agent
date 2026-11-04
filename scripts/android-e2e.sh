@@ -38,7 +38,9 @@ log="$target/qa/android-$(date +%s)-$$"
 # Headless automatic graphics use CPU rendering on macOS and compete with builds.
 gpu=auto
 if [[ $(uname) == Darwin ]]; then gpu=host; fi
-emulator -avd "$avd" -gpu "$gpu" -report-console "unix:$fixture/console.sock,server,max=30" -no-window -no-audio -no-snapshot -no-boot-anim >"$log.emulator.log" 2>&1 &
+# Use 4 GiB for disposable app data; API 37's 12 GiB default can exceed the
+# runner's free space after native compilation.
+emulator -avd "$avd" -gpu "$gpu" -partition-size 4096 -report-console "unix:$fixture/console.sock,server,max=30" -no-window -no-audio -no-snapshot -no-boot-anim >"$log.emulator.log" 2>&1 &
 emulator_pid=$!
 port=$(cargo xtask android-console "$fixture/console.sock")
 serial="emulator-$port"

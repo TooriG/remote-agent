@@ -21,7 +21,7 @@ pub struct ProjectSummary {
     pub chats_archived: bool,
     pub expanded: bool,
     pub loading: bool,
-    pub error: Option<String>,
+    pub error: Option<super::error::ErrorText>,
     pub threads: Vec<ThreadSummary>,
     pub has_more: bool,
 }
@@ -281,7 +281,10 @@ impl Snapshot {
                     }
                     summary.expanded = self.expanded_projects.contains_key(&project.id);
                     if summary.expanded && !self.connected && page.is_none() {
-                        summary.error = Some("接続するとタスクを読み込めます".into());
+                        summary.error = Some(super::error::ErrorText {
+                            message: "接続するとタスクを読み込めます".into(),
+                            details: None,
+                        });
                     }
                     if summary.expanded
                         && let Some(operation) = self.operations.get(
@@ -295,7 +298,7 @@ impl Snapshot {
                                 summary.loading = true
                             }
                             crate::state::operations::OperationPhase::Failed { message } => {
-                                summary.error = Some(super::error::error_message(message))
+                                summary.error = Some(super::error::error_text(message))
                             }
                         }
                     }
@@ -321,8 +324,10 @@ impl Snapshot {
                         summary.has_more = page.has_more;
                         let errors = self.list_error_providers(page);
                         if !errors.is_empty() {
-                            summary.error =
-                                Some(format!("一部を取得できません（{}）", errors.join("、")));
+                            summary.error = Some(super::error::ErrorText {
+                                message: format!("一部を取得できません（{}）", errors.join("、")),
+                                details: None,
+                            });
                         }
                     }
                     if summary.expanded {
@@ -745,7 +750,7 @@ mod tests {
                             .is_some_and(|notice| notice.contains(provider)),
                         root_errors && visible
                     );
-                    assert_eq!(project_error.contains(provider), visible);
+                    assert_eq!(project_error.message.contains(provider), visible);
                 }
             }
         }

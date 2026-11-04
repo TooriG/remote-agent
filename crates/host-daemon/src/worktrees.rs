@@ -208,7 +208,11 @@ impl Worktrees {
         tokio::task::spawn_blocking(move || {
             match fs::metadata(&cwd) {
                 Ok(metadata) if metadata.is_dir() => return Ok(None),
-                Ok(_) => return Err(anyhow!("working directory is not a directory")),
+                Ok(_) => {
+                    return Err(anyhow!(
+                        "作業フォルダに指定したパスはフォルダではありません。"
+                    ));
+                }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error.into()),
             }
@@ -218,11 +222,11 @@ impl Worktrees {
                 .iter()
                 .filter(|(target, _)| cwd.starts_with(target))
                 .max_by_key(|(target, _)| target.len())
-                .context("working directory is unavailable")?;
+                .context("作業フォルダが見つかりません。")?;
             let destination = Path::new(target);
             // A missing subdirectory in an existing checkout is not a deleted worktree.
             match fs::symlink_metadata(destination) {
-                Ok(_) => return Err(anyhow!("working directory is unavailable")),
+                Ok(_) => return Err(anyhow!("作業フォルダが見つかりません。")),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error.into()),
             }
@@ -258,7 +262,7 @@ impl Worktrees {
 
                 for entry in &settings.copy_paths { relative_path(entry)?; }
                 if !settings.worktree_directory.is_empty() && !Path::new(&settings.worktree_directory).is_absolute() {
-                    return Err(anyhow!("worktree directory must be an absolute path on the Host, or empty for the default"));
+                    return Err(anyhow!("ワークツリーの保存先には、ホスト上の絶対パスを入力するか空欄にしてください。"));
                 }
                 state.settings = settings;
                 save(&path, &state)?;
@@ -338,7 +342,7 @@ impl Worktrees {
             let destination = session.join(
                 original
                     .file_name()
-                    .context("repository has no folder name")?,
+                    .context("リポジトリのフォルダ名を取得できません。")?,
             );
             let branch = format!("bex/{}", session.file_name().unwrap().to_string_lossy());
             let target = create_checkout(
@@ -657,7 +661,7 @@ fn create_checkout(
             destination.join(relative_cwd)
         };
         if !target.is_dir() {
-            return Err(anyhow!("working directory does not exist in the checkout"));
+            return Err(anyhow!("作業フォルダがワークツリー内に見つかりません。"));
         }
         Ok(target)
     })();
@@ -843,7 +847,9 @@ fn no_symlinks(root: &Path, relative: &Path) -> Result<()> {
     for part in relative.components() {
         path.push(part);
         if fs::symlink_metadata(&path)?.file_type().is_symlink() {
-            return Err(anyhow!("copy paths cannot contain symbolic links"));
+            return Err(anyhow!(
+                "コピーするパスにシンボリックリンクは指定できません。"
+            ));
         }
     }
     Ok(())
@@ -859,7 +865,7 @@ fn copy(source: &Path, target: &Path) -> Result<()> {
             if let Ok(meta) = fs::symlink_metadata(ancestor)
                 && meta.file_type().is_symlink()
             {
-                return Err(anyhow!("copy destination contains a symbolic link"));
+                return Err(anyhow!("コピー先にシンボリックリンクが含まれています。"));
             }
         }
     }
@@ -897,7 +903,9 @@ fn copy(source: &Path, target: &Path) -> Result<()> {
         output.as_file().set_permissions(metadata.permissions())?;
         output.persist(target)?;
     } else {
-        return Err(anyhow!("only regular files and directories can be copied"));
+        return Err(anyhow!(
+            "コピーできるのは通常のファイルとフォルダだけです。"
+        ));
     }
     Ok(())
 }

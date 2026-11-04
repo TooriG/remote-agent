@@ -263,10 +263,18 @@ private struct ProfilesScreen: View {
 }
 
 struct AppNotice: View {
-    let text: String
+    let text: ErrorText
+
+    init(text: String) {
+        self.text = errorText(error: text)
+    }
+
+    init(text: ErrorText) {
+        self.text = text
+    }
 
     var body: some View {
-        AppText(text)
+        ErrorTextView(text: text)
             .foregroundColor(.red)
             .accessibilityIdentifier("notice")
     }

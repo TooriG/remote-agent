@@ -45,6 +45,7 @@ pub(super) enum SidebarRow {
         drag: SidebarDrag,
     },
     Heading(String),
+    Error(agent_core::presentation::error::ErrorText),
     Project {
         id: String,
         name: String,
@@ -69,6 +70,11 @@ impl SidebarRow {
     fn render(self, id: String, collapsed: bool, window: &mut Window, cx: &mut App) -> AnyElement {
         let language = crate::localization::language(cx);
         match self {
+            Self::Error(error) => error_view(&error, language)
+                .px_3()
+                .text_xs()
+                .when(collapsed, |row| row.hidden())
+                .into_any_element(),
             Self::Heading(label) => div()
                 .px_3()
                 .pt_3()
@@ -497,7 +503,7 @@ impl Desktop {
                     projects.push(SidebarMenuItem::new(language.text("読み込み中…")).into());
                 }
                 if let Some(error) = &project.error {
-                    projects.push(SidebarMenuItem::new(error.clone()).into());
+                    projects.push(SidebarRow::Error(error.clone()));
                     let retry_id = id.clone();
                     projects.push(
                         SidebarMenuItem::new(language.text("再試行"))
@@ -672,11 +678,8 @@ impl Desktop {
                             IconName::Settings,
                             language.text("設定を開く"),
                             cx,
-                            |s, _, cx| {
-                                s.open_settings();
-                                if let Some(hosts) = &s.hosts {
-                                    hosts.update(cx, |hosts, _| hosts.refresh());
-                                }
+                            |s, _, _| {
+                                s.open_settings(SettingsPage::General);
                             },
                         )
                         .debug_selector(|| "sidebar-settings".into()),
@@ -1035,6 +1038,7 @@ mod tests {
             original
         );
         for page in [
+            SettingsPage::General,
             SettingsPage::Agents,
             SettingsPage::Connections,
             SettingsPage::Worktrees,
@@ -1044,9 +1048,18 @@ mod tests {
                 cx.notify();
             });
             window.run_until_parked();
-            let scope = window.debug_bounds("settings-scope").unwrap();
+            let general = page == SettingsPage::General;
+            assert_eq!(window.debug_bounds("settings-language").is_some(), general);
+            assert_eq!(window.debug_bounds("settings-scope").is_none(), general);
+            let scope = window
+                .debug_bounds(if general {
+                    "settings-general-breadcrumb"
+                } else {
+                    "settings-scope"
+                })
+                .unwrap();
             assert!(scope.bottom() <= window.debug_bounds("settings-page-heading").unwrap().top());
-            assert!(window.debug_bounds("settings-back").unwrap().bottom() >= px(640.));
+            assert!(window.debug_bounds("settings-back").unwrap().top() < px(100.));
         }
         let collapse = window.debug_bounds("collapse-sidebar").unwrap().center();
         window.simulate_click(collapse, Modifiers::default());

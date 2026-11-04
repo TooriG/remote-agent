@@ -38,7 +38,7 @@ internal fun ConversationVisualization(
     var error by remember(path, cwd) { mutableStateOf<String?>(null) }
     LaunchedEffect(path, cwd) {
         if (perform == null) {
-            error = "Hostに接続して表示を読み込んでください。"
+            error = "ホストに接続して表示を読み込んでください。"
         } else {
             val result =
                 suspendCancellableCoroutine<Result<Outcome>> { continuation ->

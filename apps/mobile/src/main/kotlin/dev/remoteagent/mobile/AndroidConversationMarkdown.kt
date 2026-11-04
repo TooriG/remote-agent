@@ -388,6 +388,7 @@ private fun FileChip(
     val density = LocalDensity.current
     val fontPixels = with(density) { fontSize.toPx() }
     val token = dev.remoteagent.core.mobileFileIcon(file.path)
+    val language = LocalUiLanguage.current
     val bitmap =
         remember(token) {
             context.assets.open("pierre_$token.png").use { android.graphics.BitmapFactory.decodeStream(it) }
@@ -421,7 +422,7 @@ private fun FileChip(
             view.setOnCreateContextMenuListener { native, _, _ ->
                 native.setHeaderTitle(menu.firstOrNull()?.path ?: file.path)
                 menu.forEachIndexed { index, item ->
-                    native.add(0, index, index, item.label).setOnMenuItemClickListener {
+                    native.add(0, index, index, language.text(item.label)).setOnMenuItemClickListener {
                         action(item)
                         true
                     }

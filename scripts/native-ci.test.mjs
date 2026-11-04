@@ -7,10 +7,10 @@ import { spawnSync } from 'node:child_process';
 
 const workflow = readFileSync(new URL('../.github/workflows/native.yml', import.meta.url), 'utf8');
 // Exercise the actual workflow policy; keep its rules beside the job conditions.
-const block = workflow.match(/      - id: areas[\s\S]*?        run: \|\n([\s\S]*?)(?=^  repository:)/m);
+const block = workflow.match(/      - id: areas[\s\S]*?        run: \|\n([\s\S]*?)(?=^  [a-z-]+:\n)/m);
 assert.ok(block, 'Native clients must define its changes selector');
 const selector = block[1].split('\n').map(line => line.replace(/^          /, '')).join('\n');
-const platforms = ['linux', 'windows', 'android', 'iphone', 'mac'];
+const platforms = ['windows', 'android', 'iphone', 'mac'];
 
 function select(t, paths, { event = 'push', base = 'last-verified-main', queryFailure = false, fetchFailure = false, diffFailure = false } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'native-ci-'));
@@ -78,9 +78,11 @@ test('only affected native clients run while repository-only changes stay lightw
     [['apps/mobile/iosApp/Bex/ConversationTextLayout.swift'], ['iphone', 'mac']],
     [['apps/mobile/iosApp/Bex/ConversationTextLayout.swift', 'apps/mobile/iosApp/Bex/RenamedTextLayout.swift'], ['iphone', 'mac']],
     [['apps/mobile/iosApp/UITests/Fixtures/scroll-tests.swift', 'apps/mobile/iosApp/UITests/Fixtures/text-view-tests.swift'], ['iphone', 'mac']],
+    [['crates/xtask/src/ios_e2e.rs'], ['iphone', 'mac']],
+    [['crates/xtask/src/ios_e2e.rs', 'apps/desktop/src/app.rs'], ['windows', 'iphone', 'mac']],
     [['scripts/test-ios-scroll.sh'], ['mac']],
-    [['apps/desktop/src/app.rs'], ['linux', 'windows', 'mac']],
-    [['apps/desktop/native-focus/src/lib.rs'], ['linux', 'windows', 'mac']],
+    [['apps/desktop/src/app.rs'], ['windows', 'mac']],
+    [['apps/desktop/native-focus/src/lib.rs'], ['windows', 'mac']],
     [['tools/windows-fxc/prepare.ps1', 'tools/windows-fxc/verify.ps1'], ['windows']],
     [['scripts/package-windows.ps1', 'scripts/windows-installer.iss'], ['windows']],
     [['apps/mobile/src/main/kotlin/Conversation.kt', 'apps/mobile/iosApp/Bex/ConversationView.swift'], ['android', 'iphone']],
@@ -115,6 +117,12 @@ test('pull requests compare against the checked-out merge base without consultin
   assert.match(result.commands, /git rev-parse HEAD\^1/);
   assert.match(result.commands, /git diff --no-renames --name-only pull-request-base HEAD/);
   assert.ok(!result.commands.includes('gh '));
+});
+
+test('the nightly measurement repeats only iPhone acceptance without consulting main CI', (t) => {
+  const result = select(t, ['crates/agent-core/src/state.rs'], { event: 'schedule' });
+  assert.deepEqual(result.selected, ['iphone']);
+  assert.equal(result.commands, '');
 });
 
 test('manual runs and unavailable comparison data conservatively verify everything', async (t) => {

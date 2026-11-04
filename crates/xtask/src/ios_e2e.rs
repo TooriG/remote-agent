@@ -146,7 +146,7 @@ fn needs_media_fixtures(tests: &[String]) -> bool {
             test.as_str(),
             "testSimulatorCanAddASecondPhoto"
                 | "testSimulatorCanAttachPhotosAndVideos"
-                | "testSimulatorRetriesPhotoUploadAfterWorkspaceRecovery"
+                | "testSimulatorRetriesPhotoUploadAfterStorageRecovery"
         )
     })
 }
@@ -215,7 +215,7 @@ const SIMULATOR_DEVICE_TYPE: &str = "com.apple.CoreSimulator.SimDeviceType.iPhon
 /// first-boot work compresses memory until Host replies take 10-20 seconds.
 /// Bex uses only AVFoundation, Photos and QuickLook, so stop the system
 /// services for widgets, mail, maps, watch, health, Siri, Spotlight and stores.
-/// Paths are relative to the runtime root; one `launchctl bootout` takes them all.
+/// Paths are relative to the runtime root.
 const IDLE_SIMULATOR_SERVICES: &[&str] = &[
     "System/Library/LaunchDaemons/com.apple.GameController.gamecontrollerd.plist",
     "System/Library/LaunchDaemons/com.apple.Maps.mapssyncd.plist",
@@ -316,28 +316,38 @@ async fn quiet_simulator(
         .iter()
         .filter(|path| runtime_root.join(path).is_file())
         .collect::<Vec<_>>();
-    // Bootout waits for each service to exit, seconds apiece on a loaded CI Mac;
-    // ten concurrent calls stop them within the setup deadline.
+    // Independent app terminations need not wait for every service to exit.
+    // Keep at most ten CoreSimulator requests active on a loaded CI Mac.
+    let commands = services
+        .chunks(services.len().div_ceil(10).max(1))
+        .map(|chunk| {
+            let mut arguments =
+                args![vec; "xcrun", "simctl", "spawn", simulator, "launchctl", "bootout", "system"];
+            arguments.extend(
+                chunk
+                    .iter()
+                    .map(|path| runtime_root.join(path).into_os_string()),
+            );
+            (arguments, SETUP_TIMEOUT)
+        })
+        .chain(IDLE_SIMULATOR_APPS.iter().map(|app| {
+            (
+                args![vec; "xcrun", "simctl", "terminate", simulator, *app],
+                timeout,
+            )
+        }));
     let mut pending = JoinSet::new();
-    for chunk in services.chunks(services.len().div_ceil(10).max(1)) {
-        let mut arguments =
-            args![vec; "xcrun", "simctl", "spawn", simulator, "launchctl", "bootout", "system"];
-        arguments.extend(
-            chunk
-                .iter()
-                .map(|path| runtime_root.join(path).into_os_string()),
-        );
+    for (arguments, limit) in commands {
         let (cwd, log, cancel) = (cwd.to_owned(), log.try_clone()?, cancel.clone());
-        // Services that never started make bootout fail; the listing below checks the result.
+        // Services/apps that never started may fail; inspect the final listing below.
         pending.spawn(async move {
-            let _ = supervision::run(&arguments, &cwd, Io::Log(&log), &cancel, SETUP_TIMEOUT).await;
+            let _ = supervision::run(&arguments, &cwd, Io::Log(&log), &cancel, limit).await;
         });
+        if pending.len() == 10 {
+            pending.join_next().await;
+        }
     }
     while pending.join_next().await.is_some() {}
-    for app in IDLE_SIMULATOR_APPS {
-        let arguments = args!["xcrun", "simctl", "terminate", simulator, app];
-        let _ = supervision::run(&arguments, cwd, Io::Log(log), cancel, timeout).await;
-    }
     let listed = supervision::run(
         &args!["xcrun", "simctl", "spawn", simulator, "launchctl", "list"],
         cwd,
@@ -686,8 +696,9 @@ async fn worker(
                 supervision::run(&arguments, &cwd, Io::Log(&log), &cancel, SETUP_TIMEOUT).await
                     .map_err(|error| format!("{label}: {phase} failed: {error}"))?;
                 if phase == "bootstatus" {
+                    let started = Instant::now();
                     let (stopped, present) = quiet_simulator(simulator, &runtime_root, &cwd, &log, &cancel).await?;
-                    println!("{label}: stopped {stopped}/{present} unused system services");
+                    println!("{label}: stopped {stopped}/{present} unused system services in {:.2}s", started.elapsed().as_secs_f64());
                 }
             }
             if tests.iter().any(|test| test == "testSimulatorCanAttachDownloadAndPrepareAIEdit") {
@@ -844,7 +855,6 @@ async fn build_test_bundle(
         )
         .await?;
     }
-    println!("Building iOS bindings and isolated Host fixtures");
     let mut host_build = args![vec;
         "cargo",
         "build",
@@ -862,7 +872,14 @@ async fn build_test_bundle(
         "--bin",
         "agent-claude-fixture"
     ];
-    if browser {
+    // Full-suite CI caches include the desktop's unified dependency features.
+    // Match that graph for focused tests when both caches were restored.
+    if browser
+        || matches!(
+            std::env::var("AGENT_IOS_USE_CACHED_HOST_GRAPH").as_deref(),
+            Ok("true")
+        )
+    {
         host_build.extend(args![
             "--package",
             "agent-desktop",
@@ -870,12 +887,25 @@ async fn build_test_bundle(
             "agent-desktop"
         ]);
     }
-    for arguments in [
-        args![vec; "scripts/build-agent-ios.sh", "simulator"],
-        host_build,
-        args![vec; "node", "scripts/install-claude-sdk.mjs", target.join("debug")],
+    // Each phase reports its duration, so CI logs show where a slow build spent its time.
+    for (phase, arguments) in [
+        (
+            "iOS bindings",
+            args![vec; "scripts/build-agent-ios.sh", "simulator"],
+        ),
+        ("isolated Host fixtures", host_build),
+        (
+            "SDK runtime",
+            args![vec; "node", "scripts/install-claude-sdk.mjs", target.join("debug")],
+        ),
     ] {
+        println!("Building {phase}");
+        let phase_started = Instant::now();
         supervision::run(&arguments, cwd, Io::Log(log), cancel, BUILD_TIMEOUT).await?;
+        println!(
+            "Built {phase} in {:.0}s",
+            phase_started.elapsed().as_secs_f64()
+        );
     }
     let products = build.join("Build/Products");
     if products.is_dir() {
@@ -884,6 +914,7 @@ async fn build_test_bundle(
         }
     }
     println!("Building the iOS app and UI test bundle");
+    let phase_started = Instant::now();
     let revision = supervision::run(
         &args![
             "git",
@@ -932,6 +963,10 @@ async fn build_test_bundle(
         BUILD_TIMEOUT,
     )
     .await?;
+    println!(
+        "Built the iOS app and UI test bundle in {:.0}s",
+        phase_started.elapsed().as_secs_f64()
+    );
     let seconds = build_started.elapsed().as_secs_f64();
     Ok((prebuilt_test_bundle(target, browser)?, seconds))
 }
@@ -997,6 +1032,21 @@ fn report_rounds(records: &Path, rounds: usize, test_count: usize) -> Result<()>
     );
     for (test, failed) in &counts {
         println!("  {test}: failed {failed}/{rounds}");
+    }
+    // CI publishes the same table on the job summary page.
+    if let Ok(summary) = std::env::var("GITHUB_STEP_SUMMARY") {
+        let mut table = format!(
+            "### iPhone acceptance: {rounds} rounds of {test_count} tests, {} failing\n\n| Test | Failed rounds |\n| --- | --- |\n",
+            counts.len()
+        );
+        for (test, failed) in &counts {
+            table.push_str(&format!("| {test} | {failed}/{rounds} |\n"));
+        }
+        OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(summary)?
+            .write_all(table.as_bytes())?;
     }
     Ok(())
 }
@@ -1373,6 +1423,10 @@ esac
             .env("AGENT_IOS_TEST_WORKERS", "1")
             .env("AGENT_IOS_TEST_ROUNDS", "1")
             .env(
+                "AGENT_IOS_USE_CACHED_HOST_GRAPH",
+                if mode == "cached" { "true" } else { "false" },
+            )
+            .env(
                 "PATH",
                 std::env::join_paths(
                     std::iter::once(root.join("bin"))
@@ -1407,7 +1461,7 @@ esac
             }
             return;
         }
-        for mode in ["host", "browser", "failure"] {
+        for mode in ["host", "browser", "cached", "failure"] {
             let temporary = build_fixture();
             let root = temporary.path().canonicalize().unwrap();
             let output = build_command(
@@ -1432,16 +1486,14 @@ esac
                     .count(),
                 1
             );
-            assert_eq!(commands.contains("--bin agent-desktop"), mode == "browser");
+            let desktop = matches!(mode, "browser" | "cached");
+            assert_eq!(commands.contains("--bin agent-desktop"), desktop);
             assert_eq!(commands.contains("xcodebuild "), mode != "failure");
             assert_eq!(
                 commands.contains("AGENT_BUILD_REVISION=fixture-revision"),
                 mode != "failure"
             );
-            assert_eq!(
-                root.join("target/debug/agent-desktop").is_file(),
-                mode == "browser"
-            );
+            assert_eq!(root.join("target/debug/agent-desktop").is_file(), desktop);
         }
     }
 
@@ -1849,7 +1901,7 @@ esac
         for test in [
             "testSimulatorCanAddASecondPhoto",
             "testSimulatorCanAttachPhotosAndVideos",
-            "testSimulatorRetriesPhotoUploadAfterWorkspaceRecovery",
+            "testSimulatorRetriesPhotoUploadAfterStorageRecovery",
         ] {
             let mut mixed = conversation.clone();
             mixed.push(test.to_owned());
@@ -1905,6 +1957,97 @@ esac
                 "{required} must keep running"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn simulator_cleanup_overlaps_independent_stops_and_checks_the_final_state() {
+        const ROOT: &str = "AGENT_IOS_QUIET_TEST_ROOT";
+        if let Some(root) = std::env::var_os(ROOT) {
+            let root = PathBuf::from(root);
+            let (_sender, cancel) = watch::channel(false);
+            let log = File::create(root.join("cleanup.log")).unwrap();
+            let result = quiet_simulator("isolated-fixture", &root, &root, &log, &cancel)
+                .await
+                .unwrap();
+            assert_eq!(result, (1, 2));
+            assert!(!root.join("timed-out").exists());
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        for path in &IDLE_SIMULATOR_SERVICES[..2] {
+            let path = root.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "fixture service").unwrap();
+        }
+        let bin = root.join("bin");
+        fs::create_dir(&bin).unwrap();
+        let program = bin.join("xcrun");
+        fs::write(
+            &program,
+            r#"#!/usr/bin/env bash
+set -eu
+root=$AGENT_IOS_QUIET_TEST_ROOT
+[[ "$1 $3" == 'simctl isolated-fixture' ]] || exit 17
+wait_for_apps() {
+  for ((i=0;i<200;i++)); do
+    ready=true
+    for app in $AGENT_IOS_QUIET_TEST_APPS; do
+      [[ -f "$root/$app.started" ]] || ready=false
+    done
+    $ready && return
+    sleep .01
+  done
+  touch "$root/timed-out"
+  exit 23
+}
+if [[ $2 == terminate ]]; then
+  touch "$root/$4.started"
+  wait_for_apps
+  touch "$root/$4.finished"
+  exit 3 # An app that already exited does not invalidate cleanup.
+elif [[ $5 == bootout ]]; then
+  wait_for_apps
+  touch "$root/${7##*/}.finished"
+  exit 7 # Final state, rather than bootout's exit code, determines the count.
+else
+  for app in $AGENT_IOS_QUIET_TEST_APPS; do test -f "$root/$app.finished"; done
+  for path in "$root"/System/Library/LaunchDaemons/*; do
+    test -f "$root/${path##*/}.finished"
+  done
+  printf '42 - com.apple.Maps.mapssyncd\n'
+fi
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ios_e2e::tests::simulator_cleanup_overlaps_independent_stops_and_checks_the_final_state",
+                "--nocapture",
+            ])
+            .env(ROOT, &root)
+            .env("AGENT_IOS_QUIET_TEST_APPS", IDLE_SIMULATOR_APPS.join(" "))
+            .env(
+                "PATH",
+                std::env::join_paths(
+                    std::iter::once(bin)
+                        .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+                )
+                .unwrap(),
+            )
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+            fs::read_to_string(root.join("cleanup.log")).unwrap()
+        );
     }
 
     #[test]

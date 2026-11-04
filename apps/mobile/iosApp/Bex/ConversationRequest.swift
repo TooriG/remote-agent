@@ -5,7 +5,7 @@ import SwiftUI
 struct RequestPanel: View {
     let request: Request
     let busy: Bool
-    let error: String?
+    let error: ErrorText?
     let respond: (Answer) -> Void
     @State private var response = ""
     @State private var inputError: String?
@@ -33,8 +33,10 @@ struct RequestPanel: View {
                 }
             }
             answerControls
-            if let error = inputError ?? error {
-                AppText(error).font(.caption).foregroundColor(.red)
+            if let inputError {
+                AppText(inputError).font(.caption).foregroundColor(.red)
+            } else if let error {
+                ErrorTextView(text: error).font(.caption).foregroundColor(.red)
             }
         }
         .onAppear { response = requestInputDefault(body: request.requestBody) }
@@ -181,7 +183,9 @@ struct FlowLayout: Layout {
 }
 
 /// Natural height, scrolling only when the content exceeds the limit, so a
-/// docked panel never pushes the conversation away.
+/// docked panel never pushes the conversation away. With less room on screen,
+/// such as above the keyboard, it shrinks and scrolls rather than squeezing
+/// the text beside it.
 struct BoundedScroll<Content: View>: View {
     let maxHeight: CGFloat
     @ViewBuilder let content: Content
@@ -192,7 +196,7 @@ struct BoundedScroll<Content: View>: View {
             content.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
         }
         .scrollBounceBehavior(.basedOnSize)
-        .frame(height: min(height, maxHeight))
+        .frame(maxHeight: min(height, maxHeight))
     }
 }
 
@@ -211,7 +215,7 @@ extension View {
 struct QuestionPanel: View {
     let prompt: QuestionPrompt
     let busy: Bool
-    let error: String?
+    let error: ErrorText?
     let choose: (String) -> Void
     let skip: () -> Void
     /// Collapsing applies to one question; the next question opens again.
@@ -248,11 +252,18 @@ struct QuestionPanel: View {
                 .accessibilityIdentifier("request.toggle")
             }
             if expanded {
-                Text(question.prompt).textSelection(.enabled)
-                if question.multiple {
-                    Text("複数選択できます").font(.caption).foregroundStyle(.secondary)
+                // The question scrolls with its choices between the pinned header and actions, as in T3 Code.
+                BoundedScroll(maxHeight: 360) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(question.prompt).textSelection(.enabled)
+                        if question.multiple {
+                            Text("複数選択できます").font(.caption).foregroundStyle(.secondary)
+                        }
+                        choices(question)
+                    }
                 }
-                BoundedScroll(maxHeight: 240) { choices(question) }
+                // Each question opens at its start.
+                .id("\(prompt.requestId)/\(question.id)")
                 HStack {
                     Spacer(minLength: 0)
                     Button("スキップする", action: skip)
@@ -265,7 +276,7 @@ struct QuestionPanel: View {
                 Text(question.prompt).lineLimit(1).foregroundStyle(.secondary)
             }
             if let error {
-                AppText(error).font(.caption).foregroundColor(.red)
+                ErrorTextView(text: error).font(.caption).foregroundColor(.red)
             }
         }
         .disabled(busy || !prompt.canRespond)

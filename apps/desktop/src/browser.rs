@@ -1,4 +1,5 @@
 use crate::{Runtime, appearance};
+use agent_core::localization::UiLanguage;
 use agent_core::store::Store;
 use agent_protocol::{
     browser::{
@@ -19,6 +20,8 @@ use gpui_kit::{
     *,
 };
 use std::{collections::VecDeque, ops::Range, sync::Arc, time::Duration};
+
+mod credentials;
 
 #[cfg(target_os = "macos")]
 pub(crate) mod native;
@@ -166,6 +169,7 @@ impl Browser {
                                 cx,
                             )
                         });
+                        cx.emit(BrowserTitle(view.title(language)));
                         cx.notify();
                     },
                 ),
@@ -215,6 +219,9 @@ impl Browser {
                     changed = true;
                 }
                 if let Some(metadata) = frame.credentials.take() {
+                    #[cfg(target_os = "macos")]
+                    native::hide(&self.thread.to_string(), cx);
+                    self.focus.focus(window, cx);
                     changed |= self.credentials.as_ref() != Some(&metadata);
                     self.credentials = Some(metadata);
                 }
@@ -426,149 +433,6 @@ impl Browser {
             })
     }
 
-    fn credentials_panel(
-        &self,
-        metadata: BrowserCredentials,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let language = crate::localization::language(cx);
-        let mut panel = v_flex()
-            .id("browser-credentials")
-            .max_h(px(360.))
-            .overflow_y_scroll()
-            .p_3()
-            .gap_2()
-            .border_b_1()
-            .border_color(rgb(0x202020))
-            .child(
-                h_flex()
-                    .justify_between()
-                    .child(language.text("ブラウザデータ"))
-                    .child(
-                        Button::new("close-browser-data")
-                            .icon(IconName::Close)
-                            .ghost()
-                            .xsmall()
-                            .accessibility_label(language.text("ブラウザデータを閉じる"))
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.credentials = None;
-                                cx.notify();
-                            })),
-                    ),
-            )
-            .child(
-                div()
-                    .text_sm()
-                    .child(language.text("Hostのブラウザから取り込む")),
-            );
-        if metadata.profiles.is_empty() {
-            panel = panel.child(
-                div()
-                    .text_sm()
-                    .child(language.text("取り込めるブラウザプロファイルがありません。")),
-            );
-        }
-        for (index, profile) in metadata.profiles.into_iter().enumerate() {
-            let cookies = profile.id.clone();
-            let passwords = profile.id;
-            panel = panel.child(
-                v_flex().gap_1().child(profile.label).child(
-                    h_flex()
-                        .gap_2()
-                        .child(
-                            Button::new(SharedString::from(format!("import-cookies-{index}")))
-                                .label(language.text("ログイン状態（Cookie）"))
-                                .small()
-                                .ghost()
-                                .disabled(cookies.is_empty())
-                                .on_click(cx.listener(move |view, _, _, cx| {
-                                    view.send(
-                                        BrowserAction::ImportCookies {
-                                            profile: cookies.clone(),
-                                        },
-                                        cx,
-                                    )
-                                })),
-                        )
-                        .child(
-                            Button::new(SharedString::from(format!("import-passwords-{index}")))
-                                .label(language.text("保存パスワード → Keychain"))
-                                .small()
-                                .ghost()
-                                .disabled(passwords.is_empty())
-                                .on_click(cx.listener(move |view, _, _, cx| {
-                                    view.send(
-                                        BrowserAction::ImportPasswords {
-                                            profile: passwords.clone(),
-                                        },
-                                        cx,
-                                    )
-                                })),
-                        ),
-                ),
-            );
-        }
-        if let Some(origin) = metadata.origin {
-            panel = panel.child(div().mt_2().text_sm().child(
-                agent_core::localization::localized_ui_format(
-                    language,
-                    "保存パスワード · {0}".into(),
-                    vec![origin.to_string()],
-                ),
-            ));
-            if metadata.accounts.is_empty() {
-                panel = panel.child(
-                    div()
-                        .text_sm()
-                        .child(metadata.password_error.unwrap_or_else(|| {
-                            language
-                                .text("このサイトの保存パスワードはありません。")
-                                .into()
-                        })),
-                );
-            }
-            for (index, username) in metadata.accounts.iter().enumerate() {
-                let origin = origin.clone();
-                let username = username.clone();
-                panel = panel.child(
-                    Button::new(SharedString::from(format!("fill-password-{index}")))
-                        .label(if username.is_empty() {
-                            language.text("ユーザー名なし").into()
-                        } else {
-                            username.clone()
-                        })
-                        .small()
-                        .ghost()
-                        .on_click(cx.listener(move |view, _, _, cx| {
-                            view.send(
-                                BrowserAction::FillPassword {
-                                    origin: origin.clone(),
-                                    username: username.clone(),
-                                },
-                                cx,
-                            )
-                        })),
-                );
-            }
-            panel = panel.child(
-                Button::new("delete-site-passwords")
-                    .label(language.text("このサイトの保存パスワードを削除"))
-                    .small()
-                    .ghost()
-                    .disabled(metadata.accounts.is_empty())
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        view.send(
-                            BrowserAction::DeletePasswords {
-                                origin: origin.clone(),
-                            },
-                            cx,
-                        )
-                    })),
-            );
-        }
-        panel
-    }
-
     fn set_frame(&mut self, frame: BrowserFrame, cx: &mut Context<Self>) -> bool {
         let changed = self.frame.tabs != frame.tabs
             || self.frame.tab_id != frame.tab_id
@@ -578,28 +442,29 @@ impl Browser {
             || self.frame.can_go_back != frame.can_go_back
             || self.frame.can_go_forward != frame.can_go_forward;
         let changed = changed || self.frame.renderer_id != frame.renderer_id;
-        let previous = self.title();
+        let language = crate::localization::language(cx);
+        let previous = self.title(language);
         self.frame = frame;
-        let title = self.title();
+        let title = self.title(language);
         if title != previous {
             cx.emit(BrowserTitle(title));
         }
         changed
     }
 
-    pub(crate) fn title(&self) -> String {
+    pub(crate) fn title(&self, language: UiLanguage) -> String {
         self.frame
             .tabs
             .iter()
             .find(|tab| tab.id == self.frame.tab_id)
             .map(|tab| {
                 if tab.title.is_empty() || tab.url == "about:blank" {
-                    "ブラウザ".into()
+                    language.text("ブラウザ").into()
                 } else {
                     tab.title.clone()
                 }
             })
-            .unwrap_or_else(|| "ブラウザ".into())
+            .unwrap_or_else(|| language.text("ブラウザ").into())
     }
 
     pub(crate) fn set_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
@@ -671,6 +536,7 @@ impl Render for Browser {
         #[cfg(target_os = "macos")]
         let native = self.visible
             && !self.menu_open
+            && self.credentials.is_none()
             && native::has_surface(
                 &self.thread.to_string(),
                 &self.frame.renderer_id,
@@ -798,8 +664,7 @@ impl Render for Browser {
                         )
                         .child(self.actions_menu(cx)),
                 )
-                .when_some(self.credentials.clone(), |body, metadata| body.child(self.credentials_panel(metadata,cx)))
-                .when_some(self.notice.clone(), |body, notice| body.child(div().px_3().py_2().text_sm().child(notice)))
+                .when_some(self.notice.clone(), |body, notice| body.child(div().px_3().py_2().text_sm().child(agent_core::localization::localized_ui_text(language, notice))))
                 .when_some(self.error.clone().or(self.connection_error.clone()), |body, error| {
                     body.child(div().px_3().py_2().text_sm().child(agent_core::localization::localized_ui_text(language, error)))
                 })
@@ -852,7 +717,7 @@ impl Render for Browser {
                         .flex_1()
                         .min_h_0()
                         .overflow_hidden()
-                        .when(remote, |body| body
+                        .when(remote && self.credentials.is_none(), |body| body
                         .track_focus(&self.focus)
                         .on_key_down(cx.listener(Self::key))
                         .on_mouse_down(
@@ -944,6 +809,9 @@ impl Render for Browser {
                             }, |_,_,_,_|{}).size_full()) }
                             #[cfg(not(target_os="macos"))]
                             { body }
+                        })
+                        .when_some(self.credentials.clone(), |body, metadata| {
+                            body.child(self.credentials_panel(metadata, cx))
                         }),
                 )
 
@@ -1285,10 +1153,21 @@ mod tests {
         browser.update(window, |browser, cx| browser.set_frame(frame.clone(), cx));
         frame.tabs[0].url = "about:blank".into();
         browser.update(window, |browser, cx| browser.set_frame(frame.clone(), cx));
+        window.run_until_parked();
+        assert_eq!(*titles.borrow(), ["Page", "Background", "ブラウザ"]);
         browser.update(window, |browser, cx| {
             browser.set_frame(BrowserFrame::default(), cx)
         });
         window.run_until_parked();
-        assert_eq!(*titles.borrow(), ["Page", "Background", "ブラウザ"]);
+        assert_eq!(titles.borrow().len(), 3);
+        window.update(|_, cx| cx.set_global(crate::localization::Language(UiLanguage::English)));
+        window.run_until_parked();
+        assert_eq!(titles.borrow().last().map(String::as_str), Some("Browser"));
+        frame.tabs[0].url = "https://example.com/settings".into();
+        frame.tabs[0].title = "設定".into();
+        browser.update(window, |browser, cx| {
+            browser.set_frame(frame, cx);
+            assert_eq!(browser.title(UiLanguage::English), "設定");
+        });
     }
 }

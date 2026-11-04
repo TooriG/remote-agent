@@ -1,7 +1,7 @@
 use gpui_kit::{Image, ImageFormat};
 use std::{io::Write, path::Path};
 
-pub(super) fn save_image(directory: &Path, image: Image) -> Result<String, String> {
+pub(super) fn save_image(directory: &Path, image: Image) -> Result<tempfile::TempPath, String> {
     agent_local_host::create_state_directory(directory).map_err(|e| e.to_string())?;
     let passthrough = matches!(
         image.format,
@@ -25,10 +25,8 @@ pub(super) fn save_image(directory: &Path, image: Image) -> Result<String, Strin
             .and_then(|image| image.write_to(file.as_file_mut(), image::ImageFormat::Png))
             .map_err(|e| e.to_string())?;
     }
-    file.as_file().sync_all().map_err(|e| e.to_string())?;
-    // Drafts and localImage history reference this path after the window/app closes.
-    let (_, path) = file.keep().map_err(|e| e.to_string())?;
-    Ok(path.to_string_lossy().into_owned())
+    // The upload owns this temporary source; history keeps the Host's copy.
+    Ok(file.into_temp_path())
 }
 
 #[cfg(test)]
@@ -36,7 +34,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn clipboard_images_survive_reopening_and_do_not_overwrite_each_other() {
+    fn clipboard_sources_are_distinct_and_removed_after_upload_ownership_ends() {
         let directory = tempfile::tempdir().unwrap();
         let bytes = include_bytes!("../../assets/icon.png");
         let first = save_image(
@@ -49,8 +47,12 @@ mod tests {
             Image::from_bytes(ImageFormat::Png, bytes.to_vec()),
         )
         .unwrap();
-        assert_ne!(first, second);
+        assert_ne!(first.as_os_str(), second.as_os_str());
         assert_eq!(std::fs::read(&first).unwrap(), bytes);
+        let released = first.to_path_buf();
+        drop(first);
+        assert!(!released.exists());
+        assert!(second.exists());
     }
 
     #[test]
@@ -66,7 +68,7 @@ mod tests {
             Image::from_bytes(ImageFormat::Tiff, bytes.into_inner()),
         )
         .unwrap();
-        assert!(path.ends_with(".png"));
+        assert_eq!(path.extension().unwrap(), "png");
         let decoded = image::open(path).unwrap();
         assert_eq!((decoded.width(), decoded.height()), (2, 3));
     }

@@ -28,16 +28,18 @@ fn collect_workspace_review(cwd: PathBuf) -> Result<WorkspaceReview> {
 }
 
 fn review_existing_workspace(cwd: &Path) -> Result<WorkspaceReview> {
-    let cwd = dunce::canonicalize(cwd).context("working directory is unavailable")?;
+    let cwd = dunce::canonicalize(cwd).context("作業フォルダが見つかりません。")?;
     if !cwd.is_dir() {
-        return Err(anyhow!("working directory is not a directory"));
+        return Err(anyhow!(
+            "作業フォルダに指定したパスはフォルダではありません。"
+        ));
     }
     let membership = Command::new("git")
         .args(["rev-parse", "--is-inside-work-tree"])
         .env("LC_ALL", "C")
         .current_dir(&cwd)
         .output()
-        .context("failed to run git")?;
+        .context("gitを実行できませんでした。")?;
     // Git has no distinct exit code for discovery failure. Recognize only its
     // ordinary parent-directory/mount-boundary result in a fixed locale;
     // broken metadata, permissions and ownership errors must still surface.

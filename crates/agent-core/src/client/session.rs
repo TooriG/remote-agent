@@ -611,7 +611,7 @@ mod tests {
             next.clone().ready().await.unwrap();
             assert_eq!(
                 next.persistence_error().as_deref(),
-                Some("disk unavailable")
+                Some("エラーが発生しました。\ndisk unavailable")
             );
             queued.wait().await.unwrap();
             next.clone().flush().await.unwrap();
@@ -739,7 +739,15 @@ mod tests {
             assert_eq!(text(&storage.bytes.lock().unwrap()), "synchronous edit");
             let trace = crate::diagnostics::connection::Trace::new("next-revision".into());
             trace.persist(directory.path().into()).unwrap();
-            let reports = trace.pending_reports().await;
+            // Each trace has its own disk worker; reading the next trace does
+            // not wait for the previous trace's checkpoint to reach disk.
+            let reports = loop {
+                let reports = trace.pending_reports().await;
+                if !reports.is_empty() {
+                    break reports;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            };
             assert_eq!(reports.len(), 1);
             assert_eq!(reports[0].client_revision, "test-revision");
             assert!(
@@ -911,7 +919,7 @@ mod tests {
             assert!(session.clone().flush().await.is_err());
             assert_eq!(
                 session.persistence_error().as_deref(),
-                Some("disk unavailable")
+                Some("エラーが発生しました。\ndisk unavailable")
             );
             storage.fail_save.store(false, Ordering::SeqCst);
             session.clone().flush().await.unwrap();

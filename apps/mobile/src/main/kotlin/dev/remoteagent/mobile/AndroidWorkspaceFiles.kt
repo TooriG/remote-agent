@@ -141,31 +141,35 @@ private fun FilesHeader(
         Unit
     }
     BackHandler(searching) { closeSearch() }
+    val language = LocalUiLanguage.current
     Row(
         Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         IconButton(onClick = if (searching) closeSearch else back) {
-            Icon(painterResource(R.drawable.file_browser_arrow_left), if (searching) "Close file search" else "Back")
+            Icon(
+                painterResource(R.drawable.file_browser_arrow_left),
+                language.text(if (searching) "ファイル検索を閉じる" else "戻る"),
+            )
         }
         if (searching) {
             TextField(
                 value = query,
                 onValueChange = queryChanged,
-                placeholder = { Text("Search files") },
+                placeholder = { Text(language.text("ファイルを検索")) },
                 singleLine = true,
                 modifier = Modifier.weight(1f).focusRequester(focus),
                 trailingIcon = {
                     if (query.isNotEmpty())
                         IconButton(onClick = { queryChanged("") }) {
-                            Icon(painterResource(R.drawable.file_browser_x), "Clear file search")
+                            Icon(painterResource(R.drawable.file_browser_x), language.text("検索語を消去"))
                         }
                 },
             )
             LaunchedEffect(Unit) { focus.requestFocus() }
         } else {
             Column(Modifier.weight(1f)) {
-                Text("Files", style = MaterialTheme.typography.titleMedium)
+                Text(language.text("ファイル"), style = MaterialTheme.typography.titleMedium)
                 Text(
                     root.replace('\\', '/').trimEnd('/').substringAfterLast('/'),
                     maxLines = 1,
@@ -173,7 +177,7 @@ private fun FilesHeader(
                 )
             }
             IconButton(onClick = { searchOpen = true }) {
-                Icon(painterResource(R.drawable.file_browser_search), "Search files")
+                Icon(painterResource(R.drawable.file_browser_search), language.text("ファイルを検索"))
             }
             FileOptionsMenu(refresh)
         }
@@ -182,12 +186,15 @@ private fun FilesHeader(
 
 @Composable
 private fun FileOptionsMenu(refresh: () -> Unit) {
+    val language = LocalUiLanguage.current
     var menu by remember { mutableStateOf(false) }
     Box {
-        IconButton(onClick = { menu = true }) { Icon(painterResource(R.drawable.file_browser_dots), "File options") }
+        IconButton(onClick = { menu = true }) {
+            Icon(painterResource(R.drawable.file_browser_dots), language.text("ファイルの操作"))
+        }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
             DropdownMenuItem(
-                text = { Text("Refresh files") },
+                text = { Text(language.text("ファイル一覧を更新")) },
                 onClick = {
                     menu = false
                     refresh()
@@ -212,9 +219,9 @@ private fun FilesTree(tree: FileTreeView, send: (FileTreeAction) -> Unit, modifi
     ) {
         LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(vertical = 8.dp)) {
             item {
-                tree.error?.let { Text(it, Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error) }
+                tree.error?.let { ErrorTextView(it, Modifier.padding(16.dp)) }
                 if (tree.truncated)
-                    Text("More search results available. Refine your search to see them.", Modifier.padding(16.dp))
+                    Text(LocalUiLanguage.current.text("ほかにも一致する項目があります。検索語を絞り込んでください。"), Modifier.padding(16.dp))
                 if (tree.rows.isEmpty()) FilesEmpty(tree) { send(FileTreeAction.Refresh) }
             }
             items(tree.rows, key = { it.path }) { row ->
@@ -226,16 +233,17 @@ private fun FilesTree(tree: FileTreeView, send: (FileTreeAction) -> Unit, modifi
 
 @Composable
 private fun FilesEmpty(tree: FileTreeView, refresh: () -> Unit) {
+    val language = LocalUiLanguage.current
     Column(Modifier.padding(16.dp)) {
         when {
             tree.error != null -> {
-                Text("Files unavailable", fontWeight = FontWeight.Bold)
-                TextButton(onClick = refresh, enabled = !tree.pending) { Text("Try again") }
+                Text(language.text("ファイルを表示できません"), fontWeight = FontWeight.Bold)
+                TextButton(onClick = refresh, enabled = !tree.pending) { Text(language.text("再試行")) }
             }
             tree.pending -> CircularProgressIndicator()
             else -> {
-                Text("No files found", fontWeight = FontWeight.Bold)
-                Text(if (tree.query.isBlank()) "The workspace is empty." else "Try a different search.")
+                Text(language.text("ファイルが見つかりません"), fontWeight = FontWeight.Bold)
+                Text(language.text(if (tree.query.isBlank()) "作業スペースは空です。" else "別の語句で検索してください。"))
             }
         }
     }

@@ -88,7 +88,7 @@ pub fn stage(
             executable
                 .parent()
                 .is_some_and(|p| p.ends_with("Contents/MacOS")),
-            "ApplicationsにインストールしたBexから更新してください。"
+            "アプリケーションフォルダにインストールしたBexから更新してください。"
         );
         executable
             .parent()
@@ -311,7 +311,7 @@ pub async fn apply(path: &Path) -> Result<()> {
     }
     .await;
     if let Err(error) = restart {
-        result = Err(error.context("Hostの復旧を確認できませんでした。"));
+        result = Err(error.context("ホストの復旧を確認できませんでした。"));
     }
     let _ = fs::remove_file(plan.directory.join(READY_FILE));
     agent_local_host::save_private_json(
@@ -366,7 +366,7 @@ async fn apply_to_host(plan: &Plan, registry: &LocalHostRegistry, job: &Path) ->
             endpoint.close().await;
             wait_for_host(registry, &host.directory, false).await?;
         }
-        LocalHostState::Starting => bail!("Hostが起動中です。起動後にもう一度更新してください。"),
+        LocalHostState::Starting => bail!("ホストが起動中です。起動後にもう一度更新してください。"),
         LocalHostState::Stopped => {}
     }
     replace_and_verify(plan)
@@ -406,7 +406,7 @@ async fn wait_for_host(registry: &LocalHostRegistry, directory: &Path, ready: bo
         }
         ensure!(
             Instant::now() < deadline,
-            "Hostの再起動を確認できませんでした。"
+            "ホストの再起動を確認できませんでした。"
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

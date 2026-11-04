@@ -38,7 +38,7 @@ impl Operation for ResolveFileReference {
         {
             Ok(())
         } else {
-            Err("Host 上の絶対パスが必要です。".into())
+            Err("ホスト上の絶対パスが必要です。".into())
         }
     }
     async fn run(

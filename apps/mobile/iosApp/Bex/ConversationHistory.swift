@@ -92,7 +92,7 @@ extension ThreadScreen {
                 .accessibilityIdentifier("history.load")
             }
             if let error = control.error {
-                AppText(error).font(.caption).foregroundStyle(.secondary)
+                ErrorTextView(text: error).font(.caption).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity)
                     .multilineTextAlignment(.center)
                     .accessibilityIdentifier("history.error")

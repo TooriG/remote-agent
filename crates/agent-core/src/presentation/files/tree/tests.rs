@@ -278,7 +278,11 @@ fn directory_failures_keep_previous_data_and_reopening_retries() {
     );
     assert_eq!(paths(&trees), ["kept"]);
     assert_eq!(
-        trees.view(&key(ROOT)).error.as_deref(),
+        trees
+            .view(&key(ROOT))
+            .error
+            .and_then(|error| error.details)
+            .as_deref(),
         Some("Disconnected")
     );
     let retry = open(&mut trees, ROOT, FileTreeSurface::Mobile);
@@ -407,13 +411,13 @@ fn desktop_search_preserves_normal_expansion_and_defers_expand_all_until_search_
     assert!(!trees.view(&key(ROOT)).all_expanded);
     assert_eq!(
         trees.view(&key(ROOT)).toggle_all_label,
-        "Expand all folders"
+        "すべてのフォルダを展開"
     );
     assert!(toggle(&mut trees, "a").is_empty());
     assert!(action(&mut trees, FileTreeAction::ToggleAll).is_empty());
     assert_eq!(
         trees.view(&key(ROOT)).toggle_all_label,
-        "Collapse all folders"
+        "すべてのフォルダを折りたたむ"
     );
     assert!(!trees.view(&key(ROOT)).all_expanded);
     let pending = action(

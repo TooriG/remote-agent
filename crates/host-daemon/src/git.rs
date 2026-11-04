@@ -16,7 +16,7 @@ pub(crate) fn output(cwd: &Path, args: &[&str]) -> Result<Output> {
         .args(args)
         .current_dir(cwd)
         .output()
-        .context("failed to run git")?;
+        .context("gitを実行できませんでした。")?;
     if output.status.success() {
         return Ok(output);
     }

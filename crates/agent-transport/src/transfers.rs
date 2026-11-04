@@ -29,15 +29,14 @@ impl From<TransferError> for PeerError {
 
 const LIMIT: u64 = 512 * 1024 * 1024;
 
-/// Uploads a picked local file to a directory on the paired Host. An empty
-/// directory selects Host-owned attachment storage for chats without a workspace.
+/// Uploads a picked local file to attachment storage owned by the paired Host,
+/// independently of the conversation's workspace.
 /// The Host assigns the actual filename and never trusts the display name
 /// as a destination path. No file payload is embedded in JSON-RPC.
 pub async fn upload_file<S, F, Fut>(
     peer: &Client,
     open_stream: F,
     source: &Path,
-    directory: &Path,
     file_name: &str,
 ) -> Result<crate::models::UploadedFile, TransferError>
 where
@@ -61,7 +60,9 @@ where
         }
         size += read as u64;
         if size > LIMIT {
-            return Err(TransferError::Protocol("transfer exceeds 512 MiB".into()));
+            return Err(TransferError::Protocol(
+                "512 MiBを超えるファイルは転送できません。".into(),
+            ));
         }
         digest.update(&buffer[..read]);
     }
@@ -70,10 +71,6 @@ where
     let grant = peer
         .request::<TransferGrant>(&crate::protocol::Call::Upload(
             agent_protocol::operations::Upload {
-                directory: directory
-                    .to_str()
-                    .ok_or_else(|| TransferError::Protocol("directory is not UTF-8".into()))?
-                    .into(),
                 file_name: file_name.into(),
                 size,
                 sha256,
@@ -188,7 +185,9 @@ where
     W: AsyncWrite + Unpin,
 {
     if grant.size > LIMIT {
-        return Err(TransferError::Protocol("transfer exceeds 512 MiB".into()));
+        return Err(TransferError::Protocol(
+            "512 MiBを超えるファイルは転送できません。".into(),
+        ));
     }
     stream.write_all(&grant.token).await?;
     let mut digest = Context::new(&SHA256);

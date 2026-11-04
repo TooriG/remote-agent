@@ -352,9 +352,9 @@ private fun LazyListScope.projectThreads(
             }
             if (project.loading && !project.hasMore)
                 item(key = "loading:${project.id}") { CircularProgressIndicator(Modifier.size(18.dp)) }
-            project.error?.let { message ->
+            project.error?.let { error ->
                 item(key = "error:${project.id}") {
-                    Text(message)
+                    ErrorTextView(error, color = androidx.compose.ui.graphics.Color.Unspecified)
                     TextButton(onClick = { perform(Intent.RefreshProject(project.id)) }) { Text(language.text("再試行")) }
                 }
             }

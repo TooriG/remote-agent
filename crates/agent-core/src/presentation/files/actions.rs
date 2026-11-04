@@ -120,12 +120,12 @@ pub fn file_reference_menu(
     if workspace_relative {
         items.push(FileMenuItem::action(
             FileAction::CopyRelativePath,
-            "Copy relative path",
+            "相対パスをコピー",
         ));
     }
     items.push(FileMenuItem::action(
         FileAction::CopyFullPath,
-        "Copy full path",
+        "フルパスをコピー",
     ));
     items
 }
@@ -143,7 +143,7 @@ pub fn file_tree_menu(
                 FileAction::OpenEditor {
                     editor: Some(EditorId::FileManager),
                 },
-                "Open",
+                "開く",
             ));
             if let Some(kind) = reveal {
                 items.push(FileMenuItem::action(FileAction::Reveal, reveal_label(kind)));
@@ -165,16 +165,16 @@ pub fn file_tree_menu(
         if !children.is_empty() {
             items.push(FileMenuItem {
                 action: None,
-                label: "Open with".into(),
+                label: "このアプリで開く".into(),
                 children,
             });
         }
     }
     items.push(FileMenuItem::action(
         FileAction::CopyMention,
-        "Copy mention",
+        "メンションをコピー",
     ));
-    items.push(FileMenuItem::action(FileAction::AddToChat, "Add to chat"));
+    items.push(FileMenuItem::action(FileAction::AddToChat, "会話に追加"));
     items
 }
 
@@ -281,10 +281,10 @@ mod tests {
                 .map(|item| item.label.as_str())
                 .collect::<Vec<_>>(),
             [
-                "Open in VS Code",
-                "Reveal in Finder",
-                "Copy relative path",
-                "Copy full path"
+                "VS Codeで開く",
+                "Finderで表示",
+                "相対パスをコピー",
+                "フルパスをコピー"
             ]
         );
         let remote = file_reference_menu(
@@ -297,12 +297,12 @@ mod tests {
             remote,
             vec![FileMenuItem::action(
                 FileAction::CopyFullPath,
-                "Copy full path"
+                "フルパスをコピー"
             )]
         );
         assert_eq!(
             file_reference_menu(true, None, None, true)[0].label,
-            "Open in editor"
+            "エディターで開く"
         );
     }
     #[test]
@@ -318,11 +318,11 @@ mod tests {
                 .map(|item| item.label.as_str())
                 .collect::<Vec<_>>(),
             [
-                "Open",
-                "Reveal in File Explorer",
-                "Open with",
-                "Copy mention",
-                "Add to chat"
+                "開く",
+                "エクスプローラーで表示",
+                "このアプリで開く",
+                "メンションをコピー",
+                "会話に追加"
             ]
         );
         assert_eq!(
@@ -357,7 +357,7 @@ mod tests {
             &[EditorId::Zed],
             Some(FileManagerRevealKind::Finder),
         );
-        assert_eq!(no_manager[0].label, "Open with");
+        assert_eq!(no_manager[0].label, "このアプリで開く");
         assert_eq!(file_tree_menu(true, true, &[], None).len(), 2);
     }
 }

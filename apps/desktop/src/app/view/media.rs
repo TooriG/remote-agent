@@ -60,7 +60,7 @@ impl Desktop {
                     if !remote && path.is_absolute() {
                         return Ok(path.to_string_lossy().into_owned());
                     }
-                    let store = store.ok_or(language.text("Host に接続していません"))?;
+                    let store = store.ok_or(language.text("ホストに接続していません"))?;
                     if !remote {
                         let result = store
                             .dispatch(Intent::ResolveFile(op::ResolveFile {

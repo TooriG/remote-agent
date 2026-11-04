@@ -98,6 +98,7 @@ enum Tab {
 }
 #[derive(Clone, Copy, PartialEq)]
 enum SettingsPage {
+    General,
     Agents,
     Connections,
     Worktrees,
@@ -113,7 +114,6 @@ enum WorktreeToggle {
 enum ModelPanel {
     Models,
     Accounts,
-    Manage,
 }
 enum SurfaceResource {
     Diff {
@@ -194,7 +194,7 @@ pub(crate) struct Desktop {
     sidebar_view: Option<Entity<view::SidebarView>>,
     _subscriptions: Vec<Subscription>,
 }
-// Input text/catalog updates have their own owner. Other snapshot changes still
+// Input text/catalog and terminal updates have their own owners. Other changes still
 // reach Desktop observers (including open menus) without comparing conversation,
 // file, or diff contents on each keystroke. Exhaustive matching keeps new fields
 // from being silently omitted from this routing decision.
@@ -203,7 +203,7 @@ fn general_snapshot_changed(before: &Snapshot, after: &Snapshot) -> bool {
         (shared: [$($shared:ident),*], optional: [$($optional:ident),*], values: [$($value:ident),*]) => {{
             let Snapshot {
                 $($shared: _,)* $($optional: _,)* $($value: _,)*
-                drafts: _, file_drafts: _, composer_catalog: _, unconfirmed_lists: _,
+                drafts: _, file_drafts: _, composer_catalog: _, unconfirmed_lists: _, terminals: _,
             } = after;
             false
                 $(|| !Arc::ptr_eq(&before.$shared, &after.$shared))*
@@ -213,7 +213,7 @@ fn general_snapshot_changed(before: &Snapshot, after: &Snapshot) -> bool {
     }
     let changed = changed!(
         shared: [project_import, project_preferences, operations,
-            archived_scopes, account, terminals, conversations, expanded_projects,
+            archived_scopes, account, conversations, expanded_projects,
             project_threads, models, model_errors, question_drafts, draft_sessions, pending_submissions,
             workspace, workspaces, navigation, activity, management, list_query, subscriptions],
         optional: [permission_settings, task_activity, threads, file_open_capabilities],
@@ -317,7 +317,8 @@ impl Desktop {
         let account = forms::AccountForm::new(window, cx);
         let search =
             cx.new(|cx| InputState::new(window, cx).placeholder(language.text("会話を検索")));
-        let file_search = cx.new(|cx| InputState::new(window, cx).placeholder("Search files"));
+        let file_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder(language.text("ファイルを検索")));
         let worktrees = forms::WorktreeForm::new(window, cx);
         let hosts = (!side_chat_mode).then(|| cx.new(|cx| Hosts::new(window, cx)));
         let app_updates = (!side_chat_mode
@@ -338,6 +339,7 @@ impl Desktop {
                 let language = crate::localization::language(cx);
                 for (input, source) in [
                     (&view.search, language.text("会話を検索")),
+                    (&view.file_search, language.text("ファイルを検索")),
                     (&view.model_controls.search, language.text("モデルを検索")),
                     (
                         &view.account.code,
@@ -345,7 +347,7 @@ impl Desktop {
                     ),
                     (
                         &view.worktrees.directory,
-                        language.text("接続先 Host 上の絶対パス（空欄で既定）"),
+                        language.text("ホスト上の絶対パス（空欄で既定）"),
                     ),
                 ] {
                     input.update(cx, |input, cx| {
@@ -555,7 +557,7 @@ impl Desktop {
             account,
             worktrees,
             tab: Tab::Chat,
-            settings_page: SettingsPage::Agents,
+            settings_page: SettingsPage::General,
             sidebar: true,
             details: true,
             details_popover: false,
@@ -1519,8 +1521,11 @@ impl Desktop {
             }
             Panel::Terminal => {
                 if !self.surface_resources.contains_key(&id) {
+                    let Some(session) = &self.session else {
+                        return;
+                    };
                     let terminal = crate::terminal::Terminal::new(
-                        self.remote.as_ref().map_or("", |remote| &remote.ticket),
+                        session.store.clone(),
                         self.snapshot.navigation.cwd.clone(),
                         format!("agent-terminal-{}", uuid::Uuid::new_v4()),
                         window,
@@ -1723,9 +1728,7 @@ impl Desktop {
             let directory = platform::state_dir()?.join("attachments");
             item.into_entries()
                 .filter_map(|entry| match entry {
-                    ClipboardEntry::Image(image) => {
-                        Some(clipboard::save_image(&directory, image).map(PathBuf::from))
-                    }
+                    ClipboardEntry::Image(image) => Some(clipboard::save_image(&directory, image)),
                     _ => None,
                 })
                 .collect()
@@ -1735,16 +1738,14 @@ impl Desktop {
     fn attach(&mut self) {
         self.attach_sources(|| Ok(platform::choose_files().unwrap_or_default()));
     }
-    fn attach_sources(
+    fn attach_sources<P: AsRef<Path> + Send + 'static>(
         &mut self,
-        sources: impl FnOnce() -> Result<Vec<PathBuf>, String> + Send + 'static,
+        sources: impl FnOnce() -> Result<Vec<P>, String> + Send + 'static,
     ) {
         let Some(store) = self.session.as_ref().map(|session| session.store.clone()) else {
             return;
         };
         let key = self.draft_key().to_owned();
-        let remote = self.remote.is_some();
-        let directory = self.snapshot.navigation.cwd.clone();
         self.busy += 1;
         let error_scope = ErrorScope::Conversation {
             draft_key: key.clone(),
@@ -1754,7 +1755,8 @@ impl Desktop {
                 let paths = tokio::task::spawn_blocking(sources)
                     .await
                     .map_err(|error| error.to_string())??;
-                for path in paths {
+                for source in paths {
+                    let path = source.as_ref();
                     let is_image = path
                         .extension()
                         .and_then(|extension| extension.to_str())
@@ -1770,18 +1772,10 @@ impl Desktop {
                         name,
                         is_image,
                     };
-                    let intent = if remote {
-                        Intent::UploadAttachment(op::UploadAttachment {
-                            draft_key: key.clone(),
-                            attachment,
-                            directory: directory.clone(),
-                        })
-                    } else {
-                        Intent::AddAttachment {
-                            draft_key: key.clone(),
-                            attachment,
-                        }
-                    };
+                    let intent = Intent::UploadAttachment(op::UploadAttachment {
+                        draft_key: key.clone(),
+                        attachment,
+                    });
                     if store.dispatch(intent).await.is_err() {
                         break;
                     }
@@ -1907,6 +1901,22 @@ fn composer_should_submit(
     cx: &mut Context<TextareaState>,
 ) -> bool {
     !action.shift && !action.secondary && input.marked_text_range(window, cx).is_none()
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::{Snapshot, general_snapshot_changed};
+    use std::sync::Arc;
+
+    #[test]
+    fn terminal_output_does_not_republish_the_desktop() {
+        let previous = Snapshot::default();
+        let mut next = previous.clone();
+        next.terminals = Arc::new(Default::default());
+        assert!(!general_snapshot_changed(&previous, &next));
+        next.connected = true;
+        assert!(general_snapshot_changed(&previous, &next));
+    }
 }
 
 #[cfg(test)]

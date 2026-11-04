@@ -51,13 +51,14 @@ pub(super) async fn prepare(
             if matches!(action, BrowserAction::Credentials) {
                 Ok(Prepared::Metadata(BrowserCredentials {
                     profiles: Vec::new(),
+                    import_errors: Vec::new(),
                     origin: None,
                     accounts: Vec::new(),
                     password_error: None,
                 }))
             } else {
                 Err(
-                    "ログイン状態と保存パスワードの取り込みは、現在MacのHostで利用できます。"
+                    "ログイン状態と保存パスワードの取り込みは、現在Macのホストで利用できます。"
                         .into(),
                 )
             }

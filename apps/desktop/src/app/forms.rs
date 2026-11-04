@@ -220,7 +220,7 @@ impl WorktreeForm {
         Self {
             directory: cx.new(|cx| {
                 InputState::new(window, cx)
-                    .placeholder(language.text("接続先 Host 上の絶対パス（空欄で既定）"))
+                    .placeholder(language.text("ホスト上の絶対パス（空欄で既定）"))
             }),
             copy_paths: cx.new(|cx| {
                 TextareaState::new(window, cx)

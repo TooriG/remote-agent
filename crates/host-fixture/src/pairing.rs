@@ -129,26 +129,39 @@ fn route(
             serde_json::to_vec(&json!({"threadId":session_identity(root, native)?}))?,
         ));
     }
+    // Each test names its own worktree conversation so attachments and
+    // checkout state from one test never reach another on a shared Host.
+    if let Some(name) = path.strip_prefix("/worktree-conversation/") {
+        worktree_conversation(root, name)?;
+        return Ok((204, Vec::new()));
+    }
+    if let Some((name, state)) = path
+        .strip_prefix("/worktree/")
+        .and_then(|rest| rest.split_once('/'))
+    {
+        let readable = match state {
+            "unavailable" => false,
+            "restore" => true,
+            _ => return Err("unknown worktree fixture state".into()),
+        };
+        // A deleted worktree is recreated for input; unreadable directories make review fail.
+        set_worktree_access(&root.join(format!("{name}-worktree")), readable)?;
+        return Ok((204, Vec::new()));
+    }
     match path {
+        "/uploads/unavailable" | "/uploads/restore" => {
+            set_upload_storage_available(root, path == "/uploads/restore")?;
+        }
         "/auth-token/unavailable" => fs::write(root.join("auth-token-unavailable"), [])?,
         "/auth-token/reset" => {
             if root.join("auth-token-unavailable").exists() {
                 fs::remove_file(root.join("auth-token-unavailable"))?;
             }
         }
-        "/worktree-conversation" => worktree_conversation(root)?,
         "/merge-worktree/fresh" | "/merge-worktree/merged" | "/merge-worktree/new-work"
         | "/merge-worktree/dirty" | "/merge-worktree/clean" => {
             merge_worktree(root, path)?
         }
-        "/worktree/unavailable" => fs::rename(
-            root.join("review-worktree"),
-            root.join("review-worktree-unavailable"),
-        )?,
-        "/worktree/restore" => fs::rename(
-            root.join("review-worktree-unavailable"),
-            root.join("review-worktree"),
-        )?,
         "/completed-history" => write_json(
             root.join("list-fixture.json"),
             &json!([{"id":"fixture-thread-persisted","cwd":root.join("project"),
@@ -332,9 +345,11 @@ fn merge_worktree(root: &Path, path: &str) -> Result<()> {
     )
 }
 
-fn worktree_conversation(root: &Path) -> Result<()> {
-    let repository = root.join("review-repository");
-    let worktree = root.join("review-worktree");
+fn worktree_conversation(root: &Path, name: &str) -> Result<()> {
+    // Bex creates session worktrees from a project repository and records
+    // their origin; that record places the conversation in the project.
+    let repository = root.join(format!("project/{name}-repository"));
+    let worktree = root.join(format!("{name}-worktree"));
     fs::create_dir(&repository)?;
     let git = |arguments: &[&str]| -> Result<()> {
         let output = std::process::Command::new("git")
@@ -365,6 +380,15 @@ fn worktree_conversation(root: &Path) -> Result<()> {
         "session",
         worktree.to_str().ok_or("fixture path is not UTF-8")?,
     ])?;
+    let records = root.join("bex-worktrees.json");
+    let mut state: serde_json::Value = match fs::read(&records) {
+        Ok(bytes) => serde_json::from_slice(&bytes)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!({}),
+        Err(error) => return Err(error.into()),
+    };
+    state["workspaceRoots"][worktree.to_str().ok_or("fixture path is not UTF-8")?] =
+        json!(repository);
+    write_json(records, &state)?;
     fs::write(repository.join("tracked.txt"), "Project-only change\n")?;
     fs::write(
         worktree.join("tracked.txt"),
@@ -373,11 +397,42 @@ fn worktree_conversation(root: &Path) -> Result<()> {
     write_json(
         root.join("list-fixture.json"),
         &json!([{
-            "id":"fixture-worktree-thread", "cwd":root.join("project"),
+            "id":format!("fixture-{name}-thread"), "cwd":root.join("project"),
             "readCwd":worktree, "name":"Worktree conversation", "createdAt":10000,
             "updatedAt":10000,"status":{"type":"idle"}
         }]),
     )
+}
+
+#[cfg(unix)]
+fn set_worktree_access(directory: &Path, readable: bool) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = if readable { 0o755 } else { 0o000 };
+    fs::set_permissions(directory, fs::Permissions::from_mode(mode))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_worktree_access(_: &Path, _: bool) -> Result<()> {
+    Err("directory access fixtures require Unix permissions".into())
+}
+
+fn set_upload_storage_available(root: &Path, available: bool) -> Result<()> {
+    // Host repairs directory permissions before uploads. A regular file blocks
+    // directory creation instead; keep earlier attachments intact for recovery.
+    let directory = root.join("bex-attachments");
+    let backup = root.join("bex-attachments-unavailable");
+    if available {
+        if backup.exists() {
+            fs::remove_file(&directory)?;
+            fs::rename(backup, directory)?;
+        }
+    } else if !backup.exists() {
+        fs::create_dir_all(&directory)?;
+        fs::rename(&directory, backup)?;
+        fs::write(directory, [])?;
+    }
+    Ok(())
 }
 
 fn list_fixture(root: &Path, path: &str) -> Result<()> {
@@ -431,4 +486,72 @@ fn write_json(path: PathBuf, value: &impl serde::Serialize) -> Result<()> {
     serde_json::to_writer(&mut file, value)?;
     file.flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn upload_storage_controls_fail_and_recover_without_touching_the_checkout() {
+        // File controls must work without connecting to the fixture's RPC peer.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let identity = Identity::generate();
+        let node: iroh::EndpointId = identity.node_id().to_string().parse().unwrap();
+        let ticket =
+            iroh_tickets::endpoint::EndpointTicket::new(iroh::EndpointAddr::from_parts(node, []))
+                .to_string()
+                .parse()
+                .unwrap();
+
+        for existing in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let directory = root.path().join("bex-attachments");
+            let checkout = root.path().join("project.txt");
+            fs::write(&checkout, "draft stays available").unwrap();
+            if existing {
+                agent_local_host::create_state_directory(&directory).unwrap();
+                fs::write(directory.join("earlier.png"), b"earlier photo").unwrap();
+            }
+            let control = |path| {
+                assert_eq!(
+                    route(
+                        root.path(),
+                        &runtime,
+                        &ticket,
+                        &identity,
+                        &Method::Post,
+                        path
+                    )
+                    .unwrap()
+                    .0,
+                    204
+                );
+            };
+            control("/uploads/restore");
+            control("/uploads/unavailable");
+            control("/uploads/unavailable");
+            // Use the production upload preparation, including permission repair.
+            assert!(agent_local_host::create_state_directory(&directory).is_err());
+            assert!(fs::write(directory.join("selected.mov"), b"media").is_err());
+            assert_eq!(
+                fs::read_to_string(&checkout).unwrap(),
+                "draft stays available"
+            );
+            control("/uploads/restore");
+            control("/uploads/restore");
+            agent_local_host::create_state_directory(&directory).unwrap();
+            fs::write(directory.join("selected.mov"), b"media").unwrap();
+            assert_eq!(fs::read(directory.join("selected.mov")).unwrap(), b"media");
+            if existing {
+                assert_eq!(
+                    fs::read(directory.join("earlier.png")).unwrap(),
+                    b"earlier photo"
+                );
+            }
+            assert!(!root.path().join("bex-attachments-unavailable").exists());
+        }
+    }
 }

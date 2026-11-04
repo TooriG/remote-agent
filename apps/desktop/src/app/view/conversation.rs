@@ -18,7 +18,7 @@ pub(in crate::app) struct ConversationModel {
     docked: Vec<agent_core::presentation::conversation::Request>,
     errors: Vec<super::errors::ErrorRow>,
     running: std::collections::BTreeSet<op::OperationKey>,
-    failures: BTreeMap<op::OperationKey, String>,
+    failures: BTreeMap<op::OperationKey, agent_core::presentation::error::ErrorText>,
 }
 
 pub(in crate::app) enum ConversationAction {
@@ -206,9 +206,8 @@ impl Desktop {
                 selection::set_composer_text(&self.composer.input, text.clone().into(), window, cx)
             }
             ConversationAction::Usage(provider) => {
-                self.open_settings();
+                self.open_settings(SettingsPage::Agents);
                 self.model_controls.provider = *provider;
-                self.model_controls.panel = ModelPanel::Manage;
             }
             ConversationAction::OpenUsage => {
                 self.open_browser(self.panel_scope(), "https://chatgpt.com/settings/usage", cx)
@@ -537,19 +536,16 @@ impl ConversationView {
                             item_id: item.id.clone(),
                         },
                     });
+            let error = operation
+                .as_ref()
+                .and_then(|key| self.model.failures.get(key));
             let label = if operation
                 .as_ref()
                 .is_some_and(|key| self.model.running.contains(key))
             {
                 language.text("詳細を読み込み中…").to_owned()
-            } else if let Some(error) =
-                operation.and_then(|key| self.model.failures.get(&key).cloned())
-            {
-                agent_core::localization::localized_ui_format(
-                    language,
-                    "{0} · 再試行".into(),
-                    vec![error.to_string()],
-                )
+            } else if error.is_some() {
+                language.text("再試行").to_owned()
             } else {
                 language.text("詳細を読み込む").to_owned()
             };
@@ -575,6 +571,7 @@ impl ConversationView {
                         s.timeline.remeasure_item(key.1.as_str());
                     },
                 ))
+                .when_some(error, |body, error| body.child(error_view(error, language)))
                 .into_any_element();
         }
         let turn_id = turn.map(|turn| turn.id.clone()).unwrap_or_default();
@@ -1083,7 +1080,7 @@ impl ConversationView {
                                                 div()
                                                     .text_xs()
                                                     .text_color(rgb(0xff8e86))
-                                                    .child(error_message(&error)),
+                                                    .child(error_view(&error, language)),
                                             )
                                         })
                                         .child(
@@ -1384,7 +1381,7 @@ impl ConversationView {
                 div()
                     .text_sm()
                     .text_color(rgb(0xff8e86))
-                    .child(error_message(error)),
+                    .child(error_view(error, language)),
             );
         }
         if !request.details.is_empty() {
@@ -1743,7 +1740,7 @@ impl ConversationView {
                                 .text_xs()
                                 .text_center()
                                 .text_color(rgb(appearance::MUTED))
-                                .child(error),
+                                .child(error_view(&error, language)),
                         )
                     }),
             )

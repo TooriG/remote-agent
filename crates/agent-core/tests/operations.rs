@@ -236,7 +236,7 @@ async fn run_case(case: &Value) {
         tokio::join!(operation, server)
     })
     .await
-    .expect("bounded operation");
+    .unwrap_or_else(|error| panic!("bounded operation {}: {error}", text(case, "name")));
     if let Some(expected) = case.get("result") {
         let expected = match text(&case["command"], "type") {
             "listThreads" => normalize::<agent_protocol::models::ThreadList>(expected),
@@ -288,8 +288,7 @@ async fn operation_corpus() {
         serde_json::from_str(include_str!("fixtures/operations.json")).unwrap();
     let host: Vec<Value> =
         serde_json::from_str(include_str!("fixtures/host-operations.json")).unwrap();
-    let cases: Vec<_> = operations.iter().chain(&host).collect();
-    for case in cases {
+    for case in operations.iter().chain(&host) {
         run_case(case).await;
     }
 }

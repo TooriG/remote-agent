@@ -38,6 +38,7 @@ impl Desktop {
             return div().into_any_element();
         };
         let tree = &model.tree;
+        let language = crate::localization::language(cx);
         let mut header = h_flex()
             .h(px(40.))
             .min_h(px(40.))
@@ -48,11 +49,11 @@ impl Desktop {
             .child(icon_button(
                 "refresh-files",
                 IconName::RefreshCw,
-                if tree.pending {
-                    "Refreshing…"
+                language.text(if tree.pending {
+                    "更新中…"
                 } else {
-                    "Refresh files"
-                },
+                    "ファイル一覧を更新"
+                }),
                 cx,
                 |view, _, cx| {
                     view.file_tree_action(FileTreeAction::Refresh);
@@ -74,7 +75,7 @@ impl Desktop {
                     Input::new(search)
                         .small()
                         .appearance(false)
-                        .aria_label("Search files"),
+                        .aria_label(language.text("ファイルを検索")),
                 ),
             )
             .on_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
@@ -96,7 +97,10 @@ impl Desktop {
                 } else {
                     Icon::new(IconName::ChevronsUpDown)
                 },
-                tree.toggle_all_label.clone(),
+                agent_core::localization::localized_ui_text(
+                    language,
+                    tree.toggle_all_label.clone(),
+                ),
                 cx,
                 |view, _, cx| {
                     view.file_tree_action(FileTreeAction::ToggleAll);
@@ -131,17 +135,19 @@ impl Desktop {
             .child(header)
             .when_some(tree.error.as_ref(), |body, error| {
                 body.child(
-                    button(
-                        "file-tree-error",
-                        format!("{error} Click to retry."),
-                        cx,
-                        |view, _, cx| {
-                            view.file_tree_action(FileTreeAction::Refresh);
-                            cx.notify();
-                        },
-                    )
-                    .text_xs()
-                    .w_full(),
+                    v_flex().child(error_view(error, language)).child(
+                        button(
+                            "file-tree-error",
+                            language.text("再試行"),
+                            cx,
+                            |view, _, cx| {
+                                view.file_tree_action(FileTreeAction::Refresh);
+                                cx.notify();
+                            },
+                        )
+                        .text_xs()
+                        .w_full(),
+                    ),
                 )
             })
             .when(
@@ -153,7 +159,9 @@ impl Desktop {
                             .py_1()
                             .text_xs()
                             .text_color(rgb(appearance::MUTED))
-                            .child("More matches available. Refine your search."),
+                            .child(language.text(
+                                "ほかにも一致する項目があります。検索語を絞り込んでください。",
+                            )),
                     )
                 },
             )
@@ -164,11 +172,11 @@ impl Desktop {
                         .py_4()
                         .text_xs()
                         .text_color(rgb(appearance::MUTED))
-                        .child(if !tree.ready || tree.pending {
-                            "Loading files…"
+                        .child(language.text(if !tree.ready || tree.pending {
+                            "ファイルを読み込み中…"
                         } else {
-                            "No matching files."
-                        }),
+                            "一致するファイルはありません"
+                        })),
                 )
             })
             .child(

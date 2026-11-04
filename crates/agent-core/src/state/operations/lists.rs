@@ -447,6 +447,20 @@ impl Operation for ListSessions {
             received.has_more |= more;
             pages.insert(id.clone(), Arc::new(received));
         }
+        // A refresh reads only expanded projects. Collapsed pages it omitted
+        // stay visible but are read again when expanded.
+        if self.query.part.is_none() {
+            let omitted: Vec<_> = pages
+                .keys()
+                .filter(|id| !threads.project_pages.contains_key(*id))
+                .map(|id| OperationKey::ProjectList {
+                    project_id: id.clone(),
+                })
+                .collect();
+            if !omitted.is_empty() {
+                Arc::make_mut(&mut snapshot.unconfirmed_lists).extend(omitted);
+            }
+        }
         threads.data.retain(|thread| {
             thread
                 .project_id
@@ -763,6 +777,69 @@ mod tests {
         );
     }
 
+    #[test]
+    fn refresh_rereads_collapsed_project_pages_when_they_expand() {
+        use crate::models::{ListPage, Project, Thread, ThreadList};
+        let list = |pages: &[&str], rows: &[&str]| ThreadList {
+            revision: 0,
+            data: rows
+                .iter()
+                .map(|id| Thread {
+                    id: Some(SessionRef::new(ProviderKind::Codex, (*id).into()).unwrap()),
+                    project_id: crate::models::ProjectMembership::Assigned("p".into()),
+                    ..Default::default()
+                })
+                .collect(),
+            projects: vec![Project {
+                id: "p".into(),
+                name: "p".into(),
+                ..Default::default()
+            }],
+            limit: 5,
+            project_pages: pages
+                .iter()
+                .map(|id| {
+                    (
+                        (*id).into(),
+                        ListPage {
+                            limit: 5,
+                            has_more: false,
+                        },
+                    )
+                })
+                .collect(),
+            has_more: false,
+            has_more_projects: false,
+            provider_errors: None,
+        };
+        let mut state = Snapshot {
+            connected: true,
+            ..Default::default()
+        };
+        ListSessions::new(Default::default()).apply(&mut state, list(&["p"], &["old"]));
+        let mut refresh = ListSessions::new((*state.list_query).clone());
+        refresh.prepare(&mut state).unwrap();
+        assert_eq!(
+            refresh.capture(&state).unwrap().project_limits,
+            Some(Default::default()),
+            "a refresh reads no collapsed project rows"
+        );
+        refresh.apply(&mut state, list(&[], &[]));
+        assert_eq!(
+            state.project_threads["p"].data.len(),
+            1,
+            "the omitted page stays visible"
+        );
+        let (_, effects) = reduce_intent(
+            &state,
+            Intent::SetProjectExpanded {
+                project_id: "p".into(),
+                expanded: true,
+            },
+        );
+        assert_eq!(effects.len(), 1, "expanding reads the omitted page again");
+    }
+
     #[tokio::test]
     async fn project_reads_survive_task_navigation_and_report_failure_only_in_their_section() {
         tokio::time::timeout(std::time::Duration::from_secs(30), async {
@@ -854,8 +931,9 @@ mod tests {
             assert!(
                 store.snapshot().thread_list().unwrap().projects[0]
                     .error
-                    .as_deref()
+                    .as_ref()
                     .unwrap()
+                    .to_string()
                     .contains("fixture unavailable")
             );
             store

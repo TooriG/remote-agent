@@ -300,6 +300,42 @@ impl Transcripts {
         })
     }
 
+    /// Handoffs and forks read the entire committed transcript, without the UI
+    /// window's byte limit. Recorded turns alone do not prove a complete import.
+    pub(crate) fn history(
+        &self,
+        conversation: &SessionRef,
+    ) -> Result<Option<ThreadResponse>, String> {
+        self.with(|connection| {
+            let key = params![conversation.provider.key(), conversation.id];
+            let Some(metadata) = connection
+                .query_row(
+                    "SELECT metadata FROM conversations WHERE provider = ?1 AND id = ?2",
+                    key,
+                    |row| row.get::<_, Option<Vec<u8>>>(0),
+                )
+                .optional()
+                .map_err(failure)?
+                .flatten()
+            else {
+                return Ok(None);
+            };
+            let mut response: ThreadResponse = protocol::decode(&metadata).map_err(failure)?;
+            let mut statement = connection
+                .prepare("SELECT body FROM turns WHERE provider = ?1 AND id = ?2 ORDER BY position")
+                .map_err(failure)?;
+            let mut rows = statement.query(key).map_err(failure)?;
+            let mut turns = Vec::new();
+            while let Some(row) = rows.next().map_err(failure)? {
+                turns.push(std::sync::Arc::new(decode_turn(
+                    &row.get::<_, Vec<u8>>(0).map_err(failure)?,
+                )?));
+            }
+            response.thread.turns = Some(turns);
+            Ok(Some(response))
+        })
+    }
+
     /// The newest turns before `end`, or None until the conversation is imported.
     pub(crate) fn window(
         &self,
@@ -797,6 +833,37 @@ mod tests {
         store.interrupt_running().unwrap();
         assert!(version(&target) > renamed);
         assert_eq!(version(&target), version(&target), "reads keep the version");
+    }
+
+    #[test]
+    fn complete_history_requires_an_import_and_is_not_limited_to_a_display_window() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Transcripts::open(&root.path().join("transcripts.sqlite"));
+        let target = conversation();
+        let mut first = turn("first", &["large"], TurnStatus::Completed);
+        Arc::make_mut(&mut first.items.as_mut().unwrap()[0]).body =
+            agent_protocol::items::ItemContent::Inline {
+                body: Box::new(ItemBody::AssistantText {
+                    text: "x".repeat(WINDOW_BYTES),
+                    phase: AssistantPhase::Final,
+                }),
+            };
+        store.record(&target, &first).unwrap();
+        assert!(store.history(&target).unwrap().is_none());
+        let second = turn("second", &["last"], TurnStatus::Completed);
+        store.import(&target, history(vec![first, second])).unwrap();
+        assert!(store.window(&target, None, 10).unwrap().unwrap().start > 0);
+        let complete = store.history(&target).unwrap().unwrap();
+        assert_eq!(
+            complete
+                .thread
+                .turns
+                .unwrap()
+                .iter()
+                .map(|turn| turn.id.as_str())
+                .collect::<Vec<_>>(),
+            ["first", "second"]
+        );
     }
 
     #[test]

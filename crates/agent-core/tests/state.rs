@@ -839,7 +839,6 @@ fn durable_upload_and_pairing_results_survive_navigation() {
             name: "image.png".into(),
             is_image: true,
         },
-        directory: "/old".into(),
     }
     .stale(&mut snapshot, "/uploaded".into());
     assert_eq!(
@@ -1014,7 +1013,7 @@ fn terminal_presentation_only_shows_loading_or_exceptional_status() {
         (
             TerminalPhase::Failed("failure".into()),
             false,
-            Some("failure"),
+            Some("エラーが発生しました。\nfailure"),
         ),
         (
             TerminalPhase::Suspended,
@@ -1355,6 +1354,7 @@ fn file_navigation_rejects_empty_and_relative_paths_before_rpc() {
         assert_eq!(
             snapshot
                 .operation_error(op::OperationKey::Directory)
+                .map(|error| error.message)
                 .as_deref(),
             Some("絶対パスを入力してください。")
         );

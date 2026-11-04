@@ -491,7 +491,7 @@ impl Session {
                             let response = crate::protocol::Response::<()>::Failure {
                                 error: agent_protocol::error::RpcFailure {
                                     code: "invalid_params".into(),
-                                    message: "このHostは操作のパラメーターを読み取れません。PC側のBEXを更新してください。".into(),
+                                    message: "このホストは操作のパラメーターを読み取れません。PC側のBexを更新してください。".into(),
                                     delivery: agent_protocol::error::Delivery::NotSent,
                                     execution: None,
                                 },

@@ -463,7 +463,6 @@ async fn binary_transfers_use_the_issuing_iroh_session_and_preserve_bytes() {
                     name: "upload.bin".into(),
                     is_image: false,
                 },
-                directory: directory.path().to_str().unwrap().into(),
             }))
             .await
             .unwrap();
@@ -523,7 +522,6 @@ async fn binary_transfers_use_the_issuing_iroh_session_and_preserve_bytes() {
                     name: "unscoped.bin".into(),
                     is_image: false,
                 },
-                directory: store.snapshot().navigation.cwd.clone(),
             }))
             .await
             .unwrap();
@@ -572,7 +570,6 @@ async fn binary_transfers_use_the_issuing_iroh_session_and_preserve_bytes() {
                 name: "missing.bin".into(),
                 is_image: false,
             },
-            directory: directory.path().to_str().unwrap().into(),
         };
         assert!(
             store
@@ -1020,7 +1017,6 @@ async fn submissions_complete_across_saved_worktree_settings_and_chat_scopes(
                 store.dispatch(Intent::UploadAttachment(op::UploadAttachment {
                     draft_key: key,
                     attachment: Attachment { path: source.to_str().unwrap().into(), name: "photo.png".into(), is_image: true },
-                    directory: store.snapshot().navigation.cwd.clone(),
                 })).await.unwrap();
                 let current = store.snapshot();
                 Some(current.drafts[&current.navigation.draft_key].attachments[0].path.clone())

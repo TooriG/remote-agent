@@ -45,10 +45,15 @@ fn native_menu(
     owner: &WeakEntity<Desktop>,
     epoch: u64,
     target: &FileMenuTarget,
+    language: agent_core::localization::UiLanguage,
 ) -> NativeMenu {
     items.into_iter().fold(NativeMenu::new(), |menu, item| {
+        let label = agent_core::localization::localized_ui_text(language, item.label);
         if !item.children.is_empty() {
-            return menu.submenu(item.label, native_menu(item.children, owner, epoch, target));
+            return menu.submenu(
+                label,
+                native_menu(item.children, owner, epoch, target, language),
+            );
         }
         let Some(action) = item.action else {
             return menu;
@@ -60,7 +65,7 @@ fn native_menu(
             action,
         });
         // ElectronMenu.buildTemplate does not render ordinary item icons.
-        menu.menu(item.label, command)
+        menu.menu(label, command)
     })
 }
 
@@ -78,6 +83,7 @@ impl Desktop {
             &cx.entity().downgrade(),
             self.snapshot.epoch,
             &target,
+            crate::localization::language(cx),
         )
         .show(position, window, cx);
     }

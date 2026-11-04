@@ -95,7 +95,7 @@ private struct WorkspaceDirectoryScreen: View {
     @State private var selected: FileEntry?
     @State private var selectedLine: UInt32?
     @State private var sharedFile: SharedFile?
-    @State private var error: String?
+    @State private var error: ErrorText?
     @State private var busy = false
 
     private var root: String {
@@ -118,7 +118,7 @@ private struct WorkspaceDirectoryScreen: View {
                         AppNotice(text: error).padding(.horizontal, 16).padding(.vertical, 8)
                     }
                     if tree.truncated {
-                        Text("More search results available. Refine your search to see them.")
+                        Text("ほかにも一致する項目があります。検索語を絞り込んでください。")
                             .font(.caption).foregroundStyle(.secondary).padding(16)
                     }
                     if tree.rows.isEmpty {
@@ -161,7 +161,7 @@ private struct WorkspaceDirectoryScreen: View {
         }
         .navigationTitle("ファイル")
         .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: Binding(get: { tree.query }, set: { send(.query(text: $0)) }), prompt: "Search files")
+        .searchable(text: Binding(get: { tree.query }, set: { send(.query(text: $0)) }), prompt: "ファイルを検索")
         .onAppear {
             send(.open(surface: .mobile, locale: Locale.current.identifier, workspaceRoot: root))
             if let initialFile {
@@ -193,12 +193,12 @@ private struct WorkspaceDirectoryScreen: View {
             ProgressView().frame(maxWidth: .infinity).padding(20)
         } else {
             VStack(alignment: .leading, spacing: 4) {
-                Text(tree.error == nil ? "No files found" : "Files unavailable").fontWeight(.bold)
+                AppText(tree.error == nil ? "ファイルが見つかりません" : "ファイルを表示できません").fontWeight(.bold)
                 if tree.error != nil {
-                    Button("Try again") { send(.refresh) }
+                    Button("再試行") { send(.refresh) }
                 } else {
-                    Text(tree.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        ? "The workspace is empty." : "Try a different search.").font(.caption)
+                    AppText(tree.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? "作業スペースは空です。" : "別の語句で検索してください。").font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }.padding(16)
@@ -252,7 +252,7 @@ private struct WorkspaceDirectoryScreen: View {
             do {
                 let url = try await downloadFile(path)
                 selected = nil; sharedFile = SharedFile(url: url)
-            } catch { self.error = error.localizedDescription }
+            } catch { self.error = errorText(error: error.localizedDescription) }
         }
     }
 }
@@ -260,23 +260,19 @@ private struct WorkspaceDirectoryScreen: View {
 struct WorkspaceDiffScreen: View {
     @ObservedObject var model: AppViewModel
     let root: String
-    @State private var files: [WorkspaceDiffFile] = []
-    @State private var error: String?
-    @State private var busy = true
+    @State private var files: [WorkspaceDiffFile]?
 
     var body: some View {
+        // Core runs only the newest review read; an older request can finish
+        // first, so the view follows the snapshot rather than its own request.
+        let review = model.snapshot.review()
         Group {
-            if busy {
-                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let error {
+            if let error = model.snapshot.operationError(key: .workspaceReview) {
                 VStack {
                     AppNotice(text: error).padding()
                     Button("再試行", action: loadDiff).accessibilityIdentifier("files.diff.retry")
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if files.isEmpty {
-                Text("変更はありません").foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
+            } else if let files, !files.isEmpty {
                 ScrollView {
                     LazyVStack(spacing: 16) {
                         ForEach(files, id: \.path) { file in
@@ -284,28 +280,34 @@ struct WorkspaceDiffScreen: View {
                         }
                     }.padding(12)
                 }
+            } else if files != nil {
+                Text("変更はありません").foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .onAppear(perform: loadDiff)
+        .task(id: ReviewIdentity(review: review)) {
+            guard let review else { return }
+            let next = await Task.detached(priority: .userInitiated) { review.diffFiles() }.value
+            guard !Task.isCancelled else { return }
+            files = next
+        }
     }
 
     private func loadDiff() {
-        busy = true; error = nil
-        model.requestSnapshot(.reviewWorkspace(ReviewWorkspace(cwd: root))) { snapshot, result in
-            model.notice = nil
-            if case let .failure(failure) = result {
-                busy = false
-                error = failure.localizedDescription
-            } else if let review = snapshot.review() {
-                Task {
-                    files = await Task.detached(priority: .userInitiated) { review.diffFiles() }.value
-                    busy = false
-                }
-            } else {
-                busy = false
-                error = "差分を取得できませんでした。再試行してください。"
-            }
-        }
+        files = nil
+        model.perform(.reviewWorkspace(ReviewWorkspace(cwd: root)))
+    }
+}
+
+private struct ReviewIdentity: Equatable {
+    let review: WorkspaceReview?
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        guard let left = lhs.review, let right = rhs.review else { return lhs.review == nil && rhs.review == nil }
+        return left.unchanged(other: right)
     }
 }
 

@@ -184,7 +184,7 @@ impl TerminalPhase {
             Self::Suspended => "再接続を待っています".into(),
             Self::Detached => "切断済み".into(),
             Self::Exited(code) => format!("終了 · {code}"),
-            Self::Failed(error) => error.clone(),
+            Self::Failed(error) => crate::presentation::error::error_text(error).to_string(),
         }
     }
 }
@@ -366,12 +366,15 @@ impl Snapshot {
         self.operation_running(op::OperationKey::ProjectScan)
             || self.operation_running(op::OperationKey::ProjectImport)
     }
-    pub fn operation_error(&self, key: operations::OperationKey) -> Option<String> {
+    pub fn operation_error(
+        &self,
+        key: operations::OperationKey,
+    ) -> Option<crate::presentation::error::ErrorText> {
         self.operations
             .get(&key)
             .and_then(|state| match &state.phase {
                 operations::OperationPhase::Failed { message } => {
-                    Some(crate::presentation::error::error_message(message))
+                    Some(crate::presentation::error::error_text(message))
                 }
                 _ => None,
             })
@@ -421,7 +424,6 @@ pub mod projects;
 pub use projects::ProjectPreferences;
 pub mod operations;
 pub use operations::Intent;
-use operations::add_attachment;
 
 /// Client-owned data from a previously configured Host storage area. Keeping
 /// it separate prevents storage switches from deleting or mixing user drafts.
@@ -538,7 +540,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             }
             op::ErrorId::Application { message } => {
                 for error in [&mut next.connection_failure, &mut next.error] {
-                    if error.as_deref().map(crate::presentation::error::error_message).as_deref() == Some(message.as_str()) {
+                    if error.as_deref() == Some(message.as_str()) {
                         *error = None;
                     }
                 }
@@ -591,6 +593,13 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 return prepare(next, params);
             }
         }
+        Intent::CloseTerminal { handle } => {
+            if let Some(terminal) = Arc::make_mut(&mut next.terminals).remove(&handle)
+                && !matches!(terminal.phase, TerminalPhase::Exited(_) | TerminalPhase::Detached)
+            {
+                return (next, vec![Effect::execute(op::KillTerminal { handle })]);
+            }
+        }
         Intent::AcknowledgeTerminal { handle, sequence } => {
             if previous.terminals.get(&handle).is_some_and(|terminal| {
                 terminal.output.front().is_some_and(|chunk| chunk.sequence <= sequence)
@@ -641,12 +650,6 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             {
                 Arc::make_mut(&mut next.pending_submissions).remove(&client_user_message_id);
             }
-        }
-        Intent::AddAttachment {
-            draft_key,
-            attachment,
-        } => {
-            add_attachment(&mut next, draft_key, attachment);
         }
         Intent::RemoveAttachment { draft_key, index } => {
             let index = index as usize;
@@ -1724,6 +1727,7 @@ mod submission_tests {
             assert!(
                 next.operation_error(op::OperationKey::Submission { draft_key: key })
                     .unwrap()
+                    .message
                     .contains("閲覧専用")
             );
         } else {

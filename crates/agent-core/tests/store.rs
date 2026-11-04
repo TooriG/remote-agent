@@ -627,22 +627,21 @@ async fn draft_field_edits_preserve_interleaved_attachments_and_settings() {
             }}])).unwrap()),
             drafts: Arc::new(BTreeMap::from([(SessionRef {provider: ProviderKind::Codex, id: "thread".into()}.into(), Arc::new(Draft {
                 text: "old".into(), model: Some(agent_protocol::models::ModelRef { provider: agent_protocol::session::ProviderKind::Codex, id: "model".into() }), effort: Some("medium".into()),
+                attachments: ["removed.png", "image.png"].map(|name| Attachment {
+                    path: format!("/fixture/{name}"), name: name.into(), is_image: true,
+                }).into(),
                 service_tier: Some("priority".into()), ..Default::default()
             }))])),
             ..Default::default()
         };
         let (store, _reader, _writer) = setup(previous.clone()).await;
-        let attachment = Intent::AddAttachment {
+        let attachment = Intent::RemoveAttachment {
             draft_key: SessionRef {
                 provider: ProviderKind::Codex,
                 id: "thread".into(),
             }
             .into(),
-            attachment: Attachment {
-                path: "/fixture/image.png".into(),
-                name: "image.png".into(),
-                is_image: true,
-            },
+            index: 0,
         };
         let text = Intent::SetDraftText {
             thread_id: SessionRef {
@@ -705,13 +704,14 @@ async fn draft_field_edits_preserve_interleaved_attachments_and_settings() {
                 .text,
             "old"
         );
-        assert!(
+        assert_eq!(
             previous.drafts[&DraftKey::from(SessionRef {
                 provider: ProviderKind::Codex,
                 id: "thread".into()
             })]
                 .attachments
-                .is_empty()
+                .len(),
+            2
         );
         store
             .dispatch(Intent::SelectEffort {
@@ -1971,8 +1971,8 @@ async fn a_failed_open_keeps_selection_and_draft_and_can_retry() {
             store
                 .snapshot()
                 .operation_error(history.clone())
-                .as_ref()
                 .unwrap()
+                .to_string()
                 .contains("history unavailable")
         );
         let retry = store.dispatch(Intent::ReadThread(op::ReadThread::open(SessionRef {
@@ -2198,6 +2198,11 @@ async fn terminal_preserves_output_until_acknowledged_and_serializes_input() {
             assert_eq!(request["params"]["deltaBase64"], data);
             writer.reply(&request, json!({"result":{}})).await.unwrap();
         }
+        let close = read(&mut reader).await;
+        assert_eq!(close["method"], "host/terminal/kill");
+        assert_eq!(close["params"]["processHandle"], "terminal");
+        writer.notify(json!({"method":"host/terminal/exited","params":{"processHandle":"terminal","exitCode":0,"stdout":"","stderr":"","stdoutCapReached":false,"stderrCapReached":false}})).await.unwrap();
+        writer.reply(&close, json!({"result":{}})).await.unwrap();
         // Keep the transport alive until Store closes it.
         assert!(reader.read_request().await.unwrap().is_none());
     });
@@ -2245,6 +2250,20 @@ async fn terminal_preserves_output_until_acknowledged_and_serializes_input() {
         .await
         .unwrap();
     assert!(store.snapshot().terminals["terminal"].output.is_empty());
+    store
+        .dispatch(Intent::CloseTerminal {
+            handle: "terminal".into(),
+        })
+        .await
+        .unwrap();
+    assert!(!store.snapshot().terminals.contains_key("terminal"));
+    store
+        .dispatch(Intent::SetDraftText {
+            thread_id: "draft".into(),
+            text: "the conversation remains usable".into(),
+        })
+        .await
+        .unwrap();
     store.close().await.unwrap();
     server.await.unwrap();
 }
@@ -3950,8 +3969,8 @@ async fn session_update_gap_preserves_history_and_only_reports_failed_recovery(
             store
                 .snapshot()
                 .operation_error(history)
-                .as_ref()
                 .unwrap()
+                .to_string()
                 .contains("history read failed")
         );
         assert!(!store.snapshot().subscriptions.contains_key(&id));
@@ -4543,6 +4562,7 @@ async fn cursor_history_retry_preserves_the_window_and_late_pages_cannot_replace
             .snapshot()
             .operation_error(history.clone())
             .unwrap()
+            .to_string()
             .contains("temporary history failure")
     );
 

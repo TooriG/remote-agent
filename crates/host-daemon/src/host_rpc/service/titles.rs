@@ -60,7 +60,7 @@ impl HostRpcService {
         Ok(row.map_or(native, |row| {
             self.conversation_capabilities(
                 row.active.provider,
-                row.segments.iter().map(|segment| segment.session.provider),
+                row.sources().map(|source| source.provider),
             )
         }))
     }

@@ -177,7 +177,7 @@ private suspend fun downloadPreview(
             }
             return
         }
-        checkNotNull(perform) { "Hostに接続してください" }
+        checkNotNull(perform) { "ホストに接続してください" }
         suspendCancellableCoroutine<Unit> { continuation ->
             perform(Intent.DownloadFile(DownloadFile(path, target.path))) { result ->
                 if (continuation.isActive) continuation.resumeWith(result.map { Unit }) else target.delete()
@@ -190,7 +190,7 @@ internal suspend fun fileOperation(
     intent: Intent,
     perform: ((Intent, (Result<Outcome>) -> Unit) -> Unit)?,
 ): Outcome {
-    checkNotNull(perform) { "Hostに接続してください" }
+    checkNotNull(perform) { "ホストに接続してください" }
     return suspendCancellableCoroutine { continuation ->
         perform(intent) { result -> if (continuation.isActive) continuation.resumeWith(result) }
     }

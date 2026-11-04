@@ -1,4 +1,6 @@
-use super::view::section_heading;
+mod qr_text;
+
+use super::view::{section_heading, settings_group};
 use crate::{Runtime, appearance, store_session::StoreSession};
 use agent_core::{
     state::{Intent, Snapshot, operations as op},
@@ -264,6 +266,7 @@ impl Hosts {
                                 let result = (|| -> Result<_, String> {
                                     let text = serde_json::to_string(invitation)
                                         .map_err(|error| error.to_string())?;
+                                    let text = qr_text::ascii_json(&text);
                                     let code = qrcode::QrCode::with_error_correction_level(
                                         text.as_bytes(),
                                         qrcode::EcLevel::M,
@@ -332,14 +335,11 @@ impl Hosts {
         let language = crate::localization::language(cx);
         let cards = layout == ConnectionLayout::Onboarding;
         let mut agent_controls = Some(agent_controls);
-        let mut choices = v_flex()
-            .when(cards, |view| view.gap_3())
-            .when(!cards, |view| {
-                view.rounded(px(10.))
-                    .border_1()
-                    .border_color(rgb(appearance::BORDER))
-                    .overflow_hidden()
-            });
+        let mut choices = if cards {
+            v_flex().gap_3()
+        } else {
+            settings_group().overflow_hidden()
+        };
         let targets = self.choices();
         for (index, remote) in std::iter::once(None)
             .chain(targets.iter().map(Some))
@@ -375,7 +375,9 @@ impl Hosts {
                         .bg(rgb(appearance::SURFACE))
                 })
                 .when(!cards, |view| {
-                    view.border_b_1().border_color(rgb(appearance::BORDER))
+                    view.p_5()
+                        .border_b_1()
+                        .border_color(rgb(appearance::BORDER))
                 })
                 .child(
                     h_flex()
@@ -537,18 +539,18 @@ impl Hosts {
                 .when(!cards, |view| view.mx_4().mb_4())
                 .child(methods);
             if self.use_ssh {
-                form =
-                    form.child(language.text("SSH接続先"))
-                        .child(
-                            Input::new(&self.ssh)
-                                .aria_label(language.text("SSH接続先"))
-                                .disabled(disabled),
-                        )
-                        .child(div().text_xs().text_color(rgb(appearance::MUTED)).child(
-                            language.text(
-                                "SSHの鍵で接続でき、Bex Hostを起動済みのサーバーにつなぎます。",
-                            ),
-                        ));
+                form = form
+                    .child(language.text("SSH接続先"))
+                    .child(
+                        Input::new(&self.ssh)
+                            .aria_label(language.text("SSH接続先"))
+                            .disabled(disabled),
+                    )
+                    .child(div().text_xs().text_color(rgb(appearance::MUTED)).child(
+                        language.text(
+                            "SSHの鍵で接続でき、Bexのホストを起動済みのサーバーにつなぎます。",
+                        ),
+                    ));
             } else {
                 form = form.child(
                     Textarea::new(&self.pairing)
@@ -611,7 +613,10 @@ impl Hosts {
                 div()
                     .when(!cards, |view| view.p_4())
                     .text_color(rgb(0xff8e86))
-                    .child(agent_core::presentation::error::error_message(error)),
+                    .child(super::view::error_view(
+                        &agent_core::presentation::error::error_text(error),
+                        language,
+                    )),
             );
         }
         choices
@@ -698,7 +703,7 @@ impl Render for Hosts {
                         .label(if self.connecting {
                             language.text("接続中…")
                         } else {
-                            language.text("Host に接続")
+                            language.text("ホストに接続")
                         })
                         .disabled(self.connecting)
                         .on_click(cx.listener(move |view, _, _, cx| {
@@ -725,7 +730,9 @@ impl Render for Hosts {
                     Button::new("invite")
                         .label(language.text("接続用QRを表示"))
                         .icon(Icon::default().path("icons/qr-code.svg"))
-                        .primary()
+                        .secondary()
+                        .outline()
+                        .h(px(32.))
                         .disabled(disabled)
                         .on_click(cx.listener(move |view, _, _, cx| {
                             view.dispatch(
@@ -738,7 +745,7 @@ impl Render for Hosts {
         );
         if let Some((_, file)) = &self.invitation {
             body = body.child(
-                h_flex().flex_wrap().gap_5().p_4().rounded(px(10.))
+                h_flex().flex_wrap().gap_5().p_5().rounded(px(8.))
                     .border_1().border_color(rgb(appearance::BORDER))
                     .child(img(file.path().to_path_buf()).w(px(200.)).h(px(200.)))
                     .child(v_flex().flex_1().min_w(px(200.)).gap_3()
@@ -794,15 +801,11 @@ impl Render for Hosts {
                         ),
                 );
         if let Some(status) = &self.snapshot.management.status {
-            let mut list = v_flex()
-                .rounded(px(10.))
-                .border_1()
-                .border_color(rgb(appearance::BORDER))
-                .overflow_hidden();
+            let mut list = settings_group().overflow_hidden();
             if status.devices.is_empty() {
                 list = list.child(
                     div()
-                        .p_4()
+                        .p_5()
                         .text_sm()
                         .text_color(rgb(appearance::MUTED))
                         .child(language.text("接続を許可した端末はありません。")),
@@ -814,7 +817,7 @@ impl Render for Hosts {
                     h_flex()
                         .items_center()
                         .gap_4()
-                        .p_4()
+                        .p_5()
                         .when(index > 0, |row| {
                             row.border_t_1().border_color(rgb(appearance::BORDER))
                         })
@@ -842,7 +845,7 @@ impl Render for Hosts {
                                 .label(language.text("接続を解除"))
                                 .small()
                                 .ghost()
-                                .text_color(rgb(0x8bb7f9))
+                                .text_color(rgb(appearance::MUTED))
                                 .disabled(disabled)
                                 .on_click(cx.listener(move |view, _, _, cx| {
                                     view.dispatch(

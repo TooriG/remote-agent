@@ -20,14 +20,15 @@ extension LaunchUITests {
         XCTAssertEqual(folder.label, "フォルダ: 検証プロジェクト")
         captureScreen(app, named: "New chat project and environment in the centered prompt")
         let removals = app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", "を外す"))
-        selectPhotos(["写真"], in: app)
-        app.buttons["Cancel"].tap()
+        selectPhotos([.photo], in: app)
+        app.navigationBars.buttons.matching(NSPredicate(format: "label IN %@", ["Cancel", "キャンセル"]))
+            .firstMatch.tap()
         XCTAssertEqual(removals.count, 0)
         XCTAssertTrue(app.buttons["task.attach"].isEnabled)
         XCTAssertFalse(app.staticTexts["notice"].exists)
         for count in 1 ... 2 {
-            selectPhotos(["写真"], in: app)
-            app.buttons["Add"].tap()
+            selectPhotos([.photo], in: app)
+            confirmPhotoSelection(in: app)
             let attached = expectation(for: NSPredicate(format: "count == %d", count), evaluatedWith: removals)
             wait(for: [attached], timeout: 60)
             XCTAssertTrue(app.buttons["task.attach"].isEnabled)
@@ -37,8 +38,8 @@ extension LaunchUITests {
         app.buttons["task.send"].tap()
         XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 30))
         XCTAssertEqual(removals.count, 0)
-        selectPhotos(["写真"], in: app)
-        app.buttons["Add"].tap()
+        selectPhotos([.photo], in: app)
+        confirmPhotoSelection(in: app)
         let nextAttachment = expectation(for: NSPredicate(format: "count == 1"), evaluatedWith: removals)
         wait(for: [nextAttachment], timeout: 60)
         XCTAssertTrue(app.buttons["task.send"].isEnabled)
@@ -68,9 +69,9 @@ extension LaunchUITests {
         captureScreen(app, named: "Photo video camera and file attachment menu")
         app.buttons["task.attach.camera"].tap()
         XCTAssertTrue(app.staticTexts["この端末ではカメラを利用できません。"].waitForExistence(timeout: 5))
-        selectPhotos(["写真", "ビデオ"], in: app)
+        selectPhotos([.photo, .video], in: app)
         captureScreen(app, named: "Photo and video selected together")
-        app.buttons["Add"].tap()
+        confirmPhotoSelection(in: app)
         let removals = app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", "を外す"))
         let attached = expectation(for: NSPredicate(format: "count == 2"), evaluatedWith: removals)
         wait(for: [attached], timeout: 60)
@@ -79,7 +80,9 @@ extension LaunchUITests {
         app.buttons["task.send"].tap()
         let photo = app.images.matching(NSPredicate(format: "identifier BEGINSWITH %@", "message.image.")).firstMatch
         XCTAssertTrue(photo.waitForExistence(timeout: 30), "Uploaded image did not decode in the conversation")
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "添付:")).firstMatch
+        XCTAssertTrue(app.textViews.matching(NSPredicate(
+            format: "identifier == %@ AND value CONTAINS %@", "message.user-text", "添付:"
+        )).firstMatch
             .waitForExistence(timeout: 20))
         XCTAssertEqual(removals.count, 0)
         XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 30))
@@ -93,25 +96,25 @@ extension LaunchUITests {
         captureScreen(app, named: "Uploaded photo and video in chat history")
     }
 
-    func testSimulatorRetriesPhotoUploadAfterWorkspaceRecovery() throws {
+    func testSimulatorRetriesPhotoUploadAfterStorageRecovery() throws {
         let app = try connectedSimulatorApp(expandProject: false)
-        try useSimulatorListFixture("worktree-conversation")
+        try useSimulatorListFixture("worktree-conversation/upload")
         app.buttons["tasks.menu"].tap(); app.buttons["tasks.refresh"].tap()
         expandSimulatorProject(app)
-        let row = app.descendants(matching: .any)["tasks.row.codex:fixture-worktree-thread"]
+        let row = app.descendants(matching: .any)["tasks.row.codex:fixture-upload-thread"]
         XCTAssertTrue(row.waitForExistence(timeout: 15)); row.tap()
         let prompt = app.textFields["task.message"]
         XCTAssertTrue(prompt.waitForExistence(timeout: 10))
         prompt.tap(); prompt.typeText("[success] Retry selected photos")
-        try simulatorFixture("worktree/unavailable")
+        try simulatorFixture("uploads/unavailable")
         var unavailable = true
         addTeardownBlock {
             if unavailable {
-                try self.simulatorFixture("worktree/restore")
+                try self.simulatorFixture("uploads/restore")
             }
         }
-        selectPhotos(["写真", "ビデオ"], in: app)
-        app.buttons["Add"].tap()
+        selectPhotos([.photo, .video], in: app)
+        confirmPhotoSelection(in: app)
         let notices = app.staticTexts.matching(identifier: "notice")
         XCTAssertTrue(notices.firstMatch.waitForExistence(timeout: 30))
         let attach = app.buttons["task.attach"]
@@ -120,9 +123,9 @@ extension LaunchUITests {
         let removals = app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", "を外す"))
         XCTAssertEqual(removals.count, 0)
         XCTAssertEqual(prompt.value as? String, "[success] Retry selected photos")
-        try simulatorFixture("worktree/restore"); unavailable = false
-        selectPhotos(["写真", "ビデオ"], in: app)
-        app.buttons["Add"].tap()
+        try simulatorFixture("uploads/restore"); unavailable = false
+        selectPhotos([.photo, .video], in: app)
+        confirmPhotoSelection(in: app)
         let attached = expectation(for: NSPredicate(format: "count == 2"), evaluatedWith: removals)
         wait(for: [attached], timeout: 60)
         XCTAssertEqual(notices.count, 0)
@@ -141,14 +144,38 @@ extension LaunchUITests {
         captureScreen(app, named: "Recovered media upload survives reopening")
     }
 
-    private func selectPhotos(_ labels: [String], in app: XCUIApplication) {
+    private enum PickerMedia {
+        case photo, video
+
+        var labels: (String, String) {
+            switch self {
+            case .photo: ("写真", "Photo")
+            case .video: ("ビデオ", "Video")
+            }
+        }
+    }
+
+    private func selectPhotos(_ kinds: [PickerMedia], in app: XCUIApplication) {
         app.buttons["task.attach"].tap()
         app.buttons["task.attach.photos"].tap()
-        for label in labels {
-            let media = app.images.matching(NSPredicate(format: "label CONTAINS %@", label)).firstMatch
+        for kind in kinds {
+            // The system picker follows the Simulator language: Japanese locally, English on CI runners.
+            let (japanese, english) = kind.labels
+            let media = app.images
+                .matching(NSPredicate(format: "label CONTAINS %@ OR label CONTAINS %@", japanese, english)).firstMatch
             XCTAssertTrue(media.waitForExistence(timeout: 15), app.debugDescription)
             media.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         }
+    }
+
+    private func confirmPhotoSelection(in app: XCUIApplication) {
+        let confirm = app.navigationBars.buttons.matching(
+            NSPredicate(format: "label IN %@", ["Add", "Done", "追加", "完了"])
+        ).firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 10))
+        let enabled = expectation(for: NSPredicate(format: "isEnabled == true"), evaluatedWith: confirm)
+        wait(for: [enabled], timeout: 10)
+        confirm.tap()
     }
 
     private func selectAttachmentFixture(in app: XCUIApplication) {
@@ -158,11 +185,13 @@ extension LaunchUITests {
         // The picker restores the app's Documents directory asynchronously.
         // Wait for that destination before navigating a transient Browse page.
         if !attachment.waitForExistence(timeout: 10) {
-            let browse = app.buttons["ブラウズ"]
+            let browse = app.buttons.matching(NSPredicate(format: "label IN %@", ["ブラウズ", "Browse"])).firstMatch
             if browse.waitForExistence(timeout: 3) {
                 browse.tap()
             }
-            let onPhone = app.staticTexts["このiPhone内"]
+            let onPhone = app.staticTexts.matching(
+                NSPredicate(format: "label IN %@", ["このiPhone内", "On My iPhone"])
+            ).firstMatch
             if onPhone.waitForExistence(timeout: 3) {
                 onPhone.tap()
             }
@@ -189,9 +218,9 @@ extension LaunchUITests {
         let message = reopened.descendants(matching: .any)["task.message"]
         message.tap(); message.typeText("Read the attached file")
         reopened.buttons["task.send"].tap()
-        let historyAttachment = reopened.staticTexts.matching(NSPredicate(
-            format: "label CONTAINS %@",
-            "添付: attachment-fixture.txt"
+        let historyAttachment = reopened.textViews.matching(NSPredicate(
+            format: "identifier == %@ AND value CONTAINS %@",
+            "message.user-text", "添付: attachment-fixture.txt"
         )).firstMatch
         XCTAssertTrue(historyAttachment.waitForExistence(timeout: 15))
         openFiles(reopened)

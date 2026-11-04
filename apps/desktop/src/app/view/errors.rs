@@ -1,5 +1,26 @@
 use super::*;
-use agent_core::presentation::error::ErrorNotice;
+use agent_core::presentation::error::{ErrorNotice, ErrorText};
+
+/// Error copy in the UI language above its verbatim cause.
+pub(in crate::app) fn error_view(
+    text: &ErrorText,
+    language: agent_core::localization::UiLanguage,
+) -> Div {
+    v_flex()
+        .min_w_0()
+        .child(agent_core::localization::localized_ui_text(
+            language,
+            text.message.clone(),
+        ))
+        .when_some(text.details.clone(), |body, details| {
+            body.child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(appearance::MUTED))
+                    .child(details),
+            )
+        })
+}
 
 /// An error notice as the error list shows it.
 #[derive(PartialEq)]
@@ -41,11 +62,11 @@ impl Desktop {
             rows.push(ErrorRow {
                 notice: ErrorNotice {
                     id: op::ErrorId::Application {
-                        message: error_message(message),
+                        message: message.clone(),
                     },
                     context: scope.label().into(),
                     title: "操作に失敗しました".into(),
-                    message: error_message(message),
+                    text: agent_core::presentation::error::error_text(message),
                 },
                 local: true,
                 recovery: None,
@@ -78,7 +99,7 @@ impl Desktop {
                     .flex_1()
                     .text_sm()
                     .text_color(rgb(appearance::MUTED))
-                    .child(language.text("Host に接続していません")),
+                    .child(language.text("ホストに接続していません")),
             )
             .child(button(
                 "reconnect-host",
@@ -104,10 +125,10 @@ impl Desktop {
                 let notice = row.notice.clone();
                 let target = scope.clone();
                 let dismiss_target = scope.clone();
-                let copied = format!("{} · {}\n{}", notice.context, notice.title, notice.message);
-                let dismissed = notice.clone();
+                let copied = format!("{} · {}\n{}", notice.context, notice.title, notice.text);
+                let dismissed = notice.id.clone();
                 let recovered = notice.id.clone();
-                let detail = notice.message.clone();
+                let detail = notice.text.to_string();
                 h_flex()
                     .debug_selector(move || format!("error-notice-{}-{index}", target.label()))
                     .items_start()
@@ -142,15 +163,12 @@ impl Desktop {
                                     .tooltip(move |window, cx| {
                                         tooltip::Tooltip::new(detail.clone()).build(window, cx)
                                     })
-                                    .child(agent_core::localization::localized_ui_text(
-                                        language,
-                                        notice.message,
-                                    )),
+                                    .child(error_view(&notice.text, language)),
                             )
                             .when_some(row.recovery.clone(), |body, label| {
                                 body.child(button(
                                     format!("recover-error-{index}"),
-                                    label,
+                                    agent_core::localization::localized_ui_text(language, label),
                                     cx,
                                     move |view, _, _| {
                                         if let Some(recovery) =
@@ -192,18 +210,14 @@ impl Desktop {
                             cx,
                             move |view, _, _| {
                                 if local {
-                                    if view
-                                        .local_errors
-                                        .get(&dismiss_target)
-                                        .map(|message| error_message(message))
-                                        .as_deref()
-                                        == Some(dismissed.message.as_str())
+                                    if let op::ErrorId::Application { message } = &dismissed
+                                        && view.local_errors.get(&dismiss_target) == Some(message)
                                     {
                                         view.local_errors.remove(&dismiss_target);
                                     }
                                 } else {
                                     view.dispatch(Intent::DismissError {
-                                        id: dismissed.id.clone(),
+                                        id: dismissed.clone(),
                                     });
                                 }
                             },

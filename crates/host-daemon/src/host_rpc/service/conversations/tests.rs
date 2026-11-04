@@ -31,6 +31,7 @@ pub(in crate::host_rpc::service) struct NativeAgent {
     pub(in crate::host_rpc::service) records: Arc<Mutex<HashMap<String, ThreadResponse>>>,
     pub(in crate::host_rpc::service) idle_warning: Option<&'static str>,
     deferred_history: bool,
+    metadata_only_state: bool,
     /// Item IDs whose native bodies cannot be read.
     unreadable: Mutex<std::collections::HashSet<String>>,
     pub(in crate::host_rpc::service) inputs: Arc<Mutex<Vec<op::Submission>>>,
@@ -42,6 +43,7 @@ pub(in crate::host_rpc::service) struct NativeAgent {
     pub(in crate::host_rpc::service) create_started: tokio::sync::Notify,
     fail_inject: AtomicUsize,
     open_error: Mutex<Option<Failure>>,
+    state_error: Mutex<Option<Failure>>,
     /// Every open fails with this, including the open an import makes.
     open_failure: Mutex<Option<Failure>>,
     pub(in crate::host_rpc::service) fail_list: AtomicUsize,
@@ -68,6 +70,7 @@ impl NativeAgent {
             records: Default::default(),
             idle_warning: None,
             deferred_history: false,
+            metadata_only_state: false,
             unreadable: Default::default(),
             inputs: Default::default(),
             injected: Default::default(),
@@ -78,6 +81,7 @@ impl NativeAgent {
             create_started: tokio::sync::Notify::new(),
             fail_inject: AtomicUsize::new(0),
             open_error: Mutex::new(None),
+            state_error: Mutex::new(None),
             open_failure: Mutex::new(None),
             fail_list: AtomicUsize::new(0),
             fail_accounts: AtomicUsize::new(0),
@@ -95,6 +99,7 @@ impl NativeAgent {
             records: self.records.clone(),
             idle_warning: self.idle_warning,
             deferred_history: self.deferred_history,
+            metadata_only_state: self.metadata_only_state,
             unreadable: Default::default(),
             inputs: self.inputs.clone(),
             injected: self.injected.clone(),
@@ -105,6 +110,7 @@ impl NativeAgent {
             create_started: tokio::sync::Notify::new(),
             fail_inject: AtomicUsize::new(0),
             open_error: Mutex::new(None),
+            state_error: Mutex::new(None),
             open_failure: Mutex::new(None),
             fail_list: AtomicUsize::new(0),
             fail_accounts: AtomicUsize::new(0),
@@ -337,8 +343,21 @@ impl Agent for NativeAgent {
         Ok(response)
     }
     async fn state(&self, id: &str) -> Result<SubmissionState, Failure> {
+        if let Some(error) = self.state_error.lock().unwrap().take() {
+            return Err(error);
+        }
+        let mut response = self
+            .records
+            .lock()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .ok_or_else(unsupported)?;
+        if self.metadata_only_state {
+            response.thread.turns = None;
+        }
         Ok(SubmissionState {
-            response: self.open(id, usize::MAX, true).await?,
+            response,
             needs_reload: false,
         })
     }
@@ -736,26 +755,20 @@ struct HandoffFixture {
     current: TurnId,
 }
 
-async fn saved_handoff(directory: &Path) -> HandoffFixture {
-    let canonical = dunce::canonicalize(directory).unwrap();
-    let directory = canonical.as_path();
+// Native import fixtures have never committed a complete Host transcript.
+// Provider outages must keep readable ranges visible without claiming completeness.
+async fn unimported_handoff(directory: &Path) -> HandoffFixture {
+    use crate::host_rpc::conversations::{Binding, Segment};
+    let directory = dunce::canonicalize(directory).unwrap();
     let codex = NativeAgent::new(ProviderKind::Codex, directory.join("codex"));
     let claude = NativeAgent::new(ProviderKind::Claude, directory.join("claude"));
-    let host = service(directory, &codex, &claude);
+    let host = service(&directory, &codex, &claude);
     let client = host.open_session();
-    let created: agent_protocol::session::OpenedSession = call(
-        &host,
-        client.id(),
-        Call::CreateSession(op::CreateSession {
-            initial_input: None,
-            provider: ProviderKind::Codex,
-            cwd: Some(directory.to_str().unwrap().into()),
-            model: None,
-        }),
-    )
-    .await
-    .unwrap();
-    let root = created.session;
+    let source = codex
+        .create(directory.to_str().unwrap(), None, None)
+        .await
+        .unwrap();
+    let root = source.thread.id.clone().unwrap();
     let original = send(
         &host,
         client.id(),
@@ -768,10 +781,17 @@ async fn saved_handoff(directory: &Path) -> HandoffFixture {
     .unwrap()
     .turn_id
     .unwrap();
+    let target = claude
+        .create(directory.to_str().unwrap(), None, None)
+        .await
+        .unwrap()
+        .thread
+        .id
+        .unwrap();
     let current = send(
         &host,
         client.id(),
-        &root,
+        &target,
         ProviderKind::Claude,
         "review",
         "Review the task",
@@ -780,6 +800,20 @@ async fn saved_handoff(directory: &Path) -> HandoffFixture {
     .unwrap()
     .turn_id
     .unwrap();
+    let mut row = Conversation::new(&source.thread).unwrap();
+    row.segments[0].end = Some(1);
+    row.segments.push(Segment {
+        session: target.clone(),
+        from: 0,
+        end: None,
+    });
+    row.bindings.push(Binding {
+        session: target.clone(),
+        covered: None,
+    });
+    row.active = target.clone();
+    let current = row.identity(&target, &current).into();
+    host.inner.conversations.save(row).unwrap();
     HandoffFixture {
         codex,
         claude,
@@ -840,7 +874,7 @@ async fn unavailable_current_provider_does_not_block_earlier_segments_or_local_r
         original,
         current,
         ..
-    } = saved_handoff(directory.path()).await;
+    } = unimported_handoff(directory.path()).await;
 
     // The saved handoff survives a restart, while only its current provider fails.
     let host = HostRpcService::new(
@@ -1056,7 +1090,7 @@ async fn unavailable_current_provider_does_not_block_earlier_segments_or_local_r
 #[tokio::test]
 async fn unavailable_conversations_keep_project_membership_and_page_warnings() {
     let directory = tempfile::tempdir().unwrap();
-    let HandoffFixture { codex, root, .. } = saved_handoff(directory.path()).await;
+    let HandoffFixture { codex, root, .. } = unimported_handoff(directory.path()).await;
     let projects = ProjectStore::new(directory.path().join("worktrees.json"));
     projects.register(directory.path()).await.unwrap();
     let project_id = projects.load().await.unwrap().projects[0].id.clone();
@@ -1119,7 +1153,7 @@ async fn unavailable_past_provider_keeps_current_history_and_operations_usable()
         original,
         current,
         ..
-    } = saved_handoff(directory.path()).await;
+    } = unimported_handoff(directory.path()).await;
     let host = HostRpcService::new(
         [
             crate::providers::codex::Codex::new(Err("Codex failed to start".into())).into(),
@@ -1233,14 +1267,14 @@ async fn unavailable_past_provider_keeps_current_history_and_operations_usable()
 }
 
 #[tokio::test]
-async fn loaded_provider_failure_keeps_the_handoff_open_and_discoverable() {
+async fn saved_handoff_retains_complete_history_when_the_loaded_provider_fails() {
     let directory = tempfile::tempdir().unwrap();
     let HandoffFixture {
         codex,
         claude,
         root,
         ..
-    } = saved_handoff(directory.path()).await;
+    } = unimported_handoff(directory.path()).await;
     let healthy = service(directory.path(), &codex.restarted(), &claude.restarted());
     let client = healthy.open_session();
     send(
@@ -1276,13 +1310,30 @@ async fn loaded_provider_failure_keeps_the_handoff_open_and_discoverable() {
     .await
     .unwrap();
     let turns = opened.response.thread.turns.unwrap();
-    assert_eq!(turns.len(), 1);
-    assert_eq!(turns[0].provider, Some(ProviderKind::Claude));
-    assert_eq!(opened.response.thread.status, SessionStatus::Unavailable);
+    // A provider outage changes execution availability, not the completeness
+    // of the conversation already committed to the Host transcript.
     assert_eq!(
-        opened.response.thread.history_read_state.unwrap().issues,
-        ["codex: Codex failed to start"]
+        turns
+            .iter()
+            .flat_map(|turn| handoff::Message::from_turn(turn))
+            .map(|message| message.text)
+            .collect::<Vec<_>>(),
+        [
+            "Original task",
+            "answer original",
+            "Review the task",
+            "answer review",
+            "Continue",
+            "answer return"
+        ]
     );
+    assert_eq!(opened.response.thread.status, SessionStatus::Unavailable);
+    let state = opened.response.thread.history_read_state.unwrap();
+    assert_eq!(
+        state.kind,
+        agent_protocol::session::HistoryReadKind::Complete
+    );
+    assert!(state.issues.is_empty());
     assert!(!opened.response.thread.capabilities.unwrap().model_change);
     assert!(!opened.response.thread.capabilities.unwrap().fork);
     let listed: agent_protocol::models::ThreadList = call(
@@ -1322,7 +1373,7 @@ async fn loaded_provider_failure_keeps_the_handoff_open_and_discoverable() {
 async fn opening_does_not_hide_native_history_errors_as_startup_failures() {
     for code in ["native_resume_failed", "provider_unavailable"] {
         let directory = tempfile::tempdir().unwrap();
-        let HandoffFixture { codex, root, .. } = saved_handoff(directory.path()).await;
+        let HandoffFixture { codex, root, .. } = unimported_handoff(directory.path()).await;
         let codex = codex.restarted();
         *codex.open_failure.lock().unwrap() =
             Some(Failure::new(code, "native session cannot be loaded"));
@@ -1358,7 +1409,7 @@ async fn handoff_does_not_silently_transfer_only_the_readable_sources() {
         crate::providers::codex::Codex::new(Err("Codex failed to start".into())).into(),
     ] {
         let directory = tempfile::tempdir().unwrap();
-        let HandoffFixture { claude, root, .. } = saved_handoff(directory.path()).await;
+        let HandoffFixture { claude, root, .. } = unimported_handoff(directory.path()).await;
         let deepseek = NativeAgent::new(ProviderKind::DeepSeek, directory.path().join("deepseek"));
         let host = HostRpcService::new(
             [
@@ -1407,7 +1458,7 @@ async fn handoff_does_not_silently_transfer_only_the_readable_sources() {
 #[tokio::test]
 async fn all_unavailable_providers_still_open_saved_metadata_and_report_each_failure() {
     let directory = tempfile::tempdir().unwrap();
-    let HandoffFixture { root, .. } = saved_handoff(directory.path()).await;
+    let HandoffFixture { root, .. } = unimported_handoff(directory.path()).await;
     let host = HostRpcService::new(
         [
             Backend::unavailable(ProviderKind::Codex, "Codex failed to start"),
@@ -1560,11 +1611,209 @@ async fn reopening_after_restart_restores_only_accepted_turn_settings() {
 }
 
 #[tokio::test]
-async fn round_trip_reuses_native_sessions_transfers_only_missing_history_and_reopens_after_restart()
- {
+async fn handoffs_use_the_complete_host_transcript_after_native_history_breaks() {
+    use agent_protocol::session::{HistoryReadKind, HistoryReadState};
+    let directory = tempfile::tempdir().unwrap();
+    let mut a = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));
+    let mut b = NativeAgent::new(ProviderKind::Claude, directory.path().join("claude"));
+    Arc::get_mut(&mut a).unwrap().metadata_only_state = true;
+    Arc::get_mut(&mut b).unwrap().metadata_only_state = true;
+    let root = a
+        .create(directory.path().to_str().unwrap(), None, None)
+        .await
+        .unwrap()
+        .thread
+        .id
+        .unwrap();
+    let host = service(directory.path(), &a, &b);
+    let client = host.open_session();
+    send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "a1",
+        "Original requirement",
+    )
+    .await
+    .unwrap();
+    send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Claude,
+        "b1",
+        "Review requirement",
+    )
+    .await
+    .unwrap();
+    let native_b = b.inputs.lock().unwrap()[0].thread_id.clone();
+    for agent in [&a, &b] {
+        *agent.open_failure.lock().unwrap() = Some(Failure::new(
+            "incomplete_history",
+            "transcript parent is unavailable",
+        ));
+        for record in agent.records.lock().unwrap().values_mut() {
+            record.thread.history_read_state = Some(HistoryReadState::new(
+                HistoryReadKind::Incomplete,
+                vec!["transcript parent is unavailable".into()],
+            ));
+        }
+    }
+    b.records
+        .lock()
+        .unwrap()
+        .get_mut(&native_b.id)
+        .unwrap()
+        .thread
+        .status = SessionStatus::Running;
+    assert_eq!(
+        send(
+            &host,
+            client.id(),
+            &root,
+            ProviderKind::Codex,
+            "busy",
+            "Continue"
+        )
+        .await
+        .unwrap_err()
+        .code,
+        "provider_switch_busy"
+    );
+    b.records
+        .lock()
+        .unwrap()
+        .get_mut(&native_b.id)
+        .unwrap()
+        .thread
+        .status = SessionStatus::Idle;
+    send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "a2",
+        "Apply findings",
+    )
+    .await
+    .unwrap();
+    let context = a.injected.lock().unwrap()[0].1.clone();
+    assert_eq!(
+        context
+            .messages
+            .iter()
+            .map(|message| message.text.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "Original requirement",
+            "answer a1",
+            "Review requirement",
+            "answer b1"
+        ]
+    );
+    let page = host
+        .read_handoff_history(&handoff::ReadHistory {
+            session: root.clone(),
+            offset: 0,
+            limit: 20,
+            text_offset: 0,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        page.items
+            .iter()
+            .map(|entry| entry.message.text.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "Original requirement",
+            "answer a1",
+            "Review requirement",
+            "answer b1",
+            "Apply findings",
+            "answer a2"
+        ]
+    );
+    drop(client);
+    drop(host);
+    let (a, b) = (a.restarted(), b.restarted());
+    *a.open_failure.lock().unwrap() = Some(Failure::new("incomplete_history", "still unreadable"));
+    *b.open_failure.lock().unwrap() = Some(Failure::new("incomplete_history", "still unreadable"));
+    let host = service(directory.path(), &a, &b);
+    let client = host.open_session();
+    send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Claude,
+        "b2",
+        "Verify findings",
+    )
+    .await
+    .unwrap();
+    let input = b.inputs.lock().unwrap()[1].clone();
+    assert_ne!(input.thread_id, native_b);
+    let op::Input::Text { text } = &input.input[0] else {
+        panic!()
+    };
+    assert!(text.contains("Apply findings"));
+    assert!(text.contains("Original requirement"));
+    assert!(text.contains("Review requirement"));
+}
+
+#[tokio::test]
+async fn incomplete_native_history_without_a_complete_host_import_blocks_handoff() {
     let directory = tempfile::tempdir().unwrap();
     let a = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));
     let b = NativeAgent::new(ProviderKind::Claude, directory.path().join("claude"));
+    let root = a
+        .create(directory.path().to_str().unwrap(), None, None)
+        .await
+        .unwrap()
+        .thread
+        .id
+        .unwrap();
+    let host = service(directory.path(), &a, &b);
+    let client = host.open_session();
+    send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "a1",
+        "Only a recorded tail",
+    )
+    .await
+    .unwrap();
+    assert!(host.inner.transcripts.history(&root).unwrap().is_none());
+    *a.open_failure.lock().unwrap() = Some(Failure::new(
+        "incomplete_history",
+        "transcript parent is unavailable",
+    ));
+    let error = send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Claude,
+        "b1",
+        "Continue",
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code, "incomplete_history");
+    assert_eq!(b.next.load(Ordering::SeqCst), 0);
+    assert!(b.inputs.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn round_trip_reuses_native_sessions_transfers_only_missing_history_and_reopens_after_restart()
+ {
+    let directory = tempfile::tempdir().unwrap();
+    let mut a = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));
+    let mut b = NativeAgent::new(ProviderKind::Claude, directory.path().join("claude"));
+    Arc::get_mut(&mut a).unwrap().metadata_only_state = true;
+    Arc::get_mut(&mut b).unwrap().metadata_only_state = true;
     let root = a
         .create(directory.path().to_str().unwrap(), Some("model"), None)
         .await
@@ -2160,7 +2409,7 @@ async fn a_running_source_blocks_switching_and_a_failed_resume_gets_full_context
     )
     .await
     .unwrap();
-    *a.open_error.lock().unwrap() = Some(Failure::new(
+    *a.state_error.lock().unwrap() = Some(Failure::new(
         "native_resume_failed",
         "native session cannot be loaded",
     ));
@@ -2763,6 +3012,18 @@ async fn unreadable_native_bodies_stay_deferred_without_blocking_their_import() 
     .await
     .unwrap_err();
     assert_eq!(failure.code, "unreadable");
+    let error = send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Claude,
+        "handoff",
+        "Continue",
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code, "incomplete_history");
+    assert!(claude.inputs.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

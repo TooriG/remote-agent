@@ -68,7 +68,7 @@ impl Desktop {
                 if *open {
                     let _ = opening.update(cx, |view, cx| {
                         if view.snapshot.account.login.is_some() {
-                            view.model_controls.panel = ModelPanel::Manage;
+                            view.model_controls.panel = ModelPanel::Accounts;
                         } else {
                             view.model_controls.provider = None;
                             view.model_controls.panel = ModelPanel::Models;
@@ -99,7 +99,6 @@ impl Desktop {
         in_settings: bool,
         selected: bool,
         (index, account): (usize, &agent_protocol::operations::Account),
-        manage: bool,
         disabled: bool,
         cx: &Context<Self>,
     ) -> AnyElement {
@@ -108,20 +107,32 @@ impl Desktop {
         let provider = account.provider;
         let logout_id = id.clone();
         let identity = account.email.as_deref().unwrap_or(&account.id);
-        let mut row = v_flex()
-            .gap_2()
-            .p_3()
-            .rounded(px(10.))
-            .when(!in_settings, |row| row.bg(rgb(appearance::SELECTED)))
-            .when(in_settings, |row| {
-                row.p_4().border_1().border_color(rgb(appearance::BORDER))
-            })
+        let confirming = self.account.sign_out.as_deref() == Some(account.id.as_str());
+        let header = h_flex()
+            .items_center()
+            .gap_3()
             .child(
                 Button::new(format!("account-choice-{index}"))
                     .accessibility_label(identity.to_owned())
                     .small()
                     .ghost()
-                    .child(account_identity(Some(account.provider), identity).flex_1())
+                    .h_auto()
+                    .min_h(px(40.))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_1()
+                            .child(account_identity(Some(account.provider), identity))
+                            .when_some(account.plan_type.as_ref(), |body, plan| {
+                                body.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(appearance::MUTED))
+                                        .child(plan.clone()),
+                                )
+                            }),
+                    )
                     .on_click(cx.listener(move |s, _, _, cx| {
                         s.account_operation(Intent::SelectAccountForDraft(
                             op::SelectAccountForDraft {
@@ -134,29 +145,59 @@ impl Desktop {
                     }))
                     .debug_selector(move || format!("account-choice-{index}"))
                     .when(selected, |button| {
-                        button.child(Icon::new(IconName::Check).size(px(14.)))
+                        button.child(if in_settings {
+                            div()
+                                .px_2()
+                                .py_1()
+                                .rounded(px(4.))
+                                .border_1()
+                                .border_color(rgb(appearance::BORDER))
+                                .text_xs()
+                                .child(language.text("使用中"))
+                                .into_any_element()
+                        } else {
+                            Icon::new(IconName::Check).size(px(14.)).into_any_element()
+                        })
                     })
-                    .w_full()
+                    .flex_1()
+                    .min_w_0()
                     .disabled(disabled),
             )
-            .when_some(account.plan_type.as_ref(), |row, plan| {
-                row.child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(appearance::MUTED))
-                        .child(plan.to_uppercase()),
-                )
-            })
-            .child(if manage {
-                account_usage_view(account.usage.as_ref(), language)
-            } else {
-                weekly_usage_view(
-                    self.snapshot
-                        .account_weekly_usage(account.provider, account.id.clone()),
-                    language,
+            .when(!confirming, |header| {
+                let id = logout_id.clone();
+                header.child(
+                    button(
+                        format!("account-logout-{index}"),
+                        language.text("サインアウト"),
+                        cx,
+                        move |s, _, _| s.account.sign_out = Some(id.clone()),
+                    )
+                    .debug_selector(move || format!("account-logout-{index}"))
+                    .text_color(rgb(appearance::MUTED))
+                    .disabled(disabled),
                 )
             });
-        if manage && provider == ProviderKind::Codex {
+        let mut row = if in_settings {
+            settings_group().p_5().gap_4()
+        } else {
+            v_flex()
+                .gap_2()
+                .p_3()
+                .rounded(px(10.))
+                .bg(rgb(appearance::SELECTED))
+        };
+        row = row.child(header).child(
+            v_flex()
+                .gap_3()
+                .when(in_settings, |body| {
+                    body.pt_4()
+                        .border_t_1()
+                        .border_color(rgb(appearance::BORDER))
+                })
+                .child(div().font_semibold().child(language.text("使用量")))
+                .child(account_usage_view(account.usage.as_ref(), language)),
+        );
+        if provider == ProviderKind::Codex {
             let manage_usage = button(
                 format!("account-usage-manage-{index}"),
                 language.text("追加クレジット・上限を管理"),
@@ -164,14 +205,12 @@ impl Desktop {
                 |s, _, cx| {
                     s.open_browser(s.panel_scope(), "https://chatgpt.com/settings/usage", cx);
                 },
-            )
-            .small()
-            .ghost();
+            );
             let hint = div().text_xs().text_color(rgb(appearance::MUTED))
                 .child(language.text("利用枠は表示時刻に自動リセットされます。上限の変更・追加クレジットは管理画面で行えます。"));
             row = row.child(manage_usage).child(hint);
         }
-        if manage && self.account.sign_out.as_deref() == Some(account.id.as_str()) {
+        if confirming {
             row = row
                 .child(div().text_sm().child(
                     language.text("サインアウトしますか？ 再び使うにはサインインが必要です。"),
@@ -204,24 +243,10 @@ impl Desktop {
                             .debug_selector(move || format!("account-logout-cancel-{index}")),
                         ),
                 );
-        } else if manage {
-            let logout = button(
-                format!("account-logout-{index}"),
-                language.text("サインアウト"),
-                cx,
-                move |s, _, _| s.account.sign_out = Some(logout_id.clone()),
-            )
-            .debug_selector(move || format!("account-logout-{index}"))
-            .disabled(disabled);
-            row = if in_settings {
-                row.child(h_flex().justify_end().child(logout))
-            } else {
-                row.child(logout)
-            };
         }
         row.into_any_element()
     }
-    pub(super) fn account_controls(&self, manage: bool, cx: &Context<Self>) -> AnyElement {
+    pub(super) fn account_controls(&self, cx: &Context<Self>) -> AnyElement {
         let language = crate::localization::language(cx);
         let in_settings = self.tab == Tab::Settings;
         let accounts = self.snapshot.account.accounts.as_ref();
@@ -230,9 +255,11 @@ impl Desktop {
             || self.busy > 0
             || self.snapshot.account.login.is_some()
             || !self.snapshot.connected;
-        let mut services = h_flex()
-            .gap_1()
-            .when(in_settings, |row| row.max_w(px(320.)));
+        let mut services = h_flex().gap_1().when(in_settings, |row| {
+            row.w_full()
+                .border_b_1()
+                .border_color(rgb(appearance::BORDER))
+        });
         for (value, label) in [
             (ProviderKind::Codex, "Codex"),
             (ProviderKind::Claude, "Claude"),
@@ -261,63 +288,94 @@ impl Desktop {
                     },
                 )
                 .debug_selector(move || format!("model-provider-{label}"))
-                .selected(provider == Some(value))
+                .selected(!in_settings && provider == Some(value))
                 .when(in_settings, |button| {
-                    button.small().ghost().icon(provider_icon(value))
+                    button
+                        .icon(provider_icon(value))
+                        .w(px(120.))
+                        .h(px(40.))
+                        .rounded(px(0.))
+                        .border_b_2()
+                        .border_color(if provider == Some(value) {
+                            rgb(appearance::FOREGROUND)
+                        } else {
+                            rgb(appearance::BORDER).opacity(0.)
+                        })
+                        .text_color(if provider == Some(value) {
+                            rgb(appearance::FOREGROUND)
+                        } else {
+                            rgb(appearance::MUTED)
+                        })
                 })
                 .disabled(disabled)
-                .flex_1(),
+                .when(!in_settings, |button| button.flex_1()),
             );
         }
         let mut body = v_flex()
             .id("model-account-controls")
             .gap_3()
-            .when(in_settings, |body| body.gap_5())
-            .when(manage, |body| body.child(services));
+            .when(in_settings, |body| body.gap_6())
+            .child(services);
         let Some(provider) = provider else {
             return body
                 .child(language.text("エージェントを選択してください。"))
                 .into_any_element();
         };
         if provider == ProviderKind::DeepSeek {
-            return body.child(self.credential_controls(cx)).into_any_element();
-        }
-        if manage && provider == ProviderKind::Codex {
-            let cli = self.snapshot.account.codex_cli.as_deref();
-            let updating = self.snapshot.operation_running(op::OperationKey::CodexCli);
-            let mut controls = v_flex().gap_2()
-                .child(div().font_semibold().child("Codex CLI"))
-                .child(cli.and_then(|status| status.version.clone()).unwrap_or_else(|| language.text("バージョン未確認").into()))
-                .child(div().text_sm().text_color(rgb(appearance::MUTED))
-                    .child(language.text("選択中の環境のCLIを更新します。更新後は実行中の会話が終わってからHostを再起動してください。モデル一覧は再接続時に再取得します。")))
-                .child(h_flex().gap_2()
-                    .child(button("codex-cli-update", if updating { language.text("確認・更新中…") } else { language.text("最新版に更新") }, cx, |s, _, _| {
-                        s.dispatch(Intent::ManageCodexCli(op::ManageCodexCli { update: true }));
-                    }).disabled(disabled || updating).debug_selector(|| "codex-cli-update".into()))
-                    .child(button("codex-cli-refresh", language.text("状態を確認"), cx, |s, _, _| {
-                        s.dispatch(Intent::ManageCodexCli(op::ManageCodexCli { update: false }));
-                        s.refresh_accounts_and_models();
-                    }).disabled(disabled || updating)));
-            if let Some(cli) = cli {
-                if cli.restart_required {
-                    controls = controls.child(language.text(
-                        "更新が完了しました。新しいCLIを使用するにはHostを再起動してください。",
-                    ));
-                }
-                if let Some(error) = &cli.error {
-                    controls = controls.child(
-                        div()
-                            .text_sm()
-                            .text_color(rgb(0xff8e86))
-                            .child(error.clone()),
-                    );
-                }
-            }
-            body = body.child(controls);
+            let credentials = self.credential_controls(cx);
+            return body
+                .child(if in_settings {
+                    settings_group().p_5().child(credentials).into_any_element()
+                } else {
+                    credentials
+                })
+                .into_any_element();
         }
         if self.snapshot.account.login.is_some() {
             body = body.child(self.account_login_controls(None, cx));
         } else {
+            body = body.child(
+                h_flex()
+                    .items_center()
+                    .flex_wrap()
+                    .gap_3()
+                    .when(in_settings, |header| {
+                        header.child(
+                            div()
+                                .flex_1()
+                                .text_lg()
+                                .font_semibold()
+                                .child(language.text("アカウント")),
+                        )
+                    })
+                    .child(
+                        button(
+                            "account-start-login",
+                            language.text("アカウントを追加"),
+                            cx,
+                            move |s, window, cx| {
+                                s.start_provider_setup(provider, window, cx);
+                            },
+                        )
+                        .icon(IconName::Plus)
+                        .secondary()
+                        .outline()
+                        .h(px(32.))
+                        .debug_selector(|| "account-start-login".into())
+                        .disabled(disabled),
+                    )
+                    .child(
+                        button(
+                            "accounts-refresh",
+                            language.text("使用量を再取得"),
+                            cx,
+                            |s, _, _| s.refresh_accounts_and_models(),
+                        )
+                        .icon(IconName::RotateCw)
+                        .debug_selector(|| "accounts-refresh".into())
+                        .disabled(disabled),
+                    ),
+            );
             if let Some(accounts) = accounts {
                 let mut matching = accounts
                     .accounts
@@ -337,58 +395,12 @@ impl Desktop {
                         in_settings,
                         accounts.is_selected(entry.1),
                         entry,
-                        manage,
                         disabled,
                         cx,
                     ));
                 }
             } else {
                 body = body.child(language.text("アカウントを読み込み中…"));
-            }
-            if manage {
-                body = body.child(
-                    h_flex()
-                        .justify_between()
-                        .gap_2()
-                        .child(
-                            button(
-                                "account-start-login",
-                                language.text("アカウントを追加"),
-                                cx,
-                                move |s, window, cx| {
-                                    s.start_provider_setup(provider, window, cx);
-                                },
-                            )
-                            .icon(IconName::Plus)
-                            .disabled(disabled),
-                        )
-                        .child(
-                            button(
-                                "accounts-refresh",
-                                language.text("使用量を再取得"),
-                                cx,
-                                |s, _, _| {
-                                    s.refresh_accounts_and_models();
-                                },
-                            )
-                            .tooltip(language.text("モデルと使用量を更新"))
-                            .disabled(disabled),
-                        ),
-                );
-            } else {
-                body = body.child(
-                    button(
-                        "model-accounts-manage",
-                        language.text("アカウントを管理"),
-                        cx,
-                        |s, _, _| {
-                            s.model_controls.panel = ModelPanel::Manage;
-                        },
-                    )
-                    .icon(IconName::Settings)
-                    .debug_selector(|| "model-accounts-manage".into())
-                    .w_full(),
-                );
             }
         }
         body =
@@ -405,7 +417,7 @@ impl Desktop {
                         div()
                             .text_xs()
                             .text_color(rgb(0xff7777))
-                            .child(error_message(error)),
+                            .child(error_view(&error_text(error), language)),
                     )
                 },
             )
@@ -417,19 +429,52 @@ impl Desktop {
                         div()
                             .text_xs()
                             .text_color(rgb(0xff7777))
-                            .child(error_message(&error))
+                            .child(error_view(&error_text(&error), language))
                     }),
             );
         if let Some(error) = self
             .snapshot
             .operation_error(op::OperationKey::AccountLogin { provider })
         {
-            body = body.child(div().text_sm().text_color(rgb(0xff8e86)).child(error));
+            body = body.child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(0xff8e86))
+                    .child(error_view(&error, language)),
+            );
         }
         if !in_settings {
             body = body.child(self.error_notices(ErrorScope::Settings, cx));
         }
+        if provider == ProviderKind::Codex {
+            body = body.child(self.codex_cli_controls(disabled, cx));
+        }
         body.into_any_element()
+    }
+
+    fn codex_cli_controls(&self, disabled: bool, cx: &Context<Self>) -> Div {
+        let language = crate::localization::language(cx);
+        let cli = self.snapshot.account.codex_cli.as_deref();
+        let updating = self.snapshot.operation_running(op::OperationKey::CodexCli);
+        v_flex().gap_4().mt_2()
+            .child(div().text_lg().font_semibold().child("Codex CLI"))
+            .child(settings_group().p_5().gap_4()
+                .child(h_flex().items_center().flex_wrap().gap_4()
+                    .child(v_flex().flex_1().min_w(px(160.)).gap_1()
+                        .child(div().font_semibold().child(cli.and_then(|status| status.version.clone()).unwrap_or_else(|| language.text("バージョン未確認").into()))))
+                    .child(h_flex().gap_2()
+                        .child(button("codex-cli-refresh", language.text("状態を確認"), cx, |s, _, _| {
+                            s.dispatch(Intent::ManageCodexCli(op::ManageCodexCli { update: false }));
+                            s.refresh_accounts_and_models();
+                        }).secondary().outline().h(px(32.)).disabled(disabled || updating))
+                        .child(button("codex-cli-update", if updating { language.text("確認・更新中…") } else { language.text("最新版に更新") }, cx, |s, _, _| {
+                            s.dispatch(Intent::ManageCodexCli(op::ManageCodexCli { update: true }));
+                        }).secondary().outline().h(px(32.)).disabled(disabled || updating).debug_selector(|| "codex-cli-update".into()))))
+                .child(div().pt_4().border_t_1().border_color(rgb(appearance::BORDER))
+                    .text_xs().text_color(rgb(appearance::MUTED))
+                    .child(language.text("選択中の環境のCLIを更新します。更新後は実行中の会話が終わってからホストを再起動してください。モデル一覧は再接続時に再取得します。")))
+                .when(cli.is_some_and(|cli| cli.restart_required), |body| body.child(language.text("更新が完了しました。新しいCLIを使用するにはホストを再起動してください。")))
+                .when_some(cli.and_then(|cli| cli.error.as_ref()), |body, error| body.child(div().text_sm().text_color(rgb(0xff8e86)).child(error.clone()))))
     }
 }
 
@@ -461,7 +506,6 @@ impl Desktop {
             .update(cx, |input, cx| input.set_value("", window, cx));
         self.model_controls.provider = Some(provider);
         if provider == ProviderKind::DeepSeek {
-            self.model_controls.panel = ModelPanel::Manage;
             self.account_operation(Intent::ReadDshCredentials(op::ReadDshCredentials {}));
         } else {
             self.account_operation(Intent::StartAccountLogin(op::StartAccountLogin {
@@ -612,7 +656,12 @@ impl Desktop {
             .snapshot
             .operation_error(op::OperationKey::DshCredentials)
         {
-            form = form.child(div().text_sm().text_color(rgb(0xff7777)).child(error));
+            form = form.child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(0xff7777))
+                    .child(error_view(&error, language)),
+            );
         }
         form.into_any_element()
     }
@@ -782,10 +831,15 @@ fn account_usage_view(
             .into_any_element();
     };
     if let Some(error) = &usage.error {
-        body = body.child(div().text_color(rgb(0xe9b56f)).child(error_message(error)));
-    }
-    for window in &usage.windows {
         body = body.child(
+            div()
+                .text_color(rgb(0xe9b56f))
+                .child(error_view(&error_text(error), language)),
+        );
+    }
+    let mut windows = h_flex().w_full().flex_wrap().gap_5();
+    for window in &usage.windows {
+        windows = windows.child(
             usage_window_view(window, language).when_some(
                 window
                     .resets_at
@@ -805,22 +859,23 @@ fn account_usage_view(
             ),
         );
     }
-    body.when_some(
-        chrono::DateTime::from_timestamp(usage.fetched_at, 0).filter(|_| usage.error.is_none()),
-        |body, at| {
-            body.child(div().text_color(rgb(appearance::MUTED)).child(
-                agent_core::localization::localized_ui_format(
-                    language,
-                    "{0} 時点".into(),
-                    vec![format!(
-                        "{}",
-                        at.with_timezone(&chrono::Local).format("%H:%M")
-                    )],
-                ),
-            ))
-        },
-    )
-    .into_any_element()
+    body.child(windows)
+        .when_some(
+            chrono::DateTime::from_timestamp(usage.fetched_at, 0).filter(|_| usage.error.is_none()),
+            |body, at| {
+                body.child(div().text_color(rgb(appearance::MUTED)).child(
+                    agent_core::localization::localized_ui_format(
+                        language,
+                        "{0} 時点".into(),
+                        vec![format!(
+                            "{}",
+                            at.with_timezone(&chrono::Local).format("%H:%M")
+                        )],
+                    ),
+                ))
+            },
+        )
+        .into_any_element()
 }
 
 impl Desktop {
@@ -909,12 +964,7 @@ impl Desktop {
     fn model_panel_content(&self, cx: &Context<Self>) -> AnyElement {
         let language = crate::localization::language(cx);
         let mut body = v_flex().flex_1().min_w_0().gap_2();
-        if self.model_controls.panel != ModelPanel::Models {
-            let title = if self.model_controls.panel == ModelPanel::Accounts {
-                language.text("アカウント")
-            } else {
-                language.text("アカウントを管理")
-            };
+        if self.model_controls.panel == ModelPanel::Accounts {
             let header = h_flex()
                 .gap_2()
                 .h(px(44.))
@@ -926,18 +976,14 @@ impl Desktop {
                         cx,
                         |s, _, _| {
                             s.account.sign_out = None;
-                            s.model_controls.panel = match s.model_controls.panel {
-                                ModelPanel::Manage => {
-                                    s.model_controls.provider = None;
-                                    ModelPanel::Accounts
-                                }
-                                _ => ModelPanel::Models,
-                            };
+                            s.model_controls.provider = None;
+                            s.model_controls.panel = ModelPanel::Models;
                         },
                     )
-                    .disabled(self.snapshot.account.login.is_some()),
+                    .disabled(self.snapshot.account.login.is_some())
+                    .debug_selector(|| "model-panel-back".into()),
                 )
-                .child(div().text_base().child(title));
+                .child(div().text_base().child(language.text("アカウント")));
             return body
                 .w_full()
                 .child(header)
@@ -946,12 +992,7 @@ impl Desktop {
                         .id("model-accounts-scroll")
                         .max_h(px(440.))
                         .overflow_y_scroll()
-                        .child(
-                            self.account_controls(
-                                self.model_controls.panel == ModelPanel::Manage,
-                                cx,
-                            ),
-                        ),
+                        .child(self.account_controls(cx)),
                 )
                 .into_any_element();
         }
@@ -1169,7 +1210,7 @@ impl Desktop {
                         div()
                             .text_xs()
                             .text_color(rgb(0xff7777))
-                            .child(error_message(&error))
+                            .child(error_view(&error_text(&error), language))
                     }),
             )
             .when(
@@ -1396,7 +1437,8 @@ fn usage_window_view(
     language: agent_core::localization::UiLanguage,
 ) -> Div {
     v_flex()
-        .w_full()
+        .flex_1()
+        .min_w(px(180.))
         .gap_1()
         .child(
             h_flex()
@@ -1412,7 +1454,10 @@ fn usage_window_view(
                     vec![window.remaining_percent.to_string()],
                 )),
         )
-        .child(usage_bar(window.remaining_percent, rgb(0x8acfac)))
+        .child(usage_bar(
+            window.remaining_percent,
+            rgb(appearance::FOREGROUND),
+        ))
 }
 
 fn usage_bar(remaining_percent: u32, tint: Rgba) -> Div {
@@ -1559,10 +1604,9 @@ mod tests {
         window.run_until_parked();
         assert!(window.debug_bounds("account-choice-0").is_some());
         assert!(window.debug_bounds("account-choice-1").is_none());
-        assert!(window.debug_bounds("account-logout-0").is_none());
-        let manage = window.debug_bounds("model-accounts-manage").unwrap();
-        window.simulate_click(manage.center(), Modifiers::default());
-        window.run_until_parked();
+        assert!(window.debug_bounds("account-start-login").is_some());
+        assert!(window.debug_bounds("accounts-refresh").is_some());
+        assert!(window.debug_bounds("model-choice-gpt").is_none());
         let logout = window.debug_bounds("account-logout-0").unwrap();
         window.simulate_click(logout.center(), Modifiers::default());
         window.run_until_parked();
@@ -1574,10 +1618,30 @@ mod tests {
         });
         let cancel = window.debug_bounds("account-logout-cancel-0").unwrap();
         window.simulate_click(cancel.center(), Modifiers::default());
+        window.run_until_parked();
         window.update(|_, cx| assert!(view.read(cx).0.read(cx).account.sign_out.is_none()));
+        window.simulate_click(logout.center(), Modifiers::default());
+        window.run_until_parked();
+        let back = window.debug_bounds("model-panel-back").unwrap();
+        window.simulate_click(back.center(), Modifiers::default());
+        window.run_until_parked();
+        assert!(window.debug_bounds("model-choice-gpt").is_some());
+        assert!(window.debug_bounds("account-logout-0").is_none());
+        window.update(|_, cx| assert!(view.read(cx).0.read(cx).account.sign_out.is_none()));
+        let summary = window.debug_bounds("model-account-summary").unwrap();
+        window.simulate_click(summary.center(), Modifiers::default());
+        window.run_until_parked();
+        let claude = window.debug_bounds("model-provider-Claude").unwrap();
+        window.simulate_click(claude.center(), Modifiers::default());
+        window.run_until_parked();
+        assert!(window.debug_bounds("account-choice-0").is_none());
+        assert!(window.debug_bounds("account-choice-1").is_some());
+        assert!(window.debug_bounds("account-logout-1").is_some());
+        window.simulate_click(back.center(), Modifiers::default());
+        window.run_until_parked();
+        assert!(window.debug_bounds("model-choice-gpt").is_some());
         window.update(|window, cx| {
             view.read(cx).0.clone().update(cx, |view, cx| {
-                view.model_controls.panel = ModelPanel::Models;
                 view.model_controls
                     .search
                     .update(cx, |input, cx| input.set_value("no match", window, cx));
@@ -1619,7 +1683,7 @@ mod tests {
         assert!(window.debug_bounds("model-choice-claude:sonnet").is_some());
         window.update(|_, cx| {
             view.read(cx).0.clone().update(cx, |view, cx| {
-                view.model_controls.panel = ModelPanel::Manage;
+                view.model_controls.panel = ModelPanel::Accounts;
                 view.account.busy = true;
                 cx.notify();
             })
@@ -1669,7 +1733,7 @@ mod tests {
             desktop.update(cx, |view, cx| {
                 view.model_controls.provider =
                     Some(agent_protocol::session::ProviderKind::DeepSeek);
-                view.model_controls.panel = ModelPanel::Manage;
+                view.model_controls.panel = ModelPanel::Accounts;
                 let snapshot = Arc::make_mut(&mut view.snapshot);
                 snapshot.connected = true;
                 Arc::make_mut(&mut snapshot.account).dsh_credentials =

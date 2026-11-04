@@ -20,7 +20,28 @@ pub struct ErrorNotice {
     pub id: ErrorId,
     pub context: String,
     pub title: String,
+    pub text: ErrorText,
+}
+
+/// UI copy is written in the source language, Japanese. Host, transport and
+/// provider diagnostics are not, so they stay verbatim in `details` instead
+/// of mixing into translated copy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "bindings", derive(uniffi::Record))]
+pub struct ErrorText {
     pub message: String,
+    pub details: Option<String>,
+}
+
+/// Single-string consumers show the copy first and the cause on its own line.
+impl std::fmt::Display for ErrorText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)?;
+        match &self.details {
+            Some(details) => write!(f, "\n{details}"),
+            None => Ok(()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -159,18 +180,18 @@ impl Snapshot {
         let mut notices = Vec::new();
         if scope == ErrorScope::Application {
             let application = [
-                (&self.connection_failure, "接続", "Hostに接続できません"),
+                (&self.connection_failure, "接続", "ホストに接続できません"),
                 (&self.error, "操作", "操作に失敗しました"),
             ];
             for (error, context, title) in application {
                 if let Some(error) = error {
                     notices.push(ErrorNotice {
                         id: ErrorId::Application {
-                            message: error_message(error),
+                            message: error.clone(),
                         },
                         context: context.into(),
                         title: title.into(),
-                        message: error_message(error),
+                        text: error_text(error),
                     });
                 }
             }
@@ -190,7 +211,7 @@ impl Snapshot {
                     },
                     context: scope.label().into(),
                     title: title.into(),
-                    message: error_message(message),
+                    text: error_text(message),
                 });
             }
         }
@@ -204,86 +225,335 @@ impl Snapshot {
     }
 }
 
-pub fn error_message(error: &str) -> String {
-    let Some(raw) = error.strip_prefix("remote RPC error: ") else {
-        return error.into();
+const FAILED: &str = "エラーが発生しました。";
+const HOST_FAILED: &str = "ホストで操作に失敗しました。";
+const NO_DETAILS: &str = "ホストで操作に失敗しました。エラーの詳細を取得できませんでした。";
+
+#[cfg_attr(feature = "bindings", uniffi::export)]
+pub fn error_text(error: &str) -> ErrorText {
+    if let Some(raw) = error.strip_prefix("remote RPC error: ") {
+        return host_failure(raw);
+    }
+    // Local failures arrive as `PeerError` and `TransportError` text.
+    let (fallback, text) = if let Some(text) = error.strip_prefix("invalid RPC message: ") {
+        (FAILED, text)
+    } else if let Some(text) = error.strip_prefix("connection closed: ") {
+        ("ホストとの接続が切れました。", text)
+    } else if error.starts_with("iroh transport failed: ") {
+        (
+            "ネットワーク接続とホストの起動状態を確認してください。",
+            error,
+        )
+    } else if error.starts_with("request ") && error.ends_with(" timed out") {
+        ("ホストから応答がありませんでした。", error)
+    } else if error.starts_with("Invalid ") && error.contains(" response: ") {
+        ("ホストの応答を読み取れませんでした。", error)
+    } else {
+        (FAILED, error)
+    };
+    let mut text = split(text);
+    if text.message.is_empty() {
+        text = ErrorText {
+            message: fallback.into(),
+            details: (!error.trim().is_empty()).then(|| error.into()),
+        };
+    }
+    text
+}
+
+fn host_failure(raw: &str) -> ErrorText {
+    let copy = |message: &str| ErrorText {
+        message: message.into(),
+        details: None,
     };
     let Ok(value) = serde_json::from_str::<Value>(raw) else {
-        return "接続先で操作に失敗しました。エラーの詳細を取得できませんでした。".into();
+        return copy(NO_DETAILS);
     };
     match value["code"].as_str() {
-        Some("file_not_found") => return "ファイルまたはフォルダが見つかりません。".into(),
+        Some("file_not_found") => return copy("ファイルまたはフォルダが見つかりません。"),
         Some("file_access_denied") => {
-            return "ファイルまたはフォルダにアクセスする権限がありません。".into();
+            return copy("ファイルまたはフォルダにアクセスする権限がありません。");
         }
+        Some("thread_in_use") => return copy(agent_protocol::error::THREAD_IN_USE_MESSAGE),
         _ => {}
     }
-    if value["code"] == "thread_in_use" {
-        return agent_protocol::error::THREAD_IN_USE_MESSAGE.into();
-    }
-    if value["code"] == "dictation_failed" {
-        let reason = value["message"]
-            .as_str()
-            .filter(|message| !message.trim().is_empty())
-            .map(crate::diagnostics::sanitize)
-            .unwrap_or_else(|| "もう一度録音してください。".into());
-        return format!("音声を文字起こしできませんでした。{reason}");
-    }
-    value["message"]
+    let dictation = value["code"] == "dictation_failed";
+    let mut text = match value["message"]
         .as_str()
         .filter(|message| !message.trim().is_empty())
-        .map(crate::diagnostics::sanitize)
-        .unwrap_or_else(|| {
-            "接続先で操作に失敗しました。エラーの詳細を取得できませんでした。".into()
+    {
+        Some(message) => split(&crate::diagnostics::sanitize(message)),
+        None if dictation => copy(""),
+        None => return copy(NO_DETAILS),
+    };
+    if dictation {
+        let reason = match text.message.as_str() {
+            "" => "もう一度録音してください。",
+            reason => reason,
+        };
+        text.message = format!("音声を文字起こしできませんでした。{reason}");
+    } else if text.message.is_empty() {
+        text.message = HOST_FAILED.into();
+    }
+    text
+}
+
+/// Host failures join context and cause as `context: cause`, so a Japanese
+/// line ending in a non-Japanese cause is split into copy and details.
+fn split(error: &str) -> ErrorText {
+    let copy_text = |text: &str| {
+        text.chars().any(|c| {
+            matches!(c, '\u{3040}'..='\u{30ff}' | '\u{3400}'..='\u{4dbf}' | '\u{4e00}'..='\u{9fff}')
         })
+    };
+    let (mut copy, mut details) = (Vec::new(), Vec::new());
+    for line in error.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        if !copy_text(line) {
+            details.push(line);
+            continue;
+        }
+        match line
+            .match_indices(": ")
+            .find(|(index, _)| !copy_text(&line[index + 2..]))
+        {
+            Some((index, _)) => {
+                copy.push(&line[..index]);
+                details.push(&line[index + 2..]);
+            }
+            None => copy.push(line),
+        }
+    }
+    ErrorText {
+        message: copy.join("\n"),
+        details: (!details.is_empty()).then(|| details.join("\n")),
+    }
 }
 
 #[cfg(test)]
 mod error_tests {
-    use super::error_message;
-    #[test]
-    fn writer_conflicts_explain_explicit_fork_recovery() {
-        let message = error_message(
-            r#"remote RPC error: {"code":"thread_in_use","message":"thread private-id already has an active writer","delivery":"notSent"}"#,
-        );
-        assert!(message.contains("分岐") && message.contains("未送信"));
-        assert!(!message.contains("private-id") && !message.contains('{'));
+    use super::{ErrorText, error_text};
+    use crate::peer::PeerError;
+    use proptest::prelude::*;
+
+    fn japanese(text: &str) -> bool {
+        text.chars()
+            .any(|c| matches!(c, '\u{3040}'..='\u{30ff}' | '\u{4e00}'..='\u{9fff}'))
     }
 
     #[test]
-    fn provider_cause_survives_host_envelope_without_exposing_payloads() {
-        let raw = r#"remote RPC error: {"delivery":"unknown","code":"provider_failed","message":"thread example already has an active writer","execution":{"providerCode":"-32600"}}"#;
-        assert_eq!(
-            error_message(raw),
-            "thread example already has an active writer"
+    fn writer_conflicts_explain_explicit_fork_recovery() {
+        let text = error_text(
+            r#"remote RPC error: {"code":"thread_in_use","message":"thread private-id already has an active writer","delivery":"notSent"}"#,
         );
-        assert_eq!(crate::diagnostics::sanitize(raw), error_message(raw));
-        for raw in [
-            "remote RPC error: invalid",
-            r#"remote RPC error: {"message":" "}"#,
+        assert!(text.message.contains("分岐") && text.message.contains("未送信"));
+        assert!(!text.message.contains("private-id") && !text.message.contains('{'));
+        assert_eq!(text.details, None);
+    }
+
+    #[test]
+    fn known_file_failures_show_recovery_copy_without_host_payloads() {
+        for (code, message) in [
+            ("file_not_found", "ファイルまたはフォルダが見つかりません。"),
+            (
+                "file_access_denied",
+                "ファイルまたはフォルダにアクセスする権限がありません。",
+            ),
         ] {
-            let message = error_message(raw);
-            assert!(message.contains("詳細を取得できませんでした"));
-            assert!(!message.contains("もう一度"));
+            let raw = format!(
+                "remote RPC error: {}",
+                serde_json::json!({"code": code, "message": "host file failure", "data": {"path": "private"}})
+            );
+            assert_eq!(
+                error_text(&raw),
+                ErrorText {
+                    message: message.into(),
+                    details: None
+                }
+            );
         }
     }
 
     #[test]
+    fn provider_cause_stays_in_details_without_exposing_payloads() {
+        let raw = r#"remote RPC error: {"delivery":"unknown","code":"provider_failed","message":"thread example already has an active writer","execution":{"providerCode":"-32600"}}"#;
+        let text = error_text(raw);
+        assert_eq!(text.message, "ホストで操作に失敗しました。");
+        assert_eq!(
+            text.details.as_deref(),
+            Some("thread example already has an active writer")
+        );
+        assert_eq!(crate::diagnostics::sanitize(raw), text.details.unwrap());
+        for raw in [
+            "remote RPC error: invalid",
+            r#"remote RPC error: {"message":" "}"#,
+        ] {
+            let text = error_text(raw);
+            assert!(text.message.contains("詳細を取得できませんでした"));
+            assert!(!text.message.contains("もう一度"));
+            assert_eq!(text.details, None);
+        }
+    }
+
+    #[test]
+    fn host_copy_keeps_its_language_and_moves_the_cause_to_details() {
+        let host = |message: &str| {
+            error_text(&format!(
+                "remote RPC error: {}",
+                serde_json::json!({"code": "worktree_status_failed", "message": message})
+            ))
+        };
+        assert_eq!(
+            host("ワークツリーを確認できません: fatal: not a git repository"),
+            ErrorText {
+                message: "ワークツリーを確認できません".into(),
+                details: Some("fatal: not a git repository".into()),
+            }
+        );
+        assert_eq!(
+            host(
+                "Codex CLIの更新に失敗しました: exit status 1\nインストール元の方法で更新してください。"
+            ),
+            ErrorText {
+                message: "Codex CLIの更新に失敗しました\nインストール元の方法で更新してください。"
+                    .into(),
+                details: Some("exit status 1".into()),
+            }
+        );
+        let warning = "稼働状況を確認できないため削除できません: 未保存の変更があります。";
+        assert_eq!(host(warning).message, warning);
+        assert_eq!(host(warning).details, None);
+        assert_eq!(
+            error_text(r#"remote RPC error: {"code":-1,"message":"permission denied"}"#),
+            ErrorText {
+                message: "ホストで操作に失敗しました。".into(),
+                details: Some("permission denied".into()),
+            }
+        );
+    }
+
+    #[test]
     fn dictation_errors_explain_recovery_without_rendering_rpc_payloads() {
-        let message = error_message(
+        let text = error_text(
             r#"remote RPC error: {"code":"dictation_failed","message":"provider failed","data":{"audio":"private"}}"#,
         );
-        assert!(message.contains("音声を文字起こしできませんでした。provider failed"));
-        assert!(!message.contains("private") && !message.contains("{"));
-        assert!(error_message(r#"remote RPC error: {"code":"dictation_failed","message":"Codexにログインしてください。"}"#).contains("Codexにログインしてください。"));
         assert_eq!(
-            error_message(r#"remote RPC error: {"code":-1,"message":"permission denied"}"#),
-            "permission denied"
+            text.message,
+            "音声を文字起こしできませんでした。もう一度録音してください。"
+        );
+        assert_eq!(text.details.as_deref(), Some("provider failed"));
+        assert_eq!(
+            error_text(r#"remote RPC error: {"code":"dictation_failed","message":" "}"#),
+            ErrorText {
+                message: "音声を文字起こしできませんでした。もう一度録音してください。".into(),
+                details: None,
+            }
         );
         assert_eq!(
-            error_message("マイクへのアクセスを許可してください"),
-            "マイクへのアクセスを許可してください"
+            error_text(r#"remote RPC error: {"code":"dictation_failed","message":"Codexにログインしてください。"}"#).message,
+            "音声を文字起こしできませんでした。Codexにログインしてください。"
         );
+        assert_eq!(
+            error_text("マイクへのアクセスを許可してください"),
+            ErrorText {
+                message: "マイクへのアクセスを許可してください".into(),
+                details: None,
+            }
+        );
+    }
+
+    #[test]
+    fn local_transport_failures_explain_the_failure_and_keep_the_cause() {
+        let busy = "操作が混み合っています。少し待って再試行してください。";
+        assert_eq!(
+            error_text(&PeerError::InvalidMessage(busy.into()).to_string()),
+            ErrorText {
+                message: busy.into(),
+                details: None,
+            }
+        );
+        let cases = [
+            (
+                PeerError::ConnectionClosed("store is closed".into()).to_string(),
+                "ホストとの接続が切れました。",
+            ),
+            (
+                PeerError::RequestTimeout {
+                    method: "turn/start".into(),
+                }
+                .to_string(),
+                "ホストから応答がありませんでした。",
+            ),
+            (
+                PeerError::InvalidResponse {
+                    method: "thread/read".into(),
+                    reason: "missing field".into(),
+                    raw: String::new(),
+                    sequence: None,
+                }
+                .to_string(),
+                "ホストの応答を読み取れませんでした。",
+            ),
+            (
+                crate::transport::TransportError::Connection("timed out".into()).to_string(),
+                "ネットワーク接続とホストの起動状態を確認してください。",
+            ),
+            (
+                PeerError::InvalidMessage("digest mismatch".into()).to_string(),
+                "エラーが発生しました。",
+            ),
+            ("save failed".into(), "エラーが発生しました。"),
+            (
+                "request turn/start rejected".into(),
+                "エラーが発生しました。",
+            ),
+            ("read operation timed out".into(), "エラーが発生しました。"),
+            ("Invalid argument".into(), "エラーが発生しました。"),
+            (
+                "unexpected response: missing field".into(),
+                "エラーが発生しました。",
+            ),
+        ];
+        for (raw, message) in cases {
+            assert_eq!(
+                error_text(&raw),
+                ErrorText {
+                    message: message.into(),
+                    details: Some(raw.clone()),
+                }
+            );
+        }
+        assert_eq!(
+            error_text(""),
+            ErrorText {
+                message: "エラーが発生しました。".into(),
+                details: None
+            }
+        );
+    }
+
+    proptest! {
+        #[test]
+        fn copy_is_always_japanese_and_details_never_are(
+            lines in proptest::collection::vec(
+                proptest::sample::select(vec![
+                    "ファイルを保存できません", "timed out", "fatal: not a git repository",
+                    "ホストに接続してください。", "", "  ", "a: b", "保存先: /tmp/x",
+                ]),
+                0..5,
+            ),
+            prefix in proptest::sample::select(vec![
+                "", "invalid RPC message: ", "connection closed: ", "iroh transport failed: ",
+            ]),
+        ) {
+            let raw = format!("{prefix}{}", lines.join("\n"));
+            let text = error_text(&raw);
+            prop_assert!(japanese(&text.message));
+            prop_assert!(!text.details.as_deref().is_some_and(japanese));
+            let details = text.details.clone().unwrap_or_default();
+            for line in lines.iter().map(|line| line.trim()).filter(|line| !line.is_empty() && !japanese(line)) {
+                prop_assert!(details.contains(line));
+            }
+        }
     }
 }
 
@@ -335,13 +605,13 @@ mod notice_tests {
         let local = snapshot.error_notices(conversation(&draft));
         assert_eq!(global.len(), 1);
         assert_eq!(global[0].context, "接続");
-        assert_eq!(global[0].title, "Hostに接続できません");
+        assert_eq!(global[0].title, "ホストに接続できません");
         let (recovered, _) = reduce(&snapshot, Event::Connected);
         assert!(recovered.error_notices(ErrorScope::Application).is_empty());
         assert_eq!(local.len(), 1);
         assert_eq!(local[0].context, "この会話");
         assert_eq!(local[0].title, "メッセージを送信できませんでした");
-        assert_eq!(local[0].message, "send rejected");
+        assert_eq!(local[0].text.details.as_deref(), Some("send rejected"));
         let (next, effects) = reduce(
             &snapshot,
             Event::Intent(Intent::DismissError {
@@ -384,12 +654,20 @@ mod notice_tests {
         assert!(snapshot.error_notices(conversation(&draft)).is_empty());
         assert!(snapshot.error_notices(ErrorScope::Application).is_empty());
         assert_eq!(
-            snapshot.history_control(session).unwrap().error.as_deref(),
+            snapshot
+                .history_control(session)
+                .unwrap()
+                .error
+                .and_then(|error| error.details)
+                .as_deref(),
             Some("history unavailable")
         );
         let settings = snapshot.error_notices(ErrorScope::Settings);
         assert_eq!(settings.len(), 1);
-        assert_eq!(settings[0].message, "account unavailable");
+        assert_eq!(
+            settings[0].text.details.as_deref(),
+            Some("account unavailable")
+        );
     }
 
     #[test]
@@ -411,7 +689,7 @@ mod notice_tests {
         );
         let notices = next.error_notices(ErrorScope::Workspace);
         assert_eq!(notices.len(), 1);
-        assert_eq!(notices[0].message, "絶対パスを入力してください。");
+        assert_eq!(notices[0].text.message, "絶対パスを入力してください。");
         assert!(matches!(
             notices[0].id,
             ErrorId::Operation { generation: 1, .. }
@@ -626,7 +904,7 @@ mod notice_tests {
             failed(&mut snapshot, key.clone(), 1, &message);
             failed(&mut snapshot, OperationKey::Submission { draft_key: other.clone() }, 100, "other failure");
             let dismissed = snapshot.error_notices(conversation(&first)).pop().unwrap();
-            prop_assert_eq!(snapshot.error_notices(conversation(&other))[0].message.clone(), "other failure");
+            prop_assert_eq!(snapshot.error_notices(conversation(&other))[0].text.details.clone(), Some("other failure".into()));
             Arc::make_mut(&mut snapshot.operations).insert(key.clone(), OperationState {
                 generation: newer,
                 phase: if running { OperationPhase::Running } else { OperationPhase::Failed { message: message.clone() } },

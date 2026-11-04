@@ -346,7 +346,7 @@ impl HostRuntime {
         match call {
             Call::IdentifyDevice(params) => {
                 let name = params.name.trim();
-                anyhow::ensure!(!name.is_empty(), "device name is empty");
+                anyhow::ensure!(!name.is_empty(), "端末名を入力してください。");
                 let mut record = self.credentials.record.lock().await;
                 anyhow::ensure!(
                     record.trust.allowed.contains(&node),
@@ -466,7 +466,10 @@ impl HostRuntime {
             Call::RegisterRemote(params) => {
                 // Pairing runs on the client's existing endpoint. The Host only
                 // persists its local client's destination; it never binds that key.
-                let ticket: Ticket = params.ticket.parse().context("invalid remote ticket")?;
+                let ticket: Ticket = params
+                    .ticket
+                    .parse()
+                    .context("接続情報を読み取れませんでした。")?;
                 let node_id = ticket.node_id();
                 let profile = RemoteHost {
                     id: node_id.to_string(),

@@ -291,7 +291,7 @@ private fun BrowserImage(
     }
     Image(
         image,
-        language.text("Host の共有ブラウザ"),
+        language.text("ホストの共有ブラウザ"),
         modifier
             .fillMaxSize()
             .pointerInput(enabled, image.width, image.height) {

@@ -6,7 +6,6 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.remoteagent.core.AgentException
 import dev.remoteagent.core.AgentStore
-import dev.remoteagent.core.Attachment
 import dev.remoteagent.core.ConversationRowContent
 import dev.remoteagent.core.DraftKey
 import dev.remoteagent.core.Intent
@@ -115,8 +114,16 @@ class StorePersistenceTest {
             store.dispatch(Intent.NewChat("/fixture")).wait()
             val key = store.snapshot().navigation().draftKey
             store.dispatch(Intent.SetDraftText(key, "日本語の下書き")).wait()
-            store.dispatch(Intent.AddAttachment(key, Attachment("/fixture/photo.png", "photo.png", true))).wait()
-            repository.sessionStorage("host-a").save(StorageKey.LOCAL_STATE, store.snapshot().serializeLocalState())
+            val saved = JSONObject(store.snapshot().serializeLocalState().decodeToString())
+            saved
+                .getJSONArray("drafts")
+                .getJSONArray(0)
+                .getJSONObject(1)
+                .put(
+                    "attachments",
+                    JSONArray("""[{"path":"/fixture/photo.png","name":"photo.png","isImage":true}]"""),
+                )
+            repository.sessionStorage("host-a").save(StorageKey.LOCAL_STATE, saved.toString().encodeToByteArray())
             store.dispatch(Intent.SetDraftText(key, "別の Host の下書き")).wait()
             repository.sessionStorage("host-b").save(StorageKey.LOCAL_STATE, store.snapshot().serializeLocalState())
             val restoredA =

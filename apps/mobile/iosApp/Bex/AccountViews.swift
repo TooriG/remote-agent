@@ -9,10 +9,11 @@ struct AccountUsageView: View {
         VStack(alignment: .leading, spacing: 12) {
             if let usage {
                 if let error = usage.error {
-                    Label(
-                        LocalizedStringKey(accountErrorMessage(message: error)),
-                        systemImage: "exclamationmark.circle"
-                    )
+                    Label {
+                        ErrorTextView(text: errorText(error: error))
+                    } icon: {
+                        Image(systemName: "exclamationmark.circle")
+                    }
                     .font(.caption).foregroundStyle(.orange)
                 }
                 ForEach(Array(usage.windows.enumerated()), id: \.offset) { _, window in
@@ -164,7 +165,7 @@ struct AccountLoginSection: View {
                 ProgressView(LocalizedStringKey(progressMessage))
             }
             if let error = loginError {
-                AppText(accountErrorMessage(message: error)).font(.caption).foregroundStyle(.red)
+                ErrorTextView(text: errorText(error: error)).font(.caption).foregroundStyle(.red)
                 Button("認証状態を再確認", action: retry)
             }
         }

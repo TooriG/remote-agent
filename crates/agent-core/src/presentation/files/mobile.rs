@@ -44,7 +44,7 @@ pub fn mobile_file_menu(
         items.push(MobileFileMenuItem {
             mime_type: None,
             action: MobileFileAction::CopyFullPath,
-            label: "Copy full path".into(),
+            label: "フルパスをコピー".into(),
             path: file_path_for_clipboard(&target, &path),
         });
     }
@@ -52,7 +52,7 @@ pub fn mobile_file_menu(
         items.push(MobileFileMenuItem {
             mime_type: None,
             action: MobileFileAction::CopyRelativePath,
-            label: "Copy relative path".into(),
+            label: "相対パスをコピー".into(),
             path: file_path_for_clipboard(
                 &file_position_target(&relative, file.line, file.column),
                 &path,
@@ -62,7 +62,7 @@ pub fn mobile_file_menu(
     items.push(MobileFileMenuItem {
         mime_type: None,
         action: MobileFileAction::Open,
-        label: "Open in file viewer".into(),
+        label: "ファイルビューアで開く".into(),
         path: path.clone(),
     });
     // Source metadata uses the literal final extension, including a position suffix.
@@ -70,7 +70,7 @@ pub fn mobile_file_menu(
         items.push(MobileFileMenuItem {
             mime_type: Some(mime_type.into()),
             action: MobileFileAction::SaveOrShare,
-            label: "Save or share".into(),
+            label: "保存・共有".into(),
             path: target,
         });
     }

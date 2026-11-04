@@ -148,7 +148,7 @@ struct ModelSettingsScreen: View {
             .disabled(disabled)
         }
         ForEach(model.snapshot.modelErrorMessages(provider: provider), id: \.self) { error in
-            AppText(accountErrorMessage(message: error)).font(.caption).foregroundStyle(.red)
+            ErrorTextView(text: errorText(error: error)).font(.caption).foregroundStyle(.red)
                 .accessibilityIdentifier("model.error")
         }
     }

@@ -65,7 +65,7 @@ struct WorkspaceBrowserScreen: View {
                     ContentUnavailableView("プレビューはまだありません", systemImage: "globe",
                                            description: Text("URLを入力するか、AIにブラウザ操作を依頼してください。"))
                 } else {
-                    ProgressView("Host のブラウザに接続中…")
+                    ProgressView("ホストのブラウザに接続中…")
                 }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(GeometryReader { geometry in
@@ -258,48 +258,6 @@ struct WorkspaceBrowserScreen: View {
     }
 }
 
-private struct BrowserCredentialsSheet: View {
-    let credentials: BrowserCredentials
-    let send: (BrowserAction) -> Void
-    let close: () -> Void
-
-    var body: some View {
-        NavigationStack {
-            List {
-                Section("接続先のブラウザから取り込む") {
-                    if credentials.profiles.isEmpty {
-                        Text("取り込めるブラウザプロファイルがありません。")
-                    }
-                    ForEach(credentials.profiles, id: \.label) { profile in
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text(profile.label)
-                            Button("ログイン状態（Cookie）") { send(.importCookies(profile: profile.id)) }
-                            Button("保存パスワード → Keychain") { send(.importPasswords(profile: profile.id)) }
-                        }.disabled(profile.id.isEmpty).padding(.vertical, 4)
-                    }
-                }
-                if let origin = credentials.origin {
-                    Section("保存パスワード · \(origin)") {
-                        if credentials.accounts.isEmpty {
-                            Text(credentials.passwordError ?? "このサイトの保存パスワードはありません。")
-                        }
-                        ForEach(credentials.accounts, id: \.self) { username in
-                            Button(username.isEmpty ? "ユーザー名なし" : username) {
-                                send(.fillPassword(origin: origin, username: username))
-                            }
-                        }
-                        Button("このサイトの保存パスワードを削除", role: .destructive) {
-                            send(.deletePasswords(origin: origin))
-                        }.disabled(credentials.accounts.isEmpty)
-                    }
-                }
-            }
-            .navigationTitle("ブラウザデータ").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("閉じる", action: close) } }
-        }
-    }
-}
-
 private struct RemoteBrowserCanvas: UIViewRepresentable {
     let image: UIImage
     let acceptsInput: Bool
@@ -334,7 +292,7 @@ private final class BrowserCanvasView: UIScrollView, UIScrollViewDelegate {
         pagePan.maximumNumberOfTouches = 1
         addGestureRecognizer(pagePan)
         backgroundColor = .secondarySystemBackground
-        accessibilityLabel = "Host の BEX ブラウザ。ピンチで拡大、2本指で表示範囲を移動できます。"
+        accessibilityLabel = "ホストのBexブラウザ。ピンチで拡大、2本指で表示範囲を移動できます。"
     }
 
     @available(*, unavailable)
