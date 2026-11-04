@@ -20,13 +20,13 @@ extension LaunchUITests {
         XCTAssertEqual(folder.label, "フォルダ: 検証プロジェクト")
         captureScreen(app, named: "New chat project and environment in the centered prompt")
         let removals = app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", "を外す"))
-        selectPhotos(["写真"], in: app)
+        selectPhotos([.photo], in: app)
         app.buttons["Cancel"].tap()
         XCTAssertEqual(removals.count, 0)
         XCTAssertTrue(app.buttons["task.attach"].isEnabled)
         XCTAssertFalse(app.staticTexts["notice"].exists)
         for count in 1 ... 2 {
-            selectPhotos(["写真"], in: app)
+            selectPhotos([.photo], in: app)
             app.buttons["Add"].tap()
             let attached = expectation(for: NSPredicate(format: "count == %d", count), evaluatedWith: removals)
             wait(for: [attached], timeout: 60)
@@ -37,7 +37,7 @@ extension LaunchUITests {
         app.buttons["task.send"].tap()
         XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 30))
         XCTAssertEqual(removals.count, 0)
-        selectPhotos(["写真"], in: app)
+        selectPhotos([.photo], in: app)
         app.buttons["Add"].tap()
         let nextAttachment = expectation(for: NSPredicate(format: "count == 1"), evaluatedWith: removals)
         wait(for: [nextAttachment], timeout: 60)
@@ -68,7 +68,7 @@ extension LaunchUITests {
         captureScreen(app, named: "Photo video camera and file attachment menu")
         app.buttons["task.attach.camera"].tap()
         XCTAssertTrue(app.staticTexts["この端末ではカメラを利用できません。"].waitForExistence(timeout: 5))
-        selectPhotos(["写真", "ビデオ"], in: app)
+        selectPhotos([.photo, .video], in: app)
         captureScreen(app, named: "Photo and video selected together")
         app.buttons["Add"].tap()
         let removals = app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", "を外す"))
@@ -110,7 +110,7 @@ extension LaunchUITests {
                 try self.simulatorFixture("worktree/upload/restore")
             }
         }
-        selectPhotos(["写真", "ビデオ"], in: app)
+        selectPhotos([.photo, .video], in: app)
         app.buttons["Add"].tap()
         let notices = app.staticTexts.matching(identifier: "notice")
         XCTAssertTrue(notices.firstMatch.waitForExistence(timeout: 30))
@@ -121,7 +121,7 @@ extension LaunchUITests {
         XCTAssertEqual(removals.count, 0)
         XCTAssertEqual(prompt.value as? String, "[success] Retry selected photos")
         try simulatorFixture("worktree/upload/restore"); unavailable = false
-        selectPhotos(["写真", "ビデオ"], in: app)
+        selectPhotos([.photo, .video], in: app)
         app.buttons["Add"].tap()
         let attached = expectation(for: NSPredicate(format: "count == 2"), evaluatedWith: removals)
         wait(for: [attached], timeout: 60)
@@ -141,11 +141,25 @@ extension LaunchUITests {
         captureScreen(app, named: "Recovered media upload survives reopening")
     }
 
-    private func selectPhotos(_ labels: [String], in app: XCUIApplication) {
+    private enum PickerMedia {
+        case photo, video
+
+        var labels: (String, String) {
+            switch self {
+            case .photo: ("写真", "Photo")
+            case .video: ("ビデオ", "Video")
+            }
+        }
+    }
+
+    private func selectPhotos(_ kinds: [PickerMedia], in app: XCUIApplication) {
         app.buttons["task.attach"].tap()
         app.buttons["task.attach.photos"].tap()
-        for label in labels {
-            let media = app.images.matching(NSPredicate(format: "label CONTAINS %@", label)).firstMatch
+        for kind in kinds {
+            // The system picker follows the Simulator language: Japanese locally, English on CI runners.
+            let (japanese, english) = kind.labels
+            let media = app.images
+                .matching(NSPredicate(format: "label CONTAINS %@ OR label CONTAINS %@", japanese, english)).firstMatch
             XCTAssertTrue(media.waitForExistence(timeout: 15), app.debugDescription)
             media.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         }
