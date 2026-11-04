@@ -657,11 +657,16 @@ impl HostRpcService {
         params: agent_protocol::operations::CreateSession,
     ) -> Result<ThreadResponse, Failure> {
         let agent = self.creation_agent(params.provider, params.model.as_ref())?;
-        let cwd = self.prepare_directory(params.cwd.as_deref()).await?;
-        self.start_thread(agent.as_ref(), |browser| {
-            agent.create(&cwd, params.model.as_ref().map(|m| m.id.as_str()), browser)
-        })
-        .await
+        let (cwd, created) = self.prepare_directory(params.cwd.as_deref()).await?;
+        let started = self
+            .start_thread(agent.as_ref(), |browser| {
+                agent.create(&cwd, params.model.as_ref().map(|m| m.id.as_str()), browser)
+            })
+            .await;
+        if started.is_err() && created {
+            self.discard_worktree(&cwd).await;
+        }
+        started
     }
 
     pub(super) fn creation_agent(
@@ -680,7 +685,11 @@ impl HostRpcService {
         Ok(agent)
     }
 
-    pub(super) async fn prepare_directory(&self, cwd: Option<&str>) -> Result<String, Failure> {
+    /// Returns the session's working directory and whether this call created its checkout.
+    pub(super) async fn prepare_directory(
+        &self,
+        cwd: Option<&str>,
+    ) -> Result<(String, bool), Failure> {
         // A missing selection must not inherit the App Server's checkout.
         // Keep the real cwd on the thread; project enrichment identifies
         // this persisted location as a chat even after a Host restart.
@@ -696,13 +705,18 @@ impl HostRpcService {
             return directory
                 .into_os_string()
                 .into_string()
+                .map(|directory| (directory, false))
                 .map_err(|_| Failure::new("chat_directory_unavailable", "chat path is not UTF-8"));
         }
         match self.inner.worktrees.prepare(cwd).await {
-            Ok(Some(cwd)) => cwd.into_os_string().into_string().map_err(|_| {
-                Failure::new("worktree_creation_failed", "worktree path is not UTF-8")
-            }),
-            Ok(None) => Ok(cwd.unwrap_or_default().into()),
+            Ok(Some(created)) => created
+                .into_os_string()
+                .into_string()
+                .map(|created| (created, true))
+                .map_err(|_| {
+                    Failure::new("worktree_creation_failed", "worktree path is not UTF-8")
+                }),
+            Ok(None) => Ok((cwd.unwrap_or_default().into(), false)),
             Err(error) => Err(Failure::new("worktree_creation_failed", error)),
         }
     }

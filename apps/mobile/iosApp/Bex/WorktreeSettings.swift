@@ -68,7 +68,9 @@ struct WorktreeSettingsScreen: View {
     @Environment(\.dismiss) private var dismiss
     @State private var createOnNewSession = false
     @State private var copyOnCreate = false
-    @State private var deleteMerged = false
+    @State private var deleteUnchanged = false
+    @State private var projectDeleteUnchanged: [String: Bool] = [:]
+    @State private var project: String?
     @State private var copyPaths = ""
     @State private var directory = ""
     @State private var loaded = false
@@ -79,39 +81,19 @@ struct WorktreeSettingsScreen: View {
         Form {
             Section("適用範囲") {
                 SettingsScopeFields(profiles: model.profiles, selectedProfileId: model.selectedProfileId,
-                                    disabled: busy || model.snapshot.accountLogin() != nil, select: model.selectProfile)
+                                    disabled: busy || model.snapshot.accountLogin() != nil, select: model.selectProfile,
+                                    project: $project,
+                                    projects: (model.list?.projects ?? []) + (model.list?.hiddenProjects ?? []))
             }
             Section {
-                Text("この環境に保存し、新しい会話に適用します。")
+                Text(LocalizedStringKey(project == nil ? "この環境に保存し、新しい会話に適用します。" : "プロジェクトごとに変えられるのは自動削除だけです。"))
                     .font(.footnote).foregroundColor(.secondary)
             }
-            Section {
-                Toggle("新規セッションをワークツリーで開始", isOn: $createOnNewSession)
-                    .accessibilityIdentifier("worktree.create")
-                TextField("この環境の絶対パス（空欄で既定）", text: $directory)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    .accessibilityLabel("ワークツリーの保存先")
-                    .accessibilityIdentifier("worktree.directory")
-            } header: { Text("作成と保存先") }
-                footer: { Text("保存先に「セッション名/リポジトリ名」の構成で作ります。空欄なら元のリポジトリ内の .worktree に保存します。既存のワークツリーは移動しません。") }
-                .disabled(!loaded || busy || !model.isConnected)
-            Section {
-                Toggle("作成時にファイルをコピー", isOn: $copyOnCreate)
-                    .accessibilityIdentifier("worktree.copy")
-                TextEditor(text: $copyPaths)
-                    .frame(minHeight: 88)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    .accessibilityLabel("コピー対象")
-                    .accessibilityIdentifier("worktree.paths")
-            } header: { Text("コピー対象") }
-                footer: { Text("リポジトリからの相対パスを1行に1つ指定します（例: .env、config/local）。存在しないパスはスキップします。") }
-                .disabled(!loaded || busy || !model.isConnected)
-            Section {
-                Toggle("マージ済みを自動削除", isOn: $deleteMerged)
-                    .accessibilityIdentifier("worktree.deleteMerged")
-            } header: { Text("自動削除") }
-                footer: { Text("main に取り込まれた作業場所を毎分確認します。実行中・回答待ち・ターミナル使用中・ローカル変更ありの場合は保留し、後で再確認します。ブランチと会話履歴は残ります。") }
-                .disabled(!loaded || busy || !model.isConnected)
+            if let project {
+                projectCleanup(project)
+            } else {
+                sharedSettings
+            }
             if busy {
                 ProgressView().accessibilityLabel("設定を通信中")
             }
@@ -145,6 +127,53 @@ struct WorktreeSettingsScreen: View {
         }
     }
 
+    @ViewBuilder private var sharedSettings: some View {
+        Section {
+            Toggle("新規セッションをワークツリーで開始", isOn: $createOnNewSession)
+                .accessibilityIdentifier("worktree.create")
+            TextField("この環境の絶対パス（空欄で既定）", text: $directory)
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                .accessibilityLabel("ワークツリーの保存先")
+                .accessibilityIdentifier("worktree.directory")
+        } header: { Text("作成と保存先") }
+            footer: { Text("保存先に「セッション名/リポジトリ名」の構成で作ります。空欄なら元のリポジトリ内の .worktree に保存します。既存のワークツリーは移動しません。") }
+            .disabled(!loaded || busy || !model.isConnected)
+        Section {
+            Toggle("作成時にファイルをコピー", isOn: $copyOnCreate)
+                .accessibilityIdentifier("worktree.copy")
+            TextEditor(text: $copyPaths)
+                .frame(minHeight: 88)
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                .accessibilityLabel("コピー対象")
+                .accessibilityIdentifier("worktree.paths")
+        } header: { Text("コピー対象") }
+            footer: { Text("リポジトリからの相対パスを1行に1つ指定します（例: .env、config/local）。存在しないパスはスキップします。") }
+            .disabled(!loaded || busy || !model.isConnected)
+        Section {
+            Toggle("取り込み済みを自動削除", isOn: $deleteUnchanged)
+                .accessibilityIdentifier("worktree.deleteUnchanged")
+        } header: { Text("自動削除") }
+            footer: { Text("既定ブランチより先のコミットがない作業場所を1時間ごとに削除します。実行中・回答待ち・ターミナル使用中・ローカル変更ありの場合は保留します。ブランチと会話履歴は残ります。") }
+            .disabled(!loaded || busy || !model.isConnected)
+    }
+
+    private func projectCleanup(_ project: String) -> some View {
+        Section {
+            Picker("取り込み済みを自動削除", selection: Binding<Bool?>(
+                get: { projectDeleteUnchanged[project] },
+                set: { projectDeleteUnchanged[project] = $0 }
+            )) {
+                Text(LocalizedStringKey(deleteUnchanged ? "すべてのプロジェクトと同じ（オン）" : "すべてのプロジェクトと同じ（オフ）"))
+                    .tag(Bool?.none)
+                Text("オン").tag(Optional(true))
+                Text("オフ").tag(Optional(false))
+            }
+            .accessibilityIdentifier("worktree.projectDeleteUnchanged")
+        } header: { Text("自動削除") }
+            footer: { Text("このプロジェクトの作業場所に適用します。") }
+            .disabled(!loaded || busy || !model.isConnected)
+    }
+
     private func load() {
         guard model.isConnected else { return }
         busy = true; error = nil
@@ -156,7 +185,8 @@ struct WorktreeSettingsScreen: View {
             guard let settings = snapshot.worktreeSettings() else { error = "設定の応答が無効です。"; return }
             createOnNewSession = settings.createOnNewSession
             copyOnCreate = settings.copyOnCreate
-            deleteMerged = settings.deleteMerged
+            deleteUnchanged = settings.deleteUnchanged
+            projectDeleteUnchanged = settings.projectDeleteUnchanged
             copyPaths = settings.copyPaths.joined(separator: "\n")
             directory = settings.worktreeDirectory
             loaded = true
@@ -170,7 +200,7 @@ struct WorktreeSettingsScreen: View {
         model.requestSnapshot(.updateWorktreeSettings(UpdateWorktreeSettings(settings: WorktreeSettings(
             createOnNewSession: createOnNewSession, copyOnCreate: copyOnCreate,
             copyPaths: paths, worktreeDirectory: directory.trimmingCharacters(in: .whitespacesAndNewlines),
-            deleteMerged: deleteMerged
+            deleteUnchanged: deleteUnchanged, projectDeleteUnchanged: projectDeleteUnchanged
         )))) { snapshot, result in
             busy = false
             if case let .failure(failure) = result {
@@ -187,6 +217,9 @@ struct SettingsScopeFields: View {
     let selectedProfileId: String?
     let disabled: Bool
     let select: (String) -> Void
+    /// Screens with project-specific settings pass the project being edited.
+    var project: Binding<String?>?
+    var projects: [ProjectSummary] = []
 
     var body: some View {
         Picker("環境", selection: Binding<String?>(get: { selectedProfileId }, set: {
@@ -204,6 +237,18 @@ struct SettingsScopeFields: View {
         .pickerStyle(.menu)
         .accessibilityIdentifier("settings.scope.environment")
         .disabled(disabled)
-        LabeledContent("プロジェクト", value: "すべてのプロジェクト")
+        if let project {
+            Picker("プロジェクト", selection: project) {
+                Text("すべてのプロジェクト").tag(String?.none)
+                ForEach(projects, id: \.id) { project in
+                    Text(project.name).tag(Optional(project.id))
+                }
+            }
+            .pickerStyle(.menu)
+            .accessibilityIdentifier("settings.scope.project")
+            .disabled(disabled)
+        } else {
+            LabeledContent("プロジェクト", value: "すべてのプロジェクト")
+        }
     }
 }

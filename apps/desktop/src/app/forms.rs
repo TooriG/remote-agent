@@ -210,6 +210,8 @@ pub(super) struct WorktreeForm {
     /// The worktree whose removal awaits confirmation.
     pub(super) removal: Option<String>,
     pub(super) removing: bool,
+    /// The project whose cleanup rule is shown; `None` shows the shared settings.
+    pub(super) scope: Option<String>,
 }
 
 impl WorktreeForm {
@@ -231,6 +233,7 @@ impl WorktreeForm {
             save_pending: false,
             removal: None,
             removing: false,
+            scope: None,
         }
     }
 

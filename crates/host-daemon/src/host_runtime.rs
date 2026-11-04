@@ -63,11 +63,11 @@ impl HostRuntime {
                 tokio::select! {
                     biased;
                     _ = maintenance_stop.cancelled() => break,
-                    _ = interval.tick() => {
-                        if let Err(error) = service.cleanup_merged_worktrees().await {
-                            tracing::warn!(target: "agent", operation = "host.worktree.cleanup", message = %error);
-                        }
-                    }
+                    _ = interval.tick() => {}
+                    _ = service.worktree_cleanup_requested() => {}
+                }
+                if let Err(error) = service.cleanup_unchanged_worktrees().await {
+                    tracing::warn!(target: "agent", operation = "host.worktree.cleanup", message = %error);
                 }
             }
         });

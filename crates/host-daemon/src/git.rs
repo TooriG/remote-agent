@@ -23,6 +23,31 @@ pub(crate) fn output(cwd: &Path, args: &[&str]) -> Result<Output> {
     Err(anyhow!(failure(&output)))
 }
 
+/// Bound commands that can wait on the network or a busy filesystem.
+/// Dropping the timed-out child kills it.
+pub(crate) async fn bounded(
+    cwd: &Path,
+    args: &[&str],
+    limit: std::time::Duration,
+) -> Result<Output> {
+    let output = tokio::time::timeout(
+        limit,
+        tokio::process::Command::new("git")
+            .arg("--no-optional-locks")
+            .args(args)
+            .current_dir(cwd)
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| anyhow!("git {} timed out", args.join(" ")))?
+    .context("failed to run git")?;
+    if output.status.success() {
+        return Ok(output);
+    }
+    Err(anyhow!(failure(&output)))
+}
+
 pub(crate) fn failure(output: &Output) -> String {
     let message = String::from_utf8_lossy(&output.stderr).trim().to_owned();
     if message.is_empty() {

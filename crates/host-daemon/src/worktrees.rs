@@ -20,6 +20,87 @@ pub(crate) struct Worktrees {
     lock: tokio::sync::Mutex<()>,
 }
 
+pub(crate) enum Removal {
+    Manual,
+    /// Cleanup of a checkout whose HEAD `base` contains, for the project that owns it.
+    Unchanged {
+        project: Option<String>,
+        base: String,
+    },
+}
+
+const GIT_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
+const REMOVE_LIMIT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// Resolve and refresh the ref an unchanged checkout must be contained in: the
+/// primary remote's default branch, or the project's branch without a remote.
+pub(crate) async fn integration_base(project: &Path) -> Result<String> {
+    let text = |output: std::process::Output| {
+        String::from_utf8(output.stdout).context("git returned non-UTF-8 output")
+    };
+    let remotes = text(crate::git::bounded(project, &["remote"], GIT_LIMIT).await?)?;
+    let remotes: Vec<_> = remotes.lines().filter(|name| !name.is_empty()).collect();
+    let Some(remote) = remotes
+        .iter()
+        .find(|name| **name == "origin")
+        .or(remotes.first())
+    else {
+        let head = crate::git::bounded(project, &["symbolic-ref", "--quiet", "HEAD"], GIT_LIMIT)
+            .await
+            .context("project branch is unavailable")?;
+        return Ok(text(head)?.trim().to_owned());
+    };
+    let tracking = format!("refs/remotes/{remote}/");
+    let local = crate::git::bounded(
+        project,
+        &["symbolic-ref", &format!("{tracking}HEAD")],
+        GIT_LIMIT,
+    )
+    .await
+    .ok()
+    .and_then(|output| text(output).ok())
+    .and_then(|head| head.trim().strip_prefix(&tracking).map(str::to_owned));
+    let branch = match local {
+        Some(branch) => branch,
+        // Without a local HEAD ref only the remote can name its default;
+        // a conventional name may be a feature branch.
+        None => text(
+            crate::git::bounded(
+                project,
+                &["ls-remote", "--symref", "--", remote, "HEAD"],
+                std::time::Duration::from_secs(20),
+            )
+            .await?,
+        )?
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("ref: refs/heads/")?
+                .strip_suffix("\tHEAD")
+        })
+        .map(str::to_owned)
+        .context("default branch is unavailable")?,
+    };
+    crate::git::bounded(
+        project,
+        &[
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "--",
+            remote,
+            &format!("+refs/heads/{branch}:{tracking}{branch}"),
+        ],
+        GIT_LIMIT,
+    )
+    .await?;
+    Ok(format!("{tracking}{branch}"))
+}
+
+/// Any failure, including a missing base, counts as not contained and keeps the checkout.
+fn contained(checkout: &Path, base: &str) -> bool {
+    crate::git::output(checkout, &["merge-base", "--is-ancestor", "HEAD", base]).is_ok()
+}
+
 impl Worktrees {
     pub(crate) fn new(project_state: &Path) -> Self {
         Self {
@@ -68,45 +149,77 @@ impl Worktrees {
         .await?
     }
 
-    pub(crate) async fn remove(&self, target: String, require_merged: bool) -> Result<()> {
+    pub(crate) async fn remove(&self, target: String, removal: Removal) -> Result<()> {
         let _guard = self.lock.lock().await;
         let path = self.path.clone();
-        tokio::task::spawn_blocking(move || {
+        let checkout = target.clone();
+        let (root, registered) = tokio::task::spawn_blocking(move || {
             let state = read(&path)?;
             let root = state
                 .workspace_roots
-                .get(&target)
-                .context("Bexが作成したワークツリーではありません。")?;
+                .get(&checkout)
+                .context("Bexが作成したワークツリーではありません。")?
+                .clone();
             let listing =
-                crate::git::text(Path::new(root), &["worktree", "list", "--porcelain", "-z"])?;
-            if let Some((_, blocked)) = inspect(&target, root, &listing)? {
-                if let Some(reason) = blocked {
-                    return Err(anyhow!(reason));
-                }
-                // Recheck both the preference and HEAD after the activity scan.
-                // A new commit or a disabled preference cancels automatic removal.
-                if require_merged
-                    && (!state.settings.delete_merged
-                        || directory_status(Path::new(&target), None, None, None)?
-                            != Some(agent_protocol::models::WorktreeStatus::Merged))
-                {
-                    return Ok(());
-                }
-                // Git rechecks tracked/untracked changes and locks at removal time.
-                // Keep the branch so commits remain reachable even if not merged.
-                crate::git::text(Path::new(root), &["worktree", "remove", "--", &target])?;
+                crate::git::text(Path::new(&root), &["worktree", "list", "--porcelain", "-z"])?;
+            let Some((_, blocked)) = inspect(&checkout, &root, &listing)? else {
+                return Ok((root, false));
+            };
+            if let Some(reason) = blocked {
+                return Err(anyhow!(reason));
             }
-            // Only remove the empty session container used by the named-checkout layout.
-            // Old worktrees and any unrelated files in the container stay untouched.
-            let target_path = Path::new(&target);
-            if target_path.file_name() == Path::new(root).file_name()
-                && let Some(parent) = target_path.parent()
-                && parent
-                    .file_name()
-                    .is_some_and(|name| name.to_string_lossy().starts_with("session-"))
+            // Recheck both the preference and HEAD after the activity scan.
+            // A new commit or a disabled preference cancels automatic removal.
+            if let Removal::Unchanged { project, base } = &removal
+                && !(state.settings.deletes_unchanged(project.as_deref())
+                    && contained(Path::new(&checkout), base))
             {
-                let _ = fs::remove_dir(parent);
+                return Ok((root, false));
             }
+            Ok((root, true))
+        })
+        .await??;
+        if registered {
+            // Git rechecks tracked/untracked changes and locks at removal time;
+            // its untracked check would skip files hidden by local status config.
+            // Keep the branch so commits remain reachable even if not merged.
+            crate::git::bounded(
+                Path::new(&root),
+                &[
+                    "-c",
+                    "status.showUntrackedFiles=normal",
+                    "worktree",
+                    "remove",
+                    "--",
+                    &target,
+                ],
+                REMOVE_LIMIT,
+            )
+            .await?;
+        }
+        remove_session_container(Path::new(&target), Path::new(&root));
+        Ok(())
+    }
+
+    /// Roll back a checkout, including its branch, made for a session start
+    /// that failed before any conversation recorded it.
+    pub(crate) async fn discard(&self, cwd: String) -> Result<()> {
+        let _guard = self.lock.lock().await;
+        let path = self.path.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut state = read(&path)?;
+            let (target, root) = state
+                .workspace_roots
+                .iter()
+                .filter(|(target, _)| Path::new(&cwd).starts_with(target))
+                .max_by_key(|(target, _)| target.len())
+                .map(|(target, root)| (target.clone(), root.clone()))
+                .context("Bexが作成したワークツリーではありません。")?;
+            let branch = crate::git::text(Path::new(&target), &["branch", "--show-current"])?;
+            remove_checkout(Path::new(&root), Path::new(&target), branch.trim())?;
+            state.workspace_roots.remove(&target);
+            save(&path, &state)?;
+            remove_session_container(Path::new(&target), Path::new(&root));
             Ok(())
         })
         .await?
@@ -583,22 +696,36 @@ fn discard_checkout(
     branch: &str,
     error: anyhow::Error,
 ) -> anyhow::Error {
-    let cleanup = (|| -> Result<()> {
-        crate::git::text(
-            source,
-            &[
-                "worktree",
-                "remove",
-                "--force",
-                destination.to_str().context("worktree path is not UTF-8")?,
-            ],
-        )?;
-        crate::git::text(source, &["branch", "-D", branch])?;
-        Ok(())
-    })();
-    match cleanup {
+    match remove_checkout(source, destination, branch) {
         Ok(_) => error,
         Err(cleanup) => error.context(format!("worktree cleanup failed: {cleanup:#}")),
+    }
+}
+
+fn remove_checkout(source: &Path, destination: &Path, branch: &str) -> Result<()> {
+    crate::git::text(
+        source,
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            destination.to_str().context("worktree path is not UTF-8")?,
+        ],
+    )?;
+    crate::git::text(source, &["branch", "-D", branch])?;
+    Ok(())
+}
+
+/// Only remove the empty session container used by the named-checkout layout.
+/// Old worktrees and any unrelated files in the container stay untouched.
+fn remove_session_container(target: &Path, root: &Path) {
+    if target.file_name() == root.file_name()
+        && let Some(parent) = target.parent()
+        && parent
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with("session-"))
+    {
+        let _ = fs::remove_dir(parent);
     }
 }
 
@@ -766,7 +893,7 @@ mod tests {
             let head = crate::git::text(&cwd, &["rev-parse", "HEAD"]).unwrap();
             match removal {
                 "managed" => store
-                    .remove(cwd.to_str().unwrap().into(), false)
+                    .remove(cwd.to_str().unwrap().into(), Removal::Manual)
                     .await
                     .unwrap(),
                 "git" => {
@@ -891,67 +1018,177 @@ mod tests {
         assert!(error.downcast_ref::<serde_json::Error>().is_some());
     }
 
+    fn commit(cwd: &Path, message: &str) {
+        crate::git::text(
+            cwd,
+            &[
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--allow-empty",
+                "--quiet",
+                "-m",
+                message,
+            ],
+        )
+        .unwrap();
+    }
+
     #[tokio::test]
-    async fn automatic_removal_rechecks_merge_and_opt_in_before_removing_checkout() {
+    async fn automatic_removal_rechecks_containment_and_opt_in_before_removing_checkout() {
         let repository = repository();
         let root = dunce::canonicalize(repository.path()).unwrap();
         let store = Worktrees::new(&root.join("projects.json"));
         let mut settings = WorktreeSettings {
             create_on_new_session: true,
-            delete_merged: true,
+            delete_unchanged: true,
             ..Default::default()
         };
         store.settings(Some(settings.clone())).await.unwrap();
+        let base = integration_base(&root).await.unwrap();
+        assert_eq!(
+            base, "refs/heads/main",
+            "without a remote the project branch is the base"
+        );
+        let unchanged = |project: Option<&str>| Removal::Unchanged {
+            project: project.map(str::to_owned),
+            base: base.clone(),
+        };
+        let fresh = store.prepare(root.to_str()).await.unwrap().unwrap();
+        store
+            .remove(fresh.to_str().unwrap().into(), unchanged(None))
+            .await
+            .unwrap();
+        assert!(!fresh.exists(), "a checkout without commits is unchanged");
+
         let cwd = store.prepare(root.to_str()).await.unwrap().unwrap();
         let target = cwd.to_str().unwrap().to_owned();
         let branch = crate::git::text(&cwd, &["branch", "--show-current"])
             .unwrap()
             .trim()
             .to_owned();
-        let commit = |message: &str| {
-            crate::git::text(
-                &cwd,
-                &[
-                    "-c",
-                    "user.name=Fixture",
-                    "-c",
-                    "user.email=fixture@example.invalid",
-                    "-c",
-                    "commit.gpgsign=false",
-                    "commit",
-                    "--allow-empty",
-                    "-m",
-                    message,
-                ],
-            )
-            .unwrap()
-        };
         let merge = || crate::git::text(&root, &["merge", "--ff-only", &branch]).unwrap();
-        store.remove(target.clone(), true).await.unwrap();
-        assert!(cwd.is_dir(), "a fresh branch is not completed work");
-        commit("work");
-        store.remove(target.clone(), true).await.unwrap();
+        commit(&cwd, "work");
+        store.remove(target.clone(), unchanged(None)).await.unwrap();
         assert!(cwd.is_dir(), "unmerged work must stay");
         merge();
-        settings.delete_merged = false;
+        settings.delete_unchanged = false;
         store.settings(Some(settings.clone())).await.unwrap();
-        store.remove(target.clone(), true).await.unwrap();
+        store.remove(target.clone(), unchanged(None)).await.unwrap();
         assert!(
             cwd.is_dir(),
             "disabling cleanup cancels an earlier eligibility decision"
         );
-        settings.delete_merged = true;
-        store.settings(Some(settings)).await.unwrap();
-        commit("after merge");
-        store.remove(target.clone(), true).await.unwrap();
+        settings.project_delete_unchanged = [("project".to_owned(), true)].into();
+        store.settings(Some(settings.clone())).await.unwrap();
+        store
+            .remove(target.clone(), unchanged(Some("other")))
+            .await
+            .unwrap();
+        assert!(cwd.is_dir(), "another project's override does not apply");
+        commit(&cwd, "after merge");
+        store
+            .remove(target.clone(), unchanged(Some("project")))
+            .await
+            .unwrap();
         assert!(cwd.is_dir(), "a commit after merge cancels removal");
         merge();
         let head = crate::git::text(&cwd, &["rev-parse", "HEAD"]).unwrap();
-        store.remove(target, true).await.unwrap();
+        store
+            .remove(target, unchanged(Some("project")))
+            .await
+            .unwrap();
         assert!(!cwd.exists());
         assert_eq!(
             crate::git::text(&root, &["rev-parse", &branch]).unwrap(),
             head
+        );
+    }
+
+    #[tokio::test]
+    async fn work_pushed_to_the_remote_default_branch_is_unchanged() {
+        let repository = repository();
+        let root = dunce::canonicalize(repository.path()).unwrap();
+        let remote = tempfile::tempdir().unwrap();
+        crate::git::text(
+            remote.path(),
+            &["init", "--quiet", "--bare", "--initial-branch=main"],
+        )
+        .unwrap();
+        let remote_path = remote.path().to_str().unwrap();
+        crate::git::text(&root, &["remote", "add", "origin", remote_path]).unwrap();
+        crate::git::text(&root, &["push", "--quiet", "origin", "main"]).unwrap();
+        let store = Worktrees::new(&root.join("projects.json"));
+        store
+            .settings(Some(WorktreeSettings {
+                create_on_new_session: true,
+                delete_unchanged: true,
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        let cwd = store.prepare(root.to_str()).await.unwrap().unwrap();
+        commit(&cwd, "work");
+        let base = integration_base(&root).await.unwrap();
+        assert_eq!(
+            base, "refs/remotes/origin/main",
+            "the remote names its default branch"
+        );
+        let unchanged = || Removal::Unchanged {
+            project: None,
+            base: base.clone(),
+        };
+        store
+            .remove(cwd.to_str().unwrap().into(), unchanged())
+            .await
+            .unwrap();
+        assert!(cwd.is_dir(), "work the remote lacks must stay");
+        crate::git::text(&cwd, &["push", "--quiet", "origin", "HEAD:main"]).unwrap();
+        crate::git::text(&root, &["update-ref", "-d", "refs/remotes/origin/main"]).unwrap();
+        assert_eq!(integration_base(&root).await.unwrap(), base);
+        store
+            .remove(cwd.to_str().unwrap().into(), unchanged())
+            .await
+            .unwrap();
+        assert!(
+            !cwd.exists(),
+            "work pushed directly to the default branch is integrated even though local main is behind"
+        );
+    }
+
+    #[tokio::test]
+    async fn discarding_a_failed_start_removes_its_checkout_branch_and_record() {
+        let repository = repository();
+        let root = dunce::canonicalize(repository.path()).unwrap();
+        let store = Worktrees::new(&root.join("projects.json"));
+        store
+            .settings(Some(WorktreeSettings {
+                create_on_new_session: true,
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        let cwd = store.prepare(root.to_str()).await.unwrap().unwrap();
+        let branch = crate::git::text(&cwd, &["branch", "--show-current"])
+            .unwrap()
+            .trim()
+            .to_owned();
+        fs::write(cwd.join("partial.txt"), "written before the start failed").unwrap();
+        store.discard(cwd.to_str().unwrap().into()).await.unwrap();
+        assert!(!cwd.exists());
+        assert!(
+            !cwd.parent().unwrap().exists(),
+            "the session container goes too"
+        );
+        assert!(crate::git::text(&root, &["rev-parse", "--verify", "--quiet", &branch]).is_err());
+        assert!(store.list().await.unwrap().is_empty());
+        assert!(
+            store.discard(cwd.to_str().unwrap().into()).await.is_err(),
+            "only recorded checkouts can be discarded"
         );
     }
 
@@ -979,7 +1216,7 @@ mod tests {
         assert_eq!(Worktrees::new(&state).list().await.unwrap().len(), 2);
         assert!(
             worktrees
-                .remove(root.to_str().unwrap().into(), false)
+                .remove(root.to_str().unwrap().into(), Removal::Manual)
                 .await
                 .is_err()
         );
@@ -997,7 +1234,12 @@ mod tests {
                     .blocked_reason
                     .is_some()
             );
-            assert!(worktrees.remove(first_path.clone(), false).await.is_err());
+            assert!(
+                worktrees
+                    .remove(first_path.clone(), Removal::Manual)
+                    .await
+                    .is_err()
+            );
             assert_eq!(
                 fs::read_to_string(first.join(file)).unwrap(),
                 "preserve this local data\n"
@@ -1028,7 +1270,12 @@ mod tests {
                 .blocked_reason
                 .is_none()
         );
-        assert!(worktrees.remove(first_path.clone(), false).await.is_err());
+        assert!(
+            worktrees
+                .remove(first_path.clone(), Removal::Manual)
+                .await
+                .is_err()
+        );
         crate::git::text(&root, &["worktree", "unlock", &first_path]).unwrap();
         crate::git::text(&first, &["checkout", "--detach", "HEAD"]).unwrap();
         let entries = worktrees.list().await.unwrap();
@@ -1038,9 +1285,17 @@ mod tests {
             .unwrap();
         assert_eq!(entry.branch, "detached HEAD");
         assert!(entry.blocked_reason.is_some());
-        assert!(worktrees.remove(first_path.clone(), false).await.is_err());
+        assert!(
+            worktrees
+                .remove(first_path.clone(), Removal::Manual)
+                .await
+                .is_err()
+        );
         crate::git::text(&first, &["checkout", &branch]).unwrap();
-        worktrees.remove(first_path.clone(), false).await.unwrap();
+        worktrees
+            .remove(first_path.clone(), Removal::Manual)
+            .await
+            .unwrap();
         assert!(!first.exists());
         assert!(!first.parent().unwrap().exists());
         assert!(other.join("tracked.txt").exists());
@@ -1071,7 +1326,10 @@ mod tests {
         assert!(restarted.list().await.unwrap()[0].blocked_reason.is_none());
         let unrelated = other.parent().unwrap().join("keep.txt");
         fs::write(&unrelated, "preserve").unwrap();
-        restarted.remove(other_path.into(), false).await.unwrap();
+        restarted
+            .remove(other_path.into(), Removal::Manual)
+            .await
+            .unwrap();
         assert_eq!(Worktrees::new(&state).list().await.unwrap().len(), 2);
         assert_eq!(fs::read_to_string(unrelated).unwrap(), "preserve");
         let registered = worktrees.prepare(root.to_str()).await.unwrap().unwrap();
@@ -1085,7 +1343,12 @@ mod tests {
             entry.blocked_reason.is_some(),
             "a missing checkout still registered with Git must not be treated as removed"
         );
-        assert!(worktrees.remove(entry.path.clone(), false).await.is_err());
+        assert!(
+            worktrees
+                .remove(entry.path.clone(), Removal::Manual)
+                .await
+                .is_err()
+        );
         #[cfg(unix)]
         assert!(already_removed(root.join("tracked.txt/checkout").to_str().unwrap(), "").is_err());
     }
@@ -1104,7 +1367,7 @@ mod tests {
         fs::set_permissions(root.join(".env"), fs::Permissions::from_mode(0o600)).unwrap();
         fs::create_dir(root.join("local")).unwrap();
         fs::write(root.join("local/value"), "local data").unwrap();
-        let settings = json!({"createOnNewSession":true,"copyOnCreate":true,"copyPaths":[".env","local","missing","config.txt"],"worktreeDirectory":"","deleteMerged":false});
+        let settings = json!({"createOnNewSession":true,"copyOnCreate":true,"copyPaths":[".env","local","missing","config.txt"],"worktreeDirectory":"","deleteUnchanged":false,"projectDeleteUnchanged":{}});
         store.configure(Some(settings.clone())).await.unwrap();
         let loaded = Worktrees::new(&projects);
         assert_eq!(loaded.configure(None).await.unwrap(), settings);
@@ -1218,7 +1481,7 @@ mod tests {
     async fn invalid_settings_never_replace_saved_preferences() {
         let directory = repository();
         let store = Worktrees::new(&directory.path().join("projects.json"));
-        let valid = json!({"createOnNewSession":true,"copyOnCreate":false,"copyPaths":[".env"],"worktreeDirectory":"","deleteMerged":false});
+        let valid = json!({"createOnNewSession":true,"copyOnCreate":false,"copyPaths":[".env"],"worktreeDirectory":"","deleteUnchanged":false,"projectDeleteUnchanged":{}});
         store.configure(Some(valid.clone())).await.unwrap();
         for path in [
             "",
@@ -1400,7 +1663,7 @@ mod tests {
             );
             if registered {
                 store
-                    .remove(legacy.to_str().unwrap().into(), false)
+                    .remove(legacy.to_str().unwrap().into(), Removal::Manual)
                     .await
                     .unwrap();
                 assert!(!legacy.exists());

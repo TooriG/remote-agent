@@ -1937,22 +1937,6 @@
         }
       }
     },
-    "main に取り込まれた作業場所を毎分確認します。実行中・回答待ち・ターミナル使用中・ローカル変更ありの場合は保留し、後で再確認します。ブランチと会話履歴は残ります。": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "main に取り込まれた作業場所を毎分確認します。実行中・回答待ち・ターミナル使用中・ローカル変更ありの場合は保留し、後で再確認します。ブランチと会話履歴は残ります。"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Checks workspaces merged into main every minute. Removal is deferred while running, awaiting a response, using a terminal or containing local changes. Branches and conversation history are kept."
-          }
-        }
-      }
-    },
     "main に未反映の変更あり": {
       "localizations": {
         "ja": {
@@ -9165,38 +9149,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Checking microphone permission…"
-          }
-        }
-      }
-    },
-    "マージ済みを自動削除": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "マージ済みを自動削除"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Automatically remove merged worktrees"
-          }
-        }
-      }
-    },
-    "マージ済みワークツリーを自動削除": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "マージ済みワークツリーを自動削除"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Automatically remove merged worktrees"
           }
         }
       }
@@ -17597,6 +17549,118 @@
           "stringUnit": {
             "state": "translated",
             "value": "Your model and response settings carry over to the next new chat."
+          }
+        }
+      }
+    },
+    "取り込み済みを自動削除": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "取り込み済みを自動削除"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatically remove integrated worktrees"
+          }
+        }
+      }
+    },
+    "取り込み済みワークツリーを自動削除": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "取り込み済みワークツリーを自動削除"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatically remove integrated worktrees"
+          }
+        }
+      }
+    },
+    "プロジェクトごとに変えられるのは自動削除だけです。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プロジェクトごとに変えられるのは自動削除だけです。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only automatic removal can differ by project."
+          }
+        }
+      }
+    },
+    "このプロジェクトの作業場所に適用します。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このプロジェクトの作業場所に適用します。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Applies to this project's worktrees."
+          }
+        }
+      }
+    },
+    "すべてのプロジェクトと同じ（オン）": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "すべてのプロジェクトと同じ（オン）"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Same as all projects (On)"
+          }
+        }
+      }
+    },
+    "すべてのプロジェクトと同じ（オフ）": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "すべてのプロジェクトと同じ（オフ）"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Same as all projects (Off)"
+          }
+        }
+      }
+    },
+    "既定ブランチより先のコミットがない作業場所を1時間ごとに削除します。実行中・回答待ち・ターミナル使用中・ローカル変更ありの場合は保留します。ブランチと会話履歴は残ります。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "既定ブランチより先のコミットがない作業場所を1時間ごとに削除します。実行中・回答待ち・ターミナル使用中・ローカル変更ありの場合は保留します。ブランチと会話履歴は残ります。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hourly removes worktrees with no commits beyond the default branch. Worktrees that are running, awaiting an answer, used by a terminal or have local changes are skipped. Branches and conversation history are kept."
           }
         }
       }

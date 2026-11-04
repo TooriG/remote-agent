@@ -1984,7 +1984,7 @@ async fn session_worktree_settings_apply_to_new_threads_and_preserve_project_mem
         let initial = request(&service, &mut session, "host/session/create", json!({"provider":"codex","cwd":workspace})).await["response"].clone();
         assert_eq!(initial["thread"]["cwd"], workspace.to_str().unwrap());
         let destination = root.join("worktree storage");
-        let settings = json!({"createOnNewSession":true,"copyOnCreate":true,"copyPaths":[".env"],"worktreeDirectory":destination,"deleteMerged":false});
+        let settings = json!({"createOnNewSession":true,"copyOnCreate":true,"copyPaths":[".env"],"worktreeDirectory":destination,"deleteUnchanged":false,"projectDeleteUnchanged":{}});
         assert_eq!(request(&service, &mut session, "host/worktree/settings/update", settings.clone()).await, settings);
         let mut ids = Vec::new();
         let mut paths = Vec::new();
@@ -2873,7 +2873,7 @@ async fn worktree_management_preserves_conversations_and_recreates_deleted_check
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn merged_worktree_cleanup_defers_live_work_and_rechecks_new_commits() {
+async fn unchanged_worktree_cleanup_defers_live_work_and_rechecks_new_commits() {
     fn git(cwd: &Path, args: &[&str]) -> String {
         let result = std::process::Command::new("git")
             .current_dir(cwd)
@@ -3013,7 +3013,7 @@ async fn merged_worktree_cleanup_defers_live_work_and_rechecks_new_commits() {
             checkouts.iter().all(|(_, path, _)| path.exists()),
             "cleanup defaults to disabled"
         );
-        settings.delete_merged = true;
+        settings.delete_unchanged = true;
         local
             .peer
             .call(&op::UpdateWorktreeSettings { settings })
@@ -3029,8 +3029,8 @@ async fn merged_worktree_cleanup_defers_live_work_and_rechecks_new_commits() {
             std::fs::read_to_string(dirty_path.join("untracked.txt")).unwrap(),
             "preserve local data"
         );
-        // Empty commits have no unmerged file changes. Create real work while
-        // the turn still owns the checkout, before cleanup can remove it.
+        // Commit new work while the turn still owns the checkout, before
+        // cleanup can remove it.
         std::fs::write(active_path.join("new-work.txt"), "new work after merge").unwrap();
         git(active_path, &["add", "new-work.txt"]);
         git(active_path, &["commit", "-m", "new work after merge"]);
@@ -3100,7 +3100,7 @@ async fn merged_worktree_cleanup_defers_live_work_and_rechecks_new_commits() {
         fixture.close().await.unwrap();
     })
     .await
-    .expect("merged worktree cleanup deadline");
+    .expect("unchanged worktree cleanup deadline");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
