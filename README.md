@@ -144,6 +144,11 @@ Closing the terminal view or disconnecting retains its shell; choose **終了** 
 end it. Host restart ends shells. On a Mac, the browser is a native WebKit view inside the PC's Bex window; keep that window open for phone and agent access. Linux Hosts run Chromium. Each conversation owns multiple tabs, shared with
 the agent on desktop, iPhone and Android. Login storage is shared across conversations and persists across restarts.
 
+Keep macOS (including Safari updates) and iOS up to date: Bex uses the system
+WebKit and receives its security fixes through Apple updates. The phone's
+browser controls the Host's browser, so update the Host's macOS or Linux
+Chromium as well.
+
 On Mac and iPhone, select assistant text to quote it into the draft or ask about it in a side chat. Closing an iPhone side chat restores the original conversation and draft. Mac also supports right-click Copy and Google Search, and own-message hover actions for copying or returning text to the composer. Command activity starts collapsed while running and after reopening; explicit expansion is preserved.
 
 iPhone starts one Live Activity for the selected PC's ongoing tasks. The collapsed Dynamic Island shows one status icon per task, split across its two sides; up to twelve icons fit, with additional tasks represented by a count badge. Each completed task keeps a check mark until its result is opened on any device or the task starts new work. The Lock Screen and expanded island show running, awaiting-confirmation and completed counts. Tapping opens that PC's task list. The activity ends only after every task finishes and remains on the Lock Screen for one minute. Switching PCs dismisses the previous PC's activity. Live Activities must be enabled in iOS Settings.
