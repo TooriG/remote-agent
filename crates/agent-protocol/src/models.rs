@@ -206,15 +206,19 @@ impl Thread {
 /// above 512 bytes loads on expansion.
 pub fn defer_item_details(turns: &mut [Arc<Turn>], max_inline_bytes: usize) {
     for turn in turns {
-        let turn = Arc::make_mut(turn);
-        for item in turn.items.iter_mut().flatten() {
+        for index in 0..turn.items.as_ref().map_or(0, Vec::len) {
+            let item = &turn.items.as_ref().expect("turn items are present")[index];
             let limit = if is_conversation(item) {
                 max_inline_bytes
             } else {
                 512.min(max_inline_bytes)
             };
             if !item.id.is_empty() && inline_size(item, limit).is_none() {
-                Arc::make_mut(item).defer();
+                let items = Arc::make_mut(turn)
+                    .items
+                    .as_mut()
+                    .expect("turn items are present");
+                Arc::make_mut(&mut items[index]).defer();
             }
         }
     }
@@ -520,6 +524,111 @@ mod tests {
                 exit_code: Some(0),
             },
         ))
+    }
+
+    #[test]
+    fn deferred_history_shares_unchanged_turns_and_items() {
+        let mut anonymous = (*command(2, 1024)).clone();
+        anonymous.id = "".into();
+        let original = vec![
+            Arc::new(Turn::default()),
+            Arc::new(Turn {
+                items: Some(Vec::new()),
+                ..Default::default()
+            }),
+            Arc::new(Turn {
+                items: Some(vec![command(0, 16)]),
+                ..Default::default()
+            }),
+            Arc::new(Turn {
+                items: Some(vec![command(0, 16), command(1, 1024), Arc::new(anonymous)]),
+                ..Default::default()
+            }),
+        ];
+        let mut sent = original.clone();
+        defer_item_details(&mut sent, MAX_INLINE_ITEM_BYTES);
+        for (source, sent) in original.iter().zip(&sent).take(3) {
+            assert!(Arc::ptr_eq(source, sent));
+        }
+        assert!(!Arc::ptr_eq(&original[3], &sent[3]));
+        let source = original[3].items.as_ref().unwrap();
+        let sent = sent[3].items.as_ref().unwrap();
+        assert!(Arc::ptr_eq(&source[0], &sent[0]));
+        assert!(sent[1].is_deferred());
+        assert!(Arc::ptr_eq(&source[2], &sent[2]));
+        assert!(
+            matches!(source[1].body(), ItemBody::CommandExecution { output, .. } if output.len() == 1024)
+        );
+        assert!(!source[1].is_deferred());
+    }
+
+    #[test]
+    fn deferred_history_keeps_the_inclusive_wire_budget() {
+        let conversation = Arc::new(Item::new(
+            "answer".into(),
+            ItemStatus::Completed,
+            ItemBody::AssistantText {
+                text: "回答".into(),
+                phase: Default::default(),
+            },
+        ));
+        for item in [command(0, 16), conversation] {
+            let size = crate::protocol::encode(&item).unwrap().len();
+            assert!(size < 512);
+            let original = Arc::new(Turn {
+                items: Some(vec![item]),
+                ..Default::default()
+            });
+            for budget in [size, size - 1] {
+                let mut sent = vec![original.clone()];
+                defer_item_details(&mut sent, budget);
+                assert_eq!(
+                    sent[0].items.as_ref().unwrap()[0].is_deferred(),
+                    budget < size
+                );
+                assert_eq!(Arc::ptr_eq(&original, &sent[0]), budget == size);
+            }
+        }
+    }
+
+    #[test]
+    fn deferred_history_caps_activity_at_512_wire_bytes() {
+        for size in [512, 513] {
+            let item = (0..512)
+                .map(|output| command(0, output))
+                .find(|item| crate::protocol::encode(item).unwrap().len() == size)
+                .expect("an ASCII output can fill the wire budget exactly");
+            let original = Arc::new(Turn {
+                items: Some(vec![item]),
+                ..Default::default()
+            });
+            let mut sent = vec![original.clone()];
+            defer_item_details(&mut sent, MAX_INLINE_ITEM_BYTES);
+            assert_eq!(sent[0].items.as_ref().unwrap()[0].is_deferred(), size > 512);
+            assert_eq!(Arc::ptr_eq(&original, &sent[0]), size == 512);
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn deferred_history_obeys_each_activity_wire_budget(
+            outputs in proptest::collection::vec(0usize..2048, 0..24),
+            budget in 0usize..4096,
+        ) {
+            let items: Vec<_> = outputs.iter().enumerate().map(|(id, output)| command(id, *output)).collect();
+            let source = Arc::new(Turn { items: Some(items), ..Default::default() });
+            let mut sent = vec![source.clone()];
+            defer_item_details(&mut sent, budget);
+            for (source, sent) in source.items.as_ref().unwrap().iter().zip(sent[0].items.as_ref().unwrap()) {
+                let deferred = crate::protocol::encode(source).unwrap().len() > budget.min(512);
+                prop_assert_eq!(sent.is_deferred(), deferred);
+                prop_assert_eq!(&sent.id, &source.id);
+                prop_assert_eq!(sent.status, source.status);
+                if !deferred {
+                    prop_assert!(Arc::ptr_eq(source, sent));
+                }
+            }
+        }
     }
 
     proptest! {
