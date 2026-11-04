@@ -241,15 +241,26 @@ pub fn markdown_blocks(source: String) -> Vec<MarkdownBlock> {
 /// CSV always quotes cells, including embedded delimiters, quotes and newlines.
 #[cfg_attr(feature = "bindings", uniffi::export)]
 pub fn markdown_table_csv(rows: Vec<Vec<String>>) -> String {
-    rows.iter()
-        .map(|row| {
-            row.iter()
-                .map(|cell| format!("\"{}\"", cell.replace('"', "\"\"")))
-                .collect::<Vec<_>>()
-                .join(",")
-        })
-        .collect::<Vec<_>>()
-        .join("\r\n")
+    let mut csv = String::new();
+    for (row_index, row) in rows.into_iter().enumerate() {
+        if row_index > 0 {
+            csv.push_str("\r\n");
+        }
+        for (column, cell) in row.into_iter().enumerate() {
+            if column > 0 {
+                csv.push(',');
+            }
+            csv.push('"');
+            for (quote, part) in cell.split('"').enumerate() {
+                if quote > 0 {
+                    csv.push_str("\"\"");
+                }
+                csv.push_str(part);
+            }
+            csv.push('"');
+        }
+    }
+    csv
 }
 
 /// Desktop Markdown and its code labels share a parse. Image removal can change
@@ -531,6 +542,39 @@ mod tests {
         assert_eq!(
             markdown_table_csv(vec![vec!["a,b".into(), "a\"b\nc".into()]]),
             "\"a,b\",\"a\"\"b\nc\""
+        );
+    }
+
+    #[test]
+    fn csv_preserves_empty_rows_and_empty_cells() {
+        for (rows, expected) in [
+            (vec![], ""),
+            (vec![vec![]], ""),
+            (vec![vec![], vec![]], "\r\n"),
+            (vec![vec![], vec![""], vec![]], "\r\n\"\"\r\n"),
+            (vec![vec!["", ""], vec![]], "\"\",\"\"\r\n"),
+        ] {
+            let rows = rows
+                .into_iter()
+                .map(|row| row.into_iter().map(str::to_owned).collect())
+                .collect();
+            assert_eq!(markdown_table_csv(rows), expected);
+        }
+    }
+
+    #[test]
+    fn csv_doubles_adjacent_quotes_and_keeps_unicode_and_line_endings() {
+        assert_eq!(markdown_table_csv(vec![vec!["\"".into()]]), "\"\"\"\"");
+        assert_eq!(
+            markdown_table_csv(vec![vec!["a\"\"b".into()]]),
+            "\"a\"\"\"\"b\""
+        );
+        assert_eq!(
+            markdown_table_csv(vec![
+                vec!["日,本".into(), "a\r\nb".into()],
+                vec!["a\0b".into()]
+            ]),
+            "\"日,本\",\"a\r\nb\"\r\n\"a\0b\""
         );
     }
 
