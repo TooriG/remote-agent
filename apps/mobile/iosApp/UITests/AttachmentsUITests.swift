@@ -20,14 +20,15 @@ extension LaunchUITests {
         XCTAssertEqual(folder.label, "フォルダ: 検証プロジェクト")
         captureScreen(app, named: "New chat project and environment in the centered prompt")
         let removals = app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", "を外す"))
-        selectPhotos(["写真"], in: app)
-        app.buttons["Cancel"].tap()
+        selectPhotos([.photo], in: app)
+        app.navigationBars.buttons.matching(NSPredicate(format: "label IN %@", ["Cancel", "キャンセル"]))
+            .firstMatch.tap()
         XCTAssertEqual(removals.count, 0)
         XCTAssertTrue(app.buttons["task.attach"].isEnabled)
         XCTAssertFalse(app.staticTexts["notice"].exists)
         for count in 1 ... 2 {
-            selectPhotos(["写真"], in: app)
-            app.buttons["Add"].tap()
+            selectPhotos([.photo], in: app)
+            confirmPhotoSelection(in: app)
             let attached = expectation(for: NSPredicate(format: "count == %d", count), evaluatedWith: removals)
             wait(for: [attached], timeout: 60)
             XCTAssertTrue(app.buttons["task.attach"].isEnabled)
@@ -37,8 +38,8 @@ extension LaunchUITests {
         app.buttons["task.send"].tap()
         XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 30))
         XCTAssertEqual(removals.count, 0)
-        selectPhotos(["写真"], in: app)
-        app.buttons["Add"].tap()
+        selectPhotos([.photo], in: app)
+        confirmPhotoSelection(in: app)
         let nextAttachment = expectation(for: NSPredicate(format: "count == 1"), evaluatedWith: removals)
         wait(for: [nextAttachment], timeout: 60)
         XCTAssertTrue(app.buttons["task.send"].isEnabled)
@@ -68,9 +69,9 @@ extension LaunchUITests {
         captureScreen(app, named: "Photo video camera and file attachment menu")
         app.buttons["task.attach.camera"].tap()
         XCTAssertTrue(app.staticTexts["この端末ではカメラを利用できません。"].waitForExistence(timeout: 5))
-        selectPhotos(["写真", "ビデオ"], in: app)
+        selectPhotos([.photo, .video], in: app)
         captureScreen(app, named: "Photo and video selected together")
-        app.buttons["Add"].tap()
+        confirmPhotoSelection(in: app)
         let removals = app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", "を外す"))
         let attached = expectation(for: NSPredicate(format: "count == 2"), evaluatedWith: removals)
         wait(for: [attached], timeout: 60)
@@ -95,23 +96,23 @@ extension LaunchUITests {
 
     func testSimulatorRetriesPhotoUploadAfterWorkspaceRecovery() throws {
         let app = try connectedSimulatorApp(expandProject: false)
-        try useSimulatorListFixture("worktree-conversation")
+        try useSimulatorListFixture("worktree-conversation/upload")
         app.buttons["tasks.menu"].tap(); app.buttons["tasks.refresh"].tap()
         expandSimulatorProject(app)
-        let row = app.descendants(matching: .any)["tasks.row.codex:fixture-worktree-thread"]
+        let row = app.descendants(matching: .any)["tasks.row.codex:fixture-upload-thread"]
         XCTAssertTrue(row.waitForExistence(timeout: 15)); row.tap()
         let prompt = app.textFields["task.message"]
         XCTAssertTrue(prompt.waitForExistence(timeout: 10))
         prompt.tap(); prompt.typeText("[success] Retry selected photos")
-        try simulatorFixture("worktree/unavailable")
+        try simulatorFixture("worktree/upload/unavailable")
         var unavailable = true
         addTeardownBlock {
             if unavailable {
-                try self.simulatorFixture("worktree/restore")
+                try self.simulatorFixture("worktree/upload/restore")
             }
         }
-        selectPhotos(["写真", "ビデオ"], in: app)
-        app.buttons["Add"].tap()
+        selectPhotos([.photo, .video], in: app)
+        confirmPhotoSelection(in: app)
         let notices = app.staticTexts.matching(identifier: "notice")
         XCTAssertTrue(notices.firstMatch.waitForExistence(timeout: 30))
         let attach = app.buttons["task.attach"]
@@ -120,9 +121,9 @@ extension LaunchUITests {
         let removals = app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", "を外す"))
         XCTAssertEqual(removals.count, 0)
         XCTAssertEqual(prompt.value as? String, "[success] Retry selected photos")
-        try simulatorFixture("worktree/restore"); unavailable = false
-        selectPhotos(["写真", "ビデオ"], in: app)
-        app.buttons["Add"].tap()
+        try simulatorFixture("worktree/upload/restore"); unavailable = false
+        selectPhotos([.photo, .video], in: app)
+        confirmPhotoSelection(in: app)
         let attached = expectation(for: NSPredicate(format: "count == 2"), evaluatedWith: removals)
         wait(for: [attached], timeout: 60)
         XCTAssertEqual(notices.count, 0)
@@ -141,14 +142,38 @@ extension LaunchUITests {
         captureScreen(app, named: "Recovered media upload survives reopening")
     }
 
-    private func selectPhotos(_ labels: [String], in app: XCUIApplication) {
+    private enum PickerMedia {
+        case photo, video
+
+        var labels: (String, String) {
+            switch self {
+            case .photo: ("写真", "Photo")
+            case .video: ("ビデオ", "Video")
+            }
+        }
+    }
+
+    private func selectPhotos(_ kinds: [PickerMedia], in app: XCUIApplication) {
         app.buttons["task.attach"].tap()
         app.buttons["task.attach.photos"].tap()
-        for label in labels {
-            let media = app.images.matching(NSPredicate(format: "label CONTAINS %@", label)).firstMatch
+        for kind in kinds {
+            // The system picker follows the Simulator language: Japanese locally, English on CI runners.
+            let (japanese, english) = kind.labels
+            let media = app.images
+                .matching(NSPredicate(format: "label CONTAINS %@ OR label CONTAINS %@", japanese, english)).firstMatch
             XCTAssertTrue(media.waitForExistence(timeout: 15), app.debugDescription)
             media.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         }
+    }
+
+    private func confirmPhotoSelection(in app: XCUIApplication) {
+        let confirm = app.navigationBars.buttons.matching(
+            NSPredicate(format: "label IN %@", ["Add", "Done", "追加", "完了"])
+        ).firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 10))
+        let enabled = expectation(for: NSPredicate(format: "isEnabled == true"), evaluatedWith: confirm)
+        wait(for: [enabled], timeout: 10)
+        confirm.tap()
     }
 
     private func selectAttachmentFixture(in app: XCUIApplication) {

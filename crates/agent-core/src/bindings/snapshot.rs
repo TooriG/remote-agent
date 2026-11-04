@@ -195,6 +195,9 @@ impl WorkspaceReview {
     pub fn deletions(&self) -> u64 {
         self.0.deletions
     }
+    pub fn unchanged(&self, other: Arc<Self>) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
 }
 
 #[derive(uniffi::Object)]

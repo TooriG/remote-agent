@@ -48,7 +48,8 @@ try {
   const state = JSON.parse(readFileSync(join(process.env.KACHE_RUNTIME_DIR, 'daemon.state.json'), 'utf8'));
   if (!Number.isSafeInteger(state.pid) || state.pid <= 1) throw new Error('Invalid compiler cache daemon PID');
   pid = state.pid;
-  kache(['stats', '--last-build']);
+  // Report every compilation in this job; its runtime directory holds no older events.
+  kache(['stats', '--full']);
   await sweep();
 } finally {
   kache(['daemon', 'stop']);

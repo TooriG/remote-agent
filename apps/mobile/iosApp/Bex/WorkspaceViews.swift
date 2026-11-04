@@ -260,23 +260,19 @@ private struct WorkspaceDirectoryScreen: View {
 struct WorkspaceDiffScreen: View {
     @ObservedObject var model: AppViewModel
     let root: String
-    @State private var files: [WorkspaceDiffFile] = []
-    @State private var error: String?
-    @State private var busy = true
+    @State private var files: [WorkspaceDiffFile]?
 
     var body: some View {
+        // Core runs only the newest review read; an older request can finish
+        // first, so the view follows the snapshot rather than its own request.
+        let review = model.snapshot.review()
         Group {
-            if busy {
-                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let error {
+            if let error = model.snapshot.operationError(key: .workspaceReview) {
                 VStack {
                     AppNotice(text: error).padding()
                     Button("再試行", action: loadDiff).accessibilityIdentifier("files.diff.retry")
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if files.isEmpty {
-                Text("変更はありません").foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
+            } else if let files, !files.isEmpty {
                 ScrollView {
                     LazyVStack(spacing: 16) {
                         ForEach(files, id: \.path) { file in
@@ -284,28 +280,34 @@ struct WorkspaceDiffScreen: View {
                         }
                     }.padding(12)
                 }
+            } else if files != nil {
+                Text("変更はありません").foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .onAppear(perform: loadDiff)
+        .task(id: ReviewIdentity(review: review)) {
+            guard let review else { return }
+            let next = await Task.detached(priority: .userInitiated) { review.diffFiles() }.value
+            guard !Task.isCancelled else { return }
+            files = next
+        }
     }
 
     private func loadDiff() {
-        busy = true; error = nil
-        model.requestSnapshot(.reviewWorkspace(ReviewWorkspace(cwd: root))) { snapshot, result in
-            model.notice = nil
-            if case let .failure(failure) = result {
-                busy = false
-                error = failure.localizedDescription
-            } else if let review = snapshot.review() {
-                Task {
-                    files = await Task.detached(priority: .userInitiated) { review.diffFiles() }.value
-                    busy = false
-                }
-            } else {
-                busy = false
-                error = "差分を取得できませんでした。再試行してください。"
-            }
-        }
+        files = nil
+        model.perform(.reviewWorkspace(ReviewWorkspace(cwd: root)))
+    }
+}
+
+private struct ReviewIdentity: Equatable {
+    let review: WorkspaceReview?
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        guard let left = lhs.review, let right = rhs.review else { return lhs.review == nil && rhs.review == nil }
+        return left.unchanged(other: right)
     }
 }
 
