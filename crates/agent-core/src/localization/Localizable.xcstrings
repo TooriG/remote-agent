@@ -1121,38 +1121,6 @@
         }
       }
     },
-    "Bexを終了": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bexを終了"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Quit Bex"
-          }
-        }
-      }
-    },
-    "Bexを開く": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bexを開く"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Open Bex"
-          }
-        }
-      }
-    },
     "BexアプリでQRを読み取る": {
       "localizations": {
         "ja": {

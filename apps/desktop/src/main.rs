@@ -133,8 +133,6 @@ fn main() {
             Some("ChatComposer > Input"),
         )]);
         cx.set_global(MainWindow(None));
-        #[cfg(target_os = "macos")]
-        platform::task_menu::init(cx);
         cx.spawn(async move |cx| {
             cx.update(open_main_window);
         })
