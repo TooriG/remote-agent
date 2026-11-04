@@ -83,7 +83,7 @@ struct ThreadMessageRow: View, Equatable {
     var timestampMs: UInt64?
     var fork: (() -> Void)?
     var forking = false
-    var forkError: String?
+    var forkError: ErrorText?
     var restoreUnknown: ((String) -> Void)?
     var discardUnknown: ((String) -> Void)?
     @State private var copied = false
@@ -165,7 +165,7 @@ struct ThreadMessageRow: View, Equatable {
                 }
             }
             if let forkError {
-                AppText(forkError).font(.caption).foregroundColor(.red)
+                ErrorTextView(text: forkError).font(.caption).foregroundColor(.red)
             }
         }
         .padding(.bottom, isUser ? 12 : 8)

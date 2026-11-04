@@ -422,12 +422,10 @@ impl Render for Terminal {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let language = crate::localization::language(cx);
         let status = self.error.clone().unwrap_or_else(|| {
-            self.snapshot.terminals.get(&self.handle).map_or(
-                language.text("接続中…").into(),
-                |terminal| {
-                    agent_core::localization::localized_ui_text(language, terminal.phase.label())
-                },
-            )
+            self.snapshot
+                .terminals
+                .get(&self.handle)
+                .map_or("接続中…".into(), |terminal| terminal.phase.label())
         });
         v_flex()
             .size_full()
@@ -440,7 +438,9 @@ impl Render for Terminal {
                     .text_xs()
                     .text_color(rgb(crate::appearance::MUTED))
                     .child(div().flex_1().child(self.cwd.clone()))
-                    .child(status)
+                    .child(agent_core::localization::localized_ui_text(
+                        language, status,
+                    ))
                     .child(
                         div()
                             .id("terminal-stop")

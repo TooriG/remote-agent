@@ -13,7 +13,7 @@ final class SideChatRequest: ObservableObject {
     private var draftInitialized = false
     private var transition: Task<Void, Never>?
     @Published private(set) var preparing = true
-    @Published private(set) var error: String?
+    @Published private(set) var error: ErrorText?
 
     init(text: String, host: String, originalThreadId: SessionRef,
          originalConversation: ConversationPresentation?, cwd: String) {
@@ -43,7 +43,7 @@ final class SideChatRequest: ObservableObject {
     }
 
     private func prepare(_ model: AppViewModel) async {
-        if model.notice == error {
+        if model.notice == error?.plainText {
             model.notice = nil
         }
         error = nil
@@ -80,7 +80,7 @@ final class SideChatRequest: ObservableObject {
                   model.sideChatRequest?.id == id else { return }
             model.composerFocusRequest = UUID()
         } catch {
-            self.error = model.snapshot.error()?.plainText ?? error.localizedDescription
+            self.error = model.snapshot.error() ?? errorText(error: error.localizedDescription)
             await restoreOriginal(model)
         }
         preparing = false
@@ -139,7 +139,7 @@ struct ConversationSideChat: View {
                 ProgressView("サイドチャットを準備中…")
             } else if let error = request.error {
                 VStack(spacing: 16) {
-                    AppText(error).foregroundStyle(.red)
+                    ErrorTextView(text: error).foregroundStyle(.red)
                     Button("再試行") { request.activate(true, model: model) }
                 }.padding()
             } else {

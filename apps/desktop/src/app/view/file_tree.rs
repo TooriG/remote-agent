@@ -135,24 +135,19 @@ impl Desktop {
             .child(header)
             .when_some(tree.error.as_ref(), |body, error| {
                 body.child(
-                    button(
-                        "file-tree-error",
-                        agent_core::localization::localized_ui_format(
-                            language,
-                            "{0} · 再試行".into(),
-                            vec![agent_core::localization::localized_ui_text(
-                                language,
-                                error.message.clone(),
-                            )],
-                        ),
-                        cx,
-                        |view, _, cx| {
-                            view.file_tree_action(FileTreeAction::Refresh);
-                            cx.notify();
-                        },
-                    )
-                    .text_xs()
-                    .w_full(),
+                    v_flex().child(error_view(error, language)).child(
+                        button(
+                            "file-tree-error",
+                            language.text("再試行"),
+                            cx,
+                            |view, _, cx| {
+                                view.file_tree_action(FileTreeAction::Refresh);
+                                cx.notify();
+                            },
+                        )
+                        .text_xs()
+                        .w_full(),
+                    ),
                 )
             })
             .when(

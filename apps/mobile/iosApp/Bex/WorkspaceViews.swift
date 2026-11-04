@@ -95,7 +95,7 @@ private struct WorkspaceDirectoryScreen: View {
     @State private var selected: FileEntry?
     @State private var selectedLine: UInt32?
     @State private var sharedFile: SharedFile?
-    @State private var error: String?
+    @State private var error: ErrorText?
     @State private var busy = false
 
     private var root: String {
@@ -114,7 +114,7 @@ private struct WorkspaceDirectoryScreen: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    if let error = error ?? tree.error?.plainText {
+                    if let error = error ?? tree.error {
                         AppNotice(text: error).padding(.horizontal, 16).padding(.vertical, 8)
                     }
                     if tree.truncated {
@@ -193,11 +193,11 @@ private struct WorkspaceDirectoryScreen: View {
             ProgressView().frame(maxWidth: .infinity).padding(20)
         } else {
             VStack(alignment: .leading, spacing: 4) {
-                Text(tree.error == nil ? "ファイルが見つかりません" : "ファイルを表示できません").fontWeight(.bold)
+                AppText(tree.error == nil ? "ファイルが見つかりません" : "ファイルを表示できません").fontWeight(.bold)
                 if tree.error != nil {
                     Button("再試行") { send(.refresh) }
                 } else {
-                    Text(tree.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    AppText(tree.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         ? "作業スペースは空です。" : "別の語句で検索してください。").font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -252,7 +252,7 @@ private struct WorkspaceDirectoryScreen: View {
             do {
                 let url = try await downloadFile(path)
                 selected = nil; sharedFile = SharedFile(url: url)
-            } catch { self.error = error.localizedDescription }
+            } catch { self.error = errorText(error: error.localizedDescription) }
         }
     }
 }
@@ -269,7 +269,7 @@ struct WorkspaceDiffScreen: View {
         Group {
             if let error = model.snapshot.operationError(key: .workspaceReview) {
                 VStack {
-                    ErrorTextView(text: error).foregroundStyle(.red).accessibilityIdentifier("notice").padding()
+                    AppNotice(text: error).padding()
                     Button("再試行", action: loadDiff).accessibilityIdentifier("files.diff.retry")
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let files, !files.isEmpty {

@@ -5,7 +5,7 @@ import SwiftUI
 struct RequestPanel: View {
     let request: Request
     let busy: Bool
-    let error: String?
+    let error: ErrorText?
     let respond: (Answer) -> Void
     @State private var response = ""
     @State private var inputError: String?
@@ -33,8 +33,10 @@ struct RequestPanel: View {
                 }
             }
             answerControls
-            if let error = inputError ?? error {
-                AppText(error).font(.caption).foregroundColor(.red)
+            if let inputError {
+                AppText(inputError).font(.caption).foregroundColor(.red)
+            } else if let error {
+                ErrorTextView(text: error).font(.caption).foregroundColor(.red)
             }
         }
         .onAppear { response = requestInputDefault(body: request.requestBody) }
@@ -213,7 +215,7 @@ extension View {
 struct QuestionPanel: View {
     let prompt: QuestionPrompt
     let busy: Bool
-    let error: String?
+    let error: ErrorText?
     let choose: (String) -> Void
     let skip: () -> Void
     /// Collapsing applies to one question; the next question opens again.
@@ -274,7 +276,7 @@ struct QuestionPanel: View {
                 Text(question.prompt).lineLimit(1).foregroundStyle(.secondary)
             }
             if let error {
-                AppText(error).font(.caption).foregroundColor(.red)
+                ErrorTextView(text: error).font(.caption).foregroundColor(.red)
             }
         }
         .disabled(busy || !prompt.canRespond)

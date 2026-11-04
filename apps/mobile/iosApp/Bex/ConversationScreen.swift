@@ -246,7 +246,7 @@ struct ThreadScreen: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .accessibilityIdentifier("task.empty")
             } else if let id = model.selectedThreadId, let error = history?.error {
-                AppNotice(text: error.plainText).padding(.horizontal)
+                AppNotice(text: error).padding(.horizontal)
                 Button("再試行") { model.openThread(id) }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .accessibilityIdentifier("task.retry")

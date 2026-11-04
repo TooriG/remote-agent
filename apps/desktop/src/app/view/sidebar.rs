@@ -45,6 +45,7 @@ pub(super) enum SidebarRow {
         drag: SidebarDrag,
     },
     Heading(String),
+    Error(agent_core::presentation::error::ErrorText),
     Project {
         id: String,
         name: String,
@@ -69,6 +70,11 @@ impl SidebarRow {
     fn render(self, id: String, collapsed: bool, window: &mut Window, cx: &mut App) -> AnyElement {
         let language = crate::localization::language(cx);
         match self {
+            Self::Error(error) => error_view(&error, language)
+                .px_3()
+                .text_xs()
+                .when(collapsed, |row| row.hidden())
+                .into_any_element(),
             Self::Heading(label) => div()
                 .px_3()
                 .pt_3()
@@ -497,13 +503,7 @@ impl Desktop {
                     projects.push(SidebarMenuItem::new(language.text("読み込み中…")).into());
                 }
                 if let Some(error) = &project.error {
-                    projects.push(
-                        SidebarMenuItem::new(agent_core::localization::localized_ui_text(
-                            language,
-                            error.message.clone(),
-                        ))
-                        .into(),
-                    );
+                    projects.push(SidebarRow::Error(error.clone()));
                     let retry_id = id.clone();
                     projects.push(
                         SidebarMenuItem::new(language.text("再試行"))

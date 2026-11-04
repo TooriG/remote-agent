@@ -35,7 +35,7 @@ extension ThreadScreen {
                 RequestPanel(
                     request: request,
                     busy: model.snapshot.operationRunning(key: .request(id: request.id)),
-                    error: model.snapshot.operationError(key: .request(id: request.id))?.plainText,
+                    error: model.snapshot.operationError(key: .request(id: request.id)),
                     respond: { model.respond(request.id, $0) }
                 )
                 // Typed responses belong to one request.
@@ -45,7 +45,7 @@ extension ThreadScreen {
                 QuestionPanel(
                     prompt: question,
                     busy: model.snapshot.operationRunning(key: .request(id: question.requestId)),
-                    error: model.snapshot.operationError(key: .request(id: question.requestId))?.plainText,
+                    error: model.snapshot.operationError(key: .request(id: question.requestId)),
                     choose: { model.answerQuestion(question.requestId, .choose(choiceId: $0)) },
                     skip: { model.respond(question.requestId, .skipQuestions) }
                 )

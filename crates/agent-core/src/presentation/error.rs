@@ -351,6 +351,29 @@ mod error_tests {
     }
 
     #[test]
+    fn known_file_failures_show_recovery_copy_without_host_payloads() {
+        for (code, message) in [
+            ("file_not_found", "ファイルまたはフォルダが見つかりません。"),
+            (
+                "file_access_denied",
+                "ファイルまたはフォルダにアクセスする権限がありません。",
+            ),
+        ] {
+            let raw = format!(
+                "remote RPC error: {}",
+                serde_json::json!({"code": code, "message": "host file failure", "data": {"path": "private"}})
+            );
+            assert_eq!(
+                error_text(&raw),
+                ErrorText {
+                    message: message.into(),
+                    details: None
+                }
+            );
+        }
+    }
+
+    #[test]
     fn provider_cause_stays_in_details_without_exposing_payloads() {
         let raw = r#"remote RPC error: {"delivery":"unknown","code":"provider_failed","message":"thread example already has an active writer","execution":{"providerCode":"-32600"}}"#;
         let text = error_text(raw);
@@ -479,6 +502,16 @@ mod error_tests {
                 "エラーが発生しました。",
             ),
             ("save failed".into(), "エラーが発生しました。"),
+            (
+                "request turn/start rejected".into(),
+                "エラーが発生しました。",
+            ),
+            ("read operation timed out".into(), "エラーが発生しました。"),
+            ("Invalid argument".into(), "エラーが発生しました。"),
+            (
+                "unexpected response: missing field".into(),
+                "エラーが発生しました。",
+            ),
         ];
         for (raw, message) in cases {
             assert_eq!(
@@ -489,6 +522,13 @@ mod error_tests {
                 }
             );
         }
+        assert_eq!(
+            error_text(""),
+            ErrorText {
+                message: "エラーが発生しました。".into(),
+                details: None
+            }
+        );
     }
 
     proptest! {

@@ -537,22 +537,16 @@ impl ConversationView {
                             item_id: item.id.clone(),
                         },
                     });
+            let error = operation
+                .as_ref()
+                .and_then(|key| self.model.failures.get(key));
             let label = if operation
                 .as_ref()
                 .is_some_and(|key| self.model.running.contains(key))
             {
                 language.text("詳細を読み込み中…").to_owned()
-            } else if let Some(error) =
-                operation.and_then(|key| self.model.failures.get(&key).cloned())
-            {
-                agent_core::localization::localized_ui_format(
-                    language,
-                    "{0} · 再試行".into(),
-                    vec![agent_core::localization::localized_ui_text(
-                        language,
-                        error.message,
-                    )],
-                )
+            } else if error.is_some() {
+                language.text("再試行").to_owned()
             } else {
                 language.text("詳細を読み込む").to_owned()
             };
@@ -578,6 +572,7 @@ impl ConversationView {
                         s.timeline.remeasure_item(key.1.as_str());
                     },
                 ))
+                .when_some(error, |body, error| body.child(error_view(error, language)))
                 .into_any_element();
         }
         let turn_id = turn.map(|turn| turn.id.clone()).unwrap_or_default();
