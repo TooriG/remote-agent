@@ -231,19 +231,19 @@ fn file_label(file: &MarkdownFileReference, parent: Option<&str>) -> String {
     parts.join(" · ")
 }
 
-fn file_labels(
-    files: impl Iterator<Item = MarkdownFileReference>,
+fn file_labels<'a>(
+    files: impl Iterator<Item = &'a str>,
 ) -> std::collections::HashMap<String, String> {
-    let mut groups = std::collections::HashMap::<String, std::collections::HashSet<String>>::new();
-    for file in files {
+    let mut groups = std::collections::HashMap::<&str, std::collections::HashSet<String>>::new();
+    for path in files {
         groups
-            .entry(paths::basename(&file.path).into())
+            .entry(paths::basename(path))
             .or_default()
-            .insert(file.path.replace('\\', "/"));
+            .insert(path.replace('\\', "/"));
     }
     let mut labels = std::collections::HashMap::new();
     for group in groups.into_values().filter(|paths| paths.len() > 1) {
-        let parents: Vec<_> = group
+        let mut parents: Vec<_> = group
             .iter()
             .map(|path| {
                 let mut segments: Vec<_> = path
@@ -254,21 +254,29 @@ fn file_labels(
                 (path, segments)
             })
             .collect();
-        for (path, segments) in &parents {
+        // In reversed component order, the longest shared suffix must belong
+        // to a neighbor. This avoids comparing every pair of matching names.
+        parents.sort_unstable_by(|(_, left), (_, right)| left.iter().rev().cmp(right.iter().rev()));
+        for (index, (path, segments)) in parents.iter().enumerate() {
             if segments.is_empty() {
                 continue;
             }
-            let unique_depth = (1..=segments.len())
-                .find(|depth| {
-                    let candidate = &segments[segments.len() - depth..];
-                    !parents.iter().any(|(other, other_segments)| {
-                        other != path
-                            && other_segments[other_segments.len().saturating_sub(*depth)..]
-                                == *candidate
-                    })
+            let shared = index
+                .checked_sub(1)
+                .and_then(|previous| parents.get(previous))
+                .into_iter()
+                .chain(parents.get(index + 1))
+                .map(|(_, other)| {
+                    segments
+                        .iter()
+                        .rev()
+                        .zip(other.iter().rev())
+                        .take_while(|(left, right)| left == right)
+                        .count()
                 })
-                .unwrap_or(segments.len());
-            let depth = unique_depth.max(2).min(segments.len());
+                .max()
+                .unwrap_or(0);
+            let depth = (shared + 1).max(2).min(segments.len());
             labels.insert(
                 (*path).clone(),
                 segments[segments.len() - depth..].join("/"),

@@ -142,15 +142,72 @@ fn desktop_parents_expand_until_distinct_even_when_one_path_is_a_suffix() {
         "one/a/index.ts",
         "two/a/index.ts",
     ];
-    let labels = file_labels(
-        files
-            .iter()
-            .map(|path| file_reference(path, Syntax::Link).unwrap()),
-    );
+    let labels = file_labels(files.into_iter());
     assert_eq!(labels["src/index.ts"], "src");
     assert_eq!(labels["repo/src/index.ts"], "repo/src");
     assert_eq!(labels["one/a/index.ts"], "one/a");
     assert_eq!(labels["two/a/index.ts"], "two/a");
+}
+
+#[test]
+fn disambiguation_handles_normalized_duplicates_and_identical_parent_components() {
+    let labels = file_labels(
+        [
+            r"C:\repo\one\a\shared\index.ts",
+            "C:/repo/one/a/shared/index.ts",
+            "C:/repo/two/a/shared/index.ts",
+            "shared/index.ts",
+            "a//shared/index.ts",
+            "a/shared/index.ts",
+            "index.ts",
+            "/single/unique.rs",
+        ]
+        .into_iter(),
+    );
+    assert_eq!(labels["C:/repo/one/a/shared/index.ts"], "one/a/shared");
+    assert_eq!(labels["C:/repo/two/a/shared/index.ts"], "two/a/shared");
+    assert_eq!(labels["shared/index.ts"], "shared");
+    assert_eq!(labels["a//shared/index.ts"], "a/shared");
+    assert_eq!(labels["a/shared/index.ts"], "a/shared");
+    assert!(!labels.contains_key("index.ts"));
+    assert!(!labels.contains_key("/single/unique.rs"));
+}
+
+proptest::proptest! {
+    #[test]
+    fn parent_labels_use_the_shortest_distinct_suffix_with_at_least_two_components(
+        input in proptest::collection::vec("(?:[abcé]{1,3}/){0,5}index[01]\\.ts", 0..80),
+    ) {
+        let paths = input.iter().map(|path| format!("/repo/{path}")).collect::<Vec<_>>();
+        let labels = file_labels(paths.iter().map(String::as_str));
+        proptest::prop_assert_eq!(&labels, &file_labels(paths.iter().rev().map(String::as_str)));
+        let distinct = paths.iter().collect::<std::collections::BTreeSet<_>>();
+        for path in &distinct {
+            let mut segments = path.split('/').filter(|part| !part.is_empty()).collect::<Vec<_>>();
+            let basename = segments.pop().unwrap();
+            let peers = distinct.iter().filter(|other| other != &path && paths::basename(other) == basename)
+                .map(|other| {
+                    let mut parts = other.split('/').filter(|part| !part.is_empty()).collect::<Vec<_>>();
+                    parts.pop();
+                    parts
+                }).collect::<Vec<_>>();
+            let Some(label) = labels.get(path.as_str()) else {
+                proptest::prop_assert!(peers.is_empty());
+                continue;
+            };
+            proptest::prop_assert!(!peers.is_empty());
+            let depth = label.split('/').count();
+            proptest::prop_assert!((2.min(segments.len())..=segments.len()).contains(&depth));
+            proptest::prop_assert_eq!(label, &segments[segments.len()-depth..].join("/"));
+            if depth < segments.len() {
+                proptest::prop_assert!(peers.iter().all(|other| other[other.len().saturating_sub(depth)..] != segments[segments.len()-depth..]));
+            }
+            if depth > 2 {
+                let shorter = depth - 1;
+                proptest::prop_assert!(peers.iter().any(|other| other[other.len().saturating_sub(shorter)..] == segments[segments.len()-shorter..]));
+            }
+        }
+    }
 }
 
 #[test]

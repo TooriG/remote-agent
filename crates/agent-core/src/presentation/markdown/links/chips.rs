@@ -137,7 +137,7 @@ pub(in crate::presentation::markdown) fn file_chips(
         }
     }
     visit(root, &resolve, &mut chips);
-    let labels = file_labels(chips.values().map(|chip| chip.file.clone()));
+    let labels = file_labels(chips.values().map(|chip| chip.file.path.as_str()));
     for chip in chips.values_mut() {
         relabel(&mut chip.file, &labels);
     }
