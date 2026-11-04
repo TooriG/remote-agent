@@ -57,7 +57,7 @@ The shipped clips are about 120–170 KB each, 1280×720, H.264, without audio.
 
 ## Japanese promo video
 
-`promo-video/` is the Remotion source of a 40-second Japanese introduction
+`promo-video/` is the Remotion source of a 48-second Japanese introduction
 (1920×1080, 60 fps): iPhone connection over QUIC/iroh, the Rust + GPUI desktop,
 and Claude Code, Codex and DSH. `src/Film.tsx` is one continuous camera take on
 the 120 BPM beat grid: the logo's teal dot becomes the iPhone, travels to the

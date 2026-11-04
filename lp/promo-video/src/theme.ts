@@ -18,7 +18,7 @@ export const C = {
 };
 
 export const FPS = 60;
-export const FRAMES = 40 * FPS;
+export const FRAMES = 48 * FPS;
 // The track runs at 120 BPM: one beat is half a second.
 export const b = (beats: number) => Math.round((beats * FPS) / 2);
 
