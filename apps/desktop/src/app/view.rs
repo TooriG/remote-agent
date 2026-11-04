@@ -281,9 +281,7 @@ impl Desktop {
         let entity = cx.entity().downgrade();
         let owner = entity.clone();
         popover::Popover::new("thread-details")
-            .bg(rgb(appearance::SURFACE))
-            .rounded(px(18.))
-            .border_color(rgb(appearance::BORDER))
+            .appearance(false)
             .anchor(Anchor::TopRight)
             .open(open)
             .on_open_change(move |open, _, cx| {
