@@ -89,6 +89,9 @@ extension LaunchUITests {
         openWorktreeSettings(app)
         XCTAssertEqual(create.value as? String, "1", "The saved setting must survive app restart")
         app.navigationBars["ワークツリー"].buttons["BackButton"].tap()
+        let close = app.buttons["settings.close"]
+        tapWhenStable(close)
+        XCTAssertTrue(close.waitForNonExistence(timeout: 10))
     }
 
     func testSimulatorEditsHostWorktreeSettingsFromTaskMenu() throws {
