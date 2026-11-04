@@ -505,11 +505,18 @@ pub fn project_conversation(
 fn preparation_presentation(
     preparation: &agent_protocol::session::SessionPreparation,
 ) -> PreparationPresentation {
-    use agent_protocol::{operations::RetryPreparation, session::PreparationStatus};
+    use agent_protocol::{
+        operations::RetryPreparation,
+        session::{PreparationStage, PreparationStatus},
+    };
     // Startup reads as ordinary work; the composer's stop control interrupts it.
     let (text, in_progress, retry) = match &preparation.status {
         PreparationStatus::Preparing | PreparationStatus::Sending => {
-            ("作業中…".into(), true, false)
+            let text = match preparation.stage {
+                PreparationStage::Worktree => "ワークツリーを準備中…",
+                PreparationStage::Workspace | PreparationStage::Provider => "開始中…",
+            };
+            (text.into(), true, false)
         }
         PreparationStatus::Failed { error } => (
             format!("準備に失敗しました: {}", error.message),
@@ -537,8 +544,52 @@ mod preparation_tests {
     use super::*;
     use agent_protocol::{
         operations::{Input, Submission},
-        session::{PreparationStatus, ProviderKind, SessionPreparation, SessionRef},
+        session::{
+            PreparationStage, PreparationStatus, ProviderKind, SessionPreparation, SessionRef,
+        },
     };
+
+    #[test]
+    fn startup_labels_follow_host_stages_in_both_languages() {
+        use crate::localization::{UiLanguage, localized_ui_text};
+        let id = SessionRef::new(ProviderKind::Codex, "startup".into()).unwrap();
+        let mut preparation = SessionPreparation {
+            submission: Submission {
+                thread_id: id,
+                client_user_message_id: "input".into(),
+                input: Vec::new(),
+                model: None,
+                effort: None,
+                service_tier: None,
+            },
+            status: PreparationStatus::Preparing,
+            stage: PreparationStage::Workspace,
+        };
+        for (stage, japanese, english) in [
+            (PreparationStage::Workspace, "開始中…", "Starting…"),
+            (
+                PreparationStage::Worktree,
+                "ワークツリーを準備中…",
+                "Setting up worktree…",
+            ),
+            (PreparationStage::Provider, "開始中…", "Starting…"),
+        ] {
+            preparation.stage = stage;
+            let presentation = preparation_presentation(&preparation);
+            assert!(presentation.in_progress);
+            assert!(presentation.retry.is_none());
+            assert_eq!(
+                localized_ui_text(UiLanguage::Japanese, presentation.text.clone()),
+                japanese
+            );
+            assert_eq!(
+                localized_ui_text(UiLanguage::English, presentation.text),
+                english
+            );
+        }
+        preparation.status = PreparationStatus::Sending;
+        assert_eq!(preparation_presentation(&preparation).text, "開始中…");
+    }
 
     #[test]
     fn admitted_input_is_visible_once_through_failure_retry_and_native_echo() {
@@ -557,6 +608,7 @@ mod preparation_tests {
                     service_tier: None,
                 },
                 status: PreparationStatus::Preparing,
+                stage: PreparationStage::Workspace,
             }),
             ..Default::default()
         };

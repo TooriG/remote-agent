@@ -400,7 +400,7 @@ pub(super) mod tests {
             let checkout = host
                 .inner
                 .worktrees
-                .prepare(repository.to_str())
+                .prepare(repository.to_str(), || async { Ok(()) })
                 .await
                 .unwrap()
                 .unwrap();
@@ -473,7 +473,7 @@ pub(super) mod tests {
                 let checkout = host
                     .inner
                     .worktrees
-                    .prepare(repository.to_str())
+                    .prepare(repository.to_str(), || async { Ok(()) })
                     .await
                     .unwrap()
                     .unwrap();
@@ -563,7 +563,7 @@ pub(super) mod tests {
         let checkout = host
             .inner
             .worktrees
-            .prepare(repository.to_str())
+            .prepare(repository.to_str(), || async { Ok(()) })
             .await
             .unwrap()
             .unwrap();
@@ -655,7 +655,7 @@ pub(super) mod tests {
                     .unwrap();
                 host.inner
                     .worktrees
-                    .prepare(repository.to_str())
+                    .prepare(repository.to_str(), || async { Ok(()) })
                     .await
                     .unwrap()
                     .unwrap();
@@ -811,14 +811,14 @@ pub(super) mod tests {
         let first = service
             .inner
             .worktrees
-            .prepare(repository.to_str())
+            .prepare(repository.to_str(), || async { Ok(()) })
             .await
             .unwrap()
             .unwrap();
         let other = service
             .inner
             .worktrees
-            .prepare(repository.to_str())
+            .prepare(repository.to_str(), || async { Ok(()) })
             .await
             .unwrap()
             .unwrap();

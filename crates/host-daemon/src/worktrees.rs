@@ -186,19 +186,25 @@ impl Worktrees {
         ?
     }
 
-    pub(crate) async fn prepare(&self, cwd: Option<&str>) -> Result<Option<PathBuf>> {
+    pub(crate) async fn prepare<F: std::future::Future<Output = Result<()>>>(
+        &self,
+        cwd: Option<&str>,
+        on_create: impl FnOnce() -> F,
+    ) -> Result<Option<PathBuf>> {
         // Automatic worktrees need an explicitly selected checkout.
         let Some(cwd) = cwd else {
             return Ok(None);
         };
         let _guard = self.lock.lock().await;
         let path = self.path.clone();
+        let state_path = path.clone();
+        let mut state = tokio::task::spawn_blocking(move || read(&state_path)).await??;
+        if !state.settings.create_on_new_session {
+            return Ok(None);
+        }
+        on_create().await?;
         let cwd = PathBuf::from(cwd);
         tokio::task::spawn_blocking(move || {
-            let mut state = read(&path)?;
-            if !state.settings.create_on_new_session {
-                return Ok(None);
-            }
             let cwd = dunce::canonicalize(&cwd)?;
             let root = dunce::canonicalize(
                 crate::git::text(&cwd, &["rev-parse", "--show-toplevel"])?.trim_end(),
@@ -752,7 +758,11 @@ mod tests {
                 .configure(Some(json!({"createOnNewSession":true})))
                 .await
                 .unwrap();
-            let cwd = store.prepare(root.to_str()).await.unwrap().unwrap();
+            let cwd = store
+                .prepare(root.to_str(), || async { Ok(()) })
+                .await
+                .unwrap()
+                .unwrap();
             fs::write(cwd.join("tracked.txt"), "worktree commit").unwrap();
             crate::git::text(&cwd, &["add", "tracked.txt"]).unwrap();
             crate::git::text(
@@ -910,7 +920,11 @@ mod tests {
             ..Default::default()
         };
         store.settings(Some(settings.clone())).await.unwrap();
-        let cwd = store.prepare(root.to_str()).await.unwrap().unwrap();
+        let cwd = store
+            .prepare(root.to_str(), || async { Ok(()) })
+            .await
+            .unwrap()
+            .unwrap();
         let target = cwd.to_str().unwrap().to_owned();
         let branch = crate::git::text(&cwd, &["branch", "--show-current"])
             .unwrap()
@@ -976,8 +990,16 @@ mod tests {
             }))
             .await
             .unwrap();
-        let first = worktrees.prepare(root.to_str()).await.unwrap().unwrap();
-        let other = worktrees.prepare(root.to_str()).await.unwrap().unwrap();
+        let first = worktrees
+            .prepare(root.to_str(), || async { Ok(()) })
+            .await
+            .unwrap()
+            .unwrap();
+        let other = worktrees
+            .prepare(root.to_str(), || async { Ok(()) })
+            .await
+            .unwrap()
+            .unwrap();
         let first_path = first.to_str().unwrap().to_owned();
         let branch = crate::git::text(&first, &["branch", "--show-current"])
             .unwrap()
@@ -1082,7 +1104,11 @@ mod tests {
         restarted.remove(other_path.into(), false).await.unwrap();
         assert_eq!(Worktrees::new(&state).list().await.unwrap().len(), 2);
         assert_eq!(fs::read_to_string(unrelated).unwrap(), "preserve");
-        let registered = worktrees.prepare(root.to_str()).await.unwrap().unwrap();
+        let registered = worktrees
+            .prepare(root.to_str(), || async { Ok(()) })
+            .await
+            .unwrap()
+            .unwrap();
         fs::remove_dir_all(&registered).unwrap();
         let entries = worktrees.list().await.unwrap();
         let entry = entries
@@ -1099,12 +1125,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancelled_worktree_preparation_prevents_checkout_creation() {
+        let directory = repository();
+        let root = dunce::canonicalize(directory.path()).unwrap();
+        let store = Worktrees::new(&root.join("projects.json"));
+        store
+            .settings(Some(WorktreeSettings {
+                create_on_new_session: true,
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        let error = store
+            .prepare(root.to_str(), || async { anyhow::bail!("cancelled") })
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), "cancelled");
+        assert!(store.list().await.unwrap().is_empty());
+        assert!(!root.join(".worktree").exists());
+        assert!(
+            store
+                .prepare(root.to_str(), || async { Ok(()) })
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
     async fn settings_persist_and_toggles_control_real_worktree_creation_and_copying() {
         let directory = repository();
         let root = dunce::canonicalize(directory.path()).unwrap();
         let projects = root.join("projects.json");
         let store = Worktrees::new(&projects);
-        assert!(store.prepare(None).await.unwrap().is_none());
+        assert!(
+            store
+                .prepare(None, || async { anyhow::bail!("no worktree was selected") })
+                .await
+                .unwrap()
+                .is_none()
+        );
         fs::write(root.join("tracked.txt"), "uncommitted\n").unwrap();
         fs::write(root.join("config.txt"), "local config\n").unwrap();
         fs::write(root.join(".env"), "FIXTURE_TOKEN=isolated\n").unwrap();
@@ -1116,7 +1176,11 @@ mod tests {
         store.configure(Some(settings.clone())).await.unwrap();
         let loaded = Worktrees::new(&projects);
         assert_eq!(loaded.configure(None).await.unwrap(), settings);
-        let first = loaded.prepare(root.to_str()).await.unwrap().unwrap();
+        let first = loaded
+            .prepare(root.to_str(), || async { Ok(()) })
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(first.file_name(), root.file_name());
         assert_eq!(
             first.parent().unwrap().parent().unwrap(),
@@ -1168,7 +1232,11 @@ mod tests {
             ))
             .await
             .unwrap();
-        let second = store.prepare(root.to_str()).await.unwrap().unwrap();
+        let second = store
+            .prepare(root.to_str(), || async { Ok(()) })
+            .await
+            .unwrap()
+            .unwrap();
         assert_ne!(first, second);
         assert!(!second.join(".env").exists());
         store
@@ -1177,7 +1245,15 @@ mod tests {
             ))
             .await
             .unwrap();
-        assert!(store.prepare(root.to_str()).await.unwrap().is_none());
+        assert!(
+            store
+                .prepare(root.to_str(), || async {
+                    anyhow::bail!("automatic worktrees are disabled")
+                })
+                .await
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(
             fs::read_to_string(root.join("tracked.txt")).unwrap(),
             "uncommitted\n"
@@ -1207,7 +1283,10 @@ mod tests {
                 .await
                 .unwrap();
             assert!(
-                store.prepare(root.to_str()).await.is_err(),
+                store
+                    .prepare(root.to_str(), || async { Ok(()) })
+                    .await
+                    .is_err(),
                 "{path} must be rejected"
             );
             assert_eq!(
@@ -1274,7 +1353,11 @@ mod tests {
         let mut settings = json!({"createOnNewSession":true,"copyOnCreate":true,"copyPaths":[".env"],"worktreeDirectory":root.join("storage/new folder")});
         store.configure(Some(settings.clone())).await.unwrap();
         let restarted = Worktrees::new(&projects);
-        let first = restarted.prepare(root.to_str()).await.unwrap().unwrap();
+        let first = restarted
+            .prepare(root.to_str(), || async { Ok(()) })
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(first.file_name(), root.file_name());
         assert_eq!(
             first.parent().unwrap().parent().unwrap(),
@@ -1291,7 +1374,11 @@ mod tests {
         );
         settings["worktreeDirectory"] = json!(real_parent.join("second"));
         store.configure(Some(settings)).await.unwrap();
-        let second = restarted.prepare(first.to_str()).await.unwrap().unwrap();
+        let second = restarted
+            .prepare(first.to_str(), || async { Ok(()) })
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(second.file_name(), root.file_name());
         assert_eq!(
             second.parent().unwrap().parent().unwrap(),
@@ -1356,7 +1443,7 @@ mod tests {
             save(&projects.with_file_name("bex-worktrees.json"), &state).unwrap();
             let store = Worktrees::new(&projects);
             let first = store
-                .prepare(legacy.join("packages/app").to_str())
+                .prepare(legacy.join("packages/app").to_str(), || async { Ok(()) })
                 .await
                 .unwrap()
                 .unwrap();
@@ -1380,7 +1467,7 @@ mod tests {
             );
             assert!(!root.join("packages/app/source.txt").exists());
             let second = Worktrees::new(&projects)
-                .prepare(first.to_str())
+                .prepare(first.to_str(), || async { Ok(()) })
                 .await
                 .unwrap()
                 .unwrap();
@@ -1426,8 +1513,18 @@ mod tests {
             .configure(Some(json!({"createOnNewSession":true})))
             .await
             .unwrap();
-        assert!(store.prepare(directory.path().to_str()).await.is_err());
+        assert!(
+            store
+                .prepare(directory.path().to_str(), || async { Ok(()) })
+                .await
+                .is_err()
+        );
         crate::git::text(directory.path(), &["init", "--quiet"]).unwrap();
-        assert!(store.prepare(directory.path().to_str()).await.is_err());
+        assert!(
+            store
+                .prepare(directory.path().to_str(), || async { Ok(()) })
+                .await
+                .is_err()
+        );
     }
 }

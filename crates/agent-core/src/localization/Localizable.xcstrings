@@ -1,6 +1,38 @@
 {
   "sourceLanguage": "ja",
   "strings": {
+    "開始中…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Starting…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "開始中…"
+          }
+        }
+      }
+    },
+    "ワークツリーを準備中…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Setting up worktree…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ワークツリーを準備中…"
+          }
+        }
+      }
+    },
     "使用量": {
       "localizations": {
         "ja": {

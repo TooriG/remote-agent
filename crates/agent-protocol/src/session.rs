@@ -188,6 +188,16 @@ pub enum SubmissionDelivery {
 pub struct SessionPreparation {
     pub submission: crate::operations::Submission,
     pub status: PreparationStatus,
+    pub stage: PreparationStage,
+}
+
+/// Retained through failure and interruption so retry reuses a prepared workspace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PreparationStage {
+    Workspace,
+    Worktree,
+    Provider,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

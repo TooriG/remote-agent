@@ -66,12 +66,12 @@ pub(super) struct Conversation {
 pub(super) struct Startup {
     pub preparation: SessionPreparation,
     pub started_at: f64,
-    pub workspace_ready: bool,
 }
 
 /// Resource results are committed against the latest row, so an interrupt or
 /// rename received during filesystem/provider IO cannot be overwritten.
 pub(super) enum StartupChange {
+    Worktree,
     Workspace { cwd: String },
     Binding { native: SessionRef },
     Sending,
@@ -99,9 +99,18 @@ fn change_startup(
         .as_mut()
         .ok_or_else(|| Failure::new("preparation_finished", "準備は完了しています。"))?;
     match change {
+        StartupChange::Worktree => {
+            if startup.preparation.status != PreparationStatus::Preparing {
+                return Err(Failure::new(
+                    "preparation_interrupted",
+                    "準備を停止しました。",
+                ));
+            }
+            startup.preparation.stage = PreparationStage::Worktree;
+        }
         StartupChange::Workspace { cwd } => {
             row.cwd = cwd;
-            startup.workspace_ready = true;
+            startup.preparation.stage = PreparationStage::Provider;
         }
         StartupChange::Binding { native } => {
             row.bindings.push(Binding {
@@ -783,47 +792,53 @@ mod tests {
 
     #[test]
     fn restart_retains_admitted_input_and_distinguishes_preparation_from_uncertain_delivery() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("conversations.json");
-        let store = Conversations::new(path.clone());
-        for status in [PreparationStatus::Preparing, PreparationStatus::Sending] {
-            let mut row = conversation();
-            let submission = agent_protocol::operations::Submission {
-                thread_id: row.id.clone(),
-                client_user_message_id: "input".into(),
-                input: vec![agent_protocol::operations::Input::Text {
-                    text: "retained initial input".into(),
-                }],
-                model: None,
-                effort: Some("high".into()),
-                service_tier: Some("fast".into()),
-            };
-            row.startup = Some(Startup {
-                preparation: SessionPreparation {
-                    submission: submission.clone(),
-                    status: status.clone(),
-                },
-                started_at: 1.,
-                workspace_ready: true,
-            });
-            store.save(row.clone()).unwrap();
-            let restored = Conversations::new(path.clone())
-                .get(&row.id)
-                .unwrap()
-                .unwrap();
-            let startup = restored.startup.unwrap();
-            assert_eq!(startup.preparation.submission, submission);
-            assert!(startup.workspace_ready);
-            assert_eq!(restored.active, row.active);
-            match status {
-                PreparationStatus::Preparing => assert!(matches!(
-                    startup.preparation.status,
-                    PreparationStatus::Failed { .. }
-                )),
-                PreparationStatus::Sending => {
-                    assert_eq!(startup.preparation.status, PreparationStatus::Unknown)
+        for stage in [
+            PreparationStage::Workspace,
+            PreparationStage::Worktree,
+            PreparationStage::Provider,
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("conversations.json");
+            let store = Conversations::new(path.clone());
+            for status in [PreparationStatus::Preparing, PreparationStatus::Sending] {
+                let mut row = conversation();
+                let submission = agent_protocol::operations::Submission {
+                    thread_id: row.id.clone(),
+                    client_user_message_id: "input".into(),
+                    input: vec![agent_protocol::operations::Input::Text {
+                        text: "retained initial input".into(),
+                    }],
+                    model: None,
+                    effort: Some("high".into()),
+                    service_tier: Some("fast".into()),
+                };
+                row.startup = Some(Startup {
+                    preparation: SessionPreparation {
+                        submission: submission.clone(),
+                        status: status.clone(),
+                        stage,
+                    },
+                    started_at: 1.,
+                });
+                store.save(row.clone()).unwrap();
+                let restored = Conversations::new(path.clone())
+                    .get(&row.id)
+                    .unwrap()
+                    .unwrap();
+                let startup = restored.startup.unwrap();
+                assert_eq!(startup.preparation.submission, submission);
+                assert_eq!(startup.preparation.stage, stage);
+                assert_eq!(restored.active, row.active);
+                match status {
+                    PreparationStatus::Preparing => assert!(matches!(
+                        startup.preparation.status,
+                        PreparationStatus::Failed { .. }
+                    )),
+                    PreparationStatus::Sending => {
+                        assert_eq!(startup.preparation.status, PreparationStatus::Unknown)
+                    }
+                    _ => unreachable!(),
                 }
-                _ => unreachable!(),
             }
         }
     }

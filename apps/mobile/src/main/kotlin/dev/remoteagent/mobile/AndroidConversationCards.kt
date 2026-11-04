@@ -47,7 +47,10 @@ internal fun PreparationCard(
 ) {
     val language = LocalUiLanguage.current
     Column(Modifier.testTag("task.preparation")) {
-        Text(language.text(preparation.text), style = MaterialTheme.typography.bodySmall)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (preparation.inProgress) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+            Text(language.text(preparation.text), style = MaterialTheme.typography.bodySmall)
+        }
         preparation.retry?.let { retry ->
             TextButton(onClick = { perform(Intent.RetryPreparation(retry)) {} }) { Text(language.text("再試行")) }
         }

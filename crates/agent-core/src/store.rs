@@ -2076,7 +2076,7 @@ mod tests {
                 .remove("serviceTier")
                 .unwrap();
             submission["serviceTierForTurn"] = tier;
-            writer.reply(&request, json!({"result":{"thread":{"id":{"provider":"codex","id":"admitted"},"cwd":"/project","status":"preparing","preparation":{"submission":submission,"status":"preparing"}}}})).await.unwrap();
+            writer.reply(&request, json!({"result":{"thread":{"id":{"provider":"codex","id":"admitted"},"cwd":"/project","status":"preparing","preparation":{"submission":submission,"status":"preparing","stage":"workspace"}}}})).await.unwrap();
         };
         let (opened, ()) = tokio::join!(operation.run((), &mut context), reply);
         let mut snapshot = Snapshot::default();

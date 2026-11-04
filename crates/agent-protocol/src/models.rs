@@ -465,6 +465,7 @@ mod tests {
                     service_tier: None,
                 },
                 status: PreparationStatus::Preparing,
+                stage: crate::session::PreparationStage::Workspace,
             }),
             ..Default::default()
         };

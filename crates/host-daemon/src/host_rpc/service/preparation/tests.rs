@@ -72,6 +72,94 @@ async fn until(
 }
 
 #[tokio::test]
+async fn preparation_publishes_worktree_setup_only_when_it_creates_a_checkout() {
+    for (selected, automatic) in [(true, true), (true, false), (false, true)] {
+        let directory = tempfile::tempdir().unwrap();
+        let repository = crate::host_rpc::service::worktrees::tests::repository(directory.path());
+        let agent = NativeAgent::new(ProviderKind::Codex, directory.path().join("native"));
+        let blocked = agent.create_gate.acquire().await.unwrap();
+        let host = HostRpcService::new(
+            [agent.backend()],
+            ProjectStore::new(directory.path().join("worktrees.json")),
+        );
+        host.inner
+            .worktrees
+            .settings(Some(agent_protocol::models::WorktreeSettings {
+                create_on_new_session: automatic,
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        let mut input = request(&repository);
+        if !selected {
+            let Call::CreateSession(params) = &mut input else {
+                unreachable!()
+            };
+            params.cwd = None;
+        }
+        let client = host.open_session();
+        let (opened, mut updates) = admit(&host, client.id(), &input).await;
+        assert_eq!(
+            opened.response.thread.preparation.unwrap().stage,
+            PreparationStage::Workspace
+        );
+        let mut stages = Vec::new();
+        loop {
+            let SessionChange::Preparation {
+                preparation: Some(preparation),
+            } = until(&mut updates, |change| {
+                matches!(
+                    change,
+                    SessionChange::Preparation {
+                        preparation: Some(_)
+                    }
+                )
+            })
+            .await
+            else {
+                unreachable!()
+            };
+            stages.push(preparation.stage);
+            if preparation.stage == PreparationStage::Provider {
+                break;
+            }
+        }
+        assert_eq!(
+            stages.contains(&PreparationStage::Worktree),
+            selected && automatic
+        );
+        let other = host.open_session();
+        let reopened: OpenedSession = call(
+            &host,
+            other.id(),
+            Call::OpenSession(OpenSession {
+                session: opened.session.clone(),
+                limit: 5,
+                include_activity: true,
+                known_version: None,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            reopened.response.thread.preparation.unwrap().stage,
+            PreparationStage::Provider
+        );
+        if selected {
+            assert_eq!(
+                reopened.response.thread.cwd.as_deref() != repository.to_str(),
+                automatic
+            );
+        }
+        drop(blocked);
+        until(&mut updates, |change| {
+            matches!(change, SessionChange::Preparation { preparation: None })
+        })
+        .await;
+    }
+}
+
+#[tokio::test]
 async fn admission_lists_and_reopens_the_same_task_before_workspace_preparation() {
     let directory = tempfile::tempdir().unwrap();
     let agent = NativeAgent::new(ProviderKind::Codex, directory.path().join("native"));
@@ -289,7 +377,7 @@ async fn retry_restores_a_removed_workspace_before_creating_the_first_provider_s
     let checkout = host
         .inner
         .worktrees
-        .prepare(repository.to_str())
+        .prepare(repository.to_str(), || async { Ok(()) })
         .await
         .unwrap()
         .unwrap();
@@ -311,7 +399,10 @@ async fn retry_restores_a_removed_workspace_before_creating_the_first_provider_s
         .unwrap()
         .unwrap();
     assert!(row.bindings.is_empty());
-    assert!(row.startup.unwrap().workspace_ready);
+    assert_eq!(
+        row.startup.unwrap().preparation.stage,
+        PreparationStage::Provider
+    );
     host.remove_worktree(checkout.to_str().unwrap().into())
         .await
         .unwrap();

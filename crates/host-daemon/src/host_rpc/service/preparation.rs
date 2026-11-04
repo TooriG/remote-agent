@@ -3,7 +3,8 @@
 use super::*;
 use crate::host_rpc::conversations::{Conversation, Startup, StartupChange};
 use agent_protocol::session::{
-    PreparationStatus, SessionChange, SessionPreparation, SessionRef, SubmissionDelivery,
+    PreparationStage, PreparationStatus, SessionChange, SessionPreparation, SessionRef,
+    SubmissionDelivery,
 };
 
 #[cfg(test)]
@@ -80,9 +81,9 @@ impl HostRpcService {
                 preparation: SessionPreparation {
                     submission,
                     status: PreparationStatus::Preparing,
+                    stage: PreparationStage::Workspace,
                 },
                 started_at: now(),
-                workspace_ready: false,
             }),
         };
         let projects = self.project_snapshot().await?;
@@ -285,10 +286,17 @@ impl HostRpcService {
         let Some(row) = self.preparing_task(id)? else {
             return Ok(());
         };
-        if !row.startup.as_ref().unwrap().workspace_ready {
+        if row.startup.as_ref().unwrap().preparation.stage != PreparationStage::Provider {
             let selected = (std::path::Path::new(&row.cwd) != self.inner.projects.chat_directory())
                 .then_some(row.cwd.as_str());
-            let cwd = self.prepare_directory(selected).await?;
+            let cwd = self
+                .prepare_directory(selected, || async {
+                    self.change_preparation(id, StartupChange::Worktree)
+                        .await
+                        .map(|_| ())
+                        .map_err(|error| anyhow::anyhow!(error.message))
+                })
+                .await?;
             // Cancellation must not lose a checkout that has already been made.
             self.change_preparation(id, StartupChange::Workspace { cwd })
                 .await?;

@@ -384,8 +384,14 @@ pub(super) fn session_update(
         );
     }
     let active = crate::models::task_active(None, thread.status);
-    let refresh_workspace = (completed || matches!(update.change, SessionChange::Item { .. }))
-        && current.cwd.as_deref() == Some(&next.navigation.cwd);
+    let preparation_finished = current.preparation.is_some()
+        && matches!(
+            update.change,
+            SessionChange::Preparation { preparation: None }
+        );
+    let refresh_workspace =
+        (completed || preparation_finished || matches!(update.change, SessionChange::Item { .. }))
+            && current.cwd.as_deref() == Some(&next.navigation.cwd);
     Arc::make_mut(&mut next.conversations).insert(id.clone(), Arc::new(thread));
     reconcile_pending(&mut next, id);
     let mut effects = details;
@@ -639,6 +645,7 @@ mod tests {
                                 service_tier: None,
                             },
                             status: PreparationStatus::Preparing,
+                            stage: agent_protocol::session::PreparationStage::Workspace,
                         }),
                         ..Default::default()
                     }),
@@ -674,7 +681,19 @@ mod tests {
             &moved,
             crate::session::SessionChange::Preparation { preparation: None },
         );
-        assert!(effects.is_empty());
+        assert_eq!(
+            effects.len(),
+            1,
+            "completion reviews even if the provider already sent its items"
+        );
+        let (_, repeated) = update(
+            &started,
+            crate::session::SessionChange::Preparation { preparation: None },
+        );
+        assert!(
+            repeated.is_empty(),
+            "replayed completion does not refresh changes again"
+        );
         let item = serde_json::from_value(json!({
             "id":"user","status":"completed","clientInputId":"input",
             "body":{"inline":{"body":{"userMessage":{"text":"start","content":[]}}}}
