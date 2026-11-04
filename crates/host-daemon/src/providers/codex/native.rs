@@ -16,8 +16,13 @@ fn field<T: DeserializeOwned>(value: &Value, key: &str) -> Result<T, serde_json:
 fn string(value: &Value, key: &str) -> String {
     value[key].as_str().unwrap_or_default().into()
 }
-fn take_field<T: DeserializeOwned>(value: &mut Value, key: &str) -> Result<T, serde_json::Error> {
-    serde_json::from_value(value.get_mut(key).map(Value::take).unwrap_or(Value::Null))
+/// Move parsed history arrays without rebuilding their nested JSON containers.
+fn optional_array(value: Value) -> Result<Option<Vec<Value>>, serde_json::Error> {
+    match value {
+        Value::Null => Ok(None),
+        Value::Array(values) => Ok(Some(values)),
+        value => serde_json::from_value(value),
+    }
 }
 fn take_string(value: &mut Value, key: &str) -> String {
     match value.get_mut(key).map(Value::take) {
@@ -353,7 +358,12 @@ pub(crate) fn parse_item(mut value: Value) -> Result<Item, serde_json::Error> {
         },
         "imageGeneration" => ItemBody::ImageGeneration {
             saved_path: field(&value, "savedPath")?,
-            data: take_field(&mut value, "result")?,
+            data: serde_json::from_value(
+                value
+                    .get_mut("result")
+                    .map(Value::take)
+                    .unwrap_or(Value::Null),
+            )?,
             revised_prompt: field(&value, "revisedPrompt")?,
         },
         "imageView" => ItemBody::ImageView {
@@ -473,15 +483,20 @@ pub(crate) fn parse_turn(mut value: Value) -> Result<Turn, serde_json::Error> {
         provider: None,
         supports_fork: None,
         status: turn_status(value["status"].as_str()),
-        items: take_field::<Option<Vec<Value>>>(&mut value, "items")?
-            .map(|items| {
-                items
-                    .into_iter()
-                    .map(parse_item)
-                    .map(|v| v.map(Arc::new))
-                    .collect()
-            })
-            .transpose()?,
+        items: optional_array(
+            value
+                .get_mut("items")
+                .map(Value::take)
+                .unwrap_or(Value::Null),
+        )?
+        .map(|items| {
+            items
+                .into_iter()
+                .map(parse_item)
+                .map(|v| v.map(Arc::new))
+                .collect()
+        })
+        .transpose()?,
         items_summary: value["itemsView"] == "summary",
         started_at: field(&value, "startedAt")?,
         duration_ms: field(&value, "durationMs")?,
@@ -566,15 +581,20 @@ pub(crate) fn parse_thread(mut value: Value) -> Result<Thread, serde_json::Error
         name,
         cwd: field(&value, "cwd")?,
         status: session_status(&value["status"]),
-        turns: take_field::<Option<Vec<Value>>>(&mut value, "turns")?
-            .map(|turns| {
-                turns
-                    .into_iter()
-                    .map(parse_turn)
-                    .map(|v| v.map(Arc::new))
-                    .collect()
-            })
-            .transpose()?,
+        turns: optional_array(
+            value
+                .get_mut("turns")
+                .map(Value::take)
+                .unwrap_or(Value::Null),
+        )?
+        .map(|turns| {
+            turns
+                .into_iter()
+                .map(parse_turn)
+                .map(|v| v.map(Arc::new))
+                .collect()
+        })
+        .transpose()?,
         preview: field(&value, "preview")?,
         updated_at: field(&value, "updatedAt")?,
         history_has_more: field(&value, "historyHasMore")?,
@@ -627,6 +647,88 @@ pub(super) fn encode_input(input: &[agent_protocol::operations::Input]) -> Vec<V
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn native_history_arrays_reuse_owned_json_storage() {
+        let values = vec![
+            json!({"content":[{"nested":[1,2,3]}, {"opaque":{"$serde_json::private::RawValue":"unchanged"}}]}),
+        ];
+        let expected = values.clone();
+        let array = values.as_ptr();
+        let nested = values[0]["content"].as_array().unwrap().as_ptr();
+        let result = optional_array(Value::Array(values)).unwrap().unwrap();
+        assert_eq!(result, expected);
+        assert_eq!(result.as_ptr(), array);
+        assert_eq!(result[0]["content"].as_array().unwrap().as_ptr(), nested);
+    }
+
+    #[test]
+    fn native_history_fields_keep_their_shape_validation() {
+        assert!(parse_turn(json!({"id":"turn"})).unwrap().items.is_none());
+        assert!(
+            parse_thread(json!({"id":"thread"}))
+                .unwrap()
+                .turns
+                .is_none()
+        );
+        assert!(
+            parse_turn(json!({"id":"turn","items":null}))
+                .unwrap()
+                .items
+                .is_none()
+        );
+        assert!(
+            parse_thread(json!({"id":"thread","turns":null}))
+                .unwrap()
+                .turns
+                .is_none()
+        );
+        assert!(
+            parse_turn(json!({"id":"turn","items":[]}))
+                .unwrap()
+                .items
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            parse_thread(json!({"id":"thread","turns":[]}))
+                .unwrap()
+                .turns
+                .unwrap()
+                .is_empty()
+        );
+        for invalid in [json!(false), json!(1), json!("[]"), json!({})] {
+            assert!(parse_turn(json!({"id":"turn","items":invalid})).is_err());
+            assert!(
+                parse_turn(json!({"id":"turn","itemsView":"notLoaded","items":invalid})).is_err()
+            );
+            assert!(parse_thread(json!({"id":"thread","turns":invalid})).is_err());
+        }
+        assert!(parse_item(json!({"id":"image","type":"imageGeneration","result":[]})).is_err());
+    }
+
+    #[test]
+    fn native_history_keeps_session_turn_and_item_states() {
+        for (status, expected) in [
+            ("active", SessionStatus::Running),
+            ("idle", SessionStatus::Idle),
+            ("systemError", SessionStatus::Unavailable),
+        ] {
+            let thread = parse_thread(json!({
+                "id":"thread", "status":{"type":status},
+                "turns":[{"id":"turn","status":"completed","items":[
+                    {"id":"item","type":"agentMessage","status":"failed","text":"body"}
+                ]}]
+            }))
+            .unwrap();
+            assert_eq!(thread.status, expected);
+            let turn = &thread.turns.as_ref().unwrap()[0];
+            assert_eq!(turn.status, TurnStatus::Completed);
+            let item = &turn.items.as_ref().unwrap()[0];
+            assert_eq!(item.status, ItemStatus::Failed);
+            assert!(matches!(item.body(), ItemBody::AssistantText { text, .. } if text == "body"));
+        }
+    }
 
     #[test]
     fn deferred_turn_ids_preserve_order_and_ignore_non_string_ids() {
