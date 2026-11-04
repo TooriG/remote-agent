@@ -27,7 +27,8 @@ perl -MFcntl=:flock -e '
         flock(STDIN, LOCK_EX) or die "Could not lock remote worktree: $!\n";
     }
 ' <&9
-work=$(mktemp -d)
+# OpenSSH appends a socket suffix; inherited Nix TMPDIR paths can be too long.
+work=$(mktemp -d /tmp/agent-remote.XXXXXX)
 trap 'ssh -o ControlPath="$work/control" -O exit "$builder" 2> /dev/null || true; rm -rf "$work"' EXIT
 
 quote() {

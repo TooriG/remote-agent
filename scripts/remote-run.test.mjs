@@ -57,7 +57,12 @@ async function main() {
   }
   if (!args.includes('builder')) throw new Error('wrong SSH destination');
   if (args.includes('-O')) return;
-  if (args.includes('-fN')) { record('connect'); return; }
+  if (args.includes('-fN')) {
+    const control = args.find(argument => argument.startsWith('ControlPath='))?.slice('ControlPath='.length);
+    // Reserve room for the temporary suffix added while OpenSSH binds the socket.
+    if (!control || Buffer.byteLength(control) > 80) throw new Error('SSH control path is too long');
+    record('connect'); return;
+  }
   const script = args.at(-1);
   if (script.startsWith('bash -c ')) {
     fs.writeFileSync(path.join(root, task + '.command'), script);
@@ -140,4 +145,13 @@ test('native verification selects the remote environment and preserves failures'
   assert.equal(await task.done, 23, task.stderr());
   assert.match(build.command('native'), /'--native' 'true'/);
   assert.ok(existsSync(join(build.work, 'target/native')));
+});
+
+test('nested temporary directories cannot overflow the SSH control socket', async (t) => {
+  const build = fixture(t);
+  const longTemporary = join(build.work, '..', 'nested-' + 'a'.repeat(150));
+  mkdirSync(longTemporary);
+  const task = build.start('nested', { TMPDIR: longTemporary });
+  assert.equal(await task.done, 0, task.stderr());
+  assert.ok(existsSync(join(build.work, 'target/nested')));
 });
