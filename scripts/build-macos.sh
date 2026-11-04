@@ -13,6 +13,15 @@ case "$profile" in
     release) directory=release ;;
     *) echo "usage: $0 [host|desktop] [dev|release]" >&2; exit 2 ;;
 esac
+channel=${AGENT_DESKTOP_CHANNEL:-}
+if [[ -z $channel ]]; then
+    channel=production
+    if [[ $profile == dev ]]; then channel=development; fi
+fi
+case "$channel" in
+    production|development) ;;
+    *) echo 'Invalid desktop update channel.' >&2; exit 1 ;;
+esac
 packages=(--package host-daemon --package codex-app-server --package agent-process)
 if [[ $product == desktop ]]; then
     [[ $(uname -m) == arm64 ]] || { echo 'The GPUI Mac bundle requires Apple Silicon.' >&2; exit 2; }
@@ -85,7 +94,7 @@ cp apps/desktop/macos/Node.Info.plist "$node_bundle/Contents/Info.plist"
 cp "$AGENT_NODE_RUNTIME/share/doc/node/LICENSE" "$resources/Node-LICENSE.txt"
 cp apps/desktop/macos/Info.plist "$bundle/Contents/Info.plist"
 icon=icon
-if [[ $profile == dev ]]; then
+if [[ $channel == development ]]; then
     icon=icon-dev
     /usr/bin/plutil -replace CFBundleIdentifier -string app.bex.dev.desktop "$bundle/Contents/Info.plist"
     /usr/bin/plutil -replace CFBundleName -string 'Bex Dev' "$bundle/Contents/Info.plist"

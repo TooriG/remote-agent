@@ -1,6 +1,6 @@
 mod install;
 
-use agent_core::updates::{Download, RELEASES_URL, select_download};
+use agent_core::updates::{Channel, Download, RELEASES_URL, select_download};
 use futures_util::AsyncReadExt;
 use gpui_kit::http_client::{AsyncBody, HttpClient, HttpRequestExt, Request};
 use gpui_kit::{
@@ -39,13 +39,6 @@ pub fn build_number() -> u64 {
         .unwrap_or(0)
 }
 
-/// Published releases replace only the distributed app. Development bundles
-/// may carry a build number to label local deployments; they never install a
-/// release or resume one staged by an earlier build.
-fn receives_releases(build: u64, development: bool) -> bool {
-    build != 0 && !development
-}
-
 /// Handle updater workers before starting GPUI or connecting to the Host.
 pub fn run_command() -> bool {
     let mut args = std::env::args_os().skip(1);
@@ -72,8 +65,9 @@ pub fn run_command() -> bool {
 
 impl Updates {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let directory = receives_releases(build_number(), crate::platform::development_app())
-            .then(crate::platform::state_dir)
+        let channel = Channel::for_build(build_number(), crate::platform::development_app());
+        let directory = channel
+            .map(|_| crate::platform::state_dir())
             .and_then(Result::ok);
         let result = directory
             .as_ref()
@@ -85,6 +79,7 @@ impl Updates {
             .and_then(|bytes| serde_json::from_slice::<install::Plan>(&bytes).ok())
             .filter(|plan| {
                 plan.build > build_number()
+                    && Some(plan.channel) == channel
                     && plan.payload.exists()
                     && std::env::current_exe().ok().as_ref() == Some(&plan.executable)
             });
@@ -128,9 +123,10 @@ impl Updates {
     }
 
     fn check(&mut self, cx: &mut Context<Self>) {
-        if !receives_releases(build_number(), crate::platform::development_app()) {
+        let Some(channel) = Channel::for_build(build_number(), crate::platform::development_app())
+        else {
             return;
-        }
+        };
         if let Ok(directory) = crate::platform::state_dir() {
             let _ = std::fs::remove_file(directory.join(install::RESULT_FILE));
         }
@@ -165,6 +161,7 @@ impl Updates {
                 build_number(),
                 std::env::consts::OS,
                 std::env::consts::ARCH,
+                channel,
             )
             .map_err(anyhow::Error::msg)
         });
@@ -450,8 +447,7 @@ async fn download(
 #[cfg(test)]
 mod tests {
     use super::{
-        Download, RefreshThreads, State, Updates, build_number, download, install,
-        receives_releases,
+        Channel, Download, RefreshThreads, State, Updates, build_number, download, install,
     };
     use gpui_kit as gpui;
     use gpui_kit::{
@@ -460,19 +456,9 @@ mod tests {
     };
     use std::{cell::Cell, rc::Rc, sync::Arc};
 
-    #[test]
-    fn only_numbered_production_builds_receive_releases() {
-        for build in [0, 1, 120, u64::MAX] {
-            assert!(!receives_releases(build, true));
-        }
-        assert!(!receives_releases(0, false));
-        for build in [1, 120, u64::MAX] {
-            assert!(receives_releases(build, false));
-        }
-    }
-
     fn release() -> Download {
         Download {
+            channel: Channel::Production,
             build: 95,
             file_name: "update.zip".into(),
             url: "https://example.test/update.zip".into(),
@@ -483,6 +469,7 @@ mod tests {
 
     fn plan(directory: std::path::PathBuf) -> install::Plan {
         install::Plan {
+            channel: Channel::Production,
             build: 95,
             payload: "payload".into(),
             destination: "destination".into(),

@@ -125,7 +125,9 @@ jobs:
             "$AGENT_BUILD_NUMBER" "$AGENT_RELEASE_SHA" "$GITHUB_REPOSITORY" \
             "${{ github.run_id }}" > target/apple-release/release-notes.txt
           gh release create "$AGENT_RELEASE_TAG" target/apple-release/bex-macOS-arm64.zip \
-            target/apple-release/bex-macOS-arm64.zip.sha256 --repo "$GITHUB_REPOSITORY" \
+            target/apple-release/bex-macOS-arm64.zip.sha256 \
+            target/apple-release/bex-macOS-arm64-dev.zip target/apple-release/bex-macOS-arm64-dev.zip.sha256 \
+            --repo "$GITHUB_REPOSITORY" \
             --target "$AGENT_RELEASE_SHA" --title "BEX ${AGENT_BUILD_NUMBER}" \
             --notes-file target/apple-release/release-notes.txt
           # GITHUB_TOKEN release events do not trigger Native clients. Dispatch

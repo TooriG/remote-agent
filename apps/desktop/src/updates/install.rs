@@ -19,6 +19,7 @@ pub const READY_FILE: &str = "app-update-ready.json";
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Plan {
+    pub channel: agent_core::updates::Channel,
     pub build: u64,
     pub payload: PathBuf,
     pub destination: PathBuf,
@@ -76,6 +77,24 @@ fn run(command: &mut Command) -> Result<()> {
     Ok(())
 }
 
+fn installation_directory(executable: &Path) -> Result<&Path> {
+    let parent = executable
+        .parent()
+        .context("application directory unavailable")?;
+    if cfg!(target_os = "macos") {
+        ensure!(
+            parent.ends_with("Contents/MacOS"),
+            "アプリケーションフォルダにインストールしたBexから更新してください。"
+        );
+        executable
+            .ancestors()
+            .nth(3)
+            .context("application bundle unavailable")
+    } else {
+        Ok(parent)
+    }
+}
+
 pub fn stage(
     download: &agent_core::updates::Download,
     archive: &Path,
@@ -83,27 +102,7 @@ pub fn stage(
     isolated: bool,
 ) -> Result<Plan> {
     let executable = std::env::current_exe()?;
-    let destination = if cfg!(target_os = "macos") {
-        ensure!(
-            executable
-                .parent()
-                .is_some_and(|p| p.ends_with("Contents/MacOS")),
-            "アプリケーションフォルダにインストールしたBexから更新してください。"
-        );
-        executable
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .to_owned()
-    } else {
-        executable
-            .parent()
-            .context("application directory unavailable")?
-            .to_owned()
-    };
+    let destination = installation_directory(&executable)?.to_owned();
     let parent = destination
         .parent()
         .context("application parent unavailable")?;
@@ -150,7 +149,8 @@ pub fn stage(
             .output()?;
         ensure!(
             output.status.success()
-                && String::from_utf8(output.stdout)?.trim() == "app.bex.desktop",
+                && String::from_utf8(output.stdout)?.trim()
+                    == download.channel.mac_bundle_identifier(),
             "更新ファイルがBexではありません。"
         );
         verify_build(&bundle.join("Contents/MacOS/bex"), download.build)?;
@@ -162,6 +162,7 @@ pub fn stage(
     };
     let backup = staging.path().join("previous");
     let plan = Plan {
+        channel: download.channel,
         build: download.build,
         payload,
         destination,
@@ -196,10 +197,7 @@ pub fn launch(plan: &Plan) -> Result<File> {
     agent_local_host::save_private_json(&path, plan)?;
     let lease = File::create(cache.path().join("app.lock"))?;
     lease.lock()?;
-    let worker = cache
-        .path()
-        .join(format!("updater{}", std::env::consts::EXE_SUFFIX));
-    fs::copy(std::env::current_exe()?, &worker)?;
+    let worker = stage_worker(&std::env::current_exe()?, cache.path())?;
     let mut command = Command::new(worker);
     // Windows keeps the current directory open. The worker must leave the
     // installed directory before replacing it, even when launched by a shortcut.
@@ -220,6 +218,25 @@ pub fn launch(plan: &Plan) -> Result<File> {
     fs::write(cache.path().join("apply"), b"apply")?;
     let _ = cache.keep();
     Ok(lease)
+}
+
+fn stage_worker(executable: &Path, directory: &Path) -> Result<PathBuf> {
+    if cfg!(target_os = "macos") {
+        // The main executable's signature seals Info.plist and the bundle's
+        // resources. A bare copy cannot pass macOS validation outside its app.
+        let bundle = installation_directory(executable)?;
+        let worker = directory.join("updater.app");
+        run(Command::new("/usr/bin/ditto").arg(bundle).arg(&worker))?;
+        Ok(worker.join("Contents/MacOS").join(
+            executable
+                .file_name()
+                .context("application executable unavailable")?,
+        ))
+    } else {
+        let worker = directory.join(format!("updater{}", std::env::consts::EXE_SUFFIX));
+        fs::copy(executable, &worker)?;
+        Ok(worker)
+    }
 }
 
 fn detached(command: &mut Command) {
@@ -443,6 +460,48 @@ async fn wait_for_recovery(directory: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_detached_worker_preserves_its_signed_application_bundle() {
+        let directory = tempfile::tempdir().unwrap();
+        let bundle = directory.path().join("original.app");
+        let executable = bundle.join("Contents/MacOS/bex");
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        fs::create_dir(bundle.join("Contents/Resources")).unwrap();
+        fs::copy(std::env::current_exe().unwrap(), &executable).unwrap();
+        fs::write(
+            bundle.join("Contents/Resources/sealed.txt"),
+            b"signed resource",
+        )
+        .unwrap();
+        fs::write(
+            bundle.join("Contents/Info.plist"),
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>app.bex.updater-test</string>
+<key>CFBundleExecutable</key><string>bex</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+</dict></plist>"#,
+        )
+        .unwrap();
+        run(Command::new("/usr/bin/codesign")
+            .args(["--force", "--sign", "-"])
+            .arg(&bundle))
+        .unwrap();
+        let cache = directory.path().join("worker");
+        fs::create_dir(&cache).unwrap();
+        let worker = stage_worker(&executable, &cache).unwrap();
+        run(Command::new("/usr/bin/codesign")
+            .args(["--verify", "--deep", "--strict"])
+            .arg(cache.join("updater.app")))
+        .unwrap();
+        run(Command::new(worker).arg("--list")).unwrap();
+        assert_eq!(
+            fs::read(cache.join("updater.app/Contents/Resources/sealed.txt")).unwrap(),
+            b"signed resource"
+        );
+    }
+
     #[test]
     fn relaunch_preserves_the_state_scope_and_uses_the_platform_application_launcher() {
         let bundle = Path::new("/Applications/Bex Dev.app");
@@ -481,6 +540,7 @@ mod tests {
         fs::create_dir(&destination).unwrap();
         fs::write(destination.join("previous-version"), b"old app").unwrap();
         Plan {
+            channel: agent_core::updates::Channel::Production,
             build: 95,
             payload: directory.join("payload"),
             backup: directory.join("backup"),

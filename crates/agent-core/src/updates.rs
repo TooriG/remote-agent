@@ -1,11 +1,35 @@
 //! Desktop release selection. Downloads and installation belong to the OS client.
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 pub const RELEASES_URL: &str =
     "https://api.github.com/repos/ttizze/remote-agent/releases?per_page=100";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Channel {
+    Production,
+    Development,
+}
+
+impl Channel {
+    pub fn for_build(build: u64, development: bool) -> Option<Self> {
+        if development {
+            Some(Self::Development)
+        } else {
+            (build != 0).then_some(Self::Production)
+        }
+    }
+
+    pub fn mac_bundle_identifier(self) -> &'static str {
+        match self {
+            Self::Production => "app.bex.desktop",
+            Self::Development => "app.bex.dev.desktop",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Download {
+    pub channel: Channel,
     pub build: u64,
     pub file_name: String,
     pub url: String,
@@ -35,10 +59,12 @@ pub fn select_download(
     current_build: u64,
     os: &str,
     arch: &str,
+    channel: Channel,
 ) -> Result<Option<Download>, String> {
-    let file_name = match (os, arch) {
-        ("macos", "aarch64") => "bex-macOS-arm64.zip",
-        ("windows", "x86_64") => "bex-windows-x86_64-setup.exe",
+    let file_name = match (os, arch, channel) {
+        ("macos", "aarch64", Channel::Production) => "bex-macOS-arm64.zip",
+        ("macos", "aarch64", Channel::Development) => "bex-macOS-arm64-dev.zip",
+        ("windows", "x86_64", Channel::Production) => "bex-windows-x86_64-setup.exe",
         _ => return Err("この環境ではアプリ内更新に対応していません。".into()),
     };
     let releases: Vec<Release> = serde_json::from_slice(bytes)
@@ -76,6 +102,7 @@ pub fn select_download(
         return Err("更新ファイルの配布情報が正しくありません。".into());
     }
     Ok(Some(Download {
+        channel,
         build,
         file_name: file_name.into(),
         url,
@@ -101,7 +128,66 @@ mod tests {
         os: &str,
         arch: &str,
     ) -> Result<Option<Download>, String> {
-        select_download(&serde_json::to_vec(&releases).unwrap(), current, os, arch)
+        select_download(
+            &serde_json::to_vec(&releases).unwrap(),
+            current,
+            os,
+            arch,
+            Channel::Production,
+        )
+    }
+
+    #[test]
+    fn development_bundles_and_numbered_production_builds_receive_their_own_channel() {
+        assert_eq!(Channel::for_build(0, false), None);
+        for build in [0, 1, 120, u64::MAX] {
+            assert_eq!(Channel::for_build(build, true), Some(Channel::Development));
+            if build != 0 {
+                assert_eq!(Channel::for_build(build, false), Some(Channel::Production));
+            }
+        }
+        assert_eq!(
+            Channel::Development.mac_bundle_identifier(),
+            "app.bex.dev.desktop"
+        );
+        assert_eq!(
+            Channel::Production.mac_bundle_identifier(),
+            "app.bex.desktop"
+        );
+    }
+
+    #[test]
+    fn channels_select_only_their_own_uploaded_assets_and_version() {
+        let stable = "bex-macOS-arm64.zip";
+        let dev = "bex-macOS-arm64-dev.zip";
+        let mut both = release(95, stable);
+        both["assets"]
+            .as_array_mut()
+            .unwrap()
+            .push(release(95, dev)["assets"][0].clone());
+        let bytes = serde_json::to_vec(&vec![release(96, stable), both]).unwrap();
+        for (channel, file_name, build) in [
+            (Channel::Production, stable, 96),
+            (Channel::Development, dev, 95),
+        ] {
+            let download = select_download(&bytes, 94, "macos", "aarch64", channel)
+                .unwrap()
+                .unwrap();
+            assert_eq!(download.channel, channel);
+            assert_eq!(download.file_name, file_name);
+            assert_eq!(download.build, build);
+            assert!(download.url.ends_with(&format!("/prd-{build}/{file_name}")));
+            assert_eq!(
+                select_download(&bytes, build, "macos", "aarch64", channel).unwrap(),
+                None
+            );
+        }
+        let stable_only = serde_json::to_vec(&vec![release(100, stable)]).unwrap();
+        assert!(
+            select_download(&stable_only, 0, "macos", "aarch64", Channel::Development).is_err()
+        );
+        let dev_only = serde_json::to_vec(&vec![release(100, dev)]).unwrap();
+        assert!(select_download(&dev_only, 94, "macos", "aarch64", Channel::Production).is_err());
     }
 
     #[test]
@@ -161,7 +247,7 @@ mod tests {
                 "{key}"
             );
         }
-        assert!(select_download(b"not json", 94, "macos", "aarch64").is_err());
+        assert!(select_download(b"not json", 94, "macos", "aarch64", Channel::Production).is_err());
         assert!(select(vec![], 94, "macos", "aarch64").is_err());
     }
 
