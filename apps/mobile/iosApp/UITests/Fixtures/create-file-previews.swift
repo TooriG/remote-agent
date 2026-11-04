@@ -29,6 +29,7 @@ let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 160_000)!
 buffer.frameLength = buffer.frameCapacity
 memset(buffer.floatChannelData![0], 0, Int(buffer.frameLength) * MemoryLayout<Float>.size)
 try audio.write(from: buffer)
+audio.close()
 
 let gif = CGImageDestinationCreateWithURL(
     directory.appendingPathComponent("fixture animation.gif") as CFURL, UTType.gif.identifier as CFString, 2, nil
