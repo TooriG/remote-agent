@@ -4,7 +4,10 @@ use crate::{
     state::Snapshot,
 };
 use base64::Engine;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, BTreeSet, HashSet},
+};
 #[derive(PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ProjectSummary {
@@ -26,7 +29,7 @@ pub struct ProjectSummary {
     pub has_more: bool,
 }
 
-fn project_summary(project: &Project) -> ProjectSummary {
+fn project_summary(project: &Project, display_name: &str) -> ProjectSummary {
     let name = project.name.trim();
     let mut words = name
         .split(|c: char| !c.is_alphanumeric())
@@ -57,7 +60,7 @@ fn project_summary(project: &Project) -> ProjectSummary {
         .fold(0, |index, c| (index * 31 + c as usize) % COLORS.len());
     ProjectSummary {
         id: project.id.clone(),
-        name: project.name.clone(),
+        name: display_name.to_owned(),
         coordinator_url: coordinator_url(&project.id),
         roots: project.roots.clone(),
         icon_png: project
@@ -199,6 +202,7 @@ impl Snapshot {
             &self.activity.unread,
             waiting,
             &project_ids,
+            None,
         );
         for thread in &mut list.threads {
             if let Some(project) = self.chat_placement(&thread.id) {
@@ -233,20 +237,31 @@ impl Snapshot {
             &self.activity.unread,
             waiting,
             &project_ids,
+            None,
         )
         .into_iter()
         .filter(|thread| thread.project_id.is_none() && self.chat_placement(&thread.id).is_none())
         .collect();
-        let mut projects = list
-            .projects
-            .iter()
-            .filter(|p| !self.project_preference(&p.id).is_some_and(|p| p.hidden))
-            .collect::<Vec<_>>();
-        projects.sort_by_key(|p| {
-            let prefs = self.project_preference(&p.id);
+        let preferences = self.project_preferences.get(&self.storage_scope);
+        let mut projects = Vec::new();
+        let mut hidden_projects = Vec::new();
+        for project in &list.projects {
+            let prefs = preferences.and_then(|prefs| prefs.get(&project.id));
+            if prefs.is_some_and(|prefs| prefs.hidden) {
+                hidden_projects.push(project_summary(
+                    project,
+                    prefs
+                        .and_then(|prefs| prefs.name.as_deref())
+                        .unwrap_or(&project.name),
+                ));
+            } else {
+                projects.push((project, prefs));
+            }
+        }
+        projects.sort_by_key(|(_, prefs)| {
             (
                 prefs.is_none_or(|p| !p.pinned),
-                prefs.and_then(|p| p.section.clone()).unwrap_or_default(),
+                prefs.and_then(|p| p.section.as_deref()).unwrap_or_default(),
                 prefs.and_then(|p| p.order).unwrap_or(usize::MAX),
             )
         });
@@ -263,28 +278,18 @@ impl Snapshot {
                     part: crate::models::ListPart::Chats,
                 },
             ),
-            hidden_projects: list
-                .projects
-                .iter()
-                .filter(|p| self.project_preference(&p.id).is_some_and(|p| p.hidden))
-                .map(|p| {
-                    let mut summary = project_summary(p);
-                    if let Some(name) = self.project_preference(&p.id).and_then(|p| p.name.clone())
-                    {
-                        summary.name = name;
-                    }
-                    summary
-                })
-                .collect(),
+            hidden_projects,
             projects: projects
                 .into_iter()
-                .map(|project| {
+                .map(|(project, prefs)| {
                     let page = self.project_threads.get(&project.id);
-                    let mut summary = project_summary(project);
-                    if let Some(prefs) = self.project_preference(&project.id) {
-                        if let Some(name) = &prefs.name {
-                            summary.name = name.clone();
-                        }
+                    let mut summary = project_summary(
+                        project,
+                        prefs
+                            .and_then(|prefs| prefs.name.as_deref())
+                            .unwrap_or(&project.name),
+                    );
+                    if let Some(prefs) = prefs {
                         summary.pinned = prefs.pinned;
                         summary.section = prefs.section.clone();
                         summary.chats_archived = prefs.archived_before.is_some();
@@ -327,6 +332,7 @@ impl Snapshot {
                             &self.activity.unread,
                             waiting,
                             &project_ids,
+                            None,
                         );
                         summary.has_more = page.has_more;
                         let errors = self.list_error_providers(page);
@@ -338,24 +344,23 @@ impl Snapshot {
                         }
                     }
                     if summary.expanded {
-                        let placed = self
-                            .project_preference(&project.id)
+                        let placed = prefs
                             .into_iter()
                             .flat_map(|p| &p.placed_chats)
                             .map(|chat| {
-                                let mut thread = self
-                                    .thread_metadata(&chat.id)
-                                    .cloned()
-                                    .unwrap_or_else(|| crate::models::Thread {
-                                        id: Some(chat.id.clone()),
-                                        name: Some(chat.title.clone()),
-                                        ..Default::default()
-                                    });
-                                thread.project_id =
-                                    crate::models::ProjectMembership::Assigned(project.id.clone());
-                                thread
+                                self.thread_metadata(&chat.id)
+                                    .map(Cow::Borrowed)
+                                    .unwrap_or_else(|| {
+                                        Cow::Owned(crate::models::Thread {
+                                            id: Some(chat.id.clone()),
+                                            name: Some(chat.title.clone()),
+                                            ..Default::default()
+                                        })
+                                    })
                             })
-                            .filter(|thread| self.project_chat_visible(&project.id, thread))
+                            .filter(|thread| {
+                                self.project_chat_visible(&project.id, thread.as_ref())
+                            })
                             .filter(|thread| {
                                 task_title(thread.name.as_deref(), thread.preview.as_deref())
                                     .to_lowercase()
@@ -365,11 +370,12 @@ impl Snapshot {
                         summary.threads.splice(
                             0..0,
                             thread_summaries(
-                                placed.iter(),
+                                placed.iter().map(AsRef::as_ref),
                                 &self.activity.active,
                                 &self.activity.unread,
                                 waiting,
                                 &project_ids,
+                                Some(&project.id),
                             ),
                         );
                     }
@@ -388,6 +394,7 @@ fn thread_summaries<'a>(
     unread: &BTreeSet<crate::session::SessionRef>,
     waiting: &[crate::session::SessionRef],
     project_ids: &HashSet<&str>,
+    project_override: Option<&str>,
 ) -> Vec<ThreadSummary> {
     data.filter(|thread| thread.parent_id.is_none())
         .filter_map(|thread| {
@@ -403,11 +410,10 @@ fn thread_summaries<'a>(
                     } else {
                         ""
                     },
-                project_id: thread
-                    .project_id
-                    .as_ref()
-                    .filter(|id| project_ids.contains(id.as_str()))
-                    .cloned(),
+                project_id: project_override
+                    .or_else(|| thread.project_id.as_deref())
+                    .filter(|id| project_ids.contains(*id))
+                    .map(str::to_owned),
                 active,
                 waiting,
                 unread,
@@ -416,6 +422,9 @@ fn thread_summaries<'a>(
         })
         .collect()
 }
+
+#[cfg(test)]
+mod placed_tests;
 
 #[cfg(test)]
 mod tests {
@@ -428,10 +437,13 @@ mod tests {
 
     #[test]
     fn only_native_claude_projects_link_to_their_coordinator() {
-        let summary = project_summary(&Project {
-            id: "claude-project:chan_01Q7KpeXNrNrvTTahXT6YE2S".into(),
-            ..Default::default()
-        });
+        let summary = project_summary(
+            &Project {
+                id: "claude-project:chan_01Q7KpeXNrNrvTTahXT6YE2S".into(),
+                ..Default::default()
+            },
+            "",
+        );
         assert_eq!(
             summary.coordinator_url.as_deref(),
             Some("https://claude.ai/code/project/chan_01Q7KpeXNrNrvTTahXT6YE2S")
@@ -463,7 +475,7 @@ mod tests {
             name: name.into(),
             ..Default::default()
         };
-        let summary = project_summary(&project);
+        let summary = project_summary(&project, &project.name);
         assert_eq!(summary.monogram, monogram);
         assert!(summary.icon_png.is_none());
     }
@@ -472,8 +484,10 @@ mod tests {
         #[test]
         fn project_identity_is_bounded_and_ignores_surrounding_whitespace(name in ".{0,80}") {
             let project = |name| Project { name, ..Default::default() };
-            let plain = project_summary(&project(name.clone()));
-            let padded = project_summary(&project(format!(" \t{name}\n ")));
+            let plain_project = project(name);
+            let padded_project = project(format!(" \t{}\n ", plain_project.name));
+            let plain = project_summary(&plain_project, &plain_project.name);
+            let padded = project_summary(&padded_project, &padded_project.name);
             proptest::prop_assert_eq!(plain.monogram.chars().count(), 2);
             proptest::prop_assert_eq!(plain.monogram, padded.monogram);
             proptest::prop_assert_eq!(plain.icon_color, padded.icon_color);

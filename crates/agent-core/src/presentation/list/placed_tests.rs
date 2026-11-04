@@ -1,0 +1,341 @@
+use super::*;
+use crate::{
+    models::{ListQuery, ProjectMembership, SessionStatus, Thread, WorktreeStatus},
+    session::{ProviderKind, SessionRef},
+    state::{ProjectPreferences, projects::PlacedChat},
+};
+use std::sync::Arc;
+
+fn session(id: &str) -> SessionRef {
+    SessionRef::new(ProviderKind::Codex, id.into()).unwrap()
+}
+
+fn fixture() -> Snapshot {
+    let mut snapshot = Snapshot {
+        connected: true,
+        storage_scope: "active".into(),
+        threads: Some(Arc::new(serde_json::from_value(serde_json::json!({
+            "data":[],"projects":[{"id":"destination","name":"Destination","roots":[]},{"id":"source","name":"Source","roots":[]}],
+            "limit":5,"hasMore":false,"hasMoreProjects":false,"projectPages":{}
+        })).unwrap())),
+        ..Default::default()
+    };
+    for (key, name) in [
+        ("live", "Live latest"),
+        ("inactive", "Inactive latest"),
+        ("child", "Child latest"),
+        ("anonymous", "Anonymous latest"),
+        ("archived", "Archived latest"),
+        ("active-archived", "Active archived"),
+    ] {
+        let mut thread = Thread {
+            id: Some(session(key)),
+            name: Some(name.into()),
+            updated_at: Some(1.0),
+            project_id: ProjectMembership::Assigned("source".into()),
+            status: SessionStatus::Idle,
+            ..Default::default()
+        };
+        match key {
+            "live" => {
+                thread.list_stale = Some(true);
+                thread.worktree_status = Some(WorktreeStatus::Merged);
+            }
+            "anonymous" => thread.id = None,
+            "child" => thread.parent_id = Some(session("parent")),
+            _ => {}
+        }
+        Arc::make_mut(&mut snapshot.conversations).insert(session(key), Arc::new(thread));
+    }
+    let preferences = ProjectPreferences {
+        placed_chats: [
+            "live",
+            "missing",
+            "inactive",
+            "child",
+            "anonymous",
+            "archived",
+            "active-archived",
+        ]
+        .map(|id| PlacedChat {
+            id: session(id),
+            title: if id == "missing" {
+                "Missing saved".into()
+            } else {
+                format!("Old saved {id}")
+            },
+        })
+        .into(),
+        archived_before: Some(100),
+        archived_ids: [session("archived"), session("active-archived")].into(),
+        ..Default::default()
+    };
+    snapshot.project_preferences = Arc::new(
+        [
+            (
+                "active".into(),
+                [("destination".into(), preferences)].into(),
+            ),
+            (
+                "other".into(),
+                [(
+                    "destination".into(),
+                    ProjectPreferences {
+                        placed_chats: vec![PlacedChat {
+                            id: session("other"),
+                            title: "Other scope".into(),
+                        }],
+                        ..Default::default()
+                    },
+                )]
+                .into(),
+            ),
+        ]
+        .into(),
+    );
+    snapshot.expanded_projects = Arc::new([("destination".into(), 5)].into());
+    let activity = Arc::make_mut(&mut snapshot.activity);
+    activity.active.insert(session("live"), true);
+    activity.active.insert(session("active-archived"), true);
+    activity.unread.insert(session("missing"));
+    snapshot.task_activity = Some(Arc::new(agent_protocol::live_activity::TaskActivityState {
+        revision: 1,
+        statuses: vec![],
+        waiting: vec![session("live")],
+        unread: vec![],
+        display: agent_protocol::live_activity::TaskActivitySummary::default().display(),
+    }));
+    snapshot
+}
+
+fn placed(snapshot: &Snapshot) -> Vec<ThreadSummary> {
+    snapshot
+        .thread_list()
+        .unwrap()
+        .projects
+        .into_iter()
+        .find(|project| project.id == "destination")
+        .unwrap()
+        .threads
+}
+
+#[test]
+fn placed_rows_keep_live_metadata_saved_fallbacks_and_activity_in_the_destination() {
+    let snapshot = fixture();
+    let rows = placed(&snapshot);
+    assert_eq!(
+        rows.iter().map(|row| &row.id).collect::<Vec<_>>(),
+        [
+            &session("live"),
+            &session("missing"),
+            &session("inactive"),
+            &session("active-archived")
+        ]
+    );
+    assert!(
+        rows.iter()
+            .all(|row| row.project_id.as_deref() == Some("destination"))
+    );
+    assert_eq!(rows[0].title, "Live latest（保存済み・未確認）");
+    assert!(rows[0].active && rows[0].waiting && !rows[0].unread);
+    assert_eq!(rows[0].worktree_status, Some(WorktreeStatus::Merged));
+    assert_eq!(rows[1].title, "Missing saved");
+    assert!(!rows[1].active && !rows[1].waiting && rows[1].unread);
+    assert_eq!(rows[2].title, "Inactive latest");
+    assert!(!rows[2].active);
+    assert!(rows[3].active);
+    assert_eq!(
+        snapshot.conversations[&session("live")]
+            .project_id
+            .as_deref(),
+        Some("source")
+    );
+}
+
+#[test]
+fn placed_search_uses_plain_live_or_saved_titles_and_the_active_storage_scope() {
+    let mut snapshot = fixture();
+    for (search, ids) in [
+        ("LIVE LATEST", vec![session("live")]),
+        ("保存済み", vec![]),
+        ("Old saved", vec![]),
+        ("MISSING", vec![session("missing")]),
+    ] {
+        snapshot.list_query = Arc::new(ListQuery {
+            search_term: search.into(),
+            ..Default::default()
+        });
+        assert_eq!(
+            placed(&snapshot)
+                .into_iter()
+                .map(|row| row.id)
+                .collect::<Vec<_>>(),
+            ids
+        );
+    }
+    snapshot.list_query = Arc::default();
+    snapshot.storage_scope = "other".into();
+    let rows = placed(&snapshot);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, session("other"));
+    assert_eq!(rows[0].title, "Other scope");
+}
+
+#[test]
+fn project_preferences_keep_pinned_section_order_ties_and_hidden_labels() {
+    let projects = [
+        "plain-a",
+        "hidden",
+        "empty-sec",
+        "none-sec",
+        "pinned",
+        "unicode",
+        "ordered",
+        "plain-b",
+    ]
+    .map(|id| crate::models::Project {
+        id: id.into(),
+        name: id.into(),
+        ..Default::default()
+    })
+    .into();
+    let input = crate::models::ThreadList {
+        revision: 1,
+        limit: 5,
+        data: vec![],
+        projects,
+        has_more: false,
+        has_more_projects: false,
+        project_pages: Default::default(),
+        provider_errors: None,
+    };
+    let mut snapshot = Snapshot {
+        threads: Some(Arc::new(input)),
+        ..Default::default()
+    };
+    snapshot.project_preferences = Arc::new(
+        [(
+            snapshot.storage_scope.clone(),
+            [
+                (
+                    "hidden".into(),
+                    ProjectPreferences {
+                        hidden: true,
+                        pinned: true,
+                        name: Some("Hidden custom".into()),
+                        section: Some("a".into()),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "empty-sec".into(),
+                    ProjectPreferences {
+                        section: Some(String::new()),
+                        ..Default::default()
+                    },
+                ),
+                ("none-sec".into(), ProjectPreferences::default()),
+                (
+                    "pinned".into(),
+                    ProjectPreferences {
+                        pinned: true,
+                        name: Some("Pinned custom".into()),
+                        section: Some("z".into()),
+                        order: Some(999),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "unicode".into(),
+                    ProjectPreferences {
+                        section: Some("あ".into()),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "ordered".into(),
+                    ProjectPreferences {
+                        order: Some(0),
+                        ..Default::default()
+                    },
+                ),
+            ]
+            .into(),
+        )]
+        .into(),
+    );
+    let list = snapshot.thread_list().unwrap();
+    assert_eq!(
+        list.projects
+            .iter()
+            .map(|project| project.id.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "pinned",
+            "ordered",
+            "plain-a",
+            "empty-sec",
+            "none-sec",
+            "plain-b",
+            "unicode"
+        ]
+    );
+    assert_eq!(list.projects[0].name, "Pinned custom");
+    assert_eq!(list.projects[0].monogram, "PD");
+    assert_eq!(list.projects[0].icon_color, 0x60a5fa);
+    assert!(list.projects[0].pinned);
+    assert_eq!(list.projects[0].section.as_deref(), Some("z"));
+    assert_eq!(list.projects[3].section.as_deref(), Some(""));
+    assert_eq!(list.projects[4].section, None);
+    assert_eq!(list.hidden_projects.len(), 1);
+    assert_eq!(list.hidden_projects[0].id, "hidden");
+    assert_eq!(list.hidden_projects[0].name, "Hidden custom");
+    assert_eq!(list.hidden_projects[0].monogram, "HN");
+    assert_eq!(list.hidden_projects[0].icon_color, 0xf472b6);
+    assert!(!list.hidden_projects[0].pinned);
+    assert_eq!(list.hidden_projects[0].section, None);
+}
+
+#[test]
+fn project_override_keeps_catalogue_membership_and_does_not_create_row_ids() {
+    let row = Thread {
+        id: Some(session("thread")),
+        project_id: ProjectMembership::Assigned("native".into()),
+        ..Default::default()
+    };
+    let projects = ["native", "placed", ""].into();
+    for (project, expected) in [
+        (None, Some("native")),
+        (Some("placed"), Some("placed")),
+        (Some("unknown"), None),
+        (Some(""), Some("")),
+    ] {
+        let rows = thread_summaries(
+            std::iter::once(&row),
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+            &[],
+            &projects,
+            project,
+        );
+        assert_eq!(rows[0].project_id.as_deref(), expected);
+    }
+    let invalid = [
+        Thread::default(),
+        Thread {
+            parent_id: Some(session("parent")),
+            ..row
+        },
+    ];
+    assert!(
+        thread_summaries(
+            invalid.iter(),
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+            &[],
+            &projects,
+            Some("placed")
+        )
+        .is_empty()
+    );
+}
