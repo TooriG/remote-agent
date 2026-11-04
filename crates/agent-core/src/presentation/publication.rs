@@ -33,27 +33,28 @@ impl Snapshot {
             && Arc::ptr_eq(&self.project_threads, &other.project_threads)
             && Arc::ptr_eq(&self.archived_scopes, &other.archived_scopes)
             && self.connected == other.connected
-            && [
-                crate::state::operations::OperationKey::SessionList,
-                crate::state::operations::OperationKey::SessionPage {
-                    part: crate::models::ListPart::Projects,
-                },
-                crate::state::operations::OperationKey::SessionPage {
-                    part: crate::models::ListPart::Chats,
-                },
-            ]
-            .iter()
-            .all(|key| {
-                self.operations.get(key).map(|state| &state.phase)
-                    == other.operations.get(key).map(|state| &state.phase)
-            })
-            && self.threads.as_ref().is_none_or(|list| {
-                list.projects.iter().all(|project| {
-                    let key = crate::state::operations::OperationKey::ProjectList {
-                        project_id: project.id.clone(),
-                    };
-                    self.operations.get(&key).map(|state| &state.phase)
-                        == other.operations.get(&key).map(|state| &state.phase)
+            && (Arc::ptr_eq(&self.operations, &other.operations) || {
+                [
+                    crate::state::operations::OperationKey::SessionList,
+                    crate::state::operations::OperationKey::SessionPage {
+                        part: crate::models::ListPart::Projects,
+                    },
+                    crate::state::operations::OperationKey::SessionPage {
+                        part: crate::models::ListPart::Chats,
+                    },
+                ]
+                .iter()
+                .all(|key| {
+                    self.operations.get(key).map(|state| &state.phase)
+                        == other.operations.get(key).map(|state| &state.phase)
+                }) && self.threads.as_ref().is_none_or(|list| {
+                    list.projects.iter().all(|project| {
+                        let key = crate::state::operations::OperationKey::ProjectList {
+                            project_id: project.id.clone(),
+                        };
+                        self.operations.get(&key).map(|state| &state.phase)
+                            == other.operations.get(&key).map(|state| &state.phase)
+                    })
                 })
             })
     }
@@ -89,6 +90,110 @@ impl Snapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn list_publication_tracks_visible_operation_phases_without_reacting_to_generations() {
+        use crate::{
+            models::{ListPart, Project, ThreadList},
+            state::operations::{OperationKey, OperationPhase, OperationState},
+        };
+        for count in [0, 1, 16, 512] {
+            let projects: Vec<_> = (0..count)
+                .map(|index| Project {
+                    id: format!("project{index}"),
+                    ..Default::default()
+                })
+                .collect();
+            let keys: Vec<_> = [
+                OperationKey::SessionList,
+                OperationKey::SessionPage {
+                    part: ListPart::Projects,
+                },
+                OperationKey::SessionPage {
+                    part: ListPart::Chats,
+                },
+            ]
+            .into_iter()
+            .chain(projects.iter().map(|project| OperationKey::ProjectList {
+                project_id: project.id.clone(),
+            }))
+            .collect();
+            let previous = Arc::new(Snapshot {
+                threads: Some(Arc::new(ThreadList {
+                    revision: 1,
+                    limit: 5,
+                    data: Vec::new(),
+                    projects,
+                    has_more: false,
+                    has_more_projects: false,
+                    project_pages: Default::default(),
+                    provider_errors: None,
+                })),
+                operations: Arc::new(
+                    keys.iter()
+                        .cloned()
+                        .map(|key| {
+                            (
+                                key,
+                                OperationState {
+                                    generation: 1,
+                                    phase: OperationPhase::Running,
+                                },
+                            )
+                        })
+                        .collect(),
+                ),
+                ..Default::default()
+            });
+            assert!(!previous.changes(previous.clone()).list);
+            for key in keys.iter().take(3).chain(keys.last().filter(|_| count > 0)) {
+                let mut next = previous.as_ref().clone();
+                let state = Arc::make_mut(&mut next.operations).get_mut(key).unwrap();
+                state.generation += 1;
+                let generation = next.changes(previous.clone());
+                assert!(generation.changed && !generation.list);
+                Arc::make_mut(&mut next.operations)
+                    .get_mut(key)
+                    .unwrap()
+                    .phase = OperationPhase::Failed {
+                    message: "first failure".into(),
+                };
+                let failed = Arc::new(next.clone());
+                let phase = next.changes(previous.clone());
+                assert!(phase.list && !phase.models && !phase.conversation);
+                Arc::make_mut(&mut next.operations)
+                    .get_mut(key)
+                    .unwrap()
+                    .phase = OperationPhase::Failed {
+                    message: "different failure".into(),
+                };
+                assert!(next.changes(failed).list);
+                Arc::make_mut(&mut next.operations).remove(key);
+                assert!(next.changes(previous.clone()).list);
+            }
+            for key in [
+                OperationKey::WorkspaceReview,
+                OperationKey::ProjectList {
+                    project_id: "not-visible".into(),
+                },
+            ] {
+                let mut next = previous.as_ref().clone();
+                Arc::make_mut(&mut next.operations).insert(
+                    key,
+                    OperationState {
+                        generation: 2,
+                        phase: OperationPhase::Failed {
+                            message: "unrelated".into(),
+                        },
+                    },
+                );
+                let changes = next.changes(previous.clone());
+                assert!(
+                    changes.changed && !changes.list && !changes.models && !changes.conversation
+                );
+            }
+        }
+    }
 
     #[test]
     fn waiting_membership_refreshes_lists_without_republishing_other_surfaces() {
