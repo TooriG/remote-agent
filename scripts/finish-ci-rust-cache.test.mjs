@@ -61,7 +61,7 @@ test('a bounded snapshot waits for a completed sweep and daemon exit', async t =
   const f = await fixture(t);
   const result = await f.run();
   assert.equal(result.status, 0);
-  assert.deepEqual(result.commands, ['daemon start', 'stats --last-build', 'gc --json', 'gc --json', 'gc --json', 'daemon stop']);
+  assert.deepEqual(result.commands, ['daemon start', 'stats --full', 'gc --json', 'gc --json', 'gc --json', 'daemon stop']);
   assert.ok(existsSync(join(f.root, 'finished')));
 });
 
@@ -69,7 +69,7 @@ test('a failed sweep still stops and waits for the daemon', async t => {
   const f = await fixture(t, 'gc --json');
   const result = await f.run();
   assert.notEqual(result.status, 0);
-  assert.deepEqual(result.commands, ['daemon start', 'stats --last-build', 'gc --json', 'daemon stop']);
+  assert.deepEqual(result.commands, ['daemon start', 'stats --full', 'gc --json', 'daemon stop']);
   assert.ok(existsSync(join(f.root, 'finished')));
 });
 
