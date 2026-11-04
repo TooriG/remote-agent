@@ -215,8 +215,14 @@ pub struct BrowserImportProfile {
     pub label: String,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BrowserImportError {
+    pub browser: String,
+    pub message: String,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BrowserCredentials {
     pub profiles: Vec<BrowserImportProfile>,
+    pub import_errors: Vec<BrowserImportError>,
     pub origin: Option<String>,
     pub accounts: Vec<String>,
     pub password_error: Option<String>,

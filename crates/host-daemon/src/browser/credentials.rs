@@ -51,6 +51,7 @@ pub(super) async fn prepare(
             if matches!(action, BrowserAction::Credentials) {
                 Ok(Prepared::Metadata(BrowserCredentials {
                     profiles: Vec::new(),
+                    import_errors: Vec::new(),
                     origin: None,
                     accounts: Vec::new(),
                     password_error: None,
