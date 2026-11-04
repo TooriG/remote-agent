@@ -31,6 +31,7 @@ pub(in crate::host_rpc::service) struct NativeAgent {
     pub(in crate::host_rpc::service) records: Arc<Mutex<HashMap<String, ThreadResponse>>>,
     pub(in crate::host_rpc::service) idle_warning: Option<&'static str>,
     deferred_history: bool,
+    metadata_only_state: bool,
     /// Item IDs whose native bodies cannot be read.
     unreadable: Mutex<std::collections::HashSet<String>>,
     pub(in crate::host_rpc::service) inputs: Arc<Mutex<Vec<op::Submission>>>,
@@ -69,6 +70,7 @@ impl NativeAgent {
             records: Default::default(),
             idle_warning: None,
             deferred_history: false,
+            metadata_only_state: false,
             unreadable: Default::default(),
             inputs: Default::default(),
             injected: Default::default(),
@@ -97,6 +99,7 @@ impl NativeAgent {
             records: self.records.clone(),
             idle_warning: self.idle_warning,
             deferred_history: self.deferred_history,
+            metadata_only_state: self.metadata_only_state,
             unreadable: Default::default(),
             inputs: self.inputs.clone(),
             injected: self.injected.clone(),
@@ -350,8 +353,9 @@ impl Agent for NativeAgent {
             .get(id)
             .cloned()
             .ok_or_else(unsupported)?;
-        // Execution observations do not promise persisted conversation turns.
-        response.thread.turns = None;
+        if self.metadata_only_state {
+            response.thread.turns = None;
+        }
         Ok(SubmissionState {
             response,
             needs_reload: false,
@@ -1610,8 +1614,10 @@ async fn reopening_after_restart_restores_only_accepted_turn_settings() {
 async fn handoffs_use_the_complete_host_transcript_after_native_history_breaks() {
     use agent_protocol::session::{HistoryReadKind, HistoryReadState};
     let directory = tempfile::tempdir().unwrap();
-    let a = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));
-    let b = NativeAgent::new(ProviderKind::Claude, directory.path().join("claude"));
+    let mut a = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));
+    let mut b = NativeAgent::new(ProviderKind::Claude, directory.path().join("claude"));
+    Arc::get_mut(&mut a).unwrap().metadata_only_state = true;
+    Arc::get_mut(&mut b).unwrap().metadata_only_state = true;
     let root = a
         .create(directory.path().to_str().unwrap(), None, None)
         .await
@@ -1804,8 +1810,10 @@ async fn incomplete_native_history_without_a_complete_host_import_blocks_handoff
 async fn round_trip_reuses_native_sessions_transfers_only_missing_history_and_reopens_after_restart()
  {
     let directory = tempfile::tempdir().unwrap();
-    let a = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));
-    let b = NativeAgent::new(ProviderKind::Claude, directory.path().join("claude"));
+    let mut a = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));
+    let mut b = NativeAgent::new(ProviderKind::Claude, directory.path().join("claude"));
+    Arc::get_mut(&mut a).unwrap().metadata_only_state = true;
+    Arc::get_mut(&mut b).unwrap().metadata_only_state = true;
     let root = a
         .create(directory.path().to_str().unwrap(), Some("model"), None)
         .await
