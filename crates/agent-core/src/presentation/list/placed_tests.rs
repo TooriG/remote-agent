@@ -530,3 +530,250 @@ fn large_placement_lists_keep_scope_hidden_and_dangling_destinations_in_every_vi
     );
     assert_eq!(snapshot.recent_thread_list().unwrap().threads.len(), 140);
 }
+
+#[test]
+fn large_archived_projects_keep_actual_metadata_membership_and_active_overrides() {
+    let mut snapshot = fixture();
+    let count = 512;
+    snapshot.conversations = Arc::default();
+    let shortcuts: Vec<_> = (0..count)
+        .map(|index| PlacedChat {
+            id: session(&format!("saved{index}")),
+            title: format!("Saved {index}"),
+        })
+        .collect();
+    for (index, chat) in shortcuts.iter().enumerate() {
+        let mut thread = Thread {
+            id: Some(chat.id.clone()),
+            name: Some(chat.title.clone()),
+            updated_at: Some(10.),
+            status: SessionStatus::Idle,
+            ..Default::default()
+        };
+        match index {
+            0 => thread.id = None,
+            1 => thread.id = Some(session("native1")),
+            2 => thread.id = Some(session("saved3")),
+            12 => thread.parent_id = Some(session("parent")),
+            _ => {}
+        }
+        Arc::make_mut(&mut snapshot.conversations).insert(chat.id.clone(), Arc::new(thread));
+    }
+    let mut page = snapshot.threads.as_deref().unwrap().clone();
+    page.data = (0..count)
+        .map(|index| Thread {
+            id: Some(session(&format!("native{index}"))),
+            name: Some(format!("Native {index}")),
+            project_id: ProjectMembership::Assigned("destination".into()),
+            updated_at: match index {
+                8 => Some(f64::NAN),
+                9 => None,
+                10 => Some(f64::INFINITY),
+                11 => Some(101.),
+                _ => Some(10.),
+            },
+            status: SessionStatus::Idle,
+            ..Default::default()
+        })
+        .collect();
+    snapshot.project_threads = Arc::new([("destination".into(), Arc::new(page))].into());
+    snapshot.expanded_projects = Arc::new([("destination".into(), count as u32)].into());
+    snapshot.project_preferences = Arc::new(
+        [(
+            "active".into(),
+            [(
+                "destination".into(),
+                ProjectPreferences {
+                    archived_before: Some(100),
+                    archived_ids: [session("saved4"), session("saved5")].into(),
+                    placed_chats: shortcuts,
+                    ..Default::default()
+                },
+            )]
+            .into(),
+        )]
+        .into(),
+    );
+    Arc::make_mut(&mut snapshot.activity)
+        .active
+        .extend([(session("native0"), true), (session("saved5"), true)]);
+    let mut expected: Vec<_> = (2..count)
+        .filter(|index| !matches!(index, 4 | 12))
+        .map(|index| session(&format!("saved{}", if index == 2 { 3 } else { index })))
+        .collect();
+    expected.extend([0, 8, 9, 10, 11].map(|index| session(&format!("native{index}"))));
+    let list = snapshot.thread_list().unwrap();
+    let project = list
+        .projects
+        .iter()
+        .find(|project| project.id == "destination")
+        .unwrap();
+    assert_eq!(
+        project
+            .threads
+            .iter()
+            .map(|thread| &thread.id)
+            .collect::<Vec<_>>(),
+        expected.iter().collect::<Vec<_>>()
+    );
+    assert!(
+        project
+            .threads
+            .iter()
+            .find(|thread| thread.id == session("saved5"))
+            .unwrap()
+            .active
+    );
+    let recent = snapshot.recent_thread_list().unwrap();
+    assert_eq!(
+        recent
+            .threads
+            .iter()
+            .map(|thread| &thread.id)
+            .collect::<BTreeSet<_>>(),
+        [0, 8, 9, 10, 11]
+            .map(|index| session(&format!("native{index}")))
+            .iter()
+            .collect()
+    );
+}
+
+#[test]
+fn archive_filters_apply_with_only_a_timestamp_or_only_explicit_ids() {
+    for (before, ids, expected) in [
+        (Some(100), vec![], vec!["new", "undated"]),
+        (None, vec![session("old")], vec!["new", "undated"]),
+        (None, vec![], vec!["old", "new", "undated"]),
+    ] {
+        let mut snapshot = fixture();
+        let mut page = snapshot.threads.as_deref().unwrap().clone();
+        page.data = [("old", Some(1.)), ("new", Some(101.)), ("undated", None)]
+            .map(|(id, updated_at)| Thread {
+                id: Some(session(id)),
+                updated_at,
+                project_id: ProjectMembership::Assigned("destination".into()),
+                status: SessionStatus::Idle,
+                ..Default::default()
+            })
+            .into();
+        snapshot.project_threads = Arc::new([("destination".into(), Arc::new(page))].into());
+        snapshot.project_preferences = Arc::new(
+            [(
+                "active".into(),
+                [(
+                    "destination".into(),
+                    ProjectPreferences {
+                        archived_before: before,
+                        archived_ids: ids.into_iter().collect(),
+                        ..Default::default()
+                    },
+                )]
+                .into(),
+            )]
+            .into(),
+        );
+        let list = snapshot.thread_list().unwrap();
+        let rows = list
+            .projects
+            .into_iter()
+            .find(|project| project.id == "destination")
+            .unwrap()
+            .threads;
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.id.id.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        let recent = snapshot.recent_thread_list().unwrap();
+        assert_eq!(
+            recent
+                .threads
+                .iter()
+                .map(|row| row.id.id.as_str())
+                .collect::<BTreeSet<_>>(),
+            expected.into_iter().collect()
+        );
+    }
+}
+
+#[test]
+fn expanded_projects_keep_connection_and_operation_errors_without_affecting_collapsed_headers() {
+    use crate::state::operations::{OperationKey, OperationPhase, OperationState};
+    for connected in [false, true] {
+        for cached in [false, true] {
+            for expanded in [false, true] {
+                let mut snapshot = fixture();
+                snapshot.connected = connected;
+                snapshot.expanded_projects = Arc::new(if expanded {
+                    [("destination".into(), 5)].into()
+                } else {
+                    BTreeMap::new()
+                });
+                snapshot.project_threads = Arc::new(if cached {
+                    [(
+                        "destination".into(),
+                        snapshot.threads.as_ref().unwrap().clone(),
+                    )]
+                    .into()
+                } else {
+                    BTreeMap::new()
+                });
+                let expected =
+                    (expanded && !connected && !cached).then_some("接続するとタスクを読み込めます");
+                let project = snapshot
+                    .thread_list()
+                    .unwrap()
+                    .projects
+                    .into_iter()
+                    .find(|project| project.id == "destination")
+                    .unwrap();
+                assert_eq!(
+                    project.error.as_ref().map(|error| error.message.as_str()),
+                    expected
+                );
+                assert!(!project.loading);
+                let key = OperationKey::ProjectList {
+                    project_id: "destination".into(),
+                };
+                Arc::make_mut(&mut snapshot.operations).insert(
+                    key.clone(),
+                    OperationState {
+                        generation: 1,
+                        phase: OperationPhase::Running,
+                    },
+                );
+                let project = snapshot
+                    .thread_list()
+                    .unwrap()
+                    .projects
+                    .into_iter()
+                    .find(|project| project.id == "destination")
+                    .unwrap();
+                assert_eq!(project.loading, expanded);
+                assert_eq!(
+                    project.error.as_ref().map(|error| error.message.as_str()),
+                    expected
+                );
+                Arc::make_mut(&mut snapshot.operations)
+                    .get_mut(&key)
+                    .unwrap()
+                    .phase = OperationPhase::Failed {
+                    message: "read failed".into(),
+                };
+                let project = snapshot
+                    .thread_list()
+                    .unwrap()
+                    .projects
+                    .into_iter()
+                    .find(|project| project.id == "destination")
+                    .unwrap();
+                assert!(!project.loading);
+                assert!(
+                    project.error
+                        == expanded.then(|| crate::presentation::error::error_text("read failed"))
+                );
+            }
+        }
+    }
+}

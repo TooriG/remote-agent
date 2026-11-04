@@ -73,39 +73,25 @@ pub(super) fn chat_placement<'a>(
         .map(|(project, _)| project.as_str())
 }
 
+pub(crate) fn project_chat_visible(
+    archived_before: Option<i64>,
+    archived_ids: Option<&BTreeSet<crate::session::SessionRef>>,
+    id: Option<&crate::session::SessionRef>,
+    active: bool,
+    updated_at: Option<f64>,
+    placed: bool,
+) -> bool {
+    active
+        || (!id.is_some_and(|id| archived_ids.is_some_and(|ids| ids.contains(id)))
+            && (placed
+                || !archived_before
+                    .zip(updated_at)
+                    .is_some_and(|(before, at)| at.is_finite() && at <= before as f64)))
+}
+
 impl Snapshot {
     pub(crate) fn project_preference(&self, id: &str) -> Option<&ProjectPreferences> {
         self.project_preferences.get(&self.storage_scope)?.get(id)
-    }
-    pub(crate) fn project_chat_visible(&self, project: &str, thread: &Thread) -> bool {
-        let Some(p) = self.project_preference(project) else {
-            return true;
-        };
-        if crate::models::task_active(
-            thread
-                .id
-                .as_ref()
-                .and_then(|id| self.activity.active.get(id).copied()),
-            thread.status,
-        ) {
-            return true;
-        }
-        !thread
-            .id
-            .as_ref()
-            .is_some_and(|id| p.archived_ids.contains(id))
-            && !p.archived_before.is_some_and(|before| {
-                if thread
-                    .id
-                    .as_ref()
-                    .is_some_and(|id| p.placed_chats.iter().any(|chat| &chat.id == id))
-                {
-                    return false;
-                }
-                thread
-                    .updated_at
-                    .is_some_and(|at| at.is_finite() && at <= before as f64)
-            })
     }
 }
 pub(super) fn reorder(snapshot: &mut Snapshot, id: &str, target: &str, after: bool) {
@@ -733,5 +719,68 @@ mod placement_tests {
                 proptest::prop_assert_eq!(lookup.get(&id(ProviderKind::Codex, 64)), None);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod visibility_tests {
+    use super::*;
+    use crate::session::{ProviderKind, SessionRef};
+
+    #[test]
+    fn archive_visibility_keeps_active_and_placed_overrides_and_date_boundaries() {
+        let id = SessionRef::new(ProviderKind::Codex, "chat".into()).unwrap();
+        let archived = [id.clone()].into();
+        for (before, at, explicit, active, placed, expected) in [
+            (None, Some(1.), false, false, false, true),
+            (Some(100), Some(99.), false, false, false, false),
+            (Some(100), Some(100.), false, false, false, false),
+            (Some(100), Some(100.01), false, false, false, true),
+            (Some(100), None, false, false, false, true),
+            (Some(100), Some(f64::NAN), false, false, false, true),
+            (Some(100), Some(f64::INFINITY), false, false, false, true),
+            (
+                Some(100),
+                Some(f64::NEG_INFINITY),
+                false,
+                false,
+                false,
+                true,
+            ),
+            (Some(100), Some(1.), false, false, true, true),
+            (Some(100), Some(1.), false, true, false, true),
+            (None, None, true, false, false, false),
+            (Some(100), Some(1.), true, false, true, false),
+            (Some(100), Some(1.), true, true, false, true),
+        ] {
+            assert_eq!(
+                project_chat_visible(
+                    before,
+                    explicit.then_some(&archived),
+                    Some(&id),
+                    active,
+                    at,
+                    placed
+                ),
+                expected,
+                "before={before:?}, at={at:?}, explicit={explicit}, active={active}, placed={placed}"
+            );
+        }
+        assert!(!project_chat_visible(
+            Some(100),
+            Some(&archived),
+            None,
+            false,
+            Some(1.),
+            false
+        ));
+        assert!(project_chat_visible(
+            None,
+            Some(&archived),
+            None,
+            false,
+            Some(1.),
+            false
+        ));
     }
 }

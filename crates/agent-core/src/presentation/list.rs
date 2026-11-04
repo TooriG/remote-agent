@@ -1,7 +1,10 @@
 //! The visible list combines wire summaries with locally observed activity.
 use crate::{
     models::{Project, ProjectRoot, task_active, task_title},
-    state::{Snapshot, projects::ChatPlacements},
+    state::{
+        Snapshot,
+        projects::{ChatPlacements, project_chat_visible},
+    },
 };
 use base64::Engine;
 use std::{
@@ -272,19 +275,24 @@ impl Snapshot {
                             summary.chats_archived = prefs.archived_before.is_some();
                         }
                         summary.expanded = expanded;
-                        if summary.expanded && !self.connected && page.is_none() {
+                        if !expanded {
+                            return summary;
+                        }
+                        let archived_before = prefs.and_then(|prefs| prefs.archived_before);
+                        let archived_ids = prefs.map(|prefs| &prefs.archived_ids);
+                        let has_archive_filter = archived_before.is_some()
+                            || archived_ids.is_some_and(|ids| !ids.is_empty());
+                        if !self.connected && page.is_none() {
                             summary.error = Some(super::error::ErrorText {
                                 message: "接続するとタスクを読み込めます".into(),
                                 details: None,
                             });
                         }
-                        if summary.expanded
-                            && let Some(operation) = self.operations.get(
-                                &crate::state::operations::OperationKey::ProjectList {
-                                    project_id: project.id.clone(),
-                                },
-                            )
-                        {
+                        if let Some(operation) = self.operations.get(
+                            &crate::state::operations::OperationKey::ProjectList {
+                                project_id: project.id.clone(),
+                            },
+                        ) {
                             match &operation.phase {
                                 crate::state::operations::OperationPhase::Running => {
                                     summary.loading = true
@@ -294,22 +302,46 @@ impl Snapshot {
                                 }
                             }
                         }
-                        if summary.expanded
-                            && let Some(page) = page
-                        {
-                            summary.threads = thread_summaries(
-                                page.data
-                                    .iter()
-                                    .filter(|t| {
-                                        t.id.as_ref().is_none_or(|id| placements.get(id).is_none())
-                                    })
-                                    .filter(|t| self.project_chat_visible(&project.id, t)),
-                                &self.activity.active,
-                                &self.activity.unread,
-                                waiting,
-                                &project_ids,
-                                None,
-                            );
+                        if let Some(page) = page {
+                            let data = page.data.iter().filter(|thread| {
+                                thread
+                                    .id
+                                    .as_ref()
+                                    .is_none_or(|id| placements.get(id).is_none())
+                            });
+                            summary.threads = if !has_archive_filter {
+                                thread_summaries(
+                                    data,
+                                    &self.activity.active,
+                                    &self.activity.unread,
+                                    waiting,
+                                    &project_ids,
+                                    None,
+                                )
+                            } else {
+                                thread_summaries(
+                                    data.filter(|thread| {
+                                        project_chat_visible(
+                                            archived_before,
+                                            archived_ids,
+                                            thread.id.as_ref(),
+                                            task_active(
+                                                thread.id.as_ref().and_then(|id| {
+                                                    self.activity.active.get(id).copied()
+                                                }),
+                                                thread.status,
+                                            ),
+                                            thread.updated_at,
+                                            false,
+                                        )
+                                    }),
+                                    &self.activity.active,
+                                    &self.activity.unread,
+                                    waiting,
+                                    &project_ids,
+                                    None,
+                                )
+                            };
                             summary.has_more = page.has_more;
                             let errors = self.list_error_providers(page);
                             if !errors.is_empty() {
@@ -322,46 +354,79 @@ impl Snapshot {
                                 });
                             }
                         }
-                        if summary.expanded {
-                            let placed = prefs
-                                .into_iter()
-                                .flat_map(|p| &p.placed_chats)
-                                .map(|chat| {
-                                    metadata
-                                        .as_ref()
-                                        .and_then(|metadata| metadata.get(&chat.id))
-                                        .copied()
-                                        .unwrap_or_else(|| self.thread_metadata(&chat.id))
-                                        .map(Cow::Borrowed)
-                                        .unwrap_or_else(|| {
-                                            Cow::Owned(crate::models::Thread {
-                                                id: Some(chat.id.clone()),
-                                                name: Some(chat.title.clone()),
-                                                ..Default::default()
-                                            })
+                        let placed_ids = prefs
+                            .filter(|prefs| {
+                                prefs.archived_before.is_some() && prefs.placed_chats.len() >= 64
+                            })
+                            .map(|prefs| {
+                                prefs
+                                    .placed_chats
+                                    .iter()
+                                    .map(|chat| &chat.id)
+                                    .collect::<HashSet<_>>()
+                            });
+                        let placed = prefs
+                            .into_iter()
+                            .flat_map(|p| &p.placed_chats)
+                            .map(|chat| {
+                                metadata
+                                    .as_ref()
+                                    .and_then(|metadata| metadata.get(&chat.id))
+                                    .copied()
+                                    .unwrap_or_else(|| self.thread_metadata(&chat.id))
+                                    .map(Cow::Borrowed)
+                                    .unwrap_or_else(|| {
+                                        Cow::Owned(crate::models::Thread {
+                                            id: Some(chat.id.clone()),
+                                            name: Some(chat.title.clone()),
+                                            ..Default::default()
                                         })
-                                })
-                                .filter(|thread| {
-                                    self.project_chat_visible(&project.id, thread.as_ref())
-                                })
-                                .filter(|thread| {
-                                    task_title(thread.name.as_deref(), thread.preview.as_deref())
-                                        .to_lowercase()
-                                        .contains(&search)
-                                })
-                                .collect::<Vec<_>>();
-                            summary.threads.splice(
-                                0..0,
-                                thread_summaries(
-                                    placed.iter().map(AsRef::as_ref),
-                                    &self.activity.active,
-                                    &self.activity.unread,
-                                    waiting,
-                                    &project_ids,
-                                    Some(&project.id),
-                                ),
-                            );
-                        }
+                                    })
+                            })
+                            .filter(|thread| {
+                                !has_archive_filter
+                                    || project_chat_visible(
+                                        archived_before,
+                                        archived_ids,
+                                        thread.id.as_ref(),
+                                        task_active(
+                                            thread.id.as_ref().and_then(|id| {
+                                                self.activity.active.get(id).copied()
+                                            }),
+                                            thread.status,
+                                        ),
+                                        thread.updated_at,
+                                        archived_before.is_some()
+                                            && thread.id.as_ref().is_some_and(
+                                                |id| match &placed_ids {
+                                                    Some(ids) => ids.contains(id),
+                                                    None => prefs.is_some_and(|prefs| {
+                                                        prefs
+                                                            .placed_chats
+                                                            .iter()
+                                                            .any(|chat| &chat.id == id)
+                                                    }),
+                                                },
+                                            ),
+                                    )
+                            })
+                            .filter(|thread| {
+                                task_title(thread.name.as_deref(), thread.preview.as_deref())
+                                    .to_lowercase()
+                                    .contains(&search)
+                            })
+                            .collect::<Vec<_>>();
+                        summary.threads.splice(
+                            0..0,
+                            thread_summaries(
+                                placed.iter().map(AsRef::as_ref),
+                                &self.activity.active,
+                                &self.activity.unread,
+                                waiting,
+                                &project_ids,
+                                Some(&project.id),
+                            ),
+                        );
                         summary
                     })
                     .collect(),
@@ -410,12 +475,20 @@ impl Snapshot {
             .chain(self.project_threads.values().flat_map(|p| &p.data))
         {
             let Some(id) = &thread.id else { continue };
-            let project = placements
-                .get(id)
-                .or_else(|| thread.project_id.as_ref().map(String::as_str));
+            let placement = placements.get(id);
+            let project = placement.or_else(|| thread.project_id.as_ref().map(String::as_str));
             if let Some(project) = project
-                && (self.project_preference(project).is_some_and(|p| p.hidden)
-                    || !self.project_chat_visible(project, thread))
+                && self.project_preference(project).is_some_and(|prefs| {
+                    prefs.hidden
+                        || !project_chat_visible(
+                            prefs.archived_before,
+                            Some(&prefs.archived_ids),
+                            Some(id),
+                            task_active(self.activity.active.get(id).copied(), thread.status),
+                            thread.updated_at,
+                            placement.is_some(),
+                        )
+                })
             {
                 continue;
             }
