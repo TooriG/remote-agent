@@ -5,9 +5,18 @@ set -euo pipefail
     echo 'SDK cleanup requires a disposable GitHub Actions Linux runner.' >&2
     exit 2
 }
+# The initial build and the later emulator allocation have separate budgets.
+required_gib=35
+if [[ ${1-} == --required-gib ]]; then
+    required_gib=${2-}
+    [[ $required_gib =~ ^[1-9][0-9]{0,2}$ ]] || {
+        echo 'Pass a positive disk budget of at most 999 GiB.' >&2
+        exit 2
+    }
+    shift 2
+fi
 [[ $# -gt 0 ]] || { echo 'Pass the unused SDK directories to reclaim.' >&2; exit 2; }
-# Pinned build/test environments, restored Cargo outputs and a disposable AVD.
-required_kib=$((35 * 1024 * 1024))
+required_kib=$((required_gib * 1024 * 1024))
 free_kib() { df --output=avail -k / | tail -n 1; }
 df -h /
 trap 'df -h /' EXIT
@@ -26,6 +35,6 @@ for mode in large complete; do
     done
 done
 ((available >= required_kib)) || {
-    echo 'At least 35 GiB of free space is required for native CI.' >&2
+    printf 'At least %s GiB of free space is required for native CI.\n' "$required_gib" >&2
     exit 1
 }

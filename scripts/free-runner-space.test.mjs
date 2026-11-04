@@ -25,8 +25,8 @@ console.log(${initial} + (existsSync(${JSON.stringify(large)}) ? 0 : ${largeFree
   for (const name of ['df', 'sudo']) chmodSync(join(bin, name), 0o755);
   return {
     sdk, large, small, unrelated,
-    run(ci = true) {
-      const result = spawnSync('bash', [script, sdk], {encoding: 'utf8', env: {
+    run(ci = true, args = []) {
+      const result = spawnSync('bash', [script, ...args, sdk], {encoding: 'utf8', env: {
         ...process.env, PATH: `${bin}:${process.env.PATH}`, GITHUB_ACTIONS: ci ? 'true' : '', RUNNER_OS: 'Linux',
       }});
       assert.ifError(result.error);return result;
@@ -64,4 +64,25 @@ test('SDK cleanup refuses ordinary local environments', t => {
   const f = fixture(t, 10 * gib, 20 * gib);
   assert.equal(f.run(false).status, 2);
   assert.ok(existsSync(f.large)); assert.ok(existsSync(f.small));
+});
+
+test('the emulator budget leaves SDKs intact when enough space remains after compilation', t => {
+  const f = fixture(t, 10 * gib, 10 * gib);
+  assert.equal(f.run(true, ['--required-gib', '10']).status, 0);
+  assert.ok(existsSync(f.large)); assert.ok(existsSync(f.small));
+});
+
+test('the emulator budget reclaims only the space needed for userdata', t => {
+  const f = fixture(t, 10 * gib - 1, 1);
+  assert.equal(f.run(true, ['--required-gib', '10']).status, 0);
+  assert.ok(!existsSync(f.large)); assert.ok(existsSync(f.small));
+  assert.ok(existsSync(f.unrelated));
+});
+
+test('invalid budgets fail before deleting unused SDKs', t => {
+  const f = fixture(t, 0, 40 * gib);
+  for (const budget of ['', '0', '-1', '1000', '10+1', 'word']) {
+    assert.equal(f.run(true, ['--required-gib', budget]).status, 2);
+    assert.ok(existsSync(f.large)); assert.ok(existsSync(f.small));
+  }
 });

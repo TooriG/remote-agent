@@ -229,6 +229,11 @@ jobs:
           save-if: false
       - name: Build isolated Android Host fixtures
         run: nix develop .#host-build --command cargo build --locked -p host-fixture -p codex-app-server -p agent-process --bins
+      - name: Free space for Android emulator userdata
+        # Realize the test SDK first: API 37 then needs over 7 GiB to copy userdata.
+        run: |
+          nix develop .#android-test --command bash scripts/free-runner-space.sh --required-gib 10 \
+            /usr/local/lib/android /usr/share/dotnet /usr/share/swift /usr/local/.ghcup /opt/hostedtoolcache
       - name: Android emulator acceptance
         run: nix develop .#android-test --command bash scripts/android-e2e.sh
       - name: Retain Android acceptance logs and screenshots
