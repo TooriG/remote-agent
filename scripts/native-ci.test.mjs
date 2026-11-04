@@ -78,6 +78,8 @@ test('only affected native clients run while repository-only changes stay lightw
     [['apps/mobile/iosApp/Bex/ConversationTextLayout.swift'], ['iphone', 'mac']],
     [['apps/mobile/iosApp/Bex/ConversationTextLayout.swift', 'apps/mobile/iosApp/Bex/RenamedTextLayout.swift'], ['iphone', 'mac']],
     [['apps/mobile/iosApp/UITests/Fixtures/scroll-tests.swift', 'apps/mobile/iosApp/UITests/Fixtures/text-view-tests.swift'], ['iphone', 'mac']],
+    [['crates/xtask/src/ios_e2e.rs'], ['iphone', 'mac']],
+    [['crates/xtask/src/ios_e2e.rs', 'apps/desktop/src/app.rs'], ['linux', 'windows', 'iphone', 'mac']],
     [['scripts/test-ios-scroll.sh'], ['mac']],
     [['apps/desktop/src/app.rs'], ['linux', 'windows', 'mac']],
     [['apps/desktop/native-focus/src/lib.rs'], ['linux', 'windows', 'mac']],

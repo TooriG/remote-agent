@@ -86,6 +86,8 @@ jobs:
               tools/windows-fxc/* | scripts/package-windows.ps1 | scripts/windows-installer.iss) area=windows ;;
               apps/mobile/iosApp/Bex/ConversationScrollObserver.swift | apps/mobile/iosApp/Bex/ConversationTextLayout.swift | \
                 apps/mobile/iosApp/UITests/Fixtures/scroll-tests.swift | apps/mobile/iosApp/UITests/Fixtures/text-view-tests.swift) area='iphone-mac' ;;
+              # Mac runs the runner's unit tests; iPhone exercises its Simulator lifecycle.
+              crates/xtask/src/ios_e2e.rs) area='iphone-mac' ;;
               scripts/test-ios-scroll.sh) area=mac ;;
               apps/mobile/src/* | apps/mobile/build.gradle.kts | build.gradle.kts | settings.gradle.kts | \
                 gradle.properties | gradle/* | gradlew | gradlew.bat | detekt.yml | scripts/android-e2e.sh | \
