@@ -73,32 +73,81 @@ impl Operation for ReadListDecorations {
     }
     fn apply(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
         if let Some(list) = &mut snapshot.threads {
-            for project in &mut Arc::make_mut(list).projects {
-                if let Some(icon) = output.icons.get(&project.id) {
-                    project.favicon_png = icon.clone();
+            let icons: Vec<_> = list
+                .projects
+                .iter()
+                .enumerate()
+                .filter_map(|(index, project)| {
+                    output
+                        .icons
+                        .get(&project.id)
+                        .filter(|icon| **icon != project.favicon_png)
+                        .map(|icon| (index, icon))
+                })
+                .collect();
+            if !icons.is_empty() {
+                let list = Arc::make_mut(list);
+                for (index, icon) in icons {
+                    list.projects[index].favicon_png = icon.clone();
                 }
             }
         }
-        for (id, status) in output.statuses {
-            let source = self.threads.iter().find(|(source, _, _)| source == &id);
-            for list in Arc::make_mut(&mut snapshot.project_threads)
-                .values_mut()
-                .chain(snapshot.threads.iter_mut())
-            {
-                for thread in &mut Arc::make_mut(list).data {
-                    if thread.id.as_ref() == Some(&id)
-                        && source.is_some_and(|(_, cwd, branch)| {
-                            thread.cwd.as_ref() == Some(cwd) && &thread.git_branch == branch
-                        })
-                    {
-                        thread.worktree_status = status;
-                    }
-                }
+
+        if output.statuses.is_empty() {
+            return Vec::new();
+        }
+        let mut statuses: std::collections::HashMap<_, _> = output
+            .statuses
+            .iter()
+            .map(|(id, status)| (id, (*status, None)))
+            .collect();
+        for (id, cwd, branch) in &self.threads {
+            if let Some((_, source)) = statuses.get_mut(id) {
+                source.get_or_insert((cwd.as_str(), branch.as_deref()));
+            }
+        }
+        // Match the exact source captured by the read, including provider,
+        // directory and branch. A later duplicate reply keeps its last value.
+        let updates: Vec<_> = snapshot
+            .project_threads
+            .iter()
+            .map(|(id, list)| (Some(id), list))
+            .chain(snapshot.threads.iter().map(|list| (None, list)))
+            .filter_map(|(project, list)| {
+                let changed: Vec<_> = list
+                    .data
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, thread)| {
+                        let (status, source) = statuses.get(thread.id.as_ref()?)?;
+                        let (cwd, branch) = source.as_ref()?;
+                        (thread.cwd.as_deref() == Some(*cwd)
+                            && thread.git_branch.as_deref() == *branch
+                            && thread.worktree_status != *status)
+                            .then_some((index, *status))
+                    })
+                    .collect();
+                (!changed.is_empty()).then(|| (project.cloned(), changed))
+            })
+            .collect();
+        for (project, changed) in updates {
+            let list = match project {
+                Some(id) => Arc::make_mut(&mut snapshot.project_threads)
+                    .get_mut(&id)
+                    .expect("captured project page is present"),
+                None => snapshot.threads.as_mut().expect("captured root is present"),
+            };
+            let list = Arc::make_mut(list);
+            for (index, status) in changed {
+                list.data[index].worktree_status = status;
             }
         }
         Vec::new()
     }
 }
+
+#[cfg(test)]
+mod decorations_tests;
 
 pub(crate) fn refresh_agents(
     connected: bool,
