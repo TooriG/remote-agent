@@ -340,6 +340,7 @@ fn conversation_rows(
         for turn in &rendered.turns {
             let start = rows.len();
             let mut expanded = false;
+            let mut progress_shown = false;
             for (index, row) in turn.rows.iter().enumerate() {
                 match &row.content {
                     ConversationRowContent::ActivityHeader { activity } => {
@@ -351,8 +352,14 @@ fn conversation_rows(
                     ConversationRowContent::Activity { .. } if !expanded => continue,
                     // The composer answers requests from its docked cards.
                     ConversationRowContent::PendingRequest { .. } => continue,
+                    // The in-progress header directly above already shows the clock.
+                    ConversationRowContent::InProgress { .. } if progress_shown => continue,
                     _ => (),
                 }
+                progress_shown = matches!(
+                    &row.content,
+                    ConversationRowContent::ActivityHeader { activity } if activity.is_in_progress
+                );
                 rows.push(ConversationRow::Turn {
                     turn: turn.clone(),
                     index,

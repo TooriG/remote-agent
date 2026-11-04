@@ -2762,6 +2762,30 @@ mod rendering_tests {
         }
     }
 
+    #[gpui::test]
+    fn running_work_header_shows_progress_once(cx: &mut TestAppContext) {
+        let _runtime = init(cx);
+        let source = serde_json::from_value(serde_json::json!({
+            "id":{"provider":"codex","id":"fixture"}, "turns":[{
+                "id":"turn", "status":"running", "items":[
+                    {"id":"command","status":"running","body":{"inline":{"body":{
+                        "commandExecution":{"command":"sed -n 1,15p worktrees.rs","cwd":"/fixture","output":"","exitCode":null}
+                    }}}}
+                ]
+            }]
+        }))
+        .unwrap();
+        let (_, window) = cx.add_window_view(|window, cx| {
+            ConversationView::new(Snapshot::default(), source, window, cx)
+        });
+        window.run_until_parked();
+        assert!(window.debug_bounds("work-turn").is_some());
+        assert!(
+            window.debug_bounds("conversation-in-progress").is_none(),
+            "the in-progress header must not be followed by a second progress row"
+        );
+    }
+
     struct ChatNavigationView(Entity<Desktop>);
     impl Render for ChatNavigationView {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
