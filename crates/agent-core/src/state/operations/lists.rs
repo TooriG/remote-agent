@@ -1,6 +1,6 @@
 //! Conversation lists: recent chats, project pages, decorations and sub-agents.
 use super::*;
-use std::collections::{HashMap, hash_map::Entry};
+use std::collections::{HashMap, HashSet, hash_map::Entry};
 
 pub use agent_protocol::operations::AddProject;
 
@@ -241,6 +241,46 @@ fn merge_newer_rows(
     received
 }
 
+fn missing_failed_provider_rows<'a>(
+    received: &[crate::models::Thread],
+    cached: &'a [crate::models::Thread],
+    errors: &serde_json::Map<String, serde_json::Value>,
+) -> Vec<&'a crate::models::Thread> {
+    let candidates: Vec<_> = cached
+        .iter()
+        .filter_map(|row| {
+            let id = row.id.as_ref()?;
+            errors
+                .contains_key(row.active_provider.unwrap_or(id.provider).key())
+                .then_some((id, row))
+        })
+        .collect();
+    let mut missing: Vec<&crate::models::Thread> = Vec::new();
+    if candidates.len() < 128 || received.len() > candidates.len().saturating_mul(4) {
+        for (id, cached) in candidates {
+            if !received.iter().any(|row| row.id.as_ref() == Some(id))
+                && !missing.iter().any(|row| row.id.as_ref() == Some(id))
+            {
+                missing.push(cached);
+            }
+        }
+        return missing;
+    }
+
+    let mut present = HashSet::with_capacity(received.len().max(candidates.len()));
+    for row in received {
+        if let Some(id) = row.id.as_ref() {
+            present.insert(id);
+        }
+    }
+    for (id, cached) in candidates {
+        if present.insert(id) {
+            missing.push(cached);
+        }
+    }
+    missing
+}
+
 fn merge_received(
     mut threads: crate::models::ThreadList,
     previous: Option<&crate::models::ThreadList>,
@@ -319,22 +359,11 @@ fn merge_received(
     if let Some(errors) = threads.provider_errors.as_ref()
         && let Some(previous) = previous
     {
-        for cached in &previous.data {
-            let Some(id) = cached.id.as_ref() else {
-                continue;
-            };
-            let provider = cached.active_provider.unwrap_or(id.provider).key();
-            if errors.contains_key(provider)
-                && !threads
-                    .data
-                    .iter()
-                    .any(|thread| thread.id.as_ref() == Some(id))
-            {
-                let mut cached = cached.clone();
-                cached.list_stale = Some(true);
-                cached.status = crate::models::SessionStatus::Unknown;
-                threads.data.push(cached);
-            }
+        for cached in missing_failed_provider_rows(&threads.data, &previous.data, errors) {
+            let mut cached = cached.clone();
+            cached.list_stale = Some(true);
+            cached.status = crate::models::SessionStatus::Unknown;
+            threads.data.push(cached);
         }
         for project in &previous.projects {
             if !threads

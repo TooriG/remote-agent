@@ -49,6 +49,103 @@ fn versioned(id: Option<SessionRef>, name: &str, revision: u64) -> Thread {
     }
 }
 
+fn unavailable(row: Thread) -> Thread {
+    Thread {
+        status: crate::models::SessionStatus::Unknown,
+        list_stale: Some(true),
+        ..row
+    }
+}
+
+#[test]
+fn failed_reads_restore_only_missing_active_provider_rows_once_in_cached_order() {
+    for count in [16, 127, 128, 129, 512] {
+        let existing = Some(session(ProviderKind::Codex, "existing"));
+        let shared_codex = Some(session(ProviderKind::Codex, "shared"));
+        let received = vec![
+            versioned(existing.clone(), "current", 0),
+            versioned(
+                Some(session(ProviderKind::Claude, "shared")),
+                "claude-current",
+                0,
+            ),
+        ];
+        let first = versioned(Some(session(ProviderKind::Codex, "missing")), "first", 0);
+        let mut handoff = versioned(Some(session(ProviderKind::Claude, "handoff")), "handoff", 0);
+        handoff.active_provider = Some(ProviderKind::Codex);
+        let mut healthy = versioned(Some(session(ProviderKind::Codex, "healthy")), "healthy", 0);
+        healthy.active_provider = Some(ProviderKind::Claude);
+        let mut skipped = versioned(Some(session(ProviderKind::Codex, "later")), "skipped", 0);
+        skipped.active_provider = Some(ProviderKind::Claude);
+        let eligible = versioned(Some(session(ProviderKind::Codex, "later")), "eligible", 0);
+        let shared = versioned(shared_codex, "codex-shared", 0);
+        let mut anonymous = versioned(None, "anonymous", 0);
+        anonymous.active_provider = Some(ProviderKind::Codex);
+        let mut cached = vec![
+            versioned(existing, "stale", 0),
+            first.clone(),
+            versioned(first.id.clone(), "duplicate", 1),
+            anonymous,
+            healthy,
+            handoff.clone(),
+            skipped,
+            eligible.clone(),
+            shared.clone(),
+        ];
+        let mut expected = received.clone();
+        expected.extend([first, handoff, eligible, shared].map(unavailable));
+        // Six initial rows qualify, including the existing row and duplicate.
+        for index in 6..count {
+            let row = versioned(
+                Some(session(ProviderKind::Codex, &format!("extra{index}"))),
+                "extra",
+                0,
+            );
+            expected.push(unavailable(row.clone()));
+            cached.push(row);
+        }
+        let mut input = list(received);
+        let errors: serde_json::Map<String, serde_json::Value> =
+            [("codex".into(), serde_json::json!("offline"))]
+                .into_iter()
+                .collect();
+        input.provider_errors = Some(errors.clone());
+        let result = merge_received(input, Some(&list(cached)));
+        assert_eq!(result.data, expected);
+        assert_eq!(result.provider_errors, Some(errors));
+    }
+}
+
+proptest! {
+    #[test]
+    fn failed_reads_preserve_received_rows_and_restore_only_unavailable_sources(
+        cases in proptest::collection::vec((0u8..3, any::<bool>()), 0..512),
+    ) {
+        let mut cached = Vec::new();
+        let mut received = Vec::new();
+        let mut restored = Vec::new();
+        for (index, &(active, returned)) in cases.iter().enumerate() {
+            let provider = if index % 2 == 0 { ProviderKind::Codex } else { ProviderKind::Claude };
+            let id = Some(session(provider, &format!("task{}", index / 2)));
+            let mut row = versioned(id.clone(), "cached", 0);
+            row.active_provider = match active { 1 => Some(ProviderKind::Codex), 2 => Some(ProviderKind::Claude), _ => None };
+            if returned {
+                received.push(versioned(id, "received", 0));
+            } else if active == 1 || (active == 0 && provider == ProviderKind::Codex) {
+                restored.push(unavailable(row.clone()));
+            }
+            cached.push(row);
+        }
+        received.reverse();
+        let mut expected = received.clone();
+        expected.extend(restored);
+        let mut input = list(received);
+        input.provider_errors = Some([("codex".into(), serde_json::json!("offline"))].into_iter().collect());
+        let result = merge_received(input, Some(&list(cached)));
+        prop_assert_eq!(result.data, expected);
+    }
+}
+
 #[test]
 fn newer_notices_keep_last_values_first_positions_and_duplicate_received_rows() {
     for count in [16, 127, 128, 129, 512] {
