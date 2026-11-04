@@ -1,7 +1,7 @@
 //! The visible list combines wire summaries with locally observed activity.
 use crate::{
     models::{Project, ProjectRoot, task_active, task_title},
-    state::Snapshot,
+    state::{Snapshot, projects::ChatPlacements},
 };
 use base64::Engine;
 use std::{
@@ -134,6 +134,195 @@ impl Snapshot {
             .as_ref()
             .map_or(&[], |state| state.waiting.as_slice())
     }
+    fn list_projection(
+        &self,
+        list: &crate::models::ThreadList,
+        additional_queries: usize,
+    ) -> (ThreadList, ChatPlacements<'_>) {
+        let waiting = self.waiting_sessions();
+        let search = self.list_query.search_term.to_lowercase();
+        let project_ids: HashSet<_> = list
+            .projects
+            .iter()
+            .map(|project| project.id.as_str())
+            .collect();
+        let errors = self.list_error_providers(list);
+        let notice = (!errors.is_empty()).then(|| format!("会話一覧は部分結果です（{}）。取得できない提供元の保存済み表示は最新とは限りません。", errors.join("、")));
+        let preferences = self.project_preferences.get(&self.storage_scope);
+        let mut projects = Vec::new();
+        let mut hidden_projects = Vec::new();
+        for project in &list.projects {
+            let prefs = preferences.and_then(|prefs| prefs.get(&project.id));
+            if prefs.is_some_and(|prefs| prefs.hidden) {
+                hidden_projects.push(project_summary(
+                    project,
+                    prefs
+                        .and_then(|prefs| prefs.name.as_deref())
+                        .unwrap_or(&project.name),
+                ));
+            } else {
+                projects.push((
+                    project,
+                    prefs,
+                    self.project_threads.get(&project.id),
+                    self.expanded_projects.contains_key(&project.id),
+                ));
+            }
+        }
+        projects.sort_by_key(|(_, prefs, ..)| {
+            (
+                prefs.is_none_or(|p| !p.pinned),
+                prefs.and_then(|p| p.section.as_deref()).unwrap_or_default(),
+                prefs.and_then(|p| p.order).unwrap_or(usize::MAX),
+            )
+        });
+        let queries = projects.iter().fold(
+            list.data.len().saturating_add(additional_queries),
+            |queries, (_, _, page, expanded)| {
+                queries.saturating_add(if *expanded {
+                    page.map_or(0, |page| page.data.len())
+                } else {
+                    0
+                })
+            },
+        );
+        let placements = ChatPlacements::new(preferences, queries);
+        let summaries = thread_summaries(
+            list.data.iter(),
+            &self.activity.active,
+            &self.activity.unread,
+            waiting,
+            &project_ids,
+            None,
+        )
+        .into_iter()
+        .filter(|thread| thread.project_id.is_none() && placements.get(&thread.id).is_none())
+        .collect();
+        (
+            ThreadList {
+                notice,
+                threads: summaries,
+                loading_projects: self.operation_running(
+                    crate::state::operations::OperationKey::SessionPage {
+                        part: crate::models::ListPart::Projects,
+                    },
+                ),
+                loading_chats: self.operation_running(
+                    crate::state::operations::OperationKey::SessionPage {
+                        part: crate::models::ListPart::Chats,
+                    },
+                ),
+                hidden_projects,
+                projects: projects
+                    .into_iter()
+                    .map(|(project, prefs, page, expanded)| {
+                        let mut summary = project_summary(
+                            project,
+                            prefs
+                                .and_then(|prefs| prefs.name.as_deref())
+                                .unwrap_or(&project.name),
+                        );
+                        if let Some(prefs) = prefs {
+                            summary.pinned = prefs.pinned;
+                            summary.section = prefs.section.clone();
+                            summary.chats_archived = prefs.archived_before.is_some();
+                        }
+                        summary.expanded = expanded;
+                        if summary.expanded && !self.connected && page.is_none() {
+                            summary.error = Some(super::error::ErrorText {
+                                message: "接続するとタスクを読み込めます".into(),
+                                details: None,
+                            });
+                        }
+                        if summary.expanded
+                            && let Some(operation) = self.operations.get(
+                                &crate::state::operations::OperationKey::ProjectList {
+                                    project_id: project.id.clone(),
+                                },
+                            )
+                        {
+                            match &operation.phase {
+                                crate::state::operations::OperationPhase::Running => {
+                                    summary.loading = true
+                                }
+                                crate::state::operations::OperationPhase::Failed { message } => {
+                                    summary.error = Some(super::error::error_text(message))
+                                }
+                            }
+                        }
+                        if summary.expanded
+                            && let Some(page) = page
+                        {
+                            summary.threads = thread_summaries(
+                                page.data
+                                    .iter()
+                                    .filter(|t| {
+                                        t.id.as_ref().is_none_or(|id| placements.get(id).is_none())
+                                    })
+                                    .filter(|t| self.project_chat_visible(&project.id, t)),
+                                &self.activity.active,
+                                &self.activity.unread,
+                                waiting,
+                                &project_ids,
+                                None,
+                            );
+                            summary.has_more = page.has_more;
+                            let errors = self.list_error_providers(page);
+                            if !errors.is_empty() {
+                                summary.error = Some(super::error::ErrorText {
+                                    message: format!(
+                                        "一部を取得できません（{}）",
+                                        errors.join("、")
+                                    ),
+                                    details: None,
+                                });
+                            }
+                        }
+                        if summary.expanded {
+                            let placed = prefs
+                                .into_iter()
+                                .flat_map(|p| &p.placed_chats)
+                                .map(|chat| {
+                                    self.thread_metadata(&chat.id)
+                                        .map(Cow::Borrowed)
+                                        .unwrap_or_else(|| {
+                                            Cow::Owned(crate::models::Thread {
+                                                id: Some(chat.id.clone()),
+                                                name: Some(chat.title.clone()),
+                                                ..Default::default()
+                                            })
+                                        })
+                                })
+                                .filter(|thread| {
+                                    self.project_chat_visible(&project.id, thread.as_ref())
+                                })
+                                .filter(|thread| {
+                                    task_title(thread.name.as_deref(), thread.preview.as_deref())
+                                        .to_lowercase()
+                                        .contains(&search)
+                                })
+                                .collect::<Vec<_>>();
+                            summary.threads.splice(
+                                0..0,
+                                thread_summaries(
+                                    placed.iter().map(AsRef::as_ref),
+                                    &self.activity.active,
+                                    &self.activity.unread,
+                                    waiting,
+                                    &project_ids,
+                                    Some(&project.id),
+                                ),
+                            );
+                        }
+                        summary
+                    })
+                    .collect(),
+                has_more: list.has_more,
+                has_more_projects: list.has_more_projects,
+            },
+            placements,
+        )
+    }
 }
 
 #[cfg_attr(feature = "bindings", uniffi::export)]
@@ -156,8 +345,14 @@ impl Snapshot {
 
     /// Recent top-level chats across standalone and project pages, regardless of expansion.
     pub fn recent_thread_list(&self) -> Option<ThreadList> {
-        let mut list = self.thread_list()?;
-        let source = self.threads.as_ref()?;
+        let source = self.threads.as_deref()?;
+        let additional_queries = self
+            .project_threads
+            .values()
+            .fold(source.data.len(), |queries, page| {
+                queries.saturating_add(page.data.len())
+            });
+        let (mut list, placements) = self.list_projection(source, additional_queries);
         let waiting = self.waiting_sessions();
         let project_ids: HashSet<_> = source.projects.iter().map(|p| p.id.as_str()).collect();
         let mut rows: BTreeMap<_, &crate::models::Thread> = BTreeMap::new();
@@ -167,8 +362,8 @@ impl Snapshot {
             .chain(self.project_threads.values().flat_map(|p| &p.data))
         {
             let Some(id) = &thread.id else { continue };
-            let project = self
-                .chat_placement(id)
+            let project = placements
+                .get(id)
                 .or_else(|| thread.project_id.as_ref().map(String::as_str));
             if let Some(project) = project
                 && (self.project_preference(project).is_some_and(|p| p.hidden)
@@ -205,7 +400,7 @@ impl Snapshot {
             None,
         );
         for thread in &mut list.threads {
-            if let Some(project) = self.chat_placement(&thread.id) {
+            if let Some(project) = placements.get(&thread.id) {
                 thread.project_id = project_ids
                     .get(project)
                     .map(|project| (*project).to_owned());
@@ -221,170 +416,8 @@ impl Snapshot {
     }
 
     pub fn thread_list(&self) -> Option<ThreadList> {
-        let list = self.threads.as_ref()?;
-        let waiting = self.waiting_sessions();
-        let search = self.list_query.search_term.to_lowercase();
-        let project_ids: HashSet<_> = list
-            .projects
-            .iter()
-            .map(|project| project.id.as_str())
-            .collect();
-        let errors = self.list_error_providers(list);
-        let notice = (!errors.is_empty()).then(|| format!("会話一覧は部分結果です（{}）。取得できない提供元の保存済み表示は最新とは限りません。", errors.join("、")));
-        let summaries = thread_summaries(
-            list.data.iter(),
-            &self.activity.active,
-            &self.activity.unread,
-            waiting,
-            &project_ids,
-            None,
-        )
-        .into_iter()
-        .filter(|thread| thread.project_id.is_none() && self.chat_placement(&thread.id).is_none())
-        .collect();
-        let preferences = self.project_preferences.get(&self.storage_scope);
-        let mut projects = Vec::new();
-        let mut hidden_projects = Vec::new();
-        for project in &list.projects {
-            let prefs = preferences.and_then(|prefs| prefs.get(&project.id));
-            if prefs.is_some_and(|prefs| prefs.hidden) {
-                hidden_projects.push(project_summary(
-                    project,
-                    prefs
-                        .and_then(|prefs| prefs.name.as_deref())
-                        .unwrap_or(&project.name),
-                ));
-            } else {
-                projects.push((project, prefs));
-            }
-        }
-        projects.sort_by_key(|(_, prefs)| {
-            (
-                prefs.is_none_or(|p| !p.pinned),
-                prefs.and_then(|p| p.section.as_deref()).unwrap_or_default(),
-                prefs.and_then(|p| p.order).unwrap_or(usize::MAX),
-            )
-        });
-        Some(ThreadList {
-            notice,
-            threads: summaries,
-            loading_projects: self.operation_running(
-                crate::state::operations::OperationKey::SessionPage {
-                    part: crate::models::ListPart::Projects,
-                },
-            ),
-            loading_chats: self.operation_running(
-                crate::state::operations::OperationKey::SessionPage {
-                    part: crate::models::ListPart::Chats,
-                },
-            ),
-            hidden_projects,
-            projects: projects
-                .into_iter()
-                .map(|(project, prefs)| {
-                    let page = self.project_threads.get(&project.id);
-                    let mut summary = project_summary(
-                        project,
-                        prefs
-                            .and_then(|prefs| prefs.name.as_deref())
-                            .unwrap_or(&project.name),
-                    );
-                    if let Some(prefs) = prefs {
-                        summary.pinned = prefs.pinned;
-                        summary.section = prefs.section.clone();
-                        summary.chats_archived = prefs.archived_before.is_some();
-                    }
-                    summary.expanded = self.expanded_projects.contains_key(&project.id);
-                    if summary.expanded && !self.connected && page.is_none() {
-                        summary.error = Some(super::error::ErrorText {
-                            message: "接続するとタスクを読み込めます".into(),
-                            details: None,
-                        });
-                    }
-                    if summary.expanded
-                        && let Some(operation) = self.operations.get(
-                            &crate::state::operations::OperationKey::ProjectList {
-                                project_id: project.id.clone(),
-                            },
-                        )
-                    {
-                        match &operation.phase {
-                            crate::state::operations::OperationPhase::Running => {
-                                summary.loading = true
-                            }
-                            crate::state::operations::OperationPhase::Failed { message } => {
-                                summary.error = Some(super::error::error_text(message))
-                            }
-                        }
-                    }
-                    if summary.expanded
-                        && let Some(page) = page
-                    {
-                        summary.threads = thread_summaries(
-                            page.data
-                                .iter()
-                                .filter(|t| {
-                                    t.id.as_ref()
-                                        .is_none_or(|id| self.chat_placement(id).is_none())
-                                })
-                                .filter(|t| self.project_chat_visible(&project.id, t)),
-                            &self.activity.active,
-                            &self.activity.unread,
-                            waiting,
-                            &project_ids,
-                            None,
-                        );
-                        summary.has_more = page.has_more;
-                        let errors = self.list_error_providers(page);
-                        if !errors.is_empty() {
-                            summary.error = Some(super::error::ErrorText {
-                                message: format!("一部を取得できません（{}）", errors.join("、")),
-                                details: None,
-                            });
-                        }
-                    }
-                    if summary.expanded {
-                        let placed = prefs
-                            .into_iter()
-                            .flat_map(|p| &p.placed_chats)
-                            .map(|chat| {
-                                self.thread_metadata(&chat.id)
-                                    .map(Cow::Borrowed)
-                                    .unwrap_or_else(|| {
-                                        Cow::Owned(crate::models::Thread {
-                                            id: Some(chat.id.clone()),
-                                            name: Some(chat.title.clone()),
-                                            ..Default::default()
-                                        })
-                                    })
-                            })
-                            .filter(|thread| {
-                                self.project_chat_visible(&project.id, thread.as_ref())
-                            })
-                            .filter(|thread| {
-                                task_title(thread.name.as_deref(), thread.preview.as_deref())
-                                    .to_lowercase()
-                                    .contains(&search)
-                            })
-                            .collect::<Vec<_>>();
-                        summary.threads.splice(
-                            0..0,
-                            thread_summaries(
-                                placed.iter().map(AsRef::as_ref),
-                                &self.activity.active,
-                                &self.activity.unread,
-                                waiting,
-                                &project_ids,
-                                Some(&project.id),
-                            ),
-                        );
-                    }
-                    summary
-                })
-                .collect(),
-            has_more: list.has_more,
-            has_more_projects: list.has_more_projects,
-        })
+        let list = self.threads.as_deref()?;
+        Some(self.list_projection(list, 0).0)
     }
 }
 

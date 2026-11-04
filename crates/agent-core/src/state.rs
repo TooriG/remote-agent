@@ -686,7 +686,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             projects::move_chat(&mut next, &thread_id, &project_id);
             if next.connected && next.expanded_projects.contains_key(&project_id)
                 && !next.project_threads.contains_key(&project_id)
-                && next.chat_placement(&thread_id) == Some(project_id.as_str()) {
+                && projects::chat_placement(next.project_preferences.get(&next.storage_scope), &thread_id) == Some(project_id.as_str()) {
                 return prepare(next, op::ListProjectSessions {
                     project_id, limit: 5, search_term: previous.list_query.search_term.clone(),
                 });

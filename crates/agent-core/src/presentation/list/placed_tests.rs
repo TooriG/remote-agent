@@ -339,3 +339,128 @@ fn project_override_keeps_catalogue_membership_and_does_not_create_row_ids() {
         .is_empty()
     );
 }
+
+#[test]
+fn large_placement_lists_keep_scope_hidden_and_dangling_destinations_in_every_view() {
+    let mut snapshot = fixture();
+    Arc::make_mut(&mut snapshot.list_query).limit = 256;
+    snapshot.conversations = Arc::default();
+    let list = Arc::make_mut(snapshot.threads.as_mut().unwrap());
+    list.data = (0..140)
+        .map(|index| Thread {
+            id: Some(session(&format!("chat-{index}"))),
+            name: Some(format!("Chat {index}")),
+            updated_at: Some(index as f64),
+            ..Default::default()
+        })
+        .collect();
+    list.projects.push(Project {
+        id: "a-hidden".into(),
+        name: "Hidden".into(),
+        ..Default::default()
+    });
+    let mut page = list.clone();
+    page.data = [0, 1, 2, 130]
+        .map(|index| Thread {
+            id: Some(session(&format!("chat-{index}"))),
+            name: Some(format!("Source {index}")),
+            project_id: ProjectMembership::Assigned("source".into()),
+            updated_at: Some(index as f64),
+            ..Default::default()
+        })
+        .into();
+    snapshot.project_threads = Arc::new([("source".into(), Arc::new(page))].into());
+    snapshot.expanded_projects =
+        Arc::new([("source".into(), 256), ("destination".into(), 256)].into());
+    let mut preferences = BTreeMap::<String, ProjectPreferences>::new();
+    for (index, project) in (0..128).map(|index| {
+        (
+            index,
+            match index {
+                0 => "a-hidden",
+                1 => "b-dangling",
+                _ => "destination",
+            },
+        )
+    }) {
+        preferences
+            .entry(project.into())
+            .or_default()
+            .placed_chats
+            .push(PlacedChat {
+                id: session(&format!("chat-{index}")),
+                title: format!("Saved {index}"),
+            });
+    }
+    preferences.get_mut("a-hidden").unwrap().hidden = true;
+    preferences
+        .get_mut("destination")
+        .unwrap()
+        .placed_chats
+        .push(PlacedChat {
+            id: session("chat-0"),
+            title: "Duplicate later project".into(),
+        });
+    snapshot.project_preferences = Arc::new([("active".into(), preferences)].into());
+    let list = snapshot.thread_list().unwrap();
+    assert_eq!(
+        list.threads
+            .iter()
+            .map(|row| row.id.id.as_str())
+            .collect::<Vec<_>>(),
+        (128..140)
+            .map(|index| format!("chat-{index}"))
+            .collect::<Vec<_>>()
+    );
+    let source = list.projects.iter().find(|p| p.id == "source").unwrap();
+    assert_eq!(
+        source
+            .threads
+            .iter()
+            .map(|row| row.id.id.as_str())
+            .collect::<Vec<_>>(),
+        ["chat-130"]
+    );
+    assert_eq!(list.hidden_projects.len(), 1);
+    let recent = snapshot.recent_thread_list().unwrap();
+    assert_eq!(recent.threads.len(), 139);
+    assert!(!recent.threads.iter().any(|row| row.id == session("chat-0")));
+    for (id, project) in [
+        ("chat-1", None),
+        ("chat-2", Some("destination")),
+        ("chat-130", Some("source")),
+    ] {
+        assert_eq!(
+            recent
+                .threads
+                .iter()
+                .find(|row| row.id == session(id))
+                .unwrap()
+                .project_id
+                .as_deref(),
+            project
+        );
+    }
+    snapshot.storage_scope = "other".into();
+    let list = snapshot.thread_list().unwrap();
+    assert_eq!(list.threads.len(), 140);
+    assert!(list.hidden_projects.is_empty());
+    assert_eq!(
+        list.projects
+            .iter()
+            .find(|p| p.id == "source")
+            .unwrap()
+            .threads
+            .len(),
+        4
+    );
+    assert!(
+        list.projects
+            .iter()
+            .find(|p| p.id == "destination")
+            .unwrap()
+            .threads
+            .is_empty()
+    );
+    assert_eq!(snapshot.recent_thread_list().unwrap().threads.len(), 140);
+}

@@ -1,5 +1,6 @@
 //! Reversible, device-local project organization. Provider files remain unchanged.
 use super::*;
+use std::collections::HashMap;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlacedChat {
     pub id: crate::session::SessionRef,
@@ -19,14 +20,60 @@ pub struct ProjectPreferences {
     #[serde(default)]
     pub placed_chats: Vec<PlacedChat>,
 }
-impl Snapshot {
-    pub(crate) fn chat_placement(&self, id: &crate::session::SessionRef) -> Option<&str> {
-        self.project_preferences
-            .get(&self.storage_scope)?
-            .iter()
-            .find(|(_, p)| p.placed_chats.iter().any(|chat| &chat.id == id))
-            .map(|(project, _)| project.as_str())
+
+pub(crate) enum ChatPlacements<'a> {
+    Linear(Option<&'a BTreeMap<String, ProjectPreferences>>),
+    Indexed(HashMap<&'a crate::session::SessionRef, &'a str>),
+}
+
+impl<'a> ChatPlacements<'a> {
+    pub(crate) fn new(
+        preferences: Option<&'a BTreeMap<String, ProjectPreferences>>,
+        queries: usize,
+    ) -> Self {
+        if queries < 128 {
+            return Self::Linear(preferences);
+        }
+        let count: usize = preferences
+            .into_iter()
+            .flat_map(|preferences| preferences.values())
+            .map(|preferences| preferences.placed_chats.len())
+            .sum();
+        if count == 0 {
+            return Self::Linear(None);
+        }
+        if count < 128 || count > queries.saturating_mul(4) {
+            return Self::Linear(preferences);
+        }
+        let mut indexed = HashMap::with_capacity(count);
+        for (project, preferences) in preferences.into_iter().flat_map(|prefs| prefs.iter()) {
+            for chat in &preferences.placed_chats {
+                // Duplicate shortcuts keep the first project in saved key order.
+                indexed.entry(&chat.id).or_insert(project.as_str());
+            }
+        }
+        Self::Indexed(indexed)
     }
+
+    pub(crate) fn get(&self, id: &crate::session::SessionRef) -> Option<&'a str> {
+        match self {
+            Self::Linear(preferences) => chat_placement(*preferences, id),
+            Self::Indexed(indexed) => indexed.get(id).copied(),
+        }
+    }
+}
+
+pub(super) fn chat_placement<'a>(
+    preferences: Option<&'a BTreeMap<String, ProjectPreferences>>,
+    id: &crate::session::SessionRef,
+) -> Option<&'a str> {
+    preferences?
+        .iter()
+        .find(|(_, p)| p.placed_chats.iter().any(|chat| &chat.id == id))
+        .map(|(project, _)| project.as_str())
+}
+
+impl Snapshot {
     pub(crate) fn project_preference(&self, id: &str) -> Option<&ProjectPreferences> {
         self.project_preferences.get(&self.storage_scope)?.get(id)
     }
@@ -589,6 +636,101 @@ mod tests {
                 proptest::prop_assert!(Arc::ptr_eq(s.threads.as_ref().unwrap(),native.as_ref().unwrap()));
                 let decoded=crate::persistence::decode(&crate::persistence::encode(&s).unwrap()).unwrap();
                 proptest::prop_assert_eq!(&decoded.project_preferences,&s.project_preferences);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod placement_tests {
+    use super::*;
+    use crate::session::{ProviderKind, SessionRef};
+
+    fn id(provider: ProviderKind, index: usize) -> SessionRef {
+        SessionRef::new(provider, format!("chat-{index}")).unwrap()
+    }
+
+    #[test]
+    fn placement_uses_saved_project_order_and_full_provider_identity_at_every_size() {
+        for size in [0, 16, 127, 128, 129, 512, 1000] {
+            let codex = id(ProviderKind::Codex, 0);
+            let claude = id(ProviderKind::Claude, 0);
+            let mut preferences = BTreeMap::new();
+            preferences.insert(
+                "z-visible".into(),
+                ProjectPreferences {
+                    placed_chats: vec![PlacedChat {
+                        id: codex.clone(),
+                        title: "Last".into(),
+                    }],
+                    ..Default::default()
+                },
+            );
+            preferences.insert(
+                "b-dangling".into(),
+                ProjectPreferences {
+                    placed_chats: vec![PlacedChat {
+                        id: claude.clone(),
+                        title: "Other provider".into(),
+                    }],
+                    ..Default::default()
+                },
+            );
+            preferences.insert(
+                "a-hidden".into(),
+                ProjectPreferences {
+                    hidden: true,
+                    placed_chats: std::iter::repeat_n(
+                        PlacedChat {
+                            id: codex.clone(),
+                            title: "First".into(),
+                        },
+                        size,
+                    )
+                    .collect(),
+                    ..Default::default()
+                },
+            );
+            for queries in [0, 16, 127, 128, 129, 512, 4000] {
+                let lookup = ChatPlacements::new(Some(&preferences), queries);
+                assert_eq!(
+                    lookup.get(&codex),
+                    Some(if size == 0 { "z-visible" } else { "a-hidden" })
+                );
+                assert_eq!(lookup.get(&claude), Some("b-dangling"));
+                assert_eq!(lookup.get(&id(ProviderKind::Codex, 1)), None);
+            }
+        }
+        let empty = [("empty".into(), ProjectPreferences::default())].into();
+        for preferences in [None, Some(&empty)] {
+            for queries in [0, 128, 1000] {
+                assert_eq!(
+                    ChatPlacements::new(preferences, queries).get(&id(ProviderKind::Codex, 0)),
+                    None
+                );
+            }
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn every_shortcut_keeps_its_first_saved_project(
+            entries in proptest::collection::vec((0usize..12, 0usize..64, proptest::bool::ANY), 0..400)
+        ) {
+            let mut preferences: BTreeMap<String, ProjectPreferences> = BTreeMap::new();
+            let mut expected = BTreeMap::<SessionRef, usize>::new();
+            for (project, chat, claude) in entries {
+                let id = id(if claude { ProviderKind::Claude } else { ProviderKind::Codex }, chat);
+                expected.entry(id.clone()).and_modify(|first| *first = (*first).min(project)).or_insert(project);
+                preferences.entry(format!("project-{project:02}")).or_default().placed_chats.push(PlacedChat { id, title: String::new() });
+            }
+            for queries in [1, 128, 1024] {
+                let lookup = ChatPlacements::new(Some(&preferences), queries);
+                for (id, project) in &expected {
+                    let project = format!("project-{project:02}");
+                    proptest::prop_assert_eq!(lookup.get(id), Some(project.as_str()));
+                }
+                proptest::prop_assert_eq!(lookup.get(&id(ProviderKind::Codex, 64)), None);
             }
         }
     }
