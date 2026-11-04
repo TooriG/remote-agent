@@ -285,19 +285,11 @@ impl WorkspaceFiles {
                 read_editable(&path, &requested).map(Body::from)
             }
             Call::Upload(params) => {
-                // New chats have no workspace yet. Keep their attachments in
-                // Host-owned storage; explicit destinations remain absolute.
-                let directory = if params.directory.is_empty() {
-                    let directory = absolute_path(&self.upload_directory)?;
-                    agent_local_host::create_state_directory(&directory)?;
-                    directory
-                } else {
-                    absolute_path(&params.directory)?
-                };
+                // Attachments outlive worktrees. Linked workspace files still
+                // read their original path and are never archived implicitly.
+                let directory = absolute_path(&self.upload_directory)?;
+                agent_local_host::create_state_directory(&directory)?;
                 let directory = dunce::canonicalize(directory)?;
-                if !directory.is_dir() {
-                    return Err(anyhow!("upload directory is unavailable"));
-                }
                 if params.file_name.is_empty()
                     || params.file_name.len() > 200
                     || Path::new(&params.file_name)
@@ -885,13 +877,13 @@ mod tests {
     async fn corrupt_or_overlong_uploads_leave_no_destination_or_temporary_file() {
         tokio::time::timeout(Duration::from_secs(5), async {
             let directory = tempfile::tempdir().unwrap();
-            let files = WorkspaceFiles::new(directory.path().join("attachments"));
+            let attachments = directory.path().join("attachments");
+            let files = WorkspaceFiles::new(attachments.clone());
             for bytes in [&b"wrong"[..], &b"longer"[..]] {
                 let grant = files
                     .dispatch(
                         1,
                         Call::Upload(Upload {
-                            directory: directory.path().to_str().unwrap().into(),
                             file_name: "safe.txt".into(),
                             size: 5,
                             sha256: digest::digest(&SHA256, b"valid")
@@ -906,14 +898,13 @@ mod tests {
                 client.write_all(bytes).await.unwrap();
                 client.shutdown().await.unwrap();
                 assert!(files.transfer(1, server).await.is_err());
-                assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
+                assert_eq!(fs::read_dir(&attachments).unwrap().count(), 0);
             }
             assert!(
                 files
                     .dispatch(
                         1,
                         Call::Upload(Upload {
-                            directory: directory.path().to_str().unwrap().into(),
                             file_name: "../escape".into(),
                             size: 0,
                             sha256: digest::digest(&SHA256, b"").as_ref().try_into().unwrap()
@@ -922,9 +913,9 @@ mod tests {
                     .is_err()
             );
             for path in ["relative", ".", ".."] {
+                let files = WorkspaceFiles::new(path.into());
                 assert!(matches!(
                     files.dispatch(1, Call::Upload(Upload {
-                        directory: path.into(),
                         file_name: "safe.txt".into(),
                         size: 0,
                         sha256: digest::digest(&SHA256, b"").as_ref().try_into().unwrap(),
@@ -932,7 +923,7 @@ mod tests {
                     Err(error) if error.to_string() == "an absolute filesystem path is required"
                 ));
             }
-            assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
+            assert_eq!(fs::read_dir(&attachments).unwrap().count(), 0);
         })
         .await
         .unwrap();

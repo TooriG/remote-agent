@@ -372,7 +372,6 @@ fn submission_input(
 pub struct UploadAttachment {
     pub draft_key: DraftKey,
     pub attachment: Attachment,
-    pub directory: String,
 }
 
 impl Operation for UploadAttachment {
@@ -396,7 +395,6 @@ impl Operation for UploadAttachment {
             context.client,
             || async { session.open_stream().await.map_err(std::io::Error::other) },
             std::path::Path::new(&self.attachment.path),
-            std::path::Path::new(&self.directory),
             &self.attachment.name,
         )
         .await
@@ -405,7 +403,13 @@ impl Operation for UploadAttachment {
     }
     fn apply(mut self, snapshot: &mut Snapshot, path: Self::Output) -> Vec<Effect> {
         self.attachment.path = path;
-        add_attachment(snapshot, self.draft_key, self.attachment);
+        Arc::make_mut(
+            Arc::make_mut(&mut snapshot.drafts)
+                .entry(self.draft_key)
+                .or_default(),
+        )
+        .attachments
+        .push(self.attachment);
         Vec::new()
     }
 }

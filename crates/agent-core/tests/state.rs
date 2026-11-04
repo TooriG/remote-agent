@@ -839,7 +839,6 @@ fn durable_upload_and_pairing_results_survive_navigation() {
             name: "image.png".into(),
             is_image: true,
         },
-        directory: "/old".into(),
     }
     .stale(&mut snapshot, "/uploaded".into());
     assert_eq!(

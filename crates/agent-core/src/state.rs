@@ -421,7 +421,6 @@ pub mod projects;
 pub use projects::ProjectPreferences;
 pub mod operations;
 pub use operations::Intent;
-use operations::add_attachment;
 
 /// Client-owned data from a previously configured Host storage area. Keeping
 /// it separate prevents storage switches from deleting or mixing user drafts.
@@ -641,12 +640,6 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             {
                 Arc::make_mut(&mut next.pending_submissions).remove(&client_user_message_id);
             }
-        }
-        Intent::AddAttachment {
-            draft_key,
-            attachment,
-        } => {
-            add_attachment(&mut next, draft_key, attachment);
         }
         Intent::RemoveAttachment { draft_key, index } => {
             let index = index as usize;
