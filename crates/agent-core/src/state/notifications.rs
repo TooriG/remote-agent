@@ -156,12 +156,14 @@ impl Snapshot {
         if thread.parent_id.is_some() {
             return;
         }
-        let inserting = thread
-            .name
-            .as_deref()
-            .unwrap_or("")
-            .to_lowercase()
-            .contains(&self.list_query.search_term.trim().to_lowercase());
+        let search = self.list_query.search_term.trim();
+        let inserting = search.is_empty()
+            || thread
+                .name
+                .as_deref()
+                .unwrap_or("")
+                .to_lowercase()
+                .contains(&search.to_lowercase());
         if let Some(project) = project
             && let Some(page) = &mut self.threads
         {
@@ -184,18 +186,19 @@ impl Snapshot {
         }
         if let Some(project) = thread.project_id.as_ref() {
             if let Some(page) = self.project_threads.get(project)
-                && let Some((index, row)) = updated_row(&page.data, &thread, inserting)
+                && let Some((index, row)) = updated_row(&page.data, thread, inserting)
             {
+                let project = row.project_id.as_ref().unwrap().clone();
                 apply_row_update(
                     Arc::make_mut(&mut self.project_threads)
-                        .get_mut(project)
+                        .get_mut(&project)
                         .unwrap(),
                     index,
                     row,
                 );
             }
         } else if let Some(page) = &mut self.threads
-            && let Some((index, row)) = updated_row(&page.data, &thread, inserting)
+            && let Some((index, row)) = updated_row(&page.data, thread, inserting)
         {
             apply_row_update(page, index, row);
         }
@@ -234,21 +237,25 @@ fn apply_row_update(
     page.has_more |= more;
 }
 
-fn updated_row(rows: &[Thread], thread: &Thread, insert: bool) -> Option<(Option<usize>, Thread)> {
+fn updated_row(
+    rows: &[Thread],
+    mut thread: Thread,
+    insert: bool,
+) -> Option<(Option<usize>, Thread)> {
     let index = rows.iter().position(|row| row.id == thread.id);
     if index.is_none() && !insert
         || index.is_some_and(|index| rows[index].list_revision > thread.list_revision)
     {
         return None;
     }
-    let mut thread = thread.clone();
     if let Some(old) = index.map(|index| &rows[index]) {
         // Rename notices own existing names; submission metadata may have been
         // read before a native automatic rename.
         thread.name = old
             .name
-            .clone()
+            .as_ref()
             .filter(|name| !name.trim().is_empty())
+            .cloned()
             .or(thread.name);
         if old.cwd == thread.cwd {
             thread.git_branch = old.git_branch.clone().or(thread.git_branch);
@@ -1368,6 +1375,70 @@ mod tests {
             .is_empty()
         );
     }
+    #[test]
+    fn summary_insert_search_keeps_trimmed_unicode_matching_and_project_routes() {
+        for (search, name, matches) in [
+            ("", None, true),
+            (" \t\n", Some("Anything"), true),
+            ("\u{a0}", None, true),
+            (" mixed ", Some("MiXeD title"), true),
+            ("É", Some("CAFÉ"), true),
+            ("Σ", Some("ΟΣ"), false),
+            ("STRASSE", Some("Straße"), false),
+            ("missing", Some("Different"), false),
+            ("name", None, false),
+        ] {
+            for provider in [ProviderKind::Codex, ProviderKind::Claude] {
+                for project_id in [None, Some("project")] {
+                    let id = SessionRef::new(provider, "inserted".into()).unwrap();
+                    let mut state = snapshot(provider);
+                    state.conversations = Arc::default();
+                    Arc::make_mut(&mut state.list_query).search_term = search.into();
+                    Arc::make_mut(state.threads.as_mut().unwrap()).data.clear();
+                    if project_id.is_some() {
+                        state.project_threads =
+                            Arc::new([("project".into(), state.threads.clone().unwrap())].into());
+                    }
+                    let incoming = Thread {
+                        id: Some(id.clone()),
+                        name: name.map(str::to_owned),
+                        preview: Some("retained preview".into()),
+                        project_id: project_id
+                            .map_or(crate::models::ProjectMembership::Unassigned {}, |id| {
+                                crate::models::ProjectMembership::Assigned(id.into())
+                            }),
+                        list_revision: 1,
+                        ..Default::default()
+                    };
+                    let (next, effects) = notification(
+                        &state,
+                        Notification::SessionUpdated {
+                            thread: Box::new(incoming.clone()),
+                            project: None,
+                        },
+                    );
+                    assert!(effects.is_empty());
+                    let page = match project_id {
+                        Some(id) => &next.project_threads[id],
+                        None => next.threads.as_ref().unwrap(),
+                    };
+                    assert_eq!(
+                        page.data,
+                        if matches { vec![incoming] } else { vec![] },
+                        "search={search:?}, name={name:?}, provider={provider:?}, project={project_id:?}"
+                    );
+                    assert!(state.threads.as_ref().unwrap().data.is_empty());
+                    if project_id.is_some() {
+                        assert!(Arc::ptr_eq(
+                            next.threads.as_ref().unwrap(),
+                            state.threads.as_ref().unwrap(),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn summary_rows_preserve_shared_snapshots_metadata_sorting_and_page_limits() {
         let mut state = snapshot(ProviderKind::Codex);
