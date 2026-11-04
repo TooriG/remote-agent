@@ -147,14 +147,17 @@ fn parse_git_status(output: &[u8]) -> Vec<WorkspaceFileChange> {
         }
         let code = &entry[..2];
         let path = String::from_utf8_lossy(&entry[3..]).into_owned();
+        let renamed = code.contains(&b'R') || code.contains(&b'C');
+        if renamed {
+            index += 1;
+        }
         let status = if code == b"??" {
             "untracked"
         } else if code.contains(&b'D') {
             "deleted"
         } else if code.contains(&b'A') {
             "added"
-        } else if code.contains(&b'R') || code.contains(&b'C') {
-            index += 1;
+        } else if renamed {
             "renamed"
         } else {
             "modified"
@@ -306,5 +309,22 @@ mod tests {
             );
         }
         assert!(!review.files.iter().any(|file| file.path == "old.txt"));
+        std::fs::remove_file(cwd.join(renamed)).unwrap();
+        let review = collect_workspace_review(cwd.to_path_buf()).unwrap();
+        assert_eq!(
+            review.files.len(),
+            3,
+            "a deleted staged rename still owns its source record"
+        );
+        assert_eq!(
+            review
+                .files
+                .iter()
+                .find(|file| file.path == renamed)
+                .unwrap()
+                .status,
+            "deleted"
+        );
+        assert_eq!((review.additions, review.deletions), (0, 5));
     }
 }
