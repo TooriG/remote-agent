@@ -254,6 +254,7 @@ pub struct DownloadFile {
 impl Operation for DownloadFile {
     no_input!();
     type Output = ();
+    const REPORT_ERROR: bool = false;
 
     async fn run(
         &self,

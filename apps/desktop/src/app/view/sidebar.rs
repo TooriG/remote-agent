@@ -672,11 +672,8 @@ impl Desktop {
                             IconName::Settings,
                             language.text("設定を開く"),
                             cx,
-                            |s, _, cx| {
-                                s.open_settings();
-                                if let Some(hosts) = &s.hosts {
-                                    hosts.update(cx, |hosts, _| hosts.refresh());
-                                }
+                            |s, _, _| {
+                                s.open_settings(SettingsPage::General);
                             },
                         )
                         .debug_selector(|| "sidebar-settings".into()),
@@ -1035,6 +1032,7 @@ mod tests {
             original
         );
         for page in [
+            SettingsPage::General,
             SettingsPage::Agents,
             SettingsPage::Connections,
             SettingsPage::Worktrees,
@@ -1044,9 +1042,18 @@ mod tests {
                 cx.notify();
             });
             window.run_until_parked();
-            let scope = window.debug_bounds("settings-scope").unwrap();
+            let general = page == SettingsPage::General;
+            assert_eq!(window.debug_bounds("settings-language").is_some(), general);
+            assert_eq!(window.debug_bounds("settings-scope").is_none(), general);
+            let scope = window
+                .debug_bounds(if general {
+                    "settings-general-breadcrumb"
+                } else {
+                    "settings-scope"
+                })
+                .unwrap();
             assert!(scope.bottom() <= window.debug_bounds("settings-page-heading").unwrap().top());
-            assert!(window.debug_bounds("settings-back").unwrap().bottom() >= px(640.));
+            assert!(window.debug_bounds("settings-back").unwrap().top() < px(100.));
         }
         let collapse = window.debug_bounds("collapse-sidebar").unwrap().center();
         window.simulate_click(collapse, Modifiers::default());

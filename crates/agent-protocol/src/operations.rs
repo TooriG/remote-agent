@@ -454,7 +454,6 @@ pub struct LoadVisualization {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Upload {
-    pub directory: String,
     pub file_name: String,
     pub size: u64,
     pub sha256: [u8; 32],

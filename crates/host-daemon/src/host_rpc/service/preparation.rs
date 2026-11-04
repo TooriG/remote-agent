@@ -190,7 +190,7 @@ impl HostRpcService {
             &mut thread,
             self.conversation_capabilities(
                 row.active.provider,
-                row.segments.iter().map(|segment| segment.session.provider),
+                row.sources().map(|source| source.provider),
             ),
             projects,
         );

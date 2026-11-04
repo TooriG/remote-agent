@@ -318,7 +318,6 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
             return
         }
         val key = draftKey
-        val directory = snapshot.navigation().cwd
         if (!snapshot.connected()) connect()
         attachmentTransfers++
         var local: File? = null
@@ -338,7 +337,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
                     withContext(Dispatchers.IO) { importAttachment(context, uri).also { local = File(it.path) } }
                 if (selection != selectionKey) return@launch
                 uploading = true
-                perform(Intent.UploadAttachment(UploadAttachment(key, attachment, directory))) { finish() }
+                perform(Intent.UploadAttachment(UploadAttachment(key, attachment))) { finish() }
             } catch (error: SecurityException) {
                 if (selection == selectionKey) notice = error.displayMessage()
             } catch (error: IOException) {

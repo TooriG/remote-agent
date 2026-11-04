@@ -1,6 +1,6 @@
 //! A conversation keeps its public address while native bindings change.
-//! Provider bindings and ordered native-history ranges belong to the Host. Text
-//! remains in native transcripts. Admitted input is retained until delivery;
+//! Provider bindings and historical source identities belong to the Host. Text
+//! lives in Host transcripts. Admitted input is retained until delivery;
 //! provider switches retain only the exact delivered handoff.
 use crate::providers::{AgentChange, Failure};
 use agent_protocol::{
@@ -18,11 +18,14 @@ use std::{
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Binding {
     pub session: SessionRef,
-    pub seen: usize,
+    /// Number of Host transcript turns already available to this runtime.
+    pub covered: Option<usize>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Segment {
+    /// Native import ranges. Once imported, turns and handoff coverage belong
+    /// to the Host transcript; switches do not recalculate native offsets.
     pub session: SessionRef,
     pub from: usize,
     pub end: Option<usize>,
@@ -103,7 +106,7 @@ fn change_startup(
         StartupChange::Binding { native } => {
             row.bindings.push(Binding {
                 session: native.clone(),
-                seen: 0,
+                covered: None,
             });
             row.segments.push(Segment {
                 session: native.clone(),
@@ -204,7 +207,7 @@ impl Conversation {
             preview: thread.preview.clone(),
             bindings: vec![Binding {
                 session: id.clone(),
-                seen: 0,
+                covered: None,
             }],
             segments: vec![Segment {
                 session: id.clone(),
@@ -224,44 +227,26 @@ impl Conversation {
             .find(|binding| binding.session.provider == provider)
     }
 
-    pub fn seal(&mut self, count: usize) -> Result<(), Failure> {
-        if let Some(segment) = self
-            .segments
-            .last_mut()
-            .filter(|segment| segment.end.is_none())
-        {
-            if count < segment.from {
-                return Err(Failure::new(
-                    "history_changed",
-                    "Native history was shortened. The conversation cannot be switched safely.",
-                ));
-            }
-            segment.end = Some(count);
-        }
+    pub fn sources(&self) -> impl Iterator<Item = &SessionRef> {
+        self.segments
+            .iter()
+            .map(|segment| &segment.session)
+            .chain(self.bindings.iter().map(|binding| &binding.session))
+    }
+
+    pub fn cover(&mut self, count: usize) {
         if let Some(binding) = self
             .bindings
             .iter_mut()
             .find(|binding| binding.session == self.active)
         {
-            binding.seen = self.segments.len();
+            binding.covered = Some(count);
         }
-        Ok(())
     }
 
     pub fn activate(&mut self, session: SessionRef, count: usize) {
-        if let Some(binding) = self
-            .bindings
-            .iter_mut()
-            .find(|binding| binding.session == session)
-        {
-            binding.seen = self.segments.len();
-        }
-        self.segments.push(Segment {
-            session: session.clone(),
-            from: count,
-            end: None,
-        });
         self.active = session;
+        self.cover(count);
     }
 
     pub fn describe(&self, thread: &mut Thread) {
@@ -287,29 +272,6 @@ impl Conversation {
             };
             thread.updated_at = Some(startup.started_at);
         }
-    }
-
-    pub fn restore_source(&mut self, session: SessionRef) {
-        if self
-            .segments
-            .last()
-            .is_some_and(|segment| segment.end.is_none())
-        {
-            self.segments.pop();
-        }
-        let count = self
-            .segments
-            .iter()
-            .rev()
-            .find(|segment| segment.session == session)
-            .and_then(|segment| segment.end)
-            .unwrap_or(0);
-        self.active = session.clone();
-        self.segments.push(Segment {
-            session,
-            from: count,
-            end: None,
-        });
     }
 
     pub fn strip_context(&self, session: &SessionRef, item: &mut Item) {
@@ -434,13 +396,6 @@ impl Conversations {
                                 handoff.submission = SubmissionDelivery::Unknown;
                             }
                         }
-                        if row
-                            .segments
-                            .last()
-                            .is_some_and(|segment| segment.end.is_some())
-                        {
-                            row.restore_source(row.active.clone());
-                        }
                     }
                     Ok(rows)
                 }),
@@ -507,10 +462,7 @@ impl Conversations {
                 row.describe(&mut thread);
                 (
                     thread,
-                    row.segments
-                        .iter()
-                        .map(|segment| segment.session.provider)
-                        .collect(),
+                    row.sources().map(|session| session.provider).collect(),
                 )
             })
             .collect())
@@ -732,11 +684,7 @@ fn validate(rows: &[Conversation]) -> Result<(), String> {
             && (!row
                 .bindings
                 .iter()
-                .any(|binding| binding.session == row.active)
-                || row
-                    .segments
-                    .last()
-                    .is_none_or(|segment| segment.session != row.active)))
+                .any(|binding| binding.session == row.active)))
             || row.cwd.trim().is_empty()
         {
             return Err("Invalid conversation identity or workspace".into());
@@ -744,18 +692,15 @@ fn validate(rows: &[Conversation]) -> Result<(), String> {
         for binding in &row.bindings {
             binding.session.validate().map_err(str::to_owned)?;
             if !identities.insert(binding.session.clone())
-                || binding.seen > row.segments.len()
                 || (binding.session != row.id && public.contains(&binding.session))
             {
                 return Err("Duplicate native owner or invalid history coverage".into());
             }
         }
-        for (index, segment) in row.segments.iter().enumerate() {
+        for segment in &row.segments {
             segment.session.validate().map_err(str::to_owned)?;
-            if segment.end.is_some_and(|end| end < segment.from)
-                || (segment.end.is_none() && index + 1 != row.segments.len())
-            {
-                return Err("Invalid native history range".into());
+            if segment.end.is_some_and(|end| end < segment.from) {
+                return Err("Invalid native import range".into());
             }
         }
     }
@@ -889,16 +834,14 @@ mod tests {
         let path = directory.path().join("conversations.json");
         let store = Conversations::new(path.clone());
         let mut row = conversation();
-        row.seal(3).unwrap();
+        row.cover(3);
         store.save(row.clone()).unwrap();
         let recovered = Conversations::new(path.clone())
             .get(&row.id)
             .unwrap()
             .unwrap();
-        assert_eq!(recovered.segments.len(), 2);
-        assert_eq!(recovered.segments[0].end, Some(3));
-        assert_eq!(recovered.segments[1].from, 3);
-        assert_eq!(recovered.segments[1].end, None);
+        assert_eq!(recovered.segments.len(), 1);
+        assert_eq!(recovered.bindings[0].covered, Some(3));
         std::fs::remove_file(&path).unwrap();
         std::fs::create_dir(&path).unwrap();
         row.name = Some("uncommitted".into());
@@ -918,10 +861,10 @@ mod tests {
             provider: ProviderKind::Claude,
             id: "target".into(),
         };
-        row.seal(1).unwrap();
+        row.cover(1);
         row.bindings.push(Binding {
             session: target.clone(),
-            seen: 0,
+            covered: None,
         });
         row.activate(target.clone(), 0);
         store.save(row.clone()).unwrap();

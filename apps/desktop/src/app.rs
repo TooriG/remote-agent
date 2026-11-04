@@ -98,6 +98,7 @@ enum Tab {
 }
 #[derive(Clone, Copy, PartialEq)]
 enum SettingsPage {
+    General,
     Agents,
     Connections,
     Worktrees,
@@ -553,7 +554,7 @@ impl Desktop {
             account,
             worktrees,
             tab: Tab::Chat,
-            settings_page: SettingsPage::Agents,
+            settings_page: SettingsPage::General,
             sidebar: true,
             details: true,
             details_popover: false,
@@ -1721,9 +1722,7 @@ impl Desktop {
             let directory = platform::state_dir()?.join("attachments");
             item.into_entries()
                 .filter_map(|entry| match entry {
-                    ClipboardEntry::Image(image) => {
-                        Some(clipboard::save_image(&directory, image).map(PathBuf::from))
-                    }
+                    ClipboardEntry::Image(image) => Some(clipboard::save_image(&directory, image)),
                     _ => None,
                 })
                 .collect()
@@ -1733,16 +1732,14 @@ impl Desktop {
     fn attach(&mut self) {
         self.attach_sources(|| Ok(platform::choose_files().unwrap_or_default()));
     }
-    fn attach_sources(
+    fn attach_sources<P: AsRef<Path> + Send + 'static>(
         &mut self,
-        sources: impl FnOnce() -> Result<Vec<PathBuf>, String> + Send + 'static,
+        sources: impl FnOnce() -> Result<Vec<P>, String> + Send + 'static,
     ) {
         let Some(store) = self.session.as_ref().map(|session| session.store.clone()) else {
             return;
         };
         let key = self.draft_key().to_owned();
-        let remote = self.remote.is_some();
-        let directory = self.snapshot.navigation.cwd.clone();
         self.busy += 1;
         let error_scope = ErrorScope::Conversation {
             draft_key: key.clone(),
@@ -1752,7 +1749,8 @@ impl Desktop {
                 let paths = tokio::task::spawn_blocking(sources)
                     .await
                     .map_err(|error| error.to_string())??;
-                for path in paths {
+                for source in paths {
+                    let path = source.as_ref();
                     let is_image = path
                         .extension()
                         .and_then(|extension| extension.to_str())
@@ -1768,18 +1766,10 @@ impl Desktop {
                         name,
                         is_image,
                     };
-                    let intent = if remote {
-                        Intent::UploadAttachment(op::UploadAttachment {
-                            draft_key: key.clone(),
-                            attachment,
-                            directory: directory.clone(),
-                        })
-                    } else {
-                        Intent::AddAttachment {
-                            draft_key: key.clone(),
-                            attachment,
-                        }
-                    };
+                    let intent = Intent::UploadAttachment(op::UploadAttachment {
+                        draft_key: key.clone(),
+                        attachment,
+                    });
                     if store.dispatch(intent).await.is_err() {
                         break;
                     }

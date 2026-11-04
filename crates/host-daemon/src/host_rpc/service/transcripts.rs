@@ -68,30 +68,26 @@ impl HostRpcService {
         };
         let mut response = window.response;
         let native = row.map_or(target, |row| &row.active);
-        response.thread.capabilities = Some(match row {
-            Some(row) => {
-                row.describe(&mut response.thread);
-                self.conversation_capabilities(
-                    row.active.provider,
-                    row.segments.iter().map(|segment| segment.session.provider),
-                )
-            }
-            None => self
-                .inner
-                .providers
-                .get(target.provider)
-                .map(|agent| agent.capabilities())
-                .unwrap_or_default(),
-        });
-        // Accepted turns update Host selections; the imported snapshot only
-        // describes the conversation before the Host ran it.
         let saved = self
             .inner
             .model_selections
             .resolve(native, None, None, None)?;
-        response.model = saved.model.or(response.model);
-        response.effort = saved.effort.or(response.effort);
-        response.service_tier = saved.service_tier.or(response.service_tier);
+        if let Some(row) = row {
+            response = self.describe_conversation_history(row, response, saved)?;
+        } else {
+            response.thread.capabilities = Some(
+                self.inner
+                    .providers
+                    .get(target.provider)
+                    .map(|agent| agent.capabilities())
+                    .unwrap_or_default(),
+            );
+            // Accepted turns update Host selections; the imported snapshot
+            // describes the conversation before the Host ran it.
+            response.model = saved.model.or(response.model);
+            response.effort = saved.effort.or(response.effort);
+            response.service_tier = saved.service_tier.or(response.service_tier);
+        }
         if !include_activity {
             for turn in response.thread.turns.iter_mut().flatten() {
                 let provider = turn.provider.unwrap_or(target.provider);
