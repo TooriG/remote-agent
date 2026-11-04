@@ -82,6 +82,15 @@ pub(super) fn section_heading(title: &'static str, description: &'static str) ->
         )
 }
 
+pub(super) fn settings_group() -> Div {
+    v_flex()
+        .w_full()
+        .rounded(px(8.))
+        .border_1()
+        .border_color(rgb(appearance::BORDER))
+        .bg(rgb(appearance::SURFACE))
+}
+
 fn sidebar_header(expanded: bool, cx: &Context<Desktop>) -> Div {
     let language = crate::localization::language(cx);
     let (id, icon, label) = if expanded {

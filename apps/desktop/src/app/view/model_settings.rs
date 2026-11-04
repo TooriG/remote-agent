@@ -108,20 +108,32 @@ impl Desktop {
         let provider = account.provider;
         let logout_id = id.clone();
         let identity = account.email.as_deref().unwrap_or(&account.id);
-        let mut row = v_flex()
-            .gap_2()
-            .p_3()
-            .rounded(px(10.))
-            .when(!in_settings, |row| row.bg(rgb(appearance::SELECTED)))
-            .when(in_settings, |row| {
-                row.p_4().border_1().border_color(rgb(appearance::BORDER))
-            })
+        let confirming = manage && self.account.sign_out.as_deref() == Some(account.id.as_str());
+        let header = h_flex()
+            .items_center()
+            .gap_3()
             .child(
                 Button::new(format!("account-choice-{index}"))
                     .accessibility_label(identity.to_owned())
                     .small()
                     .ghost()
-                    .child(account_identity(Some(account.provider), identity).flex_1())
+                    .h_auto()
+                    .min_h(px(40.))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_1()
+                            .child(account_identity(Some(account.provider), identity))
+                            .when_some(account.plan_type.as_ref(), |body, plan| {
+                                body.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(appearance::MUTED))
+                                        .child(plan.clone()),
+                                )
+                            }),
+                    )
                     .on_click(cx.listener(move |s, _, _, cx| {
                         s.account_operation(Intent::SelectAccountForDraft(
                             op::SelectAccountForDraft {
@@ -134,28 +146,65 @@ impl Desktop {
                     }))
                     .debug_selector(move || format!("account-choice-{index}"))
                     .when(selected, |button| {
-                        button.child(Icon::new(IconName::Check).size(px(14.)))
+                        button.child(if in_settings {
+                            div()
+                                .px_2()
+                                .py_1()
+                                .rounded(px(4.))
+                                .border_1()
+                                .border_color(rgb(appearance::BORDER))
+                                .text_xs()
+                                .child(language.text("使用中"))
+                                .into_any_element()
+                        } else {
+                            Icon::new(IconName::Check).size(px(14.)).into_any_element()
+                        })
                     })
-                    .w_full()
+                    .flex_1()
+                    .min_w_0()
                     .disabled(disabled),
             )
-            .when_some(account.plan_type.as_ref(), |row, plan| {
-                row.child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(appearance::MUTED))
-                        .child(plan.to_uppercase()),
-                )
-            })
-            .child(if manage {
-                account_usage_view(account.usage.as_ref(), language)
-            } else {
-                weekly_usage_view(
-                    self.snapshot
-                        .account_weekly_usage(account.provider, account.id.clone()),
-                    language,
+            .when(manage && !confirming, |header| {
+                let id = logout_id.clone();
+                header.child(
+                    button(
+                        format!("account-logout-{index}"),
+                        language.text("サインアウト"),
+                        cx,
+                        move |s, _, _| s.account.sign_out = Some(id.clone()),
+                    )
+                    .debug_selector(move || format!("account-logout-{index}"))
+                    .text_color(rgb(appearance::MUTED))
+                    .disabled(disabled),
                 )
             });
+        let mut row = if in_settings {
+            settings_group().p_5().gap_4()
+        } else {
+            v_flex()
+                .gap_2()
+                .p_3()
+                .rounded(px(10.))
+                .bg(rgb(appearance::SELECTED))
+        };
+        row = row.child(header).child(if manage {
+            v_flex()
+                .gap_3()
+                .when(in_settings, |body| {
+                    body.pt_4()
+                        .border_t_1()
+                        .border_color(rgb(appearance::BORDER))
+                })
+                .child(div().font_semibold().child(language.text("使用量")))
+                .child(account_usage_view(account.usage.as_ref(), language))
+                .into_any_element()
+        } else {
+            weekly_usage_view(
+                self.snapshot
+                    .account_weekly_usage(account.provider, account.id.clone()),
+                language,
+            )
+        });
         if manage && provider == ProviderKind::Codex {
             let manage_usage = button(
                 format!("account-usage-manage-{index}"),
@@ -164,14 +213,12 @@ impl Desktop {
                 |s, _, cx| {
                     s.open_browser(s.panel_scope(), "https://chatgpt.com/settings/usage", cx);
                 },
-            )
-            .small()
-            .ghost();
+            );
             let hint = div().text_xs().text_color(rgb(appearance::MUTED))
                 .child(language.text("利用枠は表示時刻に自動リセットされます。上限の変更・追加クレジットは管理画面で行えます。"));
             row = row.child(manage_usage).child(hint);
         }
-        if manage && self.account.sign_out.as_deref() == Some(account.id.as_str()) {
+        if confirming {
             row = row
                 .child(div().text_sm().child(
                     language.text("サインアウトしますか？ 再び使うにはサインインが必要です。"),
@@ -204,20 +251,6 @@ impl Desktop {
                             .debug_selector(move || format!("account-logout-cancel-{index}")),
                         ),
                 );
-        } else if manage {
-            let logout = button(
-                format!("account-logout-{index}"),
-                language.text("サインアウト"),
-                cx,
-                move |s, _, _| s.account.sign_out = Some(logout_id.clone()),
-            )
-            .debug_selector(move || format!("account-logout-{index}"))
-            .disabled(disabled);
-            row = if in_settings {
-                row.child(h_flex().justify_end().child(logout))
-            } else {
-                row.child(logout)
-            };
         }
         row.into_any_element()
     }
@@ -230,9 +263,11 @@ impl Desktop {
             || self.busy > 0
             || self.snapshot.account.login.is_some()
             || !self.snapshot.connected;
-        let mut services = h_flex()
-            .gap_1()
-            .when(in_settings, |row| row.max_w(px(320.)));
+        let mut services = h_flex().gap_1().when(in_settings, |row| {
+            row.w_full()
+                .border_b_1()
+                .border_color(rgb(appearance::BORDER))
+        });
         for (value, label) in [
             (ProviderKind::Codex, "Codex"),
             (ProviderKind::Claude, "Claude"),
@@ -261,18 +296,33 @@ impl Desktop {
                     },
                 )
                 .debug_selector(move || format!("model-provider-{label}"))
-                .selected(provider == Some(value))
+                .selected(!in_settings && provider == Some(value))
                 .when(in_settings, |button| {
-                    button.small().ghost().icon(provider_icon(value))
+                    button
+                        .icon(provider_icon(value))
+                        .w(px(120.))
+                        .h(px(40.))
+                        .rounded(px(0.))
+                        .border_b_2()
+                        .border_color(if provider == Some(value) {
+                            rgb(appearance::FOREGROUND)
+                        } else {
+                            rgb(appearance::BORDER).opacity(0.)
+                        })
+                        .text_color(if provider == Some(value) {
+                            rgb(appearance::FOREGROUND)
+                        } else {
+                            rgb(appearance::MUTED)
+                        })
                 })
                 .disabled(disabled)
-                .flex_1(),
+                .when(!in_settings, |button| button.flex_1()),
             );
         }
         let mut body = v_flex()
             .id("model-account-controls")
             .gap_3()
-            .when(in_settings, |body| body.gap_5())
+            .when(in_settings, |body| body.gap_6())
             .when(manage, |body| body.child(services));
         let Some(provider) = provider else {
             return body
@@ -280,44 +330,60 @@ impl Desktop {
                 .into_any_element();
         };
         if provider == ProviderKind::DeepSeek {
-            return body.child(self.credential_controls(cx)).into_any_element();
-        }
-        if manage && provider == ProviderKind::Codex {
-            let cli = self.snapshot.account.codex_cli.as_deref();
-            let updating = self.snapshot.operation_running(op::OperationKey::CodexCli);
-            let mut controls = v_flex().gap_2()
-                .child(div().font_semibold().child("Codex CLI"))
-                .child(cli.and_then(|status| status.version.clone()).unwrap_or_else(|| language.text("バージョン未確認").into()))
-                .child(div().text_sm().text_color(rgb(appearance::MUTED))
-                    .child(language.text("選択中の環境のCLIを更新します。更新後は実行中の会話が終わってからHostを再起動してください。モデル一覧は再接続時に再取得します。")))
-                .child(h_flex().gap_2()
-                    .child(button("codex-cli-update", if updating { language.text("確認・更新中…") } else { language.text("最新版に更新") }, cx, |s, _, _| {
-                        s.dispatch(Intent::ManageCodexCli(op::ManageCodexCli { update: true }));
-                    }).disabled(disabled || updating).debug_selector(|| "codex-cli-update".into()))
-                    .child(button("codex-cli-refresh", language.text("状態を確認"), cx, |s, _, _| {
-                        s.dispatch(Intent::ManageCodexCli(op::ManageCodexCli { update: false }));
-                        s.refresh_accounts_and_models();
-                    }).disabled(disabled || updating)));
-            if let Some(cli) = cli {
-                if cli.restart_required {
-                    controls = controls.child(language.text(
-                        "更新が完了しました。新しいCLIを使用するにはHostを再起動してください。",
-                    ));
-                }
-                if let Some(error) = &cli.error {
-                    controls = controls.child(
-                        div()
-                            .text_sm()
-                            .text_color(rgb(0xff8e86))
-                            .child(error.clone()),
-                    );
-                }
-            }
-            body = body.child(controls);
+            let credentials = self.credential_controls(cx);
+            return body
+                .child(if in_settings {
+                    settings_group().p_5().child(credentials).into_any_element()
+                } else {
+                    credentials
+                })
+                .into_any_element();
         }
         if self.snapshot.account.login.is_some() {
             body = body.child(self.account_login_controls(None, cx));
         } else {
+            if manage {
+                body = body.child(
+                    h_flex()
+                        .items_center()
+                        .flex_wrap()
+                        .gap_3()
+                        .when(in_settings, |header| {
+                            header.child(
+                                div()
+                                    .flex_1()
+                                    .text_lg()
+                                    .font_semibold()
+                                    .child(language.text("アカウント")),
+                            )
+                        })
+                        .child(
+                            button(
+                                "account-start-login",
+                                language.text("アカウントを追加"),
+                                cx,
+                                move |s, window, cx| {
+                                    s.start_provider_setup(provider, window, cx);
+                                },
+                            )
+                            .icon(IconName::Plus)
+                            .secondary()
+                            .outline()
+                            .h(px(32.))
+                            .disabled(disabled),
+                        )
+                        .child(
+                            button(
+                                "accounts-refresh",
+                                language.text("使用量を再取得"),
+                                cx,
+                                |s, _, _| s.refresh_accounts_and_models(),
+                            )
+                            .icon(IconName::RotateCw)
+                            .disabled(disabled),
+                        ),
+                );
+            }
             if let Some(accounts) = accounts {
                 let mut matching = accounts
                     .accounts
@@ -345,37 +411,7 @@ impl Desktop {
             } else {
                 body = body.child(language.text("アカウントを読み込み中…"));
             }
-            if manage {
-                body = body.child(
-                    h_flex()
-                        .justify_between()
-                        .gap_2()
-                        .child(
-                            button(
-                                "account-start-login",
-                                language.text("アカウントを追加"),
-                                cx,
-                                move |s, window, cx| {
-                                    s.start_provider_setup(provider, window, cx);
-                                },
-                            )
-                            .icon(IconName::Plus)
-                            .disabled(disabled),
-                        )
-                        .child(
-                            button(
-                                "accounts-refresh",
-                                language.text("使用量を再取得"),
-                                cx,
-                                |s, _, _| {
-                                    s.refresh_accounts_and_models();
-                                },
-                            )
-                            .tooltip(language.text("モデルと使用量を更新"))
-                            .disabled(disabled),
-                        ),
-                );
-            } else {
+            if !manage {
                 body = body.child(
                     button(
                         "model-accounts-manage",
@@ -429,7 +465,35 @@ impl Desktop {
         if !in_settings {
             body = body.child(self.error_notices(ErrorScope::Settings, cx));
         }
+        if manage && provider == ProviderKind::Codex {
+            body = body.child(self.codex_cli_controls(disabled, cx));
+        }
         body.into_any_element()
+    }
+
+    fn codex_cli_controls(&self, disabled: bool, cx: &Context<Self>) -> Div {
+        let language = crate::localization::language(cx);
+        let cli = self.snapshot.account.codex_cli.as_deref();
+        let updating = self.snapshot.operation_running(op::OperationKey::CodexCli);
+        v_flex().gap_4().mt_2()
+            .child(div().text_lg().font_semibold().child("Codex CLI"))
+            .child(settings_group().p_5().gap_4()
+                .child(h_flex().items_center().flex_wrap().gap_4()
+                    .child(v_flex().flex_1().min_w(px(160.)).gap_1()
+                        .child(div().font_semibold().child(cli.and_then(|status| status.version.clone()).unwrap_or_else(|| language.text("バージョン未確認").into()))))
+                    .child(h_flex().gap_2()
+                        .child(button("codex-cli-refresh", language.text("状態を確認"), cx, |s, _, _| {
+                            s.dispatch(Intent::ManageCodexCli(op::ManageCodexCli { update: false }));
+                            s.refresh_accounts_and_models();
+                        }).secondary().outline().h(px(32.)).disabled(disabled || updating))
+                        .child(button("codex-cli-update", if updating { language.text("確認・更新中…") } else { language.text("最新版に更新") }, cx, |s, _, _| {
+                            s.dispatch(Intent::ManageCodexCli(op::ManageCodexCli { update: true }));
+                        }).secondary().outline().h(px(32.)).disabled(disabled || updating).debug_selector(|| "codex-cli-update".into()))))
+                .child(div().pt_4().border_t_1().border_color(rgb(appearance::BORDER))
+                    .text_xs().text_color(rgb(appearance::MUTED))
+                    .child(language.text("選択中の環境のCLIを更新します。更新後は実行中の会話が終わってからHostを再起動してください。モデル一覧は再接続時に再取得します。")))
+                .when(cli.is_some_and(|cli| cli.restart_required), |body| body.child(language.text("更新が完了しました。新しいCLIを使用するにはHostを再起動してください。")))
+                .when_some(cli.and_then(|cli| cli.error.as_ref()), |body, error| body.child(div().text_sm().text_color(rgb(0xff8e86)).child(error.clone()))))
     }
 }
 
@@ -784,8 +848,9 @@ fn account_usage_view(
     if let Some(error) = &usage.error {
         body = body.child(div().text_color(rgb(0xe9b56f)).child(error_message(error)));
     }
+    let mut windows = h_flex().w_full().flex_wrap().gap_5();
     for window in &usage.windows {
-        body = body.child(
+        windows = windows.child(
             usage_window_view(window, language).when_some(
                 window
                     .resets_at
@@ -805,22 +870,23 @@ fn account_usage_view(
             ),
         );
     }
-    body.when_some(
-        chrono::DateTime::from_timestamp(usage.fetched_at, 0).filter(|_| usage.error.is_none()),
-        |body, at| {
-            body.child(div().text_color(rgb(appearance::MUTED)).child(
-                agent_core::localization::localized_ui_format(
-                    language,
-                    "{0} 時点".into(),
-                    vec![format!(
-                        "{}",
-                        at.with_timezone(&chrono::Local).format("%H:%M")
-                    )],
-                ),
-            ))
-        },
-    )
-    .into_any_element()
+    body.child(windows)
+        .when_some(
+            chrono::DateTime::from_timestamp(usage.fetched_at, 0).filter(|_| usage.error.is_none()),
+            |body, at| {
+                body.child(div().text_color(rgb(appearance::MUTED)).child(
+                    agent_core::localization::localized_ui_format(
+                        language,
+                        "{0} 時点".into(),
+                        vec![format!(
+                            "{}",
+                            at.with_timezone(&chrono::Local).format("%H:%M")
+                        )],
+                    ),
+                ))
+            },
+        )
+        .into_any_element()
 }
 
 impl Desktop {
@@ -1396,7 +1462,8 @@ fn usage_window_view(
     language: agent_core::localization::UiLanguage,
 ) -> Div {
     v_flex()
-        .w_full()
+        .flex_1()
+        .min_w(px(180.))
         .gap_1()
         .child(
             h_flex()
@@ -1412,7 +1479,10 @@ fn usage_window_view(
                     vec![window.remaining_percent.to_string()],
                 )),
         )
-        .child(usage_bar(window.remaining_percent, rgb(0x8acfac)))
+        .child(usage_bar(
+            window.remaining_percent,
+            rgb(appearance::FOREGROUND),
+        ))
 }
 
 fn usage_bar(remaining_percent: u32, tint: Rgba) -> Div {

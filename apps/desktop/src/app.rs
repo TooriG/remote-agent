@@ -98,6 +98,7 @@ enum Tab {
 }
 #[derive(Clone, Copy, PartialEq)]
 enum SettingsPage {
+    General,
     Agents,
     Connections,
     Worktrees,
@@ -553,7 +554,7 @@ impl Desktop {
             account,
             worktrees,
             tab: Tab::Chat,
-            settings_page: SettingsPage::Agents,
+            settings_page: SettingsPage::General,
             sidebar: true,
             details: true,
             details_popover: false,
