@@ -33,11 +33,13 @@ import dev.remoteagent.core.mobileFileOpenRequest
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
 
-private data class FileViewerContent(
+private data class FileViewerState(
     val path: String,
     val directory: Boolean = false,
     val text: String? = null,
     val truncated: Boolean = false,
+    val loading: Boolean = false,
+    val error: String? = null,
 )
 
 /** Text stays in the viewer; binary files download through the Host and open in a native app. */
@@ -55,20 +57,22 @@ internal fun ConversationFileViewer(
     val home = snapshot.hostHomeDirectory()
     val initialPath = fileHostPath(reference.path, home)
     val request = mobileFileOpenRequest(source ?: "", cwd, home)
-    var file by remember(reference.path) { mutableStateOf(FileViewerContent(initialPath)) }
-    var error by remember(reference.path) { mutableStateOf<String?>(null) }
-    var loading by remember(reference.path) { mutableStateOf(true) }
+    var file by remember(reference.path) { mutableStateOf(FileViewerState(initialPath, loading = true)) }
     var attempt by remember(reference.path) { mutableStateOf(0) }
-    val share = rememberFileSharer(perform) { error = it }
+    val share = rememberFileSharer(perform) { file = file.copy(error = it) }
     LaunchedEffect(reference.path, attempt) {
-        loading = true
-        error = null
+        file = file.copy(loading = true, error = null)
         val failure =
             try {
                 val resolved = request?.let {
                     fileOperation(Intent.ResolveFileReference(it), perform) as Outcome.FileReferenceResolved
                 }
-                file = FileViewerContent(resolved?.path ?: initialPath, directory = resolved?.directory == true)
+                file =
+                    FileViewerState(
+                        resolved?.path ?: initialPath,
+                        directory = resolved?.directory == true,
+                        loading = true,
+                    )
                 val content = loadFileViewer(file.path, file.directory, context, perform)
                 if (content == null) dismiss() else file = content
                 null
@@ -76,12 +80,12 @@ internal fun ConversationFileViewer(
                 throw cancelled
             } catch (failure: AgentException) {
                 failure
+            } catch (failure: IllegalStateException) {
+                failure
             } catch (failure: IOException) {
                 failure
-            } finally {
-                loading = false
             }
-        error = failure?.let { it.displayMessage() ?: "ファイルを開けません" }
+        file = file.copy(loading = false, error = failure?.let { it.displayMessage() ?: "ファイルを開けません" })
     }
     if (file.directory) {
         WorkspaceFilesDialog(snapshot, file.path, checkNotNull(perform), dismiss)
@@ -89,16 +93,11 @@ internal fun ConversationFileViewer(
         AlertDialog(
             onDismissRequest = dismiss,
             title = { Text(reference.label) },
-            text = {
-                if (loading) CircularProgressIndicator()
-                else
-                    FileViewerBody(file, error, reference.line, perform) {
-                        share(file.path, "application/octet-stream")
-                    }
-            },
+            text = { FileViewerBody(file, reference.line, perform) { share(file.path, "application/octet-stream") } },
             confirmButton = { TextButton(onClick = dismiss) { Text(LocalUiLanguage.current.text("閉じる")) } },
             dismissButton = {
-                if (error != null) TextButton(onClick = { attempt++ }) { Text(LocalUiLanguage.current.text("再試行")) }
+                if (file.error != null)
+                    TextButton(onClick = { attempt++ }) { Text(LocalUiLanguage.current.text("再試行")) }
             },
         )
     }
@@ -110,46 +109,48 @@ private suspend fun loadFileViewer(
     directory: Boolean,
     context: Context,
     perform: ((Intent, (Result<Outcome>) -> Unit) -> Unit)?,
-): FileViewerContent? {
-    if (directory) return FileViewerContent(path, directory = true)
+): FileViewerState? {
+    if (directory) return FileViewerState(path, directory = true)
     val mime = filePreviewMimeType(path)
     return if (mime != null) {
         exportHostFile(context, path, mime, perform, FileExportAction.Open)
         null
     } else {
         val result = fileOperation(Intent.ReadFile(ReadFile(path, false)), perform) as Outcome.FileRead
-        FileViewerContent(path, text = result.file.text, truncated = result.file.truncated)
+        FileViewerState(path, text = result.file.text, truncated = result.file.truncated)
     }
 }
 
 @Composable
 private fun FileViewerBody(
-    file: FileViewerContent,
-    error: String?,
+    file: FileViewerState,
     line: UInt?,
     perform: ((Intent, (Result<Outcome>) -> Unit) -> Unit)?,
     download: () -> Unit,
 ) {
     val path = file.path
     val text = file.text
-    Column(Modifier.heightIn(max = 480.dp)) {
-        SelectionContainer { Text(path) }
-        if (file.truncated) Text(LocalUiLanguage.current.text(filePreviewTruncationNotice()))
-        error?.let { Text(it) }
-        if (file.truncated || error != null) {
-            TextButton(onClick = download) { Text(LocalUiLanguage.current.text("ダウンロード")) }
+    val error = file.error
+    if (file.loading) CircularProgressIndicator()
+    else
+        Column(Modifier.heightIn(max = 480.dp)) {
+            SelectionContainer { Text(path) }
+            if (file.truncated) Text(LocalUiLanguage.current.text(filePreviewTruncationNotice()))
+            error?.let { Text(it) }
+            if (file.truncated || error != null) {
+                TextButton(onClick = download) { Text(LocalUiLanguage.current.text("ダウンロード")) }
+            }
+            if (text != null && error == null) {
+                if (
+                    line == null &&
+                        dev.remoteagent.core.markdownFileKind(path) == dev.remoteagent.core.MarkdownFileKind.MARKDOWN
+                ) {
+                    Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
+                        PreviewText(text, true, path.replace('\\', '/').substringBeforeLast('/'), perform)
+                    }
+                } else FileViewerText(text, line)
+            }
         }
-        if (text != null && error == null) {
-            if (
-                line == null &&
-                    dev.remoteagent.core.markdownFileKind(path) == dev.remoteagent.core.MarkdownFileKind.MARKDOWN
-            ) {
-                Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
-                    PreviewText(text, true, path.replace('\\', '/').substringBeforeLast('/'), perform)
-                }
-            } else FileViewerText(text, line)
-        }
-    }
 }
 
 @Composable
