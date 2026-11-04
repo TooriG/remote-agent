@@ -5,6 +5,7 @@ import SwiftUI
 private struct WorkspaceFilePreview: View {
     let entry: FileEntry
     let download: @MainActor (String) async throws -> URL
+    let aiEdit: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var file: DownloadedFile?
     @State private var error: String?
@@ -24,10 +25,14 @@ private struct WorkspaceFilePreview: View {
                     }
                 } else if let error {
                     AppNotice(text: error).padding()
-                    Button("再試行") { attempt = UUID() }.padding()
                 } else {
                     ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
+                HStack {
+                    Button("再読込") { file = nil; attempt = UUID() }
+                        .disabled(file == nil && error == nil).accessibilityIdentifier("file.reload")
+                    Button("AIで編集") { aiEdit(entry.path) }.accessibilityIdentifier("file.ai-edit")
+                }.padding()
             }
             .navigationTitle(entry.name)
             .navigationBarTitleDisplayMode(.inline)
@@ -80,6 +85,7 @@ struct WorkspaceFileSheet: View {
     let entry: FileEntry
     let line: UInt32?
     let download: @MainActor (String) async throws -> URL
+    let share: (String) -> Void
     let aiEdit: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var error: String?
@@ -87,7 +93,6 @@ struct WorkspaceFileSheet: View {
     @State private var initialized = false
     @State private var confirmReload = false
     @State private var selection: TextSelection?
-    @State private var sharedFile: SharedFile?
     private var file: FileContent? {
         snapshot.file().flatMap { $0.path == entry.path ? $0 : nil }
     }
@@ -102,7 +107,7 @@ struct WorkspaceFileSheet: View {
 
     var body: some View {
         if mobileFilePreviewMimeType(path: entry.path) != nil {
-            WorkspaceFilePreview(entry: entry, download: download)
+            WorkspaceFilePreview(entry: entry, download: download, aiEdit: aiEdit)
         } else {
             editor
         }
@@ -130,17 +135,7 @@ struct WorkspaceFileSheet: View {
                             load(restoreDraft: false)
                         }
                     }
-                    Button("ダウンロード") {
-                        busy = true; error = nil
-                        Task {
-                            defer { busy = false }
-                            do {
-                                sharedFile = try await SharedFile(url: download(entry.path))
-                            } catch {
-                                self.error = error.localizedDescription
-                            }
-                        }
-                    }.disabled(busy)
+                    Button("ダウンロード") { share(entry.path) }
                     Button("AIで編集") { aiEdit(entry.path) }.accessibilityIdentifier("file.ai-edit")
                 }.padding()
             }
@@ -162,7 +157,6 @@ struct WorkspaceFileSheet: View {
                 }
             }
             .onChange(of: file?.revision) { moveToLine() }
-            .sheet(item: $sharedFile) { item in FileShareSheet(url: item.url) }
             .onAppear {
                 if !initialized {
                     load(restoreDraft: true)

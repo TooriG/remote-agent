@@ -61,6 +61,8 @@ extension LaunchUITests {
         } else {
             XCTAssertTrue(app.descendants(matching: .any)["file.preview"].waitForExistence(timeout: 15))
             XCTAssertFalse(editor.exists, "Binary files must bypass the text editor")
+            XCTAssertTrue(app.buttons["file.reload"].exists)
+            XCTAssertTrue(app.buttons["file.ai-edit"].exists)
         }
         captureScreen(app, named: filename)
         done.tap()
