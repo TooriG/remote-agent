@@ -157,20 +157,19 @@ impl Snapshot {
         let source = self.threads.as_ref()?;
         let waiting = self.waiting_sessions();
         let project_ids: HashSet<_> = source.projects.iter().map(|p| p.id.as_str()).collect();
-        let mut rows: BTreeMap<_, crate::models::Thread> = BTreeMap::new();
+        let mut rows: BTreeMap<_, &crate::models::Thread> = BTreeMap::new();
         for thread in source
             .data
             .iter()
             .chain(self.project_threads.values().flat_map(|p| &p.data))
         {
             let Some(id) = &thread.id else { continue };
-            let mut thread = thread.clone();
-            if let Some(project) = self.chat_placement(id) {
-                thread.project_id = crate::models::ProjectMembership::Assigned(project.to_owned());
-            }
-            if let Some(project) = thread.project_id.as_ref()
+            let project = self
+                .chat_placement(id)
+                .or_else(|| thread.project_id.as_ref().map(String::as_str));
+            if let Some(project) = project
                 && (self.project_preference(project).is_some_and(|p| p.hidden)
-                    || !self.project_chat_visible(project, &thread))
+                    || !self.project_chat_visible(project, thread))
             {
                 continue;
             }
@@ -178,26 +177,36 @@ impl Snapshot {
                 .get(id)
                 .is_none_or(|old| old.list_revision <= thread.list_revision)
             {
-                rows.insert(id.clone(), thread);
+                rows.insert(id, thread);
             }
         }
-        let mut rows: Vec<_> = rows.into_values().collect();
+        let mut rows: Vec<_> = rows
+            .into_values()
+            .filter(|thread| thread.parent_id.is_none())
+            .collect();
         rows.sort_by(|a, b| {
             b.updated_at
                 .unwrap_or(0.0)
                 .total_cmp(&a.updated_at.unwrap_or(0.0))
                 .then_with(|| a.id.cmp(&b.id))
         });
+        let limit = self.list_query.limit as usize;
+        list.has_more |= rows.len() > limit;
+        rows.truncate(limit);
         list.threads = thread_summaries(
-            rows.iter(),
+            rows.into_iter(),
             &self.activity.active,
             &self.activity.unread,
             waiting,
             &project_ids,
         );
-        let limit = self.list_query.limit as usize;
-        list.has_more |= list.threads.len() > limit;
-        list.threads.truncate(limit);
+        for thread in &mut list.threads {
+            if let Some(project) = self.chat_placement(&thread.id) {
+                thread.project_id = project_ids
+                    .get(project)
+                    .map(|project| (*project).to_owned());
+            }
+        }
         for project in &source.projects {
             let key = crate::state::operations::OperationKey::ProjectList {
                 project_id: project.id.clone(),

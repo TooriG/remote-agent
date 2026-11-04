@@ -302,31 +302,52 @@ pub fn source_order<'a>(
     item_id: impl Fn(usize) -> &'a str,
     anchors: impl IntoIterator<Item = Option<&'a str>>,
 ) -> Vec<usize> {
-    let positions: Vec<_> = anchors
+    let anchors: Vec<_> = anchors.into_iter().collect();
+    if anchors.is_empty() {
+        return (0..item_count).collect();
+    }
+    // Small queues avoid hashing the whole history. A larger batch amortizes
+    // the index; unanchored inputs do not need a native lookup at all.
+    const INDEX_THRESHOLD: usize = 64;
+    let latest =
+        (anchors.iter().flatten().take(INDEX_THRESHOLD).count() == INDEX_THRESHOLD).then(|| {
+            (0..item_count)
+                .map(|index| (item_id(index), index + 1))
+                .collect::<std::collections::HashMap<_, _>>()
+        });
+    let mut positions: Vec<_> = anchors
         .into_iter()
-        .map(|anchor| {
-            anchor.map_or(0, |anchor| {
-                (0..item_count)
-                    .rev()
-                    .find(|&index| item_id(index) == anchor)
-                    .map_or(item_count, |index| index + 1)
-            })
+        .enumerate()
+        .map(|(pending, anchor)| {
+            (
+                anchor.map_or(0, |anchor| {
+                    latest
+                        .as_ref()
+                        .map_or_else(
+                            || {
+                                (0..item_count)
+                                    .rev()
+                                    .find(|&index| item_id(index) == anchor)
+                                    .map(|index| index + 1)
+                            },
+                            |latest| latest.get(anchor).copied(),
+                        )
+                        .unwrap_or(item_count)
+                }),
+                item_count + pending,
+            )
         })
         .collect();
+    // The pending index breaks ties in submission order.
+    positions.sort_unstable();
     let mut order = Vec::with_capacity(item_count + positions.len());
-    for boundary in 0..=item_count {
-        order.extend(
-            positions
-                .iter()
-                .enumerate()
-                .filter_map(|(pending, &position)| {
-                    (position == boundary).then_some(item_count + pending)
-                }),
-        );
-        if boundary < item_count {
-            order.push(boundary);
-        }
+    let mut start = 0;
+    for (boundary, pending) in positions {
+        order.extend(start..boundary);
+        order.push(pending);
+        start = boundary;
     }
+    order.extend(start..item_count);
     order
 }
 
@@ -621,6 +642,7 @@ mod presentation_tests {
 #[cfg(test)]
 mod projection_tests {
     use super::*;
+    use proptest::prelude::*;
     use serde_json::json;
     macro_rules! turn {
         ($($value:tt)*) => { serde_json::from_value::<Turn>(json!($($value)*)).unwrap() };
@@ -636,6 +658,30 @@ mod projection_tests {
             ),
             [7, 0, 1, 2, 4, 6, 3, 5]
         );
+    }
+    proptest! {
+        #[test]
+        fn input_order_preserves_every_occurrence_and_submission_boundary(
+            native in prop::collection::vec(0u8..8, 0..32),
+            anchors in prop::collection::vec(prop::option::of(0u8..12), 0..196),
+        ) {
+            let ids: Vec<_> = native.iter().map(u8::to_string).collect();
+            let names: Vec<_> = anchors.iter().map(|id| id.map(|id| id.to_string())).collect();
+            let order = source_order(ids.len(), |index| &ids[index], names.iter().map(|id| id.as_deref()));
+            let mut all = order.clone();
+            all.sort_unstable();
+            prop_assert_eq!(all, (0..native.len()+anchors.len()).collect::<Vec<_>>());
+            prop_assert!(order.iter().copied().filter(|&index| index < native.len()).eq(0..native.len()));
+            let boundaries: Vec<_> = anchors.iter().map(|anchor| anchor.map_or(0, |id| {
+                native.iter().rposition(|&old| old == id).map_or(native.len(), |index| index+1)
+            })).collect();
+            for (pending, &boundary) in boundaries.iter().enumerate() {
+                let position = order.iter().position(|&index| index == native.len()+pending).unwrap();
+                prop_assert_eq!(order[..position].iter().filter(|&&index| index < native.len()).count(), boundary);
+            }
+            let pending: Vec<_> = order.iter().filter_map(|&index| index.checked_sub(native.len())).collect();
+            prop_assert!(pending.windows(2).all(|pair| boundaries[pair[0]] != boundaries[pair[1]] || pair[0] < pair[1]));
+        }
     }
     #[test]
     fn duplicate_native_ids_keep_distinct_response_and_activity_indices() {

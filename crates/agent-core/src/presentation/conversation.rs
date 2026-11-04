@@ -6,7 +6,10 @@ use crate::{
 };
 use agent_protocol::requests::Request as WireRequest;
 use serde_json::Value;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 impl Snapshot {
     /// Display pending input before a new conversation has a server ID.
@@ -323,17 +326,6 @@ pub fn project_conversation(
         .map(crate::state::DraftKey::from)
         .unwrap_or_else(|| snapshot.navigation.draft_key.clone());
     let preparation = source.preparation.as_ref();
-    let preparation_echoed = preparation.is_some_and(|preparation| {
-        source
-            .turns
-            .iter()
-            .flatten()
-            .flat_map(|turn| turn.items.iter().flatten())
-            .any(|item| {
-                item.client_input_id.as_ref()
-                    == Some(&preparation.submission.client_user_message_id)
-            })
-    });
     let mut pending: PendingItems = snapshot
         .pending_submissions
         .iter()
@@ -365,27 +357,76 @@ pub fn project_conversation(
         .map(|turn| (turn.source.id.as_str(), turn))
         .collect();
     let native = source.turns.as_deref().unwrap_or_default();
+    let preparation_echoed = preparation.is_some_and(|preparation| {
+        native
+            .iter()
+            .flat_map(|turn| turn.items.iter().flatten())
+            .any(|item| {
+                item.client_input_id.as_ref()
+                    == Some(&preparation.submission.client_user_message_id)
+            })
+    });
+    let positions: HashMap<_, _> = if pending.is_empty() && requests.is_empty() {
+        HashMap::new()
+    } else {
+        native
+            .iter()
+            .enumerate()
+            .map(|(index, turn)| (turn.id.as_str(), index))
+            .collect()
+    };
     // A submission made before any history belongs before the first turn once
     // it arrives. An acknowledged queue entry still waits for its assigned turn.
-    let pending_turn = |pending: &PendingSubmission| match pending.turn_id.as_deref() {
-        Some(id) => native.iter().rposition(|turn| turn.id.as_str() == id),
-        None if !pending.accepted && !native.is_empty() => Some(0),
-        None => None,
-    };
+    let mut pending_by_turn: HashMap<_, Vec<_>> = HashMap::new();
+    for entry @ (_, submission) in &pending {
+        let position = match submission.turn_id.as_deref() {
+            Some(id) => positions.get(id).copied(),
+            None if !submission.accepted && !native.is_empty() => Some(0),
+            None => None,
+        };
+        pending_by_turn.entry(position).or_default().push(entry);
+    }
+    let mut requests_by_turn: HashMap<_, Vec<_>> = HashMap::new();
+    let mut session_requests = Vec::new();
+    for request in requests.values() {
+        if let agent_protocol::requests::RequestTarget::Turn { turn_id, .. } = &request.target
+            && positions.contains_key(turn_id.as_str())
+        {
+            requests_by_turn
+                .entry(turn_id.as_str())
+                .or_default()
+                .push(request);
+        } else {
+            session_requests.push(request);
+        }
+    }
     let turns = native
         .iter()
         .enumerate()
         .map(|(index, turn)| {
-            let handoff = index.checked_sub(1).and_then(|previous| native[previous].provider).zip(turn.provider)
-                .filter(|(from, to)| from != to).map(|(from, to)| format!("{from:?} → {to:?} に切り替えました"));
-            let pending = pending
-                .iter()
-                .filter(|(_, p)| pending_turn(p) == Some(index));
-            let requests = requests.values().filter(|r| matches!(&r.target, agent_protocol::requests::RequestTarget::Turn { turn_id, .. } if turn_id == &turn.id));
+            let handoff = index
+                .checked_sub(1)
+                .and_then(|previous| native[previous].provider)
+                .zip(turn.provider)
+                .filter(|(from, to)| from != to)
+                .map(|(from, to)| format!("{from:?} → {to:?} に切り替えました"));
+            let pending = pending_by_turn
+                .get(&Some(index))
+                .into_iter()
+                .flatten()
+                .copied();
+            let requests = requests_by_turn
+                .get(turn.id.as_str())
+                .into_iter()
+                .flatten()
+                .copied();
             let old = cached.get(turn.id.as_str()).copied();
             if let Some(old) = old
                 && Arc::ptr_eq(turn, &old.source)
-                && old.rows.iter().find_map(|row| match &row.content { ConversationRowContent::ProviderHandoff { text } => Some(text), _ => None }) == handoff.as_ref()
+                && old.rows.iter().find_map(|row| match &row.content {
+                    ConversationRowContent::ProviderHandoff { text } => Some(text),
+                    _ => None,
+                }) == handoff.as_ref()
                 && pending
                     .clone()
                     .map(|(id, p)| (id, Arc::as_ptr(p)))
@@ -413,9 +454,11 @@ pub fn project_conversation(
         .flat_map(|old| &old.queued)
         .map(|item| (item.key(), item))
         .collect();
-    let mut queued: Vec<_> = pending
-        .iter()
-        .filter(|(_, p)| pending_turn(p).is_none())
+    let mut queued: Vec<_> = pending_by_turn
+        .get(&None)
+        .into_iter()
+        .flatten()
+        .copied()
         .map(|(id, p)| {
             RenderedItem::pending(
                 id,
@@ -460,14 +503,8 @@ pub fn project_conversation(
             );
         }
     }
-    let mut session_rows: Vec<_> = requests
-        .values()
-        .filter(|request| match &request.target {
-            agent_protocol::requests::RequestTarget::Session => true,
-            agent_protocol::requests::RequestTarget::Turn { turn_id, .. } => {
-                !native.iter().any(|turn| &turn.id == turn_id)
-            }
-        })
+    let mut session_rows: Vec<_> = session_requests
+        .into_iter()
         .map(|source| ConversationRow {
             id: format!("request:{}", source.id),
             timestamp_ms: None,
@@ -727,14 +764,18 @@ fn render_turn(
         .map(|item| (item.key(), item))
         .collect();
     let native = source.items.as_deref().unwrap_or_default();
+    let echoed: HashSet<_> = if pending.is_empty() {
+        HashSet::new()
+    } else {
+        native
+            .iter()
+            .filter_map(|item| item.client_input_id.as_ref())
+            .collect()
+    };
     // Snapshot keys already make pending IDs unique.
     let retained: Vec<_> = pending
         .iter()
-        .filter(|(id, _)| {
-            !native
-                .iter()
-                .any(|item| item.client_input_id.as_ref() == Some(id))
-        })
+        .filter(|(id, _)| !echoed.contains(id))
         .collect();
     let order = source_order(
         native.len(),
@@ -1255,11 +1296,22 @@ mod tests {
                 .unwrap(),
         );
         thread.turns.as_mut().unwrap().insert(0, old);
-        let loaded = project_snapshot(snapshot, Some(&initial));
+        let loaded = project_snapshot(snapshot.clone(), Some(&initial));
         assert!(
             matches!(&loaded.turns[1].conversation_rows()[0].content, ConversationRowContent::ProviderHandoff { text } if text == "Codex → Claude に切り替えました")
         );
         assert!(!Arc::ptr_eq(&initial.turns[0], &loaded.turns[1]));
+        let thread = Arc::make_mut(
+            Arc::make_mut(&mut snapshot.conversations)
+                .get_mut(&session)
+                .unwrap(),
+        );
+        Arc::make_mut(&mut thread.turns.as_mut().unwrap()[0]).duration_ms = Some(500);
+        let updated = project_snapshot(snapshot, Some(&loaded));
+        assert!(
+            Arc::ptr_eq(&loaded.turns[1], &updated.turns[1]),
+            "unchanged provider boundaries retain their native render identity"
+        );
     }
 
     #[test]
@@ -1417,6 +1469,129 @@ mod tests {
                 .as_str(),
             "1-question"
         );
+    }
+
+    #[test]
+    fn repeated_turns_keep_pending_input_on_the_latest_occurrence_and_route_requests_in_order() {
+        use agent_protocol::{
+            requests::{RequestBody, RequestTarget},
+            session::{ProviderKind, RequestDelivery, SessionRef},
+        };
+        let session = SessionRef::new(ProviderKind::Codex, "thread".into()).unwrap();
+        let mut source = models::Thread {
+            id: Some(session.clone()),
+            turns: Some(
+                ["first", "last"]
+                    .into_iter()
+                    .map(|text| {
+                        Arc::new(models::Turn {
+                            id: "repeat".into(),
+                            status: models::TurnStatus::Completed,
+                            items: Some(vec![Arc::new(models::Item::new(
+                                text.into(),
+                                Default::default(),
+                                models::ItemBody::AssistantText {
+                                    text: text.into(),
+                                    phase: models::AssistantPhase::Final,
+                                },
+                            ))]),
+                            ..Default::default()
+                        })
+                    })
+                    .collect(),
+            ),
+            ..Default::default()
+        };
+        let mut snapshot = Snapshot::default();
+        for (sequence, (id, turn, accepted)) in [
+            ("assigned", Some("repeat"), true),
+            ("missing", Some("absent"), true),
+            ("queued", None, true),
+            ("unassigned", None, false),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            Arc::make_mut(&mut snapshot.pending_submissions).insert(
+                id.into(),
+                Arc::new(PendingSubmission {
+                    sequence: sequence as u64,
+                    submitted_at_ms: None,
+                    draft_key: session.clone().into(),
+                    draft: Arc::new(Draft {
+                        text: id.into(),
+                        ..Default::default()
+                    }),
+                    turn_id: turn.map(Into::into),
+                    after_item_id: None,
+                    accepted,
+                    delivery_unknown: false,
+                }),
+            );
+        }
+        for (id, turn) in [
+            ("a-session", None),
+            ("b-turn", Some("repeat")),
+            ("c-missing", Some("absent")),
+            ("d-turn", Some("repeat")),
+        ] {
+            let request = WireRequest {
+                id: id.into(),
+                target: turn.map_or(RequestTarget::Session, |turn| RequestTarget::Turn {
+                    turn_id: turn.into(),
+                    item_id: None,
+                }),
+                delivery: RequestDelivery::Awaiting,
+                body: RequestBody::ToolExecution {
+                    tool: id.into(),
+                    namespace: None,
+                    arguments: Value::Null,
+                },
+            };
+            source
+                .requests
+                .insert(request.id.clone(), Arc::new(request));
+        }
+        let projected = project_conversation(&snapshot, Arc::new(source), &None);
+        assert_eq!(
+            projected.turns[0]
+                .items()
+                .filter_map(|item| item.data.body.as_deref())
+                .collect::<Vec<_>>(),
+            ["unassigned", "first"]
+        );
+        assert_eq!(
+            projected.turns[1]
+                .items()
+                .filter_map(|item| item.data.body.as_deref())
+                .collect::<Vec<_>>(),
+            ["assigned", "last"]
+        );
+        assert_eq!(
+            projected
+                .queued
+                .iter()
+                .map(|item| item.data.id.as_str())
+                .collect::<Vec<_>>(),
+            ["missing", "queued"]
+        );
+        let requests = |rows: &[ConversationRow]| {
+            rows.iter()
+                .filter_map(|row| match &row.content {
+                    ConversationRowContent::PendingRequest { request } => {
+                        Some(request.id.to_string())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            requests(&projected.session_rows),
+            ["a-session", "c-missing"]
+        );
+        for turn in &projected.turns {
+            assert_eq!(requests(&turn.rows), ["b-turn", "d-turn"]);
+        }
     }
 
     #[test]
