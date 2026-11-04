@@ -466,16 +466,17 @@ pub(super) fn content_item(
 }
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct NativePatchHunk {
+struct NativePatchHunk<'a> {
     old_start: u64,
     old_lines: u64,
     new_start: u64,
     new_lines: u64,
-    lines: Vec<String>,
+    #[serde(borrow)]
+    lines: Vec<&'a str>,
 }
 fn structured_patch(value: &Value) -> Option<String> {
     use std::fmt::Write as _;
-    let hunks: Vec<NativePatchHunk> = serde_json::from_value(value.clone()).ok()?;
+    let hunks: Vec<NativePatchHunk<'_>> = serde::Deserialize::deserialize(value).ok()?;
     if hunks.is_empty() {
         return None;
     }
@@ -495,11 +496,16 @@ fn structured_patch(value: &Value) -> Option<String> {
         )
         .ok()?;
         for line in hunk.lines {
-            writeln!(diff, "{line}").ok()?;
+            diff.push_str(line);
+            diff.push('\n');
         }
     }
     Some(diff)
 }
+
+#[cfg(test)]
+mod structured_patch_tests;
+
 pub(super) fn tool_result_body(body: &ItemBody, content: &Value, metadata: &Value) -> ItemBody {
     let mut body = body.clone();
     let output = || {
