@@ -19,25 +19,20 @@ pub fn desktop_file_reference(
     cwd: &str,
     home: Option<&str>,
 ) -> Option<(MarkdownFileReference, Option<String>)> {
-    let file = file_reference(source, Syntax::Link)?;
-    resolve_file(file, cwd, home)
+    let mut file = file_reference(source, Syntax::Link)?;
+    let cwd = file_host_path(cwd.into(), home.map(str::to_owned));
+    let (path, lookup) = resolve_path(&file.path, &cwd, home)?;
+    file.path = path;
+    Some((file, lookup))
 }
 
-fn resolve_file(
-    mut file: MarkdownFileReference,
-    cwd: &str,
-    home: Option<&str>,
-) -> Option<(MarkdownFileReference, Option<String>)> {
-    let cwd = file_host_path(cwd.into(), home.map(str::to_owned));
-    let lookup =
-        (!paths::absolute(&file.path) && !file.path.starts_with('~')).then(|| file.path.clone());
-    file.path = file_host_path(paths::resolve(&file.path, &cwd)?, home.map(str::to_owned));
-    if agent_protocol::paths::is_network_host_path(&file.path)
-        && paths::relative(&file.path, &cwd).is_none()
-    {
+fn resolve_path(path: &str, cwd: &str, home: Option<&str>) -> Option<(String, Option<String>)> {
+    let lookup = (!paths::absolute(path) && !path.starts_with('~')).then(|| path.to_owned());
+    let path = file_host_path(paths::resolve(path, cwd)?, home.map(str::to_owned));
+    if agent_protocol::paths::is_network_host_path(&path) && paths::relative(&path, cwd).is_none() {
         return None;
     }
-    Some((file, lookup))
+    Some((path, lookup))
 }
 
 pub(in crate::presentation::markdown) fn file_chips(
@@ -48,6 +43,7 @@ pub(in crate::presentation::markdown) fn file_chips(
 ) -> HashMap<usize, MarkdownFileChip> {
     let mut chips = HashMap::new();
     let definitions = definitions(root);
+    let cwd = file_host_path(cwd.into(), home.map(str::to_owned));
     let resolve = |node: &Node| -> Option<MarkdownFileChip> {
         let (target, code) = match node {
             Node::Link(link) => (link.url.as_str(), None),
@@ -55,7 +51,7 @@ pub(in crate::presentation::markdown) fn file_chips(
             Node::InlineCode(code) => (code.value.as_str(), Some(code)),
             _ => return None,
         };
-        let file = file_reference(
+        let mut file = file_reference(
             target,
             if code.is_some() {
                 Syntax::DesktopCode
@@ -63,9 +59,10 @@ pub(in crate::presentation::markdown) fn file_chips(
                 Syntax::Link
             },
         )?;
-        let label_file = file.clone();
-        let (file, lookup_path) = resolve_file(file, cwd, home)?;
+        let (path, lookup_path) = resolve_path(&file.path, &cwd, home)?;
         let label = caption_text(node);
+        let show_caption = code.is_none() && !is_file_label(&label, &file);
+        file.path = path;
         let position = node.position()?;
         let authored = &source[position.start.offset..position.end.offset];
         let copy_markdown = if let Some(code) = code {
@@ -101,7 +98,7 @@ pub(in crate::presentation::markdown) fn file_chips(
             format!("[{label}]({target})")
         };
         Some(MarkdownFileChip {
-            caption: (code.is_none() && !is_file_label(&label, &label_file)).then(|| {
+            caption: show_caption.then(|| {
                 let mut runs = Vec::new();
                 // Preserve inline syntax from the original AST. Parsing the
                 // caption alone would turn e.g. "# design" into a heading.
@@ -139,7 +136,17 @@ pub(in crate::presentation::markdown) fn file_chips(
     visit(root, &resolve, &mut chips);
     let labels = file_labels(chips.values().map(|chip| chip.file.path.as_str()));
     for chip in chips.values_mut() {
-        relabel(&mut chip.file, &labels);
+        let parent = if chip.file.path.contains('\\') {
+            labels.get(&chip.file.path.replace('\\', "/"))
+        } else {
+            labels.get(&chip.file.path)
+        };
+        chip.file.label = file_label(
+            &chip.file.path,
+            parent.map(String::as_str),
+            chip.file.line,
+            chip.file.column,
+        );
     }
     chips
 }

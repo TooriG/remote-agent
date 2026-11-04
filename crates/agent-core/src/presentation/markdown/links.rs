@@ -10,6 +10,7 @@ pub use lookup::{
 pub use paths::basename as file_basename;
 
 pub(super) use detection::Syntax;
+use std::{borrow::Cow, fmt::Write};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
@@ -135,15 +136,13 @@ pub(super) fn file_reference(source: &str, syntax: Syntax) -> Option<MarkdownFil
         return None;
     }
     let kind = markdown_file_kind(file_path);
-    let mut file = MarkdownFileReference {
+    Some(MarkdownFileReference {
         path: file_path.into(),
-        label: String::new(),
+        label: file_label(file_path, None, line, column),
         kind,
         line,
         column,
-    };
-    file.label = file_label(&file, None);
-    Some(file)
+    })
 }
 
 fn source_parts(source: &str) -> Option<(String, String)> {
@@ -180,13 +179,19 @@ pub(super) fn is_file_label(label: &str, file: &MarkdownFileReference) -> bool {
     {
         return false;
     }
+    let windows = paths::windows(&file.path);
     let normalize = |path: &str| {
-        let path = path.replace('\\', "/");
+        let normalized = if path.contains('\\') {
+            Cow::Owned(path.replace('\\', "/"))
+        } else {
+            Cow::Borrowed(path)
+        };
+        let path = normalized.as_ref();
         let path = path
             .strip_prefix("./")
-            .unwrap_or(&path)
+            .unwrap_or(path)
             .trim_end_matches('/');
-        if paths::windows(&file.path) {
+        if windows {
             path.to_lowercase()
         } else {
             path.into()
@@ -194,7 +199,11 @@ pub(super) fn is_file_label(label: &str, file: &MarkdownFileReference) -> bool {
     };
     let label = normalize(label_path);
     let destination = normalize(&file.path);
-    label.is_empty() || destination == label || destination.ends_with(&format!("/{label}"))
+    label.is_empty()
+        || destination == label
+        || destination
+            .strip_suffix(&label)
+            .is_some_and(|prefix| prefix.ends_with('/'))
 }
 
 /// Home expansion is performed only by the connected Host, never inferred from cwd.
@@ -215,20 +224,19 @@ pub fn markdown_file_target(
     Some(file)
 }
 
-fn file_label(file: &MarkdownFileReference, parent: Option<&str>) -> String {
-    let mut parts = vec![paths::basename(&file.path).to_owned()];
+fn file_label(path: &str, parent: Option<&str>, line: Option<u32>, column: Option<u32>) -> String {
+    let mut label = paths::basename(path).to_owned();
     if let Some(parent) = parent {
-        parts.push(parent.into());
+        label.push_str(" · ");
+        label.push_str(parent);
     }
-    if let Some(line) = file.line {
-        parts.push(format!(
-            "L{line}{}",
-            file.column
-                .map(|column| format!(":C{column}"))
-                .unwrap_or_default()
-        ));
+    if let Some(line) = line {
+        write!(label, " · L{line}").expect("String write cannot fail");
+        if let Some(column) = column {
+            write!(label, ":C{column}").expect("String write cannot fail");
+        }
     }
-    parts.join(" · ")
+    label
 }
 
 fn file_labels<'a>(
@@ -284,15 +292,6 @@ fn file_labels<'a>(
         }
     }
     labels
-}
-
-fn relabel(file: &mut MarkdownFileReference, labels: &std::collections::HashMap<String, String>) {
-    file.label = file_label(
-        file,
-        labels
-            .get(&file.path.replace('\\', "/"))
-            .map(String::as_str),
-    );
 }
 
 #[cfg(test)]

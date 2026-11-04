@@ -150,6 +150,49 @@ fn desktop_parents_expand_until_distinct_even_when_one_path_is_a_suffix() {
 }
 
 #[test]
+fn file_position_labels_keep_unicode_and_ignore_a_column_without_a_line() {
+    for (source, label) in [
+        ("src/資料.rs", "資料.rs"),
+        ("src/資料.rs:12", "資料.rs · L12"),
+        ("src/資料.rs:12:3", "資料.rs · L12:C3"),
+        ("src/資料.rs:0:3", "資料.rs"),
+    ] {
+        assert_eq!(file_reference(source, Syntax::Link).unwrap().label, label);
+    }
+}
+
+#[test]
+fn home_relative_workspaces_preserve_authored_captions_and_resolved_targets() {
+    let source =
+        "[../src/main.rs:7](../src/main.rs:7) [**説明**](src/main.rs) [guide.md](~/docs/guide.md)";
+    for (home, relative, absolute) in [
+        ("/Users/fixture", "~/project", "/Users/fixture/project"),
+        (
+            r"C:\Users\fixture",
+            r"~\project",
+            r"C:\Users\fixture\project",
+        ),
+    ] {
+        let expanded = super::super::markdown_presentation(source, relative, Some(home));
+        let canonical = super::super::markdown_presentation(source, absolute, Some(home));
+        assert_eq!(expanded.files, canonical.files);
+        assert_eq!(expanded.files.len(), 3);
+        assert!(expanded.files[&0].caption.is_none());
+        assert!(
+            expanded.files[&source.find("[**").unwrap()]
+                .caption
+                .is_some()
+        );
+        for path in ["../src/main.rs:7", "~/docs/guide.md"] {
+            assert_eq!(
+                desktop_file_reference(path, relative, Some(home)),
+                desktop_file_reference(path, absolute, Some(home)),
+            );
+        }
+    }
+}
+
+#[test]
 fn disambiguation_handles_normalized_duplicates_and_identical_parent_components() {
     let labels = file_labels(
         [
