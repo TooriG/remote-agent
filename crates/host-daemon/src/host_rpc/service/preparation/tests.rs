@@ -147,8 +147,11 @@ async fn preparation_publishes_worktree_setup_only_when_it_creates_a_checkout() 
         );
         if selected {
             assert_eq!(
-                reopened.response.thread.cwd.as_deref() != repository.to_str(),
-                automatic
+                dunce::canonicalize(reopened.response.thread.cwd.as_deref().unwrap()).unwrap()
+                    != dunce::canonicalize(&repository).unwrap(),
+                automatic,
+                "automatic={automatic}: the selected workspace is {repository:?}, the task uses {:?}",
+                reopened.response.thread.cwd,
             );
         }
         drop(blocked);
