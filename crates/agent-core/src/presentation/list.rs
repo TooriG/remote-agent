@@ -477,14 +477,22 @@ fn thread_summaries<'a>(
     project_ids: &HashSet<&str>,
     project_override: Option<&str>,
 ) -> Vec<ThreadSummary> {
+    let mut indexed = None;
     data.filter(|thread| thread.parent_id.is_none())
-        .filter_map(|thread| {
-            let id = thread.id.clone()?;
-            let active = task_active(active.get(&id).copied(), thread.status);
-            let unread = unread.contains(&id);
-            let waiting = waiting.contains(&id);
-            Some(ThreadSummary {
-                id,
+        .filter_map(|thread| Some((thread, thread.id.as_ref()?)))
+        .enumerate()
+        .map(|(index, (thread, id))| {
+            let active = task_active(active.get(id).copied(), thread.status);
+            let unread = unread.contains(id);
+            let waiting = if waiting.len() >= 64 && index >= 64 {
+                indexed
+                    .get_or_insert_with(|| waiting.iter().collect::<HashSet<_>>())
+                    .contains(id)
+            } else {
+                waiting.contains(id)
+            };
+            ThreadSummary {
+                id: id.clone(),
                 title: task_title(thread.name.as_deref(), thread.preview.as_deref()).to_owned()
                     + if thread.list_stale == Some(true) {
                         "（保存済み・未確認）"
@@ -499,7 +507,7 @@ fn thread_summaries<'a>(
                 waiting,
                 unread,
                 worktree_status: thread.worktree_status,
-            })
+            }
         })
         .collect()
 }
@@ -508,6 +516,8 @@ fn thread_summaries<'a>(
 mod placed_tests;
 #[cfg(test)]
 mod root_tests;
+#[cfg(test)]
+mod waiting_tests;
 
 #[cfg(test)]
 mod tests {

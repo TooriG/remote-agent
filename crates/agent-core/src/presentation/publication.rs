@@ -26,7 +26,12 @@ impl Snapshot {
             && same_list
             && Arc::ptr_eq(&self.account, &other.account)
             && Arc::ptr_eq(&self.activity, &other.activity)
-            && self.waiting_sessions() == other.waiting_sessions()
+            && (self
+                .task_activity
+                .as_ref()
+                .zip(other.task_activity.as_ref())
+                .is_some_and(|(a, b)| Arc::ptr_eq(a, b))
+                || self.waiting_sessions() == other.waiting_sessions())
             && Arc::ptr_eq(&self.expanded_projects, &other.expanded_projects)
             && Arc::ptr_eq(&self.project_preferences, &other.project_preferences)
             && self.storage_scope == other.storage_scope
@@ -277,5 +282,43 @@ mod tests {
         let connected = next.changes(before);
         assert!(connected.reconnected && connected.list);
         assert!(!connected.models && !connected.conversation);
+    }
+    #[test]
+    fn waiting_publication_keeps_distinct_state_and_empty_state_comparisons() {
+        use crate::session::{ProviderKind, SessionRef};
+        use agent_protocol::live_activity::{TaskActivityState, TaskActivitySummary};
+        let activity = |count| {
+            Arc::new(TaskActivityState {
+                revision: 1,
+                statuses: vec![],
+                waiting: (0..count)
+                    .map(|index| {
+                        SessionRef::new(ProviderKind::Codex, format!("task{index}")).unwrap()
+                    })
+                    .collect(),
+                unread: vec![],
+                display: TaskActivitySummary::default().display(),
+            })
+        };
+        for count in [0, 1, 128, 4000] {
+            let previous = Arc::new(Snapshot {
+                task_activity: Some(activity(count)),
+                ..Default::default()
+            });
+            let mut next = previous.as_ref().clone();
+            assert!(next.list_unchanged(previous.clone()));
+            Arc::make_mut(next.task_activity.as_mut().unwrap()).revision += 1;
+            assert!(next.list_unchanged(previous.clone()));
+            if count > 0 {
+                Arc::make_mut(next.task_activity.as_mut().unwrap())
+                    .waiting
+                    .last_mut()
+                    .unwrap()
+                    .provider = ProviderKind::Claude;
+                assert!(!next.list_unchanged(previous.clone()));
+            }
+            next.task_activity = None;
+            assert_eq!(next.list_unchanged(previous.clone()), count == 0);
+        }
     }
 }
