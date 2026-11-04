@@ -1,5 +1,6 @@
 //! Conversation lists: recent chats, project pages, decorations and sub-agents.
 use super::*;
+use std::collections::{HashMap, hash_map::Entry};
 
 pub use agent_protocol::operations::AddProject;
 
@@ -96,7 +97,7 @@ impl Operation for ReadListDecorations {
         if output.statuses.is_empty() {
             return Vec::new();
         }
-        let mut statuses: std::collections::HashMap<_, _> = output
+        let mut statuses: HashMap<_, _> = output
             .statuses
             .iter()
             .map(|(id, status)| (id, (*status, None)))
@@ -193,6 +194,53 @@ impl Operation for ListAgents {
     }
 }
 
+fn merge_newer_rows(
+    mut received: Vec<crate::models::Thread>,
+    cached: &[crate::models::Thread],
+    revision: u64,
+) -> Vec<crate::models::Thread> {
+    let newer: Vec<_> = cached
+        .iter()
+        .filter(|row| row.list_revision > revision)
+        .collect();
+    if newer.len() < 128 || received.len() > newer.len().saturating_mul(4) {
+        for cached in newer {
+            if let Some(row) = received.iter_mut().find(|row| row.id == cached.id) {
+                *row = cached.clone();
+            } else {
+                received.push(cached.clone());
+            }
+        }
+        return received;
+    }
+
+    // The last qualifying notice wins, while a new ID is appended where its
+    // first notice appeared. Only the first received occurrence is replaced.
+    let mut positions = HashMap::<_, usize>::with_capacity(newer.len());
+    let mut updates: Vec<(Option<usize>, &crate::models::Thread)> = Vec::with_capacity(newer.len());
+    for cached in newer {
+        match positions.entry(cached.id.as_ref()) {
+            Entry::Occupied(entry) => updates[*entry.get()].1 = cached,
+            Entry::Vacant(entry) => {
+                entry.insert(updates.len());
+                updates.push((None, cached));
+            }
+        }
+    }
+    for (index, row) in received.iter().enumerate() {
+        if let Some(&position) = positions.get(&row.id.as_ref()) {
+            updates[position].0.get_or_insert(index);
+        }
+    }
+    for (position, cached) in updates {
+        match position {
+            Some(index) => received[index] = cached.clone(),
+            None => received.push(cached.clone()),
+        }
+    }
+    received
+}
+
 fn merge_received(
     mut threads: crate::models::ThreadList,
     previous: Option<&crate::models::ThreadList>,
@@ -200,17 +248,7 @@ fn merge_received(
     if let Some(previous) = previous {
         // Notifications carry complete list metadata. Preserve only changes
         // newer than this read; a later explicit refresh can remove old rows.
-        for cached in previous
-            .data
-            .iter()
-            .filter(|row| row.list_revision > threads.revision)
-        {
-            if let Some(row) = threads.data.iter_mut().find(|row| row.id == cached.id) {
-                *row = cached.clone();
-            } else {
-                threads.data.push(cached.clone());
-            }
-        }
+        threads.data = merge_newer_rows(threads.data, &previous.data, threads.revision);
         let newer_projects: Vec<_> = previous
             .projects
             .iter()
@@ -252,7 +290,7 @@ fn merge_received(
                         old.worktree_status,
                     )
                 })
-                .collect::<std::collections::HashMap<_, _>>()
+                .collect::<HashMap<_, _>>()
         });
         for thread in &mut threads.data {
             let status = match &statuses {

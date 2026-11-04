@@ -37,6 +37,98 @@ fn list(data: Vec<Thread>) -> ThreadList {
     }
 }
 
+fn versioned(id: Option<SessionRef>, name: &str, revision: u64) -> Thread {
+    Thread {
+        id,
+        name: Some(name.into()),
+        preview: Some(format!("preview-{name}")),
+        cwd: Some(format!("/repo/{name}")),
+        status: crate::models::SessionStatus::Idle,
+        list_revision: revision,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn newer_notices_keep_last_values_first_positions_and_duplicate_received_rows() {
+    for count in [16, 127, 128, 129, 512] {
+        let existing = Some(session(ProviderKind::Codex, "existing"));
+        let a = Some(session(ProviderKind::Codex, "a"));
+        let b = Some(session(ProviderKind::Codex, "b"));
+        let last = versioned(existing.clone(), "last", 2);
+        let last_anonymous = versioned(None, "anonymous-last", 2);
+        let appended_a = versioned(a.clone(), "a-last", 2);
+        let appended_b = versioned(b, "b", 2);
+        let duplicate = versioned(existing.clone(), "duplicate", 0);
+        let anonymous_duplicate = versioned(None, "anonymous-duplicate", 0);
+        let mut received = vec![
+            versioned(existing.clone(), "received", 0),
+            duplicate.clone(),
+            versioned(None, "anonymous", 0),
+            anonymous_duplicate.clone(),
+        ];
+        let mut expected = vec![
+            last.clone(),
+            duplicate,
+            last_anonymous.clone(),
+            anonymous_duplicate,
+        ];
+        let mut previous = vec![
+            versioned(a, "a-first", 2),
+            versioned(existing, "first", 3),
+            appended_b.clone(),
+            appended_a.clone(),
+            last,
+            versioned(None, "anonymous-first", 4),
+            last_anonymous,
+        ];
+        while previous.len() < count {
+            let id = Some(session(
+                ProviderKind::Codex,
+                &format!("padding{}", previous.len()),
+            ));
+            let cached = versioned(id.clone(), "cached-padding", 2);
+            received.push(versioned(id, "received-padding", 0));
+            expected.push(cached.clone());
+            previous.push(cached);
+        }
+        previous.push(versioned(
+            Some(session(ProviderKind::Codex, "ignored")),
+            "old",
+            1,
+        ));
+        expected.extend([appended_a, appended_b]);
+        assert_eq!(
+            merge_received(list(received), Some(&list(previous))).data,
+            expected
+        );
+    }
+}
+
+proptest! {
+    #[test]
+    fn only_notices_newer_than_the_read_replace_each_provider_scoped_row(
+        fresh in proptest::collection::vec(any::<bool>(), 0..512),
+    ) {
+        let mut previous = Vec::new();
+        let mut received = Vec::new();
+        let mut expected = Vec::new();
+        for (index, fresh) in fresh.into_iter().enumerate() {
+            let provider = if index % 2 == 0 { ProviderKind::Codex } else { ProviderKind::Claude };
+            let id = Some(session(provider, &format!("task{}", index / 2)));
+            let cached = versioned(id.clone(), "cached", if fresh { 2 } else { 1 });
+            let read = versioned(id, "received", 0);
+            expected.push(if fresh { cached.clone() } else { read.clone() });
+            previous.push(cached);
+            received.push(read);
+        }
+        received.reverse();
+        expected.reverse();
+        let merged = merge_received(list(received), Some(&list(previous)));
+        prop_assert_eq!(merged.data, expected);
+    }
+}
+
 #[test]
 fn received_lists_keep_the_first_exact_source_including_absent_fields() {
     for count in [16, 63, 64, 65, 127, 128, 129, 512] {
