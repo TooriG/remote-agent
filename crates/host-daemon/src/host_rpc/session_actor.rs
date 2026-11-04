@@ -1,5 +1,6 @@
 //! Live execution and unconfirmed input delivery. Native history is never retained here.
 use agent_protocol::models::Thread;
+use std::collections::HashSet;
 
 #[derive(Default)]
 pub(super) struct SessionActor {
@@ -23,26 +24,51 @@ impl SessionActor {
         // Retire evidence only once the provider has echoed the input in a
         // finished turn. Completion alone says nothing about a queued input or
         // an RPC still in flight on another client.
-        self.timeline.submissions.retain(|id, delivery| {
-            matches!(
+        let confirmed: HashSet<_> = if self.timeline.submissions.values().any(|delivery| {
+            !matches!(
                 delivery,
                 agent_protocol::session::SubmissionDelivery::Sending
-            ) || !self
-                .timeline
+            )
+        }) {
+            self.timeline
                 .turns
                 .iter()
                 .flatten()
                 .filter(|turn| turn.status != agent_protocol::execution::TurnStatus::Running)
                 .flat_map(|turn| turn.items.iter().flatten())
-                .any(|item| {
+                .filter(|item| {
                     matches!(
                         item.body(),
                         agent_protocol::items::ItemBody::UserMessage { .. }
-                    ) && item.client_input_id.as_ref() == Some(id)
+                    )
                 })
+                .filter_map(|item| item.client_input_id.as_ref())
+                .collect()
+        } else {
+            HashSet::new()
+        };
+        self.timeline.submissions.retain(|id, delivery| {
+            matches!(
+                delivery,
+                agent_protocol::session::SubmissionDelivery::Sending
+            ) || !confirmed.contains(id)
         });
+        let accepted_turns: HashSet<_> = self
+            .timeline
+            .submissions
+            .values()
+            .filter_map(|delivery| match delivery {
+                agent_protocol::session::SubmissionDelivery::Accepted { turn_id: Some(id) } => {
+                    Some(id)
+                }
+                _ => None,
+            })
+            .collect();
         if let Some(turns) = &mut self.timeline.turns {
-            turns.retain(|turn| turn.status == agent_protocol::execution::TurnStatus::Running || self.timeline.submissions.values().any(|delivery| matches!(delivery, agent_protocol::session::SubmissionDelivery::Accepted {turn_id:Some(id)} if id == &turn.id)));
+            turns.retain(|turn| {
+                turn.status == agent_protocol::execution::TurnStatus::Running
+                    || accepted_turns.contains(&turn.id)
+            });
         }
         if self.timeline.turns.as_ref().is_some_and(Vec::is_empty) {
             self.timeline.turns = None;
@@ -152,6 +178,128 @@ mod tests {
             });
             assert_eq!(projected.turns.as_ref().unwrap(), &expected);
         }
+    }
+
+    #[test]
+    fn leases_running_echoes_and_delivery_kinds_keep_independent_lifetimes() {
+        use agent_protocol::{
+            items::{Item, ItemBody},
+            models::{Turn, TurnStatus},
+        };
+        use std::sync::Arc;
+        let user = |id: &str| {
+            let mut item = Item::new(
+                id.into(),
+                Default::default(),
+                ItemBody::UserMessage {
+                    text: None,
+                    content: Vec::new(),
+                },
+            );
+            item.client_input_id = Some(id.into());
+            Arc::new(item)
+        };
+        let mut other = Item::new("other".into(), Default::default(), ItemBody::Sleep {});
+        other.client_input_id = Some("not-user".into());
+        let mut actor = SessionActor {
+            leases: 1,
+            timeline: agent_protocol::session::Timeline {
+                turns: Some(vec![
+                    Arc::new(Turn {
+                        id: "done".into(),
+                        status: TurnStatus::Completed,
+                        items: Some(vec![user("retired"), user("sending"), Arc::new(other)]),
+                        ..Default::default()
+                    }),
+                    Arc::new(Turn {
+                        id: "active".into(),
+                        status: TurnStatus::Running,
+                        items: Some(vec![user("running")]),
+                        ..Default::default()
+                    }),
+                    Arc::new(Turn {
+                        id: "awaiting".into(),
+                        status: TurnStatus::Completed,
+                        ..Default::default()
+                    }),
+                ]),
+                submissions: [
+                    (
+                        "retired".into(),
+                        SubmissionDelivery::Accepted {
+                            turn_id: Some("done".into()),
+                        },
+                    ),
+                    ("sending".into(), SubmissionDelivery::Sending),
+                    ("not-user".into(), SubmissionDelivery::Unknown),
+                    (
+                        "running".into(),
+                        SubmissionDelivery::Accepted {
+                            turn_id: Some("active".into()),
+                        },
+                    ),
+                    (
+                        "awaiting".into(),
+                        SubmissionDelivery::Accepted {
+                            turn_id: Some("awaiting".into()),
+                        },
+                    ),
+                ]
+                .into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let held = actor.timeline.clone();
+        assert!(actor.release());
+        assert_eq!(
+            actor.timeline, held,
+            "in-flight leases retain every observation"
+        );
+        actor.leases = 0;
+        assert!(actor.release());
+        assert!(!actor.timeline.submissions.contains_key("retired"));
+        assert_eq!(actor.timeline.submissions.len(), 4);
+        assert_eq!(
+            actor
+                .timeline
+                .turns
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|turn| turn.id.as_str())
+                .collect::<Vec<_>>(),
+            ["active", "awaiting"]
+        );
+        Arc::make_mut(&mut actor.timeline.turns.as_mut().unwrap()[0]).status =
+            TurnStatus::Completed;
+        assert!(actor.release());
+        assert!(!actor.timeline.submissions.contains_key("running"));
+        assert_eq!(actor.timeline.submissions.len(), 3);
+        assert_eq!(
+            actor
+                .timeline
+                .turns
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|turn| turn.id.as_str())
+                .collect::<Vec<_>>(),
+            ["awaiting"]
+        );
+        actor.timeline.submissions.remove("sending");
+        Arc::make_mut(&mut actor.timeline.turns.as_mut().unwrap()[0]).items =
+            Some(vec![user("awaiting")]);
+        assert!(actor.release());
+        assert!(!actor.timeline.submissions.contains_key("awaiting"));
+        assert_eq!(actor.timeline.submissions.len(), 1);
+        assert!(actor.timeline.turns.is_none());
+        actor.timeline.submissions.clear();
+        assert!(
+            !actor.release(),
+            "an owner without live work can be reclaimed"
+        );
+        assert!(actor.timeline.turns.is_none());
     }
 
     #[test]
