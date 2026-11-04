@@ -51,9 +51,6 @@ internal fun PreparationCard(
         preparation.retry?.let { retry ->
             TextButton(onClick = { perform(Intent.RetryPreparation(retry)) {} }) { Text(language.text("再試行")) }
         }
-        preparation.interrupt?.let { interrupt ->
-            TextButton(onClick = { perform(Intent.Interrupt(interrupt)) {} }) { Text(language.text("停止")) }
-        }
     }
 }
 

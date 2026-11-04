@@ -172,7 +172,15 @@ pub use agent_protocol::operations::ReviewWorkspace;
 /// Navigation and notifications already belong to an epoch. Their review read
 /// shares it instead of dispatching a second intent that invalidates siblings.
 pub(in crate::state) fn review_workspace(snapshot: &mut Snapshot) -> Option<Effect> {
-    if snapshot.selected_directory().is_empty() {
+    // A preparing task still sits in its source checkout until the Host moves
+    // it to a worktree; those changes are not the task's. T3 Code shows none.
+    let preparing = snapshot
+        .navigation
+        .thread_id
+        .as_ref()
+        .and_then(|id| snapshot.conversations.get(id))
+        .is_some_and(|thread| thread.preparation.is_some());
+    if preparing || snapshot.selected_directory().is_empty() {
         if snapshot.workspace.review.is_some() || snapshot.workspace.review_cwd.is_some() {
             let workspace = Arc::make_mut(&mut snapshot.workspace);
             workspace.review = None;

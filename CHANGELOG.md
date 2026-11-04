@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Show a starting task as T3 Code does: the working indicator replaces the separate preparing and sending notices, and the composer's stop button cancels preparation. The changed-files summary no longer flashes the source checkout's changes before the task moves to its worktree.
 - Verify repository contracts and the Linux build for every main revision in a separate Portable checks workflow, so results arrive within minutes while Native clients acceptance continues on the newest main revision. Retire replaced Rust dependency caches after each acceptance run so live caches stay within the repository budget, report the duration of each iPhone build phase, and measure flaky iPhone acceptance nightly in three fresh rounds with a job summary per test.
 - Switch Codex, Claude and DSH within one conversation and workspace. Reuse each provider's native session when returning and deliver only missing history, with bounded portable context and an authenticated Host history reader. Preserve native history, conversation identity, drafts and approvals; retain delivery evidence across Host restarts and refuse automatic replay of uncertain inputs. Expose switching on desktop, iPhone and Android.
 - Allow compatible Host and client releases to update independently using named MessagePack RPC records. Keep connections alive after unsupported operations or unreadable request parameters, ignore new event kinds, and retain binary attachments. Updating from the positional protocol requires updating both Host and clients once.

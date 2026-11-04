@@ -93,8 +93,9 @@ pub enum ConversationRowContent {
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct PreparationPresentation {
     pub text: String,
+    /// Rendered like a running turn's working row, as T3 Code shows startup.
+    pub in_progress: bool,
     pub retry: Option<agent_protocol::operations::RetryPreparation>,
-    pub interrupt: Option<agent_protocol::operations::Interrupt>,
 }
 #[derive(Clone, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
@@ -475,9 +476,14 @@ pub fn project_conversation(
             },
         })
         .collect();
-    if let Some(preparation) = preparation.filter(|preparation| {
-        !(preparation_echoed
-            && preparation.status == agent_protocol::session::PreparationStatus::Unknown)
+    if let Some(preparation) = preparation.filter(|preparation| match preparation.status {
+        agent_protocol::session::PreparationStatus::Unknown => !preparation_echoed,
+        // A provider turn that already runs shows its own working row.
+        agent_protocol::session::PreparationStatus::Preparing
+        | agent_protocol::session::PreparationStatus::Sending => !native
+            .iter()
+            .any(|turn| turn.status == models::TurnStatus::Running),
+        _ => true,
     }) {
         session_rows.push(ConversationRow {
             id: "preparation".into(),
@@ -499,20 +505,18 @@ pub fn project_conversation(
 fn preparation_presentation(
     preparation: &agent_protocol::session::SessionPreparation,
 ) -> PreparationPresentation {
-    use agent_protocol::{
-        operations::{Interrupt, RetryPreparation},
-        session::PreparationStatus,
-    };
-    let input = &preparation.submission;
-    let (text, retry, interrupt) = match &preparation.status {
-        PreparationStatus::Preparing => ("タスクを準備中…".into(), false, true),
-        PreparationStatus::Sending => ("AIに送信中…".into(), false, false),
+    use agent_protocol::{operations::RetryPreparation, session::PreparationStatus};
+    // Startup reads as ordinary work; the composer's stop control interrupts it.
+    let (text, in_progress, retry) = match &preparation.status {
+        PreparationStatus::Preparing | PreparationStatus::Sending => {
+            ("作業中…".into(), true, false)
+        }
         PreparationStatus::Failed { error } => (
             format!("準備に失敗しました: {}", error.message),
-            true,
             false,
+            true,
         ),
-        PreparationStatus::Interrupted => ("準備を停止しました。".into(), true, false),
+        PreparationStatus::Interrupted => ("準備を停止しました。".into(), false, true),
         PreparationStatus::Unknown => (
             "送信結果を確認できません。二重実行を避けるため再送していません。".into(),
             false,
@@ -521,12 +525,9 @@ fn preparation_presentation(
     };
     PreparationPresentation {
         text,
+        in_progress,
         retry: retry.then(|| RetryPreparation {
-            thread_id: input.thread_id.clone(),
-        }),
-        interrupt: interrupt.then(|| Interrupt {
-            thread_id: input.thread_id.clone(),
-            turn_id: input.client_user_message_id.to_string().into(),
+            thread_id: preparation.submission.thread_id.clone(),
         }),
     }
 }
@@ -587,7 +588,7 @@ mod preparation_tests {
         else {
             panic!("missing preparation")
         };
-        assert!(preparation.interrupt.is_some() && preparation.retry.is_none());
+        assert!(preparation.in_progress && preparation.retry.is_none());
         thread.preparation.as_mut().unwrap().status = PreparationStatus::Sending;
         thread.turns = Some(vec![Arc::new(models::Turn {
             id: "starting".into(),
@@ -597,6 +598,14 @@ mod preparation_tests {
         let starting =
             project_conversation(&snapshot, Arc::new(thread.clone()), &Some(prepared.clone()));
         assert_eq!(starting.queued.len(), 1);
+        // The running provider turn's own working row replaces the startup row.
+        assert!(starting.session_rows.is_empty());
+        assert!(
+            starting.turns[0]
+                .rows
+                .iter()
+                .any(|row| matches!(row.content, ConversationRowContent::InProgress { .. }))
+        );
         assert!(
             !starting.turns[0]
                 .rows
@@ -614,7 +623,7 @@ mod preparation_tests {
         else {
             panic!("missing failure")
         };
-        assert!(preparation.retry.is_some() && preparation.interrupt.is_none());
+        assert!(preparation.retry.is_some() && !preparation.in_progress);
         let mut user = models::Item::new(
             "native-input".into(),
             models::ItemStatus::Completed,

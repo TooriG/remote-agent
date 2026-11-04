@@ -142,7 +142,20 @@ pub struct Turn {
 pub use crate::{execution::*, items::*};
 
 impl Thread {
+    /// The turn a stop request targets. The Host routes a preparing task's
+    /// submission ID to its preparation, so the same stop control covers both.
     pub fn active_turn_id(&self) -> Option<crate::ids::TurnId> {
+        if let Some(preparation) = self.preparation.as_ref().filter(|preparation| {
+            preparation.status == crate::session::PreparationStatus::Preparing
+        }) {
+            return Some(
+                preparation
+                    .submission
+                    .client_user_message_id
+                    .to_string()
+                    .into(),
+            );
+        }
         self.turns
             .as_ref()?
             .iter()
@@ -435,6 +448,42 @@ mod tests {
             };
             prop_assert_eq!(status, expected);
         }
+    }
+
+    #[test]
+    fn stop_targets_a_preparing_submission_until_the_host_sends_it() {
+        use crate::session::{PreparationStatus, ProviderKind, SessionPreparation, SessionRef};
+        let id = SessionRef::new(ProviderKind::Codex, "task".into()).unwrap();
+        let mut thread = Thread {
+            preparation: Some(SessionPreparation {
+                submission: crate::operations::Submission {
+                    thread_id: id,
+                    client_user_message_id: "input".into(),
+                    input: Vec::new(),
+                    model: None,
+                    effort: None,
+                    service_tier: None,
+                },
+                status: PreparationStatus::Preparing,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(thread.active_turn_id(), Some("input".into()));
+        thread.turns = Some(vec![Arc::new(Turn {
+            id: "native".into(),
+            status: TurnStatus::Running,
+            ..Default::default()
+        })]);
+        for status in [
+            PreparationStatus::Sending,
+            PreparationStatus::Interrupted,
+            PreparationStatus::Unknown,
+        ] {
+            thread.preparation.as_mut().unwrap().status = status;
+            assert_eq!(thread.active_turn_id(), Some("native".into()));
+        }
+        thread.turns = None;
+        assert_eq!(thread.active_turn_id(), None);
     }
 
     #[test]

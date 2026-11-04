@@ -17569,38 +17569,6 @@
         }
       }
     },
-    "タスクを準備中…": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Preparing task…"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "タスクを準備中…"
-          }
-        }
-      }
-    },
-    "AIに送信中…": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sending to AI…"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "AIに送信中…"
-          }
-        }
-      }
-    },
     "準備に失敗しました: {0}": {
       "localizations": {
         "en": {

@@ -246,15 +246,17 @@ private struct ThreadPreparationRow: View {
     let perform: (Intent) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            AppText(preparation.text).font(.caption).foregroundStyle(.secondary)
-            if let retry = preparation.retry {
-                Button("再試行") { perform(.retryPreparation(retry)) }
-            }
-            if let interrupt = preparation.interrupt {
-                Button("停止") { perform(.interrupt(interrupt)) }
-            }
-        }.accessibilityIdentifier("task.preparation")
+        if preparation.inProgress {
+            ThreadActivityHeader(summary: preparation.text, canCollapse: false, isInProgress: true, expanded: false)
+                .accessibilityIdentifier("task.preparation")
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                AppText(preparation.text).font(.caption).foregroundStyle(.secondary)
+                if let retry = preparation.retry {
+                    Button("再試行") { perform(.retryPreparation(retry)) }
+                }
+            }.accessibilityIdentifier("task.preparation")
+        }
     }
 }
 

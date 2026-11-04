@@ -1206,14 +1206,26 @@ impl ConversationView {
         cx: &Context<Self>,
     ) -> AnyElement {
         let language = crate::localization::language(cx);
+        let text = agent_core::localization::localized_ui_text(language, preparation.text.clone());
+        if preparation.in_progress {
+            return h_flex()
+                .debug_selector(|| "task-preparation".into())
+                .gap_2()
+                .text_sm()
+                .text_color(rgb(appearance::MUTED))
+                .child(crate::activity::indicator())
+                .child(text)
+                .into_any_element();
+        }
         let mut body = v_flex()
             .gap_2()
-            .px_6()
-            .pb_4()
             .debug_selector(|| "task-preparation".into())
-            .child(div().text_sm().text_color(rgb(appearance::MUTED)).child(
-                agent_core::localization::localized_ui_text(language, preparation.text.clone()),
-            ));
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(appearance::MUTED))
+                    .child(text),
+            );
         if let Some(retry) = &preparation.retry {
             let retry = retry.clone();
             body = body.child(button(
@@ -1223,19 +1235,6 @@ impl ConversationView {
                 move |_, _, cx| {
                     cx.emit(ConversationAction::Dispatch(Intent::RetryPreparation(
                         retry.clone(),
-                    )));
-                },
-            ));
-        }
-        if let Some(interrupt) = &preparation.interrupt {
-            let interrupt = interrupt.clone();
-            body = body.child(button(
-                "interrupt-preparation",
-                language.text("停止"),
-                cx,
-                move |_, _, cx| {
-                    cx.emit(ConversationAction::Dispatch(Intent::Interrupt(
-                        interrupt.clone(),
                     )));
                 },
             ));
@@ -1782,9 +1781,18 @@ impl ConversationView {
                                 .child(v_flex().w_full().max_w(px(CHAT_WIDTH)).gap_4().child(row))
                                 .into_any_element()
                         }
-                        Some(ConversationRow::Preparation(preparation)) => {
-                            view.preparation_card(&preparation, cx)
-                        }
+                        Some(ConversationRow::Preparation(preparation)) => h_flex()
+                            .justify_center()
+                            .w_full()
+                            .px_6()
+                            .pb_8()
+                            .child(
+                                v_flex()
+                                    .w_full()
+                                    .max_w(px(CHAT_WIDTH))
+                                    .child(view.preparation_card(&preparation, cx)),
+                            )
+                            .into_any_element(),
                         None => div().into_any_element(),
                     }
                 })

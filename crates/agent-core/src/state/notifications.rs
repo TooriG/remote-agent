@@ -611,6 +611,85 @@ mod tests {
         assert_eq!(effects.len(), usize::from(selected));
     }
 
+    #[test]
+    fn a_preparing_task_reviews_no_changes_until_its_turn_starts() {
+        use agent_protocol::session::{PreparationStatus, SessionPreparation};
+        let id = SessionRef::new(ProviderKind::Codex, "admitted".into()).unwrap();
+        let subscription = uuid::Uuid::new_v4();
+        let snapshot = Snapshot {
+            connected: true,
+            navigation: Arc::new(Navigation {
+                thread_id: Some(id.clone()),
+                draft_key: id.clone().into(),
+                cwd: "/project".into(),
+            }),
+            conversations: Arc::new(
+                [(
+                    id.clone(),
+                    Arc::new(Thread {
+                        id: Some(id.clone()),
+                        cwd: Some("/project".into()),
+                        preparation: Some(SessionPreparation {
+                            submission: agent_protocol::operations::Submission {
+                                thread_id: id.clone(),
+                                client_user_message_id: "input".into(),
+                                input: Vec::new(),
+                                model: None,
+                                effort: None,
+                                service_tier: None,
+                            },
+                            status: PreparationStatus::Preparing,
+                        }),
+                        ..Default::default()
+                    }),
+                )]
+                .into(),
+            ),
+            subscriptions: Arc::new([(id.clone(), subscription)].into()),
+            ..Default::default()
+        };
+        let update = |snapshot: &Snapshot, change| {
+            session_update(
+                snapshot,
+                crate::session::SessionUpdate {
+                    subscription_id: subscription,
+                    change,
+                },
+            )
+        };
+        let mut reviewing = snapshot.clone();
+        assert!(
+            op::review_workspace(&mut reviewing).is_none(),
+            "the source checkout's changes are not the preparing task's"
+        );
+        let (moved, effects) = update(
+            &snapshot,
+            crate::session::SessionChange::Workspace {
+                cwd: "/worktree".into(),
+            },
+        );
+        assert!(effects.is_empty());
+        assert!(moved.workspace.review_cwd.is_none());
+        let (started, effects) = update(
+            &moved,
+            crate::session::SessionChange::Preparation { preparation: None },
+        );
+        assert!(effects.is_empty());
+        let item = serde_json::from_value(json!({
+            "id":"user","status":"completed","clientInputId":"input",
+            "body":{"inline":{"body":{"userMessage":{"text":"start","content":[]}}}}
+        }))
+        .unwrap();
+        let (_, effects) = update(
+            &started,
+            crate::session::SessionChange::Item {
+                turn_id: "turn".into(),
+                item: Arc::new(item),
+            },
+        );
+        assert_eq!(effects.len(), 1, "the started task reviews its worktree");
+    }
+
     #[rstest::rstest]
     fn known_child_activity_updates_rows_without_refetching(
         #[values(true, false)] active: bool,
