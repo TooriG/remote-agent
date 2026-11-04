@@ -530,6 +530,42 @@ fn update_titles(snapshot: &mut Snapshot, summaries: &[crate::models::Thread]) {
     }
 }
 
+fn group_project_rows<'a>(
+    rows: Vec<crate::models::Thread>,
+    projects: impl Iterator<Item = &'a str>,
+    visible: &HashSet<&str>,
+) -> (
+    Vec<crate::models::Thread>,
+    HashMap<&'a str, Vec<crate::models::Thread>>,
+) {
+    if rows.iter().all(|row| row.project_id.is_none()) {
+        return (rows, HashMap::new());
+    }
+    let mut grouped: HashMap<_, Vec<_>> = projects.map(|id| (id, Vec::new())).collect();
+    if grouped.is_empty() {
+        return (rows, grouped);
+    }
+    let mut remaining = Vec::new();
+    for row in rows {
+        if let Some(id) = row.project_id.as_deref()
+            && let Some(group) = grouped.get_mut(id)
+        {
+            if visible.contains(id) {
+                group.push(row);
+                continue;
+            }
+            // A project outside the visible catalogue also keeps its rows in
+            // the root list, so only those rows need a second owned copy.
+            group.push(row.clone());
+        }
+        remaining.push(row);
+    }
+    (remaining, grouped)
+}
+
+#[cfg(test)]
+mod pages_tests;
+
 impl Operation for ListSessions {
     type Input = crate::models::ListQuery;
     type Output = crate::models::ThreadList;
@@ -653,25 +689,29 @@ impl Operation for ListSessions {
             OperationKey::ProjectList { project_id } => visible.contains(project_id.as_str()),
             _ => true,
         });
-        for (id, page) in &threads.project_pages {
-            if pages
-                .get(id)
-                .is_some_and(|current| current.limit > page.limit)
-            {
-                continue;
-            }
+        let project_pages: Vec<_> = threads
+            .project_pages
+            .iter()
+            .filter(|(id, page)| {
+                pages
+                    .get(*id)
+                    .is_none_or(|current| current.limit <= page.limit)
+            })
+            .collect();
+        let (remaining, mut project_rows) = group_project_rows(
+            threads.data,
+            project_pages.iter().map(|(id, _)| id.as_str()),
+            &visible,
+        );
+        threads.data = remaining;
+        for (id, page) in project_pages {
             Arc::make_mut(&mut snapshot.unconfirmed_lists).remove(&OperationKey::ProjectList {
                 project_id: id.clone(),
             });
             let mut received = merge_received(
                 crate::models::ThreadList {
                     revision: threads.revision,
-                    data: threads
-                        .data
-                        .iter()
-                        .filter(|thread| thread.project_id.as_ref() == Some(id))
-                        .cloned()
-                        .collect(),
+                    data: project_rows.remove(id.as_str()).unwrap_or_default(),
                     projects: Vec::new(),
                     has_more: page.has_more,
                     has_more_projects: false,
