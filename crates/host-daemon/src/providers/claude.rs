@@ -1326,13 +1326,14 @@ impl Worker {
         let message_id = message["message"]["id"].as_str();
         let cwd = self.record.lock().await.cwd.clone();
         for (index, block) in blocks.iter().enumerate() {
+            let block_kind = block["type"].as_str();
             let items = self
                 .current_turn()
                 .ok_or("Claude execution state is unavailable")?
                 .items
                 .as_deref()
                 .unwrap_or_default();
-            let item = match block["type"].as_str() {
+            let item = match block_kind {
                 Some("tool_result") => {
                     let item = items
                         .iter()
@@ -1350,6 +1351,11 @@ impl Worker {
                 _ => {
                     // Claude emits one assistant envelope per completed block,
                     // often with the same message ID. Preserve the stream index.
+                    let completed_text = match block_kind {
+                        Some("text") => block["text"].as_str(),
+                        Some("thinking") => block["thinking"].as_str(),
+                        _ => None,
+                    };
                     let id = message_item_id(
                         items,
                         message_id
@@ -1357,7 +1363,8 @@ impl Worker {
                             .unwrap_or("tool-result"),
                         index,
                         blocks.len(),
-                        block,
+                        block_kind,
+                        completed_text,
                     );
                     native::content_item(
                         &self.session,
@@ -1496,42 +1503,55 @@ fn message_item_id(
     message: &str,
     index: usize,
     count: usize,
-    block: &Value,
+    kind: Option<&str>,
+    text: Option<&str>,
 ) -> String {
-    if count == 1 {
-        let prefix = format!("{message}:");
-        let candidates = items.iter().filter(|item| item.id.starts_with(&prefix));
-        let matches = |item: &Item| match (block["type"].as_str(), item.body()) {
-            (Some("text"), ItemBody::AssistantText { text, .. }) => {
-                block["text"].as_str() == Some(text)
+    if count == 1 && matches!(kind, Some("text" | "thinking")) {
+        let mut first_exact = None;
+        let mut first_running = None;
+        for item in items {
+            if !item
+                .id
+                .strip_prefix(message)
+                .is_some_and(|tail| tail.starts_with(':'))
+            {
+                continue;
             }
-            (Some("thinking"), ItemBody::Reasoning { content, .. }) => {
-                block["thinking"].as_str() == Some(content.join("").as_str())
+            let exact = match (kind, item.body()) {
+                (Some("text"), ItemBody::AssistantText { text: content, .. }) => {
+                    Some(text == Some(content.as_str()))
+                }
+                (Some("thinking"), ItemBody::Reasoning { content, .. }) => {
+                    Some(text.is_some_and(|text| {
+                        content
+                            .iter()
+                            .try_fold(text, |remaining, part| {
+                                remaining.strip_prefix(part.as_str())
+                            })
+                            .is_some_and(str::is_empty)
+                    }))
+                }
+                _ => None,
+            };
+            let Some(exact) = exact else { continue };
+            if exact {
+                if item.status == ItemStatus::Running {
+                    return item.id.to_string();
+                }
+                first_exact.get_or_insert(item);
+            } else if item.status == ItemStatus::Running {
+                first_running.get_or_insert(item);
             }
-            _ => false,
-        };
-        if let Some(item) = candidates
-            .clone()
-            .filter(|item| matches(item))
-            .min_by_key(|item| item.status != ItemStatus::Running)
-        {
-            return item.id.to_string();
         }
-        if let Some(item) = candidates
-            .filter(|item| item.status == ItemStatus::Running)
-            .find(|item| {
-                matches!(
-                    (block["type"].as_str(), item.body()),
-                    (Some("text"), ItemBody::AssistantText { .. })
-                        | (Some("thinking"), ItemBody::Reasoning { .. })
-                )
-            })
-        {
+        if let Some(item) = first_exact.or(first_running) {
             return item.id.to_string();
         }
     }
     format!("{message}:{index}")
 }
+
+#[cfg(test)]
+mod message_match_tests;
 
 /// Classify native evidence before reducing it to a user-facing message.
 fn usage_limit_error(info: &Value) -> Option<ExecutionError> {
@@ -2455,52 +2475,34 @@ mod execution_tests {
             text("message:3", ItemStatus::Running, "later"),
             thinking("message:4", vec!["later".into()]),
         ];
-        for (block, expected) in [
-            (json!({"type":"text","text":"same"}), "message:1"),
-            (json!({"type":"text","text":"changed"}), "message:1"),
-            (json!({"type":"text","text":"later"}), "message:3"),
-            (json!({"type":"thinking","thinking":"onetwo"}), "message:2"),
-            (json!({"type":"thinking","thinking":"changed"}), "message:2"),
-            (json!({"type":"thinking","thinking":"later"}), "message:4"),
+        for (kind, text, expected) in [
+            ("text", "same", "message:1"),
+            ("text", "changed", "message:1"),
+            ("text", "later", "message:3"),
+            ("thinking", "onetwo", "message:2"),
+            ("thinking", "changed", "message:2"),
+            ("thinking", "later", "message:4"),
         ] {
             assert_eq!(
-                message_item_id(&items, "message", 0, 1, &block),
+                message_item_id(&items, "message", 0, 1, Some(kind), Some(text)),
                 expected,
-                "{block}"
+                "{kind}: {text}"
             );
         }
         assert_eq!(
-            message_item_id(
-                &items,
-                "message",
-                3,
-                2,
-                &json!({"type":"text","text":"same"})
-            ),
+            message_item_id(&items, "message", 3, 2, Some("text"), Some("same")),
             "message:3"
         );
         assert_eq!(
-            message_item_id(&items, "message", 3, 1, &json!({"type":"future"})),
+            message_item_id(&items, "message", 3, 1, Some("future"), None),
             "message:3"
         );
         assert_eq!(
-            message_item_id(
-                &items[..2],
-                "message",
-                3,
-                1,
-                &json!({"type":"text","text":"changed"})
-            ),
+            message_item_id(&items[..2], "message", 3, 1, Some("text"), Some("changed")),
             "message:3"
         );
         assert_eq!(
-            message_item_id(
-                &items[..2],
-                "message",
-                3,
-                1,
-                &json!({"type":"text","text":"same"})
-            ),
+            message_item_id(&items[..2], "message", 3, 1, Some("text"), Some("same")),
             "message:0"
         );
     }
