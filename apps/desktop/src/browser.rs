@@ -108,9 +108,7 @@ impl Browser {
                                     None
                                 } else {
                                     let mut rgba = image::load_from_memory(&frame.image)
-                                        .map_err(|_| {
-                                            language.text("ブラウザ画像を読み取れません。")
-                                        })?
+                                        .map_err(|_| "ブラウザ画像を読み取れません。")?
                                         .into_rgba8();
                                     for pixel in rgba.pixels_mut() {
                                         pixel.0.swap(0, 2);
@@ -120,9 +118,8 @@ impl Browser {
                                 Ok::<_, String>((frame, image))
                             })
                             .await;
-                        let result = result.unwrap_or_else(|_| {
-                            Err(language.text("ブラウザとの接続が切れました。").into())
-                        });
+                        let result =
+                            result.unwrap_or_else(|_| Err("ブラウザとの接続が切れました。".into()));
                         if view
                             .update_in(cx, |view, window, cx| {
                                 view.apply_result(result, reading, window, cx);
@@ -277,7 +274,6 @@ impl Browser {
     }
 
     fn send(&mut self, action: BrowserAction, cx: &mut Context<Self>) {
-        let language = crate::localization::language(cx);
         self.error = None;
         self.notice = None;
         if matches!(
@@ -285,9 +281,7 @@ impl Browser {
             BrowserAction::ImportCookies { .. } | BrowserAction::ImportPasswords { .. }
         ) {
             self.notice = Some(
-                language
-                    .text("ブラウザデータを取り込み中… OSのアクセス確認が出たら許可してください。")
-                    .into(),
+                "ブラウザデータを取り込み中… OSのアクセス確認が出たら許可してください。".into(),
             );
         }
         self.credentials = None;
