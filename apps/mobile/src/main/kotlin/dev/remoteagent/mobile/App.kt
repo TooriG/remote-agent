@@ -232,13 +232,14 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     }
 
     fun connect() {
-        profiles.firstOrNull { it.id == profileId }?.let { connect(it) }
+        val profile = profiles.firstOrNull { it.id == profileId } ?: return
+        if (!connections.containsKey(profile.id)) connect(profile, reconnect = true)
     }
 
-    private fun connect(profile: HostProfile, afterForeground: Boolean = false) {
+    private fun connect(profile: HostProfile, reconnect: Boolean = false) {
         val storage = repository.sessionStorage(profile.id)
         val store = sessions.open(profile.id, storage, storage)
-        if (!afterForeground && (store.snapshot().connected() || connections.containsKey(profile.id))) return
+        if (!reconnect && (store.snapshot().connected() || connections.containsKey(profile.id))) return
         connections.remove(profile.id)?.cancel()
         if (profileId == profile.id) notice = null
         connections[profile.id] =
@@ -262,7 +263,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         sessions.recordScene(if (active) 1uL else 3uL)
         if (active) {
             // Returning from a picker keeps the transport underneath its upload.
-            if (attachmentTransfers == 0) profiles.forEach { connect(it, afterForeground = true) }
+            if (attachmentTransfers == 0) profiles.forEach { connect(it, reconnect = true) }
         } else persist()
     }
 
@@ -274,7 +275,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
                 owner = store
                 var previous = store.snapshot()
                 publish(previous)
-                connect()
+                if (!previous.connected()) connect()
                 while (isActive) {
                     store.nextSnapshot(previous)
                     if (session !== selected) return@launch
