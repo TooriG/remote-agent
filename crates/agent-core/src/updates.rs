@@ -84,6 +84,12 @@ pub fn select_download(
         })
         .max_by_key(|(build, _)| *build);
     let Some((build, asset)) = selected else {
+        // Existing installations can enter the Dev channel before its first
+        // archive is published. Keep checking instead of entering a sticky
+        // failure state that requires a manual retry.
+        if channel == Channel::Development {
+            return Ok(None);
+        }
         return Err("この環境向けの更新ファイルはまだ公開されていません。".into());
     };
     if build <= current_build {
@@ -183,8 +189,13 @@ mod tests {
             );
         }
         let stable_only = serde_json::to_vec(&vec![release(100, stable)]).unwrap();
-        assert!(
-            select_download(&stable_only, 0, "macos", "aarch64", Channel::Development).is_err()
+        assert_eq!(
+            select_download(&stable_only, 0, "macos", "aarch64", Channel::Development).unwrap(),
+            None
+        );
+        assert_eq!(
+            select_download(b"[]", 0, "macos", "aarch64", Channel::Development).unwrap(),
+            None
         );
         let dev_only = serde_json::to_vec(&vec![release(100, dev)]).unwrap();
         assert!(select_download(&dev_only, 94, "macos", "aarch64", Channel::Production).is_err());
