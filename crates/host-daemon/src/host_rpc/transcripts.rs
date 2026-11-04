@@ -10,11 +10,7 @@ use agent_protocol::{
     session::SessionRef,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
-use std::{
-    collections::{HashMap, HashSet},
-    path::Path,
-    sync::Mutex,
-};
+use std::{collections::HashMap, path::Path, sync::Mutex};
 
 /// A window stops growing past this many encoded bytes, keeping at least one turn.
 const WINDOW_BYTES: usize = 1 << 20;
@@ -33,17 +29,6 @@ pub(crate) struct Window {
 
 fn failure(error: impl std::fmt::Display) -> String {
     error.to_string()
-}
-
-/// Within a turn ID's candidates, shared item IDs identify the same occurrence.
-fn same_occurrence(stored: &Turn, live: &Turn) -> bool {
-    let stored_items = stored.items.as_deref().unwrap_or_default();
-    let live_items = live.items.as_deref().unwrap_or_default();
-    if stored_items.is_empty() || live_items.is_empty() {
-        return true;
-    }
-    let stored_ids: HashSet<_> = stored_items.iter().map(|item| &item.id).collect();
-    live_items.iter().any(|item| stored_ids.contains(&item.id))
 }
 
 fn turns_by_id<'a>(turns: impl Iterator<Item = &'a Turn>) -> HashMap<&'a TurnId, Vec<&'a Turn>> {
@@ -159,7 +144,7 @@ impl Transcripts {
                 .iter()
                 .map(|native| {
                     let stored = recorded_by_id.get(&native.id).into_iter().flatten().copied()
-                        .find(|turn| same_occurrence(native, turn));
+                        .find(|turn| native.matches_occurrence(turn));
                     match stored {
                         Some(turn) => std::borrow::Cow::Owned(Turn {
                             provider: turn.provider.or(native.provider),
@@ -174,7 +159,7 @@ impl Transcripts {
                         .iter()
                         .filter(|turn| {
                             !native_by_id.get(&turn.id).into_iter().flatten()
-                                .any(|native| same_occurrence(native, turn))
+                                .any(|native| native.matches_occurrence(turn))
                         })
                         .map(std::borrow::Cow::Borrowed),
                 )
@@ -215,7 +200,7 @@ impl Transcripts {
             let stored = latest
                 .map(|(position, body)| Ok::<_, String>((position, decode_turn(&body)?)))
                 .transpose()?
-                .filter(|(_, stored)| same_occurrence(stored, &turn));
+                .filter(|(_, stored)| stored.matches_occurrence(&turn));
             let position = match stored {
                 Some((position, stored)) => {
                     if turn.items.is_none() {

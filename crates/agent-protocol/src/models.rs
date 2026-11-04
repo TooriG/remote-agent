@@ -1,7 +1,10 @@
 //! Shared typed models. Unknown provider fields are ignored.
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashSet},
+    sync::Arc,
+};
 
 pub const MAX_INLINE_ITEM_BYTES: usize = 1024 * 1024;
 
@@ -138,6 +141,22 @@ pub struct Turn {
     pub error: Option<ExecutionError>,
     pub started_at_ms: Option<u64>,
     pub completed_at_ms: Option<u64>,
+}
+impl Turn {
+    /// Reused turn IDs describe the same occurrence only when their items overlap.
+    /// An observation without items remains compatible with a matching turn ID.
+    pub fn matches_occurrence(&self, other: &Self) -> bool {
+        if self.id != other.id {
+            return false;
+        }
+        let items = self.items.as_deref().unwrap_or_default();
+        let other_items = other.items.as_deref().unwrap_or_default();
+        if items.is_empty() || other_items.is_empty() {
+            return true;
+        }
+        let ids: HashSet<_> = items.iter().map(|item| &item.id).collect();
+        other_items.iter().any(|item| ids.contains(&item.id))
+    }
 }
 pub use crate::{execution::*, items::*};
 
@@ -577,6 +596,36 @@ mod tests {
                 _ => None,
             };
             prop_assert_eq!(status, expected);
+        }
+    }
+
+    #[test]
+    fn turn_occurrences_require_matching_ids_and_overlapping_items_when_known() {
+        let turn = |id: &str, items: &[&str]| Turn {
+            id: id.into(),
+            items: Some(
+                items
+                    .iter()
+                    .map(|id| {
+                        Arc::new(Item::new(
+                            (*id).into(),
+                            ItemStatus::Completed,
+                            ItemBody::Sleep {},
+                        ))
+                    })
+                    .collect(),
+            ),
+            ..Default::default()
+        };
+        for (left, right, matches) in [
+            (turn("turn", &["a"]), turn("turn", &["b", "a"]), true),
+            (turn("turn", &["a"]), turn("turn", &["b"]), false),
+            (turn("turn", &["a"]), turn("other", &["a"]), false),
+            (turn("turn", &[]), turn("turn", &["a"]), true),
+            (turn("turn", &[]), turn("other", &[]), false),
+        ] {
+            assert_eq!(left.matches_occurrence(&right), matches);
+            assert_eq!(right.matches_occurrence(&left), matches);
         }
     }
 

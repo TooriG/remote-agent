@@ -475,6 +475,8 @@ fn merge_turn(previous: Option<&Turn>, incoming: &Turn, completed: bool) -> Opti
     let mut merged = previous.unwrap_or(incoming).clone();
     macro_rules! field { ($($field:ident),* $(,)?) => { $(if incoming.$field.is_some() { merged.$field = incoming.$field.clone(); })* }; }
     field!(
+        provider,
+        supports_fork,
         started_at,
         duration_ms,
         error,
@@ -517,6 +519,54 @@ fn merge_turn(previous: Option<&Turn>, incoming: &Turn, completed: bool) -> Opti
 mod update_tests {
     use super::*;
     use crate::execution::{ExecutionError, RetryEvidence};
+
+    #[test]
+    fn turn_updates_keep_provider_and_fork_attribution_when_it_arrives_later() {
+        for supports_fork in [false, true] {
+            let mut thread = Thread {
+                turns: Some(vec![Arc::new(Turn {
+                    id: "turn".into(),
+                    status: TurnStatus::Running,
+                    ..Default::default()
+                })]),
+                ..Default::default()
+            };
+            for completed in [false, true] {
+                thread = SessionChange::Turn {
+                    completed,
+                    turn: Turn {
+                        id: "turn".into(),
+                        provider: Some(ProviderKind::Claude),
+                        supports_fork: Some(supports_fork),
+                        status: if completed {
+                            TurnStatus::Completed
+                        } else {
+                            TurnStatus::Running
+                        },
+                        ..Default::default()
+                    },
+                }
+                .apply(&thread)
+                .unwrap();
+                let turn = &thread.turns.as_ref().unwrap()[0];
+                assert_eq!(turn.provider, Some(ProviderKind::Claude));
+                assert_eq!(turn.supports_fork, Some(supports_fork));
+            }
+            let next = SessionChange::Turn {
+                completed: true,
+                turn: Turn {
+                    id: "turn".into(),
+                    status: TurnStatus::Completed,
+                    ..Default::default()
+                },
+            }
+            .apply(&thread)
+            .unwrap();
+            let turn = &next.turns.as_ref().unwrap()[0];
+            assert_eq!(turn.provider, Some(ProviderKind::Claude));
+            assert_eq!(turn.supports_fork, Some(supports_fork));
+        }
+    }
 
     #[test]
     fn workspace_updates_replace_only_the_directory() {

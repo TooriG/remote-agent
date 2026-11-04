@@ -97,11 +97,11 @@ impl SessionActor {
             // Its owned turn is authoritative, even if persisted messages look complete.
             let turns = thread.turns.get_or_insert_default();
             // Some providers reuse a turn ID. Shared item IDs identify the
-            // owned occurrence before falling back to the latest matching ID.
+            // owned occurrence; disjoint known items belong to a new occurrence.
             let index = turns
                 .iter()
                 .enumerate()
-                .filter(|(_, old)| old.id == turn.id)
+                .filter(|(_, old)| turn.matches_occurrence(old))
                 .max_by_key(|(_, old)| {
                     old.items.iter().flatten().any(|item| {
                         turn.items
@@ -164,11 +164,26 @@ mod tests {
         };
         for (history, expected) in [
             (
+                vec![previous.clone()],
+                vec![previous.clone(), current.clone()],
+            ),
+            (
                 vec![persisted.clone(), previous.clone()],
                 vec![current.clone(), previous.clone()],
             ),
             (
                 vec![previous.clone(), persisted.clone()],
+                vec![previous.clone(), current.clone()],
+            ),
+            (
+                vec![
+                    previous.clone(),
+                    Arc::new(Turn {
+                        id: "repeated".into(),
+                        status: agent_protocol::execution::TurnStatus::Running,
+                        ..Default::default()
+                    }),
+                ],
                 vec![previous.clone(), current.clone()],
             ),
         ] {
