@@ -38,6 +38,19 @@ test('iPhone snapshots retire only older builds for their Xcode version', () => 
   assert.deepEqual(replacedBuildCaches(snapshots.filter(entry => entry.id !== 1), key), []);
 });
 
+test('iPhone release snapshots retire only older releases for their Xcode version', () => {
+  const key = 'ios-release-xcode-26.6-' + 'a'.repeat(40);
+  const snapshots = [
+    {id: 1, key, ref: 'refs/heads/main'},
+    {id: 2, key: 'ios-release-xcode-26.6-' + 'b'.repeat(40), ref: 'refs/heads/main'},
+    {id: 3, key: 'ios-release-xcode-26.5-' + 'b'.repeat(40), ref: 'refs/heads/main'},
+    {id: 4, key: 'ios-swift-xcode-26.6-' + 'b'.repeat(64), ref: 'refs/heads/main'},
+    ...entries,
+  ];
+  assert.deepEqual(replacedBuildCaches(snapshots, key), [2]);
+  assert.deepEqual(replacedBuildCaches(snapshots.filter(entry => entry.id !== 1), key), []);
+});
+
 test('repository compiler snapshots preserve other jobs, toolchains and refs', () => {
   const prefix = 'local-rust-macOS-ARM64-xcode-26.6-' + 'a'.repeat(64) + '-iphone-';
   const current = prefix + 'b'.repeat(40);

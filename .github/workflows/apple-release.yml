@@ -83,11 +83,19 @@ jobs:
           AGENT_ASC_ISSUER_ID: ${{ secrets.BEX_ASC_ISSUER_ID }}
         run: scripts/dev-env.sh bash scripts/release-apple.sh
       - name: Save iPhone archive dependencies and compiler cache
+        id: save-ios-cache
         if: ${{ !cancelled() && steps.ios-cache.outputs.cache-primary-key != '' && steps.ios-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: target/apple-release/DerivedData
           key: ${{ steps.ios-cache.outputs.cache-primary-key }}
+      - name: Retire replaced iPhone archive snapshots
+        if: ${{ !cancelled() && steps.save-ios-cache.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_CACHE_KEY: ${{ steps.ios-cache.outputs.cache-primary-key }}
+        run: scripts/dev-env.sh node scripts/prune-build-cache.mjs "$RELEASE_CACHE_KEY"
       - name: Verify Apple processing and distribute to TestFlight
         env:
           AGENT_ASC_KEY_ID: ${{ secrets.BEX_ASC_KEY_ID }}
