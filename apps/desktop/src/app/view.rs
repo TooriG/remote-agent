@@ -1012,9 +1012,13 @@ mod cache_tests {
         window.simulate_click(summary.center(), Modifiers::default());
         window.run_until_parked();
         assert!(
-            window.debug_bounds("model-accounts-manage").is_some(),
-            "account details must replace the model catalog inside the open popup"
+            window.debug_bounds("account-start-login").is_some(),
+            "account management must open directly inside the model popup"
         );
+        let back = window.debug_bounds("model-panel-back").unwrap();
+        window.simulate_click(back.center(), Modifiers::default());
+        window.run_until_parked();
+        assert!(window.debug_bounds("model-choice-extra").is_some());
     }
 
     #[gpui::test]

@@ -1,5 +1,7 @@
 use super::{Cookie, Prepared};
-use agent_protocol::browser::{BrowserAction, BrowserCredentials, BrowserImportProfile};
+use agent_protocol::browser::{
+    BrowserAction, BrowserCredentials, BrowserImportError, BrowserImportProfile,
+};
 use agent_protocol::browser_import::password_origin;
 #[path = "passwords.rs"]
 mod passwords;
@@ -241,9 +243,10 @@ fn decrypt_chromium_payload(
         .map_err(|_| "ブラウザの保存データを復号できません。取り込みは行いませんでした。".into())
 }
 
-fn profiles() -> Vec<BrowserImportProfile> {
+fn profiles(sources: Vec<ImportSource>) -> (Vec<BrowserImportProfile>, Vec<BrowserImportError>) {
     let mut result = Vec::new();
-    for source in import_sources() {
+    let mut errors = Vec::new();
+    for source in sources {
         match chromium_profiles(&source.root) {
             Ok(profiles) => {
                 result.extend(
@@ -259,13 +262,13 @@ fn profiles() -> Vec<BrowserImportProfile> {
                         }),
                 )
             }
-            Err(error) => result.push(BrowserImportProfile {
-                id: String::new(),
-                label: format!("{}: {error}", source.name),
+            Err(message) => errors.push(BrowserImportError {
+                browser: source.name.into(),
+                message,
             }),
         }
     }
-    result
+    (result, errors)
 }
 fn selected_profile(id: &str) -> Result<(std::path::PathBuf, StoragePassword), String> {
     for source in import_sources() {
@@ -288,13 +291,15 @@ fn selected_profile(id: &str) -> Result<(std::path::PathBuf, StoragePassword), S
 pub(super) fn prepare(action: BrowserAction, origin: Option<String>) -> Result<Prepared, String> {
     match action {
         BrowserAction::Credentials => {
+            let (profiles, import_errors) = profiles(import_sources());
             let (accounts, password_error) = match origin.as_deref().map(passwords::accounts) {
                 Some(Ok(accounts)) => (accounts, None),
                 Some(Err(error)) => (Vec::new(), Some(error)),
                 None => (Vec::new(), None),
             };
             Ok(Prepared::Metadata(BrowserCredentials {
-                profiles: profiles(),
+                profiles,
+                import_errors,
                 origin,
                 accounts,
                 password_error,
@@ -488,6 +493,50 @@ mod tests {
         );
         let (cookies, skipped) = read_chrome_cookies(directory.path(), 0, password).unwrap();
         assert_eq!((cookies.len(), skipped), (1, 0));
+    }
+
+    #[test]
+    fn unreadable_browsers_are_separate_from_profiles_and_recover_on_refresh() {
+        use super::{ImportSource, profiles};
+        let directory = tempfile::tempdir().unwrap();
+        let ready = directory.path().join("ready");
+        let unreadable = directory.path().join("unreadable");
+        let sources = || {
+            vec![
+                ImportSource {
+                    name: "Chrome",
+                    root: ready.clone(),
+                    password,
+                },
+                ImportSource {
+                    name: "Brave",
+                    root: unreadable.clone(),
+                    password,
+                },
+            ]
+        };
+        let create_profile = |root: &std::path::Path| {
+            std::fs::create_dir_all(root.join("Default")).unwrap();
+            std::fs::write(root.join("Default/Cookies"), []).unwrap();
+            std::fs::write(
+                root.join("Local State"),
+                r#"{"profile":{"info_cache":{"Default":{"name":"仕事用"}}}}"#,
+            )
+            .unwrap();
+        };
+        create_profile(&ready);
+        let (available, errors) = profiles(sources());
+        assert_eq!(available.len(), 1);
+        assert_eq!(available[0].id, "Chrome/Default");
+        assert_eq!(available[0].label, "Chrome · 仕事用 (Default)");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].browser, "Brave");
+        assert!(errors[0].message.contains("プロファイルが見つかりません"));
+        create_profile(&unreadable);
+        let (available, errors) = profiles(sources());
+        assert_eq!(available.len(), 2);
+        assert_eq!(available[1].id, "Brave/Default");
+        assert!(errors.is_empty());
     }
 
     #[test]

@@ -48,6 +48,7 @@ import dev.remoteagent.core.BrowserCredentials
 import dev.remoteagent.core.BrowserTab
 import dev.remoteagent.core.browserAddressUrl
 import dev.remoteagent.core.localizedUiFormat
+import dev.remoteagent.core.localizedUiText
 
 @Composable
 internal fun BrowserTabs(tabs: List<BrowserTab>, send: (BrowserAction) -> Unit) {
@@ -226,24 +227,26 @@ internal fun BrowserCredentialsDialog(
                 if (credentials.profiles.isEmpty()) Text(language.text("取り込めるブラウザプロファイルがありません。"))
                 credentials.profiles.forEach { profile ->
                     Text(profile.label)
-                    TextButton(
-                        onClick = { send(BrowserAction.ImportCookies(profile.id)) },
-                        enabled = profile.id.isNotEmpty(),
-                    ) {
+                    TextButton(onClick = { send(BrowserAction.ImportCookies(profile.id)) }) {
                         Text(language.text("ログイン状態（Cookie）"))
                     }
-                    TextButton(
-                        onClick = { send(BrowserAction.ImportPasswords(profile.id)) },
-                        enabled = profile.id.isNotEmpty(),
-                    ) {
+                    TextButton(onClick = { send(BrowserAction.ImportPasswords(profile.id)) }) {
                         Text(language.text("保存パスワード → Keychain"))
+                    }
+                }
+                if (credentials.importErrors.isNotEmpty()) {
+                    HorizontalDivider()
+                    Text(language.text("読み取れなかったブラウザ"))
+                    credentials.importErrors.forEach { error ->
+                        Text(error.browser)
+                        Text(localizedUiText(language, error.message), style = MaterialTheme.typography.bodySmall)
                     }
                 }
                 credentials.origin?.let { origin ->
                     HorizontalDivider()
                     Text(localizedUiFormat(language, "保存パスワード · {0}", listOf(origin)))
                     if (credentials.accounts.isEmpty()) {
-                        Text(credentials.passwordError ?: language.text("このサイトの保存パスワードはありません。"))
+                        Text(localizedUiText(language, credentials.passwordError ?: "このサイトの保存パスワードはありません。"))
                     }
                     credentials.accounts.forEach { username ->
                         TextButton(onClick = { send(BrowserAction.FillPassword(origin, username)) }) {

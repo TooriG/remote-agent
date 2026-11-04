@@ -264,7 +264,7 @@ impl Desktop {
                                 |path| file_name(path),
                             )
                         },
-                        |(_, view)| view.read(cx).title(),
+                        |(_, view)| view.read(cx).title(crate::localization::language(cx)),
                     )
             })
             .collect();

@@ -1505,22 +1505,6 @@
         }
       }
     },
-    "ホストのブラウザから取り込む": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ホストのブラウザから取り込む"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Import from the Host browser"
-          }
-        }
-      }
-    },
     "ホストの再起動を確認できませんでした。": {
       "localizations": {
         "ja": {
@@ -6061,22 +6045,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Updating accounts…"
-          }
-        }
-      }
-    },
-    "アカウントを管理": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "アカウントを管理"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Manage accounts"
           }
         }
       }
@@ -18989,6 +18957,214 @@
           "stringUnit": {
             "state": "translated",
             "value": "Only regular files and folders can be copied."
+          }
+        }
+      }
+    },
+    "ホストのブラウザから、ログイン状態や保存パスワードを取り込めます。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ホストのブラウザから、ログイン状態や保存パスワードを取り込めます。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import sign-in data and saved passwords from a browser on your Host."
+          }
+        }
+      }
+    },
+    "取り込み元のプロファイル": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "取り込み元のプロファイル"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Browser profiles"
+          }
+        }
+      }
+    },
+    "読み取れなかったブラウザ": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "読み取れなかったブラウザ"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unavailable browsers"
+          }
+        }
+      }
+    },
+    "ログイン状態を取り込む": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ログイン状態を取り込む"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import sign-in data"
+          }
+        }
+      }
+    },
+    "パスワードを取り込む": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "パスワードを取り込む"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import passwords"
+          }
+        }
+      }
+    },
+    "保存パスワード": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保存パスワード"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved passwords"
+          }
+        }
+      }
+    },
+    "ブラウザのプロファイルが見つかりません。取り込み元のブラウザを一度起動してください": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ブラウザのプロファイルが見つかりません。取り込み元のブラウザを一度起動してください"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No browser profile found. Open the source browser once, then try again."
+          }
+        }
+      }
+    },
+    "取り込めるブラウザプロファイルが見つかりません": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "取り込めるブラウザプロファイルが見つかりません"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No browser profiles are available to import."
+          }
+        }
+      }
+    },
+    "Chromeのプロファイル情報が大きすぎます": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chromeのプロファイル情報が大きすぎます"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The browser profile data is too large."
+          }
+        }
+      }
+    },
+    "Chromeのプロファイル情報を読み取れません": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chromeのプロファイル情報を読み取れません"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The browser profile data could not be read."
+          }
+        }
+      }
+    },
+    "Chromeのプロファイル情報がありません": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chromeのプロファイル情報がありません"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No browser profile data found."
+          }
+        }
+      }
+    },
+    "Keychain を開けません。アクセスを許可して再試行してください。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keychain を開けません。アクセスを許可して再試行してください。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cannot open Keychain. Allow access, then try again."
+          }
+        }
+      }
+    },
+    "保存パスワードを読み取れません。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保存パスワードを読み取れません。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved passwords could not be read."
           }
         }
       }

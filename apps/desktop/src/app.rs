@@ -112,7 +112,6 @@ enum WorktreeToggle {
 enum ModelPanel {
     Models,
     Accounts,
-    Manage,
 }
 enum SurfaceResource {
     Diff {

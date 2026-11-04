@@ -375,8 +375,14 @@ struct BrowserImportProfile {
     pub label: String,
 }
 #[uniffi::remote(Record)]
+struct BrowserImportError {
+    pub browser: String,
+    pub message: String,
+}
+#[uniffi::remote(Record)]
 struct BrowserCredentials {
     pub profiles: Vec<BrowserImportProfile>,
+    pub import_errors: Vec<BrowserImportError>,
     pub origin: Option<String>,
     pub accounts: Vec<String>,
     pub password_error: Option<String>,
