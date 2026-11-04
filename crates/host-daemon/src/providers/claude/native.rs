@@ -8,15 +8,35 @@ use agent_protocol::{
     session::{ProviderKind, SessionRef},
 };
 use serde_json::{Value, json};
-use std::borrow::Cow;
+use std::{borrow::Cow, collections::BTreeSet};
 
 pub(super) fn parse_models(entries: &[Value]) -> Result<Vec<Model>, String> {
     // Native aliases such as default and opus can resolve to the same model.
     // Keep the SDK's ordering, with one selectable row per execution identity.
     let mut models: Vec<Model> = Vec::new();
-    for entry in entries {
+    let mut identities = None;
+    for (index, entry) in entries.iter().enumerate() {
         let model = parse_model(entry)?;
-        if models.iter().all(|existing| existing.model != model.model) {
+        // Cloning lookup keys pays off only with enough remaining comparisons.
+        if identities.is_none() && models.len() >= 64 && entries.len() - index >= 256 {
+            identities = Some(
+                models
+                    .iter()
+                    .map(|model| model.model.clone())
+                    .collect::<BTreeSet<_>>(),
+            );
+        }
+        let unique = match &mut identities {
+            Some(identities) => {
+                if identities.contains(&model.model) {
+                    false
+                } else {
+                    identities.insert(model.model.clone())
+                }
+            }
+            None => models.iter().all(|existing| existing.model != model.model),
+        };
+        if unique {
             models.push(model);
         }
     }
@@ -632,6 +652,56 @@ mod tests {
         );
         assert_eq!(models[0].id, "default");
         assert!(parse_models(&[json!({"displayName":"invalid"})]).is_err());
+    }
+
+    #[test]
+    fn large_catalogs_keep_the_first_native_alias_and_display_metadata_in_native_order() {
+        for (total, unique) in [
+            (0, 1),
+            (16, 1),
+            (16, 16),
+            (65, 65),
+            (127, 127),
+            (128, 128),
+            (129, 129),
+            (319, 319),
+            (320, 320),
+            (321, 321),
+            (4000, 1),
+            (4000, 63),
+            (4000, 64),
+            (4000, 128),
+            (4000, 4000),
+        ] {
+            let entries:Vec<_>=(0..total).map(|index|json!({
+                "value":format!("alias{index}"),"resolvedModel":format!("model{}",index%unique),
+                "displayName":format!("Label {index}"),"supportedEffortLevels":["low","high"]
+            })).collect();
+            let models = parse_models(&entries).unwrap();
+            assert_eq!(models.len(), total.min(unique));
+            for (index, model) in models.iter().enumerate() {
+                assert_eq!(model.id, format!("alias{index}"));
+                assert_eq!(model.model.id, format!("model{index}"));
+                assert_eq!(model.model.provider, ProviderKind::Claude);
+                assert_eq!(model.display_name, format!("Label {index}"));
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_later_aliases_are_rejected_even_after_their_identity_was_seen() {
+        for count in [0, 16, 63, 64, 128, 256] {
+            let entries:Vec<_>=(0..count).map(|index|json!({"value":format!("alias{index}"),"resolvedModel":format!("model{index}"),"displayName":"Valid"})).collect();
+            for invalid in [
+                json!({"value":"duplicate","resolvedModel":"model0"}),
+                json!({"value":"duplicate","resolvedModel":"model0","displayName":"Invalid effort","supportedEffortLevels":[7]}),
+                json!({"value":"duplicate","resolvedModel":"model0","displayName":"Invalid efforts","supportedEffortLevels":false}),
+            ] {
+                let mut entries = entries.clone();
+                entries.push(invalid);
+                assert!(parse_models(&entries).is_err());
+            }
+        }
     }
 
     #[test]
