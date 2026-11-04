@@ -323,6 +323,30 @@ fn missing_referenced_projects<'a>(
     missing
 }
 
+fn merge_newer_projects(
+    mut received: Vec<crate::models::Project>,
+    cached: &[crate::models::Project],
+    revision: u64,
+) -> Vec<crate::models::Project> {
+    let newer: Vec<_> = cached
+        .iter()
+        .filter(|project| project.list_revision > revision)
+        .collect();
+    if newer.is_empty() {
+        return received;
+    }
+    if newer.len() < 128 || received.len() < 128 || newer.len() > received.len().saturating_mul(4) {
+        received.retain(|project| !newer.iter().any(|newer| newer.id == project.id));
+    } else {
+        let ids: HashSet<_> = newer.iter().map(|project| project.id.as_str()).collect();
+        received.retain(|project| !ids.contains(project.id.as_str()));
+    }
+    // Keep every newer project, including duplicates, in cached order before
+    // the surviving received projects.
+    received.splice(0..0, newer.into_iter().cloned());
+    received
+}
+
 fn retained_project_icons(
     mut received: Vec<crate::models::Project>,
     cached: &[crate::models::Project],
@@ -369,16 +393,8 @@ fn merge_received(
         // Notifications carry complete list metadata. Preserve only changes
         // newer than this read; a later explicit refresh can remove old rows.
         threads.data = merge_newer_rows(threads.data, &previous.data, threads.revision);
-        let newer_projects: Vec<_> = previous
-            .projects
-            .iter()
-            .filter(|project| project.list_revision > threads.revision)
-            .cloned()
-            .collect();
-        threads
-            .projects
-            .retain(|project| !newer_projects.iter().any(|newer| newer.id == project.id));
-        threads.projects.splice(0..0, newer_projects);
+        threads.projects =
+            merge_newer_projects(threads.projects, &previous.projects, threads.revision);
         threads.projects = retained_project_icons(threads.projects, &previous.projects);
         // Small or sharply reduced pages cost less to scan than to index the
         // entire previous page.

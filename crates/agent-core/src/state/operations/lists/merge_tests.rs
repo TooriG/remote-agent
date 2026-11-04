@@ -77,6 +77,88 @@ fn linked(id: Option<SessionRef>, project: &str) -> Thread {
 }
 
 #[test]
+fn newer_project_notices_precede_received_rows_with_every_duplicate_in_cached_order() {
+    let notice = |id: &str, name: &str, revision| Project {
+        list_revision: revision,
+        ..project(id, name)
+    };
+    for count in [16, 127, 128, 129, 512] {
+        let mut cached = vec![
+            notice("new", "first-new", 3),
+            notice("existing", "replace", 2),
+            notice("new", "second-new", 2),
+            notice("equal", "ignore-equal", 1),
+            notice("old", "ignore-old", 0),
+            notice("existing", "duplicate-replace", 4),
+            notice("", "empty-id", 2),
+        ];
+        let retained = vec![
+            notice("equal", "received-equal", 0),
+            notice("old", "received-old", 0),
+            notice("other", "first-other", 0),
+            notice("other", "second-other", 0),
+        ];
+        let mut received = retained.clone();
+        received.extend([
+            notice("existing", "first-existing", 0),
+            notice("existing", "second-existing", 0),
+            notice("new", "received-new", 0),
+            notice("", "received-empty", 0),
+        ]);
+        let mut expected = vec![
+            cached[0].clone(),
+            cached[1].clone(),
+            cached[2].clone(),
+            cached[5].clone(),
+            cached[6].clone(),
+        ];
+        for index in expected.len()..count {
+            let id = format!("padding{index}");
+            let updated = notice(&id, "updated", 2);
+            expected.push(updated.clone());
+            cached.push(updated);
+            received.push(notice(&id, "received", 0));
+        }
+        expected.extend(retained);
+        let mut input = list(Vec::new());
+        input.projects = received;
+        let mut previous = list(Vec::new());
+        previous.projects = cached;
+        assert_eq!(merge_received(input, Some(&previous)).projects, expected);
+    }
+}
+
+proptest! {
+    #[test]
+    fn project_notices_replace_only_ids_changed_after_the_read(
+        fresh in proptest::collection::vec(any::<bool>(), 0..512),
+    ) {
+        let mut cached = Vec::new();
+        let mut received = Vec::new();
+        let mut expected = Vec::new();
+        let mut unchanged = Vec::new();
+        for (index, fresh) in fresh.into_iter().enumerate() {
+            let id = format!("project{index}");
+            let notice = Project {
+                list_revision: if fresh { 2 } else { 1 },
+                ..project(&id, "notice")
+            };
+            let read = project(&id, "received");
+            if fresh { expected.push(notice.clone()); } else { unchanged.push(read.clone()); }
+            cached.push(notice);
+            received.push(read);
+        }
+        received.reverse();
+        expected.extend(unchanged.into_iter().rev());
+        let mut input = list(Vec::new());
+        input.projects = received;
+        let mut previous = list(Vec::new());
+        previous.projects = cached;
+        prop_assert_eq!(merge_received(input, Some(&previous)).projects, expected);
+    }
+}
+
+#[test]
 fn project_icons_match_ordered_roots_keep_first_values_and_reuse_unchanged_images() {
     let entry = |id: &str, name: &str, roots: &[&str], icon: Option<&str>| Project {
         id: id.into(),
