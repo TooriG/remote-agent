@@ -16,7 +16,7 @@ pub(super) fn notification(
         }
         let listed = previous
             .listed_threads()
-            .any(|thread| thread.id.as_ref() == Some(&session));
+            .find(|thread| thread.id.as_ref() == Some(&session));
         let child = previous
             .conversations
             .get(&session)
@@ -26,10 +26,7 @@ pub(super) fn notification(
             && !child
             && activity_changed
             && !active
-            && listed
-            && let Some(thread) = previous
-                .listed_threads()
-                .find(|thread| thread.id.as_ref() == Some(&session))
+            && let Some(thread) = listed
             && let Some(cwd) = &thread.cwd
         {
             effects.push(Effect::execute(op::ReadListDecorations {
@@ -40,7 +37,7 @@ pub(super) fn notification(
                 threads: vec![(session.clone(), cwd.clone(), thread.git_branch.clone())],
             }));
         }
-        if activity_changed && !listed && !previous.conversations.contains_key(&session) {
+        if activity_changed && listed.is_none() && !previous.conversations.contains_key(&session) {
             effects.extend(op::refresh_agents(
                 previous.connected,
                 previous.observed_agents.as_ref(),
@@ -1294,6 +1291,74 @@ mod tests {
             "a spawn refreshes while the parent is still running"
         );
         assert_eq!(next.navigation, snapshot.navigation);
+    }
+    #[test]
+    fn completion_decorations_keep_the_first_listed_directory_and_skip_child_sessions() {
+        let mut state = snapshot(ProviderKind::Codex);
+        let first = Arc::make_mut(state.threads.as_mut().unwrap())
+            .data
+            .first_mut()
+            .unwrap();
+        let id = first.id.clone().unwrap();
+        first.cwd = Some("/first".into());
+        first.git_branch = Some("first-branch".into());
+        let mut duplicate = first.clone();
+        duplicate.cwd = Some("/later".into());
+        duplicate.git_branch = Some("later-branch".into());
+        let root = Arc::make_mut(state.threads.as_mut().unwrap());
+        root.data.push(duplicate.clone());
+        let mut project = root.clone();
+        project.data = vec![duplicate];
+        Arc::make_mut(&mut state.project_threads).insert("project".into(), Arc::new(project));
+        Arc::make_mut(&mut state.activity)
+            .active
+            .insert(id.clone(), true);
+        let (idle, effects) = notification(
+            &state,
+            Notification::Activity {
+                session: id.clone(),
+                active: false,
+            },
+        );
+        assert_eq!(idle.activity.active.get(&id), Some(&false));
+        let expected = vec![Effect::execute(op::ReadListDecorations {
+            scope: agent_protocol::operations::ListDecorationScope::Task {
+                session: id.clone(),
+            },
+            projects: vec![],
+            threads: vec![(id.clone(), "/first".into(), Some("first-branch".into()))],
+        })];
+        assert_eq!(format!("{effects:?}"), format!("{expected:?}"));
+        Arc::make_mut(state.threads.as_mut().unwrap()).data[0].cwd = None;
+        assert!(
+            notification(
+                &state,
+                Notification::Activity {
+                    session: id.clone(),
+                    active: false
+                }
+            )
+            .1
+            .is_empty()
+        );
+        Arc::make_mut(state.threads.as_mut().unwrap()).data[0].cwd = Some("/first".into());
+        Arc::make_mut(
+            Arc::make_mut(&mut state.conversations)
+                .get_mut(&id)
+                .unwrap(),
+        )
+        .parent_id = Some(SessionRef::new(ProviderKind::Codex, "owner".into()).unwrap());
+        assert!(
+            notification(
+                &state,
+                Notification::Activity {
+                    session: id.clone(),
+                    active: false
+                }
+            )
+            .1
+            .is_empty()
+        );
     }
 }
 
