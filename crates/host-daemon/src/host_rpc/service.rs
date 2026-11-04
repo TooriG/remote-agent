@@ -47,6 +47,7 @@ struct ServiceInner {
     editors: crate::editors::Editors,
     worktrees: crate::worktrees::Worktrees,
     worktree_access: tokio::sync::RwLock<()>,
+    worktree_cleanup: tokio::sync::Notify,
     permission_settings_access: tokio::sync::Mutex<()>,
     terminals: crate::terminals::Terminals,
     dictation: crate::dictation::Dictation,
@@ -87,6 +88,7 @@ impl HostRpcService {
                 dictation,
                 worktrees: crate::worktrees::Worktrees::new(projects.path()),
                 worktree_access: tokio::sync::RwLock::new(()),
+                worktree_cleanup: tokio::sync::Notify::new(),
                 permission_settings_access: Default::default(),
                 terminals: Default::default(),
                 projects,
@@ -428,20 +430,18 @@ impl HostRpcService {
             Call::ListSessions(params) => self.list_sessions(params).await?.into(),
             Call::ListProjectSessions(params) => self.list_project_sessions(params).await?.into(),
             Call::ListAgents(params) => self.list_agents(params).await?.into(),
-            Call::ReadWorktreeSettings(_) | Call::UpdateWorktreeSettings(_) => {
-                let update = if let Call::UpdateWorktreeSettings(settings) = request {
-                    Some(settings.clone())
-                } else {
-                    None
-                };
-                (self
-                    .inner
-                    .worktrees
-                    .settings(update)
-                    .await
-                    .map_err(|error| Failure::new("worktree_settings_failed", error))?)
-                .into()
-            }
+            Call::ReadWorktreeSettings(_) => (self
+                .inner
+                .worktrees
+                .settings(None)
+                .await
+                .map_err(|error| Failure::new("worktree_settings_failed", error))?)
+            .into(),
+            Call::UpdateWorktreeSettings(settings) => (self
+                .update_worktree_settings(settings.clone())
+                .await
+                .map_err(|error| Failure::new("worktree_settings_failed", error))?)
+            .into(),
             Call::ListWorktrees(_) => (self.worktree_list().await?).into(),
             Call::RemoveWorktree(params) => {
                 (self.remove_worktree(params.path.clone()).await?).into()

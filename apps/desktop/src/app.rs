@@ -106,7 +106,9 @@ enum SettingsPage {
 enum WorktreeToggle {
     Create(bool),
     Copy(bool),
-    DeleteMerged(bool),
+    DeleteUnchanged(bool),
+    /// `None` returns the project to the rule shared by all projects.
+    ProjectDeleteUnchanged(String, Option<bool>),
 }
 #[derive(Clone, Copy, PartialEq)]
 enum ModelPanel {
@@ -1830,7 +1832,13 @@ impl Desktop {
             match toggle {
                 WorktreeToggle::Create(checked) => settings.create_on_new_session = checked,
                 WorktreeToggle::Copy(checked) => settings.copy_on_create = checked,
-                WorktreeToggle::DeleteMerged(checked) => settings.delete_merged = checked,
+                WorktreeToggle::DeleteUnchanged(checked) => settings.delete_unchanged = checked,
+                WorktreeToggle::ProjectDeleteUnchanged(project, Some(checked)) => {
+                    settings.project_delete_unchanged.insert(project, checked);
+                }
+                WorktreeToggle::ProjectDeleteUnchanged(project, None) => {
+                    settings.project_delete_unchanged.remove(&project);
+                }
             }
         }
         if self.snapshot.workspace.settings.as_deref() == Some(&settings) {

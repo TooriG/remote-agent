@@ -382,7 +382,18 @@ pub struct WorktreeSettings {
     pub copy_on_create: bool,
     pub copy_paths: Vec<String>,
     pub worktree_directory: String,
-    pub delete_merged: bool,
+    /// Remove idle checkouts whose HEAD the default branch already contains.
+    pub delete_unchanged: bool,
+    /// Project IDs that override `delete_unchanged`; other projects inherit it.
+    pub project_delete_unchanged: std::collections::HashMap<String, bool>,
+}
+impl WorktreeSettings {
+    pub fn deletes_unchanged(&self, project: Option<&str>) -> bool {
+        project
+            .and_then(|id| self.project_delete_unchanged.get(id))
+            .copied()
+            .unwrap_or(self.delete_unchanged)
+    }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -434,6 +445,24 @@ mod tests {
     }
 
     proptest! {
+        #[test]
+        fn project_cleanup_overrides_only_its_own_project(
+            global in any::<bool>(),
+            overridden in any::<bool>(),
+            other in "[a-z]{1,4}",
+        ) {
+            let settings = WorktreeSettings {
+                delete_unchanged: global,
+                project_delete_unchanged: [("project".to_owned(), overridden)].into(),
+                ..Default::default()
+            };
+            prop_assert_eq!(settings.deletes_unchanged(Some("project")), overridden);
+            prop_assert_eq!(settings.deletes_unchanged(None), global);
+            if other != "project" {
+                prop_assert_eq!(settings.deletes_unchanged(Some(&other)), global);
+            }
+        }
+
         #[test]
         fn worktree_status_distinguishes_pending_work_from_integrated_history(
             dirty in any::<bool>(),

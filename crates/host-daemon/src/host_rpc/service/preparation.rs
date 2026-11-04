@@ -289,7 +289,7 @@ impl HostRpcService {
         if row.startup.as_ref().unwrap().preparation.stage != PreparationStage::Provider {
             let selected = (std::path::Path::new(&row.cwd) != self.inner.projects.chat_directory())
                 .then_some(row.cwd.as_str());
-            let cwd = self
+            let (cwd, created) = self
                 .prepare_directory(selected, || async {
                     self.change_preparation(id, StartupChange::Worktree)
                         .await
@@ -297,9 +297,17 @@ impl HostRpcService {
                         .map_err(|error| anyhow::anyhow!(error.message))
                 })
                 .await?;
-            // Cancellation must not lose a checkout that has already been made.
-            self.change_preparation(id, StartupChange::Workspace { cwd })
-                .await?;
+            // Record the checkout even when interrupted so a retry reuses it;
+            // only a checkout no row refers to is rolled back.
+            if let Err(error) = self
+                .change_preparation(id, StartupChange::Workspace { cwd: cwd.clone() })
+                .await
+            {
+                if created {
+                    self.discard_worktree(&cwd).await;
+                }
+                return Err(error);
+            }
         } else if row.bindings.is_empty() {
             self.restore_workspace(&row.cwd).await?;
         }

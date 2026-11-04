@@ -165,7 +165,8 @@
               "assets"
             ],
             "worktreeDirectory": "/worktrees",
-            "deleteMerged": false
+            "deleteUnchanged": false,
+            "projectDeleteUnchanged": {}
           }
         }
       }
@@ -178,7 +179,8 @@
         "assets"
       ],
       "worktreeDirectory": "/worktrees",
-      "deleteMerged": false
+      "deleteUnchanged": false,
+      "projectDeleteUnchanged": {}
     }
   },
   {
@@ -193,7 +195,10 @@
           "assets"
         ],
         "worktreeDirectory": "/worktrees",
-        "deleteMerged": true
+        "deleteUnchanged": true,
+        "projectDeleteUnchanged": {
+          "project": false
+        }
       }
     },
     "exchanges": [
@@ -207,7 +212,10 @@
             "assets"
           ],
           "worktreeDirectory": "/worktrees",
-          "deleteMerged": true
+          "deleteUnchanged": true,
+          "projectDeleteUnchanged": {
+            "project": false
+          }
         },
         "response": {
           "result": {
@@ -218,7 +226,10 @@
               "assets"
             ],
             "worktreeDirectory": "/worktrees",
-            "deleteMerged": true
+            "deleteUnchanged": true,
+            "projectDeleteUnchanged": {
+              "project": false
+            }
           }
         }
       }
@@ -231,7 +242,10 @@
         "assets"
       ],
       "worktreeDirectory": "/worktrees",
-      "deleteMerged": true
+      "deleteUnchanged": true,
+      "projectDeleteUnchanged": {
+        "project": false
+      }
     }
   },
   {

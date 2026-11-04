@@ -142,7 +142,7 @@ pub(crate) async fn run(config: StartupConfig) -> Result<()> {
     let result = {
         let run = runtime
             .clone()
-            .run(shutdown.clone(), std::time::Duration::from_secs(60));
+            .run(shutdown.clone(), std::time::Duration::from_secs(60 * 60));
         tokio::pin!(run);
         tokio::select! {
             result = &mut run => result,

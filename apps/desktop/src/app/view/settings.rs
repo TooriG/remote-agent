@@ -373,7 +373,19 @@ impl Desktop {
         let disabled =
             !self.snapshot.connected || self.snapshot.workspace.settings.is_none() || self.busy > 0;
         let settings = self.snapshot.workspace.settings.as_ref();
-        v_flex().gap_8()
+        let body = v_flex()
+            .gap_8()
+            .child(settings_group().p_5().child(self.worktree_scope(cx)));
+        if let Some(project) = self.worktrees.scope.clone() {
+            return body
+                .child(
+                    settings_group()
+                        .p_5()
+                        .child(self.project_worktree_cleanup(project, disabled, cx)),
+                )
+                .into_any_element();
+        }
+        body
             .child(settings_group().p_5().gap_5()
                 .child(div().text_lg().font_semibold().child(language.text("新しい会話の作業場所")))
                 .child(h_flex().gap_5().items_center()
@@ -410,19 +422,130 @@ impl Desktop {
                     .child(div().text_xs().text_color(rgb(appearance::MUTED)).child(language.text("リポジトリからの相対パスを1行に1つ入力します。例: .env.local、config/local。存在しないパスはスキップし、シンボリックリンクはコピーしません。"))))
                 .child(div().text_xs().text_color(rgb(appearance::MUTED)).child(language.text("最初のメッセージ送信時に作成・コピーします。指定ファイルはコピー元の内容で置き換え、既存セッションでは再実行しません。"))))
             .child(settings_group().p_5().child(h_flex().gap_5().items_center()
-                .child(section_heading(language.text("マージ済みを自動削除"), language.text("main に取り込まれた作業場所を毎分確認します。実行中・回答待ち・ターミナル使用中・ローカル変更ありの場合は保留し、後で再確認します。ブランチと会話履歴は残ります。"))
+                .child(section_heading(language.text("取り込み済みを自動削除"), language.text("既定ブランチより先のコミットがない作業場所を1時間ごとに削除します。実行中・回答待ち・ターミナル使用中・ローカル変更ありの場合は保留します。ブランチと会話履歴は残ります。"))
                     .flex_1().min_w_0())
-                .child(switch::Switch::new("worktree-delete-merged")
-                    .accessibility_label(language.text("マージ済みワークツリーを自動削除"))
-                    .checked(settings.is_some_and(|settings| settings.delete_merged))
+                .child(switch::Switch::new("worktree-delete-unchanged")
+                    .accessibility_label(language.text("取り込み済みワークツリーを自動削除"))
+                    .checked(settings.is_some_and(|settings| settings.delete_unchanged))
                     .disabled(disabled || self.worktrees.saving)
                     .on_click(cx.listener(|s, checked, _, cx| {
-                        s.save_worktree_settings(Some(WorktreeToggle::DeleteMerged(*checked)), cx);
+                        s.save_worktree_settings(Some(WorktreeToggle::DeleteUnchanged(*checked)), cx);
                         cx.notify();
                     })))))
             .child(div().text_xs().text_color(rgb(appearance::MUTED)).child(if self.worktrees.saved { language.text("保存しました") } else { language.text("変更は自動で保存されます。既存のワークツリーは移動しません。") }))
             .child(self.managed_worktrees(cx))
             .into_any_element()
+    }
+
+    /// Only cleanup varies by project; creation, copying and storage are shared.
+    fn worktree_scope(&self, cx: &Context<Self>) -> Div {
+        let language = crate::localization::language(cx);
+        let projects: Vec<_> = self
+            .snapshot
+            .thread_list()
+            .map(|list| {
+                list.projects
+                    .into_iter()
+                    .chain(list.hidden_projects)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let scope = self.worktrees.scope.as_deref();
+        h_flex()
+            .gap_2()
+            .flex_wrap()
+            .items_center()
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .child(language.text("適用範囲"))
+                    .child(div().text_xs().text_color(rgb(appearance::MUTED)).child(
+                        language.text("プロジェクトごとに変えられるのは自動削除だけです。"),
+                    )),
+            )
+            .child(
+                button(
+                    "worktree-scope-all",
+                    language.text("すべてのプロジェクト"),
+                    cx,
+                    |view, _, cx| {
+                        view.worktrees.scope = None;
+                        cx.notify();
+                    },
+                )
+                .selected(scope.is_none()),
+            )
+            .children(projects.into_iter().enumerate().map(|(index, project)| {
+                let selected = scope == Some(project.id.as_str());
+                let id = project.id;
+                button(
+                    format!("worktree-scope-{index}"),
+                    project.name,
+                    cx,
+                    move |view, _, cx| {
+                        view.worktrees.scope = Some(id.clone());
+                        cx.notify();
+                    },
+                )
+                .selected(selected)
+            }))
+    }
+
+    fn project_worktree_cleanup(&self, project: String, disabled: bool, cx: &Context<Self>) -> Div {
+        let language = crate::localization::language(cx);
+        let settings = self.snapshot.workspace.settings.as_deref();
+        let current =
+            settings.and_then(|settings| settings.project_delete_unchanged.get(&project).copied());
+        let shared = settings.is_some_and(|settings| settings.delete_unchanged);
+        h_flex()
+            .gap_2()
+            .flex_wrap()
+            .items_center()
+            .child(
+                section_heading(
+                    language.text("取り込み済みを自動削除"),
+                    language.text("このプロジェクトの作業場所に適用します。"),
+                )
+                .flex_1()
+                .min_w_0(),
+            )
+            .children(
+                [
+                    (
+                        None,
+                        if shared {
+                            language.text("すべてのプロジェクトと同じ（オン）")
+                        } else {
+                            language.text("すべてのプロジェクトと同じ（オフ）")
+                        },
+                    ),
+                    (Some(true), language.text("オン")),
+                    (Some(false), language.text("オフ")),
+                ]
+                .into_iter()
+                .enumerate()
+                .map(|(index, (value, label))| {
+                    let project = project.clone();
+                    button(
+                        format!("worktree-project-cleanup-{index}"),
+                        label,
+                        cx,
+                        move |view, _, cx| {
+                            view.save_worktree_settings(
+                                Some(WorktreeToggle::ProjectDeleteUnchanged(
+                                    project.clone(),
+                                    value,
+                                )),
+                                cx,
+                            );
+                            cx.notify();
+                        },
+                    )
+                    .selected(current == value)
+                    .disabled(disabled || self.worktrees.saving)
+                }),
+            )
     }
     pub(super) fn workspace_card(&self, cx: &Context<Self>) -> AnyElement {
         let language = crate::localization::language(cx);

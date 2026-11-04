@@ -49,6 +49,13 @@ impl HostRpcService {
         Ok(true)
     }
 
+    /// Roll back a checkout that no conversation refers to after its start failed.
+    pub(super) async fn discard_worktree(&self, cwd: &str) {
+        if let Err(error) = self.inner.worktrees.discard(cwd.to_owned()).await {
+            tracing::warn!(target: "agent", operation = "host.worktree.discard", message = %format!("{error:#}"));
+        }
+    }
+
     pub(super) async fn worktree_list(
         &self,
     ) -> Result<Vec<agent_protocol::models::Worktree>, Failure> {
@@ -285,32 +292,91 @@ impl HostRpcService {
         }
         self.inner
             .worktrees
-            .remove(path, false)
+            .remove(path, crate::worktrees::Removal::Manual)
             .await
             .map_err(|error| Failure::new("worktree_remove_failed", error))
     }
-    pub(crate) async fn cleanup_merged_worktrees(&self) -> anyhow::Result<()> {
-        if !self.inner.worktrees.settings(None).await?.delete_merged {
+    pub(super) async fn update_worktree_settings(
+        &self,
+        settings: agent_protocol::models::WorktreeSettings,
+    ) -> anyhow::Result<agent_protocol::models::WorktreeSettings> {
+        let previous = self.inner.worktrees.settings(None).await?;
+        let saved = self.inner.worktrees.settings(Some(settings)).await?;
+        if (
+            previous.delete_unchanged,
+            &previous.project_delete_unchanged,
+        ) != (saved.delete_unchanged, &saved.project_delete_unchanged)
+        {
+            self.inner.worktree_cleanup.notify_one();
+        }
+        Ok(saved)
+    }
+    /// Resolves when changed cleanup rules call for a sweep before the next interval.
+    pub(crate) async fn worktree_cleanup_requested(&self) {
+        self.inner.worktree_cleanup.notified().await;
+    }
+    /// Remove idle checkouts that the project's default branch already contains.
+    pub(crate) async fn cleanup_unchanged_worktrees(&self) -> anyhow::Result<()> {
+        let settings = self.inner.worktrees.settings(None).await?;
+        let projects = self.project_snapshot().await?;
+        let candidates: Vec<_> = self
+            .inner
+            .worktrees
+            .list()
+            .await?
+            .into_iter()
+            .filter(|tree| std::path::Path::new(&tree.path).exists())
+            .filter_map(|tree| {
+                let project = projects
+                    .project_for_workspace(&tree.path)
+                    .map(str::to_owned);
+                settings
+                    .deletes_unchanged(project.as_deref())
+                    .then_some((tree, project))
+            })
+            .collect();
+        if candidates.is_empty() {
             return Ok(());
         }
+        // Fetch before excluding session starts; refreshing a base can wait on the network.
+        let mut bases = std::collections::HashMap::new();
+        for (tree, _) in &candidates {
+            if bases.contains_key(&tree.project_path) {
+                continue;
+            }
+            let project = std::path::PathBuf::from(&tree.project_path);
+            let base =
+                tokio::task::spawn_blocking(move || crate::worktrees::integration_base(&project))
+                    .await?;
+            if let Err(error) = &base {
+                tracing::warn!(target: "agent", operation = "host.worktree.cleanup", message = %format!("{error:#}"));
+            }
+            bases.insert(tree.project_path.clone(), base.ok());
+        }
         let _exclusive = self.inner.worktree_access.write().await;
-        let entries = self.worktree_list().await?;
-        let statuses = crate::worktrees::directory_statuses(
-            entries
-                .iter()
-                .filter(|entry| entry.blocked_reason.is_none())
-                .map(|entry| crate::worktrees::StatusSource {
-                    cwd: entry.path.clone(),
-                    checkout: None,
-                    repository: None,
-                    branch: None,
-                })
-                .collect(),
-        )
-        .await?;
-        for (source, status) in statuses {
-            if status == agent_protocol::models::WorktreeStatus::Merged
-                && let Err(error) = self.inner.worktrees.remove(source.cwd, true).await
+        let idle: std::collections::HashSet<_> = self
+            .worktree_list()
+            .await?
+            .into_iter()
+            .filter(|entry| entry.blocked_reason.is_none())
+            .map(|entry| entry.path)
+            .collect();
+        for (tree, project) in candidates {
+            let Some(Some(base)) = bases.get(&tree.project_path) else {
+                continue;
+            };
+            if idle.contains(&tree.path)
+                && let Err(error) = self
+                    .inner
+                    .worktrees
+                    .remove(
+                        tree.path,
+                        crate::worktrees::Removal::Unchanged {
+                            project,
+                            base: base.clone(),
+                        },
+                    )
+                    .await
             {
                 tracing::warn!(target: "agent", operation = "host.worktree.cleanup", message = %error);
             }
@@ -869,5 +935,99 @@ pub(super) mod tests {
                 .iter()
                 .all(|entry| entry.blocked_reason.is_none())
         );
+    }
+
+    #[tokio::test]
+    async fn failed_session_start_rolls_back_its_new_checkout_and_branch() {
+        use super::*;
+        use crate::host_rpc::service::conversations::tests::{NativeAgent, call};
+        let directory = tempfile::tempdir().unwrap();
+        let repository = repository(directory.path());
+        let agent = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));
+        agent.create_gate.close();
+        let host = HostRpcService::new(
+            [agent.backend()],
+            ProjectStore::new(directory.path().join("worktrees.json")),
+        );
+        host.inner
+            .worktrees
+            .settings(Some(agent_protocol::models::WorktreeSettings {
+                create_on_new_session: true,
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        let client = host.open_session();
+        call::<agent_protocol::session::OpenedSession>(
+            &host,
+            client.id(),
+            Call::CreateSession(op::CreateSession {
+                initial_input: None,
+                provider: ProviderKind::Codex,
+                cwd: Some(repository.to_str().unwrap().into()),
+                model: None,
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(host.inner.worktrees.list().await.unwrap().is_empty());
+        assert!(
+            crate::git::text(&repository, &["branch", "--list", "bex/*"])
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            std::fs::read_dir(repository.join(".worktree"))
+                .unwrap()
+                .count(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn unchanged_cleanup_follows_each_projects_override() {
+        use super::*;
+        let directory = tempfile::tempdir().unwrap();
+        let repository = repository(directory.path());
+        let host = HostRpcService::new(
+            [],
+            ProjectStore::new(directory.path().join("worktrees.json")),
+        );
+        host.inner.projects.register(&repository).await.unwrap();
+        let project = host.project_snapshot().await.unwrap().projects[0]
+            .id
+            .clone();
+        let mut settings = agent_protocol::models::WorktreeSettings {
+            create_on_new_session: true,
+            delete_unchanged: true,
+            project_delete_unchanged: [(project.clone(), false)].into(),
+            ..Default::default()
+        };
+        host.update_worktree_settings(settings.clone())
+            .await
+            .unwrap();
+        let kept = host
+            .inner
+            .worktrees
+            .prepare(repository.to_str(), || async { Ok(()) })
+            .await
+            .unwrap()
+            .unwrap();
+        host.cleanup_unchanged_worktrees().await.unwrap();
+        assert!(
+            kept.is_dir(),
+            "the project's override disables the global rule"
+        );
+        settings.delete_unchanged = false;
+        settings.project_delete_unchanged = [(project, true)].into();
+        host.update_worktree_settings(settings).await.unwrap();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            host.worktree_cleanup_requested(),
+        )
+        .await
+        .expect("changed cleanup rules request a sweep");
+        host.cleanup_unchanged_worktrees().await.unwrap();
+        assert!(!kept.exists(), "the project's override enables cleanup");
     }
 }
