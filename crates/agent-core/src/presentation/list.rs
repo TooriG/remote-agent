@@ -137,6 +137,7 @@ impl Snapshot {
     fn list_projection(
         &self,
         list: &crate::models::ThreadList,
+        include_standalone: bool,
         additional_queries: usize,
     ) -> (ThreadList, ChatPlacements<'_>) {
         let waiting = self.waiting_sessions();
@@ -180,7 +181,15 @@ impl Snapshot {
             .iter()
             .filter(|(_, _, _, expanded)| *expanded)
             .fold(
-                (list.data.len().saturating_add(additional_queries), 0usize),
+                (
+                    (if include_standalone {
+                        list.data.len()
+                    } else {
+                        0
+                    })
+                    .saturating_add(additional_queries),
+                    0usize,
+                ),
                 |(queries, shortcuts), (_, prefs, page, _)| {
                     (
                         queries.saturating_add(page.map_or(0, |page| page.data.len())),
@@ -211,17 +220,28 @@ impl Snapshot {
             None
         };
         let placements = ChatPlacements::new(preferences, queries);
-        let summaries = thread_summaries(
-            list.data.iter(),
-            &self.activity.active,
-            &self.activity.unread,
-            waiting,
-            &project_ids,
-            None,
-        )
-        .into_iter()
-        .filter(|thread| thread.project_id.is_none() && placements.get(&thread.id).is_none())
-        .collect();
+        let summaries = if include_standalone {
+            thread_summaries(
+                list.data.iter().filter(|thread| {
+                    thread
+                        .project_id
+                        .as_deref()
+                        .is_none_or(|project| !project_ids.contains(project))
+                        && thread
+                            .id
+                            .as_ref()
+                            .is_none_or(|id| placements.get(id).is_none())
+                }),
+                &self.activity.active,
+                &self.activity.unread,
+                waiting,
+                // The filter has already resolved these rows as standalone.
+                &HashSet::new(),
+                None,
+            )
+        } else {
+            Vec::new()
+        };
         (
             ThreadList {
                 notice,
@@ -380,7 +400,7 @@ impl Snapshot {
             .fold(source.data.len(), |queries, page| {
                 queries.saturating_add(page.data.len())
             });
-        let (mut list, placements) = self.list_projection(source, additional_queries);
+        let (mut list, placements) = self.list_projection(source, false, additional_queries);
         let waiting = self.waiting_sessions();
         let project_ids: HashSet<_> = source.projects.iter().map(|p| p.id.as_str()).collect();
         let mut rows: BTreeMap<_, &crate::models::Thread> = BTreeMap::new();
@@ -445,7 +465,7 @@ impl Snapshot {
 
     pub fn thread_list(&self) -> Option<ThreadList> {
         let list = self.threads.as_deref()?;
-        Some(self.list_projection(list, 0).0)
+        Some(self.list_projection(list, true, 0).0)
     }
 }
 
@@ -486,6 +506,8 @@ fn thread_summaries<'a>(
 
 #[cfg(test)]
 mod placed_tests;
+#[cfg(test)]
+mod root_tests;
 
 #[cfg(test)]
 mod tests {
