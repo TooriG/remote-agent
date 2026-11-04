@@ -344,7 +344,27 @@ fn project_override_keeps_catalogue_membership_and_does_not_create_row_ids() {
 fn large_placement_lists_keep_scope_hidden_and_dangling_destinations_in_every_view() {
     let mut snapshot = fixture();
     Arc::make_mut(&mut snapshot.list_query).limit = 256;
-    snapshot.conversations = Arc::default();
+    snapshot.conversations = Arc::new(
+        [
+            (
+                session("chat-2"),
+                Arc::new(Thread {
+                    id: Some(session("chat-2")),
+                    name: Some("Read latest".into()),
+                    ..Default::default()
+                }),
+            ),
+            (
+                session("chat-3"),
+                Arc::new(Thread {
+                    id: None,
+                    name: Some("Read anonymous".into()),
+                    ..Default::default()
+                }),
+            ),
+        ]
+        .into(),
+    );
     let list = Arc::make_mut(snapshot.threads.as_mut().unwrap());
     list.data = (0..140)
         .map(|index| Thread {
@@ -360,7 +380,7 @@ fn large_placement_lists_keep_scope_hidden_and_dangling_destinations_in_every_vi
         ..Default::default()
     });
     let mut page = list.clone();
-    page.data = [0, 1, 2, 130]
+    page.data = [0, 1, 2, 4, 130]
         .map(|index| Thread {
             id: Some(session(&format!("chat-{index}"))),
             name: Some(format!("Source {index}")),
@@ -401,6 +421,14 @@ fn large_placement_lists_keep_scope_hidden_and_dangling_destinations_in_every_vi
             id: session("chat-0"),
             title: "Duplicate later project".into(),
         });
+    preferences
+        .get_mut("destination")
+        .unwrap()
+        .placed_chats
+        .push(PlacedChat {
+            id: session("missing-row"),
+            title: "Saved missing row".into(),
+        });
     snapshot.project_preferences = Arc::new([("active".into(), preferences)].into());
     let list = snapshot.thread_list().unwrap();
     assert_eq!(
@@ -420,6 +448,44 @@ fn large_placement_lists_keep_scope_hidden_and_dangling_destinations_in_every_vi
             .map(|row| row.id.id.as_str())
             .collect::<Vec<_>>(),
         ["chat-130"]
+    );
+    let destination = list
+        .projects
+        .iter()
+        .find(|p| p.id == "destination")
+        .unwrap();
+    assert_eq!(
+        destination
+            .threads
+            .iter()
+            .find(|row| row.id == session("chat-2"))
+            .unwrap()
+            .title,
+        "Read latest"
+    );
+    assert!(
+        !destination
+            .threads
+            .iter()
+            .any(|row| row.id == session("chat-3"))
+    );
+    assert_eq!(
+        destination
+            .threads
+            .iter()
+            .find(|row| row.id == session("chat-4"))
+            .unwrap()
+            .title,
+        "Chat 4"
+    );
+    assert_eq!(
+        destination
+            .threads
+            .iter()
+            .find(|row| row.id == session("missing-row"))
+            .unwrap()
+            .title,
+        "Saved missing row"
     );
     assert_eq!(list.hidden_projects.len(), 1);
     let recent = snapshot.recent_thread_list().unwrap();
@@ -452,7 +518,7 @@ fn large_placement_lists_keep_scope_hidden_and_dangling_destinations_in_every_vi
             .unwrap()
             .threads
             .len(),
-        4
+        5
     );
     assert!(
         list.projects

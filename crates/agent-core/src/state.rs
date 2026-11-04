@@ -319,6 +319,35 @@ pub struct Snapshot {
     #[serde(skip)]
     pub error: Option<String>,
 }
+#[cfg(test)]
+mod metadata_tests;
+
+/// Cache unresolved batch lookups, including absent rows. Read conversations keep
+/// their existing priority; listed duplicates keep their first occurrence.
+pub(crate) fn index_missing_metadata<'a>(
+    conversations: &BTreeMap<crate::session::SessionRef, Arc<Thread>>,
+    listed: impl Iterator<Item = &'a Thread>,
+    requested: impl Iterator<Item = &'a crate::session::SessionRef>,
+) -> HashMap<&'a crate::session::SessionRef, Option<&'a Thread>> {
+    let mut indexed: HashMap<_, Option<&Thread>> = requested
+        .filter(|id| !conversations.contains_key(*id))
+        .map(|id| (id, None))
+        .collect();
+    let mut missing = indexed.len();
+    for thread in listed {
+        if missing == 0 {
+            break;
+        }
+        if let Some(entry) = thread.id.as_ref().and_then(|id| indexed.get_mut(id))
+            && entry.is_none()
+        {
+            *entry = Some(thread);
+            missing -= 1;
+        }
+    }
+    indexed
+}
+
 impl Snapshot {
     pub(crate) fn listed_threads(&self) -> impl Iterator<Item = &Thread> {
         self.threads

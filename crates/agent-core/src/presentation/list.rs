@@ -176,16 +176,40 @@ impl Snapshot {
                 prefs.and_then(|p| p.order).unwrap_or(usize::MAX),
             )
         });
-        let queries = projects.iter().fold(
-            list.data.len().saturating_add(additional_queries),
-            |queries, (_, _, page, expanded)| {
-                queries.saturating_add(if *expanded {
-                    page.map_or(0, |page| page.data.len())
-                } else {
-                    0
+        let (queries, shortcut_queries) = projects
+            .iter()
+            .filter(|(_, _, _, expanded)| *expanded)
+            .fold(
+                (list.data.len().saturating_add(additional_queries), 0usize),
+                |(queries, shortcuts), (_, prefs, page, _)| {
+                    (
+                        queries.saturating_add(page.map_or(0, |page| page.data.len())),
+                        shortcuts.saturating_add(prefs.map_or(0, |prefs| prefs.placed_chats.len())),
+                    )
+                },
+            );
+        let metadata = if shortcut_queries >= 128
+            && self.conversations.len().saturating_mul(2) < shortcut_queries
+            && self
+                .project_threads
+                .values()
+                .fold(list.data.len(), |count, page| {
+                    count.saturating_add(page.data.len())
                 })
-            },
-        );
+                >= 128
+        {
+            Some(crate::state::index_missing_metadata(
+                &self.conversations,
+                self.listed_threads(),
+                projects
+                    .iter()
+                    .filter(|(_, _, _, expanded)| *expanded)
+                    .flat_map(|(_, prefs, ..)| prefs.iter().flat_map(|prefs| &prefs.placed_chats))
+                    .map(|chat| &chat.id),
+            ))
+        } else {
+            None
+        };
         let placements = ChatPlacements::new(preferences, queries);
         let summaries = thread_summaries(
             list.data.iter(),
@@ -283,7 +307,11 @@ impl Snapshot {
                                 .into_iter()
                                 .flat_map(|p| &p.placed_chats)
                                 .map(|chat| {
-                                    self.thread_metadata(&chat.id)
+                                    metadata
+                                        .as_ref()
+                                        .and_then(|metadata| metadata.get(&chat.id))
+                                        .copied()
+                                        .unwrap_or_else(|| self.thread_metadata(&chat.id))
                                         .map(Cow::Borrowed)
                                         .unwrap_or_else(|| {
                                             Cow::Owned(crate::models::Thread {
