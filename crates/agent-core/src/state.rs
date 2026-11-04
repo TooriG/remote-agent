@@ -8,7 +8,7 @@ use operations as op;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     sync::Arc,
 };
 
@@ -1737,10 +1737,11 @@ fn reconcile_pending(snapshot: &mut Snapshot, thread_id: &crate::session::Sessio
     let Some(thread) = snapshot.conversations.get(thread_id) else {
         return;
     };
+    let draft_key = DraftKey::from(thread_id);
     let deliveries: Vec<_> = snapshot
         .pending_submissions
         .iter()
-        .filter(|(_, pending)| pending.draft_key == DraftKey::from(thread_id))
+        .filter(|(_, pending)| pending.draft_key == draft_key)
         .filter_map(|(id, _)| {
             thread
                 .submissions
@@ -1779,27 +1780,47 @@ fn reconcile_pending(snapshot: &mut Snapshot, thread_id: &crate::session::Sessio
             Arc::make_mut(&mut snapshot.pending_submissions).insert(id, Arc::new(pending));
         }
     }
-    let thread = &snapshot.conversations[thread_id];
-    let echoed = |id: &agent_protocol::ids::ClientInputId, pending: &Arc<PendingSubmission>| {
-        pending.draft_key == DraftKey::from(thread_id)
-            && thread
-                .turns
-                .iter()
-                .flatten()
-                .flat_map(|turn| turn.items.iter().flatten())
-                .any(|item| {
-                    matches!(item.body(), crate::models::ItemBody::UserMessage { .. })
-                        && item.client_input_id.as_ref() == Some(id)
-                })
-    };
-    if snapshot
+    let mut pending_ids = snapshot
         .pending_submissions
         .iter()
-        .any(|(id, pending)| echoed(id, pending))
-    {
-        Arc::make_mut(&mut snapshot.pending_submissions).retain(|id, pending| !echoed(id, pending));
+        .filter(|(_, pending)| pending.draft_key == draft_key)
+        .map(|(id, _)| id)
+        .peekable();
+    let Some(first) = pending_ids.next() else {
+        return;
+    };
+    let thread = &snapshot.conversations[thread_id];
+    let mut native_echoes = thread
+        .turns
+        .iter()
+        .flatten()
+        .flat_map(|turn| turn.items.iter().flatten())
+        .filter(|item| matches!(item.body(), crate::models::ItemBody::UserMessage { .. }))
+        .filter_map(|item| item.client_input_id.as_ref());
+    if pending_ids.peek().is_none() {
+        if let Some(id) = native_echoes.find(|id| *id == first) {
+            Arc::make_mut(&mut snapshot.pending_submissions).remove(id);
+        }
+        return;
+    }
+    let pending_ids: HashSet<_> = std::iter::once(first).chain(pending_ids).collect();
+    let mut echoed = HashSet::new();
+    for id in native_echoes {
+        if pending_ids.contains(id) {
+            echoed.insert(id);
+            if echoed.len() == pending_ids.len() {
+                break;
+            }
+        }
+    }
+    if !echoed.is_empty() {
+        Arc::make_mut(&mut snapshot.pending_submissions).retain(|id, _| !echoed.contains(id));
     }
 }
+
+#[cfg(test)]
+#[path = "state/pending_tests.rs"]
+mod pending_tests;
 
 #[cfg(test)]
 #[path = "state/model_selection_tests.rs"]
