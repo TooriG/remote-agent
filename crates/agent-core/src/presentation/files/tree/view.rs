@@ -5,6 +5,7 @@ use icu_collator::{
     options::{CollatorOptions, Strength},
     preferences::CollationNumericOrdering,
 };
+use std::collections::HashSet;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
@@ -200,6 +201,14 @@ impl Tree {
         searching: bool,
         visible: &BTreeSet<String>,
     ) -> Vec<FileTreeRow> {
+        // Keep the common small selection allocation-free. Large selections
+        // must not rescan every selected path for every visible row.
+        let selected = (self.selected.len() >= 64).then(|| {
+            self.selected
+                .iter()
+                .map(String::as_str)
+                .collect::<HashSet<_>>()
+        });
         let mut pending = children
             .get("")
             .into_iter()
@@ -232,7 +241,10 @@ impl Tree {
                 kind: entry.kind,
                 depth,
                 expanded,
-                selected: self.selected.contains(&entry.path),
+                selected: selected.as_ref().map_or_else(
+                    || self.selected.contains(&entry.path),
+                    |selected| selected.contains(entry.path.as_str()),
+                ),
                 ignored: entry.ignored,
                 loading: self.running.contains(&entry.path) || self.queue.contains(&entry.path),
             });

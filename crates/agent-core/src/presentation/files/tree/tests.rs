@@ -60,6 +60,101 @@ fn toggle(trees: &mut FileTrees, path: &str) -> Vec<TreeWork> {
 }
 
 #[test]
+fn range_selection_keeps_first_occurrences_and_existing_order() {
+    let mut trees = FileTrees::default();
+    let root = open(&mut trees, ROOT, FileTreeSurface::Desktop);
+    complete(
+        &mut trees,
+        &root[0],
+        ["a", "b", "c", "d"]
+            .into_iter()
+            .map(|path| entry(path, EntryKind::File))
+            .collect(),
+    );
+    let mut rows = trees.view(&key(ROOT)).rows;
+    rows.insert(2, rows[1].clone());
+    let current = ["b".into(), "a".into(), "b".into()];
+    for (anchor, target) in [("a", "d"), ("d", "a")] {
+        let (selected, retained_anchor) =
+            super::input::selection(&rows, &current, Some(anchor), target, true, true);
+        assert_eq!(selected, ["b", "a", "b", "c", "d"]);
+        assert_eq!(retained_anchor.as_deref(), Some(anchor));
+        let (selected, _) =
+            super::input::selection(&rows, &current, Some(anchor), target, false, true);
+        assert_eq!(selected, ["a", "b", "c", "d"]);
+    }
+}
+
+#[test]
+fn shift_selection_can_cover_a_large_tree_in_display_order() {
+    let mut trees = FileTrees::default();
+    let root = open(&mut trees, ROOT, FileTreeSurface::Desktop);
+    let paths: Vec<_> = (0..1024).map(|id| format!("file{id}.rs")).collect();
+    complete(
+        &mut trees,
+        &root[0],
+        paths
+            .iter()
+            .rev()
+            .map(|path| entry(path, EntryKind::File))
+            .collect(),
+    );
+    action(
+        &mut trees,
+        FileTreeAction::Select {
+            path: paths[0].clone(),
+            additive: false,
+            range: false,
+        },
+    );
+    action(
+        &mut trees,
+        FileTreeAction::Select {
+            path: paths.last().unwrap().clone(),
+            additive: false,
+            range: true,
+        },
+    );
+    let view = trees.view(&key(ROOT));
+    assert_eq!(view.selected_paths, paths);
+    assert!(view.rows.iter().all(|row| row.selected));
+}
+
+#[test]
+fn large_selections_keep_input_order_and_exact_row_membership() {
+    let mut trees = FileTrees::default();
+    let root = open(&mut trees, ROOT, FileTreeSurface::Desktop);
+    complete(
+        &mut trees,
+        &root[0],
+        (0..256)
+            .map(|id| entry(&format!("file{id}.rs"), EntryKind::File))
+            .collect(),
+    );
+    for count in [0, 1, 15, 16, 63, 64, 128] {
+        let selected: Vec<_> = (0..count)
+            .rev()
+            .map(|id| format!("file{}.rs", id * 2))
+            .collect();
+        action(
+            &mut trees,
+            FileTreeAction::SelectPaths {
+                paths: selected.clone(),
+                anchor: None,
+                focused: None,
+            },
+        );
+        let view = trees.view(&key(ROOT));
+        assert_eq!(view.selected_paths, selected);
+        let expected: BTreeSet<_> = selected.iter().collect();
+        assert_eq!(view.rows.iter().filter(|row| row.selected).count(), count);
+        for row in &view.rows {
+            assert_eq!(row.selected, expected.contains(&row.path));
+        }
+    }
+}
+
+#[test]
 fn lazy_tree_sorts_directories_first_and_desktop_flattens_single_directory_chains() {
     let mut trees = FileTrees::default();
     let root = open(&mut trees, ROOT, FileTreeSurface::Desktop);

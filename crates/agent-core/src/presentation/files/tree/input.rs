@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashSet;
 
 /// Native input produces one shared state action and any resulting UI operation.
 pub(super) struct FileTreeInput {
@@ -28,7 +29,7 @@ pub(super) fn focused_path(
         .or_else(|| {
             rows.iter()
                 .rev()
-                .find(|row| focused.is_some_and(|path| path.starts_with(&format!("{}/", row.path))))
+                .find(|row| focused.is_some_and(|path| is_descendant(path, &row.path)))
         })
         .or_else(|| rows.first())
         .map(|row| row.path.clone())
@@ -37,12 +38,17 @@ pub(super) fn desktop_query(query: &str) -> String {
     query.trim().replace('\\', "/").to_lowercase()
 }
 pub(super) fn matches_query_path(path: &str, kind: EntryKind, query: &str) -> bool {
-    let suffix = if kind == EntryKind::Directory {
-        "/"
-    } else {
-        ""
-    };
-    format!("{}{suffix}", path.to_lowercase()).contains(query)
+    let path = path.to_lowercase();
+    path.contains(query)
+        || kind == EntryKind::Directory
+            && query
+                .strip_suffix('/')
+                .is_some_and(|query| path.ends_with(query))
+}
+
+fn is_descendant(path: &str, parent: &str) -> bool {
+    path.strip_prefix(parent)
+        .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
 impl FileTreeView {
@@ -58,7 +64,7 @@ impl FileTreeView {
             .or_else(|| {
                 self.rows
                     .iter()
-                    .position(|row| row.path.starts_with(&format!("{path}/")))
+                    .position(|row| is_descendant(&row.path, path))
             })
     }
     pub(super) fn desktop_keyboard_input(
@@ -117,7 +123,7 @@ impl FileTreeView {
                 let parent = self.rows[..index]
                     .iter()
                     .rev()
-                    .find(|parent| row.path.starts_with(&format!("{}/", parent.path)))?;
+                    .find(|parent| is_descendant(&row.path, &parent.path))?;
                 FileTreeAction::Focus {
                     path: parent.path.clone(),
                 }
@@ -252,8 +258,13 @@ pub(super) fn selection(
             rows.iter().position(|row| row.path == path),
         )
     {
+        let mut seen: HashSet<_> = if additive {
+            current.iter().map(String::as_str).collect()
+        } else {
+            HashSet::new()
+        };
         for row in &rows[first.min(last)..=first.max(last)] {
-            if !selected.contains(&row.path) {
+            if seen.insert(row.path.as_str()) {
                 selected.push(row.path.clone());
             }
         }
@@ -267,4 +278,46 @@ pub(super) fn selection(
         selected.push(path.into());
     }
     (selected, Some(path.into()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn queries_match_literal_paths_and_a_directorys_virtual_trailing_slash() {
+        for (path, kind, query, expected) in [
+            ("src/MAIN.rs", EntryKind::File, "main.rs", true),
+            ("src/子", EntryKind::Directory, "子/", true),
+            ("src/子", EntryKind::File, "子/", false),
+            ("src/子", EntryKind::Directory, "src/子/", true),
+            ("src/子", EntryKind::Directory, "子//", false),
+            ("src/子", EntryKind::File, "src/", true),
+            ("root", EntryKind::File, "/", false),
+            ("root", EntryKind::Directory, "/", true),
+            ("root", EntryKind::Directory, "", true),
+            ("İ", EntryKind::Directory, "i\u{307}/", true),
+        ] {
+            assert_eq!(
+                matches_query_path(path, kind, query),
+                expected,
+                "{path:?} {query:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ancestors_require_an_actual_path_boundary() {
+        for (path, parent, expected) in [
+            ("src/main.rs", "src", true),
+            ("src/nested/file", "src", true),
+            ("src2/main.rs", "src", false),
+            ("src", "src", false),
+            ("日本語/子", "日本語", true),
+            ("日本語二/子", "日本語", false),
+            ("file", "", false),
+        ] {
+            assert_eq!(is_descendant(path, parent), expected, "{path:?} {parent:?}");
+        }
+    }
 }
