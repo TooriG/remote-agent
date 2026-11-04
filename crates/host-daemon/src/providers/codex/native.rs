@@ -239,6 +239,40 @@ fn message_parts(value: Value) -> Vec<MessagePart> {
 #[cfg(test)]
 mod owned_parts_tests;
 
+fn file_changes(value: Value) -> Vec<FileChange> {
+    let Value::Array(changes) = value else {
+        return Vec::new();
+    };
+    changes
+        .into_iter()
+        .map(|mut change| {
+            let mut kind = take_value(&mut change, "kind");
+            FileChange {
+                path: take_string(&mut change, "path"),
+                proposal: None,
+                diff: match take_value(&mut change, "diff") {
+                    Value::String(diff) => Some(diff),
+                    _ => None,
+                },
+                kind: match kind.as_str().or_else(|| kind["type"].as_str()) {
+                    Some("add") => FileChangeKind::Add,
+                    Some("delete") => FileChangeKind::Delete,
+                    Some("update") => FileChangeKind::Update {
+                        move_path: match take_value(&mut kind, "movePath") {
+                            Value::String(path) => Some(path),
+                            _ => None,
+                        },
+                    },
+                    _ => FileChangeKind::Unknown,
+                },
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod owned_details_tests;
+
 pub(crate) fn parse_item(mut value: Value) -> Result<Item, serde_json::Error> {
     let id = field(&value, "id")?;
     let status = item_status(value["status"].as_str());
@@ -271,28 +305,8 @@ pub(crate) fn parse_item(mut value: Value) -> Result<Item, serde_json::Error> {
             exit_code: field(&value, "exitCode")?,
         },
         "fileChange" => ItemBody::FileChange {
-            changes: value["changes"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .map(|change| FileChange {
-                    path: string(change, "path"),
-                    proposal: None,
-                    diff: change["diff"].as_str().map(str::to_owned),
-                    kind: match change["kind"]
-                        .as_str()
-                        .or_else(|| change["kind"]["type"].as_str())
-                    {
-                        Some("add") => FileChangeKind::Add,
-                        Some("delete") => FileChangeKind::Delete,
-                        Some("update") => FileChangeKind::Update {
-                            move_path: change["kind"]["movePath"].as_str().map(str::to_owned),
-                        },
-                        _ => FileChangeKind::Unknown,
-                    },
-                })
-                .collect(),
-            output: string(&value, "output"),
+            changes: file_changes(take_value(&mut value, "changes")),
+            output: take_string(&mut value, "output"),
         },
         "mcpToolCall" | "dynamicToolCall" => ItemBody::ToolCall {
             resource_uri: field(&value, "mcpAppResourceUri")?,
@@ -398,17 +412,21 @@ pub(crate) fn parse_item(mut value: Value) -> Result<Item, serde_json::Error> {
         "contextCompaction" => ItemBody::Compaction {},
         "enteredReviewMode" | "exitedReviewMode" => ItemBody::Review {
             entering: value["type"] == "enteredReviewMode",
-            text: string(&value, "review"),
+            text: take_string(&mut value, "review"),
         },
-        "hookPrompt" => ItemBody::Hook {
-            fragments: value["fragments"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|v| v["text"].as_str())
-                .map(str::to_owned)
-                .collect(),
-        },
+        "hookPrompt" => {
+            let fragments = match take_value(&mut value, "fragments") {
+                Value::Array(fragments) => fragments
+                    .into_iter()
+                    .filter_map(|mut fragment| match take_value(&mut fragment, "text") {
+                        Value::String(text) => Some(text),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            ItemBody::Hook { fragments }
+        }
         "sleep" => ItemBody::Sleep {},
         _ => ItemBody::Custom {
             provider: ProviderKind::Codex,
