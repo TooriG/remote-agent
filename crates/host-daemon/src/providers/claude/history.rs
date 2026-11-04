@@ -313,17 +313,21 @@ pub(super) fn summary(path: &Path) -> Result<crate::providers::SessionSummary> {
 }
 
 fn input_text(content: &Value) -> Option<String> {
-    let text = if let Some(text) = content.as_str() {
-        text.to_owned()
+    let text: String = if let Some(text) = content.as_str() {
+        text.chars().take(160).collect()
     } else {
-        content
+        let mut parts = content
             .as_array()?
             .iter()
-            .filter_map(|block| block["text"].as_str())
-            .collect::<Vec<_>>()
-            .join("\n")
+            .filter_map(|block| block["text"].as_str());
+        parts
+            .next()?
+            .chars()
+            .chain(parts.flat_map(|part| std::iter::once('\n').chain(part.chars())))
+            .take(160)
+            .collect()
     };
-    (!text.is_empty()).then(|| text.chars().take(160).collect())
+    (!text.is_empty()).then_some(text)
 }
 
 pub(super) struct NativeHistory {
@@ -778,6 +782,59 @@ mod tests {
         let path = project.join(format!("{ID}.jsonl"));
         fs::write(&path, bytes).unwrap();
         (root, path)
+    }
+
+    #[test]
+    fn previews_keep_text_block_separators_and_count_unicode_characters() {
+        for (content, expected) in [
+            (Value::Null, None),
+            (json!(42), None),
+            (json!({"text":"object"}), None),
+            (json!(""), None),
+            (json!(" \n"), Some(" \n".into())),
+            (json!([]), None),
+            (json!([null,42,"ignored",{"text":true}]), None),
+            (json!([{"text":""}]), None),
+            (json!([{"text":""},{"text":""}]), Some("\n".into())),
+            (
+                json!([{"text":"a"},null,{"text":""},{"text":42},{"text":"b"}]),
+                Some("a\n\nb".into()),
+            ),
+            (json!([{"type":"image","text":"kept"}]), Some("kept".into())),
+            (
+                json!([{"text":"a".repeat(159)},{"text":"🦀"}]),
+                Some("a".repeat(159) + "\n"),
+            ),
+            (
+                json!([{"text":"a".repeat(158)},{"text":"🦀more"}]),
+                Some("a".repeat(158) + "\n🦀"),
+            ),
+        ] {
+            assert_eq!(input_text(&content), expected, "{content}");
+        }
+        for count in [0, 1, 79, 80, 81, 159, 160, 161, 1000] {
+            let text = "🦀é".repeat(count);
+            let expected: String = text.chars().take(160).collect();
+            let expected = (!expected.is_empty()).then_some(expected);
+            for content in [json!(text), json!([{"text":text}])] {
+                assert_eq!(input_text(&content), expected);
+            }
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn preview_arrays_match_the_prefix_of_their_text_and_separators(
+            parts in proptest::collection::vec(proptest::option::of(".{0,100}"),0..32),
+        ) {
+            let combined=parts.iter().filter_map(Option::as_deref).collect::<Vec<_>>().join("\n");
+            let expected: String=combined.chars().take(160).collect();
+            let content: Vec<_>=parts.into_iter().enumerate().map(|(index,text)| match text {
+                Some(text)=>json!({"text":text}),
+                None=>if index%2==0 {Value::Null}else{json!({"text":false})},
+            }).collect();
+            proptest::prop_assert_eq!(input_text(&json!(content)),(!expected.is_empty()).then_some(expected));
+        }
     }
 
     #[test]
