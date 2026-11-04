@@ -51,13 +51,16 @@ extension LaunchUITests {
         }
         XCTAssertTrue(link.waitForExistence(timeout: 10)); link.tap()
         let done = app.buttons["file.close"]
-        XCTAssertTrue(done.waitForExistence(timeout: 15), "The Host file did not open in the file editor")
+        XCTAssertTrue(done.waitForExistence(timeout: 15), "The Host file did not open")
         let editor = app.textViews["file.editor"]
-        XCTAssertTrue(editor.exists)
         XCTAssertTrue(app.navigationBars[filename].exists)
         if let text {
+            XCTAssertTrue(editor.exists)
             let loaded = expectation(for: NSPredicate(format: "value CONTAINS %@", text), evaluatedWith: editor)
             wait(for: [loaded], timeout: 10)
+        } else {
+            XCTAssertTrue(app.descendants(matching: .any)["file.preview"].waitForExistence(timeout: 15))
+            XCTAssertFalse(editor.exists, "Binary files must bypass the text editor")
         }
         captureScreen(app, named: filename)
         done.tap()

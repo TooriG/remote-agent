@@ -1,13 +1,79 @@
 import AgentCore
+import QuickLook
 import SwiftUI
 
-struct FileEditorSheet: View {
+private struct WorkspaceFilePreview: View {
+    let entry: FileEntry
+    let download: @MainActor (String) async throws -> URL
+    @Environment(\.dismiss) private var dismiss
+    @State private var url: URL?
+    @State private var error: String?
+    @State private var attempt = UUID()
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading) {
+                Text(entry.path).font(.caption).foregroundStyle(.secondary)
+                    .textSelection(.enabled).padding(.horizontal)
+                if let url {
+                    if QLPreviewController.canPreview(url as NSURL) {
+                        ConversationFilePreview(url: url)
+                            .accessibilityIdentifier("file.preview")
+                    } else {
+                        AppNotice(text: "このファイル形式はプレビューできません").padding()
+                    }
+                } else if let error {
+                    AppNotice(text: error).padding()
+                    Button("再試行") { attempt = UUID() }.padding()
+                } else {
+                    ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .navigationTitle(entry.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("閉じる") { dismiss() }.accessibilityIdentifier("file.close")
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    if let url {
+                        ShareLink(item: url) { Image(systemName: "square.and.arrow.up") }
+                            .accessibilityLabel("保存・共有")
+                    }
+                }
+            }
+        }
+        .task(id: attempt) {
+            error = nil
+            do {
+                let downloaded = try await download(entry.path)
+                if Task.isCancelled {
+                    try? FileManager.default.removeItem(at: downloaded.deletingLastPathComponent())
+                    return
+                }
+                url = downloaded
+            } catch {
+                if !Task.isCancelled {
+                    self.error = error.localizedDescription
+                }
+            }
+        }
+        .onDisappear {
+            if let url {
+                self.url = nil
+                try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+            }
+        }
+    }
+}
+
+struct WorkspaceFileSheet: View {
     let snapshot: AgentCore.Snapshot
     @Binding var text: String
     let perform: SnapshotRequest
     let entry: FileEntry
     let line: UInt32?
-    let download: (String) -> Void
+    let download: @MainActor (String) async throws -> URL
     let aiEdit: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var error: String?
@@ -15,6 +81,7 @@ struct FileEditorSheet: View {
     @State private var initialized = false
     @State private var confirmReload = false
     @State private var selection: TextSelection?
+    @State private var sharedFile: SharedFile?
     private var file: FileContent? {
         snapshot.file().flatMap { $0.path == entry.path ? $0 : nil }
     }
@@ -28,6 +95,14 @@ struct FileEditorSheet: View {
     }
 
     var body: some View {
+        if mobileFilePreviewMimeType(path: entry.path) != nil {
+            WorkspaceFilePreview(entry: entry, download: download)
+        } else {
+            editor
+        }
+    }
+
+    private var editor: some View {
         NavigationStack {
             VStack(alignment: .leading) {
                 Text(entry.path).font(.caption).foregroundColor(.secondary).textSelection(.enabled).padding(.horizontal)
@@ -49,7 +124,17 @@ struct FileEditorSheet: View {
                             load(restoreDraft: false)
                         }
                     }
-                    Button("ダウンロード") { download(entry.path) }
+                    Button("ダウンロード") {
+                        busy = true; error = nil
+                        Task {
+                            defer { busy = false }
+                            do {
+                                sharedFile = try await SharedFile(url: download(entry.path))
+                            } catch {
+                                self.error = error.localizedDescription
+                            }
+                        }
+                    }.disabled(busy)
                     Button("AIで編集") { aiEdit(entry.path) }.accessibilityIdentifier("file.ai-edit")
                 }.padding()
             }
@@ -71,6 +156,7 @@ struct FileEditorSheet: View {
                 }
             }
             .onChange(of: file?.revision) { moveToLine() }
+            .sheet(item: $sharedFile) { item in FileShareSheet(url: item.url) }
             .onAppear {
                 if !initialized {
                     load(restoreDraft: true)

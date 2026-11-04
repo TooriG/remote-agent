@@ -111,6 +111,18 @@ fn share_mime_type(path: &str) -> Option<&'static str> {
         .map(|(_, mime)| *mime)
 }
 
+/// Resolved binary files use authenticated downloads and the platform viewer,
+/// bypassing the UTF-8 editor's size limit. HTML and notebook JSON stay editable.
+#[cfg_attr(feature = "bindings", uniffi::export)]
+pub fn mobile_file_preview_mime_type(path: String) -> Option<String> {
+    if path.ends_with(['/', '\\']) {
+        return None;
+    }
+    share_mime_type(&path)
+        .filter(|mime| !matches!(*mime, "text/html" | "application/x-ipynb+json"))
+        .map(str::to_owned)
+}
+
 const SHARE_MIME_TYPES: &[(&str, &str)] = &[
     ("aac", "audio/aac"),
     ("aiff", "audio/aiff"),
@@ -181,6 +193,26 @@ const SHARE_MIME_TYPES: &[(&str, &str)] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[rstest::rstest]
+    #[case("/Users/tt/Movies/bex-promo-ja.mp4", Some("video/mp4"))]
+    #[case(r"C:\Movies\CLIP.MOV", Some("video/quicktime"))]
+    #[case("/repo/voice.m4a", Some("audio/mp4"))]
+    #[case("/repo/photo.PNG", Some("image/png"))]
+    #[case("/repo/document.pdf", Some("application/pdf"))]
+    #[case("/repo/archive.zip", Some("application/zip"))]
+    #[case("/repo/source.rs", None)]
+    #[case("/repo/notes.md", None)]
+    #[case("/repo/plain.txt", None)]
+    #[case("/repo/index.HTML", None)]
+    #[case("/repo/index.htm", None)]
+    #[case("/repo/notebook.ipynb", None)]
+    #[case("/repo/video.mp4.txt", None)]
+    #[case("/repo/video.mp4/readme", None)]
+    #[case("/repo/video.mp4/", None)]
+    fn binary_files_bypass_text_reads(#[case] path: &str, #[case] mime: Option<&str>) {
+        assert_eq!(mobile_file_preview_mime_type(path.into()).as_deref(), mime);
+    }
+
     #[test]
     fn only_authored_relative_basenames_request_workspace_lookup() {
         let request = mobile_file_open_request("main.rs:12".into(), "/repo".into(), None).unwrap();

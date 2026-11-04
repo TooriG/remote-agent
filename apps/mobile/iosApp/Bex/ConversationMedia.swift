@@ -350,7 +350,7 @@ private struct ZoomableConversationImage: UIViewRepresentable {
     }
 }
 
-private struct ConversationFilePreview: UIViewControllerRepresentable {
+struct ConversationFilePreview: UIViewControllerRepresentable {
     let url: URL
 
     func makeCoordinator() -> Coordinator {

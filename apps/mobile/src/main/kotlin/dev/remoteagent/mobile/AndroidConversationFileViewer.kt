@@ -1,5 +1,6 @@
 package dev.remoteagent.mobile
 
+import android.content.Context
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.heightIn
@@ -17,6 +18,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import dev.remoteagent.core.AgentException
@@ -24,11 +26,16 @@ import dev.remoteagent.core.Intent
 import dev.remoteagent.core.MarkdownFileReference
 import dev.remoteagent.core.Outcome
 import dev.remoteagent.core.ReadFile
+import dev.remoteagent.core.ResolveFileReference
 import dev.remoteagent.core.fileHostPath
 import dev.remoteagent.core.mobileFileOpenRequest
+import dev.remoteagent.core.mobileFilePreviewMimeType
+import java.io.IOException
 import kotlinx.coroutines.CancellationException
 
-/** Text reads use the existing Host file operation; unsupported/binary files keep its read error. */
+private data class FileViewerContent(val path: String, val directory: Boolean = false, val text: String? = null)
+
+/** Text stays in the viewer; binary files download through the Host and open in a native app. */
 @Composable
 internal fun ConversationFileViewer(
     reference: MarkdownFileReference,
@@ -38,49 +45,73 @@ internal fun ConversationFileViewer(
     dismiss: () -> Unit,
 ) {
     val snapshot = LocalHostSnapshot.current
+    val context = LocalContext.current
     val cwd = workspaceRoot ?: snapshot.navigation().cwd
     val home = snapshot.hostHomeDirectory()
-    var path by remember(reference.path) { mutableStateOf(fileHostPath(reference.path, home)) }
-    var directory by remember(reference.path) { mutableStateOf(false) }
+    val initialPath = fileHostPath(reference.path, home)
+    val request = mobileFileOpenRequest(source ?: "", cwd, home)
+    var file by remember(reference.path) { mutableStateOf(FileViewerContent(initialPath)) }
     var error by remember(reference.path) { mutableStateOf<String?>(null) }
     var loading by remember(reference.path) { mutableStateOf(true) }
-    var text by remember(reference.path) { mutableStateOf<String?>(null) }
-    LaunchedEffect(reference.path) {
-        try {
-            if (source != null) {
-                val request = mobileFileOpenRequest(source, cwd, home)
-                if (request != null) {
-                    val result =
-                        fileOperation(Intent.ResolveFileReference(request), perform) as Outcome.FileReferenceResolved
-                    path = result.path
-                    directory = result.directory
-                }
+    var attempt by remember(reference.path) { mutableStateOf(0) }
+    LaunchedEffect(reference.path, attempt) {
+        loading = true
+        error = null
+        val failure =
+            try {
+                val content = loadFileViewer(initialPath, request, context, perform)
+                if (content == null) dismiss() else file = content
+                null
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: AgentException) {
+                failure
+            } catch (failure: IllegalStateException) {
+                failure
+            } catch (failure: IOException) {
+                failure
+            } finally {
+                loading = false
             }
-            if (!directory) {
-                val result = fileOperation(Intent.ReadFile(ReadFile(path, false)), perform) as Outcome.FileRead
-                text = result.file.text
-            }
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (failure: AgentException) {
-            error = failure.displayMessage() ?: "ファイルを開けません"
-        } catch (failure: IllegalStateException) {
-            error = failure.displayMessage() ?: "ファイルを開けません"
-        } finally {
-            loading = false
-        }
+        error = failure?.let { it.displayMessage() ?: "ファイルを開けません" }
     }
-    if (directory && perform != null) {
-        WorkspaceFilesDialog(snapshot, path, perform, dismiss)
+    if (file.directory) {
+        WorkspaceFilesDialog(snapshot, file.path, checkNotNull(perform), dismiss)
     } else {
         AlertDialog(
             onDismissRequest = dismiss,
             title = { Text(reference.label) },
             text = {
-                if (loading) CircularProgressIndicator() else FileViewerBody(path, text, error, reference.line, perform)
+                if (loading) CircularProgressIndicator()
+                else FileViewerBody(file.path, file.text, error, reference.line, perform)
             },
             confirmButton = { TextButton(onClick = dismiss) { Text(LocalUiLanguage.current.text("閉じる")) } },
+            dismissButton = {
+                if (error != null) TextButton(onClick = { attempt++ }) { Text(LocalUiLanguage.current.text("再試行")) }
+            },
         )
+    }
+}
+
+/** Null means a native app accepted the downloaded file; other results stay in this viewer. */
+private suspend fun loadFileViewer(
+    initialPath: String,
+    request: ResolveFileReference?,
+    context: Context,
+    perform: ((Intent, (Result<Outcome>) -> Unit) -> Unit)?,
+): FileViewerContent? {
+    val resolved = request?.let {
+        fileOperation(Intent.ResolveFileReference(it), perform) as Outcome.FileReferenceResolved
+    }
+    val path = resolved?.path ?: initialPath
+    if (resolved?.directory == true) return FileViewerContent(path, directory = true)
+    val mime = mobileFilePreviewMimeType(path)
+    return if (mime != null) {
+        exportHostFile(context, path, mime, perform, FileExportAction.Open)
+        null
+    } else {
+        val result = fileOperation(Intent.ReadFile(ReadFile(path, false)), perform) as Outcome.FileRead
+        FileViewerContent(path, text = result.file.text)
     }
 }
 

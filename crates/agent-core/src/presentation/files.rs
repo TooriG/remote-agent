@@ -8,6 +8,7 @@ mod mobile;
 mod mobile_icons;
 pub use mobile::{
     MobileFileAction, MobileFileMenuItem, mobile_file_menu, mobile_file_open_request,
+    mobile_file_preview_mime_type,
 };
 
 #[cfg_attr(feature = "bindings", uniffi::export)]

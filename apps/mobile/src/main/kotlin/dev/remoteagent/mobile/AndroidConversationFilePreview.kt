@@ -165,7 +165,7 @@ internal fun PreviewText(
         }
 }
 
-private suspend fun downloadPreview(
+internal suspend fun downloadPreview(
     target: File,
     path: String,
     perform: ((Intent, (Result<Outcome>) -> Unit) -> Unit)?,

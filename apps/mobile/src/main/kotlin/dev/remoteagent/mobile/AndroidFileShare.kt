@@ -8,7 +8,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.FileProvider
 import dev.remoteagent.core.AgentException
-import dev.remoteagent.core.DownloadFile
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.Outcome
 import java.io.File
@@ -17,7 +16,7 @@ import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
-/** Explicit sharing only. The provider exposes this bounded cache, never Host paths. */
+/** The provider exposes this bounded cache, never Host paths. */
 @Composable
 internal fun rememberFileSharer(
     perform: ((Intent, (Result<Outcome>) -> Unit) -> Unit)?,
@@ -27,47 +26,75 @@ internal fun rememberFileSharer(
     val scope = rememberCoroutineScope()
     return { path, mime ->
         scope.launch {
-            val directory = File(context.cacheDir, "shared-files")
-            directory.mkdirs()
-            directory
-                .listFiles()
-                ?.filter { it.lastModified() < System.currentTimeMillis() - SHARE_CACHE_MILLIS }
-                ?.forEach { it.delete() }
-            val target = File(directory, "${UUID.randomUUID()}-${path.replace('\\', '/').substringAfterLast('/')}")
-            var shared = false
             try {
-                fileOperation(Intent.DownloadFile(DownloadFile(path, target.path)), perform)
-                shareDownloadedFile(context, target, mime)
-                shared = true
+                exportHostFile(context, path, mime, perform, FileExportAction.Share)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: AgentException) {
                 failure(error.displayMessage() ?: "ファイルを共有できません")
             } catch (error: IOException) {
                 failure(error.displayMessage() ?: "ファイルを共有できません")
-            } catch (error: IllegalArgumentException) {
+            } catch (error: IllegalStateException) {
                 failure(error.displayMessage() ?: "ファイルを共有できません")
-            } catch (error: SecurityException) {
-                failure(error.displayMessage() ?: "ファイルを共有できません")
-            } catch (error: ActivityNotFoundException) {
-                failure(error.displayMessage() ?: "ファイルを共有できません")
-            } finally {
-                if (!shared) target.delete()
             }
         }
     }
 }
 
-private fun shareDownloadedFile(context: Context, target: File, mime: String) {
-    val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", target)
-    val share =
-        AndroidIntent(AndroidIntent.ACTION_SEND).apply {
-            type = mime
-            putExtra(AndroidIntent.EXTRA_STREAM, uri)
-            addFlags(AndroidIntent.FLAG_GRANT_READ_URI_PERMISSION)
-            clipData = android.content.ClipData.newRawUri(null, uri)
+internal enum class FileExportAction {
+    Open,
+    Share,
+}
+
+internal suspend fun exportHostFile(
+    context: Context,
+    path: String,
+    mime: String,
+    perform: ((Intent, (Result<Outcome>) -> Unit) -> Unit)?,
+    action: FileExportAction,
+) {
+    val directory = File(context.cacheDir, "shared-files")
+    directory.mkdirs()
+    directory
+        .listFiles()
+        ?.filter { it.lastModified() < System.currentTimeMillis() - SHARE_CACHE_MILLIS }
+        ?.forEach { it.delete() }
+    val target = File(directory, "${UUID.randomUUID()}-${path.replace('\\', '/').substringAfterLast('/')}")
+    var exported = false
+    val failure =
+        try {
+            downloadPreview(target, path, perform)
+            val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", target)
+            val intent =
+                AndroidIntent().apply {
+                    addFlags(AndroidIntent.FLAG_GRANT_READ_URI_PERMISSION)
+                    clipData = android.content.ClipData.newRawUri(null, uri)
+                }
+            when (action) {
+                FileExportAction.Open -> {
+                    intent.action = AndroidIntent.ACTION_VIEW
+                    intent.setDataAndType(uri, mime)
+                    context.startActivity(intent)
+                }
+                FileExportAction.Share -> {
+                    intent.action = AndroidIntent.ACTION_SEND
+                    intent.type = mime
+                    intent.putExtra(AndroidIntent.EXTRA_STREAM, uri)
+                    context.startActivity(AndroidIntent.createChooser(intent, null))
+                }
+            }
+            exported = true
+            null
+        } catch (error: ActivityNotFoundException) {
+            error
+        } catch (error: IllegalArgumentException) {
+            error
+        } catch (error: SecurityException) {
+            error
+        } finally {
+            if (!exported) target.delete()
         }
-    context.startActivity(AndroidIntent.createChooser(share, null))
+    if (failure != null) throw IOException(failure.message, failure)
 }
 
 private const val SHARE_CACHE_MILLIS = 24 * 60 * 60 * 1000L

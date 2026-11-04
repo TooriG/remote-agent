@@ -1,10 +1,16 @@
 package dev.remoteagent.mobile
 
+import android.content.ContextWrapper
+import android.content.Intent as AndroidIntent
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
@@ -15,8 +21,11 @@ import dev.remoteagent.core.Intent
 import dev.remoteagent.core.MarkdownFileKind
 import dev.remoteagent.core.MarkdownFileReference
 import dev.remoteagent.core.Outcome
+import java.io.File
+import java.io.IOException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 
@@ -49,6 +58,69 @@ class FileViewerTest {
         compose.onNodeWithText("Paragraph 1").assertIsDisplayed()
         compose.onNodeWithText("Last paragraph").assertIsNotDisplayed()
         compose.onNodeWithText("Last paragraph").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun videoRetriesTransferAndOpensNativeViewerWithAReadableContentUri() {
+        val requests = mutableListOf<Intent>()
+        val opened = mutableListOf<AndroidIntent>()
+        val downloads = mutableListOf<File>()
+        var dismissed = false
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        compose.setContent {
+            val activity = LocalContext.current
+            val previewContext = remember {
+                object : ContextWrapper(activity) {
+                    override fun startActivity(intent: AndroidIntent) {
+                        opened.add(intent)
+                    }
+                }
+            }
+            AppTheme {
+                CompositionLocalProvider(LocalContext provides previewContext) {
+                    ConversationFileViewer(
+                        MarkdownFileReference("/host/clip.MP4", "clip.MP4", MarkdownFileKind.FILE, null, null),
+                        perform = { intent, complete ->
+                            requests.add(intent)
+                            check(intent is Intent.DownloadFile) { "Video must bypass text reads: $intent" }
+                            val target = File(intent.v1.destination)
+                            downloads.add(target)
+                            if (downloads.size == 1) {
+                                target.writeBytes(byteArrayOf(0))
+                                complete(Result.failure(IOException("transfer interrupted")))
+                            } else {
+                                target.outputStream().use { stream -> repeat(1025) { stream.write(ByteArray(1024)) } }
+                                complete(Result.success(Outcome.Applied))
+                            }
+                        },
+                        dismiss = { dismissed = true },
+                    )
+                }
+            }
+        }
+        try {
+            compose.onNodeWithText("transfer interrupted").assertIsDisplayed()
+            compose.runOnIdle {
+                assertTrue(opened.isEmpty())
+                assertTrue(!downloads.first().exists())
+            }
+            compose.onNodeWithText("再試行").performClick()
+            compose.runOnIdle {
+                assertEquals(2, requests.size)
+                assertEquals("/host/clip.MP4", (requests.last() as Intent.DownloadFile).v1.source)
+                val intent = opened.single()
+                assertEquals(AndroidIntent.ACTION_VIEW, intent.action)
+                assertEquals("video/mp4", intent.type)
+                assertEquals("content", intent.data?.scheme)
+                assertTrue(intent.flags and AndroidIntent.FLAG_GRANT_READ_URI_PERMISSION != 0)
+                context.contentResolver.openInputStream(checkNotNull(intent.data)).use { stream ->
+                    assertEquals(1025 * 1024, checkNotNull(stream).readBytes().size)
+                }
+                assertTrue(dismissed)
+            }
+        } finally {
+            downloads.forEach { it.delete() }
+        }
     }
 
     private fun show(parent: String, reads: MutableList<String>) {

@@ -94,9 +94,6 @@ private struct WorkspaceDirectoryScreen: View {
     @State private var refreshCompletion: CheckedContinuation<Void, Never>?
     @State private var selected: FileEntry?
     @State private var selectedLine: UInt32?
-    @State private var sharedFile: SharedFile?
-    @State private var error: ErrorText?
-    @State private var busy = false
 
     private var root: String {
         fileHostPath(path: directory, home: snapshot.hostHomeDirectory())
@@ -114,7 +111,7 @@ private struct WorkspaceDirectoryScreen: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    if let error = error ?? tree.error {
+                    if let error = tree.error {
                         AppNotice(text: error).padding(.horizontal, 16).padding(.vertical, 8)
                     }
                     if tree.truncated {
@@ -178,14 +175,13 @@ private struct WorkspaceDirectoryScreen: View {
                                  path: path, directory: false, size: 0)
         }
         .sheet(item: $selected) { entry in
-            FileEditorSheet(snapshot: snapshot, text: fileDraft(entry.path), perform: perform,
-                            entry: entry, line: selectedLine, download: download) { path in
+            WorkspaceFileSheet(snapshot: snapshot, text: fileDraft(entry.path), perform: perform,
+                               entry: entry, line: selectedLine, download: downloadFile) { path in
                 aiEdit(path)
                 selected = nil
                 close()
             }
         }
-        .sheet(item: $sharedFile) { item in FileShareSheet(url: item.url) }
     }
 
     @ViewBuilder private var emptyState: some View {
@@ -242,18 +238,6 @@ private struct WorkspaceDirectoryScreen: View {
 
     private func send(_ action: FileTreeAction) {
         perform(.fileTree(key: key, action: action)) { _, _ in }
-    }
-
-    private func download(_ path: String) {
-        guard !busy else { return }
-        busy = true; error = nil
-        Task {
-            defer { busy = false }
-            do {
-                let url = try await downloadFile(path)
-                selected = nil; sharedFile = SharedFile(url: url)
-            } catch { self.error = errorText(error: error.localizedDescription) }
-        }
     }
 }
 
