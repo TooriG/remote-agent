@@ -95,19 +95,19 @@ extension LaunchUITests {
 
     func testSimulatorRetriesPhotoUploadAfterWorkspaceRecovery() throws {
         let app = try connectedSimulatorApp(expandProject: false)
-        try useSimulatorListFixture("worktree-conversation")
+        try useSimulatorListFixture("worktree-conversation/upload")
         app.buttons["tasks.menu"].tap(); app.buttons["tasks.refresh"].tap()
         expandSimulatorProject(app)
-        let row = app.descendants(matching: .any)["tasks.row.codex:fixture-worktree-thread"]
+        let row = app.descendants(matching: .any)["tasks.row.codex:fixture-upload-thread"]
         XCTAssertTrue(row.waitForExistence(timeout: 15)); row.tap()
         let prompt = app.textFields["task.message"]
         XCTAssertTrue(prompt.waitForExistence(timeout: 10))
         prompt.tap(); prompt.typeText("[success] Retry selected photos")
-        try simulatorFixture("worktree/unavailable")
+        try simulatorFixture("worktree/upload/unavailable")
         var unavailable = true
         addTeardownBlock {
             if unavailable {
-                try self.simulatorFixture("worktree/restore")
+                try self.simulatorFixture("worktree/upload/restore")
             }
         }
         selectPhotos(["写真", "ビデオ"], in: app)
@@ -120,7 +120,7 @@ extension LaunchUITests {
         let removals = app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", "を外す"))
         XCTAssertEqual(removals.count, 0)
         XCTAssertEqual(prompt.value as? String, "[success] Retry selected photos")
-        try simulatorFixture("worktree/restore"); unavailable = false
+        try simulatorFixture("worktree/upload/restore"); unavailable = false
         selectPhotos(["写真", "ビデオ"], in: app)
         app.buttons["Add"].tap()
         let attached = expectation(for: NSPredicate(format: "count == 2"), evaluatedWith: removals)
