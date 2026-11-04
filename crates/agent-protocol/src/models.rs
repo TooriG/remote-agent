@@ -333,7 +333,7 @@ pub struct Project {
     /// Host-resolved PNG thumbnail for every native client.
     pub favicon_png: Option<String>,
 }
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ProjectRoot {
     pub path: String,
 }

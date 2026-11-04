@@ -323,6 +323,44 @@ fn missing_referenced_projects<'a>(
     missing
 }
 
+fn retained_project_icons(
+    mut received: Vec<crate::models::Project>,
+    cached: &[crate::models::Project],
+) -> Vec<crate::models::Project> {
+    let icons = (cached.len() >= 128
+        && received.len() >= 128
+        && cached.len() <= received.len().saturating_mul(4))
+    .then(|| {
+        cached
+            .iter()
+            .rev()
+            .map(|project| {
+                (
+                    (project.id.as_str(), project.roots.as_slice()),
+                    &project.favicon_png,
+                )
+            })
+            .collect::<HashMap<_, _>>()
+    });
+    for project in &mut received {
+        let icon = match &icons {
+            Some(icons) => icons
+                .get(&(project.id.as_str(), project.roots.as_slice()))
+                .copied(),
+            None => cached
+                .iter()
+                .find(|old| old.id == project.id && old.roots == project.roots)
+                .map(|old| &old.favicon_png),
+        };
+        if let Some(icon) = icon
+            && &project.favicon_png != icon
+        {
+            project.favicon_png = icon.clone();
+        }
+    }
+    received
+}
+
 fn merge_received(
     mut threads: crate::models::ThreadList,
     previous: Option<&crate::models::ThreadList>,
@@ -341,15 +379,7 @@ fn merge_received(
             .projects
             .retain(|project| !newer_projects.iter().any(|newer| newer.id == project.id));
         threads.projects.splice(0..0, newer_projects);
-        for project in &mut threads.projects {
-            if let Some(old) = previous
-                .projects
-                .iter()
-                .find(|old| old.id == project.id && old.roots == project.roots)
-            {
-                project.favicon_png = old.favicon_png.clone();
-            }
-        }
+        threads.projects = retained_project_icons(threads.projects, &previous.projects);
         // Small or sharply reduced pages cost less to scan than to index the
         // entire previous page.
         let statuses = (previous.data.len() >= 128
