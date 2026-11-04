@@ -77,7 +77,7 @@ pub(super) fn relative(path: &str, cwd: &str) -> Option<String> {
     let cwd = cwd.replace('\\', "/");
     let path = strip_drive_slash(&path);
     let cwd = strip_drive_slash(&cwd).trim_end_matches('/');
-    let (comparable, root) = if windows(cwd) {
+    let (comparable, root) = if windows(cwd) || is_network_host_path(cwd) {
         (path.to_lowercase(), cwd.to_lowercase())
     } else {
         (path.to_owned(), cwd.to_owned())

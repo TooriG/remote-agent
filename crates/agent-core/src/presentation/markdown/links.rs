@@ -25,12 +25,10 @@ pub enum MarkdownFileKind {
 /// Classify a Host filename without interpreting or resolving a link.
 #[cfg_attr(feature = "bindings", uniffi::export)]
 pub fn markdown_file_kind(path: &str) -> MarkdownFileKind {
-    let basename = path
-        .trim_end_matches(['/', '\\'])
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or_default();
-    let extension = basename
+    if path.ends_with(['/', '\\']) {
+        return MarkdownFileKind::Folder;
+    }
+    let extension = paths::basename(path)
         .rsplit_once('.')
         .map(|(_, extension)| extension.to_ascii_lowercase());
     match extension.as_deref() {
@@ -44,7 +42,6 @@ pub fn markdown_file_kind(path: &str) -> MarkdownFileKind {
             MarkdownFileKind::Image
         }
         Some("pdf" | "txt" | "csv" | "tsv" | "docx" | "xlsx") => MarkdownFileKind::Document,
-        _ if path.ends_with(['/', '\\']) => MarkdownFileKind::Folder,
         _ => MarkdownFileKind::File,
     }
 }

@@ -239,6 +239,38 @@ fn desktop_network_links_are_limited_to_the_workspace_share() {
 }
 
 #[test]
+fn workspace_share_links_ignore_windows_path_casing_and_still_reject_escapes() {
+    let cwd = r"\\Server\Share\Project";
+    for source in [
+        "file://server/share/project/src/main.rs",
+        r"\\SERVER\SHARE\PROJECT\src\main.rs",
+    ] {
+        let file = markdown_file_target(source.into(), cwd.into(), MarkdownFileSurface::Desktop)
+            .expect("the same Windows workspace share is allowed");
+        assert_eq!(
+            file_workspace_relative_path(&file.path, cwd).as_deref(),
+            Some("src/main.rs")
+        );
+        assert!(desktop_file_reference(source, cwd, None).is_some());
+    }
+    for source in [
+        "file://server/share/project/../outside/main.rs",
+        "file://server/share/project-other/main.rs",
+        "file://server/other/project/main.rs",
+    ] {
+        assert!(
+            markdown_file_target(source.into(), cwd.into(), MarkdownFileSurface::Desktop).is_none()
+        );
+        assert!(desktop_file_reference(source, cwd, None).is_none());
+    }
+    assert_eq!(file_workspace_relative_path("/Repo/a.rs", "/repo"), None);
+    assert_eq!(
+        file_workspace_relative_path("C:/repo/a.rs", "/C:/Repo").as_deref(),
+        Some("a.rs")
+    );
+}
+
+#[test]
 fn malformed_percent_encoding_remains_literal_and_is_not_partially_decoded() {
     assert_eq!(paths::decode("src/a%20b%zz.rs"), "src/a%20b%zz.rs");
     assert_eq!(paths::decode("src/%FF.rs"), "src/%FF.rs");
@@ -251,6 +283,9 @@ fn malformed_percent_encoding_remains_literal_and_is_not_partially_decoded() {
 #[case("~/Pictures/photo.PNG", MarkdownFileKind::Image)]
 #[case("notes.txt", MarkdownFileKind::Document)]
 #[case("~/Documents/", MarkdownFileKind::Folder)]
+#[case("~/Documents/archive.md/", MarkdownFileKind::Folder)]
+#[case("/workspace/config.json/", MarkdownFileKind::Folder)]
+#[case(r"C:\host\main.rs\", MarkdownFileKind::Folder)]
 #[case("~", MarkdownFileKind::File)]
 #[case("notes%2Emd", MarkdownFileKind::File)]
 fn literal_filename_classification(#[case] path: &str, #[case] kind: MarkdownFileKind) {

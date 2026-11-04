@@ -351,6 +351,9 @@ pub fn project_conversation(
         return previous.clone();
     }
     let previous = previous.as_ref().filter(|old| source.id == old.source.id);
+    let supports_fork = source.capabilities.unwrap_or_default().fork;
+    let previous_supports_fork =
+        previous.is_some_and(|old| old.source.capabilities.unwrap_or_default().fork);
     let cached: HashMap<_, _> = previous
         .into_iter()
         .flat_map(|old| &old.turns)
@@ -423,6 +426,7 @@ pub fn project_conversation(
             let old = cached.get(turn.id.as_str()).copied();
             if let Some(old) = old
                 && Arc::ptr_eq(turn, &old.source)
+                && (turn.supports_fork.is_some() || supports_fork == previous_supports_fork)
                 && old.rows.iter().find_map(|row| match &row.content {
                     ConversationRowContent::ProviderHandoff { text } => Some(text),
                     _ => None,
@@ -440,7 +444,7 @@ pub fn project_conversation(
             }
             render_turn(
                 source.id.as_ref(),
-                source.capabilities.unwrap_or_default().fork,
+                supports_fork,
                 handoff,
                 turn.clone(),
                 pending.cloned().collect(),
@@ -754,12 +758,12 @@ fn render_turn(
     requests: Vec<Arc<WireRequest>>,
     previous: Option<&Arc<RenderedTurn>>,
 ) -> Arc<RenderedTurn> {
-    let provider = source
-        .provider
-        .or_else(|| session.map(|session| session.provider));
+    let session_provider = session.map(|session| session.provider);
+    let provider = source.provider.or(session_provider);
     let supports_fork = source.supports_fork.unwrap_or(supports_fork);
     let cached: HashMap<_, _> = previous
         .into_iter()
+        .filter(|turn| turn.source.provider.or(session_provider) == provider)
         .flat_map(|turn| turn.items())
         .map(|item| (item.key(), item))
         .collect();
@@ -792,7 +796,6 @@ fn render_turn(
             let id = retained[index - native.len()].0.as_str();
             ItemMetadata {
                 id,
-                client_id: Some(id),
                 kind: super::GroupKind::User,
                 ..Default::default()
             }
@@ -1864,6 +1867,95 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn cached_assistant_labels_follow_turn_provider_attribution() {
+        let snapshot = Snapshot::default();
+        let mut thread: Arc<models::Thread> = Arc::new(
+            serde_json::from_value(json!({
+                "id": {"provider": "codex", "id": "thread"},
+                "turns": [{"id": "turn", "status": "completed", "items": [
+                    {"id": "answer", "status": "completed", "body": {"inline": {
+                        "body": {"assistantText": {"text": "Done", "phase": "final"}}
+                    }}}
+                ]}]
+            }))
+            .unwrap(),
+        );
+        let initial = project_conversation(&snapshot, thread.clone(), &None);
+        let before = initial.turns[0].items().next().unwrap();
+        assert_eq!(before.data.title.as_deref(), Some("Codex"));
+        Arc::make_mut(&mut Arc::make_mut(&mut thread).turns.as_mut().unwrap()[0]).provider =
+            Some(crate::session::ProviderKind::Codex);
+        let attributed = project_conversation(&snapshot, thread.clone(), &Some(initial.clone()));
+        assert!(Arc::ptr_eq(
+            before,
+            attributed.turns[0].items().next().unwrap()
+        ));
+        Arc::make_mut(&mut Arc::make_mut(&mut thread).turns.as_mut().unwrap()[0]).provider =
+            Some(crate::session::ProviderKind::Claude);
+        let updated = project_conversation(&snapshot, thread, &Some(attributed));
+        let after = updated.turns[0].items().next().unwrap();
+        assert_eq!(after.data.title.as_deref(), Some("Claude"));
+        assert_eq!(after.data.body.as_deref(), Some("Done"));
+        assert!(matches!((&before.source, &after.source),
+            (ItemSource::Native(before), ItemSource::Native(after)) if Arc::ptr_eq(before, after)));
+        let unchanged =
+            project_conversation(&snapshot, updated.source.clone(), &Some(updated.clone()));
+        assert!(Arc::ptr_eq(&updated.turns[0], &unchanged.turns[0]));
+    }
+
+    #[rstest::rstest]
+    fn cached_response_actions_follow_capability_changes(
+        #[values(None, Some(false), Some(true))] turn_supports_fork: Option<bool>,
+    ) {
+        let snapshot = Snapshot::default();
+        let mut thread: Arc<models::Thread> = Arc::new(
+            serde_json::from_value(json!({
+                "id": {"provider": "codex", "id": "thread"},
+                "turns": [{"id": "turn", "status": "completed", "supportsFork": turn_supports_fork,
+                    "items": [{"id": "answer", "status": "completed", "body": {"inline": {
+                        "body": {"assistantText": {"text": "Done", "phase": "final"}}
+                    }}}]
+                }]
+            }))
+            .unwrap(),
+        );
+        let mut previous = None;
+        for enabled in [false, true, false] {
+            Arc::make_mut(&mut thread).capabilities = Some(crate::session::Capabilities {
+                fork: enabled,
+                ..Default::default()
+            });
+            let projected = project_conversation(&snapshot, thread.clone(), &previous);
+            let actions: Vec<_> = projected.turns[0]
+                .rows
+                .iter()
+                .filter_map(|row| match &row.content {
+                    ConversationRowContent::Response { fork_turn_id, .. } => Some(fork_turn_id),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(actions.len(), 1);
+            assert_eq!(actions[0].is_some(), turn_supports_fork.unwrap_or(enabled));
+            if let Some(previous) = &previous {
+                assert!(Arc::ptr_eq(
+                    &previous.turns[0].source,
+                    &projected.turns[0].source,
+                ));
+                assert_eq!(
+                    Arc::ptr_eq(&previous.turns[0], &projected.turns[0]),
+                    turn_supports_fork.is_some(),
+                    "only turns that inherit the changed capability need new rows",
+                );
+                assert!(Arc::ptr_eq(
+                    previous.turns[0].items().next().unwrap(),
+                    projected.turns[0].items().next().unwrap(),
+                ));
+            }
+            previous = Some(projected);
+        }
     }
 
     #[test]
