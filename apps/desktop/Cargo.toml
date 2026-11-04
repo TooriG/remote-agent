@@ -43,7 +43,8 @@ windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Graphics_
 
 [target.'cfg(target_os = "macos")'.dependencies]
 native-focus = { path = "native-focus" }
-wry = "=0.57.1"
+# WKWebView is unconditional on macOS; the defaults pull in unused GTK/X11 dependencies.
+wry = { version = "=0.57.1", default-features = false }
 zeroize.workspace = true
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "objc2-core-foundation", "NSResponder", "NSView", "NSImage"] }
