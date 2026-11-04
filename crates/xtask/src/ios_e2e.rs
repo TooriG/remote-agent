@@ -855,7 +855,6 @@ async fn build_test_bundle(
         )
         .await?;
     }
-    println!("Building iOS bindings and isolated Host fixtures");
     let mut host_build = args![vec;
         "cargo",
         "build",
@@ -881,12 +880,25 @@ async fn build_test_bundle(
             "agent-desktop"
         ]);
     }
-    for arguments in [
-        args![vec; "scripts/build-agent-ios.sh", "simulator"],
-        host_build,
-        args![vec; "node", "scripts/install-claude-sdk.mjs", target.join("debug")],
+    // Each phase reports its duration, so CI logs show where a slow build spent its time.
+    for (phase, arguments) in [
+        (
+            "iOS bindings",
+            args![vec; "scripts/build-agent-ios.sh", "simulator"],
+        ),
+        ("isolated Host fixtures", host_build),
+        (
+            "SDK runtime",
+            args![vec; "node", "scripts/install-claude-sdk.mjs", target.join("debug")],
+        ),
     ] {
+        println!("Building {phase}");
+        let phase_started = Instant::now();
         supervision::run(&arguments, cwd, Io::Log(log), cancel, BUILD_TIMEOUT).await?;
+        println!(
+            "Built {phase} in {:.0}s",
+            phase_started.elapsed().as_secs_f64()
+        );
     }
     let products = build.join("Build/Products");
     if products.is_dir() {
@@ -895,6 +907,7 @@ async fn build_test_bundle(
         }
     }
     println!("Building the iOS app and UI test bundle");
+    let phase_started = Instant::now();
     let revision = supervision::run(
         &args![
             "git",
@@ -943,6 +956,10 @@ async fn build_test_bundle(
         BUILD_TIMEOUT,
     )
     .await?;
+    println!(
+        "Built the iOS app and UI test bundle in {:.0}s",
+        phase_started.elapsed().as_secs_f64()
+    );
     let seconds = build_started.elapsed().as_secs_f64();
     Ok((prebuilt_test_bundle(target, browser)?, seconds))
 }
@@ -1008,6 +1025,21 @@ fn report_rounds(records: &Path, rounds: usize, test_count: usize) -> Result<()>
     );
     for (test, failed) in &counts {
         println!("  {test}: failed {failed}/{rounds}");
+    }
+    // CI publishes the same table on the job summary page.
+    if let Ok(summary) = std::env::var("GITHUB_STEP_SUMMARY") {
+        let mut table = format!(
+            "### iPhone acceptance: {rounds} rounds of {test_count} tests, {} failing\n\n| Test | Failed rounds |\n| --- | --- |\n",
+            counts.len()
+        );
+        for (test, failed) in &counts {
+            table.push_str(&format!("| {test} | {failed}/{rounds} |\n"));
+        }
+        OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(summary)?
+            .write_all(table.as_bytes())?;
     }
     Ok(())
 }
