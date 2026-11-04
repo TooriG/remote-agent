@@ -67,7 +67,7 @@ jobs:
         with:
           cmd-format: nix develop .#native --command {0}
           key: ${{ hashFiles('flake.lock') }}
-          save-if: ${{ github.event_name != 'pull_request' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
       - name: Build desktop, Host and CLI
         run: nix develop .#native --command cargo build --locked --features agent-core/bindings -p codex-app-server -p agent-process -p agent-desktop -p host-daemon -p agent-cli
