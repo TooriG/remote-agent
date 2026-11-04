@@ -539,18 +539,18 @@ impl Hosts {
                 .when(!cards, |view| view.mx_4().mb_4())
                 .child(methods);
             if self.use_ssh {
-                form =
-                    form.child(language.text("SSH接続先"))
-                        .child(
-                            Input::new(&self.ssh)
-                                .aria_label(language.text("SSH接続先"))
-                                .disabled(disabled),
-                        )
-                        .child(div().text_xs().text_color(rgb(appearance::MUTED)).child(
-                            language.text(
-                                "SSHの鍵で接続でき、Bex Hostを起動済みのサーバーにつなぎます。",
-                            ),
-                        ));
+                form = form
+                    .child(language.text("SSH接続先"))
+                    .child(
+                        Input::new(&self.ssh)
+                            .aria_label(language.text("SSH接続先"))
+                            .disabled(disabled),
+                    )
+                    .child(div().text_xs().text_color(rgb(appearance::MUTED)).child(
+                        language.text(
+                            "SSHの鍵で接続でき、Bexのホストを起動済みのサーバーにつなぎます。",
+                        ),
+                    ));
             } else {
                 form = form.child(
                     Textarea::new(&self.pairing)
@@ -613,7 +613,10 @@ impl Hosts {
                 div()
                     .when(!cards, |view| view.p_4())
                     .text_color(rgb(0xff8e86))
-                    .child(agent_core::presentation::error::error_message(error)),
+                    .child(super::view::error_view(
+                        &agent_core::presentation::error::error_text(error),
+                        language,
+                    )),
             );
         }
         choices
@@ -700,7 +703,7 @@ impl Render for Hosts {
                         .label(if self.connecting {
                             language.text("接続中…")
                         } else {
-                            language.text("Host に接続")
+                            language.text("ホストに接続")
                         })
                         .disabled(self.connecting)
                         .on_click(cx.listener(move |view, _, _, cx| {

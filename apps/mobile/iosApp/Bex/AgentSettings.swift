@@ -175,7 +175,7 @@ extension AgentSettingsScreen {
             Button("設定状態を取得", action: refresh).disabled(updating || !model.isConnected)
             if let error = model.snapshot
                 .operationError(key: .dshCredentials) {
-                AppText(error).font(.caption).foregroundStyle(.red)
+                ErrorTextView(text: error).font(.caption).foregroundStyle(.red)
             }
         }
     }
@@ -225,7 +225,7 @@ extension AgentSettingsScreen {
                 ProgressView(loginProgressMessage)
             }
             if let error = loginError ?? model.accountError {
-                AppText(accountErrorMessage(message: error)).font(.caption).foregroundStyle(.red)
+                ErrorTextView(text: errorText(error: error)).font(.caption).foregroundStyle(.red)
             }
         } header: {
             HStack {

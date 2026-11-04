@@ -1,5 +1,5 @@
 use super::*;
-use agent_core::{presentation::error::error_message, store::Store};
+use agent_core::{presentation::error::error_text, store::Store};
 mod browser;
 mod explorer;
 pub(super) use browser::{FileBrowser, FileBrowserModel};
@@ -23,7 +23,7 @@ impl Desktop {
             return;
         }
         if !self.snapshot.connected {
-            self.set_error("Host に接続していません".into());
+            self.set_error("ホストに接続していません".into());
             cx.notify();
             return;
         }
@@ -42,7 +42,7 @@ impl Desktop {
     }
     pub(super) fn download(&mut self, source: String) {
         let Some(store) = self.session.as_ref().map(|session| session.store.clone()) else {
-            self.set_error("Host に接続していません".into());
+            self.set_error("ホストに接続していません".into());
             return;
         };
         self.busy += 1;
@@ -85,7 +85,7 @@ pub(super) async fn download_to(
         .map_err(|error| {
             format!(
                 "ファイルを取得・保存できません: {}",
-                error_message(&error.to_string())
+                error_text(&error.to_string())
             )
         })?;
     Ok(())

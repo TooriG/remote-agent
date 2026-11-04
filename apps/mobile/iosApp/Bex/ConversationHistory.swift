@@ -92,7 +92,7 @@ extension ThreadScreen {
                 .accessibilityIdentifier("history.load")
             }
             if let error = control.error {
-                AppText(error).font(.caption).foregroundStyle(.secondary)
+                AppText(error.plainText).font(.caption).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity)
                     .multilineTextAlignment(.center)
                     .accessibilityIdentifier("history.error")
@@ -143,7 +143,7 @@ extension ThreadScreen {
                     .flatMap { turn in model.selectedThreadId.flatMap { model.snapshot.operationError(key: .fork(
                         session: $0,
                         turn: turn
-                    )) } }
+                    ))?.plainText } }
             ).equatable()
         case let (.activityHeader(activity), _): activityHeader(activity)
         case (let .activity(_, turnId), let item?): activityItem(item, turnId: turnId)

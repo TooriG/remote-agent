@@ -2,7 +2,6 @@ package dev.remoteagent.mobile
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import dev.remoteagent.core.HistoryControl
@@ -18,7 +17,7 @@ internal fun LazyListScope.historyControl(
     if (session == null || control == null) return
     item(key = "history:control") {
         Column {
-            control.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            control.error?.let { ErrorTextView(it) }
             if (control.hasMore || control.error != null) {
                 TextButton(onClick = { perform(Intent.ReadOlder(session)) {} }, enabled = !control.loading) {
                     Text(LocalUiLanguage.current.text(if (control.hasMore) control.loadLabel else "再試行"))

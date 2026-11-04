@@ -38,7 +38,10 @@ impl ProjectStore {
         }
     }
     pub(crate) async fn register(&self, root: &Path) -> anyhow::Result<String> {
-        anyhow::ensure!(root.is_absolute(), "project directory must be absolute");
+        anyhow::ensure!(
+            root.is_absolute(),
+            "プロジェクトのフォルダは絶対パスで指定してください。"
+        );
         let root = tokio::fs::canonicalize(root).await?;
         let root = dunce::simplified(&root);
         anyhow::ensure!(

@@ -383,7 +383,7 @@ impl Conversations {
                             startup.preparation.status = match startup.preparation.status {
                                 PreparationStatus::Preparing => PreparationStatus::Failed {
                                     error: agent_protocol::execution::ExecutionError {
-                                        message: "Hostの再起動で準備が中断されました。再試行してください。".into(),
+                                        message: "ホストの再起動で準備が中断されました。再試行してください。".into(),
                                         ..Default::default()
                                     },
                                 },

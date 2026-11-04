@@ -1291,7 +1291,7 @@ impl Agent for DeepSeek {
     ) -> Result<PermissionSettings, Failure> {
         Err(Failure::new(
             "native_permissions",
-            "Harness の権限設定を使用します。必要な操作はBEXの承認画面に表示されます。",
+            "Harness の権限設定を使用します。必要な操作はBexの承認画面に表示されます。",
         ))
     }
     async fn fork(&self, _: &str, _: &str, _: Option<Value>) -> Result<ThreadResponse, Failure> {

@@ -27,8 +27,3 @@ pub fn browser_input_focus(
 ) -> Option<bool> {
     crate::browser_view::input_focus(&action, input_kind)
 }
-
-#[uniffi::export]
-pub fn account_error_message(message: String) -> String {
-    crate::presentation::error::error_message(&message)
-}

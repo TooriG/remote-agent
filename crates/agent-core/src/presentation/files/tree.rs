@@ -154,10 +154,10 @@ impl FileTrees {
                 .chain(tree.queue.drain(..));
             for path in pending {
                 tree.directories.entry(path).or_default().error =
-                    Some("Host not connected.".into());
+                    Some("ホストに接続していません".into());
             }
             if !tree.search_query().trim().is_empty() && tree.search.is_none() {
-                tree.search = Some(Err("Host not connected.".into()));
+                tree.search = Some(Err("ホストに接続していません".into()));
             }
         }
     }

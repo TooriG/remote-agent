@@ -1971,8 +1971,8 @@ async fn a_failed_open_keeps_selection_and_draft_and_can_retry() {
             store
                 .snapshot()
                 .operation_error(history.clone())
-                .as_ref()
                 .unwrap()
+                .to_string()
                 .contains("history unavailable")
         );
         let retry = store.dispatch(Intent::ReadThread(op::ReadThread::open(SessionRef {
@@ -3950,8 +3950,8 @@ async fn session_update_gap_preserves_history_and_only_reports_failed_recovery(
             store
                 .snapshot()
                 .operation_error(history)
-                .as_ref()
                 .unwrap()
+                .to_string()
                 .contains("history read failed")
         );
         assert!(!store.snapshot().subscriptions.contains_key(&id));
@@ -4543,6 +4543,7 @@ async fn cursor_history_retry_preserves_the_window_and_late_pages_cannot_replace
             .snapshot()
             .operation_error(history.clone())
             .unwrap()
+            .to_string()
             .contains("temporary history failure")
     );
 

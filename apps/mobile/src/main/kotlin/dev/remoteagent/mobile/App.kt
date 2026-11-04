@@ -145,7 +145,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         expectedProfile: String?,
         request: dev.remoteagent.core.BrowserRequest,
     ): dev.remoteagent.core.BrowserFrame {
-        val store = owner ?: error("Host に接続してください。")
+        val store = owner ?: error("ホストに接続してください。")
         check(profileId == expectedProfile)
         val frame = store.browser(request)
         if (owner !== store || profileId != expectedProfile) throw CancellationException()
@@ -155,7 +155,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     fun perform(intent: Intent, complete: (Result<Outcome>) -> Unit = {}) {
         val store = session
         if (store == null) {
-            complete(Result.failure(IllegalStateException("Host not connected")))
+            complete(Result.failure(IllegalStateException("ホストに接続していません")))
             return
         }
         val receipt =
@@ -467,7 +467,7 @@ private fun PairingScreen(
     var contents by remember { mutableStateOf("") }
     Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(language.text("PCとペアリング"), style = MaterialTheme.typography.headlineMedium)
-        Text(language.text("PC Host ManagerのQRコードを読み取ります。QRの内容はこの端末に保存しません。"))
+        Text(language.text("PCのBexに表示されたQRコードを読み取ります。QRの内容はこの端末に保存しません。"))
         Button(onClick = { scan { value -> contents = value } }) { Text(language.text("QRコードを読み取る")) }
         OutlinedTextField(
             contents,

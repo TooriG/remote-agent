@@ -51,10 +51,10 @@ impl Snapshot {
     pub fn host_home_directory(&self) -> Option<String> {
         self.host_home_directory.clone()
     }
-    pub fn error(&self) -> Option<String> {
+    pub fn error(&self) -> Option<crate::presentation::error::ErrorText> {
         self.error
             .as_deref()
-            .map(crate::presentation::error::error_message)
+            .map(crate::presentation::error::error_text)
     }
     pub fn navigation(&self) -> Navigation {
         self.navigation.as_ref().clone()
@@ -223,7 +223,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            snapshot.error().as_deref(),
+            snapshot.error().map(|error| error.message).as_deref(),
             Some(agent_protocol::error::THREAD_IN_USE_MESSAGE)
         );
         assert!(snapshot.error.as_deref().unwrap().contains("private"));
@@ -335,7 +335,13 @@ mod tests {
         };
         let project = &failed.thread_list().unwrap().projects[0];
         assert!(!project.loading);
-        assert_eq!(project.error.as_deref(), Some("unavailable"));
+        assert_eq!(
+            project
+                .error
+                .as_ref()
+                .and_then(|error| error.details.as_deref()),
+            Some("unavailable")
+        );
         assert!(!failed.list_unchanged(Arc::new(loading)));
         let mut loaded = failed.clone();
         ListProjectSessions { project_id: "old".into(), limit: 5, search_term: String::new() }.apply(&mut loaded, serde_json::from_value(serde_json::json!({

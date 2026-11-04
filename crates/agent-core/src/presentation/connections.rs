@@ -19,7 +19,7 @@ pub struct ConnectionAgent {
     pub name: String,
     pub availability: AgentAvailability,
     pub label: String,
-    pub detail: Option<String>,
+    pub error: Option<super::error::ErrorText>,
 }
 
 #[derive(Clone, Debug)]
@@ -92,13 +92,13 @@ impl Snapshot {
             ConnectionAgent {
                 provider,
                 name: name.into(),
-                detail: (availability == AgentAvailability::Unavailable)
+                error: (availability == AgentAvailability::Unavailable)
                     .then(|| {
                         self.model_errors
                             .get(provider.key())
                             .and_then(|error| error.get("message"))
                             .and_then(Value::as_str)
-                            .map(str::to_owned)
+                            .map(super::error::error_text)
                             .or_else(|| self.operation_error(OperationKey::Models))
                             .or_else(|| self.operation_error(OperationKey::Accounts))
                     })
@@ -155,18 +155,21 @@ mod tests {
         );
         let agents = snapshot.connection_setup().agents;
         assert_eq!(
-            agents[0].detail.as_deref(),
+            agents[0]
+                .error
+                .as_ref()
+                .and_then(|error| error.details.as_deref()),
             Some("Codex model discovery timed out")
         );
-        assert!(agents[1].detail.is_none());
-        assert!(agents[2].detail.is_none());
+        assert!(agents[1].error.is_none());
+        assert!(agents[2].error.is_none());
         snapshot.connected = false;
         assert!(
             snapshot
                 .connection_setup()
                 .agents
                 .iter()
-                .all(|agent| agent.detail.is_none())
+                .all(|agent| agent.error.is_none())
         );
     }
 

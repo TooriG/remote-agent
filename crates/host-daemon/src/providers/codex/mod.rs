@@ -163,7 +163,7 @@ impl Codex {
         if self.stopped.is_cancelled() {
             return Err(Failure::new(
                 "provider_unavailable",
-                "Codexが終了しました。Hostを再起動すると再接続できます。Claudeの会話は継続できます。",
+                "Codexが終了しました。ホストを再起動すると再接続できます。Claudeの会話は継続できます。",
             ));
         }
         self.process
@@ -1204,7 +1204,7 @@ impl Agent for Codex {
             if let Err(error) = process.shutdown().await {
                 tracing::error!(target: "agent", operation = "host.codex.shutdown", message = %error);
             }
-            let _=emit(&output,AgentChange::Stopped {provider:ProviderKind::Codex,reason:"エージェントとの接続が終了しました。Hostを再起動してから再送信してください。".into()}).await;
+            let _=emit(&output,AgentChange::Stopped {provider:ProviderKind::Codex,reason:"エージェントとの接続が終了しました。ホストを再起動してから再送信してください。".into()}).await;
         });
         Some(receiver)
     }

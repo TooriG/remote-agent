@@ -128,7 +128,7 @@ pub(crate) async fn ssh_invitation(
         }
         let status = child.wait().await.map_err(|_| "SSHの終了を確認できません。")?;
         if !status.success() {
-            return Err("接続できません。SSHの鍵と接続先を確認し、サーバーでBex Hostを起動してください。".into());
+            return Err("接続できません。SSHの鍵と接続先を確認し、サーバーでBexのホストを起動してください。".into());
         }
         serde_json::from_slice(&contents).map_err(|_| "Bexの接続情報を取得できません。接続先で host-daemon invite を実行できるか確認してください。".into())
     }).await;

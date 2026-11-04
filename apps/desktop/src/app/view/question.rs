@@ -7,7 +7,7 @@ pub(super) struct ComposerQuestion {
     pub(super) prompt: QuestionPrompt,
     /// Its answer is being sent.
     pub(super) busy: bool,
-    pub(super) error: Option<String>,
+    pub(super) error: Option<agent_core::presentation::error::ErrorText>,
     pub(super) collapsed: bool,
     pub(super) can_advance: bool,
 }
@@ -203,8 +203,13 @@ impl Desktop {
                 );
         }
         panel
-            .when_some(question.error.clone(), |panel, error| {
-                panel.child(div().text_xs().text_color(rgb(0xff8e86)).child(error))
+            .when_some(question.error.as_ref(), |panel, error| {
+                panel.child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(0xff8e86))
+                        .child(error_view(error, language)),
+                )
             })
             .into_any_element()
     }

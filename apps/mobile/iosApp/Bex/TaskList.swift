@@ -75,7 +75,7 @@ struct ThreadsScreen: View {
                             ProgressView().taskListRowStyle()
                         }
                         if let error = project.error {
-                            AppNotice(text: error).taskListRowStyle()
+                            AppNotice(text: error.plainText).taskListRowStyle()
                             Button("再試行") {
                                 model.perform(.refreshProject(projectId: project.id))
                             }.taskListRowStyle()

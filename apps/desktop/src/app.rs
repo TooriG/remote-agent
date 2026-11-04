@@ -316,7 +316,8 @@ impl Desktop {
         let account = forms::AccountForm::new(window, cx);
         let search =
             cx.new(|cx| InputState::new(window, cx).placeholder(language.text("会話を検索")));
-        let file_search = cx.new(|cx| InputState::new(window, cx).placeholder("Search files"));
+        let file_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder(language.text("ファイルを検索")));
         let worktrees = forms::WorktreeForm::new(window, cx);
         let hosts = (!side_chat_mode).then(|| cx.new(|cx| Hosts::new(window, cx)));
         let app_updates = (!side_chat_mode
@@ -337,6 +338,7 @@ impl Desktop {
                 let language = crate::localization::language(cx);
                 for (input, source) in [
                     (&view.search, language.text("会話を検索")),
+                    (&view.file_search, language.text("ファイルを検索")),
                     (&view.model_controls.search, language.text("モデルを検索")),
                     (
                         &view.account.code,
@@ -344,7 +346,7 @@ impl Desktop {
                     ),
                     (
                         &view.worktrees.directory,
-                        language.text("接続先 Host 上の絶対パス（空欄で既定）"),
+                        language.text("ホスト上の絶対パス（空欄で既定）"),
                     ),
                 ] {
                     input.update(cx, |input, cx| {

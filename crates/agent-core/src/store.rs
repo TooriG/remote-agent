@@ -1407,7 +1407,7 @@ async fn run(
                 } else {
                     // Work started against the cached storage must not reach the Host's new one.
                     for scheduled in held.drain(..) {
-                        let error = PeerError::InvalidMessage("Hostの保存先が変わったため、操作を取り消しました。".into());
+                        let error = PeerError::InvalidMessage("ホストの保存先が変わったため、操作を取り消しました。".into());
                         effects.extend(finish(&updates, rejected(scheduled, error)));
                     }
                     apply(&updates, Event::StorageScope(introduced.storage_scope));
@@ -1481,7 +1481,7 @@ async fn run_offline(
             Command::Dispatch(command) => command,
             Command::Browser { complete, .. } => {
                 let _ = complete.send(Err(PeerError::ConnectionClosed(
-                    "Hostに接続してください。".into(),
+                    "ホストに接続してください。".into(),
                 )));
                 continue;
             }
@@ -2232,9 +2232,9 @@ mod tests {
                     assert!(recovering.await.unwrap().is_err());
                     let notices = notices();
                     assert_eq!(notices.len(), 1, "{notices:?}");
-                    assert_eq!(notices[0].title, "Hostに接続できません");
+                    assert_eq!(notices[0].title, "ホストに接続できません");
                     assert!(
-                        notices[0].message.contains("Host unavailable"),
+                        notices[0].text.to_string().contains("Host unavailable"),
                         "{notices:?}"
                     );
                 }
@@ -2253,9 +2253,9 @@ mod tests {
                         .unwrap();
                     let notices = notices();
                     assert_eq!(notices.len(), 1, "{notices:?}");
-                    assert_eq!(notices[0].title, "Hostに接続できません");
+                    assert_eq!(notices[0].title, "ホストに接続できません");
                     assert!(
-                        notices[0].message.contains("Host unavailable"),
+                        notices[0].text.to_string().contains("Host unavailable"),
                         "{notices:?}"
                     );
                 }

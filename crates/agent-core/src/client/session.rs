@@ -611,7 +611,7 @@ mod tests {
             next.clone().ready().await.unwrap();
             assert_eq!(
                 next.persistence_error().as_deref(),
-                Some("disk unavailable")
+                Some("エラーが発生しました。\ndisk unavailable")
             );
             queued.wait().await.unwrap();
             next.clone().flush().await.unwrap();
@@ -919,7 +919,7 @@ mod tests {
             assert!(session.clone().flush().await.is_err());
             assert_eq!(
                 session.persistence_error().as_deref(),
-                Some("disk unavailable")
+                Some("エラーが発生しました。\ndisk unavailable")
             );
             storage.fail_save.store(false, Ordering::SeqCst);
             session.clone().flush().await.unwrap();

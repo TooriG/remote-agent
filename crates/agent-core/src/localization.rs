@@ -124,6 +124,14 @@ pub fn localized_ui_text(language: UiLanguage, source: String) -> String {
             return localized_ui_format(language, template.source.clone(), arguments);
         }
     }
+    // Error copy is followed by verbatim diagnostics on separate lines.
+    if source.contains('\n') {
+        return source
+            .split('\n')
+            .map(|line| localized_ui_text(language, line.into()))
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
     source
 }
 
@@ -247,6 +255,13 @@ mod tests {
         assert_eq!(
             localized_ui_text(UiLanguage::English, "1時間 2分 3秒 作業しました".into()),
             "Worked for 1h 2m 3s · completed"
+        );
+        assert_eq!(
+            localized_ui_text(
+                UiLanguage::English,
+                "設定\nconnection closed\n未登録".into()
+            ),
+            "Settings\nconnection closed\n未登録"
         );
     }
 

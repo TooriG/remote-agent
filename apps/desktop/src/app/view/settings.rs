@@ -600,10 +600,15 @@ impl Desktop {
             .unwrap_or_default();
         let selected = preferred_editor(self.snapshot.preferred_editor, &options);
         let no_cwd = self.snapshot.navigation.cwd.is_empty();
-        let label = format!(
-            "Open in {}",
-            selected.map_or("editor", |editor| editor_label(editor, file_manager))
-        );
+        let language = crate::localization::language(cx);
+        let label = match selected {
+            Some(editor) => agent_core::localization::localized_ui_format(
+                language,
+                "{0}で開く".into(),
+                vec![language.text(editor_label(editor, file_manager)).into()],
+            ),
+            None => language.text("エディターで開く").into(),
+        };
         let owner = cx.entity().downgrade();
         h_flex()
             .w_full()
@@ -622,26 +627,30 @@ impl Desktop {
                     .icon(IconName::ChevronDown)
                     .small()
                     .ghost()
-                    .tooltip("Choose editor")
-                    .accessibility_label("Choose editor")
+                    .tooltip(language.text("エディターを選択"))
+                    .accessibility_label(language.text("エディターを選択"))
                     .disabled(no_cwd)
                     .dropdown_menu(move |mut menu, _, _| {
                         if options.is_empty() {
                             menu = menu.item(
-                                PopupMenuItem::new("No installed editors found").disabled(true),
+                                PopupMenuItem::new(
+                                    language.text("インストール済みのエディターが見つかりません"),
+                                )
+                                .disabled(true),
                             );
                         }
                         for editor in &options {
                             let editor = *editor;
                             let owner = owner.clone();
                             menu = menu.item(
-                                PopupMenuItem::new(editor_label(editor, file_manager)).on_click(
-                                    move |_, _, cx| {
-                                        let _ = owner.update(cx, |view, cx| {
-                                            view.open_workspace_in_editor(editor, cx);
-                                        });
-                                    },
-                                ),
+                                PopupMenuItem::new(
+                                    language.text(editor_label(editor, file_manager)),
+                                )
+                                .on_click(move |_, _, cx| {
+                                    let _ = owner.update(cx, |view, cx| {
+                                        view.open_workspace_in_editor(editor, cx);
+                                    });
+                                }),
                             );
                         }
                         menu

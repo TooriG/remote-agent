@@ -65,7 +65,7 @@ struct WorkspaceBrowserScreen: View {
                     ContentUnavailableView("プレビューはまだありません", systemImage: "globe",
                                            description: Text("URLを入力するか、AIにブラウザ操作を依頼してください。"))
                 } else {
-                    ProgressView("Host のブラウザに接続中…")
+                    ProgressView("ホストのブラウザに接続中…")
                 }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(GeometryReader { geometry in
@@ -334,7 +334,7 @@ private final class BrowserCanvasView: UIScrollView, UIScrollViewDelegate {
         pagePan.maximumNumberOfTouches = 1
         addGestureRecognizer(pagePan)
         backgroundColor = .secondarySystemBackground
-        accessibilityLabel = "Host の BEX ブラウザ。ピンチで拡大、2本指で表示範囲を移動できます。"
+        accessibilityLabel = "ホストのBexブラウザ。ピンチで拡大、2本指で表示範囲を移動できます。"
     }
 
     @available(*, unavailable)

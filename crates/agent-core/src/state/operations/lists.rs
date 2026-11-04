@@ -931,8 +931,9 @@ mod tests {
             assert!(
                 store.snapshot().thread_list().unwrap().projects[0]
                     .error
-                    .as_deref()
+                    .as_ref()
                     .unwrap()
+                    .to_string()
                     .contains("fixture unavailable")
             );
             store

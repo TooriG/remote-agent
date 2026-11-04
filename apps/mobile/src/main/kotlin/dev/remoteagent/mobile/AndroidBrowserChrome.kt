@@ -170,7 +170,7 @@ internal fun BrowserEmptyState(connected: Boolean, modifier: Modifier) {
     Box(modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
         if (!connected)
             Text(
-                language.text("Host のブラウザに接続中…"),
+                language.text("ホストのブラウザに接続中…"),
                 Modifier.padding(48.dp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

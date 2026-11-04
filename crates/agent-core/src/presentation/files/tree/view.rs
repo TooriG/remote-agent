@@ -35,7 +35,7 @@ pub struct FileTreeView {
     pub toggle_all_label: String,
     pub can_expand_all: bool,
     pub truncated: bool,
-    pub error: Option<String>,
+    pub error: Option<crate::presentation::error::ErrorText>,
 }
 
 impl Tree {
@@ -171,9 +171,9 @@ impl Tree {
                 && (self.running.contains("") || self.queue.iter().any(|path| path.is_empty())),
             all_expanded,
             toggle_all_label: if self.expand_all || all_expanded {
-                "Collapse all folders"
+                "すべてのフォルダを折りたたむ"
             } else {
-                "Expand all folders"
+                "すべてのフォルダを展開"
             }
             .into(),
             truncated: searching
@@ -184,13 +184,14 @@ impl Tree {
             error: self
                 .directories
                 .values()
-                .find_map(|directory| directory.error.clone())
+                .find_map(|directory| directory.error.as_deref())
                 .or_else(|| {
                     self.search
                         .as_ref()
                         .and_then(|search| search.as_ref().err())
-                        .cloned()
-                }),
+                        .map(String::as_str)
+                })
+                .map(crate::presentation::error::error_text),
         }
     }
     fn rows(

@@ -581,7 +581,7 @@ impl Snapshot {
                     Some(route) if route.needs_attention => "キーの接続先を確認してください",
                     Some(route) => match route.source {
                         CredentialSource::Managed => "保存済み（キーは非表示）",
-                        CredentialSource::External => "Hostの外部設定を使用",
+                        CredentialSource::External => "ホストの外部設定を使用",
                         CredentialSource::Missing => "未設定",
                     },
                     None => "設定状態を取得してください",

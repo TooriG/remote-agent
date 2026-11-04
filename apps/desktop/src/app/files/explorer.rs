@@ -124,7 +124,7 @@ impl Desktop {
             .tab_index(0)
             .role(Role::Splitter)
             .aria_orientation(Orientation::Vertical)
-            .aria_label("Resize file explorer")
+            .aria_label(crate::localization::language(cx).text("ファイル一覧の幅を変更"))
             .aria_min_numeric_value(EXPLORER_MIN_WIDTH as f64)
             .aria_max_numeric_value(explorer_max_width(self.file_explorer.available) as f64)
             .when_some(

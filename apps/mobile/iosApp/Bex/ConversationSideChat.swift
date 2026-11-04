@@ -80,7 +80,7 @@ final class SideChatRequest: ObservableObject {
                   model.sideChatRequest?.id == id else { return }
             model.composerFocusRequest = UUID()
         } catch {
-            self.error = model.snapshot.error() ?? error.localizedDescription
+            self.error = model.snapshot.error()?.plainText ?? error.localizedDescription
             await restoreOriginal(model)
         }
         preparing = false

@@ -138,7 +138,7 @@ struct ThreadScreen: View {
         return VStack(spacing: 0) {
             ErrorNotices(model: model, scope: .conversation(draftKey: model.coreDraftKey))
                 .padding(.horizontal)
-            if let notice = model.notice, notice != history?.error {
+            if let notice = model.notice, notice != history?.error?.plainText {
                 AppNotice(text: notice).padding(.horizontal).padding(.top, 8)
             }
             if let thread = conversation {
@@ -246,7 +246,7 @@ struct ThreadScreen: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .accessibilityIdentifier("task.empty")
             } else if let id = model.selectedThreadId, let error = history?.error {
-                AppNotice(text: error).padding(.horizontal)
+                AppNotice(text: error.plainText).padding(.horizontal)
                 Button("再試行") { model.openThread(id) }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .accessibilityIdentifier("task.retry")

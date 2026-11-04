@@ -68,7 +68,7 @@ impl Desktop {
                 );
             }
             let mut controls = v_flex().gap_1().child(row);
-            if let Some(detail) = &agent.detail {
+            if let Some(error) = &agent.error {
                 controls = controls.child(
                     h_flex()
                         .gap_3()
@@ -78,7 +78,7 @@ impl Desktop {
                                 .flex_1()
                                 .text_xs()
                                 .text_color(rgb(0xffc773))
-                                .child(error_message(detail)),
+                                .child(error_view(error, language)),
                         )
                         .child(
                             button(

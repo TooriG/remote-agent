@@ -418,8 +418,8 @@ mod tests {
             ),
             (
                 "file_operation_failed",
-                "Host supplied reason",
-                "Host supplied reason",
+                "ホストで操作に失敗しました。\nHost supplied reason",
+                "The operation failed on the Host.\nHost supplied reason",
             ),
         ] {
             let peer = crate::peer::PeerError::Remote {

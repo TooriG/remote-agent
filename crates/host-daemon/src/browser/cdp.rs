@@ -167,11 +167,11 @@ impl Chrome {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .map_err(|e| format!("BEXブラウザを起動できません: {e}"))?;
+            .map_err(|e| format!("Bexブラウザを起動できません: {e}"))?;
         let result = tokio::time::timeout(Duration::from_secs(20), async {
             loop {
                 if child.try_wait().map_err(|e| e.to_string())?.is_some() {
-                    return Err("BEXブラウザが起動中に終了しました。".into());
+                    return Err("Bexブラウザが起動中に終了しました。".into());
                 }
                 if let Ok(contents) = tokio::fs::read_to_string(&port_file).await {
                     let mut lines = contents.lines();
@@ -187,7 +187,7 @@ impl Chrome {
                             message = %format_args!("DevTools endpoint published after {} ms", started.elapsed().as_millis()));
                         let (socket, _) = async_tungstenite::tokio::connect_async(url)
                             .await
-                            .map_err(|_| "BEXブラウザに接続できません。".to_owned())?;
+                            .map_err(|_| "Bexブラウザに接続できません。".to_owned())?;
                         return Ok(socket);
                     }
                 }
@@ -195,7 +195,7 @@ impl Chrome {
             }
         })
         .await
-        .unwrap_or_else(|_| Err("BEXブラウザの起動がタイムアウトしました。".into()));
+        .unwrap_or_else(|_| Err("Bexブラウザの起動がタイムアウトしました。".into()));
         match result {
             Ok(socket) => {
                 tracing::info!(target: "agent", operation = "browser.launch",
@@ -231,7 +231,7 @@ impl Chrome {
         params: Value,
     ) -> Result<Value, String> {
         if self.disconnected() {
-            return Err("BEXブラウザとの接続が切れました。".into());
+            return Err("Bexブラウザとの接続が切れました。".into());
         }
         self.next_id += 1;
         let id = self.next_id;
@@ -275,7 +275,7 @@ impl Chrome {
             Ok(Err(())) => {
                 tracing::warn!(target: "agent", operation = "browser.cdp",
                     message = %format_args!("{method} interrupted after {} ms", started.elapsed().as_millis()));
-                Err("BEXブラウザとの通信が中断しました。再接続してください。".into())
+                Err("Bexブラウザとの通信が中断しました。再接続してください。".into())
             }
         }
     }

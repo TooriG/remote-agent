@@ -212,7 +212,9 @@ impl Operation for PairRemoteHost {
             .unwrap_or_default()
             .as_secs();
         if now >= self.invitation.expires_at {
-            return Err(PeerError::InvalidMessage("invitation expired".into()));
+            return Err(PeerError::InvalidMessage(
+                "招待の有効期限が切れました。".into(),
+            ));
         }
         let local = context
             .session

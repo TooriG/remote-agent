@@ -76,7 +76,7 @@ impl SearchIndexes {
     fn read(&self, request: SearchTreeEntries) -> Result<TreeEntries> {
         let root = dunce::canonicalize(absolute_path(&request.root)?)?;
         if !root.is_dir() {
-            return Err(anyhow!("workspace root is not a directory"));
+            return Err(anyhow!("作業スペースのルートがフォルダではありません。"));
         }
         let index = {
             let mut entries = self

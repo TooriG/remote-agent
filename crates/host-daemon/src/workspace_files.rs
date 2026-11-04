@@ -119,7 +119,7 @@ impl WorkspaceFiles {
         tokio::task::spawn_blocking(move || {
             use std::io::{Seek, SeekFrom};
             if bytes.len() as u64 > TRANSFER_LIMIT {
-                return Err(anyhow!("transfer exceeds 512 MiB"));
+                return Err(anyhow!("512 MiBを超えるファイルは転送できません。"));
             }
             let mut file = tempfile::tempfile()?;
             file.write_all(&bytes)?;
@@ -169,7 +169,7 @@ impl WorkspaceFiles {
             bytes
         } else {
             read_bounded(&archive, EDIT_LIMIT)
-                .context("表示ファイルが見つかりません。HostでHTMLを再作成してください。")?
+                .context("表示ファイルが見つかりません。ホストでHTMLを再作成してください。")?
         };
         let fragment = std::str::from_utf8(&bytes).context("visualize HTML is not UTF-8")?;
         Ok(Body::from(visualization_document(fragment)))
@@ -241,14 +241,14 @@ impl WorkspaceFiles {
                 let bom = original.starts_with(&[0xef, 0xbb, 0xbf]);
                 let original_text =
                     std::str::from_utf8(if bom { &original[3..] } else { &original })
-                        .context("file is not UTF-8")?;
+                        .context("UTF-8以外のファイルは編集できません。")?;
                 let text = if line_ending(original_text) == "crlf" {
                     params.text.replace("\r\n", "\n").replace('\n', "\r\n")
                 } else {
                     params.text
                 };
                 if text.len() as u64 + if bom { 3 } else { 0 } > EDIT_LIMIT {
-                    return Err(anyhow!("file exceeds editor size limit"));
+                    return Err(anyhow!("ファイルが大きすぎるため編集できません。"));
                 }
                 atomicwrites::AtomicFile::new(&path, atomicwrites::AllowOverwrite)
                     .write_with_options(
@@ -316,7 +316,7 @@ impl WorkspaceFiles {
                 let path = absolute_path(&params.path)?;
                 let mut file = File::open(path)?;
                 if !file.metadata()?.is_file() {
-                    return Err(anyhow!("download target is not a regular file"));
+                    return Err(anyhow!("ダウンロードできるのは通常のファイルだけです。"));
                 }
                 let (size, digest) = digest_file(&mut file)?;
                 use std::io::{Seek, SeekFrom};
@@ -336,7 +336,7 @@ impl WorkspaceFiles {
 
     fn grant(&self, grant: Grant) -> Result<TransferGrant> {
         if grant.size > TRANSFER_LIMIT {
-            return Err(anyhow!("transfer exceeds 512 MiB"));
+            return Err(anyhow!("512 MiBを超えるファイルは転送できません。"));
         }
         let mut grants = self.grants.lock().unwrap_or_else(|e| e.into_inner());
         grants.retain(|_, grant| grant.expires > Instant::now());
@@ -478,13 +478,13 @@ fn hash(bytes: &[u8]) -> String {
 fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>> {
     let file = File::open(path)?;
     if !file.metadata()?.is_file() {
-        return Err(anyhow!("path is not a regular file"));
+        return Err(anyhow!("通常のファイルではありません。"));
     }
     let mut bytes = Vec::new();
     file.take(limit + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > limit {
         return Err(anyhow!(
-            "file exceeds editor size limit; download it instead"
+            "ファイルが大きすぎるため表示できません。ダウンロードして開いてください。"
         ));
     }
     Ok(bytes)
@@ -493,7 +493,7 @@ fn read_editable(path: &Path, requested: &Path) -> Result<FileContent> {
     let bytes = read_bounded(path, EDIT_LIMIT)?;
     let bom = bytes.starts_with(&[0xef, 0xbb, 0xbf]);
     let text = std::str::from_utf8(if bom { &bytes[3..] } else { &bytes })
-        .context("file is not UTF-8; download it instead")?;
+        .context("UTF-8以外のファイルは表示できません。ダウンロードして開いてください。")?;
     if text.contains('\0') {
         return Err(anyhow!("binary file; download it instead"));
     }
@@ -536,7 +536,7 @@ fn digest_file(file: &mut File) -> Result<(u64, [u8; 32])> {
         }
         size += read as u64;
         if size > TRANSFER_LIMIT {
-            return Err(anyhow!("transfer exceeds 512 MiB"));
+            return Err(anyhow!("512 MiBを超えるファイルは転送できません。"));
         }
         digest.update(&buffer[..read]);
     }

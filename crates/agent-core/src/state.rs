@@ -184,7 +184,7 @@ impl TerminalPhase {
             Self::Suspended => "再接続を待っています".into(),
             Self::Detached => "切断済み".into(),
             Self::Exited(code) => format!("終了 · {code}"),
-            Self::Failed(error) => error.clone(),
+            Self::Failed(error) => crate::presentation::error::error_text(error).to_string(),
         }
     }
 }
@@ -366,12 +366,15 @@ impl Snapshot {
         self.operation_running(op::OperationKey::ProjectScan)
             || self.operation_running(op::OperationKey::ProjectImport)
     }
-    pub fn operation_error(&self, key: operations::OperationKey) -> Option<String> {
+    pub fn operation_error(
+        &self,
+        key: operations::OperationKey,
+    ) -> Option<crate::presentation::error::ErrorText> {
         self.operations
             .get(&key)
             .and_then(|state| match &state.phase {
                 operations::OperationPhase::Failed { message } => {
-                    Some(crate::presentation::error::error_message(message))
+                    Some(crate::presentation::error::error_text(message))
                 }
                 _ => None,
             })
@@ -537,7 +540,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             }
             op::ErrorId::Application { message } => {
                 for error in [&mut next.connection_failure, &mut next.error] {
-                    if error.as_deref().map(crate::presentation::error::error_message).as_deref() == Some(message.as_str()) {
+                    if error.as_deref() == Some(message.as_str()) {
                         *error = None;
                     }
                 }
@@ -1717,6 +1720,7 @@ mod submission_tests {
             assert!(
                 next.operation_error(op::OperationKey::Submission { draft_key: key })
                     .unwrap()
+                    .message
                     .contains("閲覧専用")
             );
         } else {

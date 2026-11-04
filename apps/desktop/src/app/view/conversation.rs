@@ -18,7 +18,7 @@ pub(in crate::app) struct ConversationModel {
     docked: Vec<agent_core::presentation::conversation::Request>,
     errors: Vec<super::errors::ErrorRow>,
     running: std::collections::BTreeSet<op::OperationKey>,
-    failures: BTreeMap<op::OperationKey, String>,
+    failures: BTreeMap<op::OperationKey, agent_core::presentation::error::ErrorText>,
 }
 
 pub(in crate::app) enum ConversationAction {
@@ -548,7 +548,10 @@ impl ConversationView {
                 agent_core::localization::localized_ui_format(
                     language,
                     "{0} · 再試行".into(),
-                    vec![error.to_string()],
+                    vec![agent_core::localization::localized_ui_text(
+                        language,
+                        error.message,
+                    )],
                 )
             } else {
                 language.text("詳細を読み込む").to_owned()
@@ -1083,7 +1086,7 @@ impl ConversationView {
                                                 div()
                                                     .text_xs()
                                                     .text_color(rgb(0xff8e86))
-                                                    .child(error_message(&error)),
+                                                    .child(error_view(&error, language)),
                                             )
                                         })
                                         .child(
@@ -1384,7 +1387,7 @@ impl ConversationView {
                 div()
                     .text_sm()
                     .text_color(rgb(0xff8e86))
-                    .child(error_message(error)),
+                    .child(error_view(error, language)),
             );
         }
         if !request.details.is_empty() {
@@ -1743,7 +1746,7 @@ impl ConversationView {
                                 .text_xs()
                                 .text_center()
                                 .text_color(rgb(appearance::MUTED))
-                                .child(error),
+                                .child(error_view(&error, language)),
                         )
                     }),
             )

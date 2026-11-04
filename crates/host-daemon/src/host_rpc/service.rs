@@ -339,7 +339,7 @@ impl HostRpcService {
             let browser = self.inner.browser.get().ok_or_else(|| {
                 Failure::new(
                     "browser_unavailable",
-                    "このHostではBEXブラウザが有効になっていません。",
+                    "このホストではBexブラウザが有効になっていません。",
                 )
             })?;
             return browser
@@ -377,7 +377,7 @@ impl HostRpcService {
             Call::Unsupported => {
                 return Err(Failure::new(
                     "method_not_found",
-                    "このHostはこの操作に対応していません。PC側のBEXを更新してください。",
+                    "このホストはこの操作に対応していません。PC側のBexを更新してください。",
                 ));
             }
             Call::MarkSessionRead(params) => {
@@ -738,7 +738,7 @@ mod tests {
         assert!(
             failure
                 .message
-                .contains("表示ファイルが見つかりません。HostでHTMLを再作成してください。")
+                .contains("表示ファイルが見つかりません。ホストでHTMLを再作成してください。")
         );
     }
 

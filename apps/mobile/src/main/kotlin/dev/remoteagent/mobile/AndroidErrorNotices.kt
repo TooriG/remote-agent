@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import dev.remoteagent.core.ErrorScope
+import dev.remoteagent.core.ErrorText
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.Outcome
 import dev.remoteagent.core.Snapshot
@@ -33,6 +34,25 @@ import dev.remoteagent.core.TurnErrorPresentation
 private const val ERROR_SUMMARY_LINES = 3
 private const val ERROR_SUMMARY_LENGTH = 180
 private const val WARNING_COLOR = 0xFFE5B567
+
+/** Error copy in the UI language above its verbatim cause. */
+@Composable
+internal fun ErrorTextView(
+    text: ErrorText,
+    modifier: Modifier = Modifier,
+    color: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.error,
+) {
+    Column(modifier) {
+        Text(LocalUiLanguage.current.text(text.message), color = color)
+        text.details?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+/** The copy, then the verbatim cause on its own line, for single-string surfaces. */
+internal val ErrorText.plainText: String
+    get() = listOfNotNull(message, details).joinToString("\n")
 
 @Composable
 internal fun ErrorNotices(
@@ -45,8 +65,8 @@ internal fun ErrorNotices(
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         snapshot.errorNotices(scope).forEach { notice ->
             var expanded by remember(notice) { mutableStateOf(false) }
-            val hasDetails =
-                notice.message.length > ERROR_SUMMARY_LENGTH || notice.message.lines().size > ERROR_SUMMARY_LINES
+            val details = notice.text.details.orEmpty()
+            val hasDetails = details.length > ERROR_SUMMARY_LENGTH || details.lines().size > ERROR_SUMMARY_LINES
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
@@ -61,13 +81,22 @@ internal fun ErrorNotices(
                     )
                     Text(LocalUiLanguage.current.text(notice.title), style = MaterialTheme.typography.titleSmall)
                     SelectionContainer {
-                        Text(
-                            LocalUiLanguage.current.text(notice.message),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = if (expanded || !hasDetails) Int.MAX_VALUE else ERROR_SUMMARY_LINES,
-                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                        )
+                        Column {
+                            Text(
+                                LocalUiLanguage.current.text(notice.text.message),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            if (details.isNotEmpty()) {
+                                Text(
+                                    details,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = if (expanded || !hasDetails) Int.MAX_VALUE else ERROR_SUMMARY_LINES,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
                     }
                     if (hasDetails) {
                         TextButton(onClick = { expanded = !expanded }) {
@@ -82,7 +111,9 @@ internal fun ErrorNotices(
                     if (scope == ErrorScope.Application && !snapshot.connected() && reconnect != null) {
                         TextButton(onClick = reconnect) { Text(language.text("再接続")) }
                     }
-                    ErrorNoticeButtons(notice.title, notice.message) { perform(Intent.DismissError(notice.id)) {} }
+                    ErrorNoticeButtons(notice.title, notice.text.plainText) {
+                        perform(Intent.DismissError(notice.id)) {}
+                    }
                 }
             }
         }

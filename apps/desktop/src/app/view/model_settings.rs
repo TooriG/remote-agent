@@ -441,7 +441,7 @@ impl Desktop {
                         div()
                             .text_xs()
                             .text_color(rgb(0xff7777))
-                            .child(error_message(error)),
+                            .child(error_view(&error_text(error), language)),
                     )
                 },
             )
@@ -453,14 +453,19 @@ impl Desktop {
                         div()
                             .text_xs()
                             .text_color(rgb(0xff7777))
-                            .child(error_message(&error))
+                            .child(error_view(&error_text(&error), language))
                     }),
             );
         if let Some(error) = self
             .snapshot
             .operation_error(op::OperationKey::AccountLogin { provider })
         {
-            body = body.child(div().text_sm().text_color(rgb(0xff8e86)).child(error));
+            body = body.child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(0xff8e86))
+                    .child(error_view(&error, language)),
+            );
         }
         if !in_settings {
             body = body.child(self.error_notices(ErrorScope::Settings, cx));
@@ -491,8 +496,8 @@ impl Desktop {
                         }).secondary().outline().h(px(32.)).disabled(disabled || updating).debug_selector(|| "codex-cli-update".into()))))
                 .child(div().pt_4().border_t_1().border_color(rgb(appearance::BORDER))
                     .text_xs().text_color(rgb(appearance::MUTED))
-                    .child(language.text("選択中の環境のCLIを更新します。更新後は実行中の会話が終わってからHostを再起動してください。モデル一覧は再接続時に再取得します。")))
-                .when(cli.is_some_and(|cli| cli.restart_required), |body| body.child(language.text("更新が完了しました。新しいCLIを使用するにはHostを再起動してください。")))
+                    .child(language.text("選択中の環境のCLIを更新します。更新後は実行中の会話が終わってからホストを再起動してください。モデル一覧は再接続時に再取得します。")))
+                .when(cli.is_some_and(|cli| cli.restart_required), |body| body.child(language.text("更新が完了しました。新しいCLIを使用するにはホストを再起動してください。")))
                 .when_some(cli.and_then(|cli| cli.error.as_ref()), |body, error| body.child(div().text_sm().text_color(rgb(0xff8e86)).child(error.clone()))))
     }
 }
@@ -676,7 +681,12 @@ impl Desktop {
             .snapshot
             .operation_error(op::OperationKey::DshCredentials)
         {
-            form = form.child(div().text_sm().text_color(rgb(0xff7777)).child(error));
+            form = form.child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(0xff7777))
+                    .child(error_view(&error, language)),
+            );
         }
         form.into_any_element()
     }
@@ -846,7 +856,11 @@ fn account_usage_view(
             .into_any_element();
     };
     if let Some(error) = &usage.error {
-        body = body.child(div().text_color(rgb(0xe9b56f)).child(error_message(error)));
+        body = body.child(
+            div()
+                .text_color(rgb(0xe9b56f))
+                .child(error_view(&error_text(error), language)),
+        );
     }
     let mut windows = h_flex().w_full().flex_wrap().gap_5();
     for window in &usage.windows {
@@ -1235,7 +1249,7 @@ impl Desktop {
                         div()
                             .text_xs()
                             .text_color(rgb(0xff7777))
-                            .child(error_message(&error))
+                            .child(error_view(&error_text(&error), language))
                     }),
             )
             .when(

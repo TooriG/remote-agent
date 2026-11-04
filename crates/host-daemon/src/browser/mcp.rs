@@ -267,7 +267,7 @@ async fn bridge(socket: &Path, request: BridgeRequest) -> Result<BrowserFrame, S
     {
         let socket = tokio::net::UnixStream::connect(socket)
             .await
-            .map_err(|_| "BEX Hostに接続できません。会話を開き直してください。")?;
+            .map_err(|_| "ホストに接続できません。会話を開き直してください。")?;
         let (read, write) = socket.into_split();
         let mut output = JsonlWriter::with_max_message_bytes(write, 64 * 1024);
         output
@@ -278,7 +278,7 @@ async fn bridge(socket: &Path, request: BridgeRequest) -> Result<BrowserFrame, S
             .read_line()
             .await
             .map_err(|e| e.to_string())?
-            .ok_or("BEX Hostとの接続が切れました。")?;
+            .ok_or("ホストとの接続が切れました。")?;
         serde_json::from_str(&line).map_err(|_| "invalid browser response")?
     }
     #[cfg(not(unix))]

@@ -24,7 +24,7 @@ impl HostRpcService {
                 .inner
                 .updating
                 .swap(true, std::sync::atomic::Ordering::AcqRel),
-            "Hostの更新が既に進行中です。"
+            "ホストの更新が既に進行中です。"
         );
         let reset = scopeguard::guard(&self.inner.updating, |updating| {
             updating.store(false, std::sync::atomic::Ordering::Release)

@@ -114,11 +114,11 @@ private struct WorkspaceDirectoryScreen: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    if let error = error ?? tree.error {
+                    if let error = error ?? tree.error?.plainText {
                         AppNotice(text: error).padding(.horizontal, 16).padding(.vertical, 8)
                     }
                     if tree.truncated {
-                        Text("More search results available. Refine your search to see them.")
+                        Text("ほかにも一致する項目があります。検索語を絞り込んでください。")
                             .font(.caption).foregroundStyle(.secondary).padding(16)
                     }
                     if tree.rows.isEmpty {
@@ -161,7 +161,7 @@ private struct WorkspaceDirectoryScreen: View {
         }
         .navigationTitle("ファイル")
         .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: Binding(get: { tree.query }, set: { send(.query(text: $0)) }), prompt: "Search files")
+        .searchable(text: Binding(get: { tree.query }, set: { send(.query(text: $0)) }), prompt: "ファイルを検索")
         .onAppear {
             send(.open(surface: .mobile, locale: Locale.current.identifier, workspaceRoot: root))
             if let initialFile {
@@ -193,12 +193,12 @@ private struct WorkspaceDirectoryScreen: View {
             ProgressView().frame(maxWidth: .infinity).padding(20)
         } else {
             VStack(alignment: .leading, spacing: 4) {
-                Text(tree.error == nil ? "No files found" : "Files unavailable").fontWeight(.bold)
+                Text(tree.error == nil ? "ファイルが見つかりません" : "ファイルを表示できません").fontWeight(.bold)
                 if tree.error != nil {
-                    Button("Try again") { send(.refresh) }
+                    Button("再試行") { send(.refresh) }
                 } else {
                     Text(tree.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        ? "The workspace is empty." : "Try a different search.").font(.caption)
+                        ? "作業スペースは空です。" : "別の語句で検索してください。").font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }.padding(16)

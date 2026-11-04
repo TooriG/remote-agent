@@ -2300,7 +2300,7 @@ pub struct HistoryControl {
     pub has_more: bool,
     pub loading: bool,
     pub load_label: String,
-    pub error: Option<String>,
+    pub error: Option<super::error::ErrorText>,
 }
 
 #[cfg_attr(feature = "bindings", uniffi::export)]
@@ -2373,7 +2373,10 @@ mod history_control_tests {
             (OperationPhase::Failed {
                 message: r#"remote RPC error: {"code":"provider_failed","message":"Older page unavailable"}"#.into(),
             }, HistoryControl {
-                error: Some("Older page unavailable".into()),
+                error: Some(crate::presentation::error::ErrorText {
+                    message: "ホストで操作に失敗しました。".into(),
+                    details: Some("Older page unavailable".into()),
+                }),
                 ..idle.clone()
             }),
             (OperationPhase::Running, HistoryControl {
@@ -2424,7 +2427,10 @@ mod history_control_tests {
                 has_more: false,
                 loading: false,
                 load_label: "以前のターンを読み込む".into(),
-                error: Some("History unavailable".into()),
+                error: Some(crate::presentation::error::ErrorText {
+                    message: "エラーが発生しました。".into(),
+                    details: Some("History unavailable".into()),
+                }),
             })
         );
     }

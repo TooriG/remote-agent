@@ -15,7 +15,7 @@ pub enum AgentError {
 
 pub(crate) fn error(reason: impl std::fmt::Display) -> AgentError {
     AgentError::Failed {
-        reason: crate::presentation::error::error_message(&reason.to_string()),
+        reason: crate::presentation::error::error_text(&reason.to_string()).to_string(),
     }
 }
 

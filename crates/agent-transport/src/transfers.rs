@@ -60,7 +60,9 @@ where
         }
         size += read as u64;
         if size > LIMIT {
-            return Err(TransferError::Protocol("transfer exceeds 512 MiB".into()));
+            return Err(TransferError::Protocol(
+                "512 MiBを超えるファイルは転送できません。".into(),
+            ));
         }
         digest.update(&buffer[..read]);
     }
@@ -183,7 +185,9 @@ where
     W: AsyncWrite + Unpin,
 {
     if grant.size > LIMIT {
-        return Err(TransferError::Protocol("transfer exceeds 512 MiB".into()));
+        return Err(TransferError::Protocol(
+            "512 MiBを超えるファイルは転送できません。".into(),
+        ));
     }
     stream.write_all(&grant.token).await?;
     let mut digest = Context::new(&SHA256);

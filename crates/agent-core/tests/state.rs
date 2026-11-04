@@ -1013,7 +1013,7 @@ fn terminal_presentation_only_shows_loading_or_exceptional_status() {
         (
             TerminalPhase::Failed("failure".into()),
             false,
-            Some("failure"),
+            Some("エラーが発生しました。\nfailure"),
         ),
         (
             TerminalPhase::Suspended,
@@ -1354,6 +1354,7 @@ fn file_navigation_rejects_empty_and_relative_paths_before_rpc() {
         assert_eq!(
             snapshot
                 .operation_error(op::OperationKey::Directory)
+                .map(|error| error.message)
                 .as_deref(),
             Some("絶対パスを入力してください。")
         );

@@ -497,7 +497,13 @@ impl Desktop {
                     projects.push(SidebarMenuItem::new(language.text("読み込み中…")).into());
                 }
                 if let Some(error) = &project.error {
-                    projects.push(SidebarMenuItem::new(error.clone()).into());
+                    projects.push(
+                        SidebarMenuItem::new(agent_core::localization::localized_ui_text(
+                            language,
+                            error.message.clone(),
+                        ))
+                        .into(),
+                    );
                     let retry_id = id.clone();
                     projects.push(
                         SidebarMenuItem::new(language.text("再試行"))

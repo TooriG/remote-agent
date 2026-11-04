@@ -459,7 +459,7 @@ impl Browser {
             .child(
                 div()
                     .text_sm()
-                    .child(language.text("Hostのブラウザから取り込む")),
+                    .child(language.text("ホストのブラウザから取り込む")),
             );
         if metadata.profiles.is_empty() {
             panel = panel.child(

@@ -140,6 +140,7 @@ impl Terminal {
             let events = self.events.clone();
             self.runtime.handle.spawn(async move {
                 if let Err(error) = receipt.await {
+                    let error = agent_core::presentation::error::error_text(&error.to_string());
                     let _ = events.send(Event::Error(error.to_string())).await;
                 }
             });
@@ -400,12 +401,12 @@ impl Render for Terminal {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let language = crate::localization::language(cx);
         let status = self.error.clone().unwrap_or_else(|| {
-            self.snapshot
-                .terminals
-                .get(&self.handle)
-                .map_or(language.text("接続中…").into(), |terminal| {
-                    terminal.phase.label()
-                })
+            self.snapshot.terminals.get(&self.handle).map_or(
+                language.text("接続中…").into(),
+                |terminal| {
+                    agent_core::localization::localized_ui_text(language, terminal.phase.label())
+                },
+            )
         });
         v_flex()
             .size_full()

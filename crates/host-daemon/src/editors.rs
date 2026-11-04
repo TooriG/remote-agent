@@ -139,7 +139,7 @@ impl Editors {
             ));
         }
         if request.reveal && capabilities.reveal.is_none() {
-            return Err("Reveal in file manager is unavailable on this Host".into());
+            return Err("このホストではファイルマネージャーで表示できません。".into());
         }
         let discovery = discovery::SearchPaths::read();
         let platform = discovery.platform;

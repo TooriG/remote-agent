@@ -17,6 +17,7 @@ struct AssistantSelectableText: UIViewRepresentable {
     var identifier: String = "message.assistant-text"
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.openURL) private var openURL
+    @Environment(\.locale) private var locale
     @Environment(\.sizeCategory) private var sizeCategory
 
     func makeCoordinator() -> Coordinator {
@@ -86,7 +87,8 @@ struct AssistantSelectableText: UIViewRepresentable {
             let items = mobileFileMenu(source: url.absoluteString, cwd: parent.cwd, home: parent.home)
             guard !items.isEmpty else { return nil }
             let actions = items.map { item in
-                UIAction(title: item.label) { [weak self] _ in
+                let title = localizedUiText(language: parent.locale.appLanguage, source: item.label)
+                return UIAction(title: title) { [weak self] _ in
                     switch item.action {
                     case .copyFullPath, .copyRelativePath:
                         UIPasteboard.general.string = item.path

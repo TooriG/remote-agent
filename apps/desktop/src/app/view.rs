@@ -17,10 +17,11 @@ mod settings;
 mod sidebar;
 mod workbench;
 use super::*;
-use agent_core::{presentation::error::error_message, state::operations as op};
+use agent_core::{presentation::error::error_text, state::operations as op};
 use base64::Engine;
 pub(super) use composer::ComposerView;
 pub(super) use conversation::ConversationView;
+pub(super) use errors::error_view;
 use gpui_kit::component::{
     resizable::{h_resizable, resizable_panel, v_resizable},
     sidebar::{Sidebar, SidebarItem, SidebarMenuItem},

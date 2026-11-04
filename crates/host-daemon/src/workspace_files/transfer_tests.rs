@@ -335,7 +335,7 @@ async fn attachments_outlive_worktrees_while_linked_images_fail_only_their_downl
             .unwrap();
         let error = download.await.unwrap_err();
         assert_eq!(
-            agent_core::presentation::error::error_message(&error.to_string()),
+            agent_core::presentation::error::error_text(&error.to_string()).message,
             "ファイルまたはフォルダが見つかりません。"
         );
         let after = fixture.store.snapshot();
@@ -388,7 +388,7 @@ async fn file_operations_preserve_remote_reasons_and_download_can_retry_after_fa
             assert!(matches!(&error, agent_protocol::error::PeerError::Remote {
                 delivery: agent_protocol::error::Delivery::NotSent, ..
             }));
-            assert_eq!(agent_core::presentation::error::error_message(&error.to_string()), "Host supplied reason");
+            assert_eq!(agent_core::presentation::error::error_text(&error.to_string()).details.as_deref(), Some("Host supplied reason"));
         }
         assert!(!destination.exists());
         let completion = fixture.store.dispatch(download());

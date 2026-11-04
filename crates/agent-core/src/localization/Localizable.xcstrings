@@ -993,12 +993,12 @@
         }
       }
     },
-    "ApplicationsにインストールしたBexから更新してください。": {
+    "アプリケーションフォルダにインストールしたBexから更新してください。": {
       "localizations": {
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "ApplicationsにインストールしたBexから更新してください。"
+            "value": "アプリケーションフォルダにインストールしたBexから更新してください。"
           }
         },
         "en": {
@@ -1313,12 +1313,12 @@
         }
       }
     },
-    "Host に接続": {
+    "ホストに接続": {
       "localizations": {
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "Host に接続"
+            "value": "ホストに接続"
           }
         },
         "en": {
@@ -1329,12 +1329,12 @@
         }
       }
     },
-    "Host に接続していません": {
+    "ホストに接続していません": {
       "localizations": {
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "Host に接続していません"
+            "value": "ホストに接続していません"
           }
         },
         "en": {
@@ -1345,12 +1345,12 @@
         }
       }
     },
-    "Host に接続してください。": {
+    "ホストに接続してください。": {
       "localizations": {
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "Host に接続してください。"
+            "value": "ホストに接続してください。"
           }
         },
         "en": {
@@ -1361,12 +1361,12 @@
         }
       }
     },
-    "Host の BEX ブラウザ。ピンチで拡大、2本指で表示範囲を移動できます。": {
+    "ホストのBexブラウザ。ピンチで拡大、2本指で表示範囲を移動できます。": {
       "localizations": {
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "Host の BEX ブラウザ。ピンチで拡大、2本指で表示範囲を移動できます。"
+            "value": "ホストのBexブラウザ。ピンチで拡大、2本指で表示範囲を移動できます。"
           }
         },
         "en": {
@@ -1377,12 +1377,12 @@
         }
       }
     },
-    "Host のブラウザに接続中…": {
+    "ホストのブラウザに接続中…": {
       "localizations": {
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "Host のブラウザに接続中…"
+            "value": "ホストのブラウザに接続中…"
           }
         },
         "en": {
@@ -1393,12 +1393,12 @@
         }
       }
     },
-    "Host の共有ブラウザ": {
+    "ホストの共有ブラウザ": {
       "localizations": {
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "Host の共有ブラウザ"
+            "value": "ホストの共有ブラウザ"
           }
         },
         "en": {
@@ -1409,12 +1409,12 @@
         }
       }
     },
-    "Hostが起動中です。起動後にもう一度更新してください。": {
+    "ホストが起動中です。起動後にもう一度更新してください。": {
       "localizations": {
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hostが起動中です。起動後にもう一度更新してください。"
+            "value": "ホストが起動中です。起動後にもう一度更新してください。"
           }
         },
         "en": {
@@ -1425,12 +1425,12 @@
         }
       }
     },
-    "Hostに接続してください": {
+    "ホストに接続してください": {
       "localizations": {
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hostに接続してください"
+            "value": "ホストに接続してください"
           }
         },
         "en": {
@@ -1441,12 +1441,12 @@
         }
       }
     },
-    "Hostに接続して表示を読み込んでください。": {
+    "ホストに接続して表示を読み込んでください。": {
       "localizations": {
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hostに接続して表示を読み込んでください。"
+            "value": "ホストに接続して表示を読み込んでください。"
           }
         },
         "en": {
@@ -1457,12 +1457,12 @@
         }
       }
     },
-    "Hostに接続できません": {
+    "ホストに接続できません": {
       "localizations": {
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hostに接続できません"
+            "value": "ホストに接続できません"
           }
         },
         "en": {
@@ -1473,12 +1473,12 @@
         }
       }
     },
-    "Hostのブラウザから取り込む": {
+    "ホストのブラウザから取り込む": {
       "localizations": {
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hostのブラウザから取り込む"
+            "value": "ホストのブラウザから取り込む"
           }
         },
         "en": {
@@ -1489,12 +1489,12 @@
         }
       }
     },
-    "Hostの再起動を確認できませんでした。": {
+    "ホストの再起動を確認できませんでした。": {
       "localizations": {
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hostの再起動を確認できませんでした。"
+            "value": "ホストの再起動を確認できませんでした。"
           }
         },
         "en": {
@@ -1505,12 +1505,12 @@
         }
       }
     },
-    "Hostの復旧を確認できませんでした。": {
+    "ホストの復旧を確認できませんでした。": {
       "localizations": {
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hostの復旧を確認できませんでした。"
+            "value": "ホストの復旧を確認できませんでした。"
           }
         },
         "en": {
@@ -1681,18 +1681,18 @@
         }
       }
     },
-    "PC Host ManagerのQRコードを読み取ります。QRの内容はこの端末に保存しません。": {
+    "PCのBexに表示されたQRコードを読み取ります。QRの内容はこの端末に保存しません。": {
       "localizations": {
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "PC Host ManagerのQRコードを読み取ります。QRの内容はこの端末に保存しません。"
+            "value": "PCのBexに表示されたQRコードを読み取ります。QRの内容はこの端末に保存しません。"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Scan the QR code in PC Host Manager. Its contents are not saved on this device."
+            "value": "Scan the QR code shown by Bex on your PC. Its contents are not saved on this device."
           }
         }
       }
@@ -1857,12 +1857,12 @@
         }
       }
     },
-    "SSHの鍵で接続でき、Bex Hostを起動済みのサーバーにつなぎます。": {
+    "SSHの鍵で接続でき、Bexのホストを起動済みのサーバーにつなぎます。": {
       "localizations": {
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "SSHの鍵で接続でき、Bex Hostを起動済みのサーバーにつなぎます。"
+            "value": "SSHの鍵で接続でき、Bexのホストを起動済みのサーバーにつなぎます。"
           }
         },
         "en": {
@@ -9857,12 +9857,12 @@
         }
       }
     },
-    "ログイン情報はHost経由で操作してください。": {
+    "ログイン情報はホスト経由で操作してください。": {
       "localizations": {
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "ログイン情報はHost経由で操作してください。"
+            "value": "ログイン情報はホスト経由で操作してください。"
           }
         },
         "en": {
@@ -13121,12 +13121,12 @@
         }
       }
     },
-    "接続できません。SSHの鍵と接続先を確認し、サーバーでBex Hostを起動してください。": {
+    "接続できません。SSHの鍵と接続先を確認し、サーバーでBexのホストを起動してください。": {
       "localizations": {
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "接続できません。SSHの鍵と接続先を確認し、サーバーでBex Hostを起動してください。"
+            "value": "接続できません。SSHの鍵と接続先を確認し、サーバーでBexのホストを起動してください。"
           }
         },
         "en": {
@@ -13281,12 +13281,12 @@
         }
       }
     },
-    "接続先 Host 上の絶対パス（空欄で既定）": {
+    "ホスト上の絶対パス（空欄で既定）": {
       "localizations": {
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "接続先 Host 上の絶対パス（空欄で既定）"
+            "value": "ホスト上の絶対パス（空欄で既定）"
           }
         },
         "en": {
@@ -13313,18 +13313,18 @@
         }
       }
     },
-    "接続先で操作に失敗しました。エラーの詳細を取得できませんでした。": {
+    "ホストで操作に失敗しました。エラーの詳細を取得できませんでした。": {
       "localizations": {
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "接続先で操作に失敗しました。エラーの詳細を取得できませんでした。"
+            "value": "ホストで操作に失敗しました。エラーの詳細を取得できませんでした。"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "An operation failed on the remote computer. Error details are unavailable."
+            "value": "The operation failed on the Host. Error details are unavailable."
           }
         }
       }
@@ -14017,12 +14017,12 @@
         }
       }
     },
-    "更新が完了しました。新しいCLIを使用するにはHostを再起動してください。": {
+    "更新が完了しました。新しいCLIを使用するにはホストを再起動してください。": {
       "localizations": {
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "更新が完了しました。新しいCLIを使用するにはHostを再起動してください。"
+            "value": "更新が完了しました。新しいCLIを使用するにはホストを再起動してください。"
           }
         },
         "en": {
@@ -16769,12 +16769,12 @@
         }
       }
     },
-    "選択中の環境のCLIを更新します。更新後は実行中の会話が終わってからHostを再起動してください。モデル一覧は再接続時に再取得します。": {
+    "選択中の環境のCLIを更新します。更新後は実行中の会話が終わってからホストを再起動してください。モデル一覧は再接続時に再取得します。": {
       "localizations": {
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "選択中の環境のCLIを更新します。更新後は実行中の会話が終わってからHostを再起動してください。モデル一覧は再接続時に再取得します。"
+            "value": "選択中の環境のCLIを更新します。更新後は実行中の会話が終わってからホストを再起動してください。モデル一覧は再接続時に再取得します。"
           }
         },
         "en": {
@@ -17693,6 +17693,1302 @@
           "stringUnit": {
             "state": "translated",
             "value": "Your model and response settings carry over to the next new chat."
+          }
+        }
+      }
+    },
+    "ファイルを検索": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイルを検索"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search files"
+          }
+        }
+      }
+    },
+    "ファイル一覧の幅を変更": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイル一覧の幅を変更"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resize file list"
+          }
+        }
+      }
+    },
+    "更新中…": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "更新中…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Refreshing…"
+          }
+        }
+      }
+    },
+    "ファイル一覧を更新": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイル一覧を更新"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Refresh files"
+          }
+        }
+      }
+    },
+    "ほかにも一致する項目があります。検索語を絞り込んでください。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ほかにも一致する項目があります。検索語を絞り込んでください。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "More matches are available. Refine your search."
+          }
+        }
+      }
+    },
+    "一致するファイルはありません": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "一致するファイルはありません"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No matching files"
+          }
+        }
+      }
+    },
+    "{0}で開く": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}で開く"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open in {0}"
+          }
+        }
+      }
+    },
+    "エディターで開く": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エディターで開く"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open in editor"
+          }
+        }
+      }
+    },
+    "エディターを選択": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エディターを選択"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose editor"
+          }
+        }
+      }
+    },
+    "インストール済みのエディターが見つかりません": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "インストール済みのエディターが見つかりません"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No installed editors found"
+          }
+        }
+      }
+    },
+    "ファイルが見つかりません": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイルが見つかりません"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No files found"
+          }
+        }
+      }
+    },
+    "ファイルを表示できません": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイルを表示できません"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Files unavailable"
+          }
+        }
+      }
+    },
+    "作業スペースは空です。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "作業スペースは空です。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The workspace is empty."
+          }
+        }
+      }
+    },
+    "別の語句で検索してください。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "別の語句で検索してください。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Try a different search."
+          }
+        }
+      }
+    },
+    "ファイル検索を閉じる": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイル検索を閉じる"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Close file search"
+          }
+        }
+      }
+    },
+    "検索語を消去": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "検索語を消去"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clear search"
+          }
+        }
+      }
+    },
+    "ファイルの操作": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイルの操作"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File options"
+          }
+        }
+      }
+    },
+    "ホストで操作に失敗しました。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ホストで操作に失敗しました。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The operation failed on the Host."
+          }
+        }
+      }
+    },
+    "エラーが発生しました。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エラーが発生しました。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An error occurred."
+          }
+        }
+      }
+    },
+    "Finderで表示": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finderで表示"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reveal in Finder"
+          }
+        }
+      }
+    },
+    "エクスプローラーで表示": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エクスプローラーで表示"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reveal in File Explorer"
+          }
+        }
+      }
+    },
+    "ファイルマネージャーで表示": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイルマネージャーで表示"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reveal in Files"
+          }
+        }
+      }
+    },
+    "エクスプローラー": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エクスプローラー"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File Explorer"
+          }
+        }
+      }
+    },
+    "ファイルマネージャー": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイルマネージャー"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Files"
+          }
+        }
+      }
+    },
+    "ホストとの接続が切れました。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ホストとの接続が切れました。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The connection to the Host was lost."
+          }
+        }
+      }
+    },
+    "ネットワーク接続とホストの起動状態を確認してください。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ネットワーク接続とホストの起動状態を確認してください。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check your network connection and that the Host is running."
+          }
+        }
+      }
+    },
+    "ホストから応答がありませんでした。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ホストから応答がありませんでした。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The Host did not respond."
+          }
+        }
+      }
+    },
+    "ホストの応答を読み取れませんでした。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ホストの応答を読み取れませんでした。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not read the Host's response."
+          }
+        }
+      }
+    },
+    "相対パスをコピー": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "相対パスをコピー"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy relative path"
+          }
+        }
+      }
+    },
+    "フルパスをコピー": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "フルパスをコピー"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy full path"
+          }
+        }
+      }
+    },
+    "このアプリで開く": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このアプリで開く"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open with"
+          }
+        }
+      }
+    },
+    "メンションをコピー": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "メンションをコピー"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy mention"
+          }
+        }
+      }
+    },
+    "会話に追加": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会話に追加"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add to chat"
+          }
+        }
+      }
+    },
+    "ファイルビューアで開く": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイルビューアで開く"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open in file viewer"
+          }
+        }
+      }
+    },
+    "保存・共有": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保存・共有"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save or share"
+          }
+        }
+      }
+    },
+    "すべてのフォルダを折りたたむ": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "すべてのフォルダを折りたたむ"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Collapse all folders"
+          }
+        }
+      }
+    },
+    "すべてのフォルダを展開": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "すべてのフォルダを展開"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expand all folders"
+          }
+        }
+      }
+    },
+    "ホストの外部設定を使用": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ホストの外部設定を使用"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use external settings on the Host"
+          }
+        }
+      }
+    },
+    "ホスト上の絶対パスが必要です。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ホスト上の絶対パスが必要です。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An absolute path on the Host is required."
+          }
+        }
+      }
+    },
+    "フォルダを読み込めませんでした。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "フォルダを読み込めませんでした。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not load the folder."
+          }
+        }
+      }
+    },
+    "ファイルを検索できませんでした。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイルを検索できませんでした。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not search files."
+          }
+        }
+      }
+    },
+    "招待の有効期限が切れました。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "招待の有効期限が切れました。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The invitation has expired."
+          }
+        }
+      }
+    },
+    "ホストの保存先が変わったため、操作を取り消しました。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ホストの保存先が変わったため、操作を取り消しました。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The operation was canceled because the Host's storage changed."
+          }
+        }
+      }
+    },
+    "512 MiBを超えるファイルは転送できません。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "512 MiBを超えるファイルは転送できません。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Files larger than 512 MiB cannot be transferred."
+          }
+        }
+      }
+    },
+    "このホストは操作のパラメーターを読み取れません。PC側のBexを更新してください。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このホストは操作のパラメーターを読み取れません。PC側のBexを更新してください。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This Host cannot read the operation parameters. Update Bex on the PC."
+          }
+        }
+      }
+    },
+    "Bexブラウザを起動できません": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bexブラウザを起動できません"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not start the Bex browser"
+          }
+        }
+      }
+    },
+    "Bexブラウザが起動中に終了しました。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bexブラウザが起動中に終了しました。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The Bex browser quit while starting."
+          }
+        }
+      }
+    },
+    "Bexブラウザに接続できません。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bexブラウザに接続できません。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not connect to the Bex browser."
+          }
+        }
+      }
+    },
+    "Bexブラウザの起動がタイムアウトしました。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bexブラウザの起動がタイムアウトしました。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The Bex browser timed out while starting."
+          }
+        }
+      }
+    },
+    "Bexブラウザとの接続が切れました。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bexブラウザとの接続が切れました。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The connection to the Bex browser was lost."
+          }
+        }
+      }
+    },
+    "Bexブラウザとの通信が中断しました。再接続してください。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bexブラウザとの通信が中断しました。再接続してください。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Communication with the Bex browser was interrupted. Reconnect."
+          }
+        }
+      }
+    },
+    "ログイン状態と保存パスワードの取り込みは、現在Macのホストで利用できます。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ログイン状態と保存パスワードの取り込みは、現在Macのホストで利用できます。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Importing sign-in state and saved passwords is currently available on Mac Hosts."
+          }
+        }
+      }
+    },
+    "ホストに接続できません。会話を開き直してください。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ホストに接続できません。会話を開き直してください。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not connect to the Host. Reopen the conversation."
+          }
+        }
+      }
+    },
+    "このホストではファイルマネージャーで表示できません。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このホストではファイルマネージャーで表示できません。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This Host cannot reveal files in a file manager."
+          }
+        }
+      }
+    },
+    "gitを実行できませんでした。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "gitを実行できませんでした。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not run git."
+          }
+        }
+      }
+    },
+    "ホストの再起動で準備が中断されました。再試行してください。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ホストの再起動で準備が中断されました。再試行してください。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preparation was interrupted by a Host restart. Try again."
+          }
+        }
+      }
+    },
+    "このホストではBexブラウザが有効になっていません。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このホストではBexブラウザが有効になっていません。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The Bex browser is not enabled on this Host."
+          }
+        }
+      }
+    },
+    "このホストはこの操作に対応していません。PC側のBexを更新してください。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このホストはこの操作に対応していません。PC側のBexを更新してください。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This Host does not support this operation. Update Bex on the PC."
+          }
+        }
+      }
+    },
+    "表示ファイルが見つかりません。ホストでHTMLを再作成してください。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "表示ファイルが見つかりません。ホストでHTMLを再作成してください。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The view file was not found. Recreate the HTML on the Host."
+          }
+        }
+      }
+    },
+    "ホストの更新が既に進行中です。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ホストの更新が既に進行中です。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A Host update is already in progress."
+          }
+        }
+      }
+    },
+    "端末名を入力してください。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "端末名を入力してください。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter a device name."
+          }
+        }
+      }
+    },
+    "接続情報を読み取れませんでした。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接続情報を読み取れませんでした。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not read the connection details."
+          }
+        }
+      }
+    },
+    "プロジェクトのフォルダは絶対パスで指定してください。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プロジェクトのフォルダは絶対パスで指定してください。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Specify the project folder as an absolute path."
+          }
+        }
+      }
+    },
+    "Codexが終了しました。ホストを再起動すると再接続できます。Claudeの会話は継続できます。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codexが終了しました。ホストを再起動すると再接続できます。Claudeの会話は継続できます。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codex quit. Restart the Host to reconnect. Claude conversations can continue."
+          }
+        }
+      }
+    },
+    "エージェントとの接続が終了しました。ホストを再起動してから再送信してください。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エージェントとの接続が終了しました。ホストを再起動してから再送信してください。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The connection to the agent ended. Restart the Host, then send again."
+          }
+        }
+      }
+    },
+    "Harness の権限設定を使用します。必要な操作はBexの承認画面に表示されます。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Harness の権限設定を使用します。必要な操作はBexの承認画面に表示されます。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uses Harness permission settings. Required actions appear in Bex's approval screen."
+          }
+        }
+      }
+    },
+    "UTF-8以外のファイルは編集できません。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "UTF-8以外のファイルは編集できません。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only UTF-8 files can be edited."
+          }
+        }
+      }
+    },
+    "ファイルが大きすぎるため編集できません。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイルが大きすぎるため編集できません。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The file is too large to edit."
+          }
+        }
+      }
+    },
+    "ダウンロードできるのは通常のファイルだけです。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ダウンロードできるのは通常のファイルだけです。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only regular files can be downloaded."
+          }
+        }
+      }
+    },
+    "通常のファイルではありません。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "通常のファイルではありません。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This is not a regular file."
+          }
+        }
+      }
+    },
+    "ファイルが大きすぎるため表示できません。ダウンロードして開いてください。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイルが大きすぎるため表示できません。ダウンロードして開いてください。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The file is too large to display. Download it to open it."
+          }
+        }
+      }
+    },
+    "UTF-8以外のファイルは表示できません。ダウンロードして開いてください。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "UTF-8以外のファイルは表示できません。ダウンロードして開いてください。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only UTF-8 files can be displayed. Download it to open it."
+          }
+        }
+      }
+    },
+    "作業スペースのルートがフォルダではありません。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "作業スペースのルートがフォルダではありません。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The workspace root is not a folder."
+          }
+        }
+      }
+    },
+    "作業フォルダが見つかりません。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "作業フォルダが見つかりません。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The working folder was not found."
+          }
+        }
+      }
+    },
+    "作業フォルダに指定したパスはフォルダではありません。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "作業フォルダに指定したパスはフォルダではありません。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The working folder path is not a folder."
+          }
+        }
+      }
+    },
+    "ワークツリーの保存先には、ホスト上の絶対パスを入力するか空欄にしてください。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ワークツリーの保存先には、ホスト上の絶対パスを入力するか空欄にしてください。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter an absolute path on the Host for the worktree location, or leave it blank."
+          }
+        }
+      }
+    },
+    "リポジトリのフォルダ名を取得できません。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リポジトリのフォルダ名を取得できません。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not get the repository folder name."
+          }
+        }
+      }
+    },
+    "作業フォルダがワークツリー内に見つかりません。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "作業フォルダがワークツリー内に見つかりません。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The working folder does not exist in the worktree."
+          }
+        }
+      }
+    },
+    "コピーするパスにシンボリックリンクは指定できません。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "コピーするパスにシンボリックリンクは指定できません。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy paths cannot include symbolic links."
+          }
+        }
+      }
+    },
+    "コピー先にシンボリックリンクが含まれています。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "コピー先にシンボリックリンクが含まれています。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The copy destination contains a symbolic link."
+          }
+        }
+      }
+    },
+    "コピーできるのは通常のファイルとフォルダだけです。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "コピーできるのは通常のファイルとフォルダだけです。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only regular files and folders can be copied."
           }
         }
       }
