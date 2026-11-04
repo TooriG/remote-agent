@@ -112,19 +112,21 @@ impl Snapshot {
             thread.list_revision = revision;
         }
         if let Some(page) = &mut self.threads
-            && let Some(data) = renamed_rows(&page.data, session, name, revision)
+            && let Some(index) = rename_index(&page.data, session, revision)
         {
-            Arc::make_mut(page).data = data;
+            apply_rename(page, index, name, revision);
         }
-        if self.project_threads.values().any(|page| {
-            page.data
-                .iter()
-                .any(|row| row.id.as_ref() == Some(session) && row.list_revision < revision)
-        }) {
-            for page in Arc::make_mut(&mut self.project_threads).values_mut() {
-                if let Some(data) = renamed_rows(&page.data, session, name, revision) {
-                    Arc::make_mut(page).data = data;
-                }
+        let renames: Vec<_> = self
+            .project_threads
+            .iter()
+            .filter_map(|(project, page)| {
+                rename_index(&page.data, session, revision).map(|index| (project.clone(), index))
+            })
+            .collect();
+        if !renames.is_empty() {
+            let pages = Arc::make_mut(&mut self.project_threads);
+            for (project, index) in renames {
+                apply_rename(pages.get_mut(&project).unwrap(), index, name, revision);
             }
         }
     }
@@ -182,45 +184,57 @@ impl Snapshot {
         }
         if let Some(project) = thread.project_id.as_ref() {
             if let Some(page) = self.project_threads.get(project)
-                && let Some((data, more)) = updated_rows(&page.data, &thread, inserting, page.limit)
+                && let Some((index, row)) = updated_row(&page.data, &thread, inserting)
             {
-                let page = Arc::make_mut(
+                apply_row_update(
                     Arc::make_mut(&mut self.project_threads)
                         .get_mut(project)
                         .unwrap(),
+                    index,
+                    row,
                 );
-                page.data = data;
-                page.has_more |= more;
             }
         } else if let Some(page) = &mut self.threads
-            && let Some((data, more)) = updated_rows(&page.data, &thread, inserting, page.limit)
+            && let Some((index, row)) = updated_row(&page.data, &thread, inserting)
         {
-            let page = Arc::make_mut(page);
-            page.data = data;
-            page.has_more |= more;
+            apply_row_update(page, index, row);
         }
     }
 }
-fn renamed_rows(
-    rows: &[Thread],
-    session: &SessionRef,
+
+fn rename_index(rows: &[Thread], session: &SessionRef, revision: u64) -> Option<usize> {
+    rows.iter()
+        .position(|row| row.id.as_ref() == Some(session) && row.list_revision < revision)
+}
+
+fn apply_rename(
+    page: &mut Arc<crate::models::ThreadList>,
+    index: usize,
     name: Option<&str>,
     revision: u64,
-) -> Option<Vec<Thread>> {
-    let index = rows
-        .iter()
-        .position(|row| row.id.as_ref() == Some(session) && row.list_revision < revision)?;
-    let mut rows = rows.to_vec();
-    rows[index].name = name.map(str::to_owned);
-    rows[index].list_revision = revision;
-    Some(rows)
+) {
+    let thread = &mut Arc::make_mut(page).data[index];
+    thread.name = name.map(str::to_owned);
+    thread.list_revision = revision;
 }
-fn updated_rows(
-    rows: &[Thread],
-    thread: &Thread,
-    insert: bool,
-    limit: u32,
-) -> Option<(Vec<Thread>, bool)> {
+
+fn apply_row_update(
+    page: &mut Arc<crate::models::ThreadList>,
+    index: Option<usize>,
+    thread: Thread,
+) {
+    let page = Arc::make_mut(page);
+    if let Some(index) = index {
+        page.data[index] = thread;
+    } else {
+        page.data.push(thread);
+    }
+    let (data, more) = operations::page_rows(std::mem::take(&mut page.data), page.limit);
+    page.data = data;
+    page.has_more |= more;
+}
+
+fn updated_row(rows: &[Thread], thread: &Thread, insert: bool) -> Option<(Option<usize>, Thread)> {
     let index = rows.iter().position(|row| row.id == thread.id);
     if index.is_none() && !insert
         || index.is_some_and(|index| rows[index].list_revision > thread.list_revision)
@@ -244,13 +258,7 @@ fn updated_rows(
     if index.is_some_and(|index| rows[index] == thread) {
         return None;
     }
-    let mut rows = rows.to_vec();
-    if let Some(index) = index {
-        rows[index] = thread;
-    } else {
-        rows.push(thread);
-    }
-    Some(operations::page_rows(rows, limit))
+    Some((index, thread))
 }
 
 fn fleet_contains(
@@ -1359,6 +1367,201 @@ mod tests {
             .1
             .is_empty()
         );
+    }
+    #[test]
+    fn summary_rows_preserve_shared_snapshots_metadata_sorting_and_page_limits() {
+        let mut state = snapshot(ProviderKind::Codex);
+        state.conversations = Arc::default();
+        let id = SessionRef::new(ProviderKind::Codex, "parent".into()).unwrap();
+        let other = SessionRef::new(ProviderKind::Codex, "other".into()).unwrap();
+        let page = Arc::make_mut(state.threads.as_mut().unwrap());
+        page.revision = 7;
+        page.limit = 2;
+        page.has_more = true;
+        page.has_more_projects = true;
+        page.data = vec![
+            Thread {
+                id: Some(id.clone()),
+                name: Some("Kept title".into()),
+                cwd: Some("/work".into()),
+                git_branch: Some("main".into()),
+                worktree_status: Some(crate::models::WorktreeStatus::Merged),
+                list_revision: 1,
+                updated_at: Some(1.),
+                ..Default::default()
+            },
+            Thread {
+                id: Some(other.clone()),
+                name: Some("Other".into()),
+                list_revision: 1,
+                updated_at: Some(2.),
+                ..Default::default()
+            },
+        ];
+        let mut incoming = page.data[0].clone();
+        incoming.name = Some("Native title".into());
+        incoming.preview = Some("updated preview".into());
+        incoming.git_branch = None;
+        incoming.worktree_status = None;
+        incoming.list_revision = 2;
+        let (next, effects) = notification(
+            &state,
+            Notification::SessionUpdated {
+                thread: Box::new(incoming.clone()),
+                project: None,
+            },
+        );
+        assert!(effects.is_empty());
+        let page = next.threads.as_ref().unwrap();
+        assert_eq!(
+            (
+                page.revision,
+                page.limit,
+                page.has_more,
+                page.has_more_projects
+            ),
+            (7, 2, true, true)
+        );
+        assert_eq!(
+            page.data
+                .iter()
+                .map(|row| row.id.as_ref().unwrap())
+                .collect::<Vec<_>>(),
+            [&other, &id]
+        );
+        let row = &page.data[1];
+        assert_eq!(
+            (
+                row.name.as_deref(),
+                row.preview.as_deref(),
+                row.git_branch.as_deref(),
+                row.worktree_status
+            ),
+            (
+                Some("Kept title"),
+                Some("updated preview"),
+                Some("main"),
+                Some(crate::models::WorktreeStatus::Merged)
+            )
+        );
+        assert_eq!(state.threads.as_ref().unwrap().data[0].list_revision, 1);
+        assert!(state.threads.as_ref().unwrap().data[0].preview.is_none());
+        assert!(Arc::ptr_eq(&state.project_threads, &next.project_threads));
+        for revision in [2, 0] {
+            incoming.list_revision = revision;
+            let (same, effects) = notification(
+                &next,
+                Notification::SessionUpdated {
+                    thread: Box::new(incoming.clone()),
+                    project: None,
+                },
+            );
+            assert!(effects.is_empty());
+            assert!(Arc::ptr_eq(
+                same.threads.as_ref().unwrap(),
+                next.threads.as_ref().unwrap()
+            ));
+            assert!(Arc::ptr_eq(&same.project_threads, &next.project_threads));
+        }
+        let inserted = SessionRef::new(ProviderKind::Codex, "inserted".into()).unwrap();
+        let (inserted_state, effects) = notification(
+            &next,
+            Notification::SessionUpdated {
+                thread: Box::new(Thread {
+                    id: Some(inserted.clone()),
+                    name: Some("Inserted".into()),
+                    updated_at: Some(4.),
+                    list_revision: 1,
+                    ..Default::default()
+                }),
+                project: None,
+            },
+        );
+        assert!(effects.is_empty());
+        let page = inserted_state.threads.as_ref().unwrap();
+        assert_eq!(
+            page.data
+                .iter()
+                .map(|row| row.id.as_ref().unwrap())
+                .collect::<Vec<_>>(),
+            [&inserted, &other]
+        );
+        assert!(page.has_more);
+        assert_eq!(
+            next.threads.as_ref().unwrap().data[1].id.as_ref(),
+            Some(&id)
+        );
+    }
+
+    #[test]
+    fn rename_updates_the_first_qualifying_duplicate_and_only_mutates_matching_pages() {
+        let id = SessionRef::new(ProviderKind::Codex, "duplicate".into()).unwrap();
+        let other = SessionRef::new(ProviderKind::Codex, "other".into()).unwrap();
+        let page = |data| {
+            Arc::new(serde_json::from_value::<ThreadList>(json!({"revision":8,"limit":3,"data":data,"projects":[],"hasMore":true,"hasMoreProjects":true,"projectPages":{}})).unwrap())
+        };
+        let root = page(
+            json!([{"id":id,"name":"Fresh","listRevision":3},{"id":id,"name":"Old","listRevision":1},{"id":other,"name":"Other","listRevision":1}]),
+        );
+        let untouched = page(json!([{"id":other,"name":"Other","listRevision":1}]));
+        let state = Snapshot {
+            threads: Some(root.clone()),
+            project_threads: Arc::new(
+                [
+                    ("matching".into(), root.clone()),
+                    ("untouched".into(), untouched.clone()),
+                ]
+                .into(),
+            ),
+            ..Default::default()
+        };
+        let (next, effects) = notification(
+            &state,
+            Notification::SessionRenamed {
+                session: id.clone(),
+                name: Some("Renamed".into()),
+                revision: 2,
+            },
+        );
+        assert!(effects.is_empty());
+        for page in [
+            next.threads.as_ref().unwrap(),
+            &next.project_threads["matching"],
+        ] {
+            assert_eq!(
+                (page.data[0].name.as_deref(), page.data[0].list_revision),
+                (Some("Fresh"), 3)
+            );
+            assert_eq!(
+                (page.data[1].name.as_deref(), page.data[1].list_revision),
+                (Some("Renamed"), 2)
+            );
+            assert_eq!(
+                (
+                    page.revision,
+                    page.limit,
+                    page.has_more,
+                    page.has_more_projects
+                ),
+                (8, 3, true, true)
+            );
+        }
+        assert_eq!(root.data[1].name.as_deref(), Some("Old"));
+        assert!(Arc::ptr_eq(&next.project_threads["untouched"], &untouched));
+        let (same, effects) = notification(
+            &next,
+            Notification::SessionRenamed {
+                session: id,
+                name: None,
+                revision: 2,
+            },
+        );
+        assert!(effects.is_empty());
+        assert!(Arc::ptr_eq(
+            same.threads.as_ref().unwrap(),
+            next.threads.as_ref().unwrap()
+        ));
+        assert!(Arc::ptr_eq(&same.project_threads, &next.project_threads));
     }
 }
 
