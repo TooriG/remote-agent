@@ -174,34 +174,66 @@ impl Thread {
     }
 }
 
+/// Collapsed history rows need only activity headers, so each activity body
+/// above 512 bytes loads on expansion.
 pub fn defer_item_details(turns: &mut [Arc<Turn>], max_inline_bytes: usize) {
     for turn in turns {
         let turn = Arc::make_mut(turn);
-        if let Some(items) = &mut turn.items {
-            defer_items(items, max_inline_bytes);
+        for item in turn.items.iter_mut().flatten() {
+            let limit = if is_conversation(item) {
+                max_inline_bytes
+            } else {
+                512.min(max_inline_bytes)
+            };
+            if !item.id.is_empty() && inline_size(item, limit).is_none() {
+                Arc::make_mut(item).defer();
+            }
         }
     }
 }
 
-pub fn defer_items(items: &mut [Arc<Item>], max_inline_bytes: usize) {
-    for item in items {
-        let limit = if matches!(
-            item.body(),
-            ItemBody::UserMessage { .. }
-                | ItemBody::AssistantText { .. }
-                | ItemBody::ImageGeneration { .. }
-        ) {
+/// A turn whose activity a client opened. Activity bodies stay inline,
+/// smallest first, until they total `activity_bytes`, so most rows expand
+/// without another Host request; the rest load on expansion.
+pub fn defer_turn_items(items: &mut [Arc<Item>], max_inline_bytes: usize, activity_bytes: usize) {
+    let mut activity = Vec::new();
+    for (index, item) in items.iter_mut().enumerate() {
+        if item.id.is_empty() || item.is_deferred() {
+            continue;
+        }
+        let conversation = is_conversation(item);
+        let limit = if conversation {
             max_inline_bytes
         } else {
-            512.min(max_inline_bytes)
+            activity_bytes.min(max_inline_bytes)
         };
-        if !item.id.is_empty() && !fits_inline(item, limit) {
-            Arc::make_mut(item).defer();
+        match inline_size(item, limit) {
+            Some(size) if !conversation => activity.push((size, index)),
+            Some(_) => {}
+            None => Arc::make_mut(item).defer(),
+        }
+    }
+    activity.sort_unstable();
+    let mut remaining = activity_bytes;
+    for (size, index) in activity {
+        match remaining.checked_sub(size) {
+            Some(left) => remaining = left,
+            None => Arc::make_mut(&mut items[index]).defer(),
         }
     }
 }
 
-fn fits_inline(value: &impl Serialize, limit: usize) -> bool {
+fn is_conversation(item: &Item) -> bool {
+    matches!(
+        item.body(),
+        ItemBody::UserMessage { .. }
+            | ItemBody::AssistantText { .. }
+            | ItemBody::ImageGeneration { .. }
+    )
+}
+
+/// The encoded size of `value`, when it is at most `limit` bytes.
+fn inline_size(value: &impl Serialize, limit: usize) -> Option<usize> {
     struct Budget(usize);
     impl std::io::Write for Budget {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -215,7 +247,9 @@ fn fits_inline(value: &impl Serialize, limit: usize) -> bool {
             Ok(())
         }
     }
-    crate::protocol::encode_into(Budget(limit), value).is_ok()
+    let mut budget = Budget(limit);
+    crate::protocol::encode_into(&mut budget, value).ok()?;
+    Some(limit - budget.0)
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -441,9 +475,74 @@ mod tests {
                 "id":"item", "body":{"inline":{"body":{"assistantText":{"text":"名前と本文","phase":"final"}}}}
             })).unwrap();
         let bytes = crate::protocol::encode(&item).unwrap();
-        assert!(fits_inline(&item, bytes.len()));
-        assert!(!fits_inline(&item, bytes.len() - 1));
-        assert!(!fits_inline(&item, 0));
+        assert_eq!(inline_size(&item, bytes.len()), Some(bytes.len()));
+        assert_eq!(inline_size(&item, bytes.len() + 7), Some(bytes.len()));
+        assert_eq!(inline_size(&item, bytes.len() - 1), None);
+        assert_eq!(inline_size(&item, 0), None);
+    }
+
+    fn command(id: usize, output: usize) -> Arc<Item> {
+        Arc::new(Item::new(
+            format!("command-{id}").into(),
+            ItemStatus::Completed,
+            ItemBody::CommandExecution {
+                command: "cargo test".into(),
+                cwd: None,
+                output: "x".repeat(output),
+                exit_code: Some(0),
+            },
+        ))
+    }
+
+    proptest! {
+        #[test]
+        fn opened_turn_inlines_the_most_activity_within_its_budget(
+            outputs in proptest::collection::vec(0usize..4096, 0..24),
+            budget in 0usize..32 * 1024,
+        ) {
+            let original = outputs.iter().enumerate().map(|(id, output)| command(id, *output)).collect::<Vec<_>>();
+            let size = |item: &Arc<Item>| crate::protocol::encode(item).unwrap().len();
+            let mut items = original.clone();
+            defer_turn_items(&mut items, MAX_INLINE_ITEM_BYTES, budget);
+            let (inline, deferred): (Vec<_>, Vec<_>) =
+                original.iter().zip(&items).partition(|(_, sent)| !sent.is_deferred());
+            for (source, sent) in &inline {
+                prop_assert_eq!(source, sent);
+            }
+            let used = inline.iter().map(|(source, _)| size(source)).sum::<usize>();
+            prop_assert!(used <= budget);
+            // Keeping a smaller body inline instead would fit more rows, and
+            // any deferred body that still fits should have been sent.
+            for (source, _) in &deferred {
+                prop_assert!(used + size(source) > budget);
+                prop_assert!(inline.iter().all(|(kept, _)| size(kept) <= size(source)));
+            }
+        }
+    }
+
+    #[test]
+    fn opened_turn_keeps_conversation_inline_beside_its_activity_budget() {
+        let answer = Arc::new(Item::new(
+            "answer".into(),
+            ItemStatus::Completed,
+            ItemBody::AssistantText {
+                text: "回答".repeat(4096),
+                phase: Default::default(),
+            },
+        ));
+        let mut items = vec![answer.clone(), command(0, 64), command(1, 64)];
+        let one = crate::protocol::encode(&items[1]).unwrap().len();
+        defer_turn_items(&mut items, MAX_INLINE_ITEM_BYTES, one);
+        assert_eq!(items[0], answer);
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.is_deferred())
+                .collect::<Vec<_>>(),
+            [false, false, true]
+        );
+        defer_turn_items(&mut items, 0, 0);
+        assert!(items.iter().all(|item| item.is_deferred()));
     }
 
     proptest! {

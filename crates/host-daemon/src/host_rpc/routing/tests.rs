@@ -548,6 +548,51 @@ async fn detail_reads_are_ordered_with_live_changes_and_stay_on_the_requesting_c
     );
     assert!(second_updates.receiver.try_recv().is_err());
 }
+#[tokio::test]
+async fn opened_turn_sends_typical_activity_bodies_and_defers_oversized_output() {
+    let router = SessionRouter::new();
+    let client = router.open_session();
+    let response = ThreadResponse {
+        thread: Thread {
+            id: Some(SessionRef::new(ProviderKind::Codex, "native".into()).unwrap()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut updates = router
+        .finish_session_read(open(&router, "native"), client.id(), response, false)
+        .unwrap()
+        .updates
+        .unwrap();
+    let command = |id: &str, output: usize| {
+        Arc::new(Item::new(
+            id.into(),
+            Default::default(),
+            agent_protocol::models::ItemBody::CommandExecution {
+                command: "cargo test".into(),
+                cwd: None,
+                output: "x".repeat(output),
+                exit_code: Some(0),
+            },
+        ))
+    };
+    let typical = command("typical", 4 * 1024);
+    router
+        .finish_turn_read(
+            open(&router, "native"),
+            client.id(),
+            "turn".into(),
+            vec![typical.clone(), command("oversized", OPENED_ACTIVITY_BYTES)],
+        )
+        .unwrap();
+    let SessionChange::TurnItems { items, .. } =
+        protocol::decode(&updates.recv().await.unwrap()).unwrap()
+    else {
+        panic!("turn items missing")
+    };
+    assert_eq!(items[0], typical);
+    assert!(items[1].is_deferred());
+}
 use agent_protocol::session::TextField;
 use serde_json::json;
 

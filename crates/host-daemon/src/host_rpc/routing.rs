@@ -34,6 +34,11 @@ use requests::native_key;
 
 pub type SessionId = u64;
 
+/// Activity bodies sent with an opened turn. A typical turn's commands and
+/// diffs fit, so expanding a row needs no further round trip, while one huge
+/// turn still opens with a bounded frame.
+const OPENED_ACTIVITY_BYTES: usize = 128 * 1024;
+
 pub(super) struct SessionLease {
     router: SessionRouter,
     target: SessionRef,
@@ -380,15 +385,16 @@ impl SessionRouter {
             live.and_then(|turn| turn.items.as_deref())
                 .unwrap_or_default(),
         );
-        agent_protocol::models::defer_items(
+        agent_protocol::models::defer_turn_items(
             &mut items,
             agent_protocol::models::MAX_INLINE_ITEM_BYTES,
+            OPENED_ACTIVITY_BYTES,
         );
         let mut change = SessionChange::TurnItems { turn_id, items };
         let mut frame = protocol::encode(&change).map_err(|error| error.to_string())?;
         if frame.len() > MAX_QUEUED_BYTES {
             if let SessionChange::TurnItems { items, .. } = &mut change {
-                agent_protocol::models::defer_items(items, 0);
+                agent_protocol::models::defer_turn_items(items, 0, 0);
             }
             frame = protocol::encode(&change).map_err(|error| error.to_string())?;
         }
