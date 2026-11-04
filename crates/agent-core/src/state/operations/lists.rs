@@ -230,11 +230,51 @@ fn merge_received(
                 project.favicon_png = old.favicon_png.clone();
             }
         }
+        // Small or sharply reduced pages cost less to scan than to index the
+        // entire previous page.
+        let statuses = (previous.data.len() >= 128
+            && threads.data.len() >= 128
+            && previous.data.len() <= threads.data.len().saturating_mul(4))
+        .then(|| {
+            // A repeated source keeps the first cached decoration, as in a
+            // small page's linear lookup.
+            previous
+                .data
+                .iter()
+                .rev()
+                .map(|old| {
+                    (
+                        (
+                            old.id.as_ref(),
+                            old.cwd.as_deref(),
+                            old.git_branch.as_deref(),
+                        ),
+                        old.worktree_status,
+                    )
+                })
+                .collect::<std::collections::HashMap<_, _>>()
+        });
         for thread in &mut threads.data {
-            if let Some(old) = previous.data.iter().find(|old| {
-                old.id == thread.id && old.cwd == thread.cwd && old.git_branch == thread.git_branch
-            }) {
-                thread.worktree_status = old.worktree_status;
+            let status = match &statuses {
+                Some(statuses) => statuses
+                    .get(&(
+                        thread.id.as_ref(),
+                        thread.cwd.as_deref(),
+                        thread.git_branch.as_deref(),
+                    ))
+                    .copied(),
+                None => previous
+                    .data
+                    .iter()
+                    .find(|old| {
+                        old.id == thread.id
+                            && old.cwd == thread.cwd
+                            && old.git_branch == thread.git_branch
+                    })
+                    .map(|old| old.worktree_status),
+            };
+            if let Some(status) = status {
+                thread.worktree_status = status;
             }
         }
     }
@@ -274,6 +314,9 @@ fn merge_received(
     }
     threads
 }
+
+#[cfg(test)]
+mod merge_tests;
 
 impl Operation for ListProjectSessions {
     const BACKGROUND: bool = true;
