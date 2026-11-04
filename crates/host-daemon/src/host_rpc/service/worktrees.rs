@@ -332,8 +332,10 @@ impl HostRpcService {
             if bases.contains_key(&tree.project_path) {
                 continue;
             }
+            let project = std::path::PathBuf::from(&tree.project_path);
             let base =
-                crate::worktrees::integration_base(std::path::Path::new(&tree.project_path)).await;
+                tokio::task::spawn_blocking(move || crate::worktrees::integration_base(&project))
+                    .await?;
             if let Err(error) = &base {
                 tracing::warn!(target: "agent", operation = "host.worktree.cleanup", message = %format!("{error:#}"));
             }

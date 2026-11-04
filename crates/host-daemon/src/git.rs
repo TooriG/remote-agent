@@ -23,25 +23,48 @@ pub(crate) fn output(cwd: &Path, args: &[&str]) -> Result<Output> {
     Err(anyhow!(failure(&output)))
 }
 
-/// Bound commands that can wait on the network or a busy filesystem.
-/// Dropping the timed-out child kills it.
-pub(crate) async fn bounded(
-    cwd: &Path,
-    args: &[&str],
-    limit: std::time::Duration,
-) -> Result<Output> {
-    let output = tokio::time::timeout(
-        limit,
-        tokio::process::Command::new("git")
-            .arg("--no-optional-locks")
-            .args(args)
-            .current_dir(cwd)
-            .kill_on_drop(true)
-            .output(),
-    )
-    .await
-    .map_err(|_| anyhow!("git {} timed out", args.join(" ")))?
-    .context("failed to run git")?;
+/// Bound commands that can wait on the network or a busy filesystem; the
+/// timed-out process is killed. Callers run on a blocking worker.
+pub(crate) fn bounded(cwd: &Path, args: &[&str], limit: std::time::Duration) -> Result<Output> {
+    use std::io::Read as _;
+    let mut child = Command::new("git")
+        .arg("--no-optional-locks")
+        .args(args)
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .context("failed to run git")?;
+    // Drain both pipes off-thread so a full pipe cannot stall the deadline.
+    let drain = |pipe: Option<Box<dyn std::io::Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut bytes);
+            }
+            bytes
+        })
+    };
+    let stdout = drain(child.stdout.take().map(|pipe| Box::new(pipe) as _));
+    let stderr = drain(child.stderr.take().map(|pipe| Box::new(pipe) as _));
+    let deadline = std::time::Instant::now() + limit;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(anyhow!("git {} timed out", args.join(" ")));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    let output = Output {
+        status,
+        stdout: stdout.join().unwrap_or_default(),
+        stderr: stderr.join().unwrap_or_default(),
+    };
     if output.status.success() {
         return Ok(output);
     }
