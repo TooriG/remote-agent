@@ -96,7 +96,8 @@ impl Transcripts {
                          id TEXT NOT NULL,
                          version INTEGER NOT NULL,
                          PRIMARY KEY (provider, id)
-                     ) WITHOUT ROWID;",
+                     ) WITHOUT ROWID;
+                     CREATE INDEX IF NOT EXISTS version_order ON versions (version);",
                 )
                 .map_err(failure)?;
             Ok(connection)
@@ -222,13 +223,7 @@ impl Transcripts {
                     }
                     position
                 }
-                None => transaction
-                    .query_row(
-                        "SELECT COUNT(*) FROM turns WHERE provider = ?1 AND id = ?2",
-                        key,
-                        |row| row.get::<_, i64>(0),
-                    )
-                    .map_err(failure)?,
+                None => turn_count(transaction, conversation.provider.key(), &conversation.id)?,
             };
             transaction
                 .execute(
@@ -373,13 +368,8 @@ impl Transcripts {
             else {
                 return Ok(None);
             };
-            let count = connection
-                .query_row(
-                    "SELECT COUNT(*) FROM turns WHERE provider = ?1 AND id = ?2",
-                    key,
-                    |row| row.get::<_, i64>(0),
-                )
-                .map_err(failure)? as usize;
+            let count =
+                turn_count(connection, conversation.provider.key(), &conversation.id)? as usize;
             let end = end.unwrap_or(count);
             if end > count {
                 return Err("conversation history cursor is no longer valid".into());
@@ -508,15 +498,28 @@ impl Transcripts {
     }
 }
 
-/// Give the conversation the next Host-wide version.
+/// Imports enumerate positions, and live writes only replace or append. The
+/// final indexed position therefore gives the count without scanning the history.
+fn turn_count(connection: &Connection, provider: &str, id: &str) -> Result<i64, String> {
+    connection
+        .prepare_cached(
+            "SELECT COALESCE(MAX(position) + 1, 0) FROM turns WHERE provider = ?1 AND id = ?2",
+        )
+        .map_err(failure)?
+        .query_row(params![provider, id], |row| row.get(0))
+        .map_err(failure)
+}
+
+/// Give the conversation the next Host-wide version, using the version index.
 fn advance(transaction: &Transaction, provider: &str, id: &str) -> Result<(), String> {
     transaction
-        .execute(
+        .prepare_cached(
             "INSERT INTO versions (provider, id, version)
              VALUES (?1, ?2, (SELECT COALESCE(MAX(version), 0) + 1 FROM versions))
              ON CONFLICT (provider, id) DO UPDATE SET version = excluded.version",
-            params![provider, id],
         )
+        .map_err(failure)?
+        .execute(params![provider, id])
         .map_err(failure)?;
     Ok(())
 }
@@ -528,18 +531,19 @@ fn insert(
     turn: &Turn,
 ) -> Result<(), String> {
     transaction
-        .execute(
+        .prepare_cached(
             "INSERT INTO turns (provider, id, position, turn_id, running, body)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
-                conversation.provider.key(),
-                conversation.id,
-                position,
-                turn.id.as_str(),
-                turn.status == TurnStatus::Running,
-                protocol::encode(turn).map_err(failure)?
-            ],
         )
+        .map_err(failure)?
+        .execute(params![
+            conversation.provider.key(),
+            conversation.id,
+            position,
+            turn.id.as_str(),
+            turn.status == TurnStatus::Running,
+            protocol::encode(turn).map_err(failure)?
+        ])
         .map_err(failure)?;
     Ok(())
 }
@@ -743,6 +747,76 @@ mod tests {
         assert_eq!(window.start, 0);
         assert_eq!(window.response.thread.name.as_deref(), Some("native"));
         assert_eq!(window.response.thread.status, SessionStatus::Unknown);
+    }
+
+    #[test]
+    fn failed_cached_writes_roll_back_and_recover_without_gaps_after_reopening() {
+        let (root, store) = store();
+        let target = conversation();
+        store.import(&target, history(vec![])).unwrap();
+        assert_eq!(store.window(&target, None, 10).unwrap().unwrap().start, 0);
+        store
+            .record(&target, &turn("first", &["a"], TurnStatus::Completed))
+            .unwrap();
+        let version = store
+            .window(&target, None, 10)
+            .unwrap()
+            .unwrap()
+            .response
+            .thread
+            .transcript_version;
+        store
+            .with(|connection| {
+                connection
+                    .execute_batch(
+                        "CREATE TRIGGER reject_turn BEFORE INSERT ON turns WHEN NEW.turn_id = 'rejected'
+                         BEGIN SELECT RAISE(ABORT, 'rejected by test'); END;",
+                    )
+                    .map_err(failure)
+            })
+            .unwrap();
+        assert!(
+            store
+                .record(&target, &turn("rejected", &["b"], TurnStatus::Completed))
+                .is_err()
+        );
+        let unchanged = store.window(&target, None, 10).unwrap().unwrap();
+        assert_eq!(texts(&unchanged), ["first/a"]);
+        assert_eq!(unchanged.response.thread.transcript_version, version);
+        store
+            .record(&target, &turn("second", &["b"], TurnStatus::Completed))
+            .unwrap();
+        drop(store);
+        let store = Transcripts::open(&root.path().join("state/transcripts.sqlite"));
+        let latest = store.window(&target, None, 1).unwrap().unwrap();
+        assert_eq!(latest.start, 1);
+        assert_eq!(texts(&latest), ["second/b"]);
+        // Replacing an earlier occurrence must not move the next append position.
+        store
+            .record(&target, &turn("first", &["a"], TurnStatus::Failed))
+            .unwrap();
+        store
+            .record(&target, &turn("third", &["c"], TurnStatus::Completed))
+            .unwrap();
+        let window = store.window(&target, None, 10).unwrap().unwrap();
+        assert_eq!(window.start, 0);
+        assert_eq!(texts(&window), ["first/a", "second/b", "third/c"]);
+        store
+            .with(|connection| {
+                let counted: i64 = connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM turns WHERE provider = ?1 AND id = ?2",
+                        params![target.provider.key(), target.id],
+                        |row| row.get(0),
+                    )
+                    .map_err(failure)?;
+                assert_eq!(
+                    turn_count(connection, target.provider.key(), &target.id)?,
+                    counted
+                );
+                Ok(())
+            })
+            .unwrap();
     }
 
     #[test]
