@@ -193,7 +193,7 @@ pub(crate) struct Desktop {
     sidebar_view: Option<Entity<view::SidebarView>>,
     _subscriptions: Vec<Subscription>,
 }
-// Input text/catalog updates have their own owner. Other snapshot changes still
+// Input text/catalog and terminal updates have their own owners. Other changes still
 // reach Desktop observers (including open menus) without comparing conversation,
 // file, or diff contents on each keystroke. Exhaustive matching keeps new fields
 // from being silently omitted from this routing decision.
@@ -202,7 +202,7 @@ fn general_snapshot_changed(before: &Snapshot, after: &Snapshot) -> bool {
         (shared: [$($shared:ident),*], optional: [$($optional:ident),*], values: [$($value:ident),*]) => {{
             let Snapshot {
                 $($shared: _,)* $($optional: _,)* $($value: _,)*
-                drafts: _, file_drafts: _, composer_catalog: _, unconfirmed_lists: _,
+                drafts: _, file_drafts: _, composer_catalog: _, unconfirmed_lists: _, terminals: _,
             } = after;
             false
                 $(|| !Arc::ptr_eq(&before.$shared, &after.$shared))*
@@ -212,7 +212,7 @@ fn general_snapshot_changed(before: &Snapshot, after: &Snapshot) -> bool {
     }
     let changed = changed!(
         shared: [project_import, project_preferences, operations,
-            archived_scopes, account, terminals, conversations, expanded_projects,
+            archived_scopes, account, conversations, expanded_projects,
             project_threads, models, model_errors, question_drafts, draft_sessions, pending_submissions,
             workspace, workspaces, navigation, activity, management, list_query, subscriptions],
         optional: [permission_settings, task_activity, threads, file_open_capabilities],
@@ -1518,8 +1518,11 @@ impl Desktop {
             }
             Panel::Terminal => {
                 if !self.surface_resources.contains_key(&id) {
+                    let Some(session) = &self.session else {
+                        return;
+                    };
                     let terminal = crate::terminal::Terminal::new(
-                        self.remote.as_ref().map_or("", |remote| &remote.ticket),
+                        session.store.clone(),
                         self.snapshot.navigation.cwd.clone(),
                         format!("agent-terminal-{}", uuid::Uuid::new_v4()),
                         window,
@@ -1889,6 +1892,22 @@ fn composer_should_submit(
     cx: &mut Context<TextareaState>,
 ) -> bool {
     !action.shift && !action.secondary && input.marked_text_range(window, cx).is_none()
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::{Snapshot, general_snapshot_changed};
+    use std::sync::Arc;
+
+    #[test]
+    fn terminal_output_does_not_republish_the_desktop() {
+        let previous = Snapshot::default();
+        let mut next = previous.clone();
+        next.terminals = Arc::new(Default::default());
+        assert!(!general_snapshot_changed(&previous, &next));
+        next.connected = true;
+        assert!(general_snapshot_changed(&previous, &next));
+    }
 }
 
 #[cfg(test)]

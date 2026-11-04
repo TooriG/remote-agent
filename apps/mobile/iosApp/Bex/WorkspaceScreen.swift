@@ -104,7 +104,7 @@ extension AppViewModel {
         objectWillChange.send()
         panels.close(key: scope, id: surface.id)
         if surface.kind == .terminal {
-            perform(.killTerminal(KillTerminal(handle: workbenchTerminalHandle(surface.id))))
+            perform(.closeTerminal(handle: workbenchTerminalHandle(surface.id)))
         }
         workbenchSideChats.removeValue(forKey: surface.id)
     }
