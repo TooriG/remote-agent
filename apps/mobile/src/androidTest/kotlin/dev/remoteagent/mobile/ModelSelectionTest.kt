@@ -10,6 +10,7 @@ import dev.remoteagent.core.AgentStore
 import dev.remoteagent.core.ClientBuild
 import dev.remoteagent.core.ClientPlatform
 import dev.remoteagent.core.ClientSession
+import dev.remoteagent.core.ClientSessions
 import dev.remoteagent.core.ClientStorage
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.Snapshot
@@ -39,8 +40,13 @@ class ModelSelectionTest {
 
         override fun conversationDirectory(): String? = null
 
-        fun open(): ClientSession =
-            ClientSession.open(this, this, null, false, ClientBuild(0uL, "test-revision"), "Fixture")
+        private var sessions: ClientSessions? = null
+
+        fun open(): ClientSession {
+            val next = ClientSessions(false, ClientBuild(0uL, "test-revision"), "Fixture")
+            sessions = next
+            return next.open("fixture", this, this)
+        }
     }
 
     private fun fixture(): Snapshot {

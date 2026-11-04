@@ -231,6 +231,24 @@ impl AgentStore {
 }
 
 impl AgentStore {
+    pub(crate) fn set_connection_active(&self, active: bool) {
+        self.connection_active.send_replace(active);
+    }
+    /// Platform network monitors supply changes; transport recovery stays in Core.
+    pub(crate) async fn network_changed(&self) {
+        let endpoint = self
+            .endpoint
+            .lock()
+            .await
+            .as_ref()
+            .map(|cached| cached.endpoint.clone());
+        if let Some(endpoint) = endpoint {
+            endpoint.network_change().await;
+        }
+        if let Some(recovery) = self.recovery.lock().unwrap().as_ref() {
+            recovery.wake();
+        }
+    }
     /// A store for restored device state and its connection diagnostics.
     pub(crate) fn restored(
         snapshot: Snapshot,
@@ -283,24 +301,6 @@ impl AgentStore {
     /// Foreground recovery reuses a responsive session and the endpoint identity.
     pub async fn resume(&self, connection: Connection) -> Result<bool, AgentError> {
         self.connect_recording(connection, true).await
-    }
-    pub fn set_connection_active(&self, active: bool) {
-        self.connection_active.send_replace(active);
-    }
-    /// Platform network monitors supply changes; transport recovery stays in Core.
-    pub async fn network_changed(&self) {
-        let endpoint = self
-            .endpoint
-            .lock()
-            .await
-            .as_ref()
-            .map(|cached| cached.endpoint.clone());
-        if let Some(endpoint) = endpoint {
-            endpoint.network_change().await;
-        }
-        if let Some(recovery) = self.recovery.lock().unwrap().as_ref() {
-            recovery.wake();
-        }
     }
     /// Platform lifecycle boundaries only; shared transport measurements stay in Core.
     pub fn record_connection_event(&self, phase: ConnectionPhase, value: u64) {

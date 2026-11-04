@@ -12,7 +12,12 @@ final class AppViewModel: ObservableObject {
     @Published var composerFocusRequest: UUID?
     @Published var transferError: String?
     @Published var transferring = false
-    @Published var isConnecting = false
+    @Published var connections: [String: Task<Void, Never>] = [:]
+    @Published var pairingConnection: Task<Void, Never>?
+    var isConnecting: Bool {
+        screen == .pairing ? pairingConnection != nil : selectedProfileId.flatMap { connections[$0] } != nil
+    }
+
     @Published var pairingError: String?
     @Published private(set) var pairingInvitation: Invitation?
     @Published var notice: String?
@@ -25,13 +30,15 @@ final class AppViewModel: ObservableObject {
     private var pendingPresentation: ConversationPresentationInput?
     private var recentConversations: [ConversationPresentation] = []
 
+    lazy var sessions = ClientSessions(recentChats: false, clientBuild: Self.clientBuild,
+                                       deviceName: UIDevice.current.name)
     private(set) var session: ClientSession?
+
     var store: AgentStore? {
         session?.store()
     }
 
     var observation: Task<Void, Never>?
-    var connection: Task<Void, Never>?
     private let pathMonitor = NWPathMonitor()
     let liveActivities = TaskLiveActivities()
     let panels = Panels()
@@ -43,16 +50,16 @@ final class AppViewModel: ObservableObject {
         pathMonitor.pathUpdateHandler = { [weak self] path in
             let available = path.status == .satisfied
             Task { @MainActor [weak self] in
-                guard let self, let owner = store else { return }
-                await owner.networkChanged()
-                if available, UIApplication.shared.applicationState == .active,
-                   !isConnected, !isConnecting {
-                    connect()
+                guard let self else { return }
+                await sessions.networkChanged()
+                if available, UIApplication.shared.applicationState == .active {
+                    connectProfiles()
                 }
             }
         }
         pathMonitor.start(queue: DispatchQueue(label: "agent.network-path"))
         do { profiles = try HostProfile.load() } catch { notice = error.localizedDescription }
+        connectProfiles()
         if let id = UserDefaults.standard.string(forKey: "bex.selected-host"),
            profiles.contains(where: { $0.id == id }) {
             selectProfile(id)
@@ -64,29 +71,15 @@ final class AppViewModel: ObservableObject {
     func selectProfile(_ id: String) {
         guard profiles.contains(where: { $0.id == id }) else { return }
         screen = .threads
-        if selectedProfileId == id, store != nil {
-            connect(); return
-        }
-        let old = detachStore()
+        detachObservation()
         selectedProfileId = id
         UserDefaults.standard.set(id, forKey: "bex.selected-host")
-        publish(AgentCore.Snapshot.empty())
         let storage = MobileSessionStorage(host: id)
-        let owner = ClientSession.open(storage: storage, platform: storage, previous: old, recentChats: false,
-                                       clientBuild: Self.clientBuild, deviceName: UIDevice.current.name)
+        let owner = sessions.open(host: id, storage: storage, platform: storage)
         session = owner
-        observation = Task { [weak self] in
-            do {
-                let store = try await owner.ready()
-                guard let self, session === owner, !Task.isCancelled else { return }
-                publish(store.snapshot())
-                observe(store, host: id)
-                connect()
-            } catch {
-                guard let self, session === owner, !Task.isCancelled else { return }
-                notice = error.localizedDescription
-            }
-        }
+        _ = try? owner.dispatch(intent: .showThreadList)
+        publish(owner.snapshot())
+        observe(owner, host: id)
     }
 
     private static var clientBuild: ClientBuild {
@@ -98,51 +91,50 @@ final class AppViewModel: ObservableObject {
 
     func removeProfile(_ id: String) {
         guard profiles.contains(where: { $0.id == id }) else { return }
-        do {
-            let remaining = profiles.filter { $0.id != id }
-            try DeviceIdentity.remove(id)
-            try? FileManager.default.removeItem(at: MobileSessionStorage(host: id).conversations())
-            if selectedProfileId == id {
-                let old = detachStore()
-                selectedProfileId = nil
-                UserDefaults.standard.removeObject(forKey: "bex.selected-host")
-                notice = nil
-                publish(AgentCore.Snapshot.empty())
-                Task { [weak self] in
-                    do { try await old?.shutdown() } catch { self?.notice = error.localizedDescription }
-                }
-            }
-            profiles = remaining
-            try HostProfile.save(profiles)
-            screen = .profiles
-        } catch { notice = error.localizedDescription }
+        do { try HostProfile.save(profiles.filter { $0.id != id }) } catch {
+            notice = error.localizedDescription
+            return
+        }
+        connections.removeValue(forKey: id)?.cancel()
+        let old = sessions.remove(host: id)
+        if selectedProfileId == id {
+            detachObservation()
+            selectedProfileId = nil
+            session = nil
+            UserDefaults.standard.removeObject(forKey: "bex.selected-host")
+        }
+        profiles.removeAll { $0.id == id }
+        screen = .profiles
+        Task { [weak self] in
+            do {
+                do { try await old?.shutdown() } catch { self?.notice = error.localizedDescription }
+                try DeviceIdentity.remove(id)
+                try? FileManager.default.removeItem(at: MobileSessionStorage(host: id).conversations())
+            } catch { self?.notice = error.localizedDescription }
+        }
     }
 
-    private func detachStore() -> ClientSession? {
-        connection?.cancel()
+    private func detachObservation() {
         observation?.cancel()
-        let old = session
-        old?.retire()
-        session = nil
         recentConversations.removeAll()
         pendingPresentation = nil
         conversation = nil
-        isConnecting = false
-        return old
+        notice = nil
+        publish(AgentCore.Snapshot.empty())
     }
 
     func openPairing() {
         persist()
-        connection?.cancel()
-        isConnecting = false
+        pairingConnection?.cancel()
+        pairingConnection = nil
         pairingError = nil
         pairingInvitation = nil
         screen = .pairing
     }
 
     func dismissPairing() {
-        connection?.cancel()
-        isConnecting = false
+        pairingConnection?.cancel()
+        pairingConnection = nil
         pairingInvitation = nil
         screen = .profiles
     }
@@ -162,38 +154,27 @@ final class AppViewModel: ObservableObject {
             let id = try validateInvitation(invitation: invitation, now: UInt64(Date().timeIntervalSince1970))
             pairingError = nil
             screen = .pairing
-            isConnecting = true
-            connection?.cancel()
-            connection = Task { [weak self] in
+            pairingConnection = Task { [weak self] in
+                guard let self else { return }
                 do {
                     let storage = MobileSessionStorage(host: id)
-                    let owner = try await ClientSession.pair(
-                        storage: storage, platform: storage, previous: self?.session,
-                        invitation: invitation, recentChats: false,
-                        clientBuild: Self.clientBuild, deviceName: UIDevice.current.name
-                    )
-                    guard let self, !Task.isCancelled else { try? await owner.shutdown(); return }
-                    observation?.cancel()
-                    let old = session
-                    profiles.removeAll { $0.id == id }
-                    profiles.append(HostProfile(id: id, name: invitation.hostName, ticket: invitation.endpoint))
-                    try HostProfile.save(profiles)
-                    try? await old?.shutdown()
-                    UserDefaults.standard.set(id, forKey: "bex.selected-host")
-                    selectedProfileId = id
-                    session = owner
-                    recentConversations.removeAll()
-                    pendingPresentation = nil
-                    conversation = nil
-                    publish(owner.snapshot())
-                    screen = .threads
+                    let owner = try await sessions.pair(storage: storage, platform: storage, invitation: invitation)
+                    guard !Task.isCancelled else { try? await owner.shutdown(); return }
+                    let paired = profiles.filter { $0.id != id } + [
+                        HostProfile(id: id, name: invitation.hostName, ticket: invitation.endpoint)
+                    ]
+                    try HostProfile.save(paired)
+                    connections.removeValue(forKey: id)?.cancel()
+                    sessions.adopt(host: id, session: owner)
+                    guard !Task.isCancelled else { return }
+                    profiles = paired
                     pairingInvitation = nil
-                    isConnecting = false
-                    try await observe(owner.ready(), host: id)
-                    perform(.loadHostName(LoadHostName()))
+                    pairingConnection = nil
+                    selectProfile(id)
                 } catch {
                     guard !Task.isCancelled else { return }
-                    self?.isConnecting = false; self?.pairingError = error.localizedDescription
+                    pairingConnection = nil
+                    pairingError = error.localizedDescription
                 }
             }
         } catch { pairingError = error.localizedDescription }
@@ -289,18 +270,14 @@ extension AppViewModel {
     }
 
     func persist() {
-        guard let owner = session else { return }
         Task { [weak self] in
-            do { try await owner.flush() } catch {
-                if self?.session === owner {
-                    self?.notice = error.localizedDescription
-                }
-            }
+            guard let self else { return }
+            do { try await sessions.flush() } catch { notice = error.localizedDescription }
         }
     }
 
     func persistBeforeBackground() async {
-        do { try await session?.flush() } catch { notice = error.localizedDescription }
+        do { try await sessions.flush() } catch { notice = error.localizedDescription }
         await liveActivities.flush()
     }
 }

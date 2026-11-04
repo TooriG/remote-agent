@@ -154,7 +154,7 @@ struct Restored {
 
 pub struct Persistence {
     storage: Arc<dyn ClientStorage>,
-    pub(super) device: Arc<DevicePreferences>,
+    device: Arc<DevicePreferences>,
     restored: Mutex<Option<Restored>>,
     queue: Mutex<Option<mpsc::UnboundedSender<Save>>>,
     failure: watch::Sender<Option<String>>,

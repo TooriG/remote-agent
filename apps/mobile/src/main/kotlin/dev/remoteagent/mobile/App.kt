@@ -28,6 +28,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -38,10 +39,10 @@ import dev.remoteagent.core.AgentException
 import dev.remoteagent.core.AgentStore
 import dev.remoteagent.core.ClientBuild
 import dev.remoteagent.core.ClientSession
+import dev.remoteagent.core.ClientSessions
 import dev.remoteagent.core.ErrorScope
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.ListSessions
-import dev.remoteagent.core.LoadHostName
 import dev.remoteagent.core.OperationKey
 import dev.remoteagent.core.Outcome
 import dev.remoteagent.core.Snapshot
@@ -54,11 +55,11 @@ import java.io.IOException
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -106,7 +107,11 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         private set
 
     var screen by mutableStateOf(Screen.Hosts)
-    var busy by mutableStateOf(false)
+    val busy: Boolean
+        get() =
+            if (screen == Screen.Pairing) pairingConnection != null
+            else profileId?.let(connections::containsKey) == true
+
     var notice by mutableStateOf<String?>(null)
     val loadingHistory: Boolean
         get() = snapshot.navigation().threadId?.let { snapshot.operationRunning(OperationKey.History(it)) } ?: false
@@ -120,10 +125,12 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     var list by mutableStateOf<ThreadList?>(null)
         private set
 
+    private val sessions = ClientSessions(true, ClientBuild(0uL, BuildConfig.BUILD_REVISION), repository.deviceName)
     private var session: ClientSession? = null
-    private val clientBuild = ClientBuild(0uL, BuildConfig.BUILD_REVISION)
     private var owner: AgentStore? = null
-    private var connection: Job? = null
+
+    private val connections = mutableStateMapOf<String, Job>()
+    private var pairingConnection by mutableStateOf<Job?>(null)
     private var attachmentTransfers = 0
     private var observation: Job? = null
     val draftKey
@@ -135,6 +142,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     init {
         try {
             profiles = repository.profiles()
+            profiles.forEach { connect(it) }
             repository.selected?.takeIf { id -> profiles.any { it.id == id } }?.let(::selectProfile)
         } catch (error: SerializationException) {
             notice = error.displayMessage()
@@ -176,120 +184,106 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
 
     fun selectProfile(id: String) {
         screen = Screen.Threads
-        if (profileId == id && owner != null) {
-            connect()
-            return
-        }
         observation?.cancel()
-        connection?.cancel()
-        val old = session
         val storage = repository.sessionStorage(id)
-        val selected = ClientSession.open(storage, storage, old, true, clientBuild, repository.deviceName)
+        val selected = sessions.open(id, storage, storage)
         session = selected
         owner = null
         profileId = id
         repository.selected = id
-        busy = false
+        notice = null
         publish(Snapshot.empty())
+        selected.dispatch(Intent.ShowThreadList)
+        publish(selected.snapshot())
+        observe(selected)
+    }
+
+    fun pair(contents: String) {
+        pairingConnection?.cancel()
+        notice = null
+        pairingConnection =
+            scope.launch(start = CoroutineStart.LAZY) {
+                try {
+                    val invitation =
+                        parseInvitation(contents, System.currentTimeMillis().milliseconds.inWholeSeconds.toULong())
+                    val id = ticketIdentity(invitation.endpoint)
+                    val storage = repository.sessionStorage(id)
+                    val store = sessions.pair(storage, storage, invitation)
+                    if (!isActive) {
+                        store.shutdown()
+                        return@launch
+                    }
+                    val paired =
+                        profiles.filterNot { it.id == id } + HostProfile(id, invitation.hostName, invitation.endpoint)
+                    repository.saveProfiles(paired)
+                    connections.remove(id)?.cancel()
+                    sessions.adopt(id, store)
+                    if (!isActive) return@launch
+                    profiles = paired
+                    pairingConnection = null
+                    selectProfile(id)
+                } catch (error: AgentException) {
+                    notice = error.displayMessage()
+                } finally {
+                    if (isActive) pairingConnection = null
+                }
+            }
+        pairingConnection?.start()
+    }
+
+    fun connect() {
+        profiles.firstOrNull { it.id == profileId }?.let { connect(it) }
+    }
+
+    private fun connect(profile: HostProfile, afterForeground: Boolean = false) {
+        val storage = repository.sessionStorage(profile.id)
+        val store = sessions.open(profile.id, storage, storage)
+        if (!afterForeground && (store.snapshot().connected() || connections.containsKey(profile.id))) return
+        connections.remove(profile.id)?.cancel()
+        if (profileId == profile.id) notice = null
+        connections[profile.id] =
+            scope.launch(start = CoroutineStart.LAZY) {
+                try {
+                    store.resume(profile.ticket)
+                    if (profileId == profile.id) {
+                        publish(store.snapshot())
+                        notice = null
+                    }
+                } catch (error: AgentException) {
+                    if (profileId == profile.id) notice = error.displayMessage()
+                } finally {
+                    if (isActive) connections.remove(profile.id)
+                }
+            }
+        connections[profile.id]?.start()
+    }
+
+    fun lifecycle(active: Boolean) {
+        sessions.recordScene(if (active) 1uL else 3uL)
+        if (active) {
+            // Returning from a picker keeps the transport underneath its upload.
+            if (attachmentTransfers == 0) profiles.forEach { connect(it, afterForeground = true) }
+        } else persist()
+    }
+
+    private fun observe(selected: ClientSession) {
         observation = scope.launch {
             try {
                 val store = selected.ready()
                 if (session !== selected || !isActive) return@launch
                 owner = store
-                publish(store.snapshot())
-                observe(store, id)
+                var previous = store.snapshot()
+                publish(previous)
                 connect()
+                while (isActive) {
+                    store.nextSnapshot(previous)
+                    if (session !== selected) return@launch
+                    val latest = store.snapshot()
+                    publish(latest)
+                    previous = latest
+                }
             } catch (error: AgentException) {
                 if (session === selected && isActive) notice = error.displayMessage()
-            }
-        }
-    }
-
-    fun pair(contents: String) {
-        connection?.cancel()
-        busy = true
-        notice = null
-        connection = scope.launch {
-            try {
-                val invitation =
-                    parseInvitation(contents, System.currentTimeMillis().milliseconds.inWholeSeconds.toULong())
-                val id = ticketIdentity(invitation.endpoint)
-                val storage = repository.sessionStorage(id)
-                val store =
-                    ClientSession.pair(
-                        storage,
-                        storage,
-                        session,
-                        invitation,
-                        true,
-                        clientBuild,
-                        repository.deviceName,
-                    )
-                if (!isActive) {
-                    store.shutdown()
-                    return@launch
-                }
-                observation?.cancel()
-                session?.shutdown()
-                profiles = profiles.filterNot { it.id == id } + HostProfile(id, id, invitation.endpoint)
-                repository.saveProfiles(profiles)
-                repository.selected = id
-                profileId = id
-                session = store
-                val ready = store.ready()
-                owner = ready
-                publish(ready.snapshot())
-                observe(ready, id)
-                perform(Intent.LoadHostName(LoadHostName()))
-                screen = Screen.Threads
-                busy = false
-            } catch (error: AgentException) {
-                busy = false
-                notice = error.displayMessage()
-            }
-        }
-    }
-
-    fun connect() {
-        val store = session
-        val profile = profiles.firstOrNull { it.id == profileId }
-        if (owner == null || busy) return
-        if (store == null || profile == null) return
-        busy = true
-        notice = null
-        connection = scope.launch {
-            try {
-                store.resume(profile.ticket)
-                if (profileId != profile.id) return@launch
-                publish(store.snapshot())
-                notice = null
-            } catch (error: AgentException) {
-                if (session === store) notice = error.displayMessage()
-            } finally {
-                if (session === store && profileId == profile.id && connection === currentCoroutineContext()[Job])
-                    busy = false
-            }
-        }
-    }
-
-    fun lifecycle(active: Boolean) {
-        owner?.setConnectionActive(active)
-        if (active) {
-            // Returning from a picker keeps the transport underneath its upload.
-            if (attachmentTransfers == 0) connect()
-        } else persist()
-    }
-
-    private fun observe(store: AgentStore, id: String) {
-        val initial = snapshot
-        observation = scope.launch {
-            var previous = initial
-            while (isActive) {
-                store.nextSnapshot(previous)
-                if (profileId != id) return@launch
-                val latest = store.snapshot()
-                publish(latest)
-                previous = latest
             }
         }
     }
@@ -329,7 +323,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         scope.launch {
             var uploading = false
             try {
-                connection?.join()
+                connections[selection.first]?.join()
                 if (selection != selectionKey) return@launch
                 if (!snapshot.connected()) throw IOException("PCに接続できません。接続を確認してもう一度添付してください。")
                 notice = null
@@ -349,26 +343,26 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     }
 
     fun persist() {
-        val selected = session ?: return
         scope.launch {
             try {
-                selected.flush()
+                sessions.flush()
             } catch (error: AgentException) {
-                if (session === selected) notice = error.displayMessage()
+                notice = error.displayMessage()
             }
         }
     }
 
     override fun onCleared() {
         observation?.cancel()
-        connection?.cancel()
-        val selected = session
+        pairingConnection?.cancel()
+        connections.values.forEach { it.cancel() }
+        connections.clear()
         session = null
         owner = null
-        selected?.retire()
+        sessions.retire()
         scope.launch {
             try {
-                selected?.shutdown()
+                sessions.shutdown()
             } finally {
                 scope.cancel()
             }

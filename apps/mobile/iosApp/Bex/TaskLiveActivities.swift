@@ -305,8 +305,8 @@ extension AppViewModel {
                     continue
                 }
                 guard case let .intent(hostID, intent) = request,
-                      let self, selectedProfileId == hostID, snapshot.connected(),
-                      let owner = store else { continue }
+                      let self, let owner = sessions.session(host: hostID)?.store(),
+                      owner.snapshot().connected() else { continue }
                 do {
                     let receipt = try owner.dispatch(intent: intent)
                     // Finish each request before dispatching a rotated token or unregistering.
@@ -319,7 +319,7 @@ extension AppViewModel {
                     liveActivities.logger.error("Live Activity push registration failed")
                     Task { [weak self] in
                         try? await Task.sleep(for: .seconds(5))
-                        guard let self, snapshot.connected(), selectedProfileId == hostID else { return }
+                        guard let self, sessions.session(host: hostID)?.snapshot().connected() == true else { return }
                         liveActivities.resendTokens(hostID: hostID)
                     }
                 }

@@ -4,44 +4,66 @@ import UIKit
 
 extension AppViewModel {
     func connect(afterForeground: Bool = false) {
-        guard screen != .pairing, let owner = store, let session,
-              let profile = profiles.first(where: { $0.id == selectedProfileId }),
-              !isConnecting || afterForeground else { return }
-        connection?.cancel()
-        isConnecting = true
-        notice = nil
-        connection = Task { [weak self] in
-            let started = ProcessInfo.processInfo.systemUptime
-            recordScene(UIApplication.shared.applicationState == .active ? 1 : 2)
-            owner.recordConnectionEvent(phase: .uiConnectStart, value: afterForeground ? 1 : 0)
-            do {
-                _ = try await session.resume(ticket: profile.ticket)
-                guard let self, selectedProfileId == profile.id, !Task.isCancelled else { return }
-                let elapsed = (ProcessInfo.processInfo.systemUptime - started) * 1_000_000
-                owner.recordConnectionEvent(phase: .uiConnectReady, value: UInt64(elapsed))
-                publish(owner.snapshot())
-                notice = nil
-                isConnecting = false
-            } catch {
-                owner.recordConnectionEvent(
-                    phase: Task.isCancelled ? .uiConnectCancelled : .uiConnectFailed,
-                    value: UInt64((ProcessInfo.processInfo.systemUptime - started) * 1_000_000)
-                )
-                guard self?.selectedProfileId == profile.id, !Task.isCancelled else { return }
-                self?.isConnecting = false
-                self?.notice = error.localizedDescription
-            }
+        if afterForeground {
+            connectProfiles(afterForeground: true)
+        } else if screen != .pairing, let profile = profiles.first(where: { $0.id == selectedProfileId }) {
+            connect(profile)
         }
     }
 
-    func observe(_ owner: AgentStore, host: String) {
-        let initial = snapshot
+    func connectProfiles(afterForeground: Bool = false) {
+        for profile in profiles {
+            connect(profile, afterForeground: afterForeground)
+        }
+    }
+
+    private func connect(_ profile: HostProfile, afterForeground: Bool = false) {
+        let storage = MobileSessionStorage(host: profile.id)
+        let session = sessions.open(host: profile.id, storage: storage, platform: storage)
+        guard afterForeground || (!session.snapshot().connected() && connections[profile.id] == nil) else { return }
+        connections[profile.id]?.cancel()
+        if selectedProfileId == profile.id {
+            notice = nil
+        }
+        connections[profile.id] = Task { [weak self] in
+            let started = ProcessInfo.processInfo.systemUptime
+            do {
+                let owner = try await session.ready()
+                owner.recordConnectionEvent(phase: .uiConnectStart, value: afterForeground ? 1 : 0)
+                _ = try await session.resume(ticket: profile.ticket)
+                guard let self, !Task.isCancelled else { return }
+                let elapsed = (ProcessInfo.processInfo.systemUptime - started) * 1_000_000
+                owner.recordConnectionEvent(phase: .uiConnectReady, value: UInt64(elapsed))
+                if selectedProfileId == profile.id {
+                    publish(owner.snapshot())
+                    notice = nil
+                }
+            } catch {
+                session.store()?.recordConnectionEvent(
+                    phase: Task.isCancelled ? .uiConnectCancelled : .uiConnectFailed,
+                    value: UInt64((ProcessInfo.processInfo.systemUptime - started) * 1_000_000)
+                )
+                guard let self, !Task.isCancelled else { return }
+                if selectedProfileId == profile.id {
+                    notice = error.localizedDescription
+                }
+            }
+            guard !Task.isCancelled else { return }
+            self?.connections.removeValue(forKey: profile.id)
+        }
+    }
+
+    func observe(_ session: ClientSession, host: String) {
         observation = Task { [weak self] in
-            var previous = initial
-            while !Task.isCancelled {
-                do {
+            do {
+                let owner = try await session.ready()
+                guard self?.session === session, !Task.isCancelled else { return }
+                var previous = owner.snapshot()
+                self?.publish(previous)
+                self?.connect()
+                while !Task.isCancelled {
                     _ = try await owner.nextSnapshot(previous: previous)
-                    guard let self, selectedProfileId == host, !Task.isCancelled else { return }
+                    guard let self, self.session === session, !Task.isCancelled else { return }
                     let latest = owner.snapshot()
                     publish(latest)
                     if latest.changes(previous: previous).reconnected {
@@ -49,7 +71,10 @@ extension AppViewModel {
                         notice = nil
                     }
                     previous = latest
-                } catch { return }
+                }
+            } catch {
+                guard self?.session === session, !Task.isCancelled else { return }
+                self?.notice = error.localizedDescription
             }
         }
     }

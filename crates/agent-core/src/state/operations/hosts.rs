@@ -100,6 +100,7 @@ rpc::rpc_method!(LoadHostName, HostName, |self| crate::models::Empty {});
 
 impl Operation for LoadHostName {
     rpc_operation!();
+    const STALE_POLICY: StalePolicy = StalePolicy::Apply;
     fn apply(self, snapshot: &mut Snapshot, name: Self::Output) -> Vec<Effect> {
         snapshot.host_name = Some(name);
         Vec::new()

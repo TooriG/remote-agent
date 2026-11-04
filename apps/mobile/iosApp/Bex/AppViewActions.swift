@@ -29,8 +29,7 @@ extension AppViewModel {
     }
 
     func recordScene(_ value: UInt64) {
-        store?.setConnectionActive(active: value == 1)
-        store?.recordConnectionEvent(phase: .appScene, value: value)
+        sessions.recordScene(value: value)
     }
 
     func recordListViewUpdate() {

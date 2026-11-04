@@ -1,5 +1,8 @@
-//! One mobile Host session owns restoration, queued intents and ordered saves.
+//! Each mobile Host session owns restoration, queued intents and ordered saves.
 //! Platforms supply private storage; no UI task decides when state is durable.
+mod hosts;
+pub use hosts::ClientSessions;
+
 use super::native::{AgentStore, Connection, Receipt};
 use super::persistence::ClientStorage;
 use super::persistence::{Completion, Persistence};
@@ -11,7 +14,10 @@ use crate::{
 };
 use agent_protocol::models::Invitation;
 use futures_util::FutureExt;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
@@ -26,7 +32,7 @@ pub trait ClientPlatform: Send + Sync {
 type Pending = (Intent, oneshot::Sender<Result<Outcome, AgentError>>);
 
 /// Native apps supply build metadata without recompiling the shared library.
-#[derive(uniffi::Record)]
+#[derive(Clone, uniffi::Record)]
 pub struct ClientBuild {
     pub number: u64,
     pub revision: String,
@@ -46,7 +52,8 @@ enum Phase {
 pub struct ClientSession {
     persistence: Arc<Persistence>,
     platform: Arc<dyn ClientPlatform>,
-    previous: Mutex<Option<Arc<ClientSession>>>,
+    active: AtomicBool,
+    replacing: Mutex<Option<Completion<()>>>,
     closing: Mutex<Option<Completion<()>>>,
     recent_chats: bool,
     client_build: ClientBuild,
@@ -60,73 +67,6 @@ pub struct ClientSession {
 
 #[uniffi::export(async_runtime = "tokio")]
 impl ClientSession {
-    /// Synchronous creation lets intents queue before any native task starts.
-    #[uniffi::constructor]
-    pub fn open(
-        storage: Arc<dyn ClientStorage>,
-        platform: Arc<dyn ClientPlatform>,
-        previous: Option<Arc<ClientSession>>,
-        recent_chats: bool,
-        client_build: ClientBuild,
-        device_name: String,
-    ) -> Arc<Self> {
-        if let Some(previous) = &previous {
-            previous.retire();
-        }
-        let device = previous
-            .as_ref()
-            .map(|previous| previous.persistence.device.clone())
-            .unwrap_or_default();
-        Self::create(
-            Persistence::new(storage, device),
-            platform,
-            previous,
-            recent_chats,
-            client_build,
-            device_name,
-        )
-    }
-
-    /// Pairing stays provisional until the app commits its platform profile.
-    #[uniffi::constructor]
-    pub async fn pair(
-        storage: Arc<dyn ClientStorage>,
-        platform: Arc<dyn ClientPlatform>,
-        previous: Option<Arc<ClientSession>>,
-        invitation: Invitation,
-        recent_chats: bool,
-        client_build: ClientBuild,
-        device_name: String,
-    ) -> Result<Arc<Self>, AgentError> {
-        // Device-wide model preferences must include edits still waiting for I/O.
-        // Keep the current Host usable if pairing subsequently fails.
-        if let Some(previous) = &previous {
-            previous.clone().flush().await?;
-        }
-        let device = previous
-            .as_ref()
-            .map(|previous| previous.persistence.device.clone())
-            .unwrap_or_default();
-        let session = Self::create(
-            Persistence::new(storage, device),
-            platform,
-            None,
-            recent_chats,
-            client_build,
-            device_name,
-        );
-        let store = session.restore(true).await?;
-        store
-            .reconnect(
-                session
-                    .connection(invitation.endpoint, Some(invitation.invitation.to_string()))
-                    .await?,
-            )
-            .await?;
-        session.install(store, false)?;
-        Ok(session)
-    }
-
     pub fn store(&self) -> Option<Arc<AgentStore>> {
         match &*self.phase.lock().unwrap() {
             Phase::Ready { store, .. } => Some(store.clone()),
@@ -148,12 +88,14 @@ impl ClientSession {
         if self.stop.is_cancelled() {
             return Err(error("session closed"));
         }
-        let previous = self.previous.lock().unwrap().clone();
-        if let Some(previous) = previous {
-            if let Err(reason) = previous.shutdown().await {
+        // Re-pairing the same Host shares its disk location. Its old final
+        // write must finish before this session starts autosaving there.
+        let replacing = self.replacing.lock().unwrap().clone();
+        if let Some(replacing) = replacing {
+            if let Err(reason) = replacing.await {
                 self.persistence.report_failure(reason.to_string());
             }
-            self.previous.lock().unwrap().take();
+            self.replacing.lock().unwrap().take();
         }
         let status = match &mut *self.phase.lock().unwrap() {
             Phase::Loading(_) => None,
@@ -256,9 +198,6 @@ impl ClientSession {
             return;
         }
         self.stop.cancel();
-        if let Some(previous) = self.previous.lock().unwrap().as_ref() {
-            previous.retire();
-        }
         if let Phase::Ready {
             store,
             runtime,
@@ -287,20 +226,22 @@ impl ClientSession {
 
     pub async fn shutdown(self: Arc<Self>) -> Result<(), AgentError> {
         self.retire();
-        let previous = self.previous.lock().unwrap().clone();
-        if let Some(previous) = previous {
-            Box::pin(previous.shutdown()).await?;
-        }
         let closing = self.closing.lock().unwrap().as_ref().unwrap().clone();
         closing.await
     }
 }
 
 impl ClientSession {
+    fn set_active(&self, active: bool) {
+        self.active.store(active, Ordering::SeqCst);
+        if let Some(store) = self.store() {
+            store.set_connection_active(active);
+        }
+    }
+
     fn create(
         persistence: Arc<Persistence>,
         platform: Arc<dyn ClientPlatform>,
-        previous: Option<Arc<Self>>,
         recent_chats: bool,
         client_build: ClientBuild,
         device_name: String,
@@ -308,7 +249,8 @@ impl ClientSession {
         Arc::new(Self {
             persistence,
             platform,
-            previous: Mutex::new(previous),
+            active: AtomicBool::new(true),
+            replacing: Default::default(),
             closing: Default::default(),
             recent_chats,
             client_build,
@@ -383,6 +325,7 @@ impl ClientSession {
         if let Some(task) = self.persistence.start(store.store.subscribe()) {
             runtime.spawn(task);
         }
+        store.set_connection_active(self.active.load(Ordering::SeqCst));
         // Navigation comes before queued UI intents, just as on both platforms.
         let _ = store.dispatch(Intent::ShowThreadList);
         if self.recent_chats {
@@ -576,55 +519,228 @@ mod tests {
         }
     }
 
+    fn clients() -> Arc<ClientSessions> {
+        ClientSessions::new(false, client_build(42), "Fixture device".into())
+    }
+
     fn open(storage: Arc<Storage>) -> Arc<ClientSession> {
-        ClientSession::open(
-            storage.clone(),
+        ClientSession::create(
+            Persistence::new(storage.clone(), Arc::default()),
             storage,
-            None,
             false,
             client_build(42),
             "Fixture device".into(),
         )
     }
 
+    #[allow(dead_code)]
+    mod host_fixture {
+        include!("../../tests/support/host.rs");
+    }
+
+    async fn incoming(
+        host: &crate::transport::Endpoint,
+    ) -> (
+        host_fixture::Session,
+        host_fixture::Reader,
+        host_fixture::Writer,
+    ) {
+        let identity = crate::transport::Identity::from_bytes([1; 32]);
+        let trust = crate::transport::Trust {
+            allowed: [identity.node_id()].into(),
+            ..Default::default()
+        };
+        let session = host
+            .accept()
+            .await
+            .unwrap()
+            .unwrap()
+            .authorize(&trust)
+            .unwrap();
+        let (session, mut reader, writer) = host_fixture::accept(session).await;
+        let identify = reader.read_request().await.unwrap().unwrap();
+        assert_eq!(identify["method"], "host/device/identify");
+        writer
+            .reply(
+                &identify,
+                serde_json::json!({"result":{"storageScope":"fixture-storage","ticket":""}}),
+            )
+            .await
+            .unwrap();
+        (session, reader, writer)
+    }
+
+    async fn connected(store: &AgentStore, expected: bool) {
+        let mut previous = store.snapshot();
+        while previous.connected != expected {
+            previous = store.next_snapshot(previous).await.unwrap();
+        }
+    }
+
+    async fn read_name(
+        session: &ClientSession,
+        reader: &mut host_fixture::Reader,
+        writer: &host_fixture::Writer,
+        name: &str,
+    ) {
+        let receipt = session
+            .dispatch(Intent::LoadHostName(
+                crate::state::operations::LoadHostName {},
+            ))
+            .unwrap();
+        // Host facts remain valid when the user navigates before the reply.
+        session
+            .dispatch(Intent::ShowThreadList)
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
+        loop {
+            let request = reader.read_request().await.unwrap().unwrap();
+            if request["method"] == "host/name" {
+                writer
+                    .reply(&request, serde_json::json!({"result": name}))
+                    .await
+                    .unwrap();
+                break;
+            }
+        }
+        receipt.wait().await.unwrap();
+        assert_eq!(session.snapshot().host_name.as_deref(), Some(name));
+    }
+
     #[tokio::test]
-    async fn a_failed_previous_host_save_is_reported_without_blocking_the_new_host_or_queued_work()
-    {
+    async fn two_live_hosts_survive_switching_and_recover_together_after_backgrounding() {
+        use crate::transport::{Endpoint, Identity, Relays};
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            let clients = clients();
+            let mac_storage = Arc::new(Storage::default());
+            let windows_storage = Arc::new(Storage::default());
+            let mac = clients.open("mac".into(), mac_storage.clone(), mac_storage.clone());
+            let mac_store = mac.clone().ready().await.unwrap();
+            let mac_host = Endpoint::bind(Identity::generate(), Relays::Disabled)
+                .await
+                .unwrap();
+            let windows_host = Endpoint::bind(Identity::generate(), Relays::Disabled)
+                .await
+                .unwrap();
+            let connect = |host: &Endpoint| Connection {
+                ticket: host.ticket().to_string(),
+                identity: vec![1; 32],
+                invitation: None,
+                use_relays: false,
+                device_name: "Phone".into(),
+            };
+            let (result, (mac_peer, mut mac_reader, mac_writer)) =
+                tokio::join!(mac_store.reconnect(connect(&mac_host)), incoming(&mac_host));
+            result.unwrap();
+            clients.record_scene(3);
+            // Hosts opened while inactive must inherit the same lifecycle.
+            let windows = clients.open(
+                "windows".into(),
+                windows_storage.clone(),
+                windows_storage.clone(),
+            );
+            let windows_store = windows.clone().ready().await.unwrap();
+            let (result, (windows_peer, mut windows_reader, windows_writer)) = tokio::join!(
+                windows_store.reconnect(connect(&windows_host)),
+                incoming(&windows_host)
+            );
+            result.unwrap();
+            for _ in 0..3 {
+                let selected = clients.open("mac".into(), mac_storage.clone(), mac_storage.clone());
+                read_name(&selected, &mut mac_reader, &mac_writer, "Mac").await;
+                let selected = clients.open(
+                    "windows".into(),
+                    windows_storage.clone(),
+                    windows_storage.clone(),
+                );
+                read_name(&selected, &mut windows_reader, &windows_writer, "Windows").await;
+                assert!(mac.snapshot().connected);
+                assert!(windows.snapshot().connected);
+            }
+            mac_peer.close();
+            windows_peer.close();
+            tokio::join!(
+                connected(&mac_store, false),
+                connected(&windows_store, false)
+            );
+            let pause = std::time::Duration::from_millis(2200);
+            let (mac_retry, windows_retry) = tokio::join!(
+                tokio::time::timeout(pause, mac_host.accept()),
+                tokio::time::timeout(pause, windows_host.accept())
+            );
+            assert!(mac_retry.is_err(), "inactive Mac connection retried");
+            assert!(
+                windows_retry.is_err(),
+                "inactive Windows connection retried"
+            );
+            clients.record_scene(1);
+            let (
+                (_mac_peer, mut mac_reader, mac_writer),
+                (_windows_peer, mut windows_reader, windows_writer),
+            ) = tokio::join!(incoming(&mac_host), incoming(&windows_host));
+            tokio::join!(connected(&mac_store, true), connected(&windows_store, true));
+            read_name(&mac, &mut mac_reader, &mac_writer, "Mac recovered").await;
+            read_name(
+                &windows,
+                &mut windows_reader,
+                &windows_writer,
+                "Windows recovered",
+            )
+            .await;
+            clients
+                .remove("windows".into())
+                .unwrap()
+                .shutdown()
+                .await
+                .unwrap();
+            read_name(&mac, &mut mac_reader, &mac_writer, "Mac still connected").await;
+            assert!(clients.session("windows".into()).is_none());
+            clients.shutdown().await.unwrap();
+            mac_host.close().await;
+            windows_host.close().await;
+        })
+        .await
+        .expect("multi-Host connections or foreground recovery stalled");
+    }
+
+    #[tokio::test]
+    async fn a_failed_host_save_does_not_block_other_hosts_or_their_queued_work() {
         tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            let clients = clients();
             let old_storage = Arc::new(Storage::default());
-            let old = open(old_storage.clone());
+            let old = clients.open("mac".into(), old_storage.clone(), old_storage.clone());
             old.dispatch(edit("saved old Host work")).unwrap();
             old.clone().flush().await.unwrap();
             old.dispatch(edit("unsaved old Host edit")).unwrap();
             old_storage.fail_save.store(true, Ordering::SeqCst);
+            assert!(old.clone().flush().await.is_err());
 
             let storage = Arc::new(Storage::default());
-            let next = ClientSession::open(
-                storage.clone(),
-                storage.clone(),
-                Some(old),
-                false,
-                client_build(0),
-                "Fixture device".into(),
-            );
+            let next = clients.open("windows".into(), storage.clone(), storage.clone());
             let queued = next.dispatch(edit("new Host work")).unwrap();
             next.clone().ready().await.unwrap();
-            assert_eq!(
-                next.persistence_error().as_deref(),
-                Some("エラーが発生しました。\ndisk unavailable")
-            );
             queued.wait().await.unwrap();
-            next.clone().flush().await.unwrap();
+            assert!(clients.flush().await.is_err());
+            assert!(old.persistence_error().is_some());
             assert!(next.persistence_error().is_none());
             assert_eq!(text(&storage.bytes.lock().unwrap()), "new Host work");
             assert_eq!(
                 text(&old_storage.bytes.lock().unwrap()),
                 "saved old Host work"
             );
-            next.shutdown().await.unwrap();
+            old_storage.fail_save.store(false, Ordering::SeqCst);
+            clients.flush().await.unwrap();
+            assert!(old.persistence_error().is_none());
+            assert_eq!(
+                text(&old_storage.bytes.lock().unwrap()),
+                "unsaved old Host edit"
+            );
+            clients.shutdown().await.unwrap();
         })
         .await
-        .expect("an old Host save failure blocked switching Hosts");
+        .expect("one Host's failed save blocked another Host");
     }
 
     #[tokio::test]
@@ -632,22 +748,29 @@ mod tests {
      {
         tokio::time::timeout(std::time::Duration::from_secs(3), async {
             let current_storage = Arc::new(Storage::default());
-            let current = open(current_storage.clone());
+            let clients = clients();
+            let current = clients.open(
+                "mac".into(),
+                current_storage.clone(),
+                current_storage.clone(),
+            );
             current.clone().ready().await.unwrap();
             current.dispatch(edit("unsaved current Host")).unwrap();
             let gate = Arc::new(Gate::default());
             let _release = scopeguard::guard(gate.clone(), |gate| gate.release());
             *current_storage.write_gate.lock().unwrap() = Some(gate.clone());
             let storage = Arc::new(Storage::default());
-            let pairing = tokio::spawn(ClientSession::pair(
-                storage.clone(),
-                storage.clone(),
-                Some(current.clone()),
-                invalid_invitation(),
-                false,
-                client_build(0),
-                "Fixture device".into(),
-            ));
+            let pairing_clients = clients.clone();
+            let pairing_storage = storage.clone();
+            let pairing = tokio::spawn(async move {
+                pairing_clients
+                    .pair(
+                        pairing_storage.clone(),
+                        pairing_storage,
+                        invalid_invitation(),
+                    )
+                    .await
+            });
             gate.entered.notified().await;
             assert_eq!(storage.loads.load(Ordering::SeqCst), 0);
             gate.release();
@@ -859,53 +982,127 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn switching_hosts_waits_for_the_final_save_even_if_the_old_native_waiter_disappears() {
+    async fn switching_hosts_reuses_sessions_and_never_waits_for_another_hosts_io() {
         tokio::time::timeout(std::time::Duration::from_secs(3), async {
-            let old_storage = Arc::new(Storage::default());
-            let old = open(old_storage.clone());
-            old.clone().ready().await.unwrap();
-            old.dispatch(edit("preserve old Host")).unwrap();
-            old.dispatch(Intent::SetPreferredEditor {
-                editor: agent_protocol::editors::EditorId::Zed,
-            })
-            .unwrap();
+            let clients = clients();
+            let mac_storage = Arc::new(Storage::default());
+            let mac = clients.open("mac".into(), mac_storage.clone(), mac_storage.clone());
+            mac.clone().ready().await.unwrap();
             let gate = Arc::new(Gate::default());
             let _release = scopeguard::guard(gate.clone(), |gate| gate.release());
-            *old_storage.write_gate.lock().unwrap() = Some(gate.clone());
-            let next_storage = Arc::new(Storage::default());
-            let next = ClientSession::open(
-                next_storage.clone(),
-                next_storage.clone(),
-                Some(old.clone()),
-                true,
-                client_build(0),
-                "Fixture device".into(),
-            );
+            *mac_storage.write_gate.lock().unwrap() = Some(gate.clone());
+            mac.dispatch(edit("Mac draft")).unwrap();
+            let saving = tokio::spawn(mac.clone().flush());
             gate.entered.notified().await;
-            let opening = tokio::spawn(next.clone().ready());
-            opening.abort();
-            let _ = opening.await;
-            assert!(old.dispatch(edit("obsolete input")).is_err());
-            assert_eq!(next_storage.loads.load(Ordering::SeqCst), 0);
-            drop(old);
-            let receipt = next.dispatch(edit("new Host")).unwrap();
+            let windows_storage = Arc::new(Storage::default());
+            let windows = clients.open(
+                "windows".into(),
+                windows_storage.clone(),
+                windows_storage.clone(),
+            );
+            windows.dispatch(edit("Windows draft")).unwrap();
+            windows.clone().flush().await.unwrap();
+            for _ in 0..3 {
+                assert!(Arc::ptr_eq(
+                    &mac,
+                    &clients.open("mac".into(), mac_storage.clone(), mac_storage.clone())
+                ));
+                assert!(Arc::ptr_eq(
+                    &windows,
+                    &clients.open(
+                        "windows".into(),
+                        windows_storage.clone(),
+                        windows_storage.clone()
+                    )
+                ));
+            }
+            mac.dispatch(edit("Mac keeps working")).unwrap();
+            assert_eq!(
+                mac.snapshot().drafts[&"draft".into()].text,
+                "Mac keeps working"
+            );
+            assert_eq!(
+                windows.snapshot().drafts[&"draft".into()].text,
+                "Windows draft"
+            );
+            assert_eq!(mac_storage.loads.load(Ordering::SeqCst), 1);
+            assert_eq!(windows_storage.loads.load(Ordering::SeqCst), 1);
             gate.release();
-            next.clone().flush().await.unwrap();
-            receipt.wait().await.unwrap();
-            assert!(next.snapshot().recent_chats);
+            saving.await.unwrap().unwrap();
+            let removed = clients.remove("windows".into()).unwrap();
+            assert!(clients.session("windows".into()).is_none());
+            assert!(removed.dispatch(edit("removed Host")).is_err());
+            removed.shutdown().await.unwrap();
+            mac.dispatch(edit("Mac survives removal")).unwrap();
+            clients.shutdown().await.unwrap();
             assert_eq!(
-                next.snapshot().preferred_editor,
-                Some(agent_protocol::editors::EditorId::Zed)
+                text(&mac_storage.bytes.lock().unwrap()),
+                "Mac survives removal"
             );
             assert_eq!(
-                text(&old_storage.bytes.lock().unwrap()),
-                "preserve old Host"
+                text(&windows_storage.bytes.lock().unwrap()),
+                "Windows draft"
             );
-            assert_eq!(text(&next_storage.bytes.lock().unwrap()), "new Host");
-            next.shutdown().await.unwrap();
         })
         .await
-        .expect("session lifecycle stalled");
+        .expect("switching Hosts waited for an unrelated save or lost a session");
+    }
+
+    #[tokio::test]
+    async fn repairing_one_host_orders_its_final_save_without_retiring_another_host() {
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            for fail_final_save in [false, true] {
+                let clients = clients();
+                let storage = Arc::new(Storage::default());
+                let old = clients.open("windows".into(), storage.clone(), storage.clone());
+                old.clone().ready().await.unwrap();
+                old.dispatch(edit("old Windows work")).unwrap();
+                let mac_storage = Arc::new(Storage::default());
+                let mac = clients.open("mac".into(), mac_storage.clone(), mac_storage.clone());
+                mac.clone().ready().await.unwrap();
+                let paired = open(storage.clone());
+                paired
+                    .install(
+                        AgentStore::offline(Vec::new(), None, "test-revision".into())
+                            .await
+                            .unwrap(),
+                        false,
+                    )
+                    .unwrap();
+                paired.dispatch(edit("paired Windows work")).unwrap();
+                let gate = Arc::new(Gate::default());
+                let _release = scopeguard::guard(gate.clone(), |gate| gate.release());
+                *storage.write_gate.lock().unwrap() = Some(gate.clone());
+                storage.fail_save.store(fail_final_save, Ordering::SeqCst);
+                clients.adopt("windows".into(), paired.clone());
+                gate.entered.notified().await;
+                assert!(old.dispatch(edit("retired Windows work")).is_err());
+                let cancelled = tokio::spawn(paired.clone().ready());
+                cancelled.abort();
+                let _ = cancelled.await;
+                mac.dispatch(edit("Mac keeps working during re-pairing"))
+                    .unwrap();
+                mac.clone().flush().await.unwrap();
+                gate.release();
+                paired.clone().ready().await.unwrap();
+                assert_eq!(paired.persistence_error().is_some(), fail_final_save);
+                storage.fail_save.store(false, Ordering::SeqCst);
+                paired.clone().flush().await.unwrap();
+                assert!(paired.persistence_error().is_none());
+                assert_eq!(text(&storage.bytes.lock().unwrap()), "paired Windows work");
+                assert!(Arc::ptr_eq(
+                    &paired,
+                    &clients.session("windows".into()).unwrap()
+                ));
+                assert_eq!(
+                    text(&mac_storage.bytes.lock().unwrap()),
+                    "Mac keeps working during re-pairing"
+                );
+                clients.shutdown().await.unwrap();
+            }
+        })
+        .await
+        .expect("re-pairing lost the final save or blocked another Host");
     }
 
     #[tokio::test]
@@ -947,17 +1144,10 @@ mod tests {
             let storage = Arc::new(Storage::default());
             *storage.bytes.lock().unwrap() = b"saved work must remain".to_vec();
             assert!(
-                ClientSession::pair(
-                    storage.clone(),
-                    storage.clone(),
-                    None,
-                    invalid_invitation(),
-                    false,
-                    client_build(0),
-                    "Fixture device".into()
-                )
-                .await
-                .is_err()
+                clients()
+                    .pair(storage.clone(), storage.clone(), invalid_invitation())
+                    .await
+                    .is_err()
             );
             assert_eq!(*storage.bytes.lock().unwrap(), b"saved work must remain");
             assert!(storage.writes.lock().unwrap().is_empty());
