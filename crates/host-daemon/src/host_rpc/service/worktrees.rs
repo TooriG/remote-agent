@@ -498,10 +498,9 @@ pub(super) mod tests {
                 previous.id = Some(SessionRef::new(ProviderKind::Claude, "past".into()).unwrap());
                 let mut row = Conversation::new(&previous).unwrap();
                 row.id = SessionRef::new(ProviderKind::Claude, "bex-task:managed".into()).unwrap();
-                row.seal(0).unwrap();
                 row.bindings.push(Binding {
                     session: native.clone(),
-                    seen: 0,
+                    covered: None,
                 });
                 row.activate(native.clone(), 0);
                 let public = row.id.clone();

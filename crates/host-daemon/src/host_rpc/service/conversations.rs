@@ -4,27 +4,29 @@ use agent_protocol::{
     handoff,
     session::{HistoryPage, SessionRef},
 };
-
 use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
 #[cfg(test)]
 pub(super) mod tests;
 
-// Browsing and excerpts may report missing providers. AI handoffs and imports
-// must transfer complete source history rather than silently dropping context.
+// Browsing and excerpts may report missing providers. An import must establish
+// complete source history before the Host can hand that transcript to an AI.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum HistoryUse {
     Read,
     Excerpt,
-    Handoff,
     /// A transcript copies messages and generated images in full.
     Import,
 }
 
-impl HistoryUse {
-    fn complete(self) -> bool {
-        matches!(self, Self::Handoff | Self::Import)
-    }
+fn readable_history(state: Option<&agent_protocol::session::HistoryReadState>) -> bool {
+    state.is_none_or(|state| {
+        matches!(
+            state.kind,
+            agent_protocol::session::HistoryReadKind::Complete
+                | agent_protocol::session::HistoryReadKind::Partial
+        )
+    })
 }
 
 impl HostRpcService {
@@ -34,6 +36,13 @@ impl HostRpcService {
     ) -> Result<agent_protocol::handoff::Page, Failure> {
         let history = if let Some(row) = self.inner.conversations.get(&params.session)? {
             self.conversation_history(&row, HistoryUse::Excerpt).await?
+        } else if let Some(response) = self
+            .inner
+            .transcripts
+            .history(&params.session)
+            .map_err(transcripts::storage_failure)?
+        {
+            response
         } else {
             self.native_history(&params.session, HistoryUse::Excerpt)
                 .await?
@@ -62,7 +71,7 @@ impl HostRpcService {
     ) -> Result<ThreadResponse, Failure> {
         use crate::host_rpc::conversations::Segment;
         let (native, turn) = row.source(turn_id)?;
-        if !row.segments.iter().any(|segment| segment.session == native) {
+        if !row.sources().any(|source| *source == native) {
             return Err(Failure::new(
                 "invalid_turn",
                 "The fork source is outside this conversation.",
@@ -75,67 +84,99 @@ impl HostRpcService {
                 "The source provider cannot fork this response.",
             ));
         }
-        let history = self.native_history(&native, HistoryUse::Read).await?;
-        let boundary = history
-            .thread
-            .turns
-            .as_deref()
-            .unwrap_or_default()
+        let history = if let Some(history) = self
+            .inner
+            .transcripts
+            .history(&row.id)
+            .map_err(transcripts::storage_failure)?
+        {
+            history
+        } else {
+            // A native import can fork an earlier readable range without
+            // depending on providers used only after that response.
+            let history = self.native_history(&native, HistoryUse::Read).await?;
+            let end = history
+                .thread
+                .turns
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .rposition(|candidate| candidate.id.as_str() == turn)
+                .ok_or_else(|| Failure::new("invalid_turn", "Fork source turn is unavailable."))?
+                + 1;
+            let index = row
+                .segments
+                .iter()
+                .rposition(|segment| {
+                    segment.session == native
+                        && segment.from < end
+                        && segment.end.is_none_or(|boundary| end <= boundary)
+                })
+                .ok_or_else(|| {
+                    Failure::new(
+                        "invalid_turn",
+                        "Fork source is outside the saved history range.",
+                    )
+                })?;
+            let mut prefix = row.clone();
+            prefix.active = native.clone();
+            prefix.segments.truncate(index + 1);
+            prefix.segments[index].end = Some(end);
+            self.conversation_history(&prefix, HistoryUse::Import)
+                .await?
+        };
+        let turns = history.thread.turns.as_deref().unwrap_or_default();
+        let boundary = turns
             .iter()
-            .rposition(|candidate| candidate.id.as_str() == turn)
+            .rposition(|candidate| candidate.id == *turn_id)
             .ok_or_else(|| Failure::new("invalid_turn", "Fork source turn is unavailable."))?
             + 1;
-        let segment_index = row
-            .segments
-            .iter()
-            .rposition(|segment| {
-                segment.session == native
-                    && segment.from < boundary
-                    && segment.end.is_none_or(|end| boundary <= end)
-            })
-            .ok_or_else(|| {
-                Failure::new(
-                    "invalid_turn",
-                    "Fork source is outside the saved history range.",
-                )
-            })?;
         let response = self
             .start_thread(agent.as_ref(), |browser| {
                 agent.fork(&native.id, &turn, browser)
             })
             .await?;
         let mut fork = Conversation::new(&response.thread)?;
-        let target = fork.id.clone();
-        let count = self
-            .native_history(&target, HistoryUse::Read)
-            .await?
-            .thread
-            .turns
-            .as_ref()
-            .map_or(0, Vec::len);
-        fork.segments = row.segments[..=segment_index].to_vec();
-        fork.segments.last_mut().expect("fork source segment").end = Some(boundary);
-        fork.bindings[0].seen = fork.segments.len();
-        fork.handoffs = row
-            .handoffs
-            .iter()
-            .filter(|handoff| {
-                fork.segments
-                    .iter()
-                    .any(|segment| segment.session == handoff.session)
-            })
-            .cloned()
-            .map(|mut handoff| {
-                handoff.receipt = None;
-                handoff.submission = agent_protocol::session::SubmissionDelivery::Rejected;
-                handoff
-            })
-            .collect();
+        fork.segments.clear();
+        let mut inherited = history;
+        inherited.thread.turns.as_mut().unwrap().truncate(boundary);
+        inherited.model = response.model;
+        inherited.effort = response.effort;
+        inherited.service_tier = response.service_tier;
+        // Historical references keep their source runtime even when the fork's
+        // first owned binding has a different native identity.
+        for turn in inherited.thread.turns.iter_mut().flatten() {
+            let turn = Arc::make_mut(turn);
+            let (source, id) = row.source(&turn.id)?;
+            if !fork
+                .segments
+                .iter()
+                .any(|segment| segment.session == source)
+            {
+                fork.segments.push(Segment {
+                    session: source.clone(),
+                    from: 0,
+                    end: Some(0),
+                });
+            }
+            turn.id = id.into();
+            for item in turn.items.iter_mut().flatten() {
+                let item = Arc::make_mut(item);
+                let (_, id) = row.source(&item.id)?;
+                item.id = id.into();
+            }
+            *turn = fork.turn(&source, turn.clone());
+        }
         fork.segments.push(Segment {
-            session: target,
-            from: count,
+            session: fork.active.clone(),
+            from: 0,
             end: None,
         });
+        fork.cover(boundary);
+        self.inner
+            .transcripts
+            .import(&fork.id, inherited)
+            .map_err(transcripts::storage_failure)?;
         self.inner.conversations.save(fork.clone())?;
         Self::conversation_page(
             self.conversation_history(&fork, HistoryUse::Read).await?,
@@ -155,18 +196,7 @@ impl HostRpcService {
     ) -> Result<ThreadResponse, Failure> {
         let agent = self.inner.providers.get(session.provider)?;
         let mut response = agent.open(&session.id, 100, true).await?;
-        if response
-            .thread
-            .history_read_state
-            .as_ref()
-            .is_some_and(|state| {
-                matches!(
-                    state.kind,
-                    agent_protocol::session::HistoryReadKind::Incomplete
-                        | agent_protocol::session::HistoryReadKind::Unavailable
-                )
-            })
-        {
+        if !readable_history(response.thread.history_read_state.as_ref()) {
             return Err(Failure::new(
                 "incomplete_history",
                 "The provider could not read the source history completely.",
@@ -281,6 +311,29 @@ impl HostRpcService {
         if row.startup.is_some() {
             return self.preparation_history(row).await;
         }
+        if (usage != HistoryUse::Import
+            || row.bindings.iter().any(|binding| binding.covered.is_some()))
+            && let Some(response) = self
+                .inner
+                .transcripts
+                .history(&row.id)
+                .map_err(transcripts::storage_failure)?
+        {
+            let options = self
+                .inner
+                .model_selections
+                .resolve(&row.active, None, None, None)?;
+            return self.describe_conversation_history(row, response, options);
+        }
+        // Coverage is committed only after a complete import. Never rebuild a
+        // Host-owned conversation from an older native import range if storage
+        // disappears; that would silently discard turns accepted by the Host.
+        if row.bindings.iter().any(|binding| binding.covered.is_some()) {
+            return Err(Failure::new(
+                "incomplete_history",
+                "The Host conversation transcript is unavailable.",
+            ));
+        }
         let mut sources = BTreeMap::new();
         for segment in &row.segments {
             let Entry::Vacant(slot) = sources.entry(segment.session.clone()) else {
@@ -288,7 +341,7 @@ impl HostRpcService {
             };
             let agent = match self.inner.providers.get(segment.session.provider) {
                 Ok(agent) => agent,
-                Err(error) if !usage.complete() => {
+                Err(error) if usage != HistoryUse::Import => {
                     slot.insert(Err(error));
                     continue;
                 }
@@ -300,7 +353,7 @@ impl HostRpcService {
                     agent.availability().is_ok() && agent.capabilities().fork,
                 )),
                 Err(error)
-                    if !usage.complete()
+                    if usage != HistoryUse::Import
                         && error.code == "provider_unavailable"
                         && agent.availability().is_err() =>
                 {
@@ -310,22 +363,13 @@ impl HostRpcService {
             };
             slot.insert(history);
         }
-        // Saved conversations include their active source. Coverage-limited
-        // handoffs may omit it; those callers consume only the assembled turns.
+        // Imports can read a prefix ending on an earlier provider.
         let mut response = sources
             .get(&row.active)
             .and_then(|source| source.as_ref().ok())
             .map(|(source, _)| source.clone())
             .unwrap_or_default();
         let mut turns = Vec::new();
-        let options = self.inner.model_selections.resolve(
-            &row.active,
-            response.model.as_ref(),
-            response.effort.as_deref(),
-            response.service_tier.as_deref(),
-        )?;
-        (response.model, response.effort, response.service_tier) =
-            (options.model, options.effort, options.service_tier);
         for segment in &row.segments {
             let Some(Ok((source, supports_fork))) = sources.get(&segment.session) else {
                 continue;
@@ -344,12 +388,7 @@ impl HostRpcService {
                 Arc::new(turn)
             }));
         }
-        row.describe(&mut response.thread);
         response.thread.turns = Some(turns);
-        response.thread.capabilities = Some(self.conversation_capabilities(
-            row.active.provider,
-            row.segments.iter().map(|segment| segment.session.provider),
-        ));
         let issues: BTreeSet<_> = sources
             .iter()
             .filter_map(|(session, source)| {
@@ -378,8 +417,98 @@ impl HostRpcService {
                         .collect(),
                 ));
         }
+        let options = self.inner.model_selections.resolve(
+            &row.active,
+            response.model.as_ref(),
+            response.effort.as_deref(),
+            response.service_tier.as_deref(),
+        )?;
+        self.describe_conversation_history(row, response, options)
+    }
+
+    pub(super) fn describe_conversation_history(
+        &self,
+        row: &Conversation,
+        mut response: ThreadResponse,
+        options: super::model_selections::SelectedOptions,
+    ) -> Result<ThreadResponse, Failure> {
+        (response.model, response.effort, response.service_tier) = (
+            options.model.or(response.model),
+            options.effort.or(response.effort),
+            options.service_tier.or(response.service_tier),
+        );
+        row.describe(&mut response.thread);
+        if self
+            .inner
+            .providers
+            .get(row.active.provider)
+            .and_then(|agent| agent.availability())
+            .is_err()
+        {
+            response.thread.status = agent_protocol::models::SessionStatus::Unavailable;
+        }
+        for turn in response.thread.turns.iter_mut().flatten() {
+            if turn.provider.is_none() {
+                let turn = Arc::make_mut(turn);
+                let source = row.source(&turn.id)?.0;
+                turn.provider = Some(source.provider);
+                turn.supports_fork = Some(
+                    self.inner
+                        .providers
+                        .get(source.provider)
+                        .is_ok_and(|agent| {
+                            agent.availability().is_ok() && agent.capabilities().fork
+                        }),
+                );
+            }
+        }
+        response.thread.capabilities = Some(self.conversation_capabilities(
+            row.active.provider,
+            row.sources().map(|source| source.provider),
+        ));
         response.thread.history_cursor = None;
         response.thread.history_has_more = Some(false);
+        Ok(response)
+    }
+
+    /// Like T3 Code's ContextHandoffService, portable context comes from the
+    /// application's committed conversation, independently of provider storage.
+    async fn handoff_history(&self, root: &SessionRef) -> Result<ThreadResponse, Failure> {
+        let response = if let Some(response) = self
+            .inner
+            .transcripts
+            .history(root)
+            .map_err(transcripts::storage_failure)?
+        {
+            response
+        } else {
+            if let Some(importing) = self.import_transcript(root.clone(), false) {
+                importing.await?;
+            }
+            self.inner
+                .transcripts
+                .history(root)
+                .map_err(transcripts::storage_failure)?
+                .ok_or_else(|| {
+                    Failure::new(
+                        "incomplete_history",
+                        "The complete Host conversation transcript is unavailable.",
+                    )
+                })?
+        };
+        if response
+            .thread
+            .turns
+            .iter()
+            .flatten()
+            .flat_map(|turn| turn.items.iter().flatten())
+            .any(|item| item.is_deferred() && transcripts::content(item.body()))
+        {
+            return Err(Failure::new(
+                "incomplete_history",
+                "Historical message content could not be read completely.",
+            ));
+        }
         Ok(response)
     }
 
@@ -437,7 +566,14 @@ impl HostRpcService {
         let active = previous
             .as_ref()
             .map_or_else(|| root.clone(), |row| row.active.clone());
-        let source = self.native_history(&active, HistoryUse::Read).await?;
+        let source_agent = self.inner.providers.get(active.provider)?;
+        let source = source_agent.state(&active.id).await?.response;
+        if source.thread.id.as_ref() != Some(&active) {
+            return Err(Failure::new(
+                "invalid_session",
+                "native session identity changed",
+            ));
+        }
         let selected = input
             .model
             .as_ref()
@@ -453,7 +589,7 @@ impl HostRpcService {
                 Arc::make_mut(turn).id = row.identity(&active, &turn.id).into();
             }
         }
-        let observed = self.inner.router.overlay_execution(root, observed);
+        let mut observed = self.inner.router.overlay_execution(root, observed);
         let unfinished = observed
             .submissions
             .iter()
@@ -468,13 +604,33 @@ impl HostRpcService {
                     .as_ref()
                     .is_some_and(|row| row.source(turn).is_ok_and(|(source, _)| source != active)),
                 _ => true,
-            });
-        if worktree_active(
-            observed.status,
-            observed.turns.as_deref().unwrap_or_default(),
-            !observed.requests.is_empty(),
-            unfinished,
-        ) {
+            })
+            .collect::<Vec<_>>();
+        // Runtime metadata need not replay finished turns. Host-recorded
+        // completions still prove that retained receipts no longer own work.
+        for delivery in &unfinished {
+            let agent_protocol::session::SubmissionDelivery::Accepted { turn_id: Some(id) } =
+                delivery
+            else {
+                continue;
+            };
+            if let Some(turn) = self
+                .inner
+                .transcripts
+                .turn(root, id)
+                .map_err(transcripts::storage_failure)?
+            {
+                observed.turns.get_or_insert_default().push(Arc::new(turn));
+            }
+        }
+        if source.thread.status == agent_protocol::models::SessionStatus::Running
+            || worktree_active(
+                observed.status,
+                observed.turns.as_deref().unwrap_or_default(),
+                !observed.requests.is_empty(),
+                unfinished.into_iter(),
+            )
+        {
             return Err(Failure::new(
                 "provider_switch_busy",
                 "現在の応答・確認・送信が確定してからAIを切り替えてください。",
@@ -489,7 +645,6 @@ impl HostRpcService {
                 "サブエージェントのAIは切り替えられません。親の会話から指示してください。",
             ));
         }
-        let source_agent = self.inner.providers.get(active.provider)?;
         let deadline = tokio::time::Instant::now() + SESSION_LIST_TIMEOUT;
         let children = session_pages(
             source_agent.as_ref(),
@@ -524,10 +679,23 @@ impl HostRpcService {
         }
         let agent = self.inner.providers.get(selected.provider)?;
         agent.validate_create()?;
-        let mut row = previous.unwrap_or(Conversation::new(&source.thread)?);
-        row.seal(source.thread.turns.as_ref().map_or(0, Vec::len))?;
+        let mut row = match previous {
+            Some(row) => row,
+            None => {
+                let row = Conversation::new(&source.thread)?;
+                self.inner.conversations.save(row.clone())?;
+                row
+            }
+        };
+        let history = self.handoff_history(root).await?;
+        let turns = history.thread.turns.as_deref().unwrap_or_default();
+        let count = turns.len();
+        row.cover(count);
         let mut target = row
             .binding(selected.provider)
+            // Reuse requires known coverage in this transcript. A fresh
+            // runtime can receive all history without duplicating native context.
+            .filter(|binding| binding.covered.is_some())
             .map(|binding| binding.session.clone());
         // An ambiguous history injection must never be replayed into the same
         // native session. Recover the logical history into a fresh binding.
@@ -538,31 +706,18 @@ impl HostRpcService {
         }) {
             target = None;
         }
-        let mut target_history = if let Some(target) = &target {
-            match self.native_history(target, HistoryUse::Read).await {
-                Ok(history) => history,
-                Err(_) => self.create_handoff_target(&row, selected).await?,
-            }
-        } else {
-            self.create_handoff_target(&row, selected).await?
-        };
+        let target_history = self
+            .handoff_target(&row.cwd, root, selected, target.as_ref())
+            .await?;
         let target = target_history
             .thread
             .id
             .clone()
             .ok_or_else(|| Failure::new("invalid_session", "target session ID is missing"))?;
-        if target_history.thread.status == agent_protocol::models::SessionStatus::Running
-            || !target_history.thread.requests.is_empty()
-        {
-            return Err(Failure::new(
-                "provider_switch_busy",
-                "切り替え先のAIがまだ実行中です。完了を待ってください。",
-            ));
-        }
         if !row.bindings.iter().any(|binding| binding.session == target) {
             row.bindings.push(Binding {
                 session: target.clone(),
-                seen: 0,
+                covered: Some(0),
             });
         }
         // Persist the native binding before attempting delivery; events and
@@ -573,27 +728,23 @@ impl HostRpcService {
             .iter()
             .find(|binding| binding.session == target)
             .expect("binding saved")
-            .seen;
-        let mut history_row = row.clone();
-        history_row.segments = row.segments.iter().skip(last_seen).cloned().collect();
-        let history = self
-            .conversation_history(&history_row, HistoryUse::Handoff)
-            .await?;
-        let messages = history
-            .thread
-            .turns
+            .covered
+            .unwrap_or(0);
+        let messages = turns
+            .get(last_seen..)
+            .ok_or_else(|| {
+                Failure::new(
+                    "history_changed",
+                    "Host transcript coverage is outside the saved conversation.",
+                )
+            })?
             .iter()
-            .flatten()
             .flat_map(|turn| handoff::Message::from_turn(turn))
             .collect::<Vec<_>>();
         let coverage = format!(
-            "Provider context handoff. Conversation: {root}. Covered history segments: {last_seen}..{}.\nRead omitted history on this Host with the BEX history command shown below.\n{}",
-            row.segments.len(),
+            "Provider context handoff. Conversation: {root}. Covered history turns: {last_seen}..{count}.\nRead omitted history on this Host with the BEX history command shown below.\n{}",
             self.history_command(root)
         );
-        // Bound only the history we add. Display history includes material the
-        // provider has already compacted; it cannot measure live model context.
-        // The native provider owns token accounting and automatic compaction.
         let context = handoff::select(&messages, &coverage, handoff::DEFAULT_BUDGET)
             .map_err(|error| Failure::new("handoff_context_limit", error))?;
         source_agent
@@ -616,17 +767,9 @@ impl HostRpcService {
             .map_err(Failure::before_submission)?;
         if injected {
             row.handoffs[index].delivery = Delivery::Injected;
-            let seen = row.segments.len();
-            row.bindings
-                .iter_mut()
-                .find(|binding| binding.session == target)
-                .expect("target binding")
-                .seen = seen;
             self.inner.conversations.save(row.clone())?;
-            target_history = self.native_history(&target, HistoryUse::Read).await?;
         }
-        let from = target_history.thread.turns.as_ref().map_or(0, Vec::len);
-        row.activate(target.clone(), from);
+        row.activate(target.clone(), count);
         self.inner.conversations.save(row.clone())?;
         let mut native_input = input.clone();
         native_input.thread_id = target.clone();
@@ -657,16 +800,16 @@ impl HostRpcService {
             }
             Err(error) => {
                 // A refused prompt has no tool effects. Keep delivered native
-                // history, restore the source binding, and retain its open range.
+                // history and restore the source binding.
                 if error.delivery == agent_protocol::error::Delivery::NotSent {
-                    row.restore_source(active.clone());
+                    row.active = active.clone();
                     if !injected {
                         row.handoffs[index].delivery = Delivery::Ready;
                         row.bindings
                             .iter_mut()
                             .find(|binding| binding.session == target)
                             .expect("target binding")
-                            .seen = last_seen;
+                            .covered = Some(last_seen);
                     }
                     row.handoffs[index].submission =
                         agent_protocol::session::SubmissionDelivery::Rejected;
@@ -681,20 +824,43 @@ impl HostRpcService {
         }
     }
 
-    async fn create_handoff_target(
+    async fn handoff_target(
         &self,
-        row: &Conversation,
+        cwd: &str,
+        root: &SessionRef,
         model: &agent_protocol::models::ModelRef,
+        previous: Option<&SessionRef>,
     ) -> Result<ThreadResponse, Failure> {
-        // Reuse the exact workspace; creating a second worktree would sever the
-        // relationship between the transferred conversation and its files.
-        self.inner
-            .providers
-            .get(model.provider)?
+        let agent = self.inner.providers.get(model.provider)?;
+        if let Some(previous) = previous
+            && let Ok(state) = agent.state(&previous.id).await
+        {
+            let response = state.response;
+            if response.thread.id.as_ref() != Some(previous) {
+                return Err(Failure::new(
+                    "invalid_session",
+                    "native session identity changed",
+                ));
+            }
+            if response.thread.status == agent_protocol::models::SessionStatus::Running
+                || !response.thread.requests.is_empty()
+            {
+                return Err(Failure::new(
+                    "provider_switch_busy",
+                    "切り替え先のAIがまだ実行中です。完了を待ってください。",
+                ));
+            }
+            if readable_history(response.thread.history_read_state.as_ref()) {
+                return Ok(response);
+            }
+        }
+        // An unreadable continuation receives all Host history in a fresh
+        // runtime. Keep the exact workspace and the same public conversation.
+        agent
             .create(
-                &row.cwd,
+                cwd,
                 Some(&model.id),
-                self.browser_config(&row.id.to_string())?,
+                self.browser_config(&root.to_string())?,
             )
             .await
     }

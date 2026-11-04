@@ -22,7 +22,7 @@ impl HostRpcService {
             items
         } else if let Some(row) = self.inner.conversations.get(&params.session)? {
             let (source, turn) = row.source(&params.turn_id)?;
-            if !row.segments.iter().any(|segment| segment.session == source) {
+            if !row.sources().any(|session| *session == source) {
                 return Err(Failure::new(
                     "invalid_history_reference",
                     "The turn is outside this conversation.",
@@ -298,19 +298,7 @@ impl HostRpcService {
                 })
             })
         {
-            let result = self.switch_provider(target, input).await;
-            if result.is_err()
-                && let Some(mut current) = self.inner.conversations.get(target)?
-                && current.active == *active
-                && current
-                    .segments
-                    .last()
-                    .is_some_and(|segment| segment.end.is_some())
-            {
-                current.restore_source(active.clone());
-                self.inner.conversations.save(current)?;
-            }
-            return result;
+            return self.switch_provider(target, input).await;
         }
         let mut native = input.clone();
         native.thread_id = active.clone();
@@ -612,9 +600,7 @@ impl HostRpcService {
         } else if let Some(row) = self.inner.conversations.get(target)? {
             let (source, turn) = row.source(&params.turn_id)?;
             let (item_source, item) = row.source(&params.item_id)?;
-            if source != item_source
-                || !row.segments.iter().any(|segment| segment.session == source)
-            {
+            if source != item_source || !row.sources().any(|session| *session == source) {
                 return Err(Failure::new(
                     "invalid_history_reference",
                     "The item is outside this conversation.",
