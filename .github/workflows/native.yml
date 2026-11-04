@@ -663,6 +663,8 @@ jobs:
     # would otherwise push the repository over its cache budget and evict live caches.
     needs: [android, mac, iphone, iphone-tests, wsl-runtime, windows]
     if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
+    # Cache maintenance must not invalidate successful client acceptance.
+    continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
