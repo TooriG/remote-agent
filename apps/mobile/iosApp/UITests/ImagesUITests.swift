@@ -28,7 +28,7 @@ extension LaunchUITests {
         showGeneratedImage("saved")
         captureScreen(app, named: "Generated image outside collapsed work")
         verifyWorkspaceFileLink(app, index: 0, filename: "fixture image.png")
-        verifyWorkspaceFileLink(app, index: 1, filename: "hello.txt")
+        verifyWorkspaceFileLink(app, index: 1, filename: "hello.txt", text: "日本語のファイル")
         app.terminate(); _ = try connectedSimulatorApp()
         XCTAssertTrue(app.descendants(matching: .any)["tasks.list"].waitForExistence(timeout: 30))
         let number = try XCTUnwrap(finalID.split(separator: "-").dropLast().last)
@@ -40,7 +40,7 @@ extension LaunchUITests {
         verifyWorkspaceFileLink(app, index: 0, filename: "fixture image.png")
     }
 
-    private func verifyWorkspaceFileLink(_ app: XCUIApplication, index: Int, filename: String) {
+    private func verifyWorkspaceFileLink(_ app: XCUIApplication, index: Int, filename: String, text: String? = nil) {
         // File chips replace the authored link captions. The fixture lists the image, text file, then website.
         let link = prefixedElement(app, prefix: "item.fixture-final-").links.element(boundBy: index)
         for _ in 0 ..< 12 {
@@ -52,8 +52,13 @@ extension LaunchUITests {
         XCTAssertTrue(link.waitForExistence(timeout: 10)); link.tap()
         let done = app.buttons["file.close"]
         XCTAssertTrue(done.waitForExistence(timeout: 15), "The Host file did not open in the file editor")
-        XCTAssertTrue(app.textViews["file.editor"].exists)
+        let editor = app.textViews["file.editor"]
+        XCTAssertTrue(editor.exists)
         XCTAssertTrue(app.navigationBars[filename].exists)
+        if let text {
+            let loaded = expectation(for: NSPredicate(format: "value CONTAINS %@", text), evaluatedWith: editor)
+            wait(for: [loaded], timeout: 10)
+        }
         captureScreen(app, named: filename)
         done.tap()
         wait(for: [expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: done)], timeout: 5)

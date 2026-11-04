@@ -262,11 +262,17 @@ extension LaunchUITests {
 
     private func openDiffAfterRetry(_ app: XCUIApplication) throws {
         try simulatorFixture("worktree/review/unavailable")
+        var unavailable = true
+        addTeardownBlock {
+            if unavailable {
+                try self.simulatorFixture("worktree/review/restore")
+            }
+        }
         app.buttons["task.diff"].tap()
         let retry = app.buttons["files.diff.retry"]
         XCTAssertTrue(retry.waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["file.tracked.txt"].exists)
-        try simulatorFixture("worktree/review/restore")
+        try simulatorFixture("worktree/review/restore"); unavailable = false
         retry.tap()
     }
 }
