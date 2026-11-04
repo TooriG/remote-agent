@@ -1,11 +1,8 @@
 //! T3's session metadata cache: 60 seconds, 1,024 paths and 64 paths per RPC.
 //! Requests are automatic, so network paths and oversized input never reach the Host.
 use crate::state::Snapshot;
-use agent_protocol::file_metadata::{FilePathMetadata, ReadFileMetadata};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-};
+use agent_protocol::file_metadata::{FilePathMetadata, valid_metadata_path};
+use std::{collections::BTreeMap, sync::Arc};
 
 const CAPACITY: usize = 1_024;
 const TTL_MS: u64 = 60_000;
@@ -32,26 +29,51 @@ impl FileMetadataCache {
     pub(crate) fn ensure(&mut self, paths: Vec<String>, now_ms: u64) -> (u64, Vec<String>) {
         self.sequence += 1;
         let generation = self.sequence;
-        let paths = paths
-            .into_iter()
-            .filter(|path| {
-                !agent_protocol::paths::is_network_host_path(path)
-                    && ReadFileMetadata {
-                        paths: vec![path.clone()],
-                    }
-                    .validate()
-                    .is_ok()
-            })
-            .collect::<BTreeSet<_>>();
+        let mut paths = paths;
+        paths.retain(|path| {
+            !agent_protocol::paths::is_network_host_path(path) && valid_metadata_path(path)
+        });
+        paths.sort_unstable();
+        paths.dedup();
+        paths.truncate(CAPACITY);
         let mut requests = Vec::new();
+        if paths.is_empty() {
+            return (generation, requests);
+        }
         let entries = Arc::make_mut(&mut self.entries);
-        for path in paths.into_iter().take(CAPACITY) {
+        let mut evictions = 0;
+        let mut eviction_order = Vec::new().into_iter();
+        for path in paths {
             if !entries.contains_key(&path) && entries.len() == CAPACITY {
-                let oldest = entries
-                    .iter()
-                    .min_by_key(|(_, entry)| entry.used)
-                    .map(|(path, _)| path.clone())
-                    .unwrap();
+                let oldest = if evictions < 16 {
+                    evictions += 1;
+                    entries
+                        .iter()
+                        .min_by_key(|(_, entry)| entry.used)
+                        .map(|(path, _)| path.clone())
+                        .unwrap()
+                } else {
+                    // Small misses need no index. Bulk replacement sorts once,
+                    // retaining the path tie-break of the map's original scan.
+                    if eviction_order.len() == 0 {
+                        let mut order = entries
+                            .iter()
+                            .map(|(path, entry)| (entry.used, path.clone()))
+                            .collect::<Vec<_>>();
+                        order.sort_unstable();
+                        eviction_order = order.into_iter();
+                    }
+                    // At most CAPACITY distinct paths are touched in a batch,
+                    // so an untouched older entry always remains for eviction.
+                    eviction_order
+                        .find(|(_, path)| {
+                            entries
+                                .get(path)
+                                .is_some_and(|entry| entry.used < generation)
+                        })
+                        .map(|(_, path)| path)
+                        .unwrap()
+                };
                 entries.remove(&oldest);
             }
             let entry = entries.entry(path.clone()).or_default();
@@ -78,27 +100,35 @@ impl FileMetadataCache {
             .filter(|values| values.len() == paths.len())
             .into_iter()
             .flatten();
-        let entries = Arc::make_mut(&mut self.entries);
         for path in paths {
-            let value = values.next().unwrap_or_else(|| FilePathMetadata {
+            let value = values.next();
+            if !self
+                .entries
+                .get(&path)
+                .is_some_and(|entry| entry.pending == Some(generation))
+            {
+                continue;
+            }
+            let entry = Arc::make_mut(&mut self.entries).get_mut(&path).unwrap();
+            entry.value = Some(value.unwrap_or_else(|| FilePathMetadata {
                 path: path.clone(),
                 metadata: None,
-            });
-            if let Some(entry) = entries.get_mut(&path)
-                && entry.pending == Some(generation)
-            {
-                entry.value = Some(value);
-                entry.checked_at = now_ms;
-                entry.pending = None;
-            }
+            }));
+            entry.checked_at = now_ms;
+            entry.pending = None;
         }
     }
 
     pub(crate) fn invalidate(&mut self, path: &str) {
-        Arc::make_mut(&mut self.entries).remove(path);
+        if self.entries.contains_key(path) {
+            Arc::make_mut(&mut self.entries).remove(path);
+        }
     }
 
     pub(crate) fn disconnected(&mut self) {
+        if self.entries.values().all(|entry| entry.pending.is_none()) {
+            return;
+        }
         for entry in Arc::make_mut(&mut self.entries).values_mut() {
             entry.pending = None;
         }
@@ -175,5 +205,104 @@ mod tests {
         assert_eq!(requests.len(), CAPACITY);
         assert!(requests.iter().all(|path| path.starts_with("/file/")));
         assert_eq!(cache.entries.len(), CAPACITY);
+    }
+
+    #[test]
+    fn bulk_eviction_matches_ordered_individual_requests_and_preserves_recent_entries() {
+        let mut bulk = FileMetadataCache::default();
+        let (generation, paths) = bulk.ensure(
+            (0..CAPACITY).map(|i| format!("/cached/{i:04}")).collect(),
+            0,
+        );
+        let values = paths.iter().map(|path| value(path)).collect();
+        bulk.received(generation, paths, Some(values), 0);
+        assert!(
+            bulk.ensure((0..128).map(|i| format!("/cached/{i:04}")).collect(), 1)
+                .1
+                .is_empty()
+        );
+        let mut individual = bulk.clone();
+        let ordered = (0..512)
+            .map(|i| format!("/ahead/{i:04}"))
+            .chain((0..512).map(|i| format!("/cached/{:04}", i * 2)))
+            .collect::<Vec<_>>();
+        let expected_requests = ordered
+            .iter()
+            .flat_map(|path| individual.ensure(vec![path.clone()], 2).1)
+            .collect::<Vec<_>>();
+        let (_, requests) = bulk.ensure(
+            ordered
+                .into_iter()
+                .rev()
+                .flat_map(|path| [path.clone(), path])
+                .collect(),
+            2,
+        );
+        assert_eq!(requests, expected_requests);
+        assert!(bulk.entries.keys().eq(individual.entries.keys()));
+        for path in bulk.entries.keys() {
+            assert_eq!(bulk.get(path), individual.get(path));
+        }
+        assert_eq!(bulk.get("/cached/0000"), Some(&value("/cached/0000")));
+        assert_eq!(bulk.entries.len(), CAPACITY);
+    }
+
+    #[test]
+    fn replacing_the_entire_cache_keeps_batch_ties_in_path_order() {
+        let mut cache = FileMetadataCache::default();
+        cache.ensure((0..CAPACITY).map(|i| format!("/old/{i:04}")).collect(), 0);
+        let paths = (0..CAPACITY)
+            .map(|i| format!("/new/{i:04}"))
+            .collect::<Vec<_>>();
+        let (_, requests) = cache.ensure(paths.clone(), 1);
+        assert_eq!(requests, paths);
+        assert!(cache.entries.keys().eq(paths.iter()));
+        cache.ensure(vec!["/last".into()], 2);
+        assert!(!cache.entries.contains_key("/new/0000"));
+        assert!(cache.entries.contains_key("/new/0001"));
+        assert!(cache.entries.contains_key("/last"));
+        assert_eq!(cache.entries.len(), CAPACITY);
+    }
+
+    #[test]
+    fn rejected_paths_leave_shared_metadata_untouched() {
+        let mut cache = FileMetadataCache::default();
+        cache.ensure(vec!["/cached".into()], 0);
+        let previous = cache.clone();
+        assert!(
+            cache
+                .ensure(vec!["relative".into(), "//server/share".into()], 1)
+                .1
+                .is_empty()
+        );
+        assert!(Arc::ptr_eq(&cache.entries, &previous.entries));
+    }
+
+    #[test]
+    fn stale_or_empty_updates_keep_shared_entries_and_match_values_by_request_position() {
+        let mut cache = FileMetadataCache::default();
+        let (generation, paths) = cache.ensure(vec!["/a".into(), "/b".into()], 0);
+        cache.invalidate("/a");
+        let previous = cache.clone();
+        cache.received(generation + 1, paths.clone(), None, 1);
+        cache.invalidate("/missing");
+        assert!(Arc::ptr_eq(&cache.entries, &previous.entries));
+        cache.received(
+            generation,
+            paths,
+            Some(vec![value("resolved a"), value("resolved b")]),
+            2,
+        );
+        assert!(cache.get("/a").is_none());
+        assert_eq!(cache.get("/b"), Some(&value("resolved b")));
+        assert!(previous.get("/b").is_none());
+        let previous = cache.clone();
+        cache.disconnected();
+        assert!(Arc::ptr_eq(&cache.entries, &previous.entries));
+        let (next, paths) = cache.ensure(vec!["/b".into()], TTL_MS + 2);
+        cache.disconnected();
+        cache.received(next, paths, Some(vec![value("stale")]), TTL_MS + 3);
+        assert_eq!(cache.get("/b"), Some(&value("resolved b")));
+        assert_eq!(cache.ensure(vec!["/b".into()], TTL_MS + 4).1, ["/b"]);
     }
 }

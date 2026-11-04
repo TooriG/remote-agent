@@ -31,20 +31,20 @@ pub struct FileMetadataEntries {
 pub struct ReadFileMetadata {
     pub paths: Vec<String>,
 }
+
+pub fn valid_metadata_path(path: &str) -> bool {
+    path.encode_utf16().nth(512).is_none()
+        && (crate::paths::is_absolute_host_path(path)
+            || (!path.contains('\0')
+                && (path == "~" || path.starts_with("~/") || path.starts_with("~\\"))))
+}
+
 impl ReadFileMetadata {
     pub fn validate(&self) -> Result<(), &'static str> {
         if !(1..=METADATA_BATCH_LIMIT).contains(&self.paths.len()) {
             return Err("metadata requires between 1 and 64 paths");
         }
-        if self.paths.iter().any(|path| {
-            path.trim().is_empty()
-                || path.contains('\0')
-                || path.encode_utf16().count() > 512
-                || !(crate::paths::is_absolute_host_path(path)
-                    || path == "~"
-                    || path.starts_with("~/")
-                    || path.starts_with("~\\"))
-        }) {
+        if self.paths.iter().any(|path| !valid_metadata_path(path)) {
             return Err("metadata requires absolute Host paths of at most 512 UTF-16 units");
         }
         Ok(())
@@ -65,7 +65,7 @@ mod tests {
                 .is_ok()
             );
         }
-        for path in ["", "a", "/a\0b"] {
+        for path in ["", " ", "a", "/a\0b", "~/a\0b", "~\\a\0b"] {
             assert!(
                 ReadFileMetadata {
                     paths: vec![path.into()]
@@ -97,5 +97,14 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn absolute_metadata_paths_enforce_utf16_length_and_reject_nuls(body in ".{0,520}") {
+            let path = format!("/{body}");
+            let expected = !body.contains('\0') && body.encode_utf16().count() < 512;
+            proptest::prop_assert_eq!(valid_metadata_path(&path), expected);
+        }
     }
 }
