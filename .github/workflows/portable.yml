@@ -1,0 +1,82 @@
+name: Portable checks
+# Fast verification of every main revision and pull request: repository
+# contracts and the Linux Rust build and tests. Native clients acceptance runs
+# separately (native.yml) on the newest main revision instead of every push.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  # Every main revision keeps its own result; superseded pull request pushes stop.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+env:
+  CARGO_BUILD_JOBS: 4
+  CARGO_INCREMENTAL: 0
+  # Contract tests mostly await isolated processes and network replies.
+  NEXTEST_TEST_THREADS: 16
+jobs:
+  repository:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
+      - name: Check workflows and vendored runtimes
+        run: |
+          nix develop .#repository --command bash -euo pipefail <<'CHECKS'
+          actionlint
+          pwsh -NoLogo -NoProfile -NonInteractive -File tools/windows-fxc/update.test.ps1
+          node --test lp/download.test.cjs scripts/*.test.mjs
+          node --test crates/agent-protocol/src/browser_input.test.cjs crates/host-daemon/src/browser/password-fill.test.cjs apps/desktop/src/browser/native/snapshot.test.cjs
+          npm --prefix crates/host-daemon/src/visualize ci --ignore-scripts --no-audit
+          npm --prefix crates/host-daemon/src/visualize run vendor
+          git diff --exit-code -- crates/host-daemon/src/visualize
+          npm --prefix crates/host-daemon/src/providers/claude/sdk ci --ignore-scripts --no-audit --no-fund
+          npm --prefix crates/host-daemon/src/providers/claude/sdk run vendor
+          npm --prefix crates/host-daemon/src/providers/claude/sdk test
+          git diff --exit-code -- crates/host-daemon/src/providers/claude/sdk/bridge.bundle.mjs crates/host-daemon/src/providers/claude/sdk/SDK-LICENSE.md
+          just complexity
+          CHECKS
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Free space for pinned Nix tools and Cargo builds
+        run: |
+          # Project tools come from Nix; Actions' own Node runtimes live outside this tool cache.
+          bash scripts/free-runner-space.sh /usr/local/lib/android /usr/share/dotnet \
+            /usr/share/swift /usr/local/.ghcup /opt/hostedtoolcache
+      - name: Prepare isolated Zsh startup for terminal tests
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/agent-zsh"
+          : > "$RUNNER_TEMP/agent-zsh/.zshrc"
+          echo "ZDOTDIR=$RUNNER_TEMP/agent-zsh" >> "$GITHUB_ENV"
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          cmd-format: nix develop .#native --command {0}
+          key: ${{ hashFiles('flake.lock') }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      - name: Build desktop, Host and CLI
+        run: nix develop .#native --command cargo build --locked --features agent-core/bindings -p codex-app-server -p agent-process -p agent-desktop -p host-daemon -p agent-cli
+      - name: Install the SDK runtime beside the Host
+        run: nix develop .#native --command node scripts/install-claude-sdk.mjs target/debug
+      - name: Core contracts and isolated iroh Host
+        run: nix develop .#native --command cargo nextest run --locked --no-fail-fast --features agent-core/bindings -p codex-app-server -p agent-process -p agent-protocol -p agent-transport -p agent-local-host -p agent-core -p agent-cli -p host-daemon -p host-fixture -p xtask
+      - name: Documentation examples
+        run: nix develop .#native --command cargo test --locked --doc --features agent-core/bindings -p codex-app-server -p agent-process -p agent-protocol -p agent-transport -p agent-local-host -p agent-core -p agent-cli -p host-daemon -p host-fixture -p xtask
+      - name: Real-time passive approval soak
+        if: github.event_name == 'workflow_dispatch'
+        run: nix develop .#native --command cargo test --locked -p host-fixture --test iroh_host passive_client_can_approve_after_five_minutes_without_reconnecting -- --ignored

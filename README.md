@@ -242,8 +242,11 @@ scripts/dev-env.sh just quality [apple|rust|kotlin|swift]  # source checks and c
 
 Claude contracts run with `scripts/dev-env.sh cargo test --locked -p host-fixture --test claude`. Build the companion supervisor first (see above). The tests use a deterministic external CLI boundary with real Store, iroh, Host routing, native transcript files and isolated Git/filesystem state. An anonymized transcript from Claude Code 2.1.266 also exercises native format compatibility. The opt-in `live_claude_subscription_completes_and_resumes_through_store_and_host` test uses the real authenticated CLI; set `AGENT_LIVE_CLAUDE_PROGRAM` to its absolute path and run that test with `-- --ignored --exact` to verify subscription inference, resumption across a Host restart, interruption and successful input after interruption.
 
-Development and integration policy is in [AGENTS.md](AGENTS.md). Native clients
-CI owns platform acceptance; its triggers, job selection, caches and runners are
+Development and integration policy is in [AGENTS.md](AGENTS.md). Portable
+checks ([portable.yml](.github/workflows/portable.yml)) verify repository
+contracts and the Linux build for every main revision and pull request. Native
+clients CI owns platform acceptance for the newest main revision; its triggers,
+job selection, caches, runners and the nightly flaky-test measurement are
 configured in [native.yml](.github/workflows/native.yml).
 
 Development and test builds keep filename/line-number backtraces without full variable debug information. Use `CARGO_PROFILE_DEV_DEBUG=full` when a debugger needs variables. Quality checks disable Rust incremental compilation; Kache manages incremental state for normal local builds.
