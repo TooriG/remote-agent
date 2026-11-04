@@ -367,16 +367,35 @@ impl FileTrees {
 }
 
 impl Tree {
-    fn request(&mut self, path: String, refresh: bool) {
-        if self.running.contains(&path) || self.queue.contains(&path) {
-            return;
+    fn request(&mut self, paths: impl IntoIterator<Item = String>, refresh: bool) {
+        let paths = paths.into_iter();
+        // Bulk expansion and refresh share one index; single-folder actions
+        // retain the allocation-free queue lookup.
+        let mut queued = (paths.size_hint().0 >= 64).then(|| {
+            self.queue
+                .iter()
+                .cloned()
+                .collect::<std::collections::HashSet<_>>()
+        });
+        for path in paths {
+            if !refresh
+                && self.directories.get(&path).is_some_and(|directory| {
+                    directory.entries.is_some() && directory.error.is_none()
+                })
+            {
+                continue;
+            }
+            if self.running.contains(&path)
+                || queued.as_mut().map_or_else(
+                    || self.queue.contains(&path),
+                    |queued| !queued.insert(path.clone()),
+                )
+            {
+                continue;
+            }
+            self.directories.entry(path.clone()).or_default().error = None;
+            self.queue.push_back(path);
         }
-        let directory = self.directories.entry(path.clone()).or_default();
-        if !refresh && directory.entries.is_some() && directory.error.is_none() {
-            return;
-        }
-        directory.error = None;
-        self.queue.push_back(path);
     }
     fn start(&mut self, key: &FileTreeKey) -> Vec<TreeWork> {
         let mut work = Vec::new();
@@ -402,7 +421,7 @@ impl Tree {
                 self.context_menu = None;
                 self.surface = surface;
                 self.locale = locale;
-                self.request(String::new(), true);
+                self.request([String::new()], true);
                 let visible = self
                     .expanded
                     .iter()
@@ -415,9 +434,7 @@ impl Tree {
                             .map(|(path, _)| path.clone()),
                     )
                     .collect::<BTreeSet<_>>();
-                for path in visible {
-                    self.request(path, true);
-                }
+                self.request(visible, true);
                 self.retain_discoveries();
             }
             FileTreeAction::Keyboard {
@@ -477,7 +494,7 @@ impl Tree {
                 self.load_ancestors(&path, true);
                 if directory {
                     self.expanded.insert(path.clone());
-                    self.request(path.clone(), false);
+                    self.request([path.clone()], false);
                 }
                 self.focused = Some(path.clone());
                 self.selected = vec![path];
@@ -500,9 +517,7 @@ impl Tree {
                 self.running.clear();
                 self.queue.clear();
                 let paths = self.directories.keys().cloned().collect::<Vec<_>>();
-                for path in paths {
-                    self.request(path, true);
-                }
+                self.request(paths, true);
                 if !self.query.trim().is_empty() {
                     return Some(self.restart_search());
                 }
@@ -594,7 +609,7 @@ impl Tree {
         if !self.expanded.remove(&path) {
             self.load_ancestors(&path, true);
             self.expanded.insert(path.clone());
-            self.request(path, true);
+            self.request([path], true);
         } else {
             self.expand_all = false;
             self.bound(true);
@@ -615,7 +630,7 @@ impl Tree {
             if expand {
                 self.expanded.insert(parent.clone());
             }
-            self.request(parent.clone(), false);
+            self.request([parent.clone()], false);
         }
     }
     fn select(&mut self, path: String, additive: bool, range: bool) {
@@ -675,11 +690,9 @@ impl Tree {
             .filter(|entry| entry.kind == EntryKind::Directory && !entry.ignored)
             .map(|entry| entry.path.to_owned())
             .collect::<Vec<_>>();
-        for path in paths {
-            self.expanded.insert(path.clone());
-            if self.query.trim().is_empty() {
-                self.request(path, false);
-            }
+        self.expanded.extend(paths.iter().cloned());
+        if self.query.trim().is_empty() {
+            self.request(paths, false);
         }
     }
     fn load_expanded(&mut self) {
@@ -697,9 +710,7 @@ impl Tree {
             })
             .map(|entry| entry.path.to_owned())
             .collect::<Vec<_>>();
-        for path in missing {
-            self.request(path, false);
-        }
+        self.request(missing, false);
     }
     fn all_expanded(&self) -> bool {
         let entries = self.entries();
@@ -749,8 +760,7 @@ impl Tree {
             .chain(&self.selected)
         {
             let mut path = path.as_str();
-            while !path.is_empty() {
-                owned.insert(path.to_owned());
+            while !path.is_empty() && owned.insert(path) {
                 path = path.rsplit_once('/').map_or("", |(parent, _)| parent);
             }
         }

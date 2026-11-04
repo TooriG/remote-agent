@@ -209,6 +209,12 @@ impl Tree {
                 .map(String::as_str)
                 .collect::<HashSet<_>>()
         });
+        let queued = (self.queue.len() >= 64).then(|| {
+            self.queue
+                .iter()
+                .map(String::as_str)
+                .collect::<HashSet<_>>()
+        });
         let visible = searching.then_some(visible);
         let mut pending =
             ordered_children(children.remove("").unwrap_or_default(), collator, visible)
@@ -244,7 +250,10 @@ impl Tree {
                 ),
                 ignored: entry.ignored,
                 loading: self.running.contains(entry.path)
-                    || self.queue.iter().any(|path| path == entry.path),
+                    || queued.as_ref().map_or_else(
+                        || self.queue.iter().any(|path| path == entry.path),
+                        |queued| queued.contains(entry.path),
+                    ),
             });
             if entry.kind == EntryKind::Directory
                 && (expanded || searching)

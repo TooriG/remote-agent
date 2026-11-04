@@ -299,6 +299,90 @@ fn lazy_tree_sorts_directories_first_and_desktop_flattens_single_directory_chain
 }
 
 #[test]
+fn directory_batches_deduplicate_in_order_and_retry_only_missing_or_failed_entries() {
+    for count in [0, 1, 31, 32, 63, 64, 128] {
+        let mut tree = Tree::default();
+        tree.request(["running".into()], false);
+        let started = tree.start(&key(ROOT));
+        assert_eq!(started.len(), 1);
+        tree.request(["queued".into()], false);
+        for (path, error) in [("loaded", None), ("failed", Some("old failure".into()))] {
+            tree.directories.insert(
+                path.into(),
+                Directory {
+                    entries: Some(Arc::default()),
+                    error,
+                    used: 7,
+                },
+            );
+        }
+        let names = (0..count).map(|i| format!("new{i}")).collect::<Vec<_>>();
+        let requested = ["running", "queued", "loaded", "failed"]
+            .into_iter()
+            .map(str::to_owned)
+            .chain(names.iter().flat_map(|path| [path.clone(), path.clone()]))
+            .collect::<Vec<_>>();
+        tree.request(requested.clone(), false);
+        let mut expected = ["queued", "failed"]
+            .into_iter()
+            .map(str::to_owned)
+            .chain(names)
+            .collect::<Vec<_>>();
+        assert!(tree.queue.iter().eq(&expected));
+        assert!(tree.directories["failed"].error.is_none());
+        assert_eq!(tree.directories["loaded"].used, 7);
+        tree.request(requested.clone(), false);
+        assert!(tree.queue.iter().eq(&expected));
+        tree.request(requested, true);
+        expected.push("loaded".into());
+        assert!(tree.queue.iter().eq(&expected));
+        assert_eq!(tree.start(&key(ROOT)).len(), expected.len().min(3));
+        assert!(tree.running.len() <= 4);
+    }
+}
+
+#[test]
+fn large_expansion_keeps_queued_and_running_rows_loading_and_starts_work_in_order() {
+    let mut trees = FileTrees::default();
+    let root = open(&mut trees, ROOT, FileTreeSurface::Desktop);
+    let mut entries = (0..130)
+        .map(|i| entry(&format!("dir{i:03}"), EntryKind::Directory))
+        .collect::<Vec<_>>();
+    entries.push(entry("file.txt", EntryKind::File));
+    complete(&mut trees, &root[0], entries);
+    let running = action(&mut trees, FileTreeAction::ToggleAll);
+    assert_eq!(running.len(), 4);
+    for row in trees.view(&key(ROOT)).rows {
+        assert_eq!(row.loading, row.kind == EntryKind::Directory);
+    }
+    let next = complete(&mut trees, &running[0], Vec::new());
+    assert!(matches!(next.as_slice(), [TreeWork::Directory { path, .. }] if path == "dir004"));
+    let view = trees.view(&key(ROOT));
+    assert!(
+        !view
+            .rows
+            .iter()
+            .find(|row| row.path == "dir000")
+            .unwrap()
+            .loading
+    );
+    assert!(
+        view.rows
+            .iter()
+            .find(|row| row.path == "dir004")
+            .unwrap()
+            .loading
+    );
+    assert!(
+        view.rows
+            .iter()
+            .find(|row| row.path == "dir129")
+            .unwrap()
+            .loading
+    );
+}
+
+#[test]
 fn expand_all_limits_concurrency_and_skips_ignored_folders_until_manual_open() {
     let mut trees = FileTrees::default();
     let root = open(&mut trees, ROOT, FileTreeSurface::Mobile);
@@ -1106,6 +1190,48 @@ fn desktop_keyboard_moves_focus_without_opening_and_matches_pierre_selection_com
     let reopened = open(&mut trees, ROOT, FileTreeSurface::Desktop);
     assert!(!reopened.is_empty());
     assert!(trees.view(&key(ROOT)).open_file.is_none());
+}
+
+#[test]
+fn evicted_expanded_children_reload_after_reopening_their_parent() {
+    let mut trees = FileTrees::default();
+    let root = open(&mut trees, ROOT, FileTreeSurface::Mobile);
+    complete(
+        &mut trees,
+        &root[0],
+        vec![entry("parent", EntryKind::Directory)],
+    );
+    // Mobile retains expansion after evicting a collapsed folder's cache.
+    trees
+        .tree_mut(&key(ROOT))
+        .unwrap()
+        .expanded
+        .insert("parent/child".into());
+    let parent = toggle(&mut trees, "parent");
+    let child = complete(
+        &mut trees,
+        &parent[0],
+        vec![
+            TreeEntry {
+                ignored: true,
+                ..entry("parent/child", EntryKind::Directory)
+            },
+            entry("parent/closed", EntryKind::Directory),
+            entry("parent/file.txt", EntryKind::File),
+        ],
+    );
+    assert!(
+        matches!(child.as_slice(), [TreeWork::Directory { path, .. }] if path == "parent/child")
+    );
+    assert!(
+        complete(
+            &mut trees,
+            &child[0],
+            vec![entry("parent/child/found.txt", EntryKind::File)]
+        )
+        .is_empty()
+    );
+    assert!(paths(&trees).contains(&"parent/child/found.txt".into()));
 }
 
 #[test]
