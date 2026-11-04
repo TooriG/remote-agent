@@ -18,41 +18,54 @@ async fn action(
     action: BrowserAction,
 ) -> Result<BrowserFrame, String> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    let current = loop {
+    loop {
+        let current = loop {
+            let result = browser
+                .request(&BrowserRequest {
+                    thread_id: thread.clone(),
+                    tab_id: String::new(),
+                    image_id: String::new(),
+                    generation: 0,
+                    renderer_id: String::new(),
+                    action: BrowserAction::Read,
+                })
+                .await;
+            match result {
+                Ok(frame) => break frame,
+                Err(error)
+                    if error.contains("ページが変わりました")
+                        && tokio::time::Instant::now() < deadline =>
+                {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                Err(error) => return Err(error),
+            }
+        };
+        if matches!(action, BrowserAction::Read) {
+            return Ok(current);
+        }
         let result = browser
             .request(&BrowserRequest {
                 thread_id: thread.clone(),
-                tab_id: String::new(),
+                tab_id: current.tab_id,
                 image_id: String::new(),
-                generation: 0,
+                generation: current.generation,
                 renderer_id: String::new(),
-                action: BrowserAction::Read,
+                action: action.clone(),
             })
             .await;
         match result {
-            Ok(frame) => break frame,
+            // This exact guard rejects the request before dispatch. An error
+            // during capture may follow an applied action and must not replay it.
             Err(error)
-                if error.contains("ページが変わりました")
+                if error == "表示中のページが変わりました。最新の画面で再試行してください。"
                     && tokio::time::Instant::now() < deadline =>
             {
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
-            Err(error) => return Err(error),
+            result => return result,
         }
-    };
-    if matches!(action, BrowserAction::Read) {
-        return Ok(current);
     }
-    browser
-        .request(&BrowserRequest {
-            thread_id: thread.clone(),
-            tab_id: current.tab_id,
-            image_id: String::new(),
-            generation: current.generation,
-            renderer_id: String::new(),
-            action,
-        })
-        .await
 }
 async fn evaluate(browser: &Browser, thread: &SessionRef, expression: &str) -> Value {
     let frame = action(
