@@ -356,9 +356,16 @@ impl Operation for LoadVisualization {
 #[cfg(test)]
 mod read_result_tests {
     use super::*;
-    #[test]
-    fn truncated_reads_keep_old_drafts_but_reject_edits_and_save_requests() {
-        let path = "/large.txt".to_owned();
+    #[rstest::rstest]
+    #[case("/target.txt", true, true)]
+    #[case("/target.txt", false, false)]
+    #[case("/other.txt", true, false)]
+    fn reads_preserve_drafts_and_only_the_truncated_target_rejects_changes(
+        #[case] loaded_path: &str,
+        #[case] truncated: bool,
+        #[case] read_only: bool,
+    ) {
+        let path = "/target.txt".to_owned();
         let original = Arc::new(FileDraft {
             revision: "original".into(),
             text: "unsaved work".into(),
@@ -366,30 +373,41 @@ mod read_result_tests {
         let mut snapshot = Snapshot::default();
         Arc::make_mut(&mut snapshot.file_drafts).insert(path.clone(), original.clone());
         ReadFile {
-            path: path.clone(),
+            path: loaded_path.into(),
             discard_draft: false,
         }
         .apply(
             &mut snapshot,
             FileContent {
-                path: path.clone(),
+                path: loaded_path.into(),
                 revision: "prefix".into(),
                 text: "preview".into(),
-                size: 2_000_000,
-                truncated: true,
+                size: if truncated { 2_000_000 } else { 7 },
+                truncated,
             },
         );
-        assert!(SaveFile { path: path.clone() }.capture(&snapshot).is_err());
+        assert_eq!(snapshot.file_drafts[&path], original);
+        assert_eq!(
+            SaveFile { path: path.clone() }.capture(&snapshot).is_err(),
+            read_only
+        );
         let (edited, effects) = crate::state::reduce(
             &snapshot,
             Event::Intent(Intent::SetFileDraft {
                 path: path.clone(),
-                text: "replace with prefix".into(),
+                text: "new user text".into(),
             }),
         );
         assert!(effects.is_empty());
-        assert!(edited.error.is_some());
-        assert_eq!(edited.file_drafts[&path], original);
+        assert_eq!(edited.error.is_some(), read_only);
+        assert_eq!(
+            edited.file_drafts[&path].text,
+            if read_only {
+                "unsaved work"
+            } else {
+                "new user text"
+            }
+        );
         assert_eq!(edited.workspace.file.as_ref().unwrap().text, "preview");
     }
     #[test]
