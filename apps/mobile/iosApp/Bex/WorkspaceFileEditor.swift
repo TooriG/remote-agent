@@ -6,7 +6,7 @@ private struct WorkspaceFilePreview: View {
     let entry: FileEntry
     let download: @MainActor (String) async throws -> URL
     @Environment(\.dismiss) private var dismiss
-    @State private var url: URL?
+    @State private var file: DownloadedFile?
     @State private var error: String?
     @State private var attempt = UUID()
 
@@ -15,7 +15,7 @@ private struct WorkspaceFilePreview: View {
             VStack(alignment: .leading) {
                 Text(entry.path).font(.caption).foregroundStyle(.secondary)
                     .textSelection(.enabled).padding(.horizontal)
-                if let url {
+                if let url = file?.url {
                     if QLPreviewController.canPreview(url as NSURL) {
                         ConversationFilePreview(url: url)
                             .accessibilityIdentifier("file.preview")
@@ -36,7 +36,7 @@ private struct WorkspaceFilePreview: View {
                     Button("閉じる") { dismiss() }.accessibilityIdentifier("file.close")
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    if let url {
+                    if let url = file?.url {
                         ShareLink(item: url) { Image(systemName: "square.and.arrow.up") }
                             .accessibilityLabel("保存・共有")
                     }
@@ -44,25 +44,31 @@ private struct WorkspaceFilePreview: View {
             }
         }
         .task(id: attempt) {
+            guard file == nil else { return }
             error = nil
             do {
-                let downloaded = try await download(entry.path)
-                if Task.isCancelled {
-                    try? FileManager.default.removeItem(at: downloaded.deletingLastPathComponent())
-                    return
-                }
-                url = downloaded
+                let downloaded = try await DownloadedFile(url: download(entry.path))
+                guard !Task.isCancelled else { return }
+                file = downloaded
             } catch {
                 if !Task.isCancelled {
                     self.error = error.localizedDescription
                 }
             }
         }
-        .onDisappear {
-            if let url {
-                self.url = nil
-                try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
-            }
+    }
+
+    /// Quick Look can temporarily cover the sheet with a full-screen player.
+    /// Keep its file for the lifetime of the preview, independent of appearance.
+    private final class DownloadedFile {
+        let url: URL
+
+        init(url: URL) {
+            self.url = url
+        }
+
+        deinit {
+            try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
         }
     }
 }
