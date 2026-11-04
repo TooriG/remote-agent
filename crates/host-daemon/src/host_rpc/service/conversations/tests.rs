@@ -280,14 +280,14 @@ impl Agent for NativeAgent {
             return Err(Failure::new("unreadable", "the native body is not UTF-8"));
         }
         let records = self.records.lock().unwrap();
-        let item = records
+        let turns = records
             .get(&params.thread_id.id)
             .and_then(|record| record.thread.turns.as_ref())
-            .and_then(|turns| turns.iter().rev().find(|turn| turn.id == params.turn_id))
-            .and_then(|turn| turn.items.as_ref())
-            .and_then(|items| items.iter().find(|item| item.id == params.item_id))
-            .cloned()
             .ok_or_else(unsupported)?;
+        let (turn, item) =
+            agent_protocol::session::item_position(turns, &params.turn_id, &params.item_id)
+                .ok_or_else(unsupported)?;
+        let item = turns[turn].items.as_ref().unwrap()[item].clone();
         Ok(op::ItemResponse {
             item: (*item).clone(),
             transfer: None,
@@ -3024,6 +3024,64 @@ async fn unreadable_native_bodies_stay_deferred_without_blocking_their_import() 
     .unwrap_err();
     assert_eq!(error.code, "incomplete_history");
     assert!(claude.inputs.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn recorded_items_with_reused_turn_ids_do_not_need_the_native_provider() {
+    let directory = tempfile::tempdir().unwrap();
+    let directory = dunce::canonicalize(directory.path()).unwrap();
+    let codex = NativeAgent::new(ProviderKind::Codex, directory.join("codex"));
+    let claude = NativeAgent::new(ProviderKind::Claude, directory.join("claude"));
+    let host = service(&directory, &codex, &claude);
+    let client = host.open_session();
+    let target = SessionRef::new(ProviderKind::Codex, "recorded".into()).unwrap();
+    let turns = ["older", "latest"].map(|id| {
+        Arc::new(Turn {
+            id: "repeat".into(),
+            status: TurnStatus::Completed,
+            items: Some(vec![Arc::new(Item::new(
+                id.into(),
+                ItemStatus::Completed,
+                ItemBody::AssistantText {
+                    text: id.into(),
+                    phase: AssistantPhase::Final,
+                },
+            ))]),
+            ..Default::default()
+        })
+    });
+    host.inner
+        .transcripts
+        .import(
+            &target,
+            ThreadResponse {
+                thread: Thread {
+                    id: Some(target.clone()),
+                    turns: Some(turns.into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    for item_id in ["older", "latest"] {
+        let output = call::<op::ItemResponse>(
+            &host,
+            client.id(),
+            Call::ReadItem(op::ReadItem {
+                thread_id: target.clone(),
+                turn_id: "repeat".into(),
+                item_id: item_id.into(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(output.item.id.as_str(), item_id);
+        assert!(
+            matches!(output.item.body(), ItemBody::AssistantText { text, .. } if text == item_id)
+        );
+    }
+    assert!(codex.records.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

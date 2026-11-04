@@ -4,8 +4,8 @@
 //! readers summarize or defer bodies for transfer.
 use agent_protocol::{
     execution::TurnStatus,
-    ids::TurnId,
-    models::{SessionStatus, ThreadResponse, Turn},
+    ids::{ItemId, TurnId},
+    models::{Item, SessionStatus, ThreadResponse, Turn},
     protocol,
     session::SessionRef,
 };
@@ -184,23 +184,32 @@ impl Transcripts {
     /// Replace the stored occurrence of a live turn, or append it. Conversations
     /// that are not imported yet keep these turns for their import.
     /// A turn observed without items keeps the items already stored for it.
-    pub(crate) fn record(&self, conversation: &SessionRef, turn: &Turn) -> Result<(), String> {
+    /// The removed item identifies the occurrence even after its last item is gone.
+    pub(crate) fn record(
+        &self,
+        conversation: &SessionRef,
+        turn: &Turn,
+        removed_item: Option<&ItemId>,
+    ) -> Result<(), String> {
         let key = params![conversation.provider.key(), conversation.id];
         self.write(|transaction| {
-            let latest = transaction
-                .query_row(
-                    "SELECT position, body FROM turns WHERE provider = ?1 AND id = ?2 AND turn_id = ?3
-                     ORDER BY position DESC LIMIT 1",
-                    params![conversation.provider.key(), conversation.id, turn.id.as_str()],
-                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?)),
-                )
-                .optional()
-                .map_err(failure)?;
+            let stored = find_turn(transaction, conversation, &turn.id, false, |stored| {
+                removed_item
+                    .map_or_else(
+                        || stored.shares_items(turn),
+                        |id| stored.items.iter().flatten().any(|item| &item.id == id),
+                    )
+                    .then_some(stored)
+            })?;
+            let stored = match stored {
+                None if removed_item.is_none() => {
+                    find_turn(transaction, conversation, &turn.id, false, |stored| {
+                        stored.matches_occurrence(turn).then_some(stored)
+                    })?
+                }
+                stored => stored,
+            };
             let mut turn = std::borrow::Cow::Borrowed(turn);
-            let stored = latest
-                .map(|(position, body)| Ok::<_, String>((position, decode_turn(&body)?)))
-                .transpose()?
-                .filter(|(_, stored)| stored.matches_occurrence(&turn));
             let position = match stored {
                 Some((position, stored)) => {
                     if turn.items.is_none() {
@@ -227,28 +236,26 @@ impl Transcripts {
         })
     }
 
-    /// Change the latest stored occurrence of a turn, such as with an update
-    /// a provider sent after the turn finished.
+    /// Change the stored occurrence containing the item, or the latest occurrence
+    /// for changes that do not name an item.
     pub(crate) fn update_turn(
         &self,
         conversation: &SessionRef,
         turn_id: &TurnId,
+        item_id: Option<&ItemId>,
         change: impl FnOnce(Turn) -> Option<Turn>,
     ) -> Result<(), String> {
         self.write(|transaction| {
-            let Some((position, body)) = transaction
-                .query_row(
-                    "SELECT position, body FROM turns WHERE provider = ?1 AND id = ?2 AND turn_id = ?3
-                     ORDER BY position DESC LIMIT 1",
-                    params![conversation.provider.key(), conversation.id, turn_id.as_str()],
-                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?)),
-                )
-                .optional()
-                .map_err(failure)?
+            let Some((position, turn)) =
+                find_turn(transaction, conversation, turn_id, false, |turn| {
+                    item_id
+                        .is_none_or(|id| turn.items.iter().flatten().any(|item| &item.id == id))
+                        .then_some(turn)
+                })?
             else {
                 return Ok(());
             };
-            let Some(turn) = change(decode_turn(&body)?) else {
+            let Some(turn) = change(turn) else {
                 return Ok(());
             };
             transaction
@@ -427,22 +434,23 @@ impl Transcripts {
         turn_id: &TurnId,
     ) -> Result<Option<Turn>, String> {
         self.with(|connection| {
-            connection
-                .query_row(
-                    "SELECT body FROM turns JOIN conversations USING (provider, id)
-                     WHERE provider = ?1 AND id = ?2 AND turn_id = ?3 AND metadata IS NOT NULL
-                     ORDER BY position DESC LIMIT 1",
-                    params![
-                        conversation.provider.key(),
-                        conversation.id,
-                        turn_id.as_str()
-                    ],
-                    |row| row.get::<_, Vec<u8>>(0),
-                )
-                .optional()
-                .map_err(failure)?
-                .map(|body| decode_turn(&body))
-                .transpose()
+            find_turn(connection, conversation, turn_id, true, Some)
+                .map(|found| found.map(|(_, turn)| turn))
+        })
+    }
+
+    pub(crate) fn item(
+        &self,
+        conversation: &SessionRef,
+        turn_id: &TurnId,
+        item_id: &ItemId,
+        imported_only: bool,
+    ) -> Result<Option<std::sync::Arc<Item>>, String> {
+        self.with(|connection| {
+            find_turn(connection, conversation, turn_id, imported_only, |turn| {
+                turn.items?.into_iter().find(|item| &item.id == item_id)
+            })
+            .map(|found| found.map(|(_, item)| item))
         })
     }
 
@@ -481,6 +489,37 @@ impl Transcripts {
             advance(transaction, conversation.provider.key(), &conversation.id)
         })
     }
+}
+
+fn find_turn<T>(
+    connection: &Connection,
+    conversation: &SessionRef,
+    turn_id: &TurnId,
+    imported_only: bool,
+    select: impl Fn(Turn) -> Option<T>,
+) -> Result<Option<(i64, T)>, String> {
+    let mut statement = connection
+        .prepare_cached(
+            "SELECT position, body FROM turns JOIN conversations USING (provider, id)
+         WHERE provider = ?1 AND id = ?2 AND turn_id = ?3 AND (?4 = 0 OR metadata IS NOT NULL)
+         ORDER BY position DESC",
+        )
+        .map_err(failure)?;
+    let mut rows = statement
+        .query(params![
+            conversation.provider.key(),
+            conversation.id,
+            turn_id.as_str(),
+            imported_only
+        ])
+        .map_err(failure)?;
+    while let Some(row) = rows.next().map_err(failure)? {
+        let turn = decode_turn(&row.get::<_, Vec<u8>>(1).map_err(failure)?)?;
+        if let Some(selected) = select(turn) {
+            return Ok(Some((row.get(0).map_err(failure)?, selected)));
+        }
+    }
+    Ok(None)
 }
 
 /// Imports enumerate positions, and live writes only replace or append. The
@@ -683,13 +722,33 @@ mod tests {
         let (_root, store) = store();
         let target = conversation();
         store
-            .record(&target, &turn("shared", &["live"], TurnStatus::Completed))
+            .record(
+                &target,
+                &turn("shared", &["live"], TurnStatus::Completed),
+                None,
+            )
             .unwrap();
         store
-            .record(&target, &turn("later", &["after"], TurnStatus::Completed))
+            .record(
+                &target,
+                &turn("later", &["after"], TurnStatus::Completed),
+                None,
+            )
             .unwrap();
         assert!(store.window(&target, None, 10).unwrap().is_none());
         assert!(store.turn(&target, &"later".into()).unwrap().is_none());
+        assert!(
+            store
+                .item(&target, &"later".into(), &"after".into(), true)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .item(&target, &"later".into(), &"after".into(), false)
+                .unwrap()
+                .is_some()
+        );
 
         let mut native = turn("shared", &["live"], TurnStatus::Completed);
         Arc::make_mut(&mut native.items.as_mut().unwrap()[0]).body =
@@ -715,6 +774,7 @@ mod tests {
             .record(
                 &running,
                 &turn("racing", &["start", "end"], TurnStatus::Completed),
+                None,
             )
             .unwrap();
         store
@@ -741,7 +801,7 @@ mod tests {
         store.import(&target, history(vec![])).unwrap();
         assert_eq!(store.window(&target, None, 10).unwrap().unwrap().start, 0);
         store
-            .record(&target, &turn("first", &["a"], TurnStatus::Completed))
+            .record(&target, &turn("first", &["a"], TurnStatus::Completed), None)
             .unwrap();
         let version = store
             .window(&target, None, 10)
@@ -762,14 +822,22 @@ mod tests {
             .unwrap();
         assert!(
             store
-                .record(&target, &turn("rejected", &["b"], TurnStatus::Completed))
+                .record(
+                    &target,
+                    &turn("rejected", &["b"], TurnStatus::Completed),
+                    None
+                )
                 .is_err()
         );
         let unchanged = store.window(&target, None, 10).unwrap().unwrap();
         assert_eq!(texts(&unchanged), ["first/a"]);
         assert_eq!(unchanged.response.thread.transcript_version, version);
         store
-            .record(&target, &turn("second", &["b"], TurnStatus::Completed))
+            .record(
+                &target,
+                &turn("second", &["b"], TurnStatus::Completed),
+                None,
+            )
             .unwrap();
         drop(store);
         let store = Transcripts::open(&root.path().join("state/transcripts.sqlite"));
@@ -778,10 +846,10 @@ mod tests {
         assert_eq!(texts(&latest), ["second/b"]);
         // Replacing an earlier occurrence must not move the next append position.
         store
-            .record(&target, &turn("first", &["a"], TurnStatus::Failed))
+            .record(&target, &turn("first", &["a"], TurnStatus::Failed), None)
             .unwrap();
         store
-            .record(&target, &turn("third", &["c"], TurnStatus::Completed))
+            .record(&target, &turn("third", &["c"], TurnStatus::Completed), None)
             .unwrap();
         let window = store.window(&target, None, 10).unwrap().unwrap();
         assert_eq!(window.start, 0);
@@ -861,17 +929,22 @@ mod tests {
             .unwrap();
         // A reused turn ID with new items is a new occurrence.
         store
-            .record(&target, &turn("repeated", &["new"], TurnStatus::Running))
+            .record(
+                &target,
+                &turn("repeated", &["new"], TurnStatus::Running),
+                None,
+            )
             .unwrap();
         store
             .record(
                 &target,
                 &turn("repeated", &["new", "more"], TurnStatus::Completed),
+                None,
             )
             .unwrap();
         let mut bare = turn("repeated", &[], TurnStatus::Failed);
         bare.items = None;
-        store.record(&target, &bare).unwrap();
+        store.record(&target, &bare, None).unwrap();
         let window = store.window(&target, None, 10).unwrap().unwrap();
         let turns = window.response.thread.turns.as_ref().unwrap();
         assert_eq!(
@@ -887,6 +960,82 @@ mod tests {
                 .status,
             TurnStatus::Failed
         );
+        store
+            .record(
+                &target,
+                &turn("repeated", &["old", "late"], TurnStatus::Completed),
+                None,
+            )
+            .unwrap();
+        let window = store.window(&target, None, 10).unwrap().unwrap();
+        assert_eq!(window.response.thread.turns.as_ref().unwrap().len(), 2);
+        assert_eq!(
+            texts(&window),
+            [
+                "repeated/old",
+                "repeated/late",
+                "repeated/new",
+                "repeated/more"
+            ]
+        );
+        assert_eq!(
+            window.response.thread.turns.as_ref().unwrap()[1].status,
+            TurnStatus::Failed
+        );
+    }
+
+    #[test]
+    fn known_items_identify_older_occurrences_before_empty_later_turns() {
+        let (_root, store) = store();
+        let target = conversation();
+        store
+            .import(
+                &target,
+                history(vec![
+                    turn("repeated", &["old"], TurnStatus::Completed),
+                    turn("repeated", &[], TurnStatus::Completed),
+                ]),
+            )
+            .unwrap();
+        store
+            .record(
+                &target,
+                &turn("repeated", &["old", "late"], TurnStatus::Completed),
+                None,
+            )
+            .unwrap();
+        let window = store.window(&target, None, 10).unwrap().unwrap();
+        assert_eq!(texts(&window), ["repeated/old", "repeated/late"]);
+        let turns = window.response.thread.turns.unwrap();
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].items.as_ref().unwrap().len(), 2);
+        assert!(turns[1].items.as_ref().unwrap().is_empty());
+    }
+
+    #[test]
+    fn removing_an_unrecorded_occurrence_does_not_replace_an_older_one() {
+        let (_root, store) = store();
+        let target = conversation();
+        store
+            .import(
+                &target,
+                history(vec![turn("repeat", &["old"], TurnStatus::Completed)]),
+            )
+            .unwrap();
+        // A completion can fail to persist before its last item is removed.
+        store
+            .record(
+                &target,
+                &turn("repeat", &[], TurnStatus::Completed),
+                Some(&"unrecorded".into()),
+            )
+            .unwrap();
+        let window = store.window(&target, None, 10).unwrap().unwrap();
+        assert_eq!(texts(&window), ["repeat/old"]);
+        let turns = window.response.thread.turns.unwrap();
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].items.as_ref().unwrap()[0].id.as_str(), "old");
+        assert!(turns[1].items.as_ref().unwrap().is_empty());
     }
 
     #[test]
@@ -930,7 +1079,7 @@ mod tests {
             .thread
             .transcript_version;
         store
-            .update_turn(&target, &"done".into(), |mut turn| {
+            .update_turn(&target, &"done".into(), None, |mut turn| {
                 turn.items.as_mut()?.push(Arc::new(Item::new(
                     "late".into(),
                     Default::default(),
@@ -943,7 +1092,7 @@ mod tests {
             })
             .unwrap();
         store
-            .update_turn(&target, &"missing".into(), |_| unreachable!())
+            .update_turn(&target, &"missing".into(), None, |_| unreachable!())
             .unwrap();
         let window = store.window(&target, None, 10).unwrap().unwrap();
         assert_eq!(texts(&window), ["done/answer", "done/late"]);
@@ -970,7 +1119,7 @@ mod tests {
         let imported = version(&target);
         assert!(version(&other) > imported);
         store
-            .record(&target, &turn("t", &["i"], TurnStatus::Running))
+            .record(&target, &turn("t", &["i"], TurnStatus::Running), None)
             .unwrap();
         let recorded = version(&target);
         assert!(recorded > version(&other));
@@ -995,7 +1144,7 @@ mod tests {
                     phase: AssistantPhase::Final,
                 }),
             };
-        store.record(&target, &first).unwrap();
+        store.record(&target, &first, None).unwrap();
         assert!(store.history(&target).unwrap().is_none());
         let second = turn("second", &["last"], TurnStatus::Completed);
         store.import(&target, history(vec![first, second])).unwrap();
@@ -1020,7 +1169,11 @@ mod tests {
         assert!(store.window(&conversation(), None, 10).is_err());
         assert!(
             store
-                .record(&conversation(), &turn("t", &["i"], TurnStatus::Completed))
+                .record(
+                    &conversation(),
+                    &turn("t", &["i"], TurnStatus::Completed),
+                    None
+                )
                 .is_err()
         );
     }

@@ -240,7 +240,61 @@ pub struct Timeline {
     pub preparation: Option<Option<SessionPreparation>>,
 }
 
+/// Locate an item within the newest occurrence that actually contains it.
+pub fn item_position(
+    turns: &[Arc<Turn>],
+    turn_id: &crate::ids::TurnId,
+    item_id: &crate::ids::ItemId,
+) -> Option<(usize, usize)> {
+    turns
+        .iter()
+        .enumerate()
+        .rev()
+        .filter(|(_, turn)| &turn.id == turn_id)
+        .find_map(|(turn, value)| {
+            Some((
+                turn,
+                value
+                    .items
+                    .as_ref()?
+                    .iter()
+                    .position(|item| &item.id == item_id)?,
+            ))
+        })
+}
+
 impl SessionChange {
+    pub fn item_id(&self) -> Option<&crate::ids::ItemId> {
+        match self {
+            Self::Item { item, .. } => Some(&item.id),
+            Self::RemoveItem { item_id, .. }
+            | Self::Text { item_id, .. }
+            | Self::ReasoningPart { item_id, .. } => Some(item_id),
+            _ => None,
+        }
+    }
+
+    /// Item identities disambiguate repeated turns. Disjoint lifecycle items
+    /// complete the active occurrence, or append after a finished occurrence.
+    pub fn turn_index(&self, turns: &[Arc<Turn>]) -> Option<usize> {
+        let id = self.turn_id()?;
+        if let Self::Turn { turn, .. } = self {
+            let exact = turns
+                .iter()
+                .rposition(|old| &old.id == id && old.shares_items(turn));
+            return exact.or_else(|| {
+                turns.iter().rposition(|old| {
+                    &old.id == id
+                        && (matches!(old.status, TurnStatus::Running | TurnStatus::Unknown)
+                            || old.matches_occurrence(turn))
+                })
+            });
+        }
+        self.item_id()
+            .and_then(|item| item_position(turns, id, item).map(|(turn, _)| turn))
+            .or_else(|| turns.iter().rposition(|turn| &turn.id == id))
+    }
+
     /// The turn a turn-scoped change updates.
     pub fn turn_id(&self) -> Option<&crate::ids::TurnId> {
         match self {
@@ -329,12 +383,7 @@ impl SessionChange {
             if turn_id.is_empty() {
                 return Err(UpdateError::InvalidTurnId);
             }
-            let index = next
-                .turns
-                .as_deref()
-                .unwrap_or_default()
-                .iter()
-                .rposition(|turn| &turn.id == turn_id);
+            let index = self.turn_index(next.turns.as_deref().unwrap_or_default());
             if let Self::Turn { turn, completed } = self {
                 let old = index.map(|index| &next.turns.as_ref().unwrap()[index]);
                 let Some(merged) = merge_turn(old.map(AsRef::as_ref), turn, *completed) else {
@@ -519,6 +568,282 @@ fn merge_turn(previous: Option<&Turn>, incoming: &Turn, completed: bool) -> Opti
 mod update_tests {
     use super::*;
     use crate::execution::{ExecutionError, RetryEvidence};
+
+    #[test]
+    fn item_positions_require_both_ids_and_prefer_the_latest_matching_occurrence() {
+        let turn = |id: &str, items: &[&str]| {
+            Arc::new(Turn {
+                id: id.into(),
+                items: Some(
+                    items
+                        .iter()
+                        .map(|id| {
+                            Arc::new(Item::new(
+                                (*id).into(),
+                                Default::default(),
+                                ItemBody::Sleep {},
+                            ))
+                        })
+                        .collect(),
+                ),
+                ..Default::default()
+            })
+        };
+        let turns = [
+            turn("repeat", &["old", "shared"]),
+            turn("repeat", &["new", "shared"]),
+            turn("other", &["old", "shared"]),
+            Arc::new(Turn {
+                id: "repeat".into(),
+                ..Default::default()
+            }),
+        ];
+        for (turn, item, expected) in [
+            ("repeat", "old", Some((0, 0))),
+            ("repeat", "shared", Some((1, 1))),
+            ("repeat", "new", Some((1, 0))),
+            ("other", "shared", Some((2, 1))),
+            ("missing", "old", None),
+            ("repeat", "missing", None),
+        ] {
+            assert_eq!(item_position(&turns, &turn.into(), &item.into()), expected);
+        }
+    }
+
+    #[test]
+    fn completion_can_add_disjoint_items_to_an_active_occurrence() {
+        for status in [TurnStatus::Running, TurnStatus::Unknown] {
+            let item =
+                |id: &str| Arc::new(Item::new(id.into(), Default::default(), ItemBody::Sleep {}));
+            let previous = Thread {
+                turns: Some(vec![Arc::new(Turn {
+                    id: "turn".into(),
+                    status,
+                    items: Some(vec![item("streamed")]),
+                    ..Default::default()
+                })]),
+                ..Default::default()
+            };
+            let updated = SessionChange::Turn {
+                turn: Turn {
+                    id: "turn".into(),
+                    status: TurnStatus::Completed,
+                    items: Some(vec![item("completed")]),
+                    ..Default::default()
+                },
+                completed: true,
+            }
+            .apply(&previous)
+            .unwrap();
+            let turns = updated.turns.as_ref().unwrap();
+            assert_eq!(turns.len(), 1);
+            assert_eq!(turns[0].status, TurnStatus::Completed);
+            assert_eq!(
+                turns[0]
+                    .items
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .map(|item| item.id.as_str())
+                    .collect::<Vec<_>>(),
+                ["streamed", "completed"]
+            );
+        }
+    }
+
+    #[test]
+    fn new_items_append_only_to_the_named_turn() {
+        let other = Arc::new(Turn {
+            id: "other".into(),
+            ..Default::default()
+        });
+        let previous = Thread {
+            turns: Some(vec![
+                Arc::new(Turn {
+                    id: "target".into(),
+                    ..Default::default()
+                }),
+                other.clone(),
+            ]),
+            ..Default::default()
+        };
+        let updated = SessionChange::Item {
+            turn_id: "target".into(),
+            item: Arc::new(Item::new(
+                "new".into(),
+                Default::default(),
+                ItemBody::Sleep {},
+            )),
+        }
+        .apply(&previous)
+        .unwrap();
+        let turns = updated.turns.as_ref().unwrap();
+        assert_eq!(turns[0].items.as_ref().unwrap()[0].id.as_str(), "new");
+        assert!(Arc::ptr_eq(&turns[1], &other));
+    }
+
+    #[test]
+    fn a_new_occurrence_with_a_reused_turn_id_keeps_completed_history() {
+        let item =
+            |id: &str| Arc::new(Item::new(id.into(), Default::default(), ItemBody::Sleep {}));
+        let old = Arc::new(Turn {
+            id: "repeat".into(),
+            status: TurnStatus::Completed,
+            items: Some(vec![item("old")]),
+            ..Default::default()
+        });
+        for completed in [false, true] {
+            let previous = Thread {
+                turns: Some(vec![old.clone()]),
+                ..Default::default()
+            };
+            let next = SessionChange::Turn {
+                completed,
+                turn: Turn {
+                    id: "repeat".into(),
+                    status: if completed {
+                        TurnStatus::Completed
+                    } else {
+                        TurnStatus::Running
+                    },
+                    items: Some(vec![item("new")]),
+                    ..Default::default()
+                },
+            }
+            .apply(&previous)
+            .unwrap();
+            let turns = next.turns.as_ref().unwrap();
+            assert_eq!(turns.len(), 2);
+            assert!(Arc::ptr_eq(&turns[0], &old));
+            assert_eq!(turns[1].items.as_ref().unwrap()[0].id.as_str(), "new");
+        }
+    }
+
+    #[test]
+    fn late_completion_keeps_a_later_occurrence_running() {
+        let item =
+            |id: &str| Arc::new(Item::new(id.into(), Default::default(), ItemBody::Sleep {}));
+        for items in [None, Some(vec![]), Some(vec![item("new")])] {
+            let latest = Arc::new(Turn {
+                id: "repeat".into(),
+                status: TurnStatus::Running,
+                items,
+                ..Default::default()
+            });
+            let old = Turn {
+                id: "repeat".into(),
+                status: TurnStatus::Completed,
+                items: Some(vec![item("old")]),
+                ..Default::default()
+            };
+            let previous = Thread {
+                turns: Some(vec![Arc::new(old.clone()), latest.clone()]),
+                ..Default::default()
+            };
+            let updated = SessionChange::Turn {
+                turn: Turn {
+                    status: TurnStatus::Failed,
+                    ..old
+                },
+                completed: true,
+            }
+            .apply(&previous)
+            .unwrap();
+            let turns = updated.turns.as_ref().unwrap();
+            assert_eq!(turns.len(), 2);
+            assert_eq!(turns[0].status, TurnStatus::Failed);
+            assert!(Arc::ptr_eq(&turns[1], &latest));
+            assert_eq!(updated.status, SessionStatus::Running);
+            for items in [None, Some(vec![])] {
+                let completed = SessionChange::Turn {
+                    turn: Turn {
+                        id: "repeat".into(),
+                        status: TurnStatus::Completed,
+                        items,
+                        ..Default::default()
+                    },
+                    completed: true,
+                }
+                .apply(&updated)
+                .unwrap();
+                let turns = completed.turns.as_ref().unwrap();
+                assert_eq!(turns.len(), 2);
+                assert_eq!(turns[0].status, TurnStatus::Failed);
+                assert_eq!(turns[1].status, TurnStatus::Completed);
+                assert_eq!(completed.status, SessionStatus::Idle);
+            }
+        }
+    }
+
+    #[test]
+    fn item_updates_follow_the_item_when_turn_ids_repeat() {
+        let item = |id: &str, text: &str| {
+            Arc::new(Item::new(
+                id.into(),
+                Default::default(),
+                ItemBody::AssistantText {
+                    text: text.into(),
+                    phase: crate::items::AssistantPhase::Final,
+                },
+            ))
+        };
+        let latest = Arc::new(Turn {
+            id: "repeat".into(),
+            status: TurnStatus::Running,
+            items: Some(vec![item("latest", "latest")]),
+            ..Default::default()
+        });
+        let mut thread = Thread {
+            turns: Some(vec![
+                Arc::new(Turn {
+                    id: "repeat".into(),
+                    status: TurnStatus::Completed,
+                    items: Some(vec![item("older", "summary")]),
+                    ..Default::default()
+                }),
+                latest.clone(),
+            ]),
+            ..Default::default()
+        };
+        for change in [
+            SessionChange::Item {
+                turn_id: "repeat".into(),
+                item: item("older", "full"),
+            },
+            SessionChange::Text {
+                turn_id: "repeat".into(),
+                item_id: "older".into(),
+                field: TextField::AssistantText,
+                delta: " tail".into(),
+            },
+        ] {
+            thread = change.apply(&thread).unwrap();
+            let turns = thread.turns.as_ref().unwrap();
+            assert!(
+                Arc::ptr_eq(&turns[1], &latest),
+                "another occurrence must stay untouched"
+            );
+            assert_eq!(turns[0].items.as_ref().unwrap().len(), 1);
+        }
+        assert!(
+            matches!(thread.turns.as_ref().unwrap()[0].items.as_ref().unwrap()[0].body(),
+            ItemBody::AssistantText {text, ..} if text == "full tail")
+        );
+        let removed = SessionChange::RemoveItem {
+            turn_id: "repeat".into(),
+            item_id: "older".into(),
+        }
+        .apply(&thread)
+        .unwrap();
+        assert!(
+            removed.turns.as_ref().unwrap()[0]
+                .items
+                .as_ref()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(Arc::ptr_eq(&removed.turns.as_ref().unwrap()[1], &latest));
+    }
 
     #[test]
     fn turn_updates_keep_provider_and_fork_attribution_when_it_arrives_later() {

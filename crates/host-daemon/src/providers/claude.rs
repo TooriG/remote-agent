@@ -436,17 +436,11 @@ impl Claude {
         .map_err(|error| error.to_string())?
         .map_err(|error| format!("{error:#}"))?;
         let response = native_history.response;
-        let item = response
-            .thread
-            .turns
-            .iter()
-            .flatten()
-            .find(|turn| turn.id == params.turn_id)
-            .and_then(|turn| turn.items.as_ref())
-            .into_iter()
-            .flatten()
-            .find(|item| item.id == params.item_id)
-            .ok_or("Claude native history item is unavailable")?;
+        let turns = response.thread.turns.as_deref().unwrap_or_default();
+        let (turn, item) =
+            agent_protocol::session::item_position(turns, &params.turn_id, &params.item_id)
+                .ok_or("Claude native history item is unavailable")?;
+        let item = &turns[turn].items.as_ref().unwrap()[item];
         let mut item = (**item).clone();
         if let Some(path) = native_history.output_paths.get(&item.id) {
             use tokio::io::AsyncReadExt;

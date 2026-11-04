@@ -570,27 +570,16 @@ impl HostRpcService {
         let live = self
             .inner
             .router
-            .current_turn(target, &params.turn_id)
-            .and_then(|turn| {
-                turn.items
-                    .as_ref()?
-                    .iter()
-                    .find(|item| item.id == params.item_id)
-                    .filter(|item| !item.is_deferred())
-                    .cloned()
-            });
+            .item(target, &params.turn_id, &params.item_id)
+            .filter(|item| !item.is_deferred());
         let known = match live {
             Some(item) => Some(item),
             None => self
                 .inner
                 .transcripts
-                .turn(target, &params.turn_id)
+                .item(target, &params.turn_id, &params.item_id, true)
                 .map_err(transcripts::storage_failure)?
-                .and_then(|turn| {
-                    turn.items?
-                        .into_iter()
-                        .find(|item| item.id == params.item_id && !item.is_deferred())
-                }),
+                .filter(|item| !item.is_deferred()),
         };
         let mut response = if let Some(item) = known {
             agent_protocol::operations::ItemResponse {

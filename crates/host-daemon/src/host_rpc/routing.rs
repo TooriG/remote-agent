@@ -198,7 +198,7 @@ impl SessionRouter {
             let actor = lock_state(&actor);
             for turn in actor.timeline.turns.iter().flatten() {
                 if turn.status == agent_protocol::execution::TurnStatus::Running {
-                    record_failure(transcripts.record(&target, turn));
+                    record_failure(transcripts.record(&target, turn, None));
                 }
             }
         }
@@ -327,6 +327,23 @@ impl SessionRouter {
         self.close_failed(failed);
         self.prune(target, &actor);
     }
+    pub(crate) fn item(
+        &self,
+        target: &SessionRef,
+        turn_id: &agent_protocol::ids::TurnId,
+        item_id: &agent_protocol::ids::ItemId,
+    ) -> Option<Arc<agent_protocol::models::Item>> {
+        let actor = self.existing(target)?;
+        let owned = lock_state(&actor);
+        let turns = owned.timeline.turns.as_deref().unwrap_or_default();
+        let result = agent_protocol::session::item_position(turns, turn_id, item_id)
+            .map(|(turn, item)| turns[turn].items.as_ref().unwrap()[item].clone());
+        drop(owned);
+        self.prune(target, &actor);
+        result
+    }
+
+    #[cfg(test)]
     pub(crate) fn current_turn(
         &self,
         target: &SessionRef,
@@ -608,23 +625,57 @@ impl SessionRouter {
                 .native_requests
                 .remove(&native_key(origin.instance, &origin.native_id));
         }
-        let (next, result) = change.apply_timeline(std::mem::take(&mut actor.timeline));
+        let previous_turns = actor.timeline.turns.as_deref().unwrap_or_default();
+        let removed_from_history = matches!(change, SessionChange::RemoveItem { turn_id, item_id }
+            if agent_protocol::session::item_position(previous_turns, turn_id, item_id).is_none());
+        let updated = change.turn_index(previous_turns);
+        let transcripts = lock_state(&self.state).transcripts.clone();
+        let archived_item = if let (Some(transcripts), SessionChange::Item { turn_id, item }) =
+            (&transcripts, change)
+        {
+            agent_protocol::session::item_position(previous_turns, turn_id, &item.id).is_none()
+                && match transcripts.item(target, turn_id, &item.id, false) {
+                    Ok(item) => item.is_some(),
+                    Err(message) => {
+                        tracing::error!(target: "agent", operation = "host.transcript.read", message);
+                        false
+                    }
+                }
+        } else {
+            false
+        };
+        let timeline = std::mem::take(&mut actor.timeline);
+        let (next, result) = if archived_item {
+            (
+                timeline,
+                Err(agent_protocol::session::UpdateError::MissingItem),
+            )
+        } else {
+            change.apply_timeline(timeline)
+        };
         actor.timeline = next;
         // Finished turns, and later updates to them, are recorded as they change.
-        let finished = change.turn_id().and_then(|turn_id| {
-            actor
-                .timeline
-                .turns
-                .iter()
-                .flatten()
-                .rev()
-                .find(|current| &current.id == turn_id)
-                .filter(|current| current.status != agent_protocol::execution::TurnStatus::Running)
-                .cloned()
-        });
+        let turns = actor.timeline.turns.as_deref().unwrap_or_default();
+        let finished = updated
+            .or_else(|| change.turn_index(turns))
+            .and_then(|index| {
+                turns
+                    .get(index)
+                    .filter(|current| {
+                        result.is_ok()
+                            && !removed_from_history
+                            && current.status != agent_protocol::execution::TurnStatus::Running
+                    })
+                    .cloned()
+            });
         // An update may target a finished turn that live execution no longer
         // retains; the transcript applies it, and so do subscribers.
-        let late = result == Err(agent_protocol::session::UpdateError::MissingTurn);
+        let late = removed_from_history
+            || matches!(
+                result,
+                Err(agent_protocol::session::UpdateError::MissingTurn
+                    | agent_protocol::session::UpdateError::MissingItem)
+            );
         if let Err(reason) = result
             && !late
         {
@@ -657,20 +708,26 @@ impl SessionRouter {
             &actor.timeline,
             change,
         ));
-        let transcripts = state.transcripts.clone();
         drop(state);
         if let (Some(transcripts), Some(turn)) = (&transcripts, finished) {
-            record_failure(transcripts.record(target, &turn));
+            let removed_item = match change {
+                SessionChange::RemoveItem { item_id, .. } => Some(item_id),
+                _ => None,
+            };
+            record_failure(transcripts.record(target, &turn, removed_item));
         }
         if let (Some(transcripts), true, Some(turn_id)) = (&transcripts, late, change.turn_id()) {
-            record_failure(transcripts.update_turn(target, turn_id, |turn| {
-                let (timeline, result) = change.apply_timeline(agent_protocol::session::Timeline {
-                    turns: Some(vec![Arc::new(turn)]),
-                    ..Default::default()
-                });
-                result.ok()?;
-                timeline.turns?.pop().map(Arc::unwrap_or_clone)
-            }));
+            record_failure(
+                transcripts.update_turn(target, turn_id, change.item_id(), |turn| {
+                    let (timeline, result) =
+                        change.apply_timeline(agent_protocol::session::Timeline {
+                            turns: Some(vec![Arc::new(turn)]),
+                            ..Default::default()
+                        });
+                    result.ok()?;
+                    timeline.turns?.pop().map(Arc::unwrap_or_clone)
+                }),
+            );
         }
         actor.release();
     }

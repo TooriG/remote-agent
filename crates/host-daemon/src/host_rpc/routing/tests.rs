@@ -1100,6 +1100,144 @@ async fn completion_during_native_read_is_overlaid_before_live_updates() {
 }
 
 #[test]
+fn late_item_changes_update_the_correct_recorded_occurrence() {
+    use agent_protocol::{
+        execution::TurnStatus,
+        items::{AssistantPhase, ItemBody},
+    };
+    for retained in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let transcripts = Arc::new(crate::host_rpc::transcripts::Transcripts::open(
+            &directory.path().join("transcripts.sqlite"),
+        ));
+        let target = SessionRef::new(ProviderKind::Codex, "native".into()).unwrap();
+        let turn = |item: &str, status| Turn {
+            id: "repeat".into(),
+            status,
+            items: Some(vec![Arc::new(Item::new(
+                item.into(),
+                Default::default(),
+                ItemBody::AssistantText {
+                    text: item.into(),
+                    phase: AssistantPhase::Final,
+                },
+            ))]),
+            ..Default::default()
+        };
+        transcripts
+            .import(
+                &target,
+                ThreadResponse {
+                    thread: Thread {
+                        id: Some(target.clone()),
+                        turns: Some(vec![
+                            Arc::new(turn("older", TurnStatus::Completed)),
+                            Arc::new(turn("latest", TurnStatus::Completed)),
+                        ]),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let router = SessionRouter::new().with_transcripts(transcripts.clone());
+        let lease = retained.then(|| router.retain_execution(target.clone()).unwrap());
+        if retained {
+            router.session_change(
+                &target,
+                SessionChange::Turn {
+                    turn: turn("older", TurnStatus::Completed),
+                    completed: true,
+                },
+            );
+        }
+        router.session_change(
+            &target,
+            SessionChange::Turn {
+                turn: turn("latest", TurnStatus::Running),
+                completed: false,
+            },
+        );
+        router.session_change(
+            &target,
+            SessionChange::Item {
+                turn_id: "repeat".into(),
+                item: Arc::new(Item::new(
+                    "older".into(),
+                    Default::default(),
+                    ItemBody::AssistantText {
+                        text: "older full".into(),
+                        phase: AssistantPhase::Final,
+                    },
+                )),
+            },
+        );
+        router.session_change(
+            &target,
+            SessionChange::Text {
+                turn_id: "repeat".into(),
+                item_id: "older".into(),
+                field: TextField::AssistantText,
+                delta: " tail".into(),
+            },
+        );
+        let history = transcripts.history(&target).unwrap().unwrap();
+        let turns = history.thread.turns.as_ref().unwrap();
+        assert_eq!(turns.len(), 2);
+        assert!(
+            matches!(turns[0].items.as_ref().unwrap()[0].body(), ItemBody::AssistantText {text, ..} if text == "older full tail")
+        );
+        assert!(
+            matches!(turns[1].items.as_ref().unwrap()[0].body(), ItemBody::AssistantText {text, ..} if text == "latest")
+        );
+        let live_item = router.item(&target, &"repeat".into(), &"older".into());
+        assert_eq!(live_item.is_some(), retained);
+        if let Some(item) = live_item {
+            assert!(
+                matches!(item.body(), ItemBody::AssistantText {text, ..} if text == "older full tail")
+            );
+        }
+        router.session_change(
+            &target,
+            SessionChange::RemoveItem {
+                turn_id: "repeat".into(),
+                item_id: "older".into(),
+            },
+        );
+        let history = transcripts.history(&target).unwrap().unwrap();
+        let turns = history.thread.turns.as_ref().unwrap();
+        assert_eq!(turns.len(), 2);
+        assert!(turns[0].items.as_ref().unwrap().is_empty());
+        assert_eq!(turns[1].items.as_ref().unwrap()[0].id.as_str(), "latest");
+        let live = router.current_turn(&target, "repeat").unwrap();
+        assert_eq!(live.status, TurnStatus::Running);
+        assert_eq!(live.items.as_ref().unwrap().len(), 1);
+        assert_eq!(live.items.as_ref().unwrap()[0].id.as_str(), "latest");
+        router.session_change(
+            &target,
+            SessionChange::Turn {
+                turn: turn("latest", TurnStatus::Completed),
+                completed: true,
+            },
+        );
+        // Repeated removal after completion must not append or replace a turn.
+        router.session_change(
+            &target,
+            SessionChange::RemoveItem {
+                turn_id: "repeat".into(),
+                item_id: "older".into(),
+            },
+        );
+        let history = transcripts.history(&target).unwrap().unwrap();
+        let turns = history.thread.turns.as_ref().unwrap();
+        assert_eq!(turns.len(), 2);
+        assert!(turns[0].items.as_ref().unwrap().is_empty());
+        assert_eq!(turns[1].items.as_ref().unwrap()[0].id.as_str(), "latest");
+        drop(lease);
+    }
+}
+
+#[test]
 fn completion_does_not_discard_unconfirmed_input_and_accepted_receipts_replay() {
     let router = SessionRouter::new();
     let target = SessionRef {

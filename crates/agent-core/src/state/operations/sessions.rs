@@ -1,5 +1,6 @@
 //! One conversation: opening, history and item reads, creation, forks and interrupts.
 use super::*;
+use crate::models::Item;
 
 pub use agent_protocol::operations::ReadItem;
 
@@ -111,17 +112,13 @@ pub struct ItemRead {
 }
 
 fn item_source<'a>(request: &ReadItem, snapshot: &'a Snapshot) -> Option<&'a Arc<Item>> {
-    snapshot
+    let turns = snapshot
         .conversations
         .get(&request.thread_id)?
         .turns
-        .as_ref()?
-        .iter()
-        .rfind(|turn| turn.id == request.turn_id)?
-        .items
-        .as_ref()?
-        .iter()
-        .find(|item| item.id == request.item_id)
+        .as_deref()?;
+    let (turn, item) = crate::session::item_position(turns, &request.turn_id, &request.item_id)?;
+    Some(&turns[turn].items.as_ref()?[item])
 }
 impl Operation for ReadItem {
     fn key(&self) -> Option<OperationKey> {
@@ -185,7 +182,13 @@ impl Operation for ReadItem {
             };
         }
         let response = output.response?;
-        *snapshot = upsert_item(snapshot, &self.thread_id, &self.turn_id, response.item);
+        let thread = crate::session::SessionChange::Item {
+            turn_id: self.turn_id,
+            item: Arc::new(response.item),
+        }
+        .apply(&snapshot.conversations[&self.thread_id])
+        .map_err(|error| PeerError::InvalidMessage(error.to_string()))?;
+        Arc::make_mut(&mut snapshot.conversations).insert(self.thread_id.clone(), Arc::new(thread));
         reconcile_pending(snapshot, &self.thread_id);
         Ok(Vec::new())
     }
@@ -333,7 +336,10 @@ impl Operation for ReadThread {
                 .cloned()
                 .collect();
             for current in live.drain(..) {
-                if let Some(index) = turns.iter().rposition(|turn| turn.id == current.id) {
+                if let Some(index) = turns
+                    .iter()
+                    .rposition(|turn| turn.matches_occurrence(&current))
+                {
                     turns[index] = current;
                 } else {
                     turns.push(current);
@@ -769,6 +775,67 @@ mod tests {
         incoming.history_read_state = Some(HistoryReadState::new(HistoryReadKind::Partial, vec![]));
         refresh_thread(&mut snapshot, incoming);
         assert_eq!(history_notice(&snapshot.conversations[&id]), None);
+    }
+
+    #[test]
+    fn unavailable_history_keeps_distinct_occurrences_of_a_reused_turn_id() {
+        use crate::models::{ItemBody, Turn, TurnStatus};
+        for same_occurrence in [false, true] {
+            let id = SessionRef::new(ProviderKind::Codex, "offline".into()).unwrap();
+            let turn = |item: &str, status| {
+                Arc::new(Turn {
+                    id: "reused".into(),
+                    status,
+                    items: Some(vec![Arc::new(Item::new(
+                        item.into(),
+                        Default::default(),
+                        ItemBody::Sleep {},
+                    ))]),
+                    ..Default::default()
+                })
+            };
+            let cached = turn("old", TurnStatus::Completed);
+            let live = turn(
+                if same_occurrence { "old" } else { "new" },
+                TurnStatus::Running,
+            );
+            let mut snapshot = Snapshot::default();
+            Arc::make_mut(&mut snapshot.conversations).insert(
+                id.clone(),
+                Arc::new(Thread {
+                    id: Some(id.clone()),
+                    turns: Some(vec![cached.clone()]),
+                    ..Default::default()
+                }),
+            );
+            ReadThread::new(id.clone()).apply(
+                &mut snapshot,
+                crate::session::OpenedSession {
+                    session: id.clone(),
+                    subscription_id: uuid::Uuid::new_v4(),
+                    unchanged: false,
+                    response: crate::models::ThreadResponse {
+                        thread: Thread {
+                            id: Some(id.clone()),
+                            status: crate::models::SessionStatus::Running,
+                            history_read_state: Some(crate::session::HistoryReadState::new(
+                                HistoryReadKind::Unavailable,
+                                vec![],
+                            )),
+                            turns: Some(vec![live.clone()]),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                },
+            );
+            let turns = snapshot.conversations[&id].turns.as_ref().unwrap();
+            assert_eq!(turns.len(), if same_occurrence { 1 } else { 2 });
+            if !same_occurrence {
+                assert!(Arc::ptr_eq(&turns[0], &cached));
+            }
+            assert_eq!(turns.last().unwrap().as_ref(), live.as_ref());
+        }
     }
 
     #[rstest::rstest]
@@ -1343,6 +1410,8 @@ mod tests {
 
 #[cfg(test)]
 mod item_read_tests {
+    use crate::models::{ItemBody, Turn};
+
     fn item_text(item: &agent_protocol::items::Item) -> Option<&str> {
         match item.body() {
             agent_protocol::items::ItemBody::AssistantText { text, .. } => Some(text),
@@ -1356,6 +1425,53 @@ mod item_read_tests {
 
     use super::*;
     use crate::session::{SessionChange, TextField};
+
+    #[test]
+    fn older_items_hydrate_without_changing_a_later_turn_with_the_same_id() {
+        let (mut snapshot, request) = fixture();
+        let latest = Arc::new(Turn {
+            id: request.turn_id.clone(),
+            status: crate::models::TurnStatus::Completed,
+            items: Some(vec![Arc::new(Item::new(
+                "latest".into(),
+                Default::default(),
+                ItemBody::Sleep {},
+            ))]),
+            ..Default::default()
+        });
+        Arc::make_mut(
+            Arc::make_mut(&mut snapshot.conversations)
+                .get_mut(&request.thread_id)
+                .unwrap(),
+        )
+        .turns
+        .as_mut()
+        .unwrap()
+        .push(latest.clone());
+        let captured = request.capture(&snapshot).unwrap();
+        assert!(
+            captured.0.is_some(),
+            "the requested older item must be captured"
+        );
+        let response = read(&snapshot, &request);
+        assert!(
+            request
+                .clone()
+                .complete(&mut snapshot, response, true)
+                .unwrap()
+                .is_empty()
+        );
+        let turns = snapshot.conversations[&request.thread_id]
+            .turns
+            .as_ref()
+            .unwrap();
+        assert!(!turns[0].items.as_ref().unwrap()[0].is_deferred());
+        assert_eq!(
+            item_text(&turns[0].items.as_ref().unwrap()[0]),
+            Some("old full body")
+        );
+        assert!(Arc::ptr_eq(&turns[1], &latest));
+    }
 
     fn fixture() -> (Snapshot, ReadItem) {
         let thread = serde_json::from_value(serde_json::json!({"id":{"provider":"codex","id":"chat"},"turns":[{"id":"turn","status":"running","items":[{"id":"item","status":"unknown","clientInputId":null,"body":{"deferred":{"summary":{"assistantText":{"text":"summary","phase":"unknown"}}}}}]}]})).unwrap();

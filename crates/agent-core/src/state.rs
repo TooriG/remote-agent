@@ -1,6 +1,6 @@
 //! Immutable client state and pure conversation transitions.
 use crate::models::{
-    FileContent, HostStatus, Invitation, Item, ListQuery, Model, RemoteHost, Thread, ThreadList,
+    FileContent, HostStatus, Invitation, ListQuery, Model, RemoteHost, Thread, ThreadList,
     WorkspaceReview, WorktreeSettings,
 };
 use agent_protocol::requests::{Answer, Request};
@@ -1515,29 +1515,6 @@ fn shared_mut<'a, K: Ord + Clone + std::borrow::Borrow<Q>, Q: Ord + ?Sized, T: C
         return None;
     }
     Arc::make_mut(values).get_mut(key).map(Arc::make_mut)
-}
-
-fn upsert_item(
-    previous: &Snapshot,
-    thread_id: &crate::session::SessionRef,
-    turn_id: &agent_protocol::ids::TurnId,
-    item: Item,
-) -> Snapshot {
-    let mut next = previous.clone();
-    if let Some(thread) = previous.conversations.get(thread_id) {
-        match (crate::session::SessionChange::Item {
-            turn_id: turn_id.clone(),
-            item: item.into(),
-        })
-        .apply(thread)
-        {
-            Ok(thread) => {
-                Arc::make_mut(&mut next.conversations).insert(thread_id.clone(), Arc::new(thread));
-            }
-            Err(error) => next.error = Some(error.to_string()),
-        }
-    }
-    next
 }
 
 // Publish sent content immediately as pending input. Later receipts and echoes

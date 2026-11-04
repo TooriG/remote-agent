@@ -154,8 +154,17 @@ impl Turn {
         if items.is_empty() || other_items.is_empty() {
             return true;
         }
-        let ids: HashSet<_> = items.iter().map(|item| &item.id).collect();
-        other_items.iter().any(|item| ids.contains(&item.id))
+        self.shares_items(other)
+    }
+
+    /// Known item identities distinguish occurrences even beside an empty turn.
+    pub fn shares_items(&self, other: &Self) -> bool {
+        let ids: HashSet<_> = self.items.iter().flatten().map(|item| &item.id).collect();
+        other
+            .items
+            .iter()
+            .flatten()
+            .any(|item| ids.contains(&item.id))
     }
 }
 pub use crate::{execution::*, items::*};

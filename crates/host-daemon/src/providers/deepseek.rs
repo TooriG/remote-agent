@@ -915,15 +915,11 @@ impl Agent for DeepSeek {
     }
     async fn read_item(&self, params: &op::ReadItem) -> Result<op::ItemResponse, Failure> {
         let record = self.open(&params.thread_id.id, usize::MAX, true).await?;
-        let item = record
-            .thread
-            .turns
-            .iter()
-            .flatten()
-            .filter(|t| t.id == params.turn_id)
-            .flat_map(|t| t.items.iter().flatten())
-            .find(|i| i.id == params.item_id)
-            .ok_or_else(|| failure("Item not found"))?;
+        let turns = record.thread.turns.as_deref().unwrap_or_default();
+        let (turn, item) =
+            agent_protocol::session::item_position(turns, &params.turn_id, &params.item_id)
+                .ok_or_else(|| failure("Item not found"))?;
+        let item = &turns[turn].items.as_ref().unwrap()[item];
         Ok(op::ItemResponse {
             item: (**item).clone(),
             transfer: None,
