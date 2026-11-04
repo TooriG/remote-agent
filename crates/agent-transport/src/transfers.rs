@@ -44,7 +44,11 @@ where
     F: FnOnce() -> Fut,
     Fut: Future<Output = std::io::Result<S>>,
 {
-    let mut file = tokio::fs::File::open(source).await?;
+    let mut options = tokio::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NONBLOCK);
+    let mut file = options.open(source).await?;
     if !file.metadata().await?.is_file() {
         return Err(TransferError::Protocol(
             "upload source is not a regular file".into(),

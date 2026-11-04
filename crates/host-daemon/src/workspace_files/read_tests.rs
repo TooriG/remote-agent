@@ -1,5 +1,150 @@
 use super::*;
 
+#[cfg(unix)]
+#[test]
+fn folder_listings_follow_symlinks_without_losing_broken_links() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::create_dir(directory.path().join("folder")).unwrap();
+    fs::write(directory.path().join("file.txt"), "content").unwrap();
+    for (target, alias) in [
+        ("folder", "linked-folder"),
+        ("file.txt", "linked-file.txt"),
+        ("missing", "broken-link"),
+    ] {
+        std::os::unix::fs::symlink(target, directory.path().join(alias)).unwrap();
+    }
+    let files = WorkspaceFiles::new(directory.path().join("uploads"));
+    let Body::Files(listing) = files
+        .dispatch(
+            1,
+            Call::ListFiles(PathParams {
+                path: directory.path().to_str().unwrap().into(),
+            }),
+        )
+        .unwrap()
+    else {
+        panic!("expected folder listing")
+    };
+    let folder = listing
+        .entries
+        .iter()
+        .find(|entry| entry.name == "linked-folder")
+        .unwrap();
+    assert!(folder.directory, "a linked folder must remain navigable");
+    assert_eq!(
+        folder.path,
+        directory.path().join("linked-folder").to_str().unwrap()
+    );
+    let file = listing
+        .entries
+        .iter()
+        .find(|entry| entry.name == "linked-file.txt")
+        .unwrap();
+    assert!(!file.directory);
+    assert_eq!(file.size, 7);
+    assert!(
+        listing
+            .entries
+            .iter()
+            .any(|entry| entry.name == "broken-link")
+    );
+    let Body::Files(children) = files
+        .dispatch(
+            1,
+            Call::ListFiles(PathParams {
+                path: folder.path.clone(),
+            }),
+        )
+        .unwrap()
+    else {
+        panic!("expected linked folder listing")
+    };
+    assert!(children.entries.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn file_operations_reject_named_pipes_without_waiting_for_a_writer() {
+    use std::os::unix::fs::OpenOptionsExt;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("pipe");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let files = WorkspaceFiles::new(directory.path().join("uploads"));
+    let params = PathParams {
+        path: path.to_str().unwrap().into(),
+    };
+    for request in [
+        Call::ReadFile(params.clone()),
+        Call::WriteFile(agent_protocol::operations::WriteFile {
+            path: params.path.clone(),
+            revision: hash(b""),
+            text: "replacement".into(),
+        }),
+        Call::Download(params),
+    ] {
+        let files = files.clone();
+        let (completed, result) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            completed.send(files.dispatch(1, request)).unwrap();
+        });
+        let rejected = result.recv_timeout(Duration::from_secs(1));
+        // Release a broken implementation before failing, so no blocked worker
+        // survives the regression test.
+        if rejected.is_err() {
+            drop(
+                File::options()
+                    .write(true)
+                    .custom_flags(libc::O_NONBLOCK)
+                    .open(&path)
+                    .unwrap(),
+            );
+        }
+        worker.join().unwrap();
+        assert!(
+            rejected
+                .expect("opening a named pipe blocked the file service")
+                .is_err()
+        );
+    }
+    assert!(files.grants.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_save_that_cannot_be_read_back_never_replaces_the_original_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("notes.txt");
+    fs::write(&path, "original").unwrap();
+    let files = WorkspaceFiles::new(directory.path().join("uploads"));
+    let original = read_file(&path, &path).unwrap();
+    let result = files.dispatch(
+        1,
+        Call::WriteFile(agent_protocol::operations::WriteFile {
+            path: path.to_str().unwrap().into(),
+            revision: original.revision.clone(),
+            text: "text\0with a null byte".into(),
+        }),
+    );
+    assert!(result.is_err());
+    assert_eq!(fs::read_to_string(&path).unwrap(), "original");
+    files
+        .dispatch(
+            1,
+            Call::WriteFile(agent_protocol::operations::WriteFile {
+                path: path.to_str().unwrap().into(),
+                revision: original.revision,
+                text: "valid edit".into(),
+            }),
+        )
+        .unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), "valid edit");
+}
+
 #[test]
 fn text_at_the_limit_is_editable_and_larger_text_is_a_read_only_prefix() {
     let directory = tempfile::tempdir().unwrap();

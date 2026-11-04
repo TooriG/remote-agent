@@ -354,6 +354,60 @@ async fn attachments_outlive_worktrees_while_linked_images_fail_only_their_downl
     .unwrap();
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn uploading_a_named_pipe_fails_without_waiting_or_reserving_host_storage() {
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut fixture = Fixture::start(0, false).await;
+    let path = fixture._directory.path().join("pipe");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let mut upload = Box::pin(fixture.store.dispatch(Intent::UploadAttachment(
+        op::UploadAttachment {
+            draft_key: "draft".into(),
+            attachment: agent_core::state::Attachment {
+                path: path.to_str().unwrap().into(),
+                name: "pipe".into(),
+                is_image: false,
+            },
+        },
+    )));
+    let rejected = tokio::time::timeout(Duration::from_secs(1), &mut upload).await;
+    if rejected.is_err() {
+        drop(
+            std::fs::File::options()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&path)
+                .unwrap(),
+        );
+        let _ = upload.await;
+    }
+    assert!(
+        fixture.requests.try_recv().is_err(),
+        "a non-file needs no transfer reservation"
+    );
+    assert!(
+        fixture
+            .store
+            .snapshot()
+            .drafts
+            .values()
+            .all(|draft| draft.attachments.is_empty())
+    );
+    fixture.close().await;
+    assert!(
+        rejected
+            .expect("uploading a named pipe blocked on local I/O")
+            .is_err()
+    );
+}
+
 #[tokio::test]
 async fn file_operations_preserve_remote_reasons_and_download_can_retry_after_failure() {
     tokio::time::timeout(Duration::from_secs(15), async {

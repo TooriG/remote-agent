@@ -191,6 +191,11 @@ impl WorkspaceFiles {
                         break;
                     }
                     let metadata = entry.metadata()?;
+                    let metadata = if metadata.file_type().is_symlink() {
+                        fs::metadata(entry.path()).unwrap_or(metadata)
+                    } else {
+                        metadata
+                    };
                     entries.push(FileEntry {
                         name: entry.file_name().to_string_lossy().into_owned(),
                         path: entry
@@ -231,6 +236,7 @@ impl WorkspaceFiles {
                 read_file(&path, &requested).map(Body::from)
             }
             Call::WriteFile(params) => {
+                validate_text(&params.text)?;
                 let requested = absolute_path(&params.path)?;
                 let path = dunce::canonicalize(&requested)?;
                 let _lock = self.writes.lock().unwrap_or_else(|e| e.into_inner());
@@ -245,6 +251,7 @@ impl WorkspaceFiles {
                 let original_text =
                     std::str::from_utf8(if bom { &original[3..] } else { &original })
                         .context("UTF-8以外のファイルは編集できません。")?;
+                validate_text(original_text)?;
                 let text = if line_ending(original_text) == "crlf" {
                     params.text.replace("\r\n", "\n").replace('\n', "\r\n")
                 } else {
@@ -317,10 +324,7 @@ impl WorkspaceFiles {
             }
             Call::Download(params) => {
                 let path = absolute_path(&params.path)?;
-                let mut file = File::open(path)?;
-                if !file.metadata()?.is_file() {
-                    return Err(anyhow!("ダウンロードできるのは通常のファイルだけです。"));
-                }
+                let (mut file, _) = open_regular_file(&path)?;
                 let (size, digest) = digest_file(&mut file)?;
                 use std::io::{Seek, SeekFrom};
                 file.seek(SeekFrom::Start(0))?;
@@ -478,11 +482,24 @@ fn file_failure(error: anyhow::Error) -> crate::providers::Failure {
 fn hash(bytes: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(digest::digest(&SHA256, bytes).as_ref())
 }
-fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>> {
-    let file = File::open(path)?;
-    if !file.metadata()?.is_file() {
+fn open_regular_file(path: &Path) -> Result<(File, u64)> {
+    let mut options = File::options();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // A FIFO must not block before its type can be checked.
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
         return Err(anyhow!("通常のファイルではありません。"));
     }
+    Ok((file, metadata.len()))
+}
+fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>> {
+    let (file, _) = open_regular_file(path)?;
     let mut bytes = Vec::new();
     file.take(limit + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > limit {
@@ -493,16 +510,12 @@ fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 fn read_file(path: &Path, requested: &Path) -> Result<FileContent> {
-    let file = File::open(path)?;
-    let metadata = file.metadata()?;
-    if !metadata.is_file() {
-        return Err(anyhow!("通常のファイルではありません。"));
-    }
+    let (file, file_size) = open_regular_file(path)?;
     let mut bytes = Vec::new();
     file.take(EDIT_LIMIT + 1).read_to_end(&mut bytes)?;
     let truncated = bytes.len() as u64 > EDIT_LIMIT;
     let size = if truncated {
-        metadata.len().max(bytes.len() as u64)
+        file_size.max(bytes.len() as u64)
     } else {
         bytes.len() as u64
     };
@@ -519,9 +532,7 @@ fn read_file(path: &Path, requested: &Path) -> Result<FileContent> {
                 .context("UTF-8以外のファイルは表示できません。ダウンロードして開いてください。"));
         }
     };
-    if text.contains('\0') {
-        return Err(anyhow!("binary file; download it instead"));
-    }
+    validate_text(text)?;
     Ok(FileContent {
         // The editor/draft belongs to the clicked path, including symlinks and
         // lexical parent segments. Canonical paths only identify the I/O target.
@@ -531,6 +542,12 @@ fn read_file(path: &Path, requested: &Path) -> Result<FileContent> {
         size,
         truncated,
     })
+}
+fn validate_text(text: &str) -> Result<()> {
+    if text.contains('\0') {
+        return Err(anyhow!("binary file; download it instead"));
+    }
+    Ok(())
 }
 fn line_ending(text: &str) -> &'static str {
     let crlf = text

@@ -75,17 +75,7 @@ fn inspect(requested: &str) -> Result<FilePathMetadata> {
 }
 
 fn header(path: &Path) -> Result<Option<&'static str>> {
-    let mut options = File::options();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NONBLOCK);
-    }
-    let file = options.open(path)?;
-    if !file.metadata()?.is_file() {
-        return Ok(None);
-    }
+    let (file, _) = open_regular_file(path)?;
     let mut bytes = Vec::new();
     file.take(512).read_to_end(&mut bytes)?;
     Ok(header_mime(&bytes))
