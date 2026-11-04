@@ -40,7 +40,10 @@ impl<'a> Key<'a> {
             tokens,
         }
     }
-    pub(super) fn compare(&self, other: &Key<'_>) -> Ordering {
+}
+
+impl Ord for Key<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
         self.tokens
             .iter()
             .zip(&other.tokens)
@@ -62,6 +65,20 @@ impl<'a> Key<'a> {
             .then_with(|| utf16_compare(self.original, other.original))
     }
 }
+
+impl PartialOrd for Key<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for Key<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.original == other.original
+    }
+}
+
+impl Eq for Key<'_> {}
 fn utf16_compare(left: &str, right: &str) -> Ordering {
     left.encode_utf16().cmp(right.encode_utf16())
 }
@@ -85,20 +102,20 @@ mod tests {
         let mut names = [
             "a10", "a2", "a02", "a", "A", "a-1", "a1", "a01", "🦀", "\u{e000}",
         ];
-        names.sort_by(|left, right| Key::new(left).compare(&Key::new(right)));
+        names.sort_by(|left, right| Key::new(left).cmp(&Key::new(right)));
         assert_eq!(
             names,
             [
                 "A", "a", "a01", "a1", "a02", "a2", "a10", "a-1", "🦀", "\u{e000}"
             ]
         );
-        assert!(Key::new(&"9".repeat(400)).compare(&Key::new("z")).is_lt());
+        assert!(Key::new(&"9".repeat(400)).cmp(&Key::new("z")).is_lt());
     }
 
     #[test]
     fn unicode_runs_keep_numeric_order_and_utf16_case_and_padding_ties() {
         let mut names = ["é10字", "é2字", "É2字", "é02字", "é-1字", "é2あ"];
-        names.sort_by(|a, b| Key::new(a).compare(&Key::new(b)));
+        names.sort_by(|a, b| Key::new(a).cmp(&Key::new(b)));
         assert_eq!(names, ["é2あ", "é02字", "É2字", "é2字", "é10字", "é-1字"]);
     }
 
@@ -106,11 +123,27 @@ mod tests {
     fn numeric_and_text_prefixes_preserve_punctuation_and_overflow_order() {
         let overflow = "9".repeat(400);
         let mut names = ["a", "2", "@", "_", &overflow, "/", "0", "10"];
-        names.sort_by(|a, b| Key::new(a).compare(&Key::new(b)));
+        names.sort_by(|a, b| Key::new(a).cmp(&Key::new(b)));
         assert_eq!(names, ["/", "0", "2", "10", "@", &overflow, "_", "a"]);
     }
 
     proptest! {
+        #[test]
+        fn keys_follow_total_order_laws(a in ".{0,32}", b in ".{0,32}", c in ".{0,32}") {
+            let keys = [Key::new(&a), Key::new(&b), Key::new(&c)];
+            let repeated = Key::new(&a);
+            let ab = keys[0].cmp(&keys[1]);
+            let bc = keys[1].cmp(&keys[2]);
+            prop_assert!(keys[0] == repeated);
+            prop_assert_eq!(keys[0].cmp(&repeated), Ordering::Equal);
+            prop_assert_eq!(ab, keys[1].cmp(&keys[0]).reverse());
+            prop_assert_eq!(keys[0] == keys[1], a == b);
+            prop_assert_eq!(keys[0].partial_cmp(&keys[1]), Some(ab));
+            if ab.is_le() && bc.is_le() {
+                prop_assert!(keys[0].cmp(&keys[2]).is_le());
+            }
+        }
+
         #[test]
         fn unicode_segments_preserve_numeric_value_order(
             prefix in "[^0-9]{0,16}", suffix in "[^0-9]{0,16}",
@@ -118,7 +151,7 @@ mod tests {
         ) {
             let a = format!("{prefix}{left}{suffix}");
             let b = format!("{prefix}{right}{suffix}");
-            prop_assert_eq!(Key::new(&a).compare(&Key::new(&b)), left.cmp(&right));
+            prop_assert_eq!(Key::new(&a).cmp(&Key::new(&b)), left.cmp(&right));
         }
 
         #[test]
@@ -127,8 +160,8 @@ mod tests {
         ) {
             let number = number.to_string();
             let expected = number.encode_utf16().cmp(text.to_lowercase().encode_utf16());
-            prop_assert_eq!(Key::new(&number).compare(&Key::new(&text)), expected);
-            prop_assert_eq!(Key::new(&text).compare(&Key::new(&number)), expected.reverse());
+            prop_assert_eq!(Key::new(&number).cmp(&Key::new(&text)), expected);
+            prop_assert_eq!(Key::new(&text).cmp(&Key::new(&number)), expected.reverse());
         }
     }
 }

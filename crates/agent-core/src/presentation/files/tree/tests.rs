@@ -60,6 +60,91 @@ fn toggle(trees: &mut FileTrees, path: &str) -> Vec<TreeWork> {
 }
 
 #[test]
+fn replacing_a_directory_prunes_only_its_removed_or_changed_descendants() {
+    let mut tree = Tree::default();
+    let directories = ["src/keep", "src/change", "src/gone", "src2"];
+    for path in directories {
+        tree.directories.insert(path.into(), Directory::default());
+        tree.expanded.insert(path.into());
+        tree.discoveries
+            .insert(path.into(), entry(path, EntryKind::Directory));
+    }
+    tree.running = ["src/keep".into(), "src/gone".into()].into();
+    tree.queue = ["src/change".into(), "src2".into()].into();
+    tree.selected = [
+        "src/keep/a.rs",
+        "src/change",
+        "src/change/nested.rs",
+        "src/gone/a.rs",
+        "src2/a.rs",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    tree.anchor = Some("src/gone/a.rs".into());
+    tree.focused = Some("src/change".into());
+    tree.prune(
+        "src",
+        &[
+            entry("src/keep", EntryKind::Directory),
+            entry("src/change", EntryKind::File),
+        ],
+    );
+    let remaining = ["src/keep", "src2"];
+    assert!(tree.directories.keys().map(String::as_str).eq(remaining));
+    assert!(tree.expanded.iter().map(String::as_str).eq(remaining));
+    assert!(tree.running.iter().map(String::as_str).eq(["src/keep"]));
+    assert!(tree.queue.iter().map(String::as_str).eq(["src2"]));
+    assert!(tree.discoveries.keys().map(String::as_str).eq(remaining));
+    assert_eq!(tree.selected, ["src/keep/a.rs", "src/change", "src2/a.rs"]);
+    assert!(tree.anchor.is_none());
+    assert_eq!(tree.focused.as_deref(), Some("src/change"));
+}
+
+#[test]
+fn cached_children_remain_visible_while_a_parent_listing_is_unavailable() {
+    let mut tree = Tree::default();
+    tree.discoveries
+        .insert("src".into(), entry("src", EntryKind::Directory));
+    tree.expanded.insert("src".into());
+    tree.directories.insert(
+        "src".into(),
+        Directory {
+            entries: Some(Arc::new(vec![
+                entry("src/file10.rs", EntryKind::File),
+                entry("src/file2.rs", EntryKind::File),
+            ])),
+            ..Default::default()
+        },
+    );
+    let view = tree.view();
+    assert!(!view.ready);
+    assert_eq!(
+        view.rows
+            .iter()
+            .map(|row| row.path.as_str())
+            .collect::<Vec<_>>(),
+        ["src", "src/file2.rs", "src/file10.rs"]
+    );
+}
+
+#[test]
+fn mobile_order_keeps_primary_collation_ties_in_source_path_order() {
+    let mut trees = FileTrees::default();
+    let root = open(&mut trees, ROOT, FileTreeSurface::Mobile);
+    let mut entries = ["ä", "a10", "a2", "á", "a01", "A1", "a", "A"]
+        .into_iter()
+        .map(|path| entry(path, EntryKind::File))
+        .collect::<Vec<_>>();
+    entries.push(entry("z", EntryKind::Directory));
+    complete(&mut trees, &root[0], entries);
+    assert_eq!(
+        paths(&trees),
+        ["z", "A", "a", "á", "ä", "A1", "a01", "a2", "a10"]
+    );
+}
+
+#[test]
 fn range_selection_keeps_first_occurrences_and_existing_order() {
     let mut trees = FileTrees::default();
     let root = open(&mut trees, ROOT, FileTreeSurface::Desktop);
@@ -118,6 +203,18 @@ fn shift_selection_can_cover_a_large_tree_in_display_order() {
     let view = trees.view(&key(ROOT));
     assert_eq!(view.selected_paths, paths);
     assert!(view.rows.iter().all(|row| row.selected));
+    action(
+        &mut trees,
+        FileTreeAction::DragEnd {
+            paths: paths.iter().step_by(2).cloned().collect(),
+        },
+    );
+    let expected: Vec<_> = paths.iter().skip(1).step_by(2).cloned().collect();
+    assert_eq!(trees.view(&key(ROOT)).selected_paths, expected);
+    assert_eq!(
+        view.selected_paths, paths,
+        "previous projections keep their own selection"
+    );
 }
 
 #[test]
@@ -215,6 +312,21 @@ fn expand_all_limits_concurrency_and_skips_ignored_folders_until_manual_open() {
     complete(&mut trees, &root[0], entries);
     let work = action(&mut trees, FileTreeAction::ToggleAll);
     assert_eq!(work.len(), 4);
+    let pending = trees.view(&key(ROOT));
+    assert!(
+        pending
+            .rows
+            .iter()
+            .filter(|row| !row.ignored)
+            .all(|row| row.loading)
+    );
+    assert!(
+        pending
+            .rows
+            .iter()
+            .filter(|row| row.ignored)
+            .all(|row| !row.loading)
+    );
     assert!(trees.view(&key(ROOT)).all_expanded);
     assert!(
         !trees

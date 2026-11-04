@@ -517,7 +517,18 @@ impl Tree {
                 self.focused = Some(path);
             }
             FileTreeAction::DragEnd { paths } => {
-                self.selected.retain(|path| !paths.contains(path));
+                let removed = (paths.len() >= 64 && self.selected.len() >= 64).then(|| {
+                    paths
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<std::collections::HashSet<_>>()
+                });
+                self.selected.retain(|path| {
+                    !removed.as_ref().map_or_else(
+                        || paths.contains(path),
+                        |removed| removed.contains(path.as_str()),
+                    )
+                });
                 self.retain_discoveries();
             }
             _ => {}
@@ -535,7 +546,7 @@ impl Tree {
     ) -> Option<String> {
         let directory = self
             .entries()
-            .get(&path)
+            .get(path.as_str())
             .is_some_and(|entry| entry.kind == EntryKind::Directory);
         self.load_ancestors(&path, self.surface == FileTreeSurface::Mobile);
         self.focused = Some(path.clone());
@@ -565,7 +576,7 @@ impl Tree {
             && let Some(path) = self.selected.last()
             && self
                 .entries()
-                .get(path)
+                .get(path.as_str())
                 .is_some_and(|entry| entry.kind == EntryKind::File)
         {
             self.open_file = Some(FileTreeRequest {
@@ -662,7 +673,7 @@ impl Tree {
             .entries()
             .into_values()
             .filter(|entry| entry.kind == EntryKind::Directory && !entry.ignored)
-            .map(|entry| entry.path)
+            .map(|entry| entry.path.to_owned())
             .collect::<Vec<_>>();
         for path in paths {
             self.expanded.insert(path.clone());
@@ -680,11 +691,11 @@ impl Tree {
             .into_values()
             .filter(|entry| {
                 entry.kind == EntryKind::Directory
-                    && self.expanded.contains(&entry.path)
-                    && self.visible(&entry.path)
-                    && !self.directories.contains_key(&entry.path)
+                    && self.expanded.contains(entry.path)
+                    && self.visible(entry.path)
+                    && !self.directories.contains_key(entry.path)
             })
-            .map(|entry| entry.path)
+            .map(|entry| entry.path.to_owned())
             .collect::<Vec<_>>();
         for path in missing {
             self.request(path, false);
@@ -692,8 +703,11 @@ impl Tree {
     }
     fn all_expanded(&self) -> bool {
         let entries = self.entries();
-        let search = self.desktop_search().then(|| self.search_paths(&entries));
-        all_expanded(&entries, search.as_ref().unwrap_or(&self.expanded))
+        if self.desktop_search() {
+            all_expanded(&entries, &self.search_paths(&entries))
+        } else {
+            all_expanded(&entries, &self.expanded)
+        }
     }
     fn desktop_search(&self) -> bool {
         self.surface == FileTreeSurface::Desktop && !self.query.trim().is_empty()
@@ -743,7 +757,17 @@ impl Tree {
         self.discoveries = self
             .entries()
             .into_iter()
-            .filter(|(path, _)| owned.contains(path))
+            .filter(|(path, _)| owned.contains(*path))
+            .map(|(path, entry)| {
+                (
+                    path.to_owned(),
+                    TreeEntry {
+                        path: entry.path.to_owned(),
+                        kind: entry.kind,
+                        ignored: entry.ignored,
+                    },
+                )
+            })
             .collect();
     }
     fn prune(&mut self, directory: &str, entries: &[TreeEntry]) {
@@ -754,7 +778,12 @@ impl Tree {
         };
         let children = entries
             .iter()
-            .map(|entry| (entry.path.as_str(), entry.kind))
+            .filter_map(|entry| {
+                entry
+                    .path
+                    .strip_prefix(&prefix)
+                    .map(|path| (path, entry.kind))
+            })
             .collect::<BTreeMap<_, _>>();
         let retained = |path: &str, directory: bool| {
             let Some(relative) = path.strip_prefix(&prefix) else {
@@ -767,7 +796,7 @@ impl Tree {
                 .split_once('/')
                 .map_or((relative, false), |(child, _)| (child, true));
             children
-                .get(format!("{prefix}{child}").as_str())
+                .get(child)
                 .is_some_and(|kind| !(directory || nested) || *kind == EntryKind::Directory)
         };
         self.directories.retain(|path, _| retained(path, true));
@@ -782,12 +811,15 @@ impl Tree {
     }
 }
 
-fn all_expanded(entries: &BTreeMap<String, TreeEntry>, expanded: &BTreeSet<String>) -> bool {
+fn all_expanded<K: Ord + std::borrow::Borrow<str>>(
+    entries: &BTreeMap<&str, view::EntryRef<'_>>,
+    expanded: &BTreeSet<K>,
+) -> bool {
     let mut directories = entries
         .values()
         .filter(|entry| entry.kind == EntryKind::Directory && !entry.ignored)
         .peekable();
-    directories.peek().is_some() && directories.all(|entry| expanded.contains(&entry.path))
+    directories.peek().is_some() && directories.all(|entry| expanded.contains(entry.path))
 }
 
 #[cfg_attr(feature = "bindings", uniffi::export)]
