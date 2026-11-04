@@ -1,9 +1,21 @@
+import CoreGraphics
 import Foundation
 import XCTest
 
 private enum WorkspacePreview {
     case image, media, web, document, download, truncated, unavailable
     case text(String)
+}
+
+private func renderedTextContrast(_ image: CGImage, region: CGRect) -> Int {
+    guard let sample = image.cropping(to: region),
+          let context = CGContext(data: nil, width: 128, height: 128, bitsPerComponent: 8, bytesPerRow: 128,
+                                  space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue)
+    else { return 0 }
+    context.draw(sample, in: CGRect(x: 0, y: 0, width: 128, height: 128))
+    guard let pixels = context.makeImage()?.dataProvider?.data else { return 0 }
+    let values = pixels as Data
+    return Int(values.max() ?? 0) - Int(values.min() ?? 0)
 }
 
 /// XCTest selectors remain on LaunchUITests for the fixture runner.
@@ -63,7 +75,10 @@ extension LaunchUITests {
         XCTAssertTrue(done.waitForExistence(timeout: 15), "The Host file did not open")
         XCTAssertTrue(app.navigationBars[filename].exists)
         verifyWorkspacePreview(app, expected: expected)
-        captureScreen(app, named: filename)
+        let screen = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screen.name = filename
+        screen.lifetime = .keepAlways
+        add(screen)
         done.tap()
         wait(for: [expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: done)], timeout: 5)
         tapWhenStable(app.navigationBars.buttons["閉じる"])
@@ -88,6 +103,13 @@ extension LaunchUITests {
             XCTAssertFalse(app.buttons["file.save"].isEnabled)
             XCTAssertTrue(app.buttons["file.download"].exists)
             XCTAssertFalse(app.textViews["file.editor"].exists)
+            let image = preview.screenshot().image.cgImage
+            let scale = CGFloat(image?.width ?? 0) / preview.frame.width
+            // Sample below the heading, away from the scroll indicator.
+            let area = CGRect(x: 12, y: 48, width: 100, height: 100)
+                .applying(CGAffineTransform(scaleX: scale, y: scale))
+            let contrast = image.map { renderedTextContrast($0, region: area) } ?? 0
+            XCTAssertGreaterThan(contrast, 128, "The long unbroken line must actually be drawn")
         case .unavailable:
             XCTAssertTrue(app.descendants(matching: .any)["file.error"].waitForExistence(timeout: 15))
             XCTAssertTrue(app.buttons["file.download"].exists)

@@ -284,7 +284,10 @@ private struct FileTextPreview: UIViewRepresentable {
     let line: UInt32?
 
     func makeUIView(context _: Context) -> UITextView {
-        let view = UITextView()
+        // TextKit 2 can omit very long paragraphs. Lay out the bounded file
+        // prefix with TextKit 1, allowing sections to be laid out independently.
+        let view = UITextView(usingTextLayoutManager: false)
+        view.layoutManager.allowsNonContiguousLayout = true
         view.isEditable = false
         view.isSelectable = true
         view.backgroundColor = .clear
