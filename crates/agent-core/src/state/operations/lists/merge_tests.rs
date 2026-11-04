@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    models::{Thread, ThreadList, WorktreeStatus},
+    models::{Project, ProjectMembership, ProjectRoot, Thread, ThreadList, WorktreeStatus},
     session::{ProviderKind, SessionRef},
 };
 use proptest::prelude::*;
@@ -54,6 +54,107 @@ fn unavailable(row: Thread) -> Thread {
         status: crate::models::SessionStatus::Unknown,
         list_stale: Some(true),
         ..row
+    }
+}
+
+fn project(id: &str, name: &str) -> Project {
+    Project {
+        id: id.into(),
+        name: name.into(),
+        roots: vec![ProjectRoot {
+            path: format!("/repo/{name}"),
+        }],
+        favicon_png: Some(format!("icon-{name}")),
+        ..Default::default()
+    }
+}
+
+fn linked(id: Option<SessionRef>, project: &str) -> Thread {
+    Thread {
+        project_id: ProjectMembership::Assigned(project.into()),
+        ..versioned(id, "linked", 0)
+    }
+}
+
+#[test]
+fn failed_reads_restore_only_referenced_projects_in_first_cached_order() {
+    for count in [16, 127, 128, 129, 512] {
+        let current = vec![
+            project("present", "current"),
+            project("present", "current-duplicate"),
+        ];
+        let first = project("missing", "first");
+        let anonymous = project("anonymous", "anonymous");
+        let mut cached = vec![
+            project("present", "stale"),
+            first.clone(),
+            project("unused", "unused"),
+            project("missing", "duplicate"),
+            anonymous.clone(),
+        ];
+        let mut rows = vec![
+            linked(Some(session(ProviderKind::Claude, "present")), "present"),
+            linked(Some(session(ProviderKind::Claude, "missing")), "missing"),
+            linked(None, "anonymous"),
+            Thread {
+                cwd: Some("/repo/unused".into()),
+                project_id: ProjectMembership::Unassigned {},
+                ..Default::default()
+            },
+        ];
+        let mut expected = current.clone();
+        expected.extend([first, anonymous]);
+        while cached.len() < count {
+            let id = format!("project{}", cached.len());
+            let row_id = format!("thread{}", cached.len());
+            rows.push(linked(Some(session(ProviderKind::Claude, &row_id)), &id));
+            let project = project(&id, "padding");
+            expected.push(project.clone());
+            cached.push(project);
+        }
+        let mut input = list(rows);
+        input.projects = current;
+        input.provider_errors = Some(
+            [("codex".into(), serde_json::json!("offline"))]
+                .into_iter()
+                .collect(),
+        );
+        let mut previous = list(Vec::new());
+        previous.projects = cached;
+        assert_eq!(merge_received(input, Some(&previous)).projects, expected);
+    }
+}
+
+proptest! {
+    #[test]
+    fn project_recovery_keeps_current_catalogue_and_uses_membership_from_every_provider(
+        cases in proptest::collection::vec((any::<bool>(), any::<bool>()), 0..512),
+    ) {
+        let mut cached = Vec::new();
+        let mut received = Vec::new();
+        let mut restored = Vec::new();
+        let mut rows = Vec::new();
+        for (index, &(used, returned)) in cases.iter().enumerate() {
+            let id = format!("project{index}");
+            let old = project(&id, "cached");
+            if returned { received.push(project(&id, "received")); }
+            if used {
+                let provider = if index % 2 == 0 { ProviderKind::Codex } else { ProviderKind::Claude };
+                rows.push(linked(Some(session(provider, &format!("thread{index}"))), &id));
+                if !returned { restored.push(old.clone()); }
+            }
+            cached.push(old);
+        }
+        received.reverse();
+        let mut expected = received.clone();
+        expected.extend(restored);
+        let mut input = list(rows);
+        input.projects = received;
+        input.provider_errors = Some([("codex".into(), serde_json::json!("offline"))].into_iter().collect());
+        let mut previous = list(Vec::new());
+        previous.projects = cached;
+        let result = merge_received(input, Some(&previous));
+        prop_assert_eq!(result.projects, expected);
     }
 }
 

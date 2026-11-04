@@ -281,6 +281,48 @@ fn missing_failed_provider_rows<'a>(
     missing
 }
 
+fn missing_referenced_projects<'a>(
+    received: &[crate::models::Project],
+    cached: &'a [crate::models::Project],
+    rows: &[crate::models::Thread],
+) -> Vec<&'a crate::models::Project> {
+    let mut missing: Vec<&crate::models::Project> = Vec::new();
+    if cached.is_empty() || rows.is_empty() {
+        return missing;
+    }
+    if cached.len() < 128 || received.len() > cached.len().saturating_mul(4) {
+        for project in cached {
+            if !received.iter().any(|current| current.id == project.id)
+                && !missing.iter().any(|current| current.id == project.id)
+                && rows
+                    .iter()
+                    .any(|row| row.project_id.as_ref() == Some(&project.id))
+            {
+                missing.push(project);
+            }
+        }
+        return missing;
+    }
+
+    let used: HashSet<_> = rows
+        .iter()
+        .filter_map(|row| row.project_id.as_deref())
+        .collect();
+    if used.is_empty() {
+        return missing;
+    }
+    let mut present = HashSet::with_capacity(received.len().max(cached.len()));
+    for project in received {
+        present.insert(project.id.as_str());
+    }
+    for project in cached {
+        if used.contains(project.id.as_str()) && present.insert(project.id.as_str()) {
+            missing.push(project);
+        }
+    }
+    missing
+}
+
 fn merge_received(
     mut threads: crate::models::ThreadList,
     previous: Option<&crate::models::ThreadList>,
@@ -365,18 +407,10 @@ fn merge_received(
             cached.status = crate::models::SessionStatus::Unknown;
             threads.data.push(cached);
         }
-        for project in &previous.projects {
-            if !threads
-                .projects
-                .iter()
-                .any(|current| current.id == project.id)
-                && threads
-                    .data
-                    .iter()
-                    .any(|thread| thread.project_id.as_ref() == Some(&project.id))
-            {
-                threads.projects.push(project.clone());
-            }
+        for project in
+            missing_referenced_projects(&threads.projects, &previous.projects, &threads.data)
+        {
+            threads.projects.push(project.clone());
         }
     }
     threads
