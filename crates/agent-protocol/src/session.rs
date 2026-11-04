@@ -3,7 +3,10 @@
 use crate::execution::ExecutionError;
 use crate::models::{Item, ItemBody, SessionStatus, Thread, Turn, TurnStatus};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -489,12 +492,12 @@ fn merge_turn(previous: Option<&Turn>, incoming: &Turn, completed: bool) -> Opti
         // a native "full" turn can omit an item whose output is still
         // arriving. Only RemoveItem removes a streamed item; a new
         // history response replaces the conversation at its owner.
-        merged.items = Some(append_items(
-            previous
-                .and_then(|old| old.items.clone())
-                .unwrap_or_default(),
-            items,
-        ));
+        let previous_items = if previous.is_some() {
+            merged.items.take().unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        merged.items = Some(append_items(previous_items, items));
     }
     if incoming.error.is_none()
         && (merged.status == TurnStatus::Completed
@@ -511,9 +514,32 @@ fn merge_turn(previous: Option<&Turn>, incoming: &Turn, completed: bool) -> Opti
 }
 
 #[cfg(test)]
-mod merge_turn_tests {
+mod update_tests {
     use super::*;
     use crate::execution::{ExecutionError, RetryEvidence};
+
+    #[test]
+    fn workspace_updates_replace_only_the_directory() {
+        let previous = Thread {
+            cwd: Some("/before".into()),
+            name: Some("conversation".into()),
+            status: SessionStatus::Running,
+            ..Default::default()
+        };
+        let next = SessionChange::Workspace {
+            cwd: "/after".into(),
+        }
+        .apply(&previous)
+        .unwrap();
+        assert_eq!(
+            next,
+            Thread {
+                cwd: Some("/after".into()),
+                ..previous.clone()
+            }
+        );
+        assert_eq!(previous.cwd.as_deref(), Some("/before"));
+    }
 
     #[test]
     fn running_notifications_do_not_reopen_terminal_turns() {
@@ -611,10 +637,30 @@ mod merge_turn_tests {
 }
 
 pub fn append_items(mut previous: Vec<Arc<Item>>, incoming: &[Arc<Item>]) -> Vec<Arc<Item>> {
+    match incoming {
+        [] => return previous,
+        // Single-item notifications need no index allocation or hashing.
+        [item] => {
+            if let Some(current) = previous.iter_mut().find(|current| current.id == item.id) {
+                *current = item.clone();
+            } else {
+                previous.push(item.clone());
+            }
+            return previous;
+        }
+        _ => {}
+    }
+    // Last update wins, while the first occurrence keeps its original position.
+    // Borrow incoming identities so indexing does not copy their strings.
+    let mut updates: HashMap<_, _> = incoming.iter().map(|item| (&item.id, item)).collect();
+    for current in &mut previous {
+        if let Some(item) = updates.remove(&current.id) {
+            *current = item.clone();
+        }
+    }
+    previous.reserve(updates.len());
     for item in incoming {
-        if let Some(index) = previous.iter().position(|current| current.id == item.id) {
-            previous[index] = item.clone();
-        } else {
+        if let Some(item) = updates.remove(&item.id) {
             previous.push(item.clone());
         }
     }
@@ -693,29 +739,27 @@ pub fn retained_history(previous: &[Arc<Turn>], incoming: &[Arc<Turn>]) -> Optio
         return None;
     }
     let prefix = previous.len() - overlap;
-    let older = previous[..prefix].to_vec();
     let mut hydrated = incoming.to_vec();
     for (index, cached) in previous[prefix..].iter().enumerate() {
         let fresh = &mut hydrated[index];
         if (fresh.items_summary || fresh.items.is_none()) && cached.items.is_some() {
-            let changed =
-                fresh.items.is_some()
-                    && (fresh.status == TurnStatus::Running
-                        || fresh.status != cached.status
-                        || fresh.duration_ms != cached.duration_ms
-                        || fresh.items.iter().flatten().any(|item| {
-                            !cached.items.iter().flatten().any(|old| old.id == item.id)
-                        }));
+            let cached_ids: HashSet<_> =
+                cached.items.iter().flatten().map(|item| &item.id).collect();
+            let changed = fresh.items.is_some()
+                && (fresh.status == TurnStatus::Running
+                    || fresh.status != cached.status
+                    || fresh.duration_ms != cached.duration_ms
+                    || fresh
+                        .items
+                        .iter()
+                        .flatten()
+                        .any(|item| !cached_ids.contains(&item.id)));
             let fresh = Arc::make_mut(fresh);
             let updates: Vec<_> = fresh
                 .items
                 .iter()
                 .flatten()
-                .filter(|item| {
-                    !item.is_deferred()
-                        || changed
-                        || !cached.items.iter().flatten().any(|old| old.id == item.id)
-                })
+                .filter(|item| !item.is_deferred() || changed || !cached_ids.contains(&item.id))
                 .cloned()
                 .collect();
             fresh.items = Some(append_items(
@@ -725,20 +769,20 @@ pub fn retained_history(previous: &[Arc<Turn>], incoming: &[Arc<Turn>]) -> Optio
             fresh.items_summary = cached.items_summary || changed;
         }
     }
-    Some(prepend_history(&older, &hydrated))
+    Some(prepend_history(&previous[..prefix], &hydrated))
 }
 
 fn ordered_overlap(previous: &[Arc<Turn>], incoming: &[Arc<Turn>]) -> usize {
     if previous
         .iter()
         .map(|turn| &turn.id)
-        .collect::<std::collections::HashSet<_>>()
+        .collect::<HashSet<_>>()
         .len()
         != previous.len()
         || incoming
             .iter()
             .map(|turn| &turn.id)
-            .collect::<std::collections::HashSet<_>>()
+            .collect::<HashSet<_>>()
             .len()
             != incoming.len()
     {
@@ -853,7 +897,68 @@ mod history_tests {
         })
     }
 
+    #[test]
+    fn item_updates_keep_positions_and_use_the_last_incoming_body() {
+        let old = turn(0, 0..3, false).items.clone().unwrap();
+        let mut incoming = turn(0, 2..5, false).items.clone().unwrap();
+        let last = Arc::new(Item::new(
+            "item-2".into(),
+            Default::default(),
+            ItemBody::Plan {
+                text: "latest".into(),
+            },
+        ));
+        incoming.extend([incoming[1].clone(), last.clone()]);
+        let mut previous = old.clone();
+        previous.push(old[2].clone());
+        let merged = append_items(previous.clone(), &incoming);
+        assert_eq!(
+            merged
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            ["item-0", "item-1", "item-2", "item-2", "item-3", "item-4"]
+        );
+        assert!(Arc::ptr_eq(&merged[2], &last));
+        assert!(
+            Arc::ptr_eq(&merged[3], &old[2]),
+            "later stored occurrences stay intact"
+        );
+        assert_eq!(append_items(previous.clone(), &[]), previous);
+        let only_new = append_items(Vec::new(), &incoming);
+        assert_eq!(
+            only_new
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            ["item-2", "item-3", "item-4"]
+        );
+        assert!(Arc::ptr_eq(&only_new[0], &last));
+    }
+
     proptest! {
+        #[test]
+        fn item_merges_preserve_order_and_last_writes(
+            existing in prop::collection::btree_set(0u8..32, 0..32),
+            updates in prop::collection::vec(0u8..48, 0..64),
+        ) {
+            let item = |id: u8| Arc::new(Item::new(id.to_string().into(), Default::default(), ItemBody::Sleep {}));
+            let previous: Vec<_> = existing.iter().copied().map(item).collect();
+            let incoming: Vec<_> = updates.iter().copied().map(item).collect();
+            let merged = append_items(previous.clone(), &incoming);
+            let new_ids: std::collections::BTreeSet<_> = updates.iter().filter(|id| !existing.contains(id)).collect();
+            prop_assert_eq!(merged.len(), existing.len() + new_ids.len());
+            prop_assert!(merged[..previous.len()].iter().map(|item| &item.id).eq(previous.iter().map(|item| &item.id)));
+            let positions: Vec<_> = merged[previous.len()..].iter()
+                .map(|item| incoming.iter().position(|update| update.id == item.id).unwrap()).collect();
+            prop_assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+            for actual in &merged {
+                let expected = incoming.iter().rfind(|item| item.id == actual.id)
+                    .or_else(|| previous.iter().find(|item| item.id == actual.id)).unwrap();
+                prop_assert!(Arc::ptr_eq(actual, expected));
+            }
+        }
+
         #[test]
         fn cursor_pages_preserve_every_turn_and_item_occurrence(
             sizes in prop::collection::vec(1usize..25, 1..12), cut in 0usize..12,

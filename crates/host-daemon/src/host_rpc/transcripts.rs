@@ -10,7 +10,11 @@ use agent_protocol::{
     session::SessionRef,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
-use std::{path::Path, sync::Mutex};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+    sync::Mutex,
+};
 
 /// A window stops growing past this many encoded bytes, keeping at least one turn.
 const WINDOW_BYTES: usize = 1 << 20;
@@ -31,20 +35,23 @@ fn failure(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
-/// Providers may reuse a turn ID; shared item IDs identify the same occurrence.
+/// Within a turn ID's candidates, shared item IDs identify the same occurrence.
 fn same_occurrence(stored: &Turn, live: &Turn) -> bool {
-    let items = |turn: &Turn| {
-        turn.items
-            .iter()
-            .flatten()
-            .map(|item| item.id.clone())
-            .collect::<Vec<_>>()
-    };
-    let (stored_items, live_items) = (items(stored), items(live));
-    stored.id == live.id
-        && (stored_items.is_empty()
-            || live_items.is_empty()
-            || stored_items.iter().any(|id| live_items.contains(id)))
+    let stored_items = stored.items.as_deref().unwrap_or_default();
+    let live_items = live.items.as_deref().unwrap_or_default();
+    if stored_items.is_empty() || live_items.is_empty() {
+        return true;
+    }
+    let stored_ids: HashSet<_> = stored_items.iter().map(|item| &item.id).collect();
+    live_items.iter().any(|item| stored_ids.contains(&item.id))
+}
+
+fn turns_by_id<'a>(turns: impl Iterator<Item = &'a Turn>) -> HashMap<&'a TurnId, Vec<&'a Turn>> {
+    let mut by_id: HashMap<_, Vec<_>> = HashMap::new();
+    for turn in turns {
+        by_id.entry(&turn.id).or_default().push(turn);
+    }
+    by_id
 }
 
 fn decode_turn(body: &[u8]) -> Result<Turn, String> {
@@ -145,20 +152,29 @@ impl Transcripts {
             }
             // A turn recorded before its conversation was saved lacks the
             // provider attribution native reads add.
+            let recorded_by_id = turns_by_id(recorded.iter());
+            let native_by_id = turns_by_id(native.iter().map(AsRef::as_ref));
             let turns: Vec<std::borrow::Cow<Turn>> = native
                 .iter()
-                .map(|native| match recorded.iter().find(|turn| same_occurrence(native, turn)) {
-                    Some(turn) => std::borrow::Cow::Owned(Turn {
-                        provider: turn.provider.or(native.provider),
-                        supports_fork: turn.supports_fork.or(native.supports_fork),
-                        ..turn.clone()
-                    }),
-                    None => std::borrow::Cow::Borrowed(native.as_ref()),
+                .map(|native| {
+                    let stored = recorded_by_id.get(&native.id).into_iter().flatten().copied()
+                        .find(|turn| same_occurrence(native, turn));
+                    match stored {
+                        Some(turn) => std::borrow::Cow::Owned(Turn {
+                            provider: turn.provider.or(native.provider),
+                            supports_fork: turn.supports_fork.or(native.supports_fork),
+                            ..turn.clone()
+                        }),
+                        None => std::borrow::Cow::Borrowed(native.as_ref()),
+                    }
                 })
                 .chain(
                     recorded
                         .iter()
-                        .filter(|turn| !native.iter().any(|native| same_occurrence(native, turn)))
+                        .filter(|turn| {
+                            !native_by_id.get(&turn.id).into_iter().flatten()
+                                .any(|native| same_occurrence(native, turn))
+                        })
                         .map(std::borrow::Cow::Borrowed),
                 )
                 .collect();
@@ -599,6 +615,78 @@ mod tests {
                 _ => unreachable!(),
             })
             .collect()
+    }
+
+    #[test]
+    fn imports_match_repeated_turn_ids_by_items_and_keep_unmatched_occurrences() {
+        let (_root, store) = store();
+        let target = conversation();
+        store
+            .import(
+                &target,
+                history(vec![
+                    turn("reused", &["a"], TurnStatus::Completed),
+                    turn("reused", &["b"], TurnStatus::Failed),
+                    turn("other", &["tail"], TurnStatus::Completed),
+                ]),
+            )
+            .unwrap();
+        let mut shared = turn("reused", &["b", "native-only"], TurnStatus::Running);
+        shared.provider = Some(ProviderKind::Codex);
+        shared.supports_fork = Some(true);
+        store
+            .import(
+                &target,
+                history(vec![
+                    shared,
+                    turn("reused", &["new"], TurnStatus::Completed),
+                ]),
+            )
+            .unwrap();
+        let saved = store
+            .history(&target)
+            .unwrap()
+            .unwrap()
+            .thread
+            .turns
+            .unwrap();
+        assert_eq!(
+            saved
+                .iter()
+                .map(|turn| turn.id.as_str())
+                .collect::<Vec<_>>(),
+            ["reused", "reused", "reused", "other"]
+        );
+        assert_eq!(saved[0].status, TurnStatus::Failed);
+        assert_eq!(saved[0].provider, Some(ProviderKind::Codex));
+        assert_eq!(saved[0].supports_fork, Some(true));
+        assert_eq!(
+            saved
+                .iter()
+                .flat_map(|turn| turn.items.iter().flatten())
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            ["b", "new", "a", "tail"]
+        );
+
+        // An itemless native observation matches the first stored occurrence
+        // and suppresses all stored occurrences covered by that observation.
+        store
+            .import(
+                &target,
+                history(vec![turn("reused", &[], TurnStatus::Running)]),
+            )
+            .unwrap();
+        let saved = store
+            .history(&target)
+            .unwrap()
+            .unwrap()
+            .thread
+            .turns
+            .unwrap();
+        assert_eq!(saved.len(), 2);
+        assert_eq!(saved[0].items.as_ref().unwrap()[0].id.as_str(), "b");
+        assert_eq!(saved[1].id.as_str(), "other");
     }
 
     #[test]

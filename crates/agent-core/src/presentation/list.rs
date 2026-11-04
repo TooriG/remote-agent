@@ -189,7 +189,7 @@ impl Snapshot {
                 .then_with(|| a.id.cmp(&b.id))
         });
         list.threads = thread_summaries(
-            &rows,
+            rows.iter(),
             &self.activity.active,
             &self.activity.unread,
             waiting,
@@ -210,6 +210,7 @@ impl Snapshot {
     pub fn thread_list(&self) -> Option<ThreadList> {
         let list = self.threads.as_ref()?;
         let waiting = self.waiting_sessions();
+        let search = self.list_query.search_term.to_lowercase();
         let project_ids: HashSet<_> = list
             .projects
             .iter()
@@ -218,7 +219,7 @@ impl Snapshot {
         let errors = self.list_error_providers(list);
         let notice = (!errors.is_empty()).then(|| format!("会話一覧は部分結果です（{}）。取得できない提供元の保存済み表示は最新とは限りません。", errors.join("、")));
         let summaries = thread_summaries(
-            &list.data,
+            list.data.iter(),
             &self.activity.active,
             &self.activity.unread,
             waiting,
@@ -306,16 +307,13 @@ impl Snapshot {
                         && let Some(page) = page
                     {
                         summary.threads = thread_summaries(
-                            &page
-                                .data
+                            page.data
                                 .iter()
                                 .filter(|t| {
                                     t.id.as_ref()
                                         .is_none_or(|id| self.chat_placement(id).is_none())
                                 })
-                                .filter(|t| self.project_chat_visible(&project.id, t))
-                                .cloned()
-                                .collect::<Vec<_>>(),
+                                .filter(|t| self.project_chat_visible(&project.id, t)),
                             &self.activity.active,
                             &self.activity.unread,
                             waiting,
@@ -352,13 +350,13 @@ impl Snapshot {
                             .filter(|thread| {
                                 task_title(thread.name.as_deref(), thread.preview.as_deref())
                                     .to_lowercase()
-                                    .contains(&self.list_query.search_term.to_lowercase())
+                                    .contains(&search)
                             })
                             .collect::<Vec<_>>();
                         summary.threads.splice(
                             0..0,
                             thread_summaries(
-                                &placed,
+                                placed.iter(),
                                 &self.activity.active,
                                 &self.activity.unread,
                                 waiting,
@@ -375,15 +373,14 @@ impl Snapshot {
     }
 }
 
-fn thread_summaries(
-    data: &[crate::models::Thread],
+fn thread_summaries<'a>(
+    data: impl Iterator<Item = &'a crate::models::Thread>,
     active: &BTreeMap<crate::session::SessionRef, bool>,
     unread: &BTreeSet<crate::session::SessionRef>,
     waiting: &[crate::session::SessionRef],
     project_ids: &HashSet<&str>,
 ) -> Vec<ThreadSummary> {
-    data.iter()
-        .filter(|thread| thread.parent_id.is_none())
+    data.filter(|thread| thread.parent_id.is_none())
         .filter_map(|thread| {
             let id = thread.id.clone()?;
             let active = task_active(active.get(&id).copied(), thread.status);
