@@ -127,7 +127,8 @@ impl Desktop {
     // Resource ownership and visibility are reconciled before drawing, including
     // Desktop state changes and window resizes. Rendering only reads the result.
     pub(in crate::app) fn sync_surfaces(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let panel = self.panels.get(self.panel_scope());
+        let scope = self.panel_scope();
+        let panel = self.panels.get(scope.clone());
         let panel_open = panel.open;
         let panel_kind = panel.kind();
         let panel_layout = panel.layout;
@@ -186,6 +187,18 @@ impl Desktop {
                     chat.update(cx, |chat, cx| {
                         chat.set_visible(active && Some(*id) == active_surface, window, cx)
                     });
+                }
+                SurfaceResource::Terminal(view)
+                    if self.snapshot.connected
+                        && self.panels.scope(*id).is_some_and(|owner| {
+                            owner.host == scope.host && owner.storage == scope.storage
+                        }) =>
+                {
+                    if let Some(session) = &self.session {
+                        view.update(cx, |view, cx| {
+                            view.connect(session.store.clone(), window, cx)
+                        });
+                    }
                 }
                 _ => (),
             }

@@ -1,10 +1,11 @@
 name: Dependabot merge
-# Merges a Dependabot pull request once Native clients passed for its current head and every
-# update keeps the existing API (scripts/dependabot-merge.mjs). Main has no required checks,
-# so sessions can push directly; GitHub auto-merge would need them and is not used.
+# Merges a Dependabot pull request once Portable checks and Native clients passed for its
+# current head and every update keeps the existing API (scripts/dependabot-merge.mjs). Main has
+# no required checks, so sessions can push directly; GitHub auto-merge would need them and is
+# not used.
 on:
   workflow_run:
-    workflows: [Native clients]
+    workflows: [Portable checks, Native clients]
     types: [completed]
 permissions: {}
 concurrency:
@@ -36,6 +37,15 @@ jobs:
           PULL_REQUESTS: ${{ toJSON(github.event.workflow_run.pull_requests) }}
         run: |
           set -euo pipefail
+          # Either workflow may finish last; merge once both verified this head.
+          for workflow in portable.yml native.yml; do
+            verified=$(gh run list --workflow "$workflow" --event pull_request --commit "$HEAD_SHA" \
+              --status success --limit 1 --json headSha --jq '.[0].headSha // ""')
+            if [[ $verified != "$HEAD_SHA" ]]; then
+              echo "$workflow has not passed for $HEAD_SHA yet"
+              exit 0
+            fi
+          done
           for number in $(jq -r '.[].number' <<< "$PULL_REQUESTS"); do
             gh pr view "$number" --json state,isDraft,baseRefName,author,headRefOid,commits,title,body > pull-request.json
             decision=$(node scripts/dependabot-merge.mjs "$HEAD_SHA" < pull-request.json)
@@ -43,6 +53,7 @@ jobs:
             if [[ $(jq -r .merge <<< "$decision") == true ]]; then
               gh pr merge "$number" --merge --match-head-commit "$HEAD_SHA"
               # A merge by this token starts no push workflows, so verify the merged main here.
+              gh workflow run portable.yml --ref main
               gh workflow run native.yml --ref main
             fi
           done

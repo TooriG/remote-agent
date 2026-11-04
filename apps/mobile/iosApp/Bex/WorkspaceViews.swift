@@ -269,7 +269,7 @@ struct WorkspaceDiffScreen: View {
         Group {
             if let error = model.snapshot.operationError(key: .workspaceReview) {
                 VStack {
-                    AppNotice(text: error).padding()
+                    ErrorTextView(text: error).foregroundStyle(.red).accessibilityIdentifier("notice").padding()
                     Button("再試行", action: loadDiff).accessibilityIdentifier("files.diff.retry")
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let files, !files.isEmpty {

@@ -144,10 +144,14 @@ fn route(
             "restore" => true,
             _ => return Err("unknown worktree fixture state".into()),
         };
+        // A deleted worktree is recreated for input; unreadable directories make review fail.
         set_worktree_access(&root.join(format!("{name}-worktree")), readable)?;
         return Ok((204, Vec::new()));
     }
     match path {
+        "/uploads/unavailable" | "/uploads/restore" => {
+            set_upload_storage_available(root, path == "/uploads/restore")?;
+        }
         "/auth-token/unavailable" => fs::write(root.join("auth-token-unavailable"), [])?,
         "/auth-token/reset" => {
             if root.join("auth-token-unavailable").exists() {
@@ -400,19 +404,35 @@ fn worktree_conversation(root: &Path, name: &str) -> Result<()> {
     )
 }
 
-// The Host shows a deleted worktree as unchanged because input recreates it,
-// so an unreadable checkout is what makes its review fail.
 #[cfg(unix)]
-fn set_worktree_access(worktree: &Path, readable: bool) -> Result<()> {
+fn set_worktree_access(directory: &Path, readable: bool) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let mode = if readable { 0o755 } else { 0o000 };
-    fs::set_permissions(worktree, fs::Permissions::from_mode(mode))?;
+    fs::set_permissions(directory, fs::Permissions::from_mode(mode))?;
     Ok(())
 }
 
 #[cfg(not(unix))]
 fn set_worktree_access(_: &Path, _: bool) -> Result<()> {
-    Err("worktree access fixtures require Unix permissions".into())
+    Err("directory access fixtures require Unix permissions".into())
+}
+
+fn set_upload_storage_available(root: &Path, available: bool) -> Result<()> {
+    // Host repairs directory permissions before uploads. A regular file blocks
+    // directory creation instead; keep earlier attachments intact for recovery.
+    let directory = root.join("bex-attachments");
+    let backup = root.join("bex-attachments-unavailable");
+    if available {
+        if backup.exists() {
+            fs::remove_file(&directory)?;
+            fs::rename(backup, directory)?;
+        }
+    } else if !backup.exists() {
+        fs::create_dir_all(&directory)?;
+        fs::rename(&directory, backup)?;
+        fs::write(directory, [])?;
+    }
+    Ok(())
 }
 
 fn list_fixture(root: &Path, path: &str) -> Result<()> {
@@ -466,4 +486,72 @@ fn write_json(path: PathBuf, value: &impl serde::Serialize) -> Result<()> {
     serde_json::to_writer(&mut file, value)?;
     file.flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn upload_storage_controls_fail_and_recover_without_touching_the_checkout() {
+        // File controls must work without connecting to the fixture's RPC peer.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let identity = Identity::generate();
+        let node: iroh::EndpointId = identity.node_id().to_string().parse().unwrap();
+        let ticket =
+            iroh_tickets::endpoint::EndpointTicket::new(iroh::EndpointAddr::from_parts(node, []))
+                .to_string()
+                .parse()
+                .unwrap();
+
+        for existing in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let directory = root.path().join("bex-attachments");
+            let checkout = root.path().join("project.txt");
+            fs::write(&checkout, "draft stays available").unwrap();
+            if existing {
+                agent_local_host::create_state_directory(&directory).unwrap();
+                fs::write(directory.join("earlier.png"), b"earlier photo").unwrap();
+            }
+            let control = |path| {
+                assert_eq!(
+                    route(
+                        root.path(),
+                        &runtime,
+                        &ticket,
+                        &identity,
+                        &Method::Post,
+                        path
+                    )
+                    .unwrap()
+                    .0,
+                    204
+                );
+            };
+            control("/uploads/restore");
+            control("/uploads/unavailable");
+            control("/uploads/unavailable");
+            // Use the production upload preparation, including permission repair.
+            assert!(agent_local_host::create_state_directory(&directory).is_err());
+            assert!(fs::write(directory.join("selected.mov"), b"media").is_err());
+            assert_eq!(
+                fs::read_to_string(&checkout).unwrap(),
+                "draft stays available"
+            );
+            control("/uploads/restore");
+            control("/uploads/restore");
+            agent_local_host::create_state_directory(&directory).unwrap();
+            fs::write(directory.join("selected.mov"), b"media").unwrap();
+            assert_eq!(fs::read(directory.join("selected.mov")).unwrap(), b"media");
+            if existing {
+                assert_eq!(
+                    fs::read(directory.join("earlier.png")).unwrap(),
+                    b"earlier photo"
+                );
+            }
+            assert!(!root.path().join("bex-attachments-unavailable").exists());
+        }
+    }
 }

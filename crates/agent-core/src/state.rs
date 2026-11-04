@@ -593,6 +593,13 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 return prepare(next, params);
             }
         }
+        Intent::CloseTerminal { handle } => {
+            if let Some(terminal) = Arc::make_mut(&mut next.terminals).remove(&handle)
+                && !matches!(terminal.phase, TerminalPhase::Exited(_) | TerminalPhase::Detached)
+            {
+                return (next, vec![Effect::execute(op::KillTerminal { handle })]);
+            }
+        }
         Intent::AcknowledgeTerminal { handle, sequence } => {
             if previous.terminals.get(&handle).is_some_and(|terminal| {
                 terminal.output.front().is_some_and(|chunk| chunk.sequence <= sequence)

@@ -1,3 +1,4 @@
+use agent_protocol::{models::SessionStatus, session::SessionChange};
 use codex_app_server::{AppServerConfig, CodexAppServer};
 use host_daemon::{HostRpcService, HostSession, ProjectStore};
 use serde_json::{Value, json};
@@ -57,7 +58,7 @@ async fn completed_turn(
     session: &mut HostSession,
     thread: &str,
     text: &str,
-) -> String {
+) {
     let open = agent_protocol::protocol::Call::OpenSession(agent_protocol::session::OpenSession {
         include_activity: false,
         known_version: None,
@@ -77,19 +78,25 @@ async fn completed_turn(
     )
     .await;
     assert!(result.get("error").is_none(), "{result}");
-    let id = result["result"]["turnId"].as_str().unwrap().to_owned();
+    let id = result["result"]["turnId"].as_str().unwrap();
+    let mut completed = false;
     loop {
-        let event = agent_protocol::protocol::decode::<agent_protocol::session::SessionChange>(
-            &updates.recv().await.unwrap(),
-        )
-        .unwrap();
-        if let agent_protocol::session::SessionChange::Turn {
-            turn,
-            completed: true,
-        } = event
-            && turn.id.as_str() == id
-        {
-            return id;
+        let event =
+            agent_protocol::protocol::decode::<SessionChange>(&updates.recv().await.unwrap())
+                .unwrap();
+        match event {
+            SessionChange::Turn {
+                turn,
+                completed: true,
+            } if turn.id.as_str() == id => {
+                completed = true;
+            }
+            // The fixture publishes idle separately after the completed turn.
+            // Observe it before comparing snapshots across an account switch.
+            SessionChange::Status {
+                status: SessionStatus::Idle,
+            } if completed => return,
+            _ => {}
         }
     }
 }

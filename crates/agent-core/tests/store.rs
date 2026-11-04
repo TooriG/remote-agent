@@ -2198,6 +2198,11 @@ async fn terminal_preserves_output_until_acknowledged_and_serializes_input() {
             assert_eq!(request["params"]["deltaBase64"], data);
             writer.reply(&request, json!({"result":{}})).await.unwrap();
         }
+        let close = read(&mut reader).await;
+        assert_eq!(close["method"], "host/terminal/kill");
+        assert_eq!(close["params"]["processHandle"], "terminal");
+        writer.notify(json!({"method":"host/terminal/exited","params":{"processHandle":"terminal","exitCode":0,"stdout":"","stderr":"","stdoutCapReached":false,"stderrCapReached":false}})).await.unwrap();
+        writer.reply(&close, json!({"result":{}})).await.unwrap();
         // Keep the transport alive until Store closes it.
         assert!(reader.read_request().await.unwrap().is_none());
     });
@@ -2245,6 +2250,20 @@ async fn terminal_preserves_output_until_acknowledged_and_serializes_input() {
         .await
         .unwrap();
     assert!(store.snapshot().terminals["terminal"].output.is_empty());
+    store
+        .dispatch(Intent::CloseTerminal {
+            handle: "terminal".into(),
+        })
+        .await
+        .unwrap();
+    assert!(!store.snapshot().terminals.contains_key("terminal"));
+    store
+        .dispatch(Intent::SetDraftText {
+            thread_id: "draft".into(),
+            text: "the conversation remains usable".into(),
+        })
+        .await
+        .unwrap();
     store.close().await.unwrap();
     server.await.unwrap();
 }

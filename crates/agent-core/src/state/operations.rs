@@ -70,6 +70,9 @@ pub enum Intent {
     StartTerminal(StartTerminal),
     DetachTerminal(DetachTerminal),
     KillTerminal(KillTerminal),
+    CloseTerminal {
+        handle: String,
+    },
     Transcribe(Dictate),
     CreateInvitation(CreateInvitation),
     RemoveRemoteHost(RemoveRemoteHost),

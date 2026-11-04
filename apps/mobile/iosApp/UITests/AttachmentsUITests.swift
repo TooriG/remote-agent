@@ -80,7 +80,9 @@ extension LaunchUITests {
         app.buttons["task.send"].tap()
         let photo = app.images.matching(NSPredicate(format: "identifier BEGINSWITH %@", "message.image.")).firstMatch
         XCTAssertTrue(photo.waitForExistence(timeout: 30), "Uploaded image did not decode in the conversation")
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "添付:")).firstMatch
+        XCTAssertTrue(app.textViews.matching(NSPredicate(
+            format: "identifier == %@ AND value CONTAINS %@", "message.user-text", "添付:"
+        )).firstMatch
             .waitForExistence(timeout: 20))
         XCTAssertEqual(removals.count, 0)
         XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 30))
@@ -94,7 +96,7 @@ extension LaunchUITests {
         captureScreen(app, named: "Uploaded photo and video in chat history")
     }
 
-    func testSimulatorRetriesPhotoUploadAfterWorkspaceRecovery() throws {
+    func testSimulatorRetriesPhotoUploadAfterStorageRecovery() throws {
         let app = try connectedSimulatorApp(expandProject: false)
         try useSimulatorListFixture("worktree-conversation/upload")
         app.buttons["tasks.menu"].tap(); app.buttons["tasks.refresh"].tap()
@@ -104,11 +106,11 @@ extension LaunchUITests {
         let prompt = app.textFields["task.message"]
         XCTAssertTrue(prompt.waitForExistence(timeout: 10))
         prompt.tap(); prompt.typeText("[success] Retry selected photos")
-        try simulatorFixture("worktree/upload/unavailable")
+        try simulatorFixture("uploads/unavailable")
         var unavailable = true
         addTeardownBlock {
             if unavailable {
-                try self.simulatorFixture("worktree/upload/restore")
+                try self.simulatorFixture("uploads/restore")
             }
         }
         selectPhotos([.photo, .video], in: app)
@@ -121,7 +123,7 @@ extension LaunchUITests {
         let removals = app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", "を外す"))
         XCTAssertEqual(removals.count, 0)
         XCTAssertEqual(prompt.value as? String, "[success] Retry selected photos")
-        try simulatorFixture("worktree/upload/restore"); unavailable = false
+        try simulatorFixture("uploads/restore"); unavailable = false
         selectPhotos([.photo, .video], in: app)
         confirmPhotoSelection(in: app)
         let attached = expectation(for: NSPredicate(format: "count == 2"), evaluatedWith: removals)
@@ -183,11 +185,13 @@ extension LaunchUITests {
         // The picker restores the app's Documents directory asynchronously.
         // Wait for that destination before navigating a transient Browse page.
         if !attachment.waitForExistence(timeout: 10) {
-            let browse = app.buttons["ブラウズ"]
+            let browse = app.buttons.matching(NSPredicate(format: "label IN %@", ["ブラウズ", "Browse"])).firstMatch
             if browse.waitForExistence(timeout: 3) {
                 browse.tap()
             }
-            let onPhone = app.staticTexts["このiPhone内"]
+            let onPhone = app.staticTexts.matching(
+                NSPredicate(format: "label IN %@", ["このiPhone内", "On My iPhone"])
+            ).firstMatch
             if onPhone.waitForExistence(timeout: 3) {
                 onPhone.tap()
             }
@@ -214,9 +218,9 @@ extension LaunchUITests {
         let message = reopened.descendants(matching: .any)["task.message"]
         message.tap(); message.typeText("Read the attached file")
         reopened.buttons["task.send"].tap()
-        let historyAttachment = reopened.staticTexts.matching(NSPredicate(
-            format: "label CONTAINS %@",
-            "添付: attachment-fixture.txt"
+        let historyAttachment = reopened.textViews.matching(NSPredicate(
+            format: "identifier == %@ AND value CONTAINS %@",
+            "message.user-text", "添付: attachment-fixture.txt"
         )).firstMatch
         XCTAssertTrue(historyAttachment.waitForExistence(timeout: 15))
         openFiles(reopened)

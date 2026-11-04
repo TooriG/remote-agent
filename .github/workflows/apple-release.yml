@@ -6,8 +6,10 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+env:
+  AGENT_RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
 jobs:
-  release:
+  verification:
     if: >-
       (github.event_name == 'workflow_run' &&
        github.event.workflow_run.event == 'push' &&
@@ -15,6 +17,26 @@ jobs:
        github.event.workflow_run.head_repository.full_name == github.repository &&
        github.event.workflow_run.conclusion == 'success') ||
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    permissions:
+      actions: read
+    steps:
+      - name: Require both workflows to verify this exact main commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for workflow in portable.yml native.yml; do
+            run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --branch main \
+              --event push --commit "$AGENT_RELEASE_SHA" --limit 1 --json databaseId --jq '.[0].databaseId // ""')
+            test -n "$run"
+            # Native acceptance may finish before Portable checks. Wait on Linux
+            # before allocating the signing runner; only Native clients triggers release.
+            gh run watch "$run" --repo "$GITHUB_REPOSITORY" --exit-status --interval 30
+          done
+  release:
+    needs: verification
     # Skipped PR and failed-build notifications must not replace a queued release.
     concurrency:
       group: apple-release
@@ -28,7 +50,6 @@ jobs:
       AGENT_XCODE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       CARGO_BUILD_JOBS: 2
       CARGO_INCREMENTAL: 0
-      AGENT_RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
       AGENT_DISTRIBUTION_SIGNING: '1'
       AGENT_TESTFLIGHT_GROUP: BEX External
     steps:
@@ -36,14 +57,9 @@ jobs:
         with:
           ref: ${{ env.AGENT_RELEASE_SHA }}
           persist-credentials: false
-      - name: Require successful Native clients for this exact main commit
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Verify the source revision and pinned Xcode
         run: |
           test "$(git rev-parse HEAD)" = "$AGENT_RELEASE_SHA"
-          verified=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow native.yml --branch main \
-            --event push --commit "$AGENT_RELEASE_SHA" --status success --limit 1 --json headSha --jq '.[0].headSha // ""')
-          test "$verified" = "$AGENT_RELEASE_SHA"
           test -d "$AGENT_XCODE_DEVELOPER_DIR"
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
       - name: Initialize pinned tooling before loading signing secrets
@@ -105,9 +121,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          printf 'Mac and TestFlight build %s.\n\n[iPhone: Get on TestFlight](https://testflight.apple.com/join/UJbK9Ww7)\n\nSource commit: %s\n\nNative clients verification: https://github.com/%s/actions/runs/%s\n' \
+          printf 'Mac and TestFlight build %s.\n\n[iPhone: Get on TestFlight](https://testflight.apple.com/join/UJbK9Ww7)\n\nSource commit: %s\n\nRelease verification: https://github.com/%s/actions/runs/%s\n' \
             "$AGENT_BUILD_NUMBER" "$AGENT_RELEASE_SHA" "$GITHUB_REPOSITORY" \
-            "${{ github.event.workflow_run.id || github.run_id }}" > target/apple-release/release-notes.txt
+            "${{ github.run_id }}" > target/apple-release/release-notes.txt
           gh release create "$AGENT_RELEASE_TAG" target/apple-release/bex-macOS-arm64.zip \
             target/apple-release/bex-macOS-arm64.zip.sha256 --repo "$GITHUB_REPOSITORY" \
             --target "$AGENT_RELEASE_SHA" --title "BEX ${AGENT_BUILD_NUMBER}" \

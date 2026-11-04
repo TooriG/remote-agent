@@ -157,3 +157,53 @@ impl Operation for KillTerminal {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn closing_a_terminal_releases_only_its_state_and_kills_owned_processes() {
+        for (phase, kills) in [
+            (TerminalPhase::Starting, true),
+            (TerminalPhase::Running, true),
+            (TerminalPhase::Suspended, true),
+            (TerminalPhase::Failed("startup failed".into()), true),
+            (TerminalPhase::Exited(0), false),
+            (TerminalPhase::Detached, false),
+        ] {
+            let terminal = Arc::new(Terminal {
+                cwd: "/fixture".into(),
+                size: agent_protocol::operations::TerminalSize { rows: 24, cols: 80 },
+                phase,
+                sequence: 0,
+                output: VecDeque::new(),
+            });
+            let before = Snapshot {
+                terminals: Arc::new(BTreeMap::from([
+                    ("closing".into(), terminal.clone()),
+                    ("other".into(), terminal.clone()),
+                ])),
+                ..Default::default()
+            };
+            let (closed, effects) = reduce(
+                &before,
+                Event::Intent(Intent::CloseTerminal {
+                    handle: "closing".into(),
+                }),
+            );
+            assert!(!closed.terminals.contains_key("closing"));
+            assert!(Arc::ptr_eq(&closed.terminals["other"], &terminal));
+            assert_eq!(effects.len(), usize::from(kills));
+            assert_eq!(before.terminals.len(), 2);
+            let (closed_again, effects) = reduce(
+                &closed,
+                Event::Intent(Intent::CloseTerminal {
+                    handle: "closing".into(),
+                }),
+            );
+            assert_eq!(closed_again.terminals, closed.terminals);
+            assert!(effects.is_empty());
+        }
+    }
+}

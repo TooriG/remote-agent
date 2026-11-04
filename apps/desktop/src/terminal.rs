@@ -1,5 +1,6 @@
-use crate::{Runtime, store_session::StoreSession};
+use crate::Runtime;
 use agent_core::state::{Intent, Snapshot, TerminalPhase, operations as op};
+use agent_core::store::Store;
 use agent_protocol::operations::TerminalSize;
 use alacritty_terminal::{
     Term,
@@ -14,7 +15,10 @@ use gpui_kit::{
     component::{h_flex, v_flex},
     *,
 };
-use std::{ops::Range, sync::Arc};
+use std::{
+    ops::Range,
+    sync::{Arc, Weak},
+};
 
 const FONT_SIZE: f32 = 13.;
 const LINE_HEIGHT: f32 = 18.;
@@ -41,16 +45,15 @@ impl EventListener for TerminalEvents {
     }
 }
 enum Event {
-    Connected(Result<StoreSession, String>),
-    Snapshot(Arc<Snapshot>),
     Clipboard(String),
-    Error(String),
+    Error(Weak<Store>, String),
 }
 
 pub(crate) struct Terminal {
-    session: Option<StoreSession>,
+    store: Arc<Store>,
+    _snapshots: Task<()>,
     snapshot: Arc<Snapshot>,
-    runtime: Runtime,
+    runtime: tokio::runtime::Handle,
     events: async_channel::Sender<Event>,
     handle: String,
     cwd: String,
@@ -69,34 +72,18 @@ pub(crate) struct Terminal {
 }
 impl Terminal {
     pub(crate) fn new(
-        remote: &str,
+        store: Arc<Store>,
         cwd: String,
         handle: String,
         window: &mut Window,
         cx: &mut App,
     ) -> Entity<Self> {
         let (events, incoming) = async_channel::unbounded();
-        let runtime = cx.global::<Runtime>().clone();
-        let connections = runtime.connections.clone();
-        let remote = (!remote.is_empty()).then(|| remote.to_owned());
-        let updates = events.clone();
-        let session_runtime = runtime.clone();
-        runtime.handle.spawn(async move {
-            StoreSession::publish(
-                connections
-                    .connect(remote.as_deref(), Snapshot::default())
-                    .await,
-                session_runtime,
-                updates,
-                Event::Connected,
-                Event::Snapshot,
-            )
-            .await;
-        });
+        let runtime = cx.global::<Runtime>().handle.clone();
         let size = TerminalSize { cols: 80, rows: 24 };
         let focus = cx.focus_handle();
         cx.new(|cx: &mut Context<Self>| {
-            StoreSession::on_app_quit(cx, |view| &mut view.session);
+            let snapshots = Self::observe(store.subscribe(), window, cx);
             cx.spawn_in(window, async move |view, cx| {
                 while let Ok(event) = incoming.recv().await {
                     if view
@@ -108,9 +95,10 @@ impl Terminal {
                 }
             })
             .detach();
-            Self {
-                session: None,
-                snapshot: Arc::default(),
+            let mut view = Self {
+                snapshot: store.snapshot(),
+                store,
+                _snapshots: snapshots,
                 runtime,
                 handle,
                 cwd,
@@ -131,32 +119,62 @@ impl Terminal {
                 selecting: false,
                 mouse_pressed: false,
                 error: None,
+            };
+            view.update_snapshot(view.snapshot.clone(), cx);
+            view
+        })
+    }
+    fn observe(
+        mut snapshots: tokio::sync::watch::Receiver<Arc<Snapshot>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Task<()> {
+        cx.spawn_in(window, async move |view, cx| {
+            loop {
+                let snapshot = snapshots.borrow_and_update().clone();
+                if view
+                    .update_in(cx, |view, _, cx| view.update_snapshot(snapshot, cx))
+                    .is_err()
+                    || snapshots.changed().await.is_err()
+                {
+                    break;
+                }
             }
         })
     }
-    fn dispatch(&self, intent: Intent) {
-        if let Some(session) = &self.session {
-            let receipt = session.store.dispatch(intent);
-            let events = self.events.clone();
-            self.runtime.handle.spawn(async move {
-                if let Err(error) = receipt.await {
-                    let error = agent_core::presentation::error::error_text(&error.to_string());
-                    let _ = events.send(Event::Error(error.to_string())).await;
-                }
-            });
+    pub(crate) fn connect(
+        &mut self,
+        store: Arc<Store>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if Arc::ptr_eq(&self.store, &store) {
+            return;
         }
+        // Host switching closes the previous Store, while its PTYs survive.
+        // Reattach the same handle and consume the new Store's checkpoint sequence.
+        self._snapshots = Self::observe(store.subscribe(), window, cx);
+        self.store = store;
+        self.started = false;
+        self.sequence = 0;
+        self.error = None;
+        self.update_snapshot(self.store.snapshot(), cx);
     }
-    pub(crate) fn close(&mut self) {
-        if let Some(session) = self.session.take() {
-            let handle = self.handle.clone();
-            self.runtime.handle.spawn(async move {
-                let _ = session
-                    .store
-                    .dispatch(Intent::KillTerminal(op::KillTerminal { handle }))
-                    .await;
-                drop(session);
-            });
-        }
+    fn dispatch(&self, intent: Intent) {
+        let receipt = self.store.dispatch(intent);
+        let source = Arc::downgrade(&self.store);
+        let events = self.events.clone();
+        self.runtime.spawn(async move {
+            if let Err(error) = receipt.await {
+                let error = agent_core::presentation::error::error_text(&error.to_string());
+                let _ = events.send(Event::Error(source, error.to_string())).await;
+            }
+        });
+    }
+    pub(crate) fn close(&self) {
+        self.dispatch(Intent::CloseTerminal {
+            handle: self.handle.clone(),
+        });
     }
     pub(crate) fn focus(&self, window: &mut Window, cx: &mut App) {
         self.focus.focus(window, cx);
@@ -175,14 +193,17 @@ impl Terminal {
     }
     fn event(&mut self, event: Event, cx: &mut Context<Self>) {
         match event {
-            Event::Connected(Ok(session)) => {
-                self.snapshot = session.store.snapshot();
-                self.session = Some(session);
+            Event::Error(source, error) => {
+                if source.ptr_eq(&Arc::downgrade(&self.store)) {
+                    self.error = Some(error);
+                }
             }
-            Event::Connected(Err(error)) | Event::Error(error) => self.error = Some(error),
-            Event::Snapshot(snapshot) => self.snapshot = snapshot,
             Event::Clipboard(text) => cx.write_to_clipboard(ClipboardItem::new_string(text)),
         }
+        cx.notify();
+    }
+    fn update_snapshot(&mut self, snapshot: Arc<Snapshot>, cx: &mut Context<Self>) {
+        self.snapshot = snapshot;
         if self.snapshot.connected && !self.started {
             self.started = true;
             self.dispatch(Intent::StartTerminal(op::StartTerminal {
@@ -820,5 +841,114 @@ impl EntityInputHandler for Terminal {
         _: &mut Context<Self>,
     ) -> Option<usize> {
         Some(0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::prelude::v1::test;
+
+    fn checkpoint(sequence: u64, text: &[u8]) -> Snapshot {
+        let size = TerminalSize { cols: 80, rows: 24 };
+        Snapshot {
+            terminals: Arc::new(std::collections::BTreeMap::from([(
+                "retained-shell".into(),
+                Arc::new(agent_core::state::Terminal {
+                    cwd: "/fixture".into(),
+                    size,
+                    phase: TerminalPhase::Detached,
+                    sequence,
+                    output: [Arc::new(agent_core::state::TerminalOutput {
+                        sequence,
+                        data: text.into(),
+                        reset_size: Some(size),
+                    })]
+                    .into(),
+                }),
+            )])),
+            ..Default::default()
+        }
+    }
+
+    #[gpui::test]
+    fn terminal_reuses_the_host_store_and_observes_replacement_checkpoints(
+        cx: &mut TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (store, replacement) = runtime.block_on(async {
+            (
+                Arc::new(Store::offline(checkpoint(42, b"old"))),
+                Arc::new(Store::offline(checkpoint(1, b"restored"))),
+            )
+        });
+        cx.update(|cx| {
+            crate::appearance::init(cx);
+            cx.set_global(Runtime {
+                handle: runtime.handle().clone(),
+                connections: Arc::default(),
+                closing: tokio_util::task::TaskTracker::new(),
+                logging_error: None,
+            });
+        });
+        let window = cx.add_empty_window();
+        let terminal = window.update(|window, cx| {
+            Terminal::new(
+                store.clone(),
+                "/fixture".into(),
+                "retained-shell".into(),
+                window,
+                cx,
+            )
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            terminal.update(cx, |view, cx| {
+                assert!(Arc::ptr_eq(&view.store, &store));
+                assert_eq!(view.sequence, 42);
+                assert_eq!(view.term.grid()[Line(0)][Column(0)].c, 'o');
+                view.connect(store.clone(), window, cx);
+                assert_eq!(view.sequence, 42, "the current Store must keep its cursor");
+                view.connect(replacement.clone(), window, cx);
+            });
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            terminal.update(cx, |view, cx| {
+                assert_eq!(view.sequence, 1, "the replacement has a fresh sequence");
+                assert_eq!(view.term.grid()[Line(0)][Column(0)].c, 'r');
+                assert_eq!(view.handle, "retained-shell");
+                view.event(Event::Error(Arc::downgrade(&store), "old error".into()), cx);
+                assert!(view.error.is_none());
+                view.event(
+                    Event::Error(Arc::downgrade(&replacement), "current error".into()),
+                    cx,
+                );
+                assert_eq!(view.error.as_deref(), Some("current error"));
+                view.close();
+            });
+        });
+        drop(terminal);
+        assert!(
+            !replacement
+                .snapshot()
+                .terminals
+                .contains_key("retained-shell")
+        );
+        runtime.block_on(async {
+            // Closing the terminal must leave its owning conversation usable.
+            replacement
+                .dispatch(Intent::SetDraftText {
+                    thread_id: "draft".into(),
+                    text: "still connected to the Store".into(),
+                })
+                .await
+                .unwrap();
+            store.close().await.unwrap();
+            replacement.close().await.unwrap();
+        });
     }
 }

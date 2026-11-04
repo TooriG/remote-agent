@@ -202,7 +202,7 @@ scripts/dev-env.sh just quality [apple|rust|kotlin|swift]  # 静的検査と契�
 
 Claudeの契約テストは`scripts/dev-env.sh cargo test --locked -p host-fixture --test claude`です。先に監視用実行ファイルをビルドしてください。決定的に動作する外部CLI境界と、実際のStore・iroh・Hostルーティング・ネイティブ会話ファイル・隔離Git環境を使います。Claude Code 2.1.266の匿名化した記録でもネイティブ形式との互換性を確認します。任意実行の`live_claude_subscription_completes_and_resumes_through_store_and_host`は実際の認証済みCLIを使います。`AGENT_LIVE_CLAUDE_PROGRAM`に絶対パスを設定し、`-- --ignored --exact`を付けて実行すると、サブスクリプションでの推論、Host再起動後の再開、中断、中断後の入力を確認できます。
 
-開発・統合の方針は[AGENTS.md](AGENTS.md)を参照してください。プラットフォームの受け入れ検証はNative clients CIが担当し、起動条件、対象選択、キャッシュ、ランナーは[native.yml](.github/workflows/native.yml)で管理します。
+開発・統合の方針は[AGENTS.md](AGENTS.md)を参照してください。リポジトリの契約とLinuxビルドはPortable checks（[portable.yml](.github/workflows/portable.yml)）がmainの各リビジョンとPRごとに検証します。プラットフォームの受け入れ検証はNative clients CIがmainの最新リビジョンに対して担当し、起動条件、対象選択、キャッシュ、ランナー、夜間のflakyテスト計測は[native.yml](.github/workflows/native.yml)で管理します。
 
 開発・テストビルドは、全変数のデバッグ情報を含めず、ファイル名・行番号付きバックトレースを保持します。デバッガーで変数が必要なら`CARGO_PROFILE_DEV_DEBUG=full`を指定してください。品質チェックではRustのインクリメンタルコンパイルを無効にし、通常のローカルビルドのインクリメンタル状態はKacheが管理します。
 

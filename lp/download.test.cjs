@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const source = fs.readFileSync(__dirname + '/public/download.js', 'utf8');
 const download = 'https://github.com/ttizze/remote-agent/releases/download/prd-75/bex-windows-x86_64-setup.exe';
-const preview = 'https://github.com/TooriG/remote-agent/releases/download/windows-preview-20261020-storage-notice/bex-windows-x86_64-setup.exe';
+const pinnedWindows = 'https://github.com/ttizze/remote-agent/releases/download/prd-133/bex-windows-x86_64-setup.exe';
 
 async function renderDownloads({ language = 'en', platform = 'Win32', userAgent, assets = [], releases = [{ assets }], ok = true, fail = false } = {}) {
   const element = () => ({ classList: { toggle() {} }, innerHTML: '', href: '' });
@@ -36,7 +36,7 @@ async function renderDownloads({ language = 'en', platform = 'Win32', userAgent,
 
 for (const language of ['ja', 'en']) {
   test(`Android phone ${language} prominently links to the published preview APK`, async () => {
-    const apk = 'https://github.com/TooriG/remote-agent/releases/download/android-preview-69/bex-android-preview.apk';
+    const apk = 'https://github.com/TooriG/remote-agent/releases/download/android-preview-79/bex-android-preview.apk';
     const result = await renderDownloads({ language, platform: 'Linux arm64', userAgent: 'Android 17 Mobile', assets: [{ name: 'bex-android-preview.apk', state: 'uploaded', browser_download_url: apk }] });
     assert.equal(result.isMobile, true);
     assert.equal(result.primary[0].href, apk);
@@ -50,7 +50,7 @@ test('Android download remains direct when the upstream release API is offline',
   const result = await renderDownloads({ platform: 'Linux arm64', userAgent: 'Android 17 Mobile', fail: true });
   assert.equal(result.isMobile, true);
   assert.match(result.mobile[0].innerHTML, /Use on Android/);
-  assert.equal(result.mobile[0].href, 'https://github.com/TooriG/remote-agent/releases/download/android-preview-69/bex-android-preview.apk');
+  assert.equal(result.mobile[0].href, 'https://github.com/TooriG/remote-agent/releases/download/android-preview-79/bex-android-preview.apk');
   assert.ok(!result.mobile[0].innerHTML.includes('coming soon'));
 });
 
@@ -77,10 +77,10 @@ for (const [name, options] of Object.entries({
 })) {
   test(`${name} retains the pinned Windows EXE download`, async () => {
     const result = await renderDownloads(options);
-    assert.equal(result.primary[0].href, preview);
+    assert.equal(result.primary[0].href, pinnedWindows);
     assert.match(result.primary[0].innerHTML, /Download for Windows/);
-    assert.ok(result.grid.includes(`href="${preview}"`));
-    assert.match(result.grid, /preview EXE/);
+    assert.ok(result.grid.includes(`href="${pinnedWindows}"`));
+    assert.match(result.grid, /EXE/);
     const windowsCard = result.grid.match(/<h3>Windows<\/h3>[\s\S]*?<\/a>/)[0];
     assert.doesNotMatch(windowsCard, /Install from source|docs\/WINDOWS/);
     assert.ok(!result.primary[0].innerHTML.includes('coming soon'));
@@ -88,9 +88,9 @@ for (const [name, options] of Object.entries({
 }
 
 for (const language of ['ja', 'en']) {
-  test(`Windows ${language} menu also retains the preview without the release API`, async () => {
+  test(`Windows ${language} menu also retains the published installer without the release API`, async () => {
     const result = await renderDownloads({ language, platform:'MacIntel', fail:true });
-    assert.ok(result.menu.includes(`href="${preview}"`));
+    assert.ok(result.menu.includes(`href="${pinnedWindows}"`));
   });
 }
 
@@ -113,9 +113,9 @@ test('Mac and Windows select the newest uploaded asset for each platform across 
 });
 
 test('Mac retains its published download offline and accepts the historical versioned ZIP name', async () => {
-  const pinned = 'https://github.com/ttizze/remote-agent/releases/download/prd-74/bex-74-macOS-arm64.zip';
+  const pinned = 'https://github.com/ttizze/remote-agent/releases/download/prd-133/bex-macOS-arm64.zip';
   assert.equal((await renderDownloads({ platform: 'MacIntel', fail: true })).primary[0].href, pinned);
-  const mac = pinned.replaceAll('74', '76');
+  const mac = 'https://github.com/ttizze/remote-agent/releases/download/prd-76/bex-76-macOS-arm64.zip';
   const result = await renderDownloads({ platform: 'MacIntel', assets: [{ name: 'bex-76-macOS-arm64.zip', state: 'uploaded', browser_download_url: mac }] });
   assert.equal(result.primary[0].href, mac);
 });

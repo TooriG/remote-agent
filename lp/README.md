@@ -28,9 +28,14 @@ and drafts, so save unsent drafts first and pair again afterward. PC conversatio
 history stays on the Host. A production/store release needs its own signing policy.
 
 Check download behavior with `node --test lp/download.test.cjs`.
-Preview from this directory with `npx wrangler dev` and deploy with
-`npx wrangler deploy`. Use the Cloudflare account that owns `bex-lp` and
-`getbex.dev`. Publish and verify the APK asset before deploying a changed Android URL.
+After Portable checks succeeds on main, Landing page deploys that verified revision
+to Cloudflare. Configure repository secrets `CLOUDFLARE_ACCOUNT_ID` and
+`CLOUDFLARE_API_TOKEN` for the account owning `bex-lp` and `getbex.dev`;
+the token needs permission to deploy that Worker and its assets and custom domain.
+Deployment tooling is pinned in `package-lock.json`. Mac and Windows links follow
+published release assets automatically; Apple release already requires both Portable
+checks and Native clients to succeed before publishing. Publish and verify the APK
+asset before deploying a changed Android URL.
 
 
 ## Usage demos
