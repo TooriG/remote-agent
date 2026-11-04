@@ -216,14 +216,8 @@ mod tests {
         let unrelated = root.path().join("other-files");
         std::fs::create_dir(&old).unwrap();
         std::fs::create_dir(&unrelated).unwrap();
-        let yesterday = SystemTime::now() - Duration::from_secs(25 * 60 * 60);
-        let times = std::fs::FileTimes::new().set_modified(yesterday);
-        std::fs::File::open(&old).unwrap().set_times(times).unwrap();
-        std::fs::File::open(&unrelated)
-            .unwrap()
-            .set_times(times)
-            .unwrap();
-        let recent = preview_directory(root.path(), SystemTime::now()).unwrap();
+        let tomorrow = SystemTime::now() + Duration::from_secs(25 * 60 * 60);
+        let recent = preview_directory(root.path(), tomorrow).unwrap();
         let another = preview_directory(root.path(), SystemTime::now()).unwrap();
         assert!(!old.exists());
         assert!(unrelated.exists());
