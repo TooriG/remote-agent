@@ -64,7 +64,12 @@ class ConversationRecoveryTest {
                 }
                 try {
                     model.pair(invitation)
-                    while (model.busy || !model.snapshot.connected() || model.snapshot.models().isEmpty()) delay(10)
+                    // Models can arrive before accounts; core selects an authenticated provider only after both.
+                    while (
+                        model.busy ||
+                            !model.snapshot.connected() ||
+                            model.snapshot.modelProviderForDraft(model.draftKey) == null
+                    ) delay(10)
                     perform(Intent.NewChat(cwd)).getOrThrow()
                     perform(Intent.SetDraftText(model.draftKey, "Recovery fixture input")).getOrThrow()
                     perform(Intent.Submit(null, UUID.randomUUID().toString())).getOrThrow()
