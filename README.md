@@ -255,8 +255,7 @@ Set `KACHE_CACHE_DIR` to select a cache location;
 when `bex.buildRoot` is configured the default is `<buildRoot>/.kache`.
 Use `scripts/dev-env.sh kache stats --last-build` to inspect reuse or
 `scripts/dev-env.sh kache explain` to investigate misses. Cache policy lives in
-[.kache.toml](.kache.toml). Apple CI combines Cargo dependency caches with Kache
-for vendored Rust dependencies.
+[.kache.toml](.kache.toml).
 
 Inspect connection timing with `scripts/dev-env.sh cargo xtask connection-diagnostics`.
 Use `scripts/dev-env.sh just --list` to discover focused checks and
