@@ -57,13 +57,8 @@ extension LaunchUITests {
     ) {
         // File chips replace the authored link captions. The fixture lists the image, text file, then website.
         let link = prefixedElement(app, prefix: "item.fixture-final-").links.element(boundBy: index)
-        for _ in 0 ..< 12 {
-            if link.exists, link.isHittable {
-                break
-            }
-            app.swipeUp()
-        }
-        XCTAssertTrue(link.waitForExistence(timeout: 10)); link.tap()
+        showConversationElement(link, in: app, upward: true)
+        link.tap()
         let done = app.buttons["file.close"]
         XCTAssertTrue(done.waitForExistence(timeout: 15), "The Host file did not open")
         XCTAssertTrue(app.navigationBars[filename].exists)
@@ -137,7 +132,7 @@ extension LaunchUITests {
             format: "identifier BEGINSWITH %@",
             "message.image.fixture-generated-inline-"
         )).firstMatch
-        showImage(image, in: app, upward: false)
+        showConversationElement(image, in: app, upward: false)
         image.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         XCTAssertTrue(app.buttons["conversation.preview.close"].waitForExistence(timeout: 10))
         let preview = app.images["conversation.preview.image"]
@@ -174,7 +169,7 @@ extension LaunchUITests {
             .firstMatch
         let hostImage = app.images["Hostから読み込んだ画像"]
         let inlineImage = app.images["インライン画像"]
-        showImage(inlineImage, in: app, upward: true)
+        showConversationElement(inlineImage, in: app, upward: true)
         inlineImage.tap()
         let save = app.buttons["conversation.preview.save"]
         let close = app.buttons["conversation.preview.close"]
@@ -187,8 +182,8 @@ extension LaunchUITests {
         close.tap()
         XCTAssertTrue(inlineImage.waitForExistence(timeout: 5))
         captureScreen(app, named: "Markdown image decoded in the conversation")
-        showImage(hostImage, in: app, upward: false)
-        showImage(messageImage, in: app, upward: false)
+        showConversationElement(hostImage, in: app, upward: false)
+        showConversationElement(messageImage, in: app, upward: false)
         captureScreen(app, named: "Host attachment decoded in the user message")
         app.terminate(); _ = try connectedSimulatorApp()
         XCTAssertTrue(app.descendants(matching: .any)["tasks.list"].waitForExistence(timeout: 30))
@@ -196,27 +191,27 @@ extension LaunchUITests {
         let row = try app
             .descendants(matching: .any)[simulatorTaskRowIdentifier("session-identity/fixture-thread-\(threadNumber)")]
         XCTAssertTrue(row.waitForExistence(timeout: 20)); row.tap()
-        showImage(inlineImage, in: app, upward: true)
-        showImage(hostImage, in: app, upward: false)
-        showImage(messageImage, in: app, upward: false)
+        showConversationElement(inlineImage, in: app, upward: true)
+        showConversationElement(hostImage, in: app, upward: false)
+        showConversationElement(messageImage, in: app, upward: false)
     }
 
-    func showImage(_ image: XCUIElement, in app: XCUIApplication, upward: Bool) {
+    func showConversationElement(_ element: XCUIElement, in app: XCUIApplication, upward: Bool) {
         for _ in 0 ..< 15 {
-            if image.exists, image.isHittable,
-               image.frame.midY > app.frame.height * 0.2,
-               image.frame.midY < app.frame.height * 0.65 {
+            if element.exists, element.isHittable,
+               element.frame.midY > app.frame.height * 0.2,
+               element.frame.midY < app.frame.height * 0.65 {
                 return
             }
-            let below = image.exists ? image.frame.midY > app.frame.height * 0.65 : upward
+            let below = element.exists ? element.frame.midY > app.frame.height * 0.65 : upward
             app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: below ? 0.55 : 0.35))
                 .press(forDuration: 0.05, thenDragTo: app.coordinate(
                     withNormalizedOffset: CGVector(dx: 0.5, dy: below ? 0.35 : 0.55)
                 ))
         }
-        XCTAssertTrue(image.waitForExistence(timeout: 10))
-        XCTAssertTrue(image.isHittable)
-        XCTAssertGreaterThan(image.frame.midY, app.frame.height * 0.2)
-        XCTAssertLessThan(image.frame.midY, app.frame.height * 0.65)
+        XCTAssertTrue(element.waitForExistence(timeout: 10))
+        XCTAssertTrue(element.isHittable)
+        XCTAssertGreaterThan(element.frame.midY, app.frame.height * 0.2)
+        XCTAssertLessThan(element.frame.midY, app.frame.height * 0.65)
     }
 }
