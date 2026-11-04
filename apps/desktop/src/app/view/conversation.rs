@@ -1933,6 +1933,10 @@ impl ConversationView {
             let file_chips =
                 super::markdown_file::FileChips::new(presentation.files.into(), &desktop, cx);
             let source: SharedString = source.to_owned().into();
+            let rendered = match presentation.source {
+                std::borrow::Cow::Borrowed(_) => source.clone(),
+                std::borrow::Cow::Owned(rendered) => rendered.into(),
+            };
             let (wrap_code, compact_tables) = self
                 .timeline
                 .markdown
@@ -1944,7 +1948,7 @@ impl ConversationView {
                 id.clone(),
                 MarkdownContent {
                     source,
-                    rendered: presentation.source.into(),
+                    rendered,
                     images: presentation.images.into(),
                     code_headers: Arc::new(presentation.code_headers),
                     file_chips,
@@ -2394,6 +2398,27 @@ mod rendering_tests {
             "a path-only reference has no additional caption"
         );
         let desktop = view.read_with(window, |view, _| view.desktop.clone());
+        let conversation = desktop.read_with(window, |desktop, _| desktop.conversation.clone());
+        conversation.update(window, |view, cx| {
+            assert!(
+                view.timeline
+                    .markdown
+                    .values()
+                    .all(|cached| { cached.source.as_ptr() == cached.rendered.as_ptr() })
+            );
+            let _ = view.markdown(
+                "transformed-source-test".into(),
+                "<summary>caption</summary>",
+                cx,
+            );
+            let cached = view
+                .timeline
+                .markdown
+                .remove("transformed-source-test")
+                .unwrap();
+            assert_eq!(cached.source.as_ref(), "<summary>caption</summary>");
+            assert_eq!(cached.rendered.as_ref(), "caption");
+        });
         let before = desktop.read_with(window, |view, _| view.panels.get(view.panel_scope()));
         desktop.update(window, |desktop, cx| {
             desktop.local_shell = true;

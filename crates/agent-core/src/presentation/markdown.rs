@@ -265,20 +265,26 @@ pub fn markdown_table_csv(rows: Vec<Vec<String>>) -> String {
 
 /// Desktop Markdown and its code labels share a parse. Image removal can change
 /// block boundaries, so it precedes parsing; file chips only replace inline nodes.
-pub struct MarkdownPresentation {
-    pub source: String,
+pub struct MarkdownPresentation<'a> {
+    /// Borrowed only when the complete input is unchanged, so native caches
+    /// can share their original text allocation with the rendered source.
+    pub source: Cow<'a, str>,
     pub images: Vec<String>,
     pub code_headers: HashMap<usize, String>,
     pub files: HashMap<usize, MarkdownFileChip>,
 }
 
-pub fn markdown_presentation(source: &str, cwd: &str, home: Option<&str>) -> MarkdownPresentation {
+pub fn markdown_presentation<'a>(
+    source: &'a str,
+    cwd: &str,
+    home: Option<&str>,
+) -> MarkdownPresentation<'a> {
     let (source, images) = markdown_without_images(source);
     // File chips need a link or inline-code opener. Fenced labels need a fence;
     // ordinary prose and indented code can go straight to the retained renderer.
     if !source.contains(['[', '<', '`', '~']) {
         return MarkdownPresentation {
-            source: source.into_owned(),
+            source,
             images,
             code_headers: HashMap::new(),
             files: HashMap::new(),
@@ -287,7 +293,7 @@ pub fn markdown_presentation(source: &str, cwd: &str, home: Option<&str>) -> Mar
     let root = parse(&source);
     let files = links::chips::file_chips(&source, &root, cwd, home);
     MarkdownPresentation {
-        source: source.into_owned(),
+        source,
         images,
         code_headers: code_headers(&root).into_iter().collect(),
         files,
@@ -935,10 +941,13 @@ mod tests {
         let source = "日本語の文章🌸\n\n    plain code";
         let presentation = markdown_presentation(source, "/repo", None);
         assert_eq!(presentation.source, source);
+        assert!(matches!(presentation.source, Cow::Borrowed(_)));
+        assert!(std::ptr::eq(presentation.source.as_ref(), source));
         assert!(presentation.images.is_empty());
         assert!(presentation.code_headers.is_empty());
         let presentation = markdown_presentation("<file:///tmp/main.rs>", "/repo", None);
         assert_eq!(presentation.source, "<file:///tmp/main.rs>");
+        assert!(matches!(presentation.source, Cow::Borrowed(_)));
         let chip = &presentation.files[&0];
         assert!(chip.caption.is_some());
         assert_eq!(chip.file.label, "main.rs");
@@ -946,10 +955,23 @@ mod tests {
     }
 
     #[test]
+    fn transformed_presentation_owns_its_rendered_text() {
+        for (source, expected) in [
+            ("<summary>caption</summary>", "caption"),
+            ("![image](image.png)", ""),
+        ] {
+            let presentation = markdown_presentation(source, "/repo", None);
+            assert_eq!(presentation.source, expected);
+            assert!(matches!(presentation.source, Cow::Owned(_)));
+        }
+    }
+
+    #[test]
     fn presentation_keeps_code_labels_at_displayed_offsets() {
         let source = "[長い説明](src/first.rs)\n\n```rust filename=src/一.rs\nfn first() {}\n```\n\n![証拠](image.png)\n\n`src/a/index.ts` and `src/b/index.ts`\n\n~~~ts title=src/second.ts\nconst second = 2;\n~~~\n\n`src/last.rs`";
         let presentation = markdown_presentation(source, "/repo", None);
         assert_eq!(presentation.images, ["image.png"]);
+        assert!(matches!(presentation.source, Cow::Owned(_)));
         assert!(!presentation.source.contains("![証拠]"));
         let labels: Vec<_> = presentation
             .files
