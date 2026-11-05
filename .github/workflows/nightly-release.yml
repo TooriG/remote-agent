@@ -30,7 +30,7 @@ jobs:
           ref: ${{ env.AGENT_RELEASE_SHA }}
           persist-credentials: false
       - id: source
-        name: Require candidate promotion support in the verified revision
+        name: Require release support in the verified revision
         run: |
           if [[ -f scripts/release-candidate.mjs ]]; then
             echo 'supported=true' >> "$GITHUB_OUTPUT"
@@ -52,134 +52,11 @@ jobs:
   release:
     needs: verification
     if: needs.verification.outputs.supported == 'true'
-    # Skipped PR and failed-build notifications must not replace a queued release.
-    concurrency:
-      group: apple-release
-      cancel-in-progress: false
-    outputs:
-      tag: ${{ steps.candidate.outputs.tag }}
-    runs-on: macos-26
-    timeout-minutes: 150
-    permissions:
-      actions: read
-      contents: write
-    env:
-      AGENT_XCODE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
-      CARGO_BUILD_JOBS: 2
-      CARGO_INCREMENTAL: 0
-      AGENT_DISTRIBUTION_SIGNING: '1'
-      AGENT_TESTFLIGHT_GROUP: BEX External
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ env.AGENT_RELEASE_SHA }}
-          persist-credentials: false
-      - name: Verify the source revision and pinned Xcode
-        run: |
-          test "$(git rev-parse HEAD)" = "$AGENT_RELEASE_SHA"
-          test -d "$AGENT_XCODE_DEVELOPER_DIR"
-      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
-      - name: Initialize pinned tooling before loading signing secrets
-        run: scripts/dev-env.sh true
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          cmd-format: nix develop . --command {0}
-          key: apple-release-xcode-26.6-${{ hashFiles('flake.lock') }}
-          cache-on-failure: true
-      - name: Restore iPhone archive dependencies and compiler cache
-        id: ios-cache
-        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
-        with:
-          path: target/apple-release/DerivedData
-          key: ios-release-xcode-26.6-${{ env.AGENT_RELEASE_SHA }}
-          restore-keys: ios-release-xcode-26.6-
-      - name: Prepare dedicated non-interactive signing keychain
-        env:
-          AGENT_SIGNING_KEYCHAIN_BASE64: ${{ secrets.BEX_SIGNING_KEYCHAIN_BASE64 }}
-          AGENT_SIGNING_KEYCHAIN_PASSWORD: ${{ secrets.BEX_SIGNING_KEYCHAIN_PASSWORD }}
-          AGENT_ASC_PRIVATE_KEY: ${{ secrets.BEX_ASC_PRIVATE_KEY }}
-          AGENT_ASC_KEY_ID: ${{ secrets.BEX_ASC_KEY_ID }}
-          AGENT_ASC_ISSUER_ID: ${{ secrets.BEX_ASC_ISSUER_ID }}
-        run: scripts/dev-env.sh node scripts/apple-signing.mjs prepare
-      - name: Allocate one new build number for Mac and iPhone
-        env:
-          GH_TOKEN: ${{ github.token }}
-          AGENT_ASC_KEY_ID: ${{ secrets.BEX_ASC_KEY_ID }}
-          AGENT_ASC_ISSUER_ID: ${{ secrets.BEX_ASC_ISSUER_ID }}
-        run: |
-          mkdir -p target/apple-release
-          gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName > target/apple-release/releases.json
-          scripts/dev-env.sh node scripts/apple-release.mjs plan
-      - name: Build, notarize, archive and upload the verified revision
-        env:
-          AGENT_ASC_KEY_ID: ${{ secrets.BEX_ASC_KEY_ID }}
-          AGENT_ASC_ISSUER_ID: ${{ secrets.BEX_ASC_ISSUER_ID }}
-        run: scripts/dev-env.sh bash scripts/release-apple.sh
-      - name: Save iPhone archive dependencies and compiler cache
-        id: save-ios-cache
-        if: ${{ !cancelled() && steps.ios-cache.outputs.cache-primary-key != '' && steps.ios-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
-        with:
-          path: target/apple-release/DerivedData
-          key: ${{ steps.ios-cache.outputs.cache-primary-key }}
-      - name: Retire replaced iPhone archive snapshots
-        if: ${{ !cancelled() && steps.save-ios-cache.outcome == 'success' }}
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_CACHE_KEY: ${{ steps.ios-cache.outputs.cache-primary-key }}
-        run: scripts/dev-env.sh node scripts/prune-build-cache.mjs "$RELEASE_CACHE_KEY"
-      - name: Verify Apple processing and distribute to TestFlight
-        env:
-          AGENT_ASC_KEY_ID: ${{ secrets.BEX_ASC_KEY_ID }}
-          AGENT_ASC_ISSUER_ID: ${{ secrets.BEX_ASC_ISSUER_ID }}
-        run: scripts/dev-env.sh node scripts/apple-release.mjs verify
-      - name: Store the immutable Apple candidate
-        id: candidate
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh api "repos/$GITHUB_REPOSITORY/git/refs" --method POST \
-            -f "ref=refs/tags/$AGENT_RELEASE_TAG" -f "sha=$AGENT_RELEASE_SHA" > /dev/null
-          gh release create "$AGENT_RELEASE_TAG" target/apple-release/bex-macOS-arm64.zip \
-            target/apple-release/bex-macOS-arm64.zip.sha256 target/apple-release/apple-build.json \
-            --repo "$GITHUB_REPOSITORY" --target "$AGENT_RELEASE_SHA" --draft --prerelease \
-            --title "BEX Nightly $AGENT_BUILD_NUMBER" \
-            --notes "Source: $AGENT_RELEASE_SHA. iPhone: https://testflight.apple.com/join/UJbK9Ww7"
-          echo "tag=$AGENT_RELEASE_TAG" >> "$GITHUB_OUTPUT"
-      - name: Remove signing credentials
-        if: always()
-        run: scripts/dev-env.sh node scripts/apple-signing.mjs cleanup
-  windows:
-    needs: release
     permissions:
       actions: write
       contents: write
-    uses: ./.github/workflows/native.yml
+    uses: ./.github/workflows/build-release.yml
     with:
-      candidate-tag: ${{ needs.release.outputs.tag }}
-  android:
-    needs: release
-    permissions:
-      contents: write
-    uses: ./.github/workflows/android-download.yml
-    with:
-      candidate-tag: ${{ needs.release.outputs.tag }}
+      source-sha: ${{ github.event.workflow_run.head_sha || github.sha }}
+      channel: nightly
     secrets: inherit
-  publish:
-    needs: [release, windows, android]
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ env.AGENT_RELEASE_SHA }}
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
-      - name: Verify all packages and publish the Nightly channel
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CANDIDATE_TAG: ${{ needs.release.outputs.tag }}
-        run: scripts/dev-env.sh node scripts/release-candidate.mjs seal "$CANDIDATE_TAG"

@@ -1,16 +1,17 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { distributeBuild, requestFromEnvironment } from './apple-release.mjs';
+import { iosDistribution, requestFromEnvironment } from './apple-release.mjs';
 import { submitProduction } from './app-store-release.mjs';
 
-export const packages = [
+const commonPackages = [
   'bex-macOS-arm64.zip', 'bex-windows-x86_64-setup.exe',
   'bex-windows-x86_64-release.zip', 'bex-android.apk', 'bex-linux-x86_64.tar.gz',
 ];
+export const packages = channel => [...commonPackages, ...(channel === 'nightly' ? ['bex-iOS-preview.ipa'] : [])];
 const checksum = bytes => createHash('sha256').update(bytes).digest('hex');
 
 export function releaseNumber(tag, channel) {
@@ -19,23 +20,36 @@ export function releaseNumber(tag, channel) {
   return match[1];
 }
 
-export function validateCandidate(manifest, tag, sha) {
-  const number = releaseNumber(tag, 'nightly');
-  if (manifest.tag !== tag || manifest.version !== number || manifest.sha !== sha || !/^[a-f0-9]{40}$/.test(sha)) throw new Error('The candidate tag, revision and build number must agree.');
-  if (manifest.appId !== '6816015343' || !manifest.buildId || !/^\d+\.\d+\.\d+$/.test(manifest.versionName)) throw new Error('The candidate must identify the existing BEX App Store build.');
-  const expected = packages.flatMap(name => [name, `${name}.sha256`]).sort();
-  if (JSON.stringify(Object.keys(manifest.assets).sort()) !== JSON.stringify(expected)) throw new Error('The candidate must contain every platform package and checksum.');
+export function latestNightly(releases) {
+  const latest = releases.filter(item => !item.isDraft && item.isPrerelease && /^nightly-[1-9][0-9]*$/.test(item.tagName))
+    .sort((a, b) => Number(releaseNumber(b.tagName, 'nightly')) - Number(releaseNumber(a.tagName, 'nightly')))[0];
+  if (!latest) throw new Error('Publish a verified Nightly before creating a stable release.');
+  return latest.tagName;
+}
+
+export function validateRelease(manifest, tag, sha) {
+  const channel = tag.startsWith('nightly-') ? 'nightly' : 'stable';
+  const number = releaseNumber(tag, channel === 'nightly' ? 'nightly' : 'prd');
+  if (manifest.channel !== channel || manifest.tag !== tag || manifest.version !== number
+    || manifest.sha !== sha || !/^[a-f0-9]{40}$/.test(sha)) throw new Error('The release tag, source revision, channel and build number must agree.');
+  if (manifest.bundleId !== iosDistribution(channel).bundleId || !/^\d+\.\d+\.\d+$/.test(manifest.versionName)) throw new Error('Invalid iPhone release identity.');
+  if (channel === 'stable') {
+    releaseNumber(manifest.sourceTag, 'nightly');
+    if (manifest.appId !== '6816015343' || !manifest.buildId) throw new Error('Stable must identify its rebuilt BEX App Store binary.');
+  } else if (manifest.appId || manifest.buildId || manifest.sourceTag) throw new Error('Nightly distributes the separate internally signed Preview app.');
+  const expected = packages(channel).flatMap(name => [name, `${name}.sha256`]).sort();
+  if (JSON.stringify(Object.keys(manifest.assets).sort()) !== JSON.stringify(expected)) throw new Error('The release must contain every platform package and checksum.');
   for (const asset of Object.values(manifest.assets)) {
-    if (!/^[a-f0-9]{64}$/.test(asset.sha256) || !Number.isSafeInteger(asset.size) || asset.size <= 0) throw new Error('Invalid candidate asset verification data.');
+    if (!/^[a-f0-9]{64}$/.test(asset.sha256) || !Number.isSafeInteger(asset.size) || asset.size <= 0) throw new Error('Invalid release asset verification data.');
   }
 }
 
 export function verifyPackages(directory, assets) {
   for (const [name, expected] of Object.entries(assets)) {
     const bytes = readFileSync(join(directory, name));
-    if (bytes.length !== expected.size || checksum(bytes) !== expected.sha256) throw new Error(`Candidate checksum mismatch: ${name}`);
+    if (bytes.length !== expected.size || checksum(bytes) !== expected.sha256) throw new Error(`Release checksum mismatch: ${name}`);
   }
-  for (const name of packages) {
+  for (const name of Object.keys(assets).filter(name => !name.endsWith('.sha256'))) {
     const sidecar = readFileSync(join(directory, `${name}.sha256`), 'utf8').trim();
     if (!new RegExp(`^${assets[name].sha256}\\s+\\*?${name.replaceAll('.', '\\.')}\\s*$`).test(sidecar)) throw new Error(`Invalid checksum file: ${name}`);
   }
@@ -48,7 +62,7 @@ const repository = () => {
   return value;
 };
 const gh = (...args) => run('gh', args);
-const release = tag => JSON.parse(gh('api', `repos/${repository()}/releases/tags/${tag}`));
+const releases = () => JSON.parse(gh('release', 'list', '--repo', repository(), '--limit', '1000', '--json', 'tagName,isDraft,isPrerelease'));
 const revision = tag => run('git', ['rev-parse', '--verify', `refs/tags/${tag}^{commit}`]);
 
 async function inDirectory(action) {
@@ -57,102 +71,76 @@ async function inDirectory(action) {
   finally { rmSync(directory, { recursive: true, force: true }); }
 }
 
-async function seal(tag) {
-  releaseNumber(tag, 'nightly');
-  const candidate = release(tag);
-  if (!candidate.prerelease) throw new Error('A Nightly candidate must be a prerelease.');
-  await inDirectory(async directory => {
-    gh('release', 'download', tag, '--repo', repository(), '--dir', directory);
-    const previous = candidate.draft ? null : readFileSync(join(directory, 'release.json'), 'utf8');
-    const manifest = JSON.parse(readFileSync(join(directory, 'apple-build.json'), 'utf8'));
-    manifest.assets = Object.fromEntries(packages.flatMap(name => [name, `${name}.sha256`]).map(name => {
-      const bytes = readFileSync(join(directory, name));
-      return [name, { size: bytes.length, sha256: checksum(bytes) }];
-    }));
-    validateCandidate(manifest, tag, revision(tag));
-    verifyPackages(directory, manifest.assets);
-    const path = join(directory, 'release.json');
-    writeFileSync(path, JSON.stringify(manifest, null, 2) + '\n');
-    if (!candidate.draft) {
-      if (readFileSync(path, 'utf8') !== previous) throw new Error('Published candidates cannot be changed.');
-      return;
-    }
-    gh('release', 'upload', tag, path, '--repo', repository(), '--clobber');
-    gh('release', 'edit', tag, '--repo', repository(), '--draft=false', '--prerelease', '--latest=false');
-  });
-}
-
 function readManifest(directory, tag) {
   const manifest = JSON.parse(readFileSync(join(directory, 'release.json'), 'utf8'));
-  const source = `nightly-${releaseNumber(tag, tag.startsWith('prd-') ? 'prd' : 'nightly')}`;
-  validateCandidate(manifest, source, revision(tag));
+  validateRelease(manifest, tag, revision(tag));
   return manifest;
 }
 
 async function withManifest(tag, action) {
   return inDirectory(async directory => {
-    gh('release', 'download', tag, '--repo', repository(), '--dir', directory);
-    const manifest = readManifest(directory, tag);
-    verifyPackages(directory, manifest.assets);
-    return action(manifest, directory);
+    gh('release', 'download', tag, '--repo', repository(), '--pattern', 'release.json', '--dir', directory);
+    return action(readManifest(directory, tag), directory);
   });
 }
 
-async function promote(tag) {
-  const number = releaseNumber(tag, 'prd');
-  const source = `nightly-${number}`;
-  const candidate = release(source);
-  if (candidate.draft || !candidate.prerelease || revision(source) !== revision(tag)) throw new Error('Production must select the exact published Nightly candidate revision.');
-  const request = requestFromEnvironment();
-  await withManifest(source, async (manifest, directory) => {
-    const releases = JSON.parse(gh('release', 'list', '--repo', repository(), '--limit', '1000', '--json', 'tagName,isDraft'));
-    const existing = releases.find(item => item.tagName === tag);
-    if (!existing) {
-      const files = [...Object.keys(manifest.assets), 'release.json'].map(name => join(directory, name));
-      gh('release', 'create', tag, ...files, '--repo', repository(), '--draft', '--title', `BEX ${manifest.versionName} (${number})`,
-        '--notes', `Source: ${manifest.sha}\n\n${manifest.notes}\n\nApp Store build: ${manifest.version}.`);
-    } else {
-      await withManifest(tag, async existingManifest => {
-        if (JSON.stringify(existingManifest) !== JSON.stringify(manifest)) throw new Error('The existing production release selects a different candidate.');
-      });
-    }
-    const status = await submitProduction(request, manifest.appId, manifest.buildId, manifest.versionName, manifest.locale, manifest.notes);
-    if (status.published) publish(tag);
-    console.log(`${tag}: ${status.state}`);
+async function resolve() {
+  const tag = latestNightly(releases());
+  await withManifest(tag, manifest => {
+    run('git', ['merge-base', '--is-ancestor', manifest.sha, 'origin/main']);
+    if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `sha=${manifest.sha}\nsource-tag=${tag}\n`);
+    console.log(`Stable will rebuild ${tag} at ${manifest.sha}.`);
   });
 }
 
-function publish(tag) {
-  const releases = JSON.parse(gh('release', 'list', '--repo', repository(), '--limit', '1000', '--json', 'tagName,isDraft,isPrerelease'));
-  const newer = releases.some(item => !item.isDraft && !item.isPrerelease && /^prd-[1-9][0-9]*$/.test(item.tagName)
+function publish(tag, channel) {
+  const newer = channel === 'stable' && releases().some(item => !item.isDraft && !item.isPrerelease && /^prd-[1-9][0-9]*$/.test(item.tagName)
     && Number(releaseNumber(item.tagName, 'prd')) > Number(releaseNumber(tag, 'prd')));
-  gh('release', 'edit', tag, '--repo', repository(), '--draft=false', '--prerelease=false', `--latest=${!newer}`);
+  gh('release', 'edit', tag, '--repo', repository(), '--draft=false', `--prerelease=${channel === 'nightly'}`, `--latest=${channel === 'stable' && !newer}`);
+}
+
+async function seal(tag) {
+  const release = JSON.parse(gh('api', `repos/${repository()}/releases/tags/${tag}`));
+  await inDirectory(async directory => {
+    gh('release', 'download', tag, '--repo', repository(), '--dir', directory);
+    const previous = release.draft ? null : readFileSync(join(directory, 'release.json'), 'utf8');
+    const manifest = JSON.parse(readFileSync(join(directory, 'apple-build.json'), 'utf8'));
+    manifest.assets = Object.fromEntries(packages(manifest.channel).flatMap(name => [name, `${name}.sha256`]).map(name => {
+      const bytes = readFileSync(join(directory, name));
+      return [name, { size: bytes.length, sha256: checksum(bytes) }];
+    }));
+    validateRelease(manifest, tag, revision(tag));
+    verifyPackages(directory, manifest.assets);
+    if (manifest.channel === 'stable') await withManifest(manifest.sourceTag, source => {
+      if (source.sha !== manifest.sha) throw new Error('Stable must rebuild the selected Nightly source revision.');
+    });
+    const path = join(directory, 'release.json');
+    writeFileSync(path, JSON.stringify(manifest, null, 2) + '\n');
+    if (!release.draft) {
+      if (readFileSync(path, 'utf8') !== previous) throw new Error('Published releases cannot be changed.');
+      return;
+    }
+    gh('release', 'upload', tag, path, '--repo', repository(), '--clobber');
+    if (manifest.channel === 'nightly') publish(tag, 'nightly');
+    else {
+      const status = await submitProduction(requestFromEnvironment(), manifest.appId, manifest.buildId, manifest.versionName, manifest.locale, manifest.notes);
+      if (status.published) publish(tag, 'stable');
+      console.log(`${tag}: ${status.state}`);
+    }
+  });
 }
 
 async function sync() {
   const request = requestFromEnvironment();
-  const releases = JSON.parse(gh('release', 'list', '--repo', repository(), '--limit', '1000', '--json', 'tagName,isDraft,isPrerelease'));
-  const latestNightly = releases.filter(item => !item.isDraft && item.isPrerelease && /^nightly-[1-9][0-9]*$/.test(item.tagName))
-    .sort((a, b) => Number(releaseNumber(b.tagName, 'nightly')) - Number(releaseNumber(a.tagName, 'nightly')))[0];
   const failures = [];
-  try {
-    if (latestNightly) await inDirectory(async directory => {
-      gh('release', 'download', latestNightly.tagName, '--repo', repository(), '--pattern', 'release.json', '--dir', directory);
-      const manifest = readManifest(directory, latestNightly.tagName);
-      const state = await distributeBuild(request, manifest.appId, manifest.buildId, 'BEX External', manifest.notes, manifest.locale);
-      console.log(`${latestNightly.tagName} TestFlight: ${state}`);
-    });
-  } catch (error) { failures.push(error.message); }
-  for (const item of releases.filter(item => item.isDraft && /^prd-[1-9][0-9]*$/.test(item.tagName))) {
+  for (const item of releases().filter(item => item.isDraft && /^prd-[1-9][0-9]*$/.test(item.tagName))) {
     try {
-      await inDirectory(async directory => {
-        gh('release', 'download', item.tagName, '--repo', repository(), '--pattern', 'release.json', '--dir', directory);
-        const manifest = readManifest(directory, item.tagName);
+      await withManifest(item.tagName, async (manifest, directory) => {
         const status = await submitProduction(request, manifest.appId, manifest.buildId, manifest.versionName, manifest.locale, manifest.notes);
         if (status.published) {
           gh('release', 'download', item.tagName, '--repo', repository(), '--skip-existing', '--dir', directory);
           verifyPackages(directory, manifest.assets);
-          publish(item.tagName);
+          publish(item.tagName, 'stable');
         }
         console.log(`${item.tagName}: ${status.state}`);
       });
@@ -163,6 +151,7 @@ async function sync() {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const [command, tag] = process.argv.slice(2);
-  const task = command === 'seal' ? seal(tag) : command === 'promote' ? promote(tag) : command === 'sync' ? sync() : Promise.reject(new Error('Use seal nightly-N, promote prd-N, or sync.'));
+  const task = command === 'resolve' ? resolve() : command === 'seal' ? seal(tag) : command === 'sync' ? sync()
+    : Promise.reject(new Error('Use resolve, seal nightly-N/prd-N, or sync.'));
   task.catch(error => { console.error(error.message); process.exitCode = 1; });
 }

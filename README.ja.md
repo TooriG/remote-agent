@@ -114,8 +114,7 @@ open apps/mobile/iosApp/Bex.xcodeproj
 scripts/dev-env.sh ./gradlew :apps:mobile:assembleDebug
 ```
 
-Nightly の配布と本番への昇格は、[リリース手順](docs/RELEASES.md)を参照してください。iPhone は同じ BEX アプリを外部 TestFlight と App Store で配布します。
-本番を同じ iPhone に残して開発する場合は、別 ID の BEX Dev を使います。
+Nightly の配布と本番への昇格は、[リリース手順](docs/RELEASES.md)を参照してください。iPhone の Nightly は登録済み端末向けの BEX Preview として配布します。本番・BEX Preview・BEX Dev は別 ID で併用できます。本番の TestFlight と App Store は同じ ID です。
 
 Rustのソースを変更したら、iOS用ライブラリも再ビルドしてください。デスクトップの下書きとログは`AGENT_STATE_DIR`を使いますが、Host探索で別の認証情報ディレクトリを選ぶことがあります。本番と Nightly は既存のデータ保存先とローカル Host を共有し、デスクトップの debug ビルドはその `dev` サブディレクトリと専用 Host を使います。配布ビルドを隔離するには`AGENT_ISOLATED_HOST=1`と`AGENT_STATE_DIR`の両方を設定します。個人のプロバイダー状態をテストが読み込まないよう、別のCodexホームかフィクスチャ実行ファイルも使ってください。
 

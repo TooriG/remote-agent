@@ -30,6 +30,12 @@ export function nextMarketingVersion(source, approvedVersions) {
   return next.join('.');
 }
 
+export function iosDistribution(channel) {
+  if (channel === 'nightly') return { bundleId: 'dev.remoteagent.mobile.ios.preview', profileType: 'IOS_APP_ADHOC', method: 'release-testing', product: 'BEX Preview' };
+  if (channel === 'stable') return { bundleId: 'dev.remoteagent.mobile.ios', profileType: 'IOS_APP_STORE', method: 'app-store-connect', product: 'Bex' };
+  throw new Error('Release channel must be nightly or stable.');
+}
+
 const required = name => { const value = process.env[name]; if (!value) throw new Error(`${name} is required.`); return value; };
 
 export function requestFromEnvironment() {
@@ -148,6 +154,8 @@ async function main(command) {
   const keyPath = required('AGENT_ASC_PRIVATE_KEY_FILE');
   const request = requestFromEnvironment();
   if (command === 'plan') {
+    const channel = required('AGENT_RELEASE_CHANNEL');
+    const distribution = iosDistribution(channel);
     const app = await appForBundleId(request, 'dev.remoteagent.mobile.ios');
     const builds = await listAll(request, `/v1/builds?filter[app]=${app.id}&limit=200`);
     const source = readFileSync('apps/mobile/iosApp/Bex.xcodeproj/project.pbxproj', 'utf8');
@@ -157,17 +165,33 @@ async function main(command) {
     const releases = JSON.parse(readFileSync('target/apple-release/releases.json', 'utf8'));
     const version = nextBuildNumber([...versions, macVersion], builds.map(build => build.attributes.version), releases.map(release => release.tagName));
     const storeVersions = await listAll(request, `/v1/apps/${app.id}/appStoreVersions?limit=200`);
+    if (channel === 'stable' && storeVersions.some(version => version.attributes.platform === 'IOS'
+      && version.attributes.appStoreState === 'PENDING_DEVELOPER_RELEASE')) {
+      throw new Error('Publish the already approved App Store version before building the next stable release.');
+    }
     const sourceVersion = /MARKETING_VERSION = ([\d.]+);/.exec(source)?.[1];
     const approvedVersions = storeVersions.filter(version => version.attributes.platform === 'IOS'
       && ['PENDING_DEVELOPER_RELEASE', 'READY_FOR_DISTRIBUTION', 'READY_FOR_SALE'].includes(version.attributes.appStoreState))
       .map(version => version.attributes.versionString);
     const versionName = nextMarketingVersion(sourceVersion, approvedVersions);
-    const plan = { appId: app.id, version, versionName, tag: `nightly-${version}`, sha: required('AGENT_RELEASE_SHA'), locale: app.attributes.primaryLocale, notes: execFileSync('git', ['log', '-1', '--format=%s'], { encoding: 'utf8' }).trim() };
+    const sourceTag = channel === 'stable' ? required('AGENT_SOURCE_TAG') : undefined;
+    if (sourceTag && !/^nightly-[1-9]\d*$/.test(sourceTag)) throw new Error('Stable must rebuild a selected Nightly.');
+    const plan = { channel, sourceTag, bundleId: distribution.bundleId, ...(channel === 'stable' ? { appId: app.id } : {}),
+      version, versionName, tag: `${channel === 'nightly' ? 'nightly' : 'prd'}-${version}`,
+      sha: required('AGENT_RELEASE_SHA'), locale: app.attributes.primaryLocale,
+      notes: execFileSync('git', ['log', '-1', '--format=%s'], { encoding: 'utf8' }).trim() };
     writeFileSync(planPath, JSON.stringify(plan) + '\n');
     appendFileSync(required('GITHUB_ENV'), `AGENT_BUILD_NUMBER=${version}\nAGENT_RELEASE_TAG=${plan.tag}\nAGENT_MARKETING_VERSION=${versionName}\n`);
     console.log(`Apple release build ${version} planned for ${plan.sha}.`);
   } else if (command === 'verify') {
     const plan = JSON.parse(readFileSync(planPath, 'utf8'));
+    if (plan.channel === 'nightly') {
+      const ipa = 'target/apple-release/bex-iOS-preview.ipa';
+      if (!statSync(ipa).size) throw new Error('The signed iPhone Preview package is missing.');
+      writeFileSync('target/apple-release/apple-build.json', JSON.stringify(plan) + '\n');
+      appendFileSync(required('GITHUB_STEP_SUMMARY'), `iPhone **BEX Preview ${plan.version}**: signed internal-distribution IPA for registered devices.\n\nSource: \`${plan.sha}\`.\n`);
+      return;
+    }
     let output;
     try {
       if (!plan.deliveryId) throw new Error('Missing delivery receipt.');

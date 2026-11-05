@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { productionStatus, submitProduction } from './app-store-release.mjs';
 
-function fixture({ state = 'PREPARE_FOR_SUBMISSION', selected = 'candidate', valid = true, beta = 'IN_BETA_TESTING', submission = null, failOnce = false } = {}) {
+function fixture({ state = 'PREPARE_FOR_SUBMISSION', selected = 'candidate', valid = true, submission = null, failOnce = false } = {}) {
   let version = state === 'NOT_CREATED' ? null : { id: 'version', attributes: { versionString: '1.0.1', appStoreState: state } };
   let linked = selected;
   let items = [];
@@ -13,7 +13,6 @@ function fixture({ state = 'PREPARE_FOR_SUBMISSION', selected = 'candidate', val
       if (path === '/v1/builds/candidate') return { data: { id: 'candidate', attributes: { processingState: valid ? 'VALID' : 'PROCESSING', expired: false } } };
       if (path.endsWith('/preReleaseVersion')) return { data: { attributes: { version: '1.0.1' } } };
       if (path.endsWith('/app')) return { data: { id: '6816015343' } };
-      if (path.endsWith('/buildBetaDetail')) return { data: { attributes: { externalBuildState: beta } } };
       if (path.includes('/appStoreVersions?')) return { data: version ? [version] : [] };
       if (path.endsWith('/build')) return { data: linked ? { id: linked } : null };
       if (path.endsWith('/appStoreVersionLocalizations')) return { data: [{ id: 'ja' }, { id: 'en' }] };
@@ -43,7 +42,7 @@ function fixture({ state = 'PREPARE_FOR_SUBMISSION', selected = 'candidate', val
   return { request, submit, changes, finish: () => { version.attributes.appStoreState = 'READY_FOR_DISTRIBUTION'; } };
 }
 
-test('a production tag submits the exact externally tested build with release after approval', async () => {
+test('a stable rebuild submits its own App Store binary with release after approval', async () => {
   const api = fixture({ state: 'NOT_CREATED', selected: null });
   assert.equal((await api.submit()).state, 'WAITING_FOR_REVIEW');
   const creation = api.changes.find(change => change.path === '/v1/appStoreVersions').data.data;
@@ -72,8 +71,8 @@ test('approved builds and ongoing reviews can never be replaced by a different c
   }
 });
 
-test('invalid, untested and rejected builds fail before further release side effects', async () => {
-  for (const options of [{ valid: false }, { beta: 'WAITING_FOR_BETA_REVIEW' }, { state: 'REJECTED' }]) {
+test('invalid and rejected builds fail before further release side effects', async () => {
+  for (const options of [{ valid: false }, { state: 'REJECTED' }]) {
     const api = fixture(options);
     await assert.rejects(api.submit());
     assert.deepEqual(api.changes, []);

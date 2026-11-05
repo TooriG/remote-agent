@@ -11,12 +11,12 @@ on:
     - cron: '0 18 * * *'
   workflow_call:
     inputs:
-      candidate-tag:
+      release-tag:
         type: string
         required: true
   workflow_dispatch:
     inputs:
-      candidate-tag:
+      release-tag:
         description: Nightly candidate tag to package; leave empty for CI
         type: string
         default: ''
@@ -32,7 +32,7 @@ permissions:
   contents: read
 concurrency:
   # The nightly measurement never displaces a pending main revision.
-  group: ${{ github.workflow }}-${{ github.event_name == 'schedule' && 'nightly' || inputs.candidate-tag || github.ref }}${{ inputs.ios-tests && '-focused' || '' }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'schedule' && 'nightly' || inputs.release-tag || github.ref }}${{ inputs.ios-tests && '-focused' || '' }}
   # Finish a running main revision and keep only the newest pending revision.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 env:
@@ -42,7 +42,7 @@ env:
   NEXTEST_TEST_THREADS: 16
 jobs:
   changes:
-    if: ${{ !inputs.candidate-tag }}
+    if: ${{ !inputs.release-tag }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -120,7 +120,7 @@ jobs:
           printf 'windows=%s\nandroid=%s\niphone=%s\nmac=%s\n' "$windows" "$android" "$iphone" "$mac" | tee -a "$GITHUB_OUTPUT"
   toolchain:
     needs: changes
-    if: ${{ !cancelled() && !inputs.ios-tests && (inputs.candidate-tag || needs.changes.outputs.windows == 'true') }}
+    if: ${{ !cancelled() && !inputs.ios-tests && (inputs.release-tag || needs.changes.outputs.windows == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -131,7 +131,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # Delayed stages must use the event commit even when main advances.
-          ref: ${{ inputs.candidate-tag || github.sha }}
+          ref: ${{ inputs.release-tag || github.sha }}
           persist-credentials: false
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
       - id: rust
@@ -532,7 +532,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      WSL_PROFILE: ${{ (inputs.candidate-tag != '') && 'release' || 'dev' }}
+      WSL_PROFILE: ${{ (inputs.release-tag != '') && 'release' || 'dev' }}
     steps:
       - *windows-checkout
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
@@ -551,10 +551,10 @@ jobs:
           nix develop .#host-build --command node scripts/package-wsl-runtime.mjs "target/$directory" target/wsl-runtime
           nix develop .#host-build --command node scripts/verify-wsl-runtime.mjs target/wsl-runtime
       - name: Package the matching Linux Host and CLI candidate
-        if: inputs.candidate-tag != ''
+        if: inputs.release-tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
-          CANDIDATE_TAG: ${{ inputs.candidate-tag }}
+          CANDIDATE_TAG: ${{ inputs.release-tag }}
         run: |
           cp scripts/install-linux-runtime.sh target/wsl-runtime/install.sh
           bash target/wsl-runtime/install.sh "$RUNNER_TEMP/bex-linux-smoke" "$RUNNER_TEMP/bex-linux-bin"
@@ -580,17 +580,17 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 60
     env:
-      AGENT_RELEASE_TAG: ${{ inputs.candidate-tag }}
+      AGENT_RELEASE_TAG: ${{ inputs.release-tag }}
       # rust-cache prunes non-Cargo files inside target, leaving empty tool caches.
       AGENT_FXC_CACHE_ROOT: ${{ github.workspace }}/output/tool-cache/windows-fxc
     steps:
       - *windows-checkout
       - name: Require a verified Nightly revision for release packaging
-        if: inputs.candidate-tag != ''
+        if: inputs.release-tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if ($env:AGENT_RELEASE_TAG -notmatch '^nightly-[1-9][0-9]*$') { throw "A Nightly candidate tag is required." }
+          if ($env:AGENT_RELEASE_TAG -notmatch '^(nightly|prd)-[1-9][0-9]*$') { throw "A Nightly or stable release tag is required." }
           $revision = git rev-parse HEAD
           foreach ($workflow in 'portable.yml', 'native.yml') {
             $verified = gh run list --repo "$env:GITHUB_REPOSITORY" --workflow $workflow --branch main --event push --commit "$revision" --status success --limit 1 --json headSha --jq '.[0].headSha // ""'
@@ -626,7 +626,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Pinned FXC preparation failed." }
           "GPUI_FXC_PATH=$compiler" >> $env:GITHUB_ENV
       - name: Build desktop, Host and CLI
-        if: ${{ !inputs.candidate-tag }}
+        if: ${{ !inputs.release-tag }}
         run: |
           cargo build --locked --features agent-core/bindings -p codex-app-server -p agent-process -p agent-desktop -p host-daemon -p agent-cli
           if ($LASTEXITCODE -ne 0) { throw "Windows build failed." }
@@ -638,34 +638,34 @@ jobs:
             throw "The desktop updater could not read the development build number."
           }
       - name: Install the SDK runtime beside the Host
-        if: ${{ !inputs.candidate-tag }}
+        if: ${{ !inputs.release-tag }}
         run: node scripts/install-claude-sdk.mjs target/debug
       - name: Core contracts and isolated iroh Host
-        if: ${{ !inputs.candidate-tag }}
+        if: ${{ !inputs.release-tag }}
         run: cargo nextest run --locked --no-fail-fast --features agent-core/bindings -p codex-app-server -p agent-process -p agent-protocol -p agent-transport -p agent-local-host -p agent-core -p agent-cli -p host-daemon -p host-fixture -p xtask
       - name: Documentation examples
-        if: ${{ !inputs.candidate-tag }}
+        if: ${{ !inputs.release-tag }}
         run: cargo test --locked --doc --features agent-core/bindings -p codex-app-server -p agent-process -p agent-protocol -p agent-transport -p agent-local-host -p agent-core -p agent-cli -p host-daemon -p host-fixture -p xtask
       - name: Real-time passive approval soak
-        if: github.event_name == 'workflow_dispatch' && !inputs.candidate-tag
+        if: github.event_name == 'workflow_dispatch' && !inputs.release-tag
         run: cargo test --locked -p host-fixture --test iroh_host passive_client_can_approve_after_five_minutes_without_reconnecting -- --ignored
       - name: Package verified Windows development binaries
-        if: ${{ !inputs.candidate-tag }}
+        if: ${{ !inputs.release-tag }}
         run: ./scripts/package-windows.ps1 -Profile dev -SkipBuild
       - name: Build and package Windows release
-        if: inputs.candidate-tag != ''
+        if: inputs.release-tag != ''
         run: |
-          if ($env:AGENT_RELEASE_TAG -match '^nightly-([1-9][0-9]*)$') { $env:AGENT_BUILD_NUMBER = $Matches[1] }
+          if ($env:AGENT_RELEASE_TAG -match '^(?:nightly|prd)-([1-9][0-9]*)$') { $env:AGENT_BUILD_NUMBER = $Matches[1] }
           ./scripts/package-windows.ps1 -Profile release
       - name: Retain the Windows package and checksum
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: bex-windows-x86_64-${{ (inputs.candidate-tag != '') && 'release' || 'dev' }}
+          name: bex-windows-x86_64-${{ (inputs.release-tag != '') && 'release' || 'dev' }}
           path: target/windows-packages/bex-windows-x86_64-*
           if-no-files-found: error
           retention-days: 14
       - name: Attach Windows package to the published release
-        if: inputs.candidate-tag != ''
+        if: inputs.release-tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ env.AGENT_RELEASE_TAG }}

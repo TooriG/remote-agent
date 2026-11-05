@@ -118,8 +118,9 @@ scripts/dev-env.sh ./gradlew :apps:mobile:assembleDebug
 ```
 
 See [release operations](docs/RELEASES.md) for Nightly distribution and production promotion.
-External TestFlight and App Store builds use the same BEX app. Use the separate
-iPhone BEX Dev configuration for development alongside that release.
+iPhone Nightlies distribute BEX Preview for registered devices. BEX Preview and
+BEX Dev have separate IDs from the production app, so all three can coexist.
+Production TestFlight and App Store builds share the production ID.
 
 Rerun the iOS library build after changing Rust sources. Desktop drafts and logs use `AGENT_STATE_DIR`; Host discovery may select a different credential directory. Stable and Nightly share the existing application-data directory and local Host. Desktop debug builds default to its `dev` subdirectory and an isolated Host. To isolate a release build, set both `AGENT_ISOLATED_HOST=1` and `AGENT_STATE_DIR`; use a separate Codex home or fixture executable as well so tests cannot read personal provider state.
 

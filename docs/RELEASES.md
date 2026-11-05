@@ -1,21 +1,43 @@
 # Release operations
 
 Develop on `main`. A revision that passes both Portable checks and Native clients
-produces a numbered GitHub prerelease, `nightly-N`. Download its packages from GitHub;
-on iPhone, use the existing [BEX TestFlight public link](https://testflight.apple.com/join/UJbK9Ww7).
-External TestFlight availability follows Apple's beta review and automatic tester
-notification. The GitHub job summary distinguishes submission from availability.
+produces a numbered GitHub prerelease, `nightly-N`, containing Mac, Windows,
+Android, Linux Host/CLI and iPhone Preview packages.
 
-The iPhone release candidate uses the production bundle ID,
-`dev.remoteagent.mobile.ios`, in both external TestFlight and the App Store.
-Installing its TestFlight build replaces the App Store version on that device.
-For development alongside the installed release, retain **BEX Dev** with the
-separate bundle ID `dev.remoteagent.mobile.ios.dev`, icon and `bex-dev` URL scheme.
-Its preferences, snapshots and default Keychain access group are separate. Pair
-it with the development Host explicitly. The automated release workflow builds
-the production app; BEX Dev is for parallel development.
+On macOS and Windows, select **Nightly** in Settings → Update channel to receive
+these candidates. **Stable** is the default. Returning to Stable waits for a newer
+stable build; it never automatically downgrades the installed app.
 
-To archive BEX Dev, use the same iPhone build command with its configuration:
+Stable and Nightly share BEX's existing application-data directory, conversations,
+settings and local Host. Desktop debug builds use its `dev` subdirectory and an
+isolated Host by default. Run `scripts/dev-env.sh just dev` on macOS to launch that
+instance alongside the installed release. `AGENT_STATE_DIR` selects an explicit
+state directory; `AGENT_ISOLATED_HOST` explicitly selects Host isolation. Provider
+caches and project worktrees keep their existing shared locations.
+
+## iPhone variants
+
+| App | Bundle ID | Distribution |
+| --- | --- | --- |
+| BEX | `dev.remoteagent.mobile.ios` | App Store and production TestFlight |
+| BEX Preview | `dev.remoteagent.mobile.ios.preview` | Nightly IPA, signed for registered iPhones |
+| BEX Dev | `dev.remoteagent.mobile.ios.dev` | Local development builds |
+
+All three can coexist, with separate preferences, snapshots, Keychain access
+and URL schemes (`bex`, `bex-preview`, `bex-dev`). TestFlight for the production
+ID replaces the App Store app; Preview does not. The existing production beta
+link remains https://testflight.apple.com/join/UJbK9Ww7.
+
+Download `bex-iOS-preview.ipa` from a Nightly and install it using Apple
+Configurator or Xcode. Preview uses Ad Hoc distribution, so the iPhone must be
+registered and enabled in the Apple Developer account before the release builds.
+A later device registration takes effect in the next Nightly; existing profiles
+are retained for already installed versions. Preview does not require an App Store
+Connect app record or beta review. Enable Push Notifications on the Preview app's
+registered bundle ID. APNs on a Host uses its configured `bundle_id`; a Host
+configured for a different variant cannot send background updates to Preview.
+
+To archive the local development app, use the signing-keychain preflight and:
 
 ```sh
 scripts/dev-env.sh just ios-archive \
@@ -24,53 +46,38 @@ scripts/dev-env.sh just ios-archive \
   DEVELOPMENT_TEAM=K65K9J8686
 ```
 
-Apply the signing-keychain preflight before archiving. For direct device
-installation, select the Apple Development identity. If uploading a development
-build, increment its build number past existing BEX Dev uploads and use the
-BEX Dev App Store Connect record (`6820657007`). Production promotion always
-selects the production app's tested build.
+Select Apple Development signing for direct installation. If uploading a Dev
+build, use the BEX Dev App Store Connect record (`6820657007`) and a build number
+higher than its existing uploads. Pair Dev with the development Host explicitly.
 
-On macOS and Windows, select **Nightly** in Settings → Update channel to
-receive these candidates. **Stable** is the default. Returning to Stable waits
-for a newer stable build; it never automatically downgrades the installed app.
+## Stable release
 
-Stable and Nightly share BEX's existing application-data directory, conversations,
-settings and local Host. The update channel never selects a different data directory.
-Desktop debug builds use its `dev` subdirectory and an isolated Host by default.
-Run `scripts/dev-env.sh just dev` on macOS to build and launch that development
-instance alongside the installed release. `AGENT_STATE_DIR` selects an explicit
-state directory; `AGENT_ISOLATED_HOST` explicitly selects Host isolation when
-needed. Provider caches and project worktrees keep their existing shared locations.
+After testing Nightly, run **Production release → Run workflow** on `main`. It
+selects the latest published Nightly's exact source commit and rebuilds every
+platform for Stable with a new release build number. It creates a new `prd-N` tag;
+its number does not have to match the selected Nightly. `release.json` records
+both the source commit and the selected Nightly tag. Do not manually create or
+move production tags, or replace published assets.
 
-After testing a candidate, create the production tag at that exact revision:
+The iPhone Stable rebuild uses the production bundle ID and is uploaded to its
+existing TestFlight groups and submitted for App Review. The rebuilt binary does
+not need another external beta review before App Review. Release after approval
+is enabled for this selected build. The scheduled Production workflow finishes
+pending approvals and publishes the matching GitHub release, advancing Stable.
+An already approved version keeps its selected build: publish a pending initial
+version before releasing the next version. The first new production release
+switches the public iPhone download from TestFlight to App Store.
 
-```sh
-git fetch origin --tags
-git tag prd-N nightly-N
-git push origin prd-N
-```
+Retry failed build jobs through GitHub Actions. Never move a published tag. For
+an App Review rejection, inspect the rejection and create a corrected Nightly.
+Android Nightly and Stable use the same distribution key and package ID. Older
+APKs signed with another key require reinstallation before entering this channel.
 
-Replace `N` with the chosen candidate number. Production promotion checks the
-revision and every package checksum, selects the existing iPhone build for App
-Review, and requests release after approval. All desktop, Android and Linux
-packages retain the bytes tested in Nightly. Production downloads remain on the
-previous release until App Store distribution is ready; the scheduled Production
-release workflow then publishes the draft and advances the stable channel.
-
-Retry a failed promotion from **Production release → Run workflow**, specifying
-the same `prd-N` tag. Never move a published tag or replace its packages. If App
-Review rejects a build, inspect the rejection and ship a corrected candidate.
-
-An already approved App Store version keeps its selected build. Publish a pending
-initial version before promoting the next version. The first new production
-release switches the public iPhone download from TestFlight to App Store.
-Existing published download fallbacks remain available in the meantime.
-
-Linux x86-64 packages include Host and CLI with their shared-library closure.
-Extract the archive and run `bash install.sh` to install under `~/.local` without
-restarting an existing Host. Provide Node.js and the selected provider CLIs as
-for a source installation. To update a running Host, use its existing update and
-continuation procedure; replacing a download alone does not update that process.
+Linux packages include Host and CLI with their shared-library closure. Extract
+the archive and run `bash install.sh` to install under `~/.local`. Provide Node.js
+and the selected provider CLIs as for a source installation. Updating a running
+Host requires its existing update and continuation procedure; replacing a
+package alone does not update that process.
 
 For public BEX releases, retain the configured territories (US, Japan and China,
 excluding France) and existing encryption declarations in App Store Connect.

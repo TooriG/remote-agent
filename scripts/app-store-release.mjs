@@ -50,7 +50,7 @@ async function reviewSubmission(request, appId, versionId) {
   return submission;
 }
 
-// A production tag authorizes this one immutable candidate, including automatic
+// A production release authorizes this rebuild of the selected Nightly source, including automatic
 // release after approval. Never cancel an existing review or replace its build.
 export async function submitProduction(request, appId, buildId, versionName, locale, notes) {
   const status = await productionStatus(request, appId, versionName, buildId);
@@ -69,8 +69,6 @@ export async function submitProduction(request, appId, buildId, versionName, loc
   const app = (await request(`/v1/builds/${buildId}/app`)).data;
   const preRelease = (await request(`/v1/builds/${buildId}/preReleaseVersion`)).data;
   if (app.id !== appId || preRelease.attributes.version !== versionName) throw new Error('The Apple build does not match this candidate.');
-  const beta = (await request(`/v1/builds/${buildId}/buildBetaDetail`)).data;
-  if (beta.attributes.externalBuildState !== 'IN_BETA_TESTING') throw new Error('The candidate must be available to external TestFlight testers before promotion.');
   let versionId = status.versionId;
   if (!versionId) {
     versionId = (await request('/v1/appStoreVersions', { method: 'POST', data: { data: {
