@@ -100,10 +100,11 @@ function publish(tag, channel) {
 }
 
 async function seal(tag) {
-  const release = JSON.parse(gh('api', `repos/${repository()}/releases/tags/${tag}`));
+  // The REST tag endpoint only returns published releases; view also resolves staged drafts.
+  const isDraft = JSON.parse(gh('release', 'view', tag, '--repo', repository(), '--json', 'isDraft')).isDraft;
   await inDirectory(async directory => {
     gh('release', 'download', tag, '--repo', repository(), '--dir', directory);
-    const previous = release.draft ? null : readFileSync(join(directory, 'release.json'), 'utf8');
+    const previous = isDraft ? null : readFileSync(join(directory, 'release.json'), 'utf8');
     const manifest = JSON.parse(readFileSync(join(directory, 'apple-build.json'), 'utf8'));
     manifest.assets = Object.fromEntries(packages(manifest.channel).flatMap(name => [name, `${name}.sha256`]).map(name => {
       const bytes = readFileSync(join(directory, name));
@@ -116,7 +117,7 @@ async function seal(tag) {
     });
     const path = join(directory, 'release.json');
     writeFileSync(path, JSON.stringify(manifest, null, 2) + '\n');
-    if (!release.draft) {
+    if (!isDraft) {
       if (readFileSync(path, 'utf8') !== previous) throw new Error('Published releases cannot be changed.');
       return;
     }

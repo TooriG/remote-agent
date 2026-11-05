@@ -49,9 +49,9 @@ const fs = require('node:fs'), path = require('node:path');
 const root = process.env.RELEASE_FIXTURE, args = process.argv.slice(2);
 const statePath = path.join(root, 'state.json'), state = JSON.parse(fs.readFileSync(statePath));
 fs.appendFileSync(path.join(root, 'commands'), JSON.stringify(args) + '\\n');
-if (args[0] === 'api') {
- const release = state.releases.find(item => item.tagName === args[1].split('/').at(-1));
- console.log(JSON.stringify({ draft: release.isDraft, prerelease: release.isPrerelease }));
+if (args[1] === 'view') {
+ const release = state.releases.find(item => item.tagName === args[2]);
+ console.log(JSON.stringify({ isDraft: release.isDraft }));
 }
 else if (args[1] === 'list') console.log(JSON.stringify(state.releases));
 else if (args[1] === 'download') {
