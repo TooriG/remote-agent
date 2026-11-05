@@ -208,7 +208,7 @@ extension LaunchUITests {
         let message = app.descendants(matching: .any)["task.message"]
         let completed = app.textViews.matching(NSPredicate(format: "value CONTAINS %@", "MARKDOWN_STREAM_COMPLETE"))
             .firstMatch
-        focusComposerKeepingLatestVisible(in: app, latest: completed)
+        focusComposerKeepingLatestVisible(in: app, latestResponse: completed)
         message.typeText("Keep this draft")
         waitForDraftText(message, text: "Keep this draft")
         app.navigationBars.buttons.element(boundBy: 0).tap()
@@ -240,11 +240,13 @@ extension LaunchUITests {
         assertConversationTextMargins(completed, in: app)
     }
 
-    func focusComposerKeepingLatestVisible(in app: XCUIApplication, latest: XCUIElement) {
+    func focusComposerKeepingLatestVisible(in app: XCUIApplication, latestResponse: XCUIElement?) {
         app.descendants(matching: .any)["task.message"].tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
-        assertConversationTextMargins(latest, in: app)
-        XCTAssertTrue(latest.isHittable, "Opening the keyboard must keep the conversation visible")
+        if let latestResponse {
+            assertConversationTextMargins(latestResponse, in: app)
+            XCTAssertTrue(latestResponse.isHittable, "Opening the keyboard must keep the conversation visible")
+        }
         XCTAssertFalse(app.buttons["task.latest"].exists,
                        "Opening the keyboard must keep following the latest message")
     }

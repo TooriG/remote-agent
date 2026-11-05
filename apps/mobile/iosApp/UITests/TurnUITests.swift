@@ -30,11 +30,9 @@ extension LaunchUITests {
                 repeating: "Keep the latest message visible.\n",
                 count: 6
             )
-            let tail = answers.allElementsBoundByIndex.last
-                ?? app.textViews.matching(NSPredicate(
-                    format: "value == %@", "Latest interrupted conversation message is visible."
-                )).firstMatch
-            focusComposerKeepingLatestVisible(in: app, latest: tail)
+            // The initial interrupted turn keeps its commentary in collapsed work.
+            // Check text geometry once a rendered answer exists; always check bottom following.
+            focusComposerKeepingLatestVisible(in: app, latestResponse: answers.allElementsBoundByIndex.last)
             message.typeText(prompt)
             XCTAssertTrue(app.keyboards.firstMatch.exists)
             app.buttons["task.send"].tap()
