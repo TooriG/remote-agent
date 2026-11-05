@@ -58,7 +58,8 @@ final class ConversationListController: UICollectionViewController {
     private var pending: Source?
     private var applying = false
     private var active = true
-    private var requestedEdge: VerticalEdge? = .bottom
+    private var following = true
+    private var requestedEdge: VerticalEdge?
     private var request: ConversationScrollState.Request?
     private var visibilityUpdate: Task<Void, Never>?
     private var data: UICollectionViewDiffableDataSource<Int, ConversationList.RowID>!
@@ -94,7 +95,7 @@ final class ConversationListController: UICollectionViewController {
     func update(ids: [ConversationList.RowID], following: Bool, request: ConversationScrollState.Request?,
                 accessibilityValue: String, row: @escaping (Int) -> AnyView) {
         loadViewIfNeeded()
-        layout.following = following
+        self.following = following
         if following {
             layout.anchor = nil
         }
@@ -126,16 +127,13 @@ final class ConversationListController: UICollectionViewController {
         let changed = source.ids != pending.ids
         let nextIndices = changed
             ? Dictionary(uniqueKeysWithValues: pending.ids.enumerated().map { ($0.element, $0.offset) }) : indices
-        if !layout.following, requestedEdge == nil,
+        if !following, requestedEdge == nil,
            layout.anchor.flatMap({ nextIndices[$0.id] }) == nil {
             captureAnchor(allowed: nextIndices)
         }
         source = pending
         if changed {
             indices = nextIndices
-            if layout.following {
-                requestedEdge = .bottom
-            }
             applying = true
             var snapshot = NSDiffableDataSourceSnapshot<Int, ConversationList.RowID>()
             snapshot.appendSections([0])
@@ -160,7 +158,8 @@ final class ConversationListController: UICollectionViewController {
                 show(cell, id: id)
             }
         }
-        scrollToRequestedEdge()
+        collectionView.layoutIfNeeded()
+        positionViewport()
         publishVisibility()
     }
 
@@ -184,27 +183,29 @@ final class ConversationListController: UICollectionViewController {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         applyPending()
-        scrollToRequestedEdge()
-        if !layout.following, layout.anchor == nil {
+        positionViewport()
+        if !following, layout.anchor == nil {
             captureAnchor(allowed: indices)
         }
         publishVisibility()
     }
 
-    private func scrollToRequestedEdge() {
-        guard !applying, !source.ids.isEmpty, let edge = requestedEdge else { return }
+    /// Intrinsic-content updates do not necessarily use flow layout's target-offset hook.
+    /// Follow the measured bottom after UIKit has laid out the actual cells.
+    private func positionViewport() {
+        guard !applying, !source.ids.isEmpty,
+              let edge = requestedEdge ?? (following ? .bottom : nil) else { return }
         requestedEdge = nil
-        collectionView.layoutIfNeeded()
         let offset = edge == .bottom ? layout.bottomOffset(in: collectionView) : -collectionView.adjustedContentInset
             .top
-        collectionView.setContentOffset(
-            CGPoint(x: -collectionView.adjustedContentInset.left, y: offset),
-            animated: false
-        )
+        let target = CGPoint(x: -collectionView.adjustedContentInset.left, y: offset)
+        if collectionView.contentOffset != target {
+            collectionView.setContentOffset(target, animated: false)
+        }
     }
 
     private func restoreReadingPosition() {
-        guard !layout.following, layout.anchor != nil else { return }
+        guard !following, layout.anchor != nil else { return }
         collectionView.layoutIfNeeded()
         collectionView.setContentOffset(
             layout.targetContentOffset(forProposedContentOffset: collectionView.contentOffset),
@@ -249,7 +250,7 @@ final class ConversationListController: UICollectionViewController {
     }
 
     override func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        if !applying, !layout.following,
+        if !applying, !following,
            scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating {
             captureAnchor(allowed: indices)
         }
@@ -257,26 +258,25 @@ final class ConversationListController: UICollectionViewController {
     }
 
     override func scrollViewDidChangeAdjustedContentInset(_: UIScrollView) {
-        if layout.following {
-            requestedEdge = .bottom
+        if following {
             view.setNeedsLayout()
         }
     }
 
     override func scrollViewDidEndDecelerating(_: UIScrollView) {
-        if !layout.following {
+        if !following {
             captureAnchor(allowed: indices)
         }
     }
 
     override func scrollViewDidEndScrollingAnimation(_: UIScrollView) {
-        if !layout.following {
+        if !following {
             captureAnchor(allowed: indices)
         }
     }
 
     override func scrollViewDidScrollToTop(_: UIScrollView) {
-        if !layout.following {
+        if !following {
             captureAnchor(allowed: indices)
         }
     }
@@ -284,7 +284,7 @@ final class ConversationListController: UICollectionViewController {
     override func scrollViewWillBeginDragging(_: UIScrollView) {
         requestedEdge = nil
         scroll.following = false
-        layout.following = false
+        following = false
         layout.anchor = nil
     }
 
@@ -292,7 +292,7 @@ final class ConversationListController: UICollectionViewController {
                                             targetContentOffset: UnsafeMutablePointer<CGPoint>) {
         if scrollView.panGestureRecognizer.translation(in: scrollView).y < 0, latestIsVisible() {
             scroll.following = true
-            layout.following = true
+            following = true
             targetContentOffset.pointee.y = layout.bottomOffset(in: scrollView)
         }
     }
@@ -300,7 +300,7 @@ final class ConversationListController: UICollectionViewController {
     override func scrollViewShouldScrollToTop(_: UIScrollView) -> Bool {
         requestedEdge = nil
         scroll.following = false
-        layout.following = false
+        following = false
         layout.anchor = nil
         return true
     }

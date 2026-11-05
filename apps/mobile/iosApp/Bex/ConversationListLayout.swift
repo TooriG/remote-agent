@@ -8,7 +8,6 @@ final class ConversationListLayout: UICollectionViewFlowLayout {
         let displacement: CGFloat
     }
 
-    var following = true
     var anchor: Anchor?
     var indexPath: (ConversationList.RowID) -> IndexPath? = { _ in nil }
     private var alignment: CGFloat = 0
@@ -67,9 +66,6 @@ final class ConversationListLayout: UICollectionViewFlowLayout {
 
     override func targetContentOffset(forProposedContentOffset proposedContentOffset: CGPoint) -> CGPoint {
         guard let collectionView else { return proposedContentOffset }
-        if following {
-            return CGPoint(x: proposedContentOffset.x, y: bottomOffset(in: collectionView))
-        }
         if let anchor, let path = indexPath(anchor.id), let attributes = layoutAttributesForItem(at: path) {
             return CGPoint(x: proposedContentOffset.x,
                            y: clamped(attributes.frame.minY - anchor.displacement, in: collectionView))
@@ -86,21 +82,16 @@ final class ConversationListLayout: UICollectionViewFlowLayout {
             forPreferredLayoutAttributes: translated(preferredAttributes, by: -alignment),
             withOriginalAttributes: translated(originalAttributes, by: -alignment)
         )
-        guard let collectionView else { return context }
+        guard let collectionView, let anchor else { return context }
         let delta = preferredAttributes.size.height - originalAttributes.size.height
-        if following {
-            context.contentOffsetAdjustment.y = bottomOffset(in: collectionView, growth: delta)
-                - bottomOffset(in: collectionView)
-        } else {
-            let insets = collectionView.adjustedContentInset
-            let viewport = collectionView.bounds.height - insets.top - insets.bottom
-            let height = collectionViewContentSize.height - alignment + delta
-            let shift = max(0, viewport - height) - alignment
-            let above = anchor.flatMap { indexPath($0.id) }.map { originalAttributes.indexPath < $0 }
-                ?? (originalAttributes.frame.maxY <= collectionView.contentOffset.y
-                    + collectionView.adjustedContentInset.top)
-            context.contentOffsetAdjustment.y = shift + (above ? delta : 0)
-        }
+        let insets = collectionView.adjustedContentInset
+        let viewport = collectionView.bounds.height - insets.top - insets.bottom
+        let height = collectionViewContentSize.height - alignment + delta
+        let shift = max(0, viewport - height) - alignment
+        let above = indexPath(anchor.id).map { originalAttributes.indexPath < $0 }
+            ?? (originalAttributes.frame.maxY <= collectionView.contentOffset.y
+                + collectionView.adjustedContentInset.top)
+        context.contentOffsetAdjustment.y = shift + (above ? delta : 0)
         return context
     }
 
@@ -108,20 +99,8 @@ final class ConversationListLayout: UICollectionViewFlowLayout {
         newBounds.size != collectionView?.bounds.size || super.shouldInvalidateLayout(forBoundsChange: newBounds)
     }
 
-    override func invalidationContext(forBoundsChange newBounds: CGRect) -> UICollectionViewLayoutInvalidationContext {
-        let context = super.invalidationContext(forBoundsChange: newBounds)
-        if following, let collectionView, newBounds.height != collectionView.bounds.height {
-            context.contentOffsetAdjustment.y = max(-collectionView.adjustedContentInset.top,
-                                                    collectionViewContentSize
-                                                        .height - alignment - newBounds.height
-                                                        + collectionView.adjustedContentInset.bottom) - collectionView
-                .contentOffset.y
-        }
-        return context
-    }
-
-    func bottomOffset(in scroll: UIScrollView, growth: CGFloat = 0) -> CGFloat {
-        let height = collectionViewContentSize.height - alignment + growth
+    func bottomOffset(in scroll: UIScrollView) -> CGFloat {
+        let height = collectionViewContentSize.height - alignment
         return max(-scroll.adjustedContentInset.top,
                    height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
     }
