@@ -17,8 +17,10 @@ function fixture(t) {
   for (const path of [
     'apps/mobile/iosApp/Bex/ConversationScrollObserver.swift',
     'apps/mobile/iosApp/Bex/ConversationTextLayout.swift',
+    'apps/mobile/iosApp/Bex/AppDiagnostics.swift',
     'apps/mobile/iosApp/UITests/Fixtures/scroll-tests.swift',
     'apps/mobile/iosApp/UITests/Fixtures/text-view-tests.swift',
+    'apps/mobile/iosApp/UITests/Fixtures/app-diagnostics-tests.swift',
   ]) {
     const destination = join(root, path);
     mkdirSync(join(destination, '..'), { recursive: true });
@@ -66,13 +68,13 @@ function successfulRun(build, compileCount, overrides) {
   const result = build.run(overrides);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.commands.filter(command => command === 'compile').length, compileCount);
-  assert.equal(result.commands.filter(command => command === 'run').length, 2);
+  assert.equal(result.commands.filter(command => command === 'run').length, 3);
 }
 
-test('unchanged Swift tests reuse compilation and always execute both fixtures', (t) => {
+test('unchanged Swift tests reuse compilation and always execute every fixture', (t) => {
   const build = fixture(t);
   const directory = join(build.target, 'qa/ios-scroll/builds/scroll-tests');
-  successfulRun(build, 2);
+  successfulRun(build, 3);
   const firstBuild = readdirSync(directory)[0];
   successfulRun(build, 0);
   writeFileSync(join(build.root, 'apps/mobile/iosApp/Bex/ConversationScrollObserver.swift'), '// changed source\n');
@@ -85,7 +87,7 @@ test('unchanged Swift tests reuse compilation and always execute both fixtures',
     { SWIFT_FIXTURE_SDK_BUILD: '26B' },
     { SWIFT_FIXTURE_SDK: join(build.root, 'Other SDK') },
     { SWIFT_FIXTURE_ARCH: 'x86_64' },
-  ]) successfulRun(build, 2, overrides);
+  ]) successfulRun(build, 3, overrides);
   chmodSync(join(directory, currentBuild), 0o644);
   successfulRun(build, 1);
   successfulRun(build, 0);
@@ -96,7 +98,7 @@ test('failed compilations are retried and cached test failures still fail verifi
   const compilation = build.run({ SWIFT_FIXTURE_COMPILE_STATUS: '1' });
   assert.equal(compilation.status, 1);
   assert.deepEqual(compilation.commands, ['compile']);
-  successfulRun(build, 2);
+  successfulRun(build, 3);
   const failure = build.run({ SWIFT_FIXTURE_TEST_STATUS: '7' });
   assert.equal(failure.status, 7);
   assert.deepEqual(failure.commands, ['run']);

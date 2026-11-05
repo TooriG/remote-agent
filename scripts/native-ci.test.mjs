@@ -76,6 +76,7 @@ test('only affected native clients run while repository-only changes stay lightw
     [['.swiftformat', '.swiftlint.yml', 'scripts/build-agent-ios.sh'], ['iphone']],
     [['apps/mobile/iosApp/Bex/ConversationScrollObserver.swift'], ['iphone', 'mac']],
     [['apps/mobile/iosApp/Bex/ConversationTextLayout.swift'], ['iphone', 'mac']],
+    [['apps/mobile/iosApp/Bex/AppDiagnostics.swift', 'apps/mobile/iosApp/UITests/Fixtures/app-diagnostics-tests.swift'], ['iphone', 'mac']],
     [['apps/mobile/iosApp/Bex/ConversationTextLayout.swift', 'apps/mobile/iosApp/Bex/RenamedTextLayout.swift'], ['iphone', 'mac']],
     [['apps/mobile/iosApp/UITests/Fixtures/scroll-tests.swift', 'apps/mobile/iosApp/UITests/Fixtures/text-view-tests.swift'], ['iphone', 'mac']],
     [['crates/xtask/src/ios_e2e.rs'], ['iphone', 'mac']],

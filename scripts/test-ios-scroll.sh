@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Exercise UIKit scroll geometry on macOS without a Simulator or Host.
+# Exercise native iOS components on macOS without a Simulator or Host.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 sdk=$(xcrun --sdk macosx --show-sdk-path)
@@ -37,3 +37,4 @@ run_test() {
 }
 run_test scroll-tests apps/mobile/iosApp/Bex/ConversationScrollObserver.swift
 run_test text-view-tests apps/mobile/iosApp/Bex/ConversationTextLayout.swift
+run_test app-diagnostics-tests apps/mobile/iosApp/Bex/AppDiagnostics.swift

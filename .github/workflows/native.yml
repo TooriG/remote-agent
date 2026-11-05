@@ -96,7 +96,9 @@ jobs:
                 apps/desktop/src/browser/native/snapshot.test.cjs) continue ;;
               tools/windows-fxc/* | scripts/package-windows.ps1 | scripts/windows-installer.iss) area=windows ;;
               apps/mobile/iosApp/Bex/ConversationScrollObserver.swift | apps/mobile/iosApp/Bex/ConversationTextLayout.swift | \
-                apps/mobile/iosApp/UITests/Fixtures/scroll-tests.swift | apps/mobile/iosApp/UITests/Fixtures/text-view-tests.swift) area='iphone-mac' ;;
+                apps/mobile/iosApp/Bex/AppDiagnostics.swift | \
+                apps/mobile/iosApp/UITests/Fixtures/scroll-tests.swift | apps/mobile/iosApp/UITests/Fixtures/text-view-tests.swift | \
+                apps/mobile/iosApp/UITests/Fixtures/app-diagnostics-tests.swift) area='iphone-mac' ;;
               # Mac runs the runner's unit tests; iPhone exercises its Simulator lifecycle.
               crates/xtask/src/ios_e2e.rs) area='iphone-mac' ;;
               scripts/test-ios-scroll.sh) area=mac ;;
@@ -111,7 +113,7 @@ jobs:
             if [[ $area == all || $area == desktop || $area == windows ]]; then windows=true; fi
             if [[ $area == all || $area == android ]]; then android=true; fi
             if [[ $area == all || $area == iphone || $area == iphone-mac ]]; then iphone=true; fi
-            # Only the UIKit geometry fixtures also compile Swift in the Mac job.
+            # Headless UIKit component fixtures also compile Swift in the Mac job.
             if [[ $area == all || $area == mac || $area == iphone-mac || $area == desktop ]]; then mac=true; fi
           done <<< "$changed"
           printf 'windows=%s\nandroid=%s\niphone=%s\nmac=%s\n' "$windows" "$android" "$iphone" "$mac" | tee -a "$GITHUB_OUTPUT"

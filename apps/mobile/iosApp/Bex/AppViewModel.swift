@@ -46,6 +46,7 @@ final class AppViewModel: ObservableObject {
     var workbenchSideChats: [UInt64: SideChatRequest] = [:]
 
     init() {
+        AppDiagnostics.shared.record(.modelInitializing)
         observeLiveActivityRequests()
         pathMonitor.pathUpdateHandler = { [weak self] path in
             let available = path.status == .satisfied
@@ -58,12 +59,20 @@ final class AppViewModel: ObservableObject {
             }
         }
         pathMonitor.start(queue: DispatchQueue(label: "agent.network-path"))
-        do { profiles = try HostProfile.load() } catch { notice = error.localizedDescription }
+        AppDiagnostics.shared.record(.profilesLoading)
+        do {
+            profiles = try HostProfile.load()
+            AppDiagnostics.shared.record(.profilesLoaded, value: profiles.count)
+        } catch {
+            AppDiagnostics.shared.record(.profilesLoadFailed, value: (error as NSError).code)
+            notice = error.localizedDescription
+        }
         connectProfiles()
         if let id = UserDefaults.standard.string(forKey: "bex.selected-host"),
            profiles.contains(where: { $0.id == id }) {
             selectProfile(id)
         }
+        AppDiagnostics.shared.record(.modelReady)
     }
 
     deinit { pathMonitor.cancel() }

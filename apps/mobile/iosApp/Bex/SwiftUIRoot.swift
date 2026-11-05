@@ -51,7 +51,14 @@ struct SwiftUIRoot: View {
         .safeAreaInset(edge: .top, spacing: 0) {
             ErrorNotices(model: model, scope: .application).padding(.horizontal)
         }
-        .onChange(of: model.screen) { screen in
+        .onChange(of: model.screen, initial: true) { _, screen in
+            let event: AppDiagnostics.Event = switch screen {
+            case .profiles: .profilesScreen
+            case .pairing: .pairingScreen
+            case .threads: .threadsScreen
+            case .thread: .conversationScreen
+            }
+            AppDiagnostics.shared.record(event)
             if screen != .thread {
                 model.sideChatRequest = nil
             }
