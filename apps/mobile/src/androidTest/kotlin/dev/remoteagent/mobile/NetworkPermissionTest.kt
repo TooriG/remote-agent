@@ -58,6 +58,8 @@ class NetworkPermissionTest {
             device.pressBack()
             assertTrue(device.wait(Until.hasObject(By.text("インターネット経由で接続")), 10_000))
             device.findObject(By.text("インターネット経由で接続")).click()
+            assertTrue(device.wait(Until.hasObject(By.text("環境に接続")), 10_000))
+            device.findObject(By.text("環境に接続")).click()
             assertTrue(device.wait(Until.hasObject(By.text("PCとペアリング")), 10_000))
             assertThrows(IOException::class.java) { readLocalHost() }
             activity.recreate()
@@ -69,6 +71,8 @@ class NetworkPermissionTest {
             if (!dismissPermissionDialog(device, "permission_allow_button")) {
                 throw permissionFailure("Permission dialog did not close after allowing access", activity.state, device)
             }
+            assertTrue(device.wait(Until.hasObject(By.text("環境に接続")), 10_000))
+            device.findObject(By.text("環境に接続")).click()
             assertTrue(device.wait(Until.hasObject(By.text("PCとペアリング")), 10_000))
             assertEquals(
                 PackageManager.PERMISSION_GRANTED,

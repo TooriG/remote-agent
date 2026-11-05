@@ -20,6 +20,7 @@ extension AppViewModel {
     private func connect(_ profile: HostProfile, afterForeground: Bool = false) {
         let storage = MobileSessionStorage(host: profile.id)
         let session = sessions.open(host: profile.id, storage: storage, platform: storage)
+        observe(session, host: profile.id)
         guard afterForeground || (!session.snapshot().connected() && connections[profile.id] == nil) else { return }
         connections[profile.id]?.cancel()
         if selectedProfileId == profile.id {
@@ -62,27 +63,42 @@ extension AppViewModel {
     }
 
     func observe(_ session: ClientSession, host: String) {
-        observation = Task { [weak self] in
+        guard observations[host] == nil else { return }
+        observations[host] = Task { [weak self] in
             do {
                 let owner = try await session.ready()
-                guard self?.session === session, !Task.isCancelled else { return }
+                guard !Task.isCancelled else { return }
                 var previous = owner.snapshot()
-                self?.publish(previous)
-                self?.connect()
+                self?.receiveHost(previous, host: host, listChanged: true)
                 while !Task.isCancelled {
                     _ = try await owner.nextSnapshot(previous: previous)
-                    guard let self, self.session === session, !Task.isCancelled else { return }
+                    guard let self, !Task.isCancelled else { return }
                     let latest = owner.snapshot()
-                    publish(latest)
+                    receiveHost(latest, host: host, listChanged: latest.changes(previous: previous).list)
                     if latest.changes(previous: previous).reconnected {
                         liveActivities.resendTokens(hostID: host)
-                        notice = nil
+                        if selectedProfileId == host {
+                            notice = nil
+                        }
                     }
                     previous = latest
                 }
             } catch {
-                guard self?.session === session, !Task.isCancelled else { return }
-                self?.notice = error.localizedDescription
+                guard !Task.isCancelled else { return }
+                if self?.selectedProfileId == host {
+                    self?.notice = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func receiveHost(_ next: AgentCore.Snapshot, host: String, listChanged: Bool) {
+        if selectedProfileId == host {
+            publish(next)
+        } else {
+            updateProfile(next, host: host)
+            if allProfiles, listChanged {
+                updateTaskList()
             }
         }
     }

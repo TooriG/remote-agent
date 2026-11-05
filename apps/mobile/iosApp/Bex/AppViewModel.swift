@@ -7,7 +7,7 @@ import UIKit
 @MainActor
 final class AppViewModel: ObservableObject {
     @Published private(set) var snapshot = AgentCore.Snapshot.empty()
-    @Published var screen: AppScreen = .profiles
+    @Published var screen: AppScreen = .threads
     @Published var sideChatRequest: SideChatRequest?
     @Published var composerFocusRequest: UUID?
     @Published var transferError: String?
@@ -20,11 +20,13 @@ final class AppViewModel: ObservableObject {
 
     @Published var pairingError: String?
     @Published private(set) var pairingInvitation: Invitation?
+    private var pairingReturnScreen: AppScreen = .threads
     @Published var notice: String?
     @Published var profiles: [HostProfile] = []
     @Published private(set) var selectedProfileId: String?
+    @Published private(set) var allProfiles = false
     @Published private(set) var conversation: ConversationPresentation?
-    private(set) var list: ThreadList?
+    @Published private(set) var list: ThreadList?
     private(set) var models: [Model] = []
     private var presentationTask: Task<Void, Never>?
     private var pendingPresentation: ConversationPresentationInput?
@@ -38,7 +40,7 @@ final class AppViewModel: ObservableObject {
         session?.store()
     }
 
-    var observation: Task<Void, Never>?
+    var observations: [String: Task<Void, Never>] = [:]
     private let pathMonitor = NWPathMonitor()
     let liveActivities = TaskLiveActivities()
     let panels = Panels()
@@ -67,11 +69,14 @@ final class AppViewModel: ObservableObject {
             AppDiagnostics.shared.record(.profilesLoadFailed, value: (error as NSError).code)
             notice = error.localizedDescription
         }
-        connectProfiles()
-        if let id = UserDefaults.standard.string(forKey: "bex.selected-host"),
-           profiles.contains(where: { $0.id == id }) {
-            selectProfile(id)
+        let selection = resolveConnectionSelection(hosts: profiles.map(\.id),
+                                                   lastHost: UserDefaults.standard.string(forKey: "bex.selected-host"),
+                                                   all: UserDefaults.standard.bool(forKey: "bex.all-hosts"))
+        allProfiles = selection.all
+        if let id = selection.hostId {
+            activateProfile(id)
         }
+        connectProfiles()
         AppDiagnostics.shared.record(.modelReady)
     }
 
@@ -79,8 +84,27 @@ final class AppViewModel: ObservableObject {
 
     func selectProfile(_ id: String) {
         guard profiles.contains(where: { $0.id == id }) else { return }
+        allProfiles = false
+        UserDefaults.standard.set(false, forKey: "bex.all-hosts")
+        activateProfile(id)
+        showThreadList()
+        updateTaskList()
+    }
+
+    func selectAllProfiles() {
+        allProfiles = true
+        UserDefaults.standard.set(true, forKey: "bex.all-hosts")
+        showThreadList()
+        updateTaskList()
+    }
+
+    func activateProfile(_ id: String) {
+        guard profiles.contains(where: { $0.id == id }) else { return }
+        if selectedProfileId == id, session === sessions.session(host: id) {
+            return
+        }
         screen = .threads
-        detachObservation()
+        resetPresentation()
         selectedProfileId = id
         UserDefaults.standard.set(id, forKey: "bex.selected-host")
         let storage = MobileSessionStorage(host: id)
@@ -89,6 +113,10 @@ final class AppViewModel: ObservableObject {
         _ = try? owner.dispatch(intent: .showThreadList)
         publish(owner.snapshot())
         observe(owner, host: id)
+    }
+
+    func updateTaskList() {
+        list = sessions.threadList(host: allProfiles ? nil : selectedProfileId)
     }
 
     private static var clientBuild: ClientBuild {
@@ -105,14 +133,26 @@ final class AppViewModel: ObservableObject {
             return
         }
         connections.removeValue(forKey: id)?.cancel()
+        observations.removeValue(forKey: id)?.cancel()
         let old = sessions.remove(host: id)
         if selectedProfileId == id {
-            detachObservation()
+            resetPresentation()
             selectedProfileId = nil
             session = nil
             UserDefaults.standard.removeObject(forKey: "bex.selected-host")
         }
         profiles.removeAll { $0.id == id }
+        let selection = resolveConnectionSelection(
+            hosts: profiles.map(\.id),
+            lastHost: selectedProfileId,
+            all: allProfiles
+        )
+        allProfiles = selection.all
+        UserDefaults.standard.set(allProfiles, forKey: "bex.all-hosts")
+        if let host = selection.hostId {
+            activateProfile(host)
+        }
+        updateTaskList()
         screen = .profiles
         Task { [weak self] in
             do {
@@ -123,8 +163,7 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    private func detachObservation() {
-        observation?.cancel()
+    private func resetPresentation() {
         recentConversations.removeAll()
         pendingPresentation = nil
         conversation = nil
@@ -133,6 +172,9 @@ final class AppViewModel: ObservableObject {
     }
 
     func openPairing() {
+        if screen != .pairing {
+            pairingReturnScreen = screen == .profiles ? .profiles : .threads
+        }
         persist()
         pairingConnection?.cancel()
         pairingConnection = nil
@@ -141,11 +183,11 @@ final class AppViewModel: ObservableObject {
         screen = .pairing
     }
 
-    func dismissPairing() {
+    func dismissPairing(returnTo: AppScreen? = nil) {
         pairingConnection?.cancel()
         pairingConnection = nil
         pairingInvitation = nil
-        screen = .profiles
+        screen = returnTo ?? pairingReturnScreen
     }
 
     func preparePairing(_ contents: String) {
@@ -174,6 +216,7 @@ final class AppViewModel: ObservableObject {
                     ]
                     try HostProfile.save(paired)
                     connections.removeValue(forKey: id)?.cancel()
+                    observations.removeValue(forKey: id)?.cancel()
                     sessions.adopt(host: id, session: owner)
                     guard !Task.isCancelled else { return }
                     profiles = paired
@@ -215,18 +258,9 @@ extension AppViewModel {
     func publish(_ next: AgentCore.Snapshot) {
         let changes = next.changes(previous: snapshot)
         guard changes.changed else { return }
-        // The Host's latest addresses let the next cold connection dial it directly.
-        if let index = profiles.firstIndex(where: { $0.id == selectedProfileId }) {
-            var profile = profiles[index]
-            profile.name = next.hostName() ?? profile.name
-            profile.ticket = next.hostTicket() ?? profile.ticket
-            if profile != profiles[index] {
-                profiles[index] = profile
-                do { try HostProfile.save(profiles) } catch { notice = error.localizedDescription }
-            }
-        }
+        updateProfile(next, host: selectedProfileId)
         if changes.list {
-            list = next.threadList()
+            updateTaskList()
             if list != nil {
                 store?.recordConnectionEvent(phase: .listPublished, value: next.connected() ? 1 : 0)
             }
@@ -242,6 +276,19 @@ extension AppViewModel {
         }
         if let error = session?.persistenceError() {
             notice = error
+        }
+    }
+
+    func updateProfile(_ next: AgentCore.Snapshot, host: String?) {
+        // The Host's latest addresses let the next cold connection dial it directly.
+        if let index = profiles.firstIndex(where: { $0.id == host }) {
+            var profile = profiles[index]
+            profile.name = next.hostName() ?? profile.name
+            profile.ticket = next.hostTicket() ?? profile.ticket
+            if profile != profiles[index] {
+                profiles[index] = profile
+                do { try HostProfile.save(profiles) } catch { notice = error.localizedDescription }
+            }
         }
     }
 

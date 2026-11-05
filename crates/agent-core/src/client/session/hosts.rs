@@ -57,6 +57,32 @@ impl ClientSessions {
         self.hosts.lock().unwrap().sessions.get(&host).cloned()
     }
 
+    pub fn thread_list(
+        &self,
+        host: Option<String>,
+    ) -> Option<crate::presentation::list::ThreadList> {
+        let sessions: Vec<_> = self
+            .hosts
+            .lock()
+            .unwrap()
+            .sessions
+            .iter()
+            .filter(|(id, _)| host.as_ref().is_none_or(|host| host == *id))
+            .map(|(id, session)| (id.clone(), session.clone()))
+            .collect();
+        crate::presentation::connection_list::combine_connection_lists(
+            sessions.into_iter().filter_map(|(id, session)| {
+                let snapshot = session.snapshot();
+                let list = if self.recent_chats {
+                    snapshot.recent_thread_list()
+                } else {
+                    snapshot.thread_list()
+                };
+                list.map(|list| (id, list))
+            }),
+        )
+    }
+
     /// Remains provisional until the platform saves the profile and adopts it.
     pub async fn pair(
         &self,

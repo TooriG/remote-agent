@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -75,19 +76,18 @@ internal fun ThreadListScreen(
     list: ThreadList?,
     query: ListQuery,
     loadingThreads: Boolean,
-    perform: (Intent) -> Unit,
-    showHosts: () -> Unit,
-    hostName: String = "My PC",
-    connected: Boolean = false,
-    openSettings: () -> Unit = {},
+    perform: (Intent, String?) -> Unit,
+    title: @Composable RowScope.() -> Unit,
+    emptyContent: (@Composable () -> Unit)? = null,
+    scopeKey: String = "",
 ) {
     val language = LocalUiLanguage.current
-    var search by rememberSaveable { mutableStateOf(query.searchTerm.takeIf { it.isNotEmpty() }) }
+    var search by rememberSaveable(scopeKey) { mutableStateOf(query.searchTerm.takeIf { it.isNotEmpty() }) }
     val focusManager = LocalFocusManager.current
     fun closeSearch() {
         search = null
         focusManager.clearFocus()
-        perform(Intent.ListSessions(ListSessions(query = query.copy(searchTerm = ""))))
+        perform(Intent.ListSessions(ListSessions(query = query.copy(searchTerm = ""))), null)
     }
     BackHandler(enabled = search != null) { closeSearch() }
     var selectedTab by rememberSaveable { mutableStateOf(0) }
@@ -95,14 +95,14 @@ internal fun ThreadListScreen(
     val dispatch by rememberUpdatedState(perform)
     val listState = rememberLazyListState()
     val reorder = rememberProjectReorder(listState, list?.projects.orEmpty(), perform)
-    LaunchedEffect(Unit) {
+    LaunchedEffect(scopeKey) {
         // Core loads the initial query; every later edit supersedes pending input.
         snapshotFlow { search }
             .drop(1)
             .collectLatest { term ->
                 if (term != null) {
                     kotlinx.coroutines.delay(SEARCH_DEBOUNCE_MILLIS)
-                    dispatch(Intent.ListSessions(ListSessions(query = currentQuery.copy(searchTerm = term))))
+                    dispatch(Intent.ListSessions(ListSessions(query = currentQuery.copy(searchTerm = term))), null)
                 }
             }
     }
@@ -111,33 +111,35 @@ internal fun ThreadListScreen(
             search = search,
             loadingThreads = loadingThreads,
             changeSearch = { if (it == null) closeSearch() else search = it },
-            refresh = { perform(Intent.ListSessions(ListSessions(query = query))) },
-        ) {
-            Text(
-                "bex",
-                Modifier.padding(end = 8.dp),
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-            )
-            HostSelector(hostName, connected, showHosts, Modifier.weight(1f))
-            IconButton(onClick = openSettings) { Icon(painterResource(R.drawable.ic_globe), language.text("設定")) }
-        }
-        TabRow(selectedTabIndex = selectedTab, containerColor = MaterialTheme.colorScheme.background) {
-            listOf(language.text("最近のチャット"), language.text("プロジェクト")).forEachIndexed { index, label ->
-                Tab(selected = selectedTab == index, onClick = { selectedTab = index }, text = { Text(label) })
+            refresh = { perform(Intent.ListSessions(ListSessions(query = query)), null) },
+            title = title,
+        )
+        if (emptyContent != null) {
+            Box(Modifier.weight(1f)) { emptyContent() }
+        } else {
+            TabRow(selectedTabIndex = selectedTab, containerColor = MaterialTheme.colorScheme.background) {
+                listOf(language.text("最近のチャット"), language.text("プロジェクト")).forEachIndexed { index, label ->
+                    Tab(selected = selectedTab == index, onClick = { selectedTab = index }, text = { Text(label) })
+                }
             }
+            ThreadListContent(
+                list,
+                loadingThreads,
+                selectedTab,
+                reorder,
+                perform,
+                Modifier.weight(1f).fillMaxWidth(),
+            )
+            NewChatButton(perform)
         }
-        ThreadListContent(list, loadingThreads, selectedTab, reorder, perform, Modifier.weight(1f).fillMaxWidth())
-        NewChatButton(perform)
     }
 }
 
 @Composable
-private fun NewChatButton(perform: (Intent) -> Unit) {
+private fun NewChatButton(perform: (Intent, String?) -> Unit) {
     val language = LocalUiLanguage.current
     Button(
-        onClick = { perform(Intent.NewChat("")) },
+        onClick = { perform(Intent.NewChat(""), null) },
         modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
         shape = RoundedCornerShape(10.dp),
         contentPadding = PaddingValues(16.dp),
@@ -153,7 +155,7 @@ private fun ThreadListContent(
     loadingThreads: Boolean,
     selectedTab: Int,
     reorder: ProjectReorder,
-    perform: (Intent) -> Unit,
+    perform: (Intent, String?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val language = LocalUiLanguage.current
@@ -167,7 +169,7 @@ private fun ThreadListContent(
             }
         }
         reorder.projects
-            .firstOrNull { it.id == reorder.source }
+            .firstOrNull { it.listKey == reorder.source }
             ?.let { project ->
                 // Draw above the list while the original handle stays put to keep gesture coordinates stable.
                 ProjectRow(
@@ -194,17 +196,24 @@ private fun ThreadListContent(
 private fun LazyListScope.recentChats(
     list: ThreadList?,
     loadingThreads: Boolean,
-    perform: (Intent) -> Unit,
+    perform: (Intent, String?) -> Unit,
     language: dev.remoteagent.core.UiLanguage,
 ) {
     val threads = list?.threads.orEmpty()
-    items(threads, key = { "chat:${it.id.listKey}" }) {
-        SummaryRow(it, perform, list?.projects?.firstOrNull { project -> project.id == it.projectId }?.name)
+    items(threads, key = { "chat:${it.hostId}:${it.id.listKey}" }) { thread ->
+        SummaryRow(
+            thread,
+            { perform(it, thread.hostId) },
+            list
+                ?.projects
+                ?.firstOrNull { project -> project.hostId == thread.hostId && project.id == thread.projectId }
+                ?.name,
+        )
     }
     if (list?.hasMore == true)
         item {
             TextButton(
-                onClick = { perform(Intent.ExpandRecentChats) },
+                onClick = { perform(Intent.ExpandRecentChats, null) },
                 enabled = !loadingThreads && !list.loadingChats,
             ) {
                 LoadingLabel("もっと見る", list.loadingChats)
@@ -218,42 +227,6 @@ private fun LazyListScope.recentChats(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-}
-
-@Composable
-private fun HostSelector(hostName: String, connected: Boolean, showHosts: () -> Unit, modifier: Modifier = Modifier) {
-    val language = LocalUiLanguage.current
-    Row(
-        modifier
-            .heightIn(min = 48.dp)
-            .clickable(
-                role = androidx.compose.ui.semantics.Role.Button,
-                onClickLabel = language.text("接続先を切り替える"),
-                onClick = showHosts,
-            ),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Icon(
-            painterResource(R.drawable.ic_circle),
-            if (connected) language.text("接続中") else language.text("未接続"),
-            Modifier.size(6.dp),
-            tint = if (connected) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Icon(
-            painterResource(R.drawable.ic_computer),
-            null,
-            Modifier.size(16.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-            hostName,
-            Modifier.weight(1f, fill = false),
-            style = MaterialTheme.typography.labelLarge,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
 }
 
 @Composable
@@ -323,54 +296,17 @@ private val SessionRef.listKey: String
 private fun LazyListScope.projectThreads(
     list: ThreadList?,
     loadingThreads: Boolean,
-    perform: (Intent) -> Unit,
+    perform: (Intent, String?) -> Unit,
     reorder: ProjectReorder,
     language: dev.remoteagent.core.UiLanguage,
 ) {
     list?.projects.orEmpty().forEach { project ->
-        item(key = "project:${project.id}") {
-            ProjectDropMarker(reorder, project.id, after = false)
-            ProjectRow(
-                project,
-                perform,
-                reorder,
-                modifier = Modifier.alpha(if (reorder.source == project.id) DRAG_PLACEHOLDER_ALPHA else 1f),
-            )
-            ProjectDropMarker(reorder, project.id, after = true)
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-        }
-        if (project.expanded) {
-            project.coordinatorUrl?.let {
-                item(key = "coordinator:${project.id}") {
-                    Text(
-                        language.text("タスクの依頼・振り分けはメイン会話へ。以下はこのPCの作業スレッドです。"),
-                        Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            if (project.loading && !project.hasMore)
-                item(key = "loading:${project.id}") { CircularProgressIndicator(Modifier.size(18.dp)) }
-            project.error?.let { error ->
-                item(key = "error:${project.id}") {
-                    ErrorTextView(error, color = androidx.compose.ui.graphics.Color.Unspecified)
-                    TextButton(onClick = { perform(Intent.RefreshProject(project.id)) }) { Text(language.text("再試行")) }
-                }
-            }
-            items(project.threads, key = { "project:${project.id}:${it.id.listKey}" }) { SummaryRow(it, perform) }
-            if (project.hasMore)
-                item(key = "more:${project.id}") {
-                    TextButton(onClick = { perform(Intent.ExpandThreadList(project.id)) }, enabled = !project.loading) {
-                        LoadingLabel("もっと見る", project.loading)
-                    }
-                }
-        }
+        projectSection(project, reorder, { perform(it, project.hostId) }, language)
     }
     if (list?.hasMoreProjects == true)
         item {
             TextButton(
-                onClick = { perform(Intent.ExpandProjects) },
+                onClick = { perform(Intent.ExpandProjects, null) },
                 enabled = !loadingThreads && !list.loadingProjects,
             ) {
                 LoadingLabel("もっとプロジェクトを表示", list.loadingProjects)
@@ -384,6 +320,55 @@ private fun LazyListScope.projectThreads(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+}
+
+private fun LazyListScope.projectSection(
+    project: ProjectSummary,
+    reorder: ProjectReorder,
+    dispatch: (Intent) -> Unit,
+    language: dev.remoteagent.core.UiLanguage,
+) {
+    item(key = "project:${project.listKey}") {
+        ProjectDropMarker(reorder, project.listKey, after = false)
+        ProjectRow(
+            project,
+            dispatch,
+            reorder,
+            modifier = Modifier.alpha(if (reorder.source == project.listKey) DRAG_PLACEHOLDER_ALPHA else 1f),
+        )
+        ProjectDropMarker(reorder, project.listKey, after = true)
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+    }
+    if (project.expanded) {
+        project.coordinatorUrl?.let {
+            item(key = "coordinator:${project.listKey}") {
+                Text(
+                    language.text("タスクの依頼・振り分けはメイン会話へ。以下はこのPCの作業スレッドです。"),
+                    Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        if (project.loading && !project.hasMore)
+            item(key = "loading:${project.listKey}") { CircularProgressIndicator(Modifier.size(18.dp)) }
+        project.error?.let { error ->
+            item(key = "error:${project.listKey}") {
+                ErrorTextView(error, color = androidx.compose.ui.graphics.Color.Unspecified)
+                TextButton(onClick = { dispatch(Intent.RefreshProject(project.id)) }) { Text(language.text("再試行")) }
+            }
+        }
+        items(project.threads, key = { "project:${project.listKey}:${it.id.listKey}" }) { SummaryRow(it, dispatch) }
+        if (project.hasMore)
+            item(key = "more:${project.listKey}") {
+                TextButton(
+                    onClick = { dispatch(Intent.ExpandThreadList(project.id)) },
+                    enabled = !project.loading,
+                ) {
+                    LoadingLabel("もっと見る", project.loading)
+                }
+            }
+    }
 }
 
 @Composable

@@ -1,6 +1,86 @@
 {
   "sourceLanguage": "ja",
   "strings": {
+    "すべての接続先": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All connections"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "すべての接続先"
+          }
+        }
+      }
+    },
+    "作業する環境を接続": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connect a workspace"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "作業する環境を接続"
+          }
+        }
+      }
+    },
+    "接続すると、プロジェクトとタスクがここに表示されます": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connect to see your projects and tasks here."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接続すると、プロジェクトとタスクがここに表示されます"
+          }
+        }
+      }
+    },
+    "環境に接続": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connect"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "環境に接続"
+          }
+        }
+      }
+    },
+    "QRコード・接続情報を使う": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use a QR code or connection details"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "QRコード・接続情報を使う"
+          }
+        }
+      }
+    },
     "先頭1 MiBだけ表示しています。全文はダウンロードできます。": {
       "localizations": {
         "ja": {

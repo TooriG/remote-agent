@@ -55,7 +55,13 @@ class ThreadListTest {
             val intents = mutableListOf<Intent>()
             compose.setContent {
                 AppTheme {
-                    ThreadListScreen(snapshot.recentThreadList(), snapshot.listQuery(), false, { intents.add(it) }, {})
+                    ThreadListScreen(
+                        snapshot.recentThreadList(),
+                        snapshot.listQuery(),
+                        false,
+                        { intent, _ -> intents.add(intent) },
+                        {},
+                    )
                 }
             }
             compose.onNodeWithText("Project conversation").assertIsDisplayed()
@@ -88,7 +94,13 @@ class ThreadListTest {
             val intents = mutableListOf<Intent>()
             compose.setContent {
                 AppTheme {
-                    ThreadListScreen(snapshot.threadList(), snapshot.listQuery(), false, { intents.add(it) }, {})
+                    ThreadListScreen(
+                        snapshot.threadList(),
+                        snapshot.listQuery(),
+                        false,
+                        { intent, _ -> intents.add(intent) },
+                        {},
+                    )
                 }
             }
             compose.onNodeWithText("プロジェクト").performClick()
@@ -140,10 +152,16 @@ class ThreadListTest {
                             snapshot.threadList(),
                             snapshot.listQuery(),
                             false,
-                            { intents.add(it) },
-                            { openedHosts = true },
-                            hostName = "Development PC",
-                            connected = true,
+                            { intent, _ -> intents.add(intent) },
+                            title = {
+                                ConnectionListTitle(
+                                    listOf(HostProfile("development", "Development PC", "")),
+                                    dev.remoteagent.core.ConnectionSelection("development", false),
+                                    true,
+                                    select = { openedHosts = true },
+                                    openSettings = {},
+                                )
+                            },
                         )
                     }
                 }
@@ -152,7 +170,7 @@ class ThreadListTest {
             compose.onNodeWithContentDescription("接続中").assertIsDisplayed()
             val header =
                 listOf(
-                        compose.onNodeWithText("bex"),
+                        compose.onNodeWithContentDescription("Bex"),
                         compose.onNodeWithText("Development PC"),
                         compose.onNodeWithContentDescription("検索"),
                         compose.onNodeWithContentDescription("更新"),
@@ -160,6 +178,7 @@ class ThreadListTest {
                     .map { it.assertIsDisplayed().fetchSemanticsNode().boundsInRoot }
             header.forEach { assertEquals(header.first().center.y, it.center.y, 1f) }
             compose.onNodeWithText("Development PC").performClick()
+            compose.onNodeWithText("すべての接続先").performClick()
             assertTrue(openedHosts)
             compose.onNodeWithText("プロジェクト").performClick()
             compose.onNodeWithText("最近のチャット").performClick()
@@ -179,7 +198,7 @@ class ThreadListTest {
                         snapshot.threadList(),
                         query,
                         false,
-                        { intent ->
+                        { intent, _ ->
                             intents.add(intent)
                             if (intent is Intent.ListSessions) query = intent.v1.query
                         },
@@ -238,7 +257,7 @@ class ThreadListTest {
                         list,
                         snapshot.listQuery(),
                         false,
-                        { intent -> if (intent is Intent.ReadThread) opened.add(intent.v1.threadId) },
+                        { intent, _ -> if (intent is Intent.ReadThread) opened.add(intent.v1.threadId) },
                         {},
                     )
                 }

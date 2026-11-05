@@ -14,6 +14,7 @@ use std::{
 #[derive(PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ProjectSummary {
+    pub host_id: String,
     pub id: String,
     pub name: String,
     /// The native coordinator lives on Claude, separately from local worker sessions.
@@ -62,6 +63,7 @@ fn project_summary(project: &Project, display_name: &str) -> ProjectSummary {
         .chars()
         .fold(0, |index, c| (index * 31 + c as usize) % COLORS.len());
     ProjectSummary {
+        host_id: String::new(),
         id: project.id.clone(),
         name: display_name.to_owned(),
         coordinator_url: coordinator_url(&project.id),
@@ -91,6 +93,7 @@ fn coordinator_url(project_id: &str) -> Option<String> {
 #[derive(PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ThreadSummary {
+    pub host_id: String,
     pub id: crate::session::SessionRef,
     pub title: String,
     pub project_id: Option<String>,
@@ -565,6 +568,7 @@ fn thread_summaries<'a>(
                 waiting.contains(id)
             };
             ThreadSummary {
+                host_id: String::new(),
                 id: id.clone(),
                 title: task_title(thread.name.as_deref(), thread.preview.as_deref()).to_owned()
                     + if thread.list_stale == Some(true) {
