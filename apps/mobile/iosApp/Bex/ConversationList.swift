@@ -45,14 +45,25 @@ struct ConversationList: UIViewControllerRepresentable {
     }
 }
 
-final class ConversationListController: UICollectionViewController {
+/// Observe the collection's actual layout, including inset changes that do not resize its controller.
+private final class ConversationCollectionView: UICollectionView {
+    var didLayout: (() -> Void)?
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        didLayout?()
+    }
+}
+
+final class ConversationListController: UIViewController, UICollectionViewDelegate {
     private struct Source {
         let ids: [ConversationList.RowID]
         let row: (Int) -> AnyView
     }
 
     private let scroll: ConversationScrollState
-    private let layout = ConversationListLayout()
+    private let layout: ConversationListLayout
+    let collectionView: UICollectionView
     private var source = Source(ids: [], row: { _ in AnyView(EmptyView()) })
     private var indices: [ConversationList.RowID: Int] = [:]
     private var pending: Source?
@@ -66,7 +77,12 @@ final class ConversationListController: UICollectionViewController {
 
     init(scroll: ConversationScrollState) {
         self.scroll = scroll
-        super.init(collectionViewLayout: layout)
+        let layout = ConversationListLayout()
+        self.layout = layout
+        let collection = ConversationCollectionView(frame: .zero, collectionViewLayout: layout)
+        collectionView = collection
+        super.init(nibName: nil, bundle: nil)
+        collection.didLayout = { [weak self] in self?.didLayoutCollectionView() }
     }
 
     @available(*, unavailable)
@@ -74,8 +90,13 @@ final class ConversationListController: UICollectionViewController {
         fatalError("init(coder:) has not been implemented")
     }
 
+    override func loadView() {
+        view = collectionView
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
+        collectionView.delegate = self
         collectionView.backgroundColor = .clear
         collectionView.alwaysBounceVertical = true
         collectionView.keyboardDismissMode = .interactive
@@ -168,20 +189,20 @@ final class ConversationListController: UICollectionViewController {
         cell.show(AnyView(source.row(index).id(id)), parent: self)
     }
 
-    override func collectionView(_: UICollectionView, willDisplay cell: UICollectionViewCell,
-                                 forItemAt indexPath: IndexPath) {
+    func collectionView(_: UICollectionView, willDisplay cell: UICollectionViewCell,
+                        forItemAt indexPath: IndexPath) {
         if let cell = cell as? ConversationListCell, !cell.isMounted, let id = data.itemIdentifier(for: indexPath) {
             show(cell, id: id)
         }
     }
 
-    override func collectionView(_: UICollectionView, didEndDisplaying cell: UICollectionViewCell,
-                                 forItemAt _: IndexPath) {
+    func collectionView(_: UICollectionView, didEndDisplaying cell: UICollectionViewCell,
+                        forItemAt _: IndexPath) {
         (cell as? ConversationListCell)?.unmount()
     }
 
-    override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
+    private func didLayoutCollectionView() {
+        guard active else { return }
         applyPending()
         positionViewport()
         if !following, layout.anchor == nil {
@@ -249,7 +270,7 @@ final class ConversationListController: UICollectionViewController {
         }
     }
 
-    override func scrollViewDidScroll(_ scrollView: UIScrollView) {
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
         if !applying, !following,
            scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating {
             captureAnchor(allowed: indices)
@@ -257,39 +278,39 @@ final class ConversationListController: UICollectionViewController {
         publishVisibility()
     }
 
-    override func scrollViewDidChangeAdjustedContentInset(_: UIScrollView) {
+    func scrollViewDidChangeAdjustedContentInset(_: UIScrollView) {
         if following {
             view.setNeedsLayout()
         }
     }
 
-    override func scrollViewDidEndDecelerating(_: UIScrollView) {
+    func scrollViewDidEndDecelerating(_: UIScrollView) {
         if !following {
             captureAnchor(allowed: indices)
         }
     }
 
-    override func scrollViewDidEndScrollingAnimation(_: UIScrollView) {
+    func scrollViewDidEndScrollingAnimation(_: UIScrollView) {
         if !following {
             captureAnchor(allowed: indices)
         }
     }
 
-    override func scrollViewDidScrollToTop(_: UIScrollView) {
+    func scrollViewDidScrollToTop(_: UIScrollView) {
         if !following {
             captureAnchor(allowed: indices)
         }
     }
 
-    override func scrollViewWillBeginDragging(_: UIScrollView) {
+    func scrollViewWillBeginDragging(_: UIScrollView) {
         requestedEdge = nil
         scroll.following = false
         following = false
         layout.anchor = nil
     }
 
-    override func scrollViewWillEndDragging(_ scrollView: UIScrollView, withVelocity _: CGPoint,
-                                            targetContentOffset: UnsafeMutablePointer<CGPoint>) {
+    func scrollViewWillEndDragging(_ scrollView: UIScrollView, withVelocity _: CGPoint,
+                                   targetContentOffset: UnsafeMutablePointer<CGPoint>) {
         if scrollView.panGestureRecognizer.translation(in: scrollView).y < 0, latestIsVisible() {
             scroll.following = true
             following = true
@@ -297,7 +318,7 @@ final class ConversationListController: UICollectionViewController {
         }
     }
 
-    override func scrollViewShouldScrollToTop(_: UIScrollView) -> Bool {
+    func scrollViewShouldScrollToTop(_: UIScrollView) -> Bool {
         requestedEdge = nil
         scroll.following = false
         following = false

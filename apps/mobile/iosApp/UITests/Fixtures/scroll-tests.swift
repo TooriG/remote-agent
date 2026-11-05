@@ -4,6 +4,7 @@ import UIKit
 @main @MainActor
 final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
     var window: UIWindow?
+    private var failures = 0
 
     func application(_: UIApplication,
                      didFinishLaunchingWithOptions _: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
@@ -13,6 +14,7 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
             await checkWrappedRows()
             await checkShortHistory()
             await checkStagedHistory()
+            guard failures == 0 else { exit(1) }
             print("Native conversation recycling and scroll tests passed")
             exit(0)
         }
@@ -22,8 +24,14 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
     private func check(_ condition: @autoclosure () -> Bool, _ message: String) {
         guard condition() else {
             fputs("FAIL: \(message)\n", stderr)
-            exit(1)
+            failures += 1
+            return
         }
+    }
+
+    private func geometry(_ view: UICollectionView) -> String {
+        "offset=\(view.contentOffset), bounds=\(view.bounds.size), "
+            + "inset=\(view.adjustedContentInset), content=\(view.contentSize)"
     }
 
     private func mount(_ controller: ConversationListController) {
@@ -46,7 +54,7 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
     }
 
     private func position(_ item: Int, in controller: ConversationListController) -> CGFloat {
-        let view = controller.collectionView!
+        let view = controller.collectionView
         guard let attributes = view.layoutAttributesForItem(at: IndexPath(item: item, section: 0)) else {
             preconditionFailure("Missing row geometry")
         }
@@ -76,7 +84,7 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
         }
         update(ids)
         await layout(controller)
-        let view = controller.collectionView!
+        let view = controller.collectionView
         check(built < 120, "Ten thousand rows must materialize only the viewport, including initial positioning")
         check(view.indexPathsForVisibleItems.contains(IndexPath(item: 9999, section: 0)), "Open at the latest row")
         check(controller.children.count < 40, "Recycling must keep the hosting-controller hierarchy bounded")
@@ -119,7 +127,7 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
         }
         update(1200)
         await layout(controller)
-        let view = controller.collectionView!
+        let view = controller.collectionView
         let bottom = view.contentOffset.y + view.bounds.height - view.adjustedContentInset.bottom
         let last = view.layoutAttributesForItem(at: IndexPath(item: 1, section: 0))!
         check(abs(bottom - last.frame.maxY - 6) < 1, "Opening must reveal the end of a very tall row")
@@ -130,13 +138,12 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
               "A streamed row must be remeasured: height=\(grown.frame.height)")
         check(abs(view.contentOffset.y + view.bounds.height - view.adjustedContentInset.bottom
                   - grown.frame.maxY - 6) < 1,
-        "Following must track streamed self-sizing growth: offset=\(view.contentOffset.y), "
-            + "viewport=\(view.bounds.height), inset=\(view.adjustedContentInset.bottom), "
-            + "last=\(grown.frame), content=\(view.contentSize)")
+        "Following must track streamed self-sizing growth: last=\(grown.frame), \(geometry(view))")
         view.contentInset.bottom += 200
         await layout(controller)
         check(abs(view.contentOffset.y + view.bounds.height - view.adjustedContentInset.bottom
-                - grown.frame.maxY - 6) < 1, "Keyboard insets must keep the latest message visible")
+                  - grown.frame.maxY - 6) < 1,
+        "Keyboard insets must keep the latest message visible: last=\(grown.frame), \(geometry(view))")
         ids.append(.message("appended"))
         update(1600)
         await layout(controller)
@@ -167,7 +174,7 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
         update(ids)
         await layout(controller)
         check(abs(position(50, in: controller) - reading) < 1, "A staged prepend must preserve bottom-aligned content")
-        let view = controller.collectionView!
+        let view = controller.collectionView
         let before = view.contentOffset
         update(ids)
         await layout(controller)
@@ -194,18 +201,18 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
             })
         }
         await layout(controller)
-        let view = controller.collectionView!
+        let view = controller.collectionView
         let path = IndexPath(item: 0, section: 0)
         let wide = view.layoutAttributesForItem(at: path)!.size
         check(wide.height > view.bounds.height && wide.height < 10000,
-              "Wrapped text must measure its contents while a horizontal scroller keeps its ideal height")
+              "Wrapped text must measure its contents while a horizontal scroller keeps its ideal height: \(wide)")
         view.contentInset.left = 24
         view.contentInset.right = 24
         view.bounds.size.width /= 2
         await layout(controller)
         let narrow = view.layoutAttributesForItem(at: path)!.size
         check(narrow.width < wide.width && narrow.height > wide.height,
-              "A width change must remeasure the SwiftUI row with its new explicit width")
+              "A width change must remeasure the SwiftUI row: wide=\(wide), narrow=\(narrow), \(geometry(view))")
         check(abs(narrow.width - (view.bounds.width - view.adjustedContentInset.left
                 - view.adjustedContentInset.right - 32)) < 1, "Native safe-area insets must be outside the row margins")
         check(abs(view.contentOffset.y + view.bounds.height - view.adjustedContentInset.bottom
@@ -238,7 +245,8 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
         update([.history] + older + messages, header: 8)
         await layout(controller)
         check(abs(position(51, in: controller) - reading) < 1,
-              "Staged history must retain the original anchor even if its interim offset was clamped")
+              "Staged history must retain the original anchor even if its interim offset was clamped: "
+                  + "before=\(reading), after=\(position(51, in: controller)), \(geometry(controller.collectionView))")
         controller.collectionView.bounds.size.width -= 40
         await layout(controller)
         check(abs(position(51, in: controller) - reading) < 1, "Resizing must preserve a detached reader")
