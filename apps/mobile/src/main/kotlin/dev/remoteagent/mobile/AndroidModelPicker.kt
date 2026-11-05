@@ -114,8 +114,7 @@ private fun ModelPickerDialog(
                 if (choices.isEmpty()) {
                     Text(
                         language.text(
-                            if (snapshot.modelsLoading(null)) "モデルを読み込み中…"
-                            else "モデルがありません。検索条件やPCとの接続を確認してください。"
+                            if (snapshot.modelsLoading(null)) "モデルを読み込み中…" else "モデルがありません。検索条件やPCとの接続を確認してください。"
                         )
                     )
                 }
